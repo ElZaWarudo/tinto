@@ -1,4 +1,5 @@
 pub mod git;
+pub mod paths;
 
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};

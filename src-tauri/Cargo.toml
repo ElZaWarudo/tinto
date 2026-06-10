@@ -27,6 +27,9 @@ tokio = { version = "1", features = ["time"] }
 # features ssh/https porque Tinto nunca hace fetch/push)
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 thiserror = "2"
+# Clasificación de paths: reglas .gitignore (crate de ripgrep) + globs de watchlist
+ignore = "0.4"
+globset = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
