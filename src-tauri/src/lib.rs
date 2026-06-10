@@ -1,5 +1,6 @@
 pub mod git;
 pub mod paths;
+pub mod workbench;
 
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,8 +34,30 @@ fn ping() -> PingResponse {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Config corrupta o ilegible: la app arranca con config vacía en memoria
+    // sin tocar el archivo (solo se sobreescribe si el usuario muta).
+    let store = workbench::WorkbenchStore::open_default().unwrap_or_else(|e| {
+        eprintln!("tinto: no se pudo cargar la config de workbenches: {e}");
+        let dir = dirs::config_dir()
+            .map(|d| d.join("tinto"))
+            .unwrap_or_else(std::env::temp_dir);
+        workbench::WorkbenchStore::with_default_config(dir)
+    });
+
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ping])
+        .manage(std::sync::Mutex::new(store))
+        .invoke_handler(tauri::generate_handler![
+            ping,
+            workbench::commands::list_workbenches,
+            workbench::commands::create_workbench,
+            workbench::commands::rename_workbench,
+            workbench::commands::delete_workbench,
+            workbench::commands::add_repo,
+            workbench::commands::remove_repo,
+            workbench::commands::update_repo,
+            workbench::commands::set_active_workbench,
+            workbench::commands::autodetect_repos_under
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
