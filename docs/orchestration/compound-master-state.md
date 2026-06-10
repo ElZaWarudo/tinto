@@ -88,10 +88,10 @@
 - RDM-001 ✅ ENTREGADO Y MERGEADO (PR #1).
 - RDM-002 ✅ ENTREGADO Y MERGEADO (**PR #2**, merge `b9465e9`, autorización explícita en el plan de release aprobado; 4 commits semánticos; review 3 personas → 7 tests añadidos + 1 bug real atrapado: log() unborn devolvía Internal; 24/24 tests). Artefactos: brainstorm/plan/package 2026-06-11 + gates actualizados.
 - **Gates wave 2 (decisión usuario 2026-06-11): auto hasta release plan** — solo detengo en el plan de release por PR y en decisiones de producto reales.
-- **RDM-003 (clasificador de paths): IMPLEMENTADO, VERIFICADO Y REVISADO** — pendiente release plan (gate de usuario). Rama `feat/path-classification`. Módulo `src-tauri/src/paths/` (PathClassifier: un matcher Gitignore por directorio, deepest-match-wins con negaciones, poda BFS de dirs ignorados, watchlist globset, cero I/O en classify). 36/36 tests; review dual aplicado. Limitación v1 documentada en rustdoc: tracked-pero-gitignoreados; status (RDM-006) es la fuente de verdad.
-- Artefactos RDM-003: brainstorm/plan/package 2026-06-11 (plan corregido en review: classify(path, is_dir) sin I/O — flag del caller).
-- **Nuevo acuerdo de flujo (usuario 2026-06-11): actualizar y commitear los archivos de compound master al cierre de cada unidad**, dentro del commit docs de esa unidad.
-- Luego: RDM-005 (workbench manager) — última de wave 2.
+- RDM-003 ✅ ENTREGADO Y MERGEADO (**PR #3**, merge `2011005`; merge autorizado bajo la regla standing). Módulo `paths` (clasificador con semántica git real, poda BFS, cero I/O en classify).
+- **Acuerdos de flujo (usuario 2026-06-11):** (a) actualizar y commitear los archivos de compound master al cierre de cada unidad; (b) **merge pre-autorizado para los PRs del programa siempre que el PR incluya el estado de compound master actualizado** (el release plan debe afirmar esa condición).
+- **RDM-005 (workbench manager): IMPLEMENTADO, VERIFICADO Y REVISADO** — rama `feat/workbench-config`, pendiente release. Módulo `workbench`: store TOML atómico (tmp por-PID + rename, backup `.corrupt` en modo degradado) en config dir inyectable, CRUD completo con validación Git2Engine, autodetección BFS-4 con worktrees, 9 comandos Tauri con `WorkbenchError` serializable y mutex sin panics. 53/53 tests backend; review dual aplicado (4 P1 corregidos).
+- **WAVE 2 COMPLETA al mergear RDM-005.** Siguiente: wave 3 → RDM-004 (watcher con debounce/throttling, consume el clasificador); luego wave 4 → RDM-006 (bus de estado/eventos — congelar contrato; primer consumidor de git engine + watcher + workbench).
 - [ ] 5b. Nota para release: repo SIN commit inicial — `main` es ref no-nacida; el primer commit ocurrirá en fase release (gitflow-knight); marshal debe bootstrapear `main` y basar el PR ahí (estrategia D1). `gh` CLI autenticado como ElZaWarudo (github.com, https) → R12 viable. Sin remote configurado aún.
 - [ ] 6. Impact scan, verificación, code review, security, CI
 - [ ] 7. Handoff a krt-release-marshal
