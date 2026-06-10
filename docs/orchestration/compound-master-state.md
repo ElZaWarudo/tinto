@@ -66,7 +66,27 @@
   - Descartados con announce: core:default NO incluye fs/shell en Tauri 2 (overclaim del adversarial); StrictMode double-listen limpia cada unlisten propio; tick task muere con el proceso. Registrados como residual notes.
   - Re-verificación post-fixes ✔: vitest 3/3, lint, fmt, clippy, cargo test 2/2.
   - Re-humo dev con CSP ✔ (ventana up). `tauri build` exit 0: exe 8.6MB + MSI + NSIS; humo del binario release ✔ (ventana "Tinto" con CSP de producción). **Items 5 y 6 del pipeline COMPLETOS; review unit RU1 implementation-complete + review PASS + verificación PASS.** Paquete → `implemented-verified-awaiting-release`.
-- [ ] 7. Handoff a krt-release-marshal — **EN CURSO** (commits vía gitflow-knight, bootstrap de main, repo GitHub + push, PR; Jira omitted: sin contexto/config).
+- [x] 7. Handoff a krt-release-marshal **COMPLETO** (2026-06-10):
+  - Plan de release aprobado por usuario (incluida decisión de tamaño/alcance: aprobar PR grande — masa = lockfiles generados en commit propio; autoría humana ~600 líneas código + ~890 docs).
+  - Bootstrap: `main` con root commit `4b7438d` (init vacío); rama `feat/tauri-react-skeleton` con 4 commits: `e9c46e5` feat(app) 600+, `8f16675` chore(tooling) 66+, `26003e1` chore(generated) 9198+, `44f69a7` docs(orquestación) 890+. Guard env-ignore de gitflow-knight OK (creó `.krt/env/.gitignore`, commiteado en tooling).
+  - Rebase: innecesario (historia lineal nueva).
+  - Jira: **omitted** — checker `ok: false` diagnóstico `env-loaded-without-project-secret-file` (falta `.krt/env/jira-scribe.env` en el checkout). Sin backlink ni transición.
+  - Repo GitHub privado creado: https://github.com/ElZaWarudo/tinto; push de `main` y `feat/tauri-react-skeleton`.
+  - **PR #1: https://github.com/ElZaWarudo/tinto/pull/1** (`feat/tauri-react-skeleton → main`, ready). Cuerpo validado con format/check_pr_body (5 bullets, sin IDs internos).
+  - Reviewers: omitidos con nota — repo nuevo sin colaboradores.
+  - **Merge: NO intentado** — requiere gate visible en GitHub + autorización explícita del usuario para ese merge exacto.
+  - R12 ✔ (remote origin privado con main pusheada). RDM-001 entregado a revisión.
+
+## Checkpoint de merge (2026-06-11)
+
+- **PR #1 MERGED** con autorización explícita del usuario ("completa el merge"); gate visible: MERGEABLE, sin checks ni reviews requeridos (main sin protección, repo sin colaboradores). Merge commit `62e5653`; rama feature borrada local y remota.
+- **D1 RESUELTA:** `develop` creada desde main y pusheada. Las features siguientes basan en `develop`; PRs `feat/* → develop`.
+- Docs post-PR (este estado + summary 2026-06-10) en working tree; viajan con la rama de RDM-002.
+
+## Wave 2 — EN CURSO
+
+- RDM-001 ✅ ENTREGADO Y MERGEADO.
+- **RDM-002 (git engine): brainstorm EN CURSO.** Luego RDM-003, RDM-005 (serial, parallel:false).
 - [ ] 5b. Nota para release: repo SIN commit inicial — `main` es ref no-nacida; el primer commit ocurrirá en fase release (gitflow-knight); marshal debe bootstrapear `main` y basar el PR ahí (estrategia D1). `gh` CLI autenticado como ElZaWarudo (github.com, https) → R12 viable. Sin remote configurado aún.
 - [ ] 6. Impact scan, verificación, code review, security, CI
 - [ ] 7. Handoff a krt-release-marshal
