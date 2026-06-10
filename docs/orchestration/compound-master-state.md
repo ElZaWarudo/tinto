@@ -90,8 +90,18 @@
 - **Gates wave 2 (decisión usuario 2026-06-11): auto hasta release plan** — solo detengo en el plan de release por PR y en decisiones de producto reales.
 - RDM-003 ✅ ENTREGADO Y MERGEADO (**PR #3**, merge `2011005`; merge autorizado bajo la regla standing). Módulo `paths` (clasificador con semántica git real, poda BFS, cero I/O en classify).
 - **Acuerdos de flujo (usuario 2026-06-11):** (a) actualizar y commitear los archivos de compound master al cierre de cada unidad; (b) **merge pre-autorizado para los PRs del programa siempre que el PR incluya el estado de compound master actualizado** (el release plan debe afirmar esa condición).
-- **RDM-005 (workbench manager): IMPLEMENTADO, VERIFICADO Y REVISADO** — rama `feat/workbench-config`, pendiente release. Módulo `workbench`: store TOML atómico (tmp por-PID + rename, backup `.corrupt` en modo degradado) en config dir inyectable, CRUD completo con validación Git2Engine, autodetección BFS-4 con worktrees, 9 comandos Tauri con `WorkbenchError` serializable y mutex sin panics. 53/53 tests backend; review dual aplicado (4 P1 corregidos).
-- **WAVE 2 COMPLETA al mergear RDM-005.** Siguiente: wave 3 → RDM-004 (watcher con debounce/throttling, consume el clasificador); luego wave 4 → RDM-006 (bus de estado/eventos — congelar contrato; primer consumidor de git engine + watcher + workbench).
+- RDM-005 ✅ ENTREGADO Y MERGEADO (**PR #4**, merge `a199d0e`, bajo regla standing — estado incluido en `9e6f670`). Módulo `workbench`: store TOML atómico (tmp por-PID, backup `.corrupt`), CRUD + autodetección BFS-4 con worktrees, 9 comandos Tauri. 53/53 tests; review dual con 4 P1 corregidos.
+
+## ✅ WAVE 2 COMPLETA (2026-06-11)
+
+PRs #2 (git engine), #3 (clasificador), #4 (workbenches) mergeados a `develop`. Backend listo para integración: 53 tests, clippy limpio.
+
+## Pausa de corrida (decisión usuario 2026-06-11: "aprobar y pausar después")
+
+- Rama `feat/fs-watcher` ya creada con este estado commiteado (viaja en el PR de RDM-004, regla del estado).
+- **Próxima invocación:** `krt-compound-master mode:full` → wave 3: brainstorm/plan/package/ejecución de **RDM-004 (watcher notify + debounce 200–400ms + throttling por repo)**, consumiendo `PathClassifier` y la config de workbenches. Preguntas abiertas del roadmap para ese brainstorm: confirmar que debounce (004) y coalescing (006) no dupliquen trabajo; scope del watcher (workbench activo vs todos, configurable).
+- Después: wave 4 RDM-006 (bus — congelar contrato de eventos; resolver wrapping spawn_blocking del GitEngine; recordar dirección de UI del usuario para RDM-007/008: tabs por proyecto + árbol izquierda + gestión de archivos abiertos).
+- Blockers: ninguno. Jira sigue omitida (falta `.krt/env/jira-scribe.env`; crearlo la habilitaría).
 - [ ] 5b. Nota para release: repo SIN commit inicial — `main` es ref no-nacida; el primer commit ocurrirá en fase release (gitflow-knight); marshal debe bootstrapear `main` y basar el PR ahí (estrategia D1). `gh` CLI autenticado como ElZaWarudo (github.com, https) → R12 viable. Sin remote configurado aún.
 - [ ] 6. Impact scan, verificación, code review, security, CI
 - [ ] 7. Handoff a krt-release-marshal
