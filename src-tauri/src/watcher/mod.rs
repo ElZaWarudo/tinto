@@ -17,6 +17,7 @@
 //! de workbench pertenecen a RDM-006; aquí los tests construyen y ejercen
 //! el watcher directamente.
 
+pub mod debounce;
 pub mod normalize;
 
 use std::path::PathBuf;
