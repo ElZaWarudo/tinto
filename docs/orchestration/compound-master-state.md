@@ -111,6 +111,19 @@ PRs #2 (git engine), #3 (clasificador), #4 (workbenches) mergeados a `develop`. 
 
 - Ninguno. Jira sigue omitida (falta `.krt/env/jira-scribe.env`; crearlo la habilitaría).
 
+## Wave 3 — RDM-004 (watcher) — EN CURSO
+
+- [x] Brainstorm: `docs/brainstorms/2026-06-11-rdm-004-watcher-requirements.md`. Decisión usuario: **scope = solo workbench activo** (configurable diferido). Boundary 004/006 resuelto: debounce/throttle sobre eventos FS crudos (004) vs coalescing de deltas + emit-throttle (006). Canal único con mensaje `Batch | RepoError`; remount por API explícito (wiring → RDM-006).
+- [x] Review brainstorm (coherence, feasibility, scope-guardian). Fixes: normalización de kinds de notify (renames→Removed+Created, Any→Modified, Access descartado); is_dir sin stat con default false; AE5/R3 reformulados (notify no emite error al borrar root → síntesis); criterio de testabilidad determinista para debounce; R12 ampliado; roadmap anotado (scope resuelto + dep RDM-005).
+- [x] Plan: `docs/plans/2026-06-11-004-feat-fs-watcher-plan.md` (U1 tipos+normalize, U2 debounce/throttle reloj pausado, U3 FsWatcher+lifecycle). Review (coherence, feasibility) aplicado: features tokio completas (prod time/sync/macros/rt + dev test-util), KTD ciclo-de-vida sin contradicción (managed state → RDM-006; tests construyen directo), `tokio::spawn` con contexto requerido, `shutdown(self)` async + Drop best-effort, `pub mod watcher`, tolerar WatchNotFound, rebuild flag en debounce.rs con señal en el lote, riesgos añadidos.
+- [x] Work package: `docs/work-packages/RDM-004-watcher/2026-06-11-001-fs-watcher-work-package.md` — RU1 única, rama `feat/fs-watcher`, base `develop`. Checker OK (2 warnings justificados); review coherence → 1 safe_auto aplicado (Cargo.toml en commit grouping). **PACKAGE SOUND.**
+- [x] **Ejecución RU1 COMPLETA** (inline): U1 normalize+tipos (7 tests), U2 debounce/throttle con reloj pausado (deadline = max(piso, min(calma, techo)); 11 tests, 0.00s), U3 FsWatcher (montaje canonicalizado, classifier-antes-de-watch, dead_roots para remount real, re-assert de roots solapados, RescanNeeded ante overflow del kernel, shutdown con flush; 10 tests integración FS). 1 fix de fixture en ejecución (AE2: .env debe estar gitignoreado para ser Plane2).
+- [x] **Verificación RU1 PASS:** fmt ✓ clippy ✓ (`replace_box`, `ptr_arg` corregidos) `cargo test` 81/81 ✓ build ✓ npm install limpio + vitest 3/3 + eslint ✓.
+- [x] **Code review PASS** (4 personas): 12 fixes aplicados (3 P1: remount no-op por `mounted` divergente → dead_roots; unwatch anidado envenenaba subtree → re-assert; Rescan tragado → `RescanNeeded`; más 5 P2 + 3 P3 + safe_autos) + 9 tests nuevos del review. Descartados con announce: rebuild inline (riesgo aceptado en plan), rename watch_workbench, Serialize de errores (→ RDM-006). Detalle en el Review Gate del paquete. Re-verificación 81/81.
+- [x] Security gate: not required (RU1 sin superficie de alto riesgo, según paquete).
+- Paquete → `implemented-verified-awaiting-release`.
+- [ ] **Handoff a krt-release-marshal — EN CURSO** (commits semánticos en `feat/fs-watcher`, push, PR → `develop`; merge pre-autorizado por regla standing si el PR incluye este estado actualizado; Jira omitted: sin `.krt/env/jira-scribe.env`).
+
 ## Próxima acción
 
-Wave 3 — **RDM-004 (watcher notify + debounce 200–400ms + throttling por repo)**: brainstorm → review → plan → review → package → ejecución, consumiendo `PathClassifier` (RDM-003) y la config de workbenches (RDM-005). Rama `feat/fs-watcher` (este checkout). Preguntas abiertas del roadmap para el brainstorm: confirmar que debounce (004) y coalescing (006) no dupliquen trabajo; scope del watcher (workbench activo vs todos, configurable). Gates: auto hasta release plan (regla standing wave 2, salvo decisión de producto real).
+Release de RU1 (RDM-004): commits → push → PR → merge (regla standing). Después: wave 4 — RDM-006 (bus; congelar contrato de eventos; wiring del watcher como managed state + remount desde conmutación; spawn_blocking del GitEngine; nota: consumidor debe manejar `RescanNeeded` y tratar lotes con `.gitignore` Plane1 como señal de recálculo completo).
