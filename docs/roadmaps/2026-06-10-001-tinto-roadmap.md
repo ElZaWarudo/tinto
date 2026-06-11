@@ -69,8 +69,8 @@ source_docs:
 - RDM-004. **Watcher con debounce y throttling por repo**
   - Outcome: `notify` observa los working dirs del workbench activo; los eventos entran a un canal, pasan por debounce (~200–400 ms) para agrupar ráfagas y throttling por repo; ignora `.git/` salvo HEAD/index. Emite eventos clasificados hacia el bus.
   - Why now: Los agentes escriben en ráfagas; sin coalescing/throttling la UI se satura (§7). Es el productor de eventos del sistema.
-  - Scope boundary: Incluye watcher, debounce, throttling, selección de scope (workbench activo vs todos, configurable). Excluye el recálculo de git (RDM-002) y el render (frontend).
-  - Hard depends on: RDM-001, RDM-003
+  - Scope boundary: Incluye watcher, debounce, throttling. Scope de observación **resuelto (usuario 2026-06-11): solo el workbench activo**; la opción "todos / configurable" queda diferida hasta necesidad real. Excluye el recálculo de git (RDM-002), el render (frontend) y el wiring del remount al comando de conmutación (integración → RDM-006).
+  - Hard depends on: RDM-001, RDM-003, RDM-005 (workbench activo)
   - Soft sequencing preference: None
   - Blocks/enables: RDM-006, RDM-009
   - Risk: medium — manejo de handles del SO, edge cases multiplataforma de notify, tuning de debounce.

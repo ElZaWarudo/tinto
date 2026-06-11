@@ -6,7 +6,8 @@
 
 - **Proyecto:** Tinto — app de escritorio (Tauri 2) de monitoreo read-only de repos git editados por agentes de código.
 - **Fuente de diseño:** `tinto-design.md` (diseño a nivel arquitectura, no spec de implementación).
-- **Repo:** `C:\Users\Mayor\Documents\Caribbean\tinto` (git init en rama `main`).
+- **Repo:** `/home/teb/personal-proyects/tinto` (**checkout Linux/WSL desde 2026-06-11**; corridas previas en `C:\Users\Mayor\Documents\Caribbean\tinto`, Windows). Remote: https://github.com/ElZaWarudo/tinto. Integración: `develop` (gitflow, D1).
+- **Toolchain Linux verificado (2026-06-11):** Rust 1.93.1, node 24.13, npm 11.6, `gh` autenticado (ElZaWarudo). Plugin compound-engineering 3.12.0 **reinstalado** en este host (user scope, marketplace EveryInc); los SKILL.md de ce-* se leen del cache `~/.claude/plugins/cache/.../3.12.0/skills/`.
 
 ## Argumentos resueltos
 
@@ -98,18 +99,31 @@ PRs #2 (git engine), #3 (clasificador), #4 (workbenches) mergeados a `develop`. 
 
 ## Pausa de corrida (decisión usuario 2026-06-11: "aprobar y pausar después")
 
-- Rama `feat/fs-watcher` ya creada con este estado commiteado (viaja en el PR de RDM-004, regla del estado).
-- **Próxima invocación:** `krt-compound-master mode:full` → wave 3: brainstorm/plan/package/ejecución de **RDM-004 (watcher notify + debounce 200–400ms + throttling por repo)**, consumiendo `PathClassifier` y la config de workbenches. Preguntas abiertas del roadmap para ese brainstorm: confirmar que debounce (004) y coalescing (006) no dupliquen trabajo; scope del watcher (workbench activo vs todos, configurable).
-- Después: wave 4 RDM-006 (bus — congelar contrato de eventos; resolver wrapping spawn_blocking del GitEngine; recordar dirección de UI del usuario para RDM-007/008: tabs por proyecto + árbol izquierda + gestión de archivos abiertos).
-- Blockers: ninguno. Jira sigue omitida (falta `.krt/env/jira-scribe.env`; crearlo la habilitaría).
-- [ ] 5b. Nota para release: repo SIN commit inicial — `main` es ref no-nacida; el primer commit ocurrirá en fase release (gitflow-knight); marshal debe bootstrapear `main` y basar el PR ahí (estrategia D1). `gh` CLI autenticado como ElZaWarudo (github.com, https) → R12 viable. Sin remote configurado aún.
-- [ ] 6. Impact scan, verificación, code review, security, CI
-- [ ] 7. Handoff a krt-release-marshal
+- ~~Rama `feat/fs-watcher` ya creada~~ — esa rama se creó **solo en el checkout Windows** y nunca se pusheó; **recreada en el checkout Linux** desde `develop` (2026-06-11, esta corrida).
+- Después de RDM-004: wave 4 RDM-006 (bus — congelar contrato de eventos; resolver wrapping spawn_blocking del GitEngine; recordar dirección de UI del usuario para RDM-007/008: tabs por proyecto + árbol izquierda + gestión de archivos abiertos).
+
+## Resume Linux (2026-06-11) — incidente de reconciliación y decisiones
+
+- **Incidente (resuelto):** la corrida resumida en este host arrancó con el checkout en `main` (stale, 14 commits detrás) y sin inspeccionar el contenido de `origin/develop`; regeneró brainstorm/plan/work-package de **RDM-002**, que ya estaba entregado (PR #2). El review de feasibility del work package lo detectó (conf 100). **Corrección:** trabajo local duplicado descartado (decisión usuario), checkout resincronizado a `develop`. *Lección operativa: el preflight de resume debe inspeccionar la base de integración remota (`git log origin/main..origin/develop`), no solo verificar que exista.*
+- **Decisión de usuario — fetch opt-in → BACKLOG (2026-06-11):** durante la regeneración el usuario eligió (3 confirmaciones) añadir un `fetch` opt-in al git engine. develop entregó RDM-002 deliberadamente sin red (`git2 0.20` sin features ssh/https, "Tinto nunca hace fetch/push"). El usuario decidió preservar el diseño del fetch como **item de backlog/follow-up** (enmienda futura al git engine), no ejecutarlo ahora ni descartarlo. Diseño preservado en `docs/backlog/2026-06-11-fetch-opt-in-backlog.md` (decisiones + requisitos de seguridad del review: host fail-closed sin CertificatePassthrough, scoping de credenciales al host confirmado, sanitización de errores, known_hosts manual, staleness honesta).
 
 ## Blockers
 
-- Ninguno por ahora.
+- Ninguno. Jira sigue omitida (falta `.krt/env/jira-scribe.env`; crearlo la habilitaría).
+
+## Wave 3 — RDM-004 (watcher) — EN CURSO
+
+- [x] Brainstorm: `docs/brainstorms/2026-06-11-rdm-004-watcher-requirements.md`. Decisión usuario: **scope = solo workbench activo** (configurable diferido). Boundary 004/006 resuelto: debounce/throttle sobre eventos FS crudos (004) vs coalescing de deltas + emit-throttle (006). Canal único con mensaje `Batch | RepoError`; remount por API explícito (wiring → RDM-006).
+- [x] Review brainstorm (coherence, feasibility, scope-guardian). Fixes: normalización de kinds de notify (renames→Removed+Created, Any→Modified, Access descartado); is_dir sin stat con default false; AE5/R3 reformulados (notify no emite error al borrar root → síntesis); criterio de testabilidad determinista para debounce; R12 ampliado; roadmap anotado (scope resuelto + dep RDM-005).
+- [x] Plan: `docs/plans/2026-06-11-004-feat-fs-watcher-plan.md` (U1 tipos+normalize, U2 debounce/throttle reloj pausado, U3 FsWatcher+lifecycle). Review (coherence, feasibility) aplicado: features tokio completas (prod time/sync/macros/rt + dev test-util), KTD ciclo-de-vida sin contradicción (managed state → RDM-006; tests construyen directo), `tokio::spawn` con contexto requerido, `shutdown(self)` async + Drop best-effort, `pub mod watcher`, tolerar WatchNotFound, rebuild flag en debounce.rs con señal en el lote, riesgos añadidos.
+- [x] Work package: `docs/work-packages/RDM-004-watcher/2026-06-11-001-fs-watcher-work-package.md` — RU1 única, rama `feat/fs-watcher`, base `develop`. Checker OK (2 warnings justificados); review coherence → 1 safe_auto aplicado (Cargo.toml en commit grouping). **PACKAGE SOUND.**
+- [x] **Ejecución RU1 COMPLETA** (inline): U1 normalize+tipos (7 tests), U2 debounce/throttle con reloj pausado (deadline = max(piso, min(calma, techo)); 11 tests, 0.00s), U3 FsWatcher (montaje canonicalizado, classifier-antes-de-watch, dead_roots para remount real, re-assert de roots solapados, RescanNeeded ante overflow del kernel, shutdown con flush; 10 tests integración FS). 1 fix de fixture en ejecución (AE2: .env debe estar gitignoreado para ser Plane2).
+- [x] **Verificación RU1 PASS:** fmt ✓ clippy ✓ (`replace_box`, `ptr_arg` corregidos) `cargo test` 81/81 ✓ build ✓ npm install limpio + vitest 3/3 + eslint ✓.
+- [x] **Code review PASS** (4 personas): 12 fixes aplicados (3 P1: remount no-op por `mounted` divergente → dead_roots; unwatch anidado envenenaba subtree → re-assert; Rescan tragado → `RescanNeeded`; más 5 P2 + 3 P3 + safe_autos) + 9 tests nuevos del review. Descartados con announce: rebuild inline (riesgo aceptado en plan), rename watch_workbench, Serialize de errores (→ RDM-006). Detalle en el Review Gate del paquete. Re-verificación 81/81.
+- [x] Security gate: not required (RU1 sin superficie de alto riesgo, según paquete).
+- Paquete → `implemented-verified-awaiting-release`.
+- [ ] **Handoff a krt-release-marshal — EN CURSO** (commits semánticos en `feat/fs-watcher`, push, PR → `develop`; merge pre-autorizado por regla standing si el PR incluye este estado actualizado; Jira omitted: sin `.krt/env/jira-scribe.env`).
 
 ## Próxima acción
 
-Generar el roadmap con krt-roadmap-cartographer a partir de `tinto-design.md`.
+Release de RU1 (RDM-004): commits → push → PR → merge (regla standing). Después: wave 4 — RDM-006 (bus; congelar contrato de eventos; wiring del watcher como managed state + remount desde conmutación; spawn_blocking del GitEngine; nota: consumidor debe manejar `RescanNeeded` y tratar lotes con `.gitignore` Plane1 como señal de recálculo completo).

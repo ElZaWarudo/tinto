@@ -1,5 +1,6 @@
 pub mod git;
 pub mod paths;
+pub mod watcher;
 pub mod workbench;
 
 use serde::Serialize;
