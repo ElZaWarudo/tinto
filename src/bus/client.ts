@@ -10,8 +10,12 @@ import {
   EVENT_WATCHING_STATE,
   EVENT_WORKBENCH_DELTA,
   type CommitInfo,
+  type FileContent,
+  type FileDiff,
   type FsEventBatch,
   type RepoDelta,
+  type RepoTree,
+  type SubscriptionTarget,
   type WatchingState,
   type WorkbenchConfig,
   type WorkbenchSnapshot,
@@ -39,6 +43,17 @@ export const getCommitLog = (repo: string, offset: number, limit: number) =>
   invoke<CommitInfo[]>("get_commit_log", { repo, offset, limit });
 
 export const retryRepo = (repo: string) => invoke("retry_repo", { repo });
+
+// ---- RDM-008: diff / tree / content / subscriptions ----
+export const getWorktreeDiff = (repo: string) => invoke<FileDiff[]>("get_worktree_diff", { repo });
+
+export const getFileContent = (repo: string, path: string) =>
+  invoke<FileContent>("get_file_content", { repo, path });
+
+export const listRepoTree = (repo: string) => invoke<RepoTree>("list_repo_tree", { repo });
+
+export const setSubscriptions = (targets: SubscriptionTarget[]) =>
+  invoke("set_subscriptions", { targets });
 
 // ---- Event listeners (StrictMode-safe; see KTD6) ----
 // Each returns a promise resolving to an unlisten fn. Callers attach in an

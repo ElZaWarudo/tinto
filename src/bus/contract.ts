@@ -42,11 +42,28 @@ export interface RepoErrorState {
   message: string;
 }
 
+// ---- Diff types (consumed by RDM-008) ----
+// serde serializes the Rust enum variants as-is: PascalCase (no rename_all).
+export type DiffLineKind = "Added" | "Removed" | "Context";
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  content: string;
+  old_lineno: number | null; // null for Added
+  new_lineno: number | null; // null for Removed
+}
+
+export interface DiffHunk {
+  old_start: number;
+  new_start: number;
+  lines: DiffLine[];
+}
+
 export interface FileDiff {
   path: string;
   old_path: string | null;
   is_binary: boolean;
-  hunks: unknown[]; // diff hunks; only consumed by RDM-008
+  hunks: DiffHunk[];
 }
 
 export interface RepoDelta {
@@ -80,6 +97,30 @@ export interface FsEventBatch {
 export interface WatchingState {
   available: boolean;
   reason?: string | null;
+}
+
+// ---- Subscriptions / tree / file content (RDM-008) ----
+export interface SubscriptionTarget {
+  repo: string;
+  path?: string | null; // null/omitted = whole-repo (RDM-008 uses file targets only)
+}
+
+export interface TreeEntry {
+  path: string; // relative to the repo root
+  is_dir: boolean;
+}
+
+export interface RepoTree {
+  entries: TreeEntry[];
+  truncated: boolean; // true when the 20k-entry cap was hit
+}
+
+export type FileEncoding = "utf8" | "base64";
+
+export interface FileContent {
+  encoding: FileEncoding;
+  content: string;
+  truncated: boolean; // true when the 1 MiB read guard cut the content
 }
 
 // ---- Snapshot ----

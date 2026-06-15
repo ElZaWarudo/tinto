@@ -6,13 +6,16 @@
 // their own repo changes.
 
 import { useSyncExternalStore } from "react";
-import type { FsEventBatch, RepoDelta, WatchingState, WorkbenchConfig } from "./contract";
+import type { FileDiff, FsEventBatch, RepoDelta, WatchingState, WorkbenchConfig } from "./contract";
 
 export interface BusState {
   /** Latest delta per canonical repo path. */
   repos: Record<string, RepoDelta>;
   /** Last activity (epoch ms) per repo: max of delta + fs-event timestamps. */
   activity: Record<string, number>;
+  /** Live diffs per repo, keyed by file path (RDM-008). A repo key present
+   * (even `{}`) means a diff computation has occurred for it — see KTD2. */
+  diffs: Record<string, Record<string, FileDiff>>;
   watching: WatchingState;
   /** Workbench config (names/aliases/active); null until loaded. */
   config: WorkbenchConfig | null;
@@ -23,6 +26,7 @@ export interface BusState {
 const EMPTY: BusState = {
   repos: {},
   activity: {},
+  diffs: {},
   watching: { available: true },
   config: null,
   loaded: false,
@@ -31,6 +35,16 @@ const EMPTY: BusState = {
 export function basename(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
+}
+
+/** Build a repo's diff map from a delta's `subscribed_diffs`, or null when the
+ * delta omits them (`null`/`undefined`) — the caller retains on null (KTD2). */
+function sliceFromDelta(delta: RepoDelta): Record<string, FileDiff> | null {
+  const sub = delta.subscribed_diffs;
+  if (sub == null) return null;
+  const map: Record<string, FileDiff> = {};
+  for (const fd of sub) map[fd.path] = fd;
+  return map;
 }
 
 export class BusStore {
@@ -59,21 +73,38 @@ export class BusStore {
   loadSnapshot(repos: RepoDelta[], watching: WatchingState) {
     const repoMap: Record<string, RepoDelta> = {};
     const activity: Record<string, number> = {};
+    const diffs: Record<string, Record<string, FileDiff>> = {};
     for (const d of repos) {
       const existing = this.state.repos[d.repo];
       const winner = existing && existing.revision > d.revision ? existing : d;
       repoMap[d.repo] = winner;
       const prevActivity = this.state.activity[d.repo] ?? 0;
       activity[d.repo] = Math.max(prevActivity, winner.last_activity_ms);
+      // Diffs: a subscribed snapshot carries them; else retain any in-flight diff
+      // for a repo that survives membership. Repos absent from the snapshot drop.
+      const sliced = sliceFromDelta(winner);
+      if (sliced) diffs[d.repo] = sliced;
+      else if (this.state.diffs[d.repo]) diffs[d.repo] = this.state.diffs[d.repo];
     }
-    this.set({ ...this.state, repos: repoMap, activity, watching, loaded: true });
+    this.set({ ...this.state, repos: repoMap, activity, diffs, watching, loaded: true });
   }
 
-  /** Apply a delta, honoring the monotonic-revision rule. */
+  /** Apply a delta, honoring the monotonic-revision rule.
+   *
+   * Diff rule (KTD2): `subscribed_diffs == null` ⇒ retain the repo's diffs (a
+   * status-only / error delta must not blank an open diff — R5a); a non-null
+   * array is authoritative for the repo's subscribed targets ⇒ replace-set the
+   * repo's diff map (a reverted file omitted from the array clears, an empty
+   * array sets `{}` which still marks "computed"). */
   applyDelta(delta: RepoDelta) {
     const existing = this.state.repos[delta.repo];
     if (existing && existing.revision >= delta.revision) return; // stale
     const prevActivity = this.state.activity[delta.repo] ?? 0;
+    const sliced = sliceFromDelta(delta);
+    const diffs =
+      sliced === null
+        ? this.state.diffs // retain
+        : { ...this.state.diffs, [delta.repo]: sliced }; // replace-set
     this.set({
       ...this.state,
       repos: { ...this.state.repos, [delta.repo]: delta },
@@ -81,7 +112,17 @@ export class BusStore {
         ...this.state.activity,
         [delta.repo]: Math.max(prevActivity, delta.last_activity_ms),
       },
+      diffs,
     });
+  }
+
+  /** Drop a single target's diff (on diff-panel close). */
+  dropDiff(repo: string, path: string) {
+    const repoDiffs = this.state.diffs[repo];
+    if (!repoDiffs || !(path in repoDiffs)) return;
+    const next = { ...repoDiffs };
+    delete next[path];
+    this.set({ ...this.state, diffs: { ...this.state.diffs, [repo]: next } });
   }
 
   /** Plane-2 events bump the repo's activity without a git recompute. */
@@ -106,7 +147,7 @@ export class BusStore {
 
   /** Clear live repo state (on workbench switch); config is reloaded separately. */
   reset() {
-    this.set({ ...this.state, repos: {}, activity: {} });
+    this.set({ ...this.state, repos: {}, activity: {}, diffs: {} });
   }
 
   /** Full reset to the empty state (primarily for tests). */
@@ -143,6 +184,17 @@ export function statusSummary(status: {
 /** Convert a CommitInfo unix-seconds timestamp to a JS Date (KTD8). */
 export function commitDate(unixSeconds: number): Date {
   return new Date(unixSeconds * 1000);
+}
+
+/** The live diff for a target, or undefined if none is held (RDM-008). */
+export function getDiff(state: BusState, repo: string, path: string): FileDiff | undefined {
+  return state.diffs[repo]?.[path];
+}
+
+/** True once a diff computation has occurred for a repo (lets a panel tell
+ * "loading" from "clean / no-renderable" — KTD2 / R7). */
+export function hasComputedDiffs(state: BusState, repo: string): boolean {
+  return state.diffs[repo] !== undefined;
 }
 
 /** Singleton store for the app. */
