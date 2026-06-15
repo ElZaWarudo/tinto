@@ -80,8 +80,16 @@ pub fn update_repo(
 }
 
 #[tauri::command]
-pub fn set_active_workbench(store: Store<'_>, name: String) -> Result<Workbench, WorkbenchError> {
-    locked(&store, |s| s.set_active(&name))
+pub fn set_active_workbench(
+    store: Store<'_>,
+    bus: State<'_, crate::bus::BusHandle>,
+    name: String,
+) -> Result<Workbench, WorkbenchError> {
+    let workbench = locked(&store, |s| s.set_active(&name))?;
+    // Notifica al bus (envío no-bloqueante por canal); el remount y el
+    // snapshot del nuevo workbench corren en la task del bus, no inline.
+    bus.set_workbench(workbench.repos.clone());
+    Ok(workbench)
 }
 
 #[tauri::command]

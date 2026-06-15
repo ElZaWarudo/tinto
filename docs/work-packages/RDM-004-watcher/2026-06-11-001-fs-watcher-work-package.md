@@ -1,6 +1,6 @@
 ---
 title: Watcher de FS con debounce y throttling por repo
-status: implemented-verified-awaiting-release
+status: shipped-merged
 roadmap_item: RDM-004
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-11-rdm-004-watcher-requirements.md

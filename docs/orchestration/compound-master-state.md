@@ -1,129 +1,159 @@
-# Compound Master — Estado en vivo
+# Compound Master — Live state
 
-> Entrypoint compacto de resume. Detalle histórico largo se archiva en `archive/compound-master-state/`.
+> Compact resume entrypoint. Long historical detail is archived in `archive/compound-master-state/`.
 
-## Iniciativa
+## Initiative
 
-- **Proyecto:** Tinto — app de escritorio (Tauri 2) de monitoreo read-only de repos git editados por agentes de código.
-- **Fuente de diseño:** `tinto-design.md` (diseño a nivel arquitectura, no spec de implementación).
-- **Repo:** `/home/teb/personal-proyects/tinto` (**checkout Linux/WSL desde 2026-06-11**; corridas previas en `C:\Users\Mayor\Documents\Caribbean\tinto`, Windows). Remote: https://github.com/ElZaWarudo/tinto. Integración: `develop` (gitflow, D1).
-- **Toolchain Linux verificado (2026-06-11):** Rust 1.93.1, node 24.13, npm 11.6, `gh` autenticado (ElZaWarudo). Plugin compound-engineering 3.12.0 **reinstalado** en este host (user scope, marketplace EveryInc); los SKILL.md de ce-* se leen del cache `~/.claude/plugins/cache/.../3.12.0/skills/`.
+- **Project:** Tinto — a desktop app (Tauri 2) for read-only monitoring of git repos edited by code agents.
+- **Design source:** `tinto-design.md` (architecture-level design, not an implementation spec).
+- **Repo:** `/home/teb/personal-proyects/tinto` (**Linux/WSL checkout since 2026-06-11**; earlier runs in `C:\Users\Mayor\Documents\Caribbean\tinto`, Windows). Remote: https://github.com/ElZaWarudo/tinto. Integration: `develop` (gitflow, D1).
+- **Linux toolchain verified (2026-06-11):** Rust 1.93.1, node 24.13, npm 11.6, `gh` authenticated (ElZaWarudo). The compound-engineering plugin 3.12.0 was **reinstalled** on this host (user scope, EveryInc marketplace); the ce-* SKILL.md files are read from the cache `~/.claude/plugins/cache/.../3.12.0/skills/`.
 
-## Argumentos resueltos
+## Resolved arguments
 
-| Arg | Valor | Notas |
+| Arg | Value | Notes |
 |---|---|---|
-| mode | full | artefactos + arrancar ejecución del primer review unit |
-| production | prototype | greenfield, sin sistema live |
-| jira-policy | optional | sin contexto Jira detectado → handoff degradado sin Jira |
+| mode | full | artifacts + start execution of the first review unit |
+| production | prototype | greenfield, no live system |
+| jira-policy | optional | no Jira context detected → degraded handoff without Jira |
 | pr-granularity | auto (review-unit) | |
 | parallel | false | |
 | delegation | auto → autonomy:guarded | |
 | worktree-policy | avoid | |
-| autonomy | guarded | sin ledger → solo autonomía local, sin mutación externa |
+| autonomy | guarded | no ledger → local autonomy only, no external mutation |
 | review-threshold | P0-P2 | |
 
-## Decisiones de usuario (preflight)
+## User decisions (preflight)
 
-- **Alcance:** mode:full — generar artefactos y arrancar ejecución.
-- **Git:** inicializado en el folder tinto (rama `main`).
-- **Frontend:** **React** (el diseño lo marcaba opcional; usuario lo fija explícitamente).
+- **Scope:** mode:full — generate artifacts and start execution.
+- **Git:** initialized in the tinto folder (branch `main`).
+- **Frontend:** **React** (the design marked it optional; the user fixes it explicitly).
 
-## Roles resueltos
+## Resolved roles
 
-| Rol | Skill | Runtime |
+| Role | Skill | Runtime |
 |---|---|---|
-| roadmap_generator | krt-roadmap-cartographer | nativo |
-| brainstorm | ce-brainstorm | plugin compound-engineering 3.12.0* |
-| plan | ce-plan | plugin compound-engineering 3.12.0* |
-| document_review | ce-doc-review | plugin compound-engineering 3.12.0* |
-| work | ce-work | plugin compound-engineering 3.12.0* |
-| code_review | ce-code-review | plugin compound-engineering 3.12.0* |
-| security_review | krt-security-sentinel | nativo |
-| project_pr | krt-release-marshal | nativo |
+| roadmap_generator | krt-roadmap-cartographer | native |
+| brainstorm | ce-brainstorm | compound-engineering plugin 3.12.0* |
+| plan | ce-plan | compound-engineering plugin 3.12.0* |
+| document_review | ce-doc-review | compound-engineering plugin 3.12.0* |
+| work | ce-work | compound-engineering plugin 3.12.0* |
+| code_review | ce-code-review | compound-engineering plugin 3.12.0* |
+| security_review | krt-security-sentinel | native |
+| project_pr | krt-release-marshal | native |
 
-\* Plugin instalado a mitad de sesión (user scope, marketplace EveryInc/compound-engineering-plugin). En esta sesión los SKILL.md se ejecutan leyéndolos desde `C:\Users\Mayor\.claude\plugins\cache\compound-engineering-plugin\compound-engineering\3.12.0\skills\`; tras reiniciar sesión serán invocables nativamente.
+\* Plugin installed mid-session (user scope, EveryInc/compound-engineering-plugin marketplace). In this session the SKILL.md files are executed by reading them from `C:\Users\Mayor\.claude\plugins\cache\compound-engineering-plugin\compound-engineering\3.12.0\skills\`; after restarting the session they will be natively invocable.
 
-## Pipeline — progreso
+## Pipeline — progress
 
-- [x] 1. Preflight (roles, repo, branch, jira, producción, delegación, contexto)
-- [x] 2. Roadmap generado: `docs/roadmaps/2026-06-10-001-tinto-roadmap.md` (12 items RDM-001..012, 8 waves; decisiones D1 gitflow, D2 CI, D3 React registradas)
-- [x] 3a. Review del roadmap (ce-doc-review headless: coherence, feasibility, design-lens, scope-guardian — 4 reviewers paralelos). 2 safe_auto aplicados (drift de Blocks/enables en RDM-001/005). 3 decisiones de usuario aplicadas: editor fs_watch → RDM-009; first-run onboarding → RDM-007; secrets → patrones simples en RDM-011. Boundary RDM-011↔008/009 aclarado. Resto ruteado a "Deferred / Open Questions" del roadmap.
-- [x] 3b-RDM-001. Brainstorm capturado y revisado: `docs/brainstorms/2026-06-10-rdm-001-esqueleto-tauri-requirements.md` (TypeScript; npm ignore-scripts; GitHub remote ahora + CI diferido → D2 resuelta; AE3: Windows duro, Linux best-effort hasta CI; R1 sin pin de React 18 → versión del template).
-- [x] 4-RDM-001. Plan escrito y revisado: `docs/plans/2026-06-10-001-feat-esqueleto-tauri-react-plan.md` (U1 scaffold, U2 tooling, U3 puente humo vía tauri::async_runtime + mockIPC, U4 entrega-solo-handoff). Work package derivado, checker OK (warning docs-mixing justificado) y review "PACKAGE SOUND": `docs/work-packages/RDM-001-esqueleto-tauri/2026-06-10-001-esqueleto-tauri-work-package.md` — RU1 única, rama `feat/tauri-react-skeleton`, base `main`.
-  - Items RDM-002..012: brainstorm/plan/package pendientes; se generan al acercarse su wave (los de UI dependen del contrato de eventos que congela RDM-006).
-- [ ] 5. Ejecutar RU1 de RDM-001 — **EN CURSO** (inline, rama `feat/tauri-react-skeleton`)
-  - Delegación resuelta: inline (matriz: trabajo acoplado mismo-archivo + CLI pesado). Usuario aprobó ejecución y aportó dirección de UI (tabs por proyecto + árbol izquierda) → registrada en roadmap Open Questions RDM-007/008.
-  - **Acciones de toolchain (asunciones ejecutadas, reversibles):** rustup 1.29/Rust 1.96 MSVC instalado vía winget; Windows 11 SDK 10.0.26100.8249 instalado (elevado, UAC aceptado por usuario) — VS2019 BuildTools MSVC 14.29 y WebView2 ya existían. Sanity link test OK.
-  - U1 ✔: template react-ts scaffoldeado (React 19.1, Vite 7, TS 5.8, Tauri 2) vía dir temporal → raíz; identidad renombrada (tinto / dev.tinto.app / Tinto); `.npmrc ignore-scripts=true` ANTES de install; **asunción verificada: install limpio sin lifecycle scripts** (esbuild/rollup/tauri via optionalDependencies); tokio time + cargo check OK.
-  - U2 ✔: ESLint flat + Prettier + Vitest jsdom + testing-library; scripts lint/format/test; format aplicado; lint verde; `.prettierignore`.
-  - U3 ✔ (código+tests): ping/tick con tauri::async_runtime + Emitter; App.tsx con instrumentación; vitest 3/3 (AE1, AE2, error path — mockIPC + vi.mock del módulo event); cargo test 2/2; fmt+clippy -D warnings limpios.
-  - Humo visual `tauri dev` ✔ (ventana "Tinto" PID 5532, ping/tick visibles).
-- [ ] 6. Code review (rol ce-code-review, 4 personas: correctness/testing/maintainability/adversarial) — **fixes aplicados**:
-  - CSP `default-src 'self'` + ipc (era `null`) [correctness P1 + adversarial].
-  - Removido `tauri-plugin-opener` no usado (Cargo.toml, lib.rs, package.json) y su grant `opener:default` en capabilities [maintainability + adversarial].
-  - Test AE2: assertion fortalecida a patrón de hora real; eliminado `clearMocks()` a mitad de test [testing P1/P2].
-  - README de Tinto (reemplaza template) y `<title>Tinto</title>` [maintainability P2/P3].
-  - Descartados con announce: core:default NO incluye fs/shell en Tauri 2 (overclaim del adversarial); StrictMode double-listen limpia cada unlisten propio; tick task muere con el proceso. Registrados como residual notes.
-  - Re-verificación post-fixes ✔: vitest 3/3, lint, fmt, clippy, cargo test 2/2.
-  - Re-humo dev con CSP ✔ (ventana up). `tauri build` exit 0: exe 8.6MB + MSI + NSIS; humo del binario release ✔ (ventana "Tinto" con CSP de producción). **Items 5 y 6 del pipeline COMPLETOS; review unit RU1 implementation-complete + review PASS + verificación PASS.** Paquete → `implemented-verified-awaiting-release`.
-- [x] 7. Handoff a krt-release-marshal **COMPLETO** (2026-06-10):
-  - Plan de release aprobado por usuario (incluida decisión de tamaño/alcance: aprobar PR grande — masa = lockfiles generados en commit propio; autoría humana ~600 líneas código + ~890 docs).
-  - Bootstrap: `main` con root commit `4b7438d` (init vacío); rama `feat/tauri-react-skeleton` con 4 commits: `e9c46e5` feat(app) 600+, `8f16675` chore(tooling) 66+, `26003e1` chore(generated) 9198+, `44f69a7` docs(orquestación) 890+. Guard env-ignore de gitflow-knight OK (creó `.krt/env/.gitignore`, commiteado en tooling).
-  - Rebase: innecesario (historia lineal nueva).
-  - Jira: **omitted** — checker `ok: false` diagnóstico `env-loaded-without-project-secret-file` (falta `.krt/env/jira-scribe.env` en el checkout). Sin backlink ni transición.
-  - Repo GitHub privado creado: https://github.com/ElZaWarudo/tinto; push de `main` y `feat/tauri-react-skeleton`.
-  - **PR #1: https://github.com/ElZaWarudo/tinto/pull/1** (`feat/tauri-react-skeleton → main`, ready). Cuerpo validado con format/check_pr_body (5 bullets, sin IDs internos).
-  - Reviewers: omitidos con nota — repo nuevo sin colaboradores.
-  - **Merge: NO intentado** — requiere gate visible en GitHub + autorización explícita del usuario para ese merge exacto.
-  - R12 ✔ (remote origin privado con main pusheada). RDM-001 entregado a revisión.
+- [x] 1. Preflight (roles, repo, branch, jira, production, delegation, context)
+- [x] 2. Roadmap generated: `docs/roadmaps/2026-06-10-001-tinto-roadmap.md` (12 items RDM-001..012, 8 waves; decisions D1 gitflow, D2 CI, D3 React recorded)
+- [x] 3a. Roadmap review (ce-doc-review headless: coherence, feasibility, design-lens, scope-guardian — 4 reviewers in parallel). 2 safe_auto applied (Blocks/enables drift in RDM-001/005). 3 user decisions applied: editor fs_watch → RDM-009; first-run onboarding → RDM-007; secrets → simple patterns in RDM-011. Boundary RDM-011↔008/009 clarified. The rest routed to the roadmap's "Deferred / Open Questions".
+- [x] 3b-RDM-001. Brainstorm captured and reviewed: `docs/brainstorms/2026-06-10-rdm-001-esqueleto-tauri-requirements.md` (TypeScript; npm ignore-scripts; GitHub remote now + CI deferred → D2 resolved; AE3: Windows hard, Linux best-effort until CI; R1 with no React 18 pin → template version).
+- [x] 4-RDM-001. Plan written and reviewed: `docs/plans/2026-06-10-001-feat-esqueleto-tauri-react-plan.md` (U1 scaffold, U2 tooling, U3 smoke bridge via tauri::async_runtime + mockIPC, U4 deliver-handoff-only). Work package derived, checker OK (justified docs-mixing warning) and review "PACKAGE SOUND": `docs/work-packages/RDM-001-esqueleto-tauri/2026-06-10-001-esqueleto-tauri-work-package.md` — single RU1, branch `feat/tauri-react-skeleton`, base `main`.
+  - Items RDM-002..012: brainstorm/plan/package pending; generated as their wave approaches (the UI ones depend on the event contract that RDM-006 freezes).
+- [ ] 5. Execute RU1 of RDM-001 — **IN PROGRESS** (inline, branch `feat/tauri-react-skeleton`)
+  - Delegation resolved: inline (matrix: same-file coupled work + heavy CLI). User approved execution and provided UI direction (per-project tabs + left tree) → recorded in roadmap Open Questions RDM-007/008.
+  - **Toolchain actions (executed assumptions, reversible):** rustup 1.29/Rust 1.96 MSVC installed via winget; Windows 11 SDK 10.0.26100.8249 installed (elevated, UAC accepted by user) — VS2019 BuildTools MSVC 14.29 and WebView2 already existed. Sanity link test OK.
+  - U1 ✔: react-ts template scaffolded (React 19.1, Vite 7, TS 5.8, Tauri 2) via temp dir → root; identity renamed (tinto / dev.tinto.app / Tinto); `.npmrc ignore-scripts=true` BEFORE install; **assumption verified: clean install with no lifecycle scripts** (esbuild/rollup/tauri via optionalDependencies); tokio time + cargo check OK.
+  - U2 ✔: ESLint flat + Prettier + Vitest jsdom + testing-library; lint/format/test scripts; format applied; lint green; `.prettierignore`.
+  - U3 ✔ (code+tests): ping/tick with tauri::async_runtime + Emitter; App.tsx with instrumentation; vitest 3/3 (AE1, AE2, error path — mockIPC + vi.mock of the event module); cargo test 2/2; fmt+clippy -D warnings clean.
+  - Visual smoke `tauri dev` ✔ (window "Tinto" PID 5532, ping/tick visible).
+- [ ] 6. Code review (ce-code-review role, 4 personas: correctness/testing/maintainability/adversarial) — **fixes applied**:
+  - CSP `default-src 'self'` + ipc (was `null`) [correctness P1 + adversarial].
+  - Removed unused `tauri-plugin-opener` (Cargo.toml, lib.rs, package.json) and its `opener:default` grant in capabilities [maintainability + adversarial].
+  - Test AE2: assertion strengthened to a real-time pattern; removed mid-test `clearMocks()` [testing P1/P2].
+  - Tinto README (replaces template) and `<title>Tinto</title>` [maintainability P2/P3].
+  - Dismissed with announce: core:default does NOT include fs/shell in Tauri 2 (adversarial overclaim); StrictMode double-listen cleans up each unlisten of its own; tick task dies with the process. Recorded as residual notes.
+  - Post-fix re-verification ✔: vitest 3/3, lint, fmt, clippy, cargo test 2/2.
+  - Re-smoke dev with CSP ✔ (window up). `tauri build` exit 0: exe 8.6MB + MSI + NSIS; release binary smoke ✔ (window "Tinto" with production CSP). **Pipeline items 5 and 6 COMPLETE; review unit RU1 implementation-complete + review PASS + verification PASS.** Package → `implemented-verified-awaiting-release`.
+- [x] 7. Handoff to krt-release-marshal **COMPLETE** (2026-06-10):
+  - Release plan approved by user (including the size/scope decision: approve a large PR — bulk = lockfiles generated in their own commit; human authorship ~600 lines of code + ~890 docs).
+  - Bootstrap: `main` with root commit `4b7438d` (empty init); branch `feat/tauri-react-skeleton` with 4 commits: `e9c46e5` feat(app) 600+, `8f16675` chore(tooling) 66+, `26003e1` chore(generated) 9198+, `44f69a7` docs(orchestration) 890+. gitflow-knight's env-ignore guard OK (created `.krt/env/.gitignore`, committed in tooling).
+  - Rebase: unnecessary (new linear history).
+  - Jira: **omitted** — checker `ok: false` diagnostic `env-loaded-without-project-secret-file` (missing `.krt/env/jira-scribe.env` in the checkout). No backlink or transition.
+  - Private GitHub repo created: https://github.com/ElZaWarudo/tinto; pushed `main` and `feat/tauri-react-skeleton`.
+  - **PR #1: https://github.com/ElZaWarudo/tinto/pull/1** (`feat/tauri-react-skeleton → main`, ready). Body validated with format/check_pr_body (5 bullets, no internal IDs).
+  - Reviewers: omitted with a note — new repo with no collaborators.
+  - **Merge: NOT attempted** — requires a visible gate on GitHub + explicit user authorization for that exact merge.
+  - R12 ✔ (private origin remote with main pushed). RDM-001 delivered for review.
 
-## Checkpoint de merge (2026-06-11)
+## Merge checkpoint (2026-06-11)
 
-- **PR #1 MERGED** con autorización explícita del usuario ("completa el merge"); gate visible: MERGEABLE, sin checks ni reviews requeridos (main sin protección, repo sin colaboradores). Merge commit `62e5653`; rama feature borrada local y remota.
-- **D1 RESUELTA:** `develop` creada desde main y pusheada. Las features siguientes basan en `develop`; PRs `feat/* → develop`.
-- Docs post-PR (este estado + summary 2026-06-10) en working tree; viajan con la rama de RDM-002.
+- **PR #1 MERGED** with explicit user authorization ("complete the merge"); visible gate: MERGEABLE, no required checks or reviews (main unprotected, repo with no collaborators). Merge commit `62e5653`; feature branch deleted locally and remotely.
+- **D1 RESOLVED:** `develop` created from main and pushed. Subsequent features base on `develop`; PRs `feat/* → develop`.
+- Post-PR docs (this state + 2026-06-10 summary) in the working tree; they travel with the RDM-002 branch.
 
-## Wave 2 — EN CURSO
+## Wave 2 — IN PROGRESS
 
-- RDM-001 ✅ ENTREGADO Y MERGEADO (PR #1).
-- RDM-002 ✅ ENTREGADO Y MERGEADO (**PR #2**, merge `b9465e9`, autorización explícita en el plan de release aprobado; 4 commits semánticos; review 3 personas → 7 tests añadidos + 1 bug real atrapado: log() unborn devolvía Internal; 24/24 tests). Artefactos: brainstorm/plan/package 2026-06-11 + gates actualizados.
-- **Gates wave 2 (decisión usuario 2026-06-11): auto hasta release plan** — solo detengo en el plan de release por PR y en decisiones de producto reales.
-- RDM-003 ✅ ENTREGADO Y MERGEADO (**PR #3**, merge `2011005`; merge autorizado bajo la regla standing). Módulo `paths` (clasificador con semántica git real, poda BFS, cero I/O en classify).
-- **Acuerdos de flujo (usuario 2026-06-11):** (a) actualizar y commitear los archivos de compound master al cierre de cada unidad; (b) **merge pre-autorizado para los PRs del programa siempre que el PR incluya el estado de compound master actualizado** (el release plan debe afirmar esa condición).
-- RDM-005 ✅ ENTREGADO Y MERGEADO (**PR #4**, merge `a199d0e`, bajo regla standing — estado incluido en `9e6f670`). Módulo `workbench`: store TOML atómico (tmp por-PID, backup `.corrupt`), CRUD + autodetección BFS-4 con worktrees, 9 comandos Tauri. 53/53 tests; review dual con 4 P1 corregidos.
+- RDM-001 ✅ DELIVERED AND MERGED (PR #1).
+- RDM-002 ✅ DELIVERED AND MERGED (**PR #2**, merge `b9465e9`, explicit authorization in the approved release plan; 4 semantic commits; 3-persona review → 7 tests added + 1 real bug caught: log() unborn returned Internal; 24/24 tests). Artifacts: brainstorm/plan/package 2026-06-11 + gates updated.
+- **Wave 2 gates (user decision 2026-06-11): auto until release plan** — I only stop at the per-PR release plan and on real product decisions.
+- RDM-003 ✅ DELIVERED AND MERGED (**PR #3**, merge `2011005`; merge authorized under the standing rule). `paths` module (classifier with real git semantics, BFS pruning, zero I/O in classify).
+- **Flow agreements (user 2026-06-11):** (a) update and commit the compound master files at the close of each unit; (b) **pre-authorized merge for the program's PRs whenever the PR includes the updated compound master state** (the release plan must affirm that condition).
+- RDM-005 ✅ DELIVERED AND MERGED (**PR #4**, merge `a199d0e`, under the standing rule — state included in `9e6f670`). `workbench` module: atomic TOML store (per-PID tmp, `.corrupt` backup), CRUD + BFS-4 autodetection with worktrees, 9 Tauri commands. 53/53 tests; dual review with 4 P1 fixed.
 
-## ✅ WAVE 2 COMPLETA (2026-06-11)
+## ✅ WAVE 2 COMPLETE (2026-06-11)
 
-PRs #2 (git engine), #3 (clasificador), #4 (workbenches) mergeados a `develop`. Backend listo para integración: 53 tests, clippy limpio.
+PRs #2 (git engine), #3 (classifier), #4 (workbenches) merged to `develop`. Backend ready for integration: 53 tests, clippy clean.
 
-## Pausa de corrida (decisión usuario 2026-06-11: "aprobar y pausar después")
+## Run pause (user decision 2026-06-11: "approve and pause afterward")
 
-- ~~Rama `feat/fs-watcher` ya creada~~ — esa rama se creó **solo en el checkout Windows** y nunca se pusheó; **recreada en el checkout Linux** desde `develop` (2026-06-11, esta corrida).
-- Después de RDM-004: wave 4 RDM-006 (bus — congelar contrato de eventos; resolver wrapping spawn_blocking del GitEngine; recordar dirección de UI del usuario para RDM-007/008: tabs por proyecto + árbol izquierda + gestión de archivos abiertos).
+- ~~Branch `feat/fs-watcher` already created~~ — that branch was created **only in the Windows checkout** and was never pushed; **recreated in the Linux checkout** from `develop` (2026-06-11, this run).
+- After RDM-004: wave 4 RDM-006 (bus — freeze the event contract; resolve the spawn_blocking wrapping of the GitEngine; remember the user's UI direction for RDM-007/008: per-project tabs + left tree + management of open files).
 
-## Resume Linux (2026-06-11) — incidente de reconciliación y decisiones
+## Linux resume (2026-06-11) — reconciliation incident and decisions
 
-- **Incidente (resuelto):** la corrida resumida en este host arrancó con el checkout en `main` (stale, 14 commits detrás) y sin inspeccionar el contenido de `origin/develop`; regeneró brainstorm/plan/work-package de **RDM-002**, que ya estaba entregado (PR #2). El review de feasibility del work package lo detectó (conf 100). **Corrección:** trabajo local duplicado descartado (decisión usuario), checkout resincronizado a `develop`. *Lección operativa: el preflight de resume debe inspeccionar la base de integración remota (`git log origin/main..origin/develop`), no solo verificar que exista.*
-- **Decisión de usuario — fetch opt-in → BACKLOG (2026-06-11):** durante la regeneración el usuario eligió (3 confirmaciones) añadir un `fetch` opt-in al git engine. develop entregó RDM-002 deliberadamente sin red (`git2 0.20` sin features ssh/https, "Tinto nunca hace fetch/push"). El usuario decidió preservar el diseño del fetch como **item de backlog/follow-up** (enmienda futura al git engine), no ejecutarlo ahora ni descartarlo. Diseño preservado en `docs/backlog/2026-06-11-fetch-opt-in-backlog.md` (decisiones + requisitos de seguridad del review: host fail-closed sin CertificatePassthrough, scoping de credenciales al host confirmado, sanitización de errores, known_hosts manual, staleness honesta).
+- **Incident (resolved):** the run resumed on this host started with the checkout on `main` (stale, 14 commits behind) and without inspecting the contents of `origin/develop`; it regenerated the brainstorm/plan/work-package of **RDM-002**, which was already delivered (PR #2). The work package's feasibility review caught it (conf 100). **Correction:** duplicate local work discarded (user decision), checkout resynced to `develop`. *Operational lesson: the resume preflight must inspect the remote integration base (`git log origin/main..origin/develop`), not just verify that it exists.*
+- **User decision — opt-in fetch → BACKLOG (2026-06-11):** during the regeneration the user chose (3 confirmations) to add an opt-in `fetch` to the git engine. develop delivered RDM-002 deliberately without network (`git2 0.20` without ssh/https features, "Tinto never does fetch/push"). The user decided to preserve the fetch design as a **backlog/follow-up item** (future amendment to the git engine), not to execute it now nor discard it. Design preserved in `docs/backlog/2026-06-11-fetch-opt-in-backlog.md` (decisions + the review's security requirements: host fail-closed without CertificatePassthrough, credential scoping to the host confirmed, error sanitization, manual known_hosts, honest staleness).
 
 ## Blockers
 
-- Ninguno. Jira sigue omitida (falta `.krt/env/jira-scribe.env`; crearlo la habilitaría).
+- None. Jira is still omitted (missing `.krt/env/jira-scribe.env`; creating it would enable it).
 
-## Wave 3 — RDM-004 (watcher) — EN CURSO
+## Wave 3 — RDM-004 (watcher) — IN PROGRESS
 
-- [x] Brainstorm: `docs/brainstorms/2026-06-11-rdm-004-watcher-requirements.md`. Decisión usuario: **scope = solo workbench activo** (configurable diferido). Boundary 004/006 resuelto: debounce/throttle sobre eventos FS crudos (004) vs coalescing de deltas + emit-throttle (006). Canal único con mensaje `Batch | RepoError`; remount por API explícito (wiring → RDM-006).
-- [x] Review brainstorm (coherence, feasibility, scope-guardian). Fixes: normalización de kinds de notify (renames→Removed+Created, Any→Modified, Access descartado); is_dir sin stat con default false; AE5/R3 reformulados (notify no emite error al borrar root → síntesis); criterio de testabilidad determinista para debounce; R12 ampliado; roadmap anotado (scope resuelto + dep RDM-005).
-- [x] Plan: `docs/plans/2026-06-11-004-feat-fs-watcher-plan.md` (U1 tipos+normalize, U2 debounce/throttle reloj pausado, U3 FsWatcher+lifecycle). Review (coherence, feasibility) aplicado: features tokio completas (prod time/sync/macros/rt + dev test-util), KTD ciclo-de-vida sin contradicción (managed state → RDM-006; tests construyen directo), `tokio::spawn` con contexto requerido, `shutdown(self)` async + Drop best-effort, `pub mod watcher`, tolerar WatchNotFound, rebuild flag en debounce.rs con señal en el lote, riesgos añadidos.
-- [x] Work package: `docs/work-packages/RDM-004-watcher/2026-06-11-001-fs-watcher-work-package.md` — RU1 única, rama `feat/fs-watcher`, base `develop`. Checker OK (2 warnings justificados); review coherence → 1 safe_auto aplicado (Cargo.toml en commit grouping). **PACKAGE SOUND.**
-- [x] **Ejecución RU1 COMPLETA** (inline): U1 normalize+tipos (7 tests), U2 debounce/throttle con reloj pausado (deadline = max(piso, min(calma, techo)); 11 tests, 0.00s), U3 FsWatcher (montaje canonicalizado, classifier-antes-de-watch, dead_roots para remount real, re-assert de roots solapados, RescanNeeded ante overflow del kernel, shutdown con flush; 10 tests integración FS). 1 fix de fixture en ejecución (AE2: .env debe estar gitignoreado para ser Plane2).
-- [x] **Verificación RU1 PASS:** fmt ✓ clippy ✓ (`replace_box`, `ptr_arg` corregidos) `cargo test` 81/81 ✓ build ✓ npm install limpio + vitest 3/3 + eslint ✓.
-- [x] **Code review PASS** (4 personas): 12 fixes aplicados (3 P1: remount no-op por `mounted` divergente → dead_roots; unwatch anidado envenenaba subtree → re-assert; Rescan tragado → `RescanNeeded`; más 5 P2 + 3 P3 + safe_autos) + 9 tests nuevos del review. Descartados con announce: rebuild inline (riesgo aceptado en plan), rename watch_workbench, Serialize de errores (→ RDM-006). Detalle en el Review Gate del paquete. Re-verificación 81/81.
-- [x] Security gate: not required (RU1 sin superficie de alto riesgo, según paquete).
-- Paquete → `implemented-verified-awaiting-release`.
-- [ ] **Handoff a krt-release-marshal — EN CURSO** (commits semánticos en `feat/fs-watcher`, push, PR → `develop`; merge pre-autorizado por regla standing si el PR incluye este estado actualizado; Jira omitted: sin `.krt/env/jira-scribe.env`).
+- [x] Brainstorm: `docs/brainstorms/2026-06-11-rdm-004-watcher-requirements.md`. User decision: **scope = active workbench only** (configurable deferred). Boundary 004/006 resolved: debounce/throttle over raw FS events (004) vs delta coalescing + emit-throttle (006). Single channel with a `Batch | RepoError` message; remount via explicit API (wiring → RDM-006).
+- [x] Brainstorm review (coherence, feasibility, scope-guardian). Fixes: normalization of notify kinds (renames→Removed+Created, Any→Modified, Access dropped); is_dir without stat with default false; AE5/R3 reformulated (notify does not emit an error on deleting root → synthesis); deterministic testability criterion for debounce; R12 expanded; roadmap annotated (scope resolved + dep RDM-005).
+- [x] Plan: `docs/plans/2026-06-11-004-feat-fs-watcher-plan.md` (U1 types+normalize, U2 debounce/throttle paused clock, U3 FsWatcher+lifecycle). Review (coherence, feasibility) applied: full tokio features (prod time/sync/macros/rt + dev test-util), lifecycle KTD without contradiction (managed state → RDM-006; tests build directly), `tokio::spawn` with required context, `shutdown(self)` async + Drop best-effort, `pub mod watcher`, tolerate WatchNotFound, rebuild flag in debounce.rs with a signal in the batch, risks added.
+- [x] Work package: `docs/work-packages/RDM-004-watcher/2026-06-11-001-fs-watcher-work-package.md` — single RU1, branch `feat/fs-watcher`, base `develop`. Checker OK (2 justified warnings); coherence review → 1 safe_auto applied (Cargo.toml in commit grouping). **PACKAGE SOUND.**
+- [x] **RU1 execution COMPLETE** (inline): U1 normalize+types (7 tests), U2 debounce/throttle with paused clock (deadline = max(floor, min(quiet, ceiling)); 11 tests, 0.00s), U3 FsWatcher (canonicalized mount, classifier-before-watch, dead_roots for real remount, re-assert of overlapping roots, RescanNeeded on kernel overflow, shutdown with flush; 10 FS integration tests). 1 fixture fix during execution (AE2: .env must be gitignored to be Plane2).
+- [x] **RU1 verification PASS:** fmt ✓ clippy ✓ (`replace_box`, `ptr_arg` fixed) `cargo test` 81/81 ✓ build ✓ clean npm install + vitest 3/3 + eslint ✓.
+- [x] **Code review PASS** (4 personas): 12 fixes applied (3 P1: no-op remount from divergent `mounted` → dead_roots; nested unwatch poisoned subtree → re-assert; swallowed Rescan → `RescanNeeded`; plus 5 P2 + 3 P3 + safe_autos) + 9 new tests from the review. Dismissed with announce: inline rebuild (risk accepted in plan), rename watch_workbench, Serialize of errors (→ RDM-006). Detail in the package's Review Gate. Re-verification 81/81.
+- [x] Security gate: not required (RU1 with no high-risk surface, per the package).
+- Package → `implemented-verified-awaiting-release`.
+- [x] **Release COMPLETE (2026-06-11):** release plan approved by user (incl. `Size/scope decision: approve a large PR` — ~1,746 human lines, ~372 docs separately, ~half of the Rust is tests; broad RU approved in the package). 6 semantic commits on `feat/fs-watcher` (3 feat with incremental history of mod.rs, chore lockfile, docs, + reconciliation f7ea5d5). Scope guardrail: BLOCKING size resolved with the plan's decision. Jira omitted (`jira-env-not-configured`). **PR #6 https://github.com/ElZaWarudo/tinto/pull/6 MERGED to `develop`** (merge `c008d77`, visible gate MERGEABLE/CLEAN with no required checks or reviews, merge pre-authorized by standing rule — state included in commit `8c3e21e`). Branch deleted locally and remotely. Reviewers omitted with a note (repo with no collaborators). **RDM-004 CLOSED.**
 
-## Próxima acción
+## ✅ WAVE 3 COMPLETE (2026-06-11)
 
-Release de RU1 (RDM-004): commits → push → PR → merge (regla standing). Después: wave 4 — RDM-006 (bus; congelar contrato de eventos; wiring del watcher como managed state + remount desde conmutación; spawn_blocking del GitEngine; nota: consumidor debe manejar `RescanNeeded` y tratar lotes con `.gitignore` Plane1 como señal de recálculo completo).
+PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenches + watcher; 81 tests, clippy clean.
+
+## Wave 4 — RDM-006 (State/Event bus) — IN PROGRESS
+
+- Branch: `feat/state-event-bus` (from develop; carries the wave 3 closeout docs).
+- [x] Brainstorm: `docs/brainstorms/2026-06-11-rdm-006-state-event-bus-requirements.md`. User decisions 2026-06-11: (1) **lightweight push + subscription to the open diff**; (2) **full repo tree** in the UI ⇒ the contract freezes a tree-listing command (walk with the `ignore` crate).
+- [x] Brainstorm review (coherence, feasibility, scope-guardian, adversarial). Hardening applied: dry-run of the freeze against RDM-007..010 as a condition; errors in 2 classes (transient vs terminal of the watcher) + retry command; global degraded state via `BackendInit`; untracked with synthesized FileDiff (R9b); working-tree current-content command; subscription = a set capped at N; monotonic revision snapshot+deltas (R2b); Plane 2 with best-effort stat + last known size (size delta for RDM-009); RescanNeeded broadcast with bounded concurrency; live diff latency budget ≤2s p95 (coalescing only for bursty cases); wiring constraints (watcher owned by the bus, synchronous channel in setup, switching notifies — nothing inline on the main thread); blob Vec<u8> carve-out; cite Git2Engine (not a trait); AE8–AE11.
+- [x] Plan: `docs/plans/2026-06-11-005-feat-state-event-bus-plan.md` (U1 contract+dry-run, U2 pure state, U3 bus task, U4 commands, U5 wiring). Review (coherence, feasibility) applied: run-loop `.build().run(RunEvent)` + Shutdown(ack)+block_on for clean exit; identity = canonical path throughout the bus; subscribed diffs inside the recompute closure (snapshot of subscriptions); results channel (not JoinSet without guard); `DeltaSink` (not `Emitter`, collides); `State<BusHandle>` required (not Option — Tauri does not support it; no wrapper tests); dep `base64`; tree cap 20k pinned; trace/structure fixes.
+- [x] Work package: `docs/work-packages/RDM-006-state-event-bus/2026-06-11-001-state-event-bus-work-package.md` — **single RU** (contract-vs-orchestration split evaluated and dismissed: U1 has no independent verification; dry-run as an internal gate). Checker OK; coherence review → 3 fixes (Security Watch aligned to verifiable containment + traversal test; "already on the branch"→working tree; glob docs not overlapping the contract). **PACKAGE SOUND.**
+- [~] **RU1 execution — code complete, VERIFICATION PENDING** (inline, branch `feat/state-event-bus`):
+  - U1 ✔ code: `docs/contracts/bus-contract.md` (contract + dry-run table RDM-007..010 with no gaps) + `src-tauri/src/bus/contract.rs` (Serialize types + shape tests).
+  - U2 ✔ code: pure logic in `bus/mod.rs` (`RepoLiveState`, `recalc_scope`, monotonic revision, error classes, `fs_events` with size/delta) + pure tests.
+  - U3 ✔ code: `run_bus` task (select! commands/watcher/results-channel, `Git2Engine::open` in spawn_blocking + semaphore cap=2 + pending flag, subscribed diffs inside the closure, canonical identity, injected `DeltaSink`, degraded via BackendInit) + 5 integration tests (AE1/AE7/AE3/AE10/AE8).
+  - U4 ✔ code: `bus/commands.rs` (serializable CommandError; get_worktree_diff/commit_diff/commit_log/blob/file_content/list_repo_tree in spawn_blocking; resolve_within anti-traversal; FileContent utf8/base64/truncated; tree via `ignore::WalkBuilder` cap 20k; snapshot/subscribe/retry proxies) + tests. Dep `base64` added.
+  - U5 ✔ code: wiring in `lib.rs` (synchronous channel + manage(BusHandle) + spawn run_bus with AppHandle::emit sink + initial of the active workbench; `.build().run(RunEvent::ExitRequested→shutdown+block_on)`); `set_active_workbench` gains `State<BusHandle>` and notifies the bus.
+  - **✅ UNBLOCKED and VERIFIED (2026-06-15):** Bash restored. Fix of 1 flaky test (non-deterministic order of the initial A/B snapshot) + 2 compile errors (`Manager` trait for `try_state`; `block_on` inference). Verification PASS: fmt ✓ clippy ✓ `cargo test` 106/106 ✓ build ✓ npm lint+vitest 3/3 ✓ `tauri dev` smoke ✓.
+- [x] **Code review COMPLETE (4 personas, 2026-06-15)** — see the table in the package's Review Gate. **11 fixes applied** (1 P0 allowlist, 5 P1, 3 P2, 2 P3) + **9 new tests**. Deferred with rationale: 9-arg struct, bounded channel, blob bound (git module), various P3. **Surfaceable decision:** the workbench-membership allowlist (P0 adv) was implemented despite being deferred in the package's Security Gate — cheap, does not change legitimate frontend behavior, hardens consistently with RDM-001's CSP/capabilities. Closes the "future hardening". Contract updated (`bus-contract.md`: containment categories, allowlist, durable revision, terminal cleanup).
+- [x] Security gate: not required (covered by the adversarial persona; traversal/`.git`/allowlist surface now has tests).
+- Package → `implemented-verified-awaiting-release`. **Pipeline items 5 and 6 COMPLETE.**
+
+## Next action
+
+**Handoff to `krt-release-marshal`** (do not stop before; the release-plan approval pause lives inside Release Marshal). PR `feat/state-event-bus` → `develop`. Handoff inputs:
+- **Surfaceable decision in the release plan:** P0 allowlist implemented outside the package's prototype scope (see above) — the user may object.
+- **Size/scope decision:** single broad RU (full bus + review hardening); ~half of the Rust is tests. Affirm in the plan.
+- **Merge:** pre-authorized standing rule **whenever the PR includes the updated compound master state** (this file + work package + contract + summary travel on the branch).
+- Jira: omitted (`jira-env-not-configured`); record the degraded handoff.
+- Reviewers: omitted with a note (repo with no collaborators).
+- Backup of the prior WIP on the remote branch `checkpoint/state-event-bus`.
+
+After RDM-006 is merged (closes Wave 4 / freezes the event contract): Wave 5 = RDM-007/008 (UI that consumes the contract; the user's UI direction already recorded: per-project tabs + left tree + drill-through card→diff). The frozen contract already has the dry-run table RDM-007..010 with no gaps.
