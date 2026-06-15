@@ -1,58 +1,74 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useMemo, useRef } from "react";
+import type { DockviewApi } from "dockview-react";
+import { DockWorkspace, type PanelComponents } from "./workspace/DockWorkspace";
+import { PANEL_DASHBOARD, PANEL_REPO, PANEL_TREE, repoPanelId } from "./workspace/panels";
+import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/actions";
+import { openRepoPanel } from "./workspace/openRepo";
+import { DashboardPanel } from "./panels/DashboardPanel";
+import { RepoPanel } from "./panels/RepoPanel";
+import { RepoTreePanel } from "./panels/RepoTreePanel";
+import { TopBar } from "./workbench/TopBar";
+import { FirstRun } from "./workbench/firstRun";
+import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
+import { useBusConnection } from "./bus/connection";
+import { busStore, useBusState } from "./bus/store";
 import "./App.css";
 
-interface PingResponse {
-  message: string;
-  timestamp_ms: number;
-}
+const components: PanelComponents = {
+  [PANEL_DASHBOARD]: DashboardPanel,
+  [PANEL_TREE]: RepoTreePanel,
+  [PANEL_REPO]: RepoPanel,
+};
 
-interface TickPayload {
-  timestamp_ms: number;
-}
+export default function App() {
+  useBusConnection();
+  const { config, loaded } = useBusState();
+  const apiRef = useRef<DockviewApi | null>(null);
 
-function App() {
-  const [pingMessage, setPingMessage] = useState("contactando backend...");
-  const [pingError, setPingError] = useState(false);
-  const [lastTick, setLastTick] = useState<number | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    invoke<PingResponse>("ping")
-      .then((res) => {
-        if (active) setPingMessage(res.message);
-      })
-      .catch(() => {
-        if (active) {
-          setPingError(true);
-          setPingMessage("error contactando el backend");
+  const actions = useMemo<WorkspaceActions>(
+    () => ({
+      openRepo: (path) => {
+        if (apiRef.current) {
+          openRepoPanel(apiRef.current, path, busStore.displayName(path));
         }
-      });
+      },
+      addRepo: () => {
+        const active = busStore.getState().config?.active;
+        if (active) void addRepoFlow(active);
+      },
+      removeRepo: (path) => {
+        const active = busStore.getState().config?.active;
+        if (!active) return;
+        void removeRepoFlow(active, path).then((removed) => {
+          if (removed) apiRef.current?.getPanel(repoPanelId(path))?.api.close();
+        });
+      },
+    }),
+    [],
+  );
 
-    const unlisten = listen<TickPayload>("tick", (event) => {
-      if (active) setLastTick(event.payload.timestamp_ms);
-    });
-
-    return () => {
-      active = false;
-      unlisten.then((fn) => fn());
-    };
-  }, []);
+  // First-run: once loaded, no active workbench → the create flow.
+  if (loaded && !config?.active) {
+    return (
+      <div className="app-shell">
+        <FirstRun />
+      </div>
+    );
+  }
 
   return (
-    <main className="container">
-      <h1>Tinto</h1>
-      <p>Esqueleto del monitor de repos. Instrumentación de humo del puente webview↔Rust:</p>
-      <p data-testid="ping" className={pingError ? "error" : undefined}>
-        ping: {pingMessage}
-      </p>
-      <p data-testid="tick">
-        tick: {lastTick === null ? "esperando..." : new Date(lastTick).toLocaleTimeString()}
-      </p>
-    </main>
+    <WorkspaceActionsContext.Provider value={actions}>
+      <div className="app-shell">
+        <TopBar />
+        <div className="app-shell__body">
+          <DockWorkspace
+            components={components}
+            onApi={(api) => {
+              apiRef.current = api;
+            }}
+          />
+        </div>
+      </div>
+    </WorkspaceActionsContext.Provider>
   );
 }
-
-export default App;

@@ -128,9 +128,11 @@ PRs #2 (git engine), #3 (classifier), #4 (workbenches) merged to `develop`. Back
 
 PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenches + watcher; 81 tests, clippy clean.
 
-## Wave 4 — RDM-006 (State/Event bus) — IN PROGRESS
+## Wave 4 — RDM-006 (State/Event bus) — ✅ COMPLETE (shipped 2026-06-15)
 
-- Branch: `feat/state-event-bus` (from develop; carries the wave 3 closeout docs).
+- **PR #7 MERGED** to `develop` (merge commit `92f2446`, gate MERGEABLE/CLEAN, no required checks/reviews; merged under the standing rule with state included). Branch deleted local+remote. **Event contract frozen** (`docs/contracts/bus-contract.md`). Backend complete: git engine + classifier + workbenches + watcher + state/event bus; 106 tests, clippy clean.
+- **Language switch (user directive 2026-06-15):** mid-merge the user set this repo to **English going forward**. PR #7 was given a full English rewrite (3 commit messages + PR title/body + the new docs: brainstorm, plan, work package, contract, and this state file). Code-file comments/strings remain Spanish (consistent with RDM-001..005); English applies to net-new code from RDM-007 on. WIP backup branch `checkpoint/state-event-bus` is now obsolete (local+remote) — prune when convenient.
+- Branch: `feat/state-event-bus` (from develop; carried the wave 3 closeout docs).
 - [x] Brainstorm: `docs/brainstorms/2026-06-11-rdm-006-state-event-bus-requirements.md`. User decisions 2026-06-11: (1) **lightweight push + subscription to the open diff**; (2) **full repo tree** in the UI ⇒ the contract freezes a tree-listing command (walk with the `ignore` crate).
 - [x] Brainstorm review (coherence, feasibility, scope-guardian, adversarial). Hardening applied: dry-run of the freeze against RDM-007..010 as a condition; errors in 2 classes (transient vs terminal of the watcher) + retry command; global degraded state via `BackendInit`; untracked with synthesized FileDiff (R9b); working-tree current-content command; subscription = a set capped at N; monotonic revision snapshot+deltas (R2b); Plane 2 with best-effort stat + last known size (size delta for RDM-009); RescanNeeded broadcast with bounded concurrency; live diff latency budget ≤2s p95 (coalescing only for bursty cases); wiring constraints (watcher owned by the bus, synchronous channel in setup, switching notifies — nothing inline on the main thread); blob Vec<u8> carve-out; cite Git2Engine (not a trait); AE8–AE11.
 - [x] Plan: `docs/plans/2026-06-11-005-feat-state-event-bus-plan.md` (U1 contract+dry-run, U2 pure state, U3 bus task, U4 commands, U5 wiring). Review (coherence, feasibility) applied: run-loop `.build().run(RunEvent)` + Shutdown(ack)+block_on for clean exit; identity = canonical path throughout the bus; subscribed diffs inside the recompute closure (snapshot of subscriptions); results channel (not JoinSet without guard); `DeltaSink` (not `Emitter`, collides); `State<BusHandle>` required (not Option — Tauri does not support it; no wrapper tests); dep `base64`; tree cap 20k pinned; trace/structure fixes.
@@ -146,14 +148,32 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 - [x] Security gate: not required (covered by the adversarial persona; traversal/`.git`/allowlist surface now has tests).
 - Package → `implemented-verified-awaiting-release`. **Pipeline items 5 and 6 COMPLETE.**
 
+## Wave 5 — RDM-007 (Dashboard UI) — IMPLEMENTED, AWAITING RELEASE
+
+- **Scope decided with user (2026-06-15):** RDM-007 expanded to a VS Code–style **dockable/splittable workspace** (build the shell now, user chose against splitting into 007a/007b). Panel model: Dashboard card grid + per-repo detail tabs + repo-node tree. Global persisted layout. Core workbench mgmt (create/switch/add/remove). Repo tree is **repo-node-level only**; file expansion deferred to RDM-008. RDM-008 = Wave 6 (hard-depends on 007).
+- [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-007-dashboard-ui-requirements.md`. Reviewed (coherence, feasibility, scope-guardian, design-lens). Hardened: differentiated Repo panel (commit log + status list vs card), git edge states, zero-repos/loading/degraded states, activity-indicator spec, dock-library-first gate, plugins/capabilities directive, `list_workbenches` name join.
+- [x] Plan: `docs/plans/2026-06-15-001-feat-dashboard-ui-plan.md` (U1 deps+Tauri wiring, U2 dock shell GATE, U3 bus client+store, U4 dashboard, U5 repo panel, U6 tree, U7 workbench mgmt, U8 integration). Reviewed (coherence, feasibility). Fixes applied: KTD1 dockview; mutation commands need `workbench` name arg; timestamp units (ms vs s); `dialog:allow-open`; ui_state write-failure + flush-on-quit; **KTD5 canonical-path join** (canonicalize stored repo path on add — small RDM-005 amendment).
+- [x] Work package: `docs/work-packages/RDM-007-dashboard-ui/2026-06-15-001-dashboard-ui-work-package.md` — **single RU** (reviewers' split recommendation declined: user prefers fewer cycles + U2 internal gate de-risks). Checker OK; coherence review → 1 fix (dangling finding-ID reference). **PACKAGE SOUND.** Large PR (>1000 lines, ~half tests) → `aprobar PR grande` decision carried to release plan.
+- [x] **Execute RU1 (U1–U8) — COMPLETE.** Branch `feat/dashboard-ui` from develop.
+  - [x] U1 deps + Tauri wiring: dockview-react 6.6.1 + @tauri-apps/plugin-dialog 2.7.1; Rust `ui_state` command (`get_ui_state`/`set_ui_state`, atomic write, corrupt-tolerant) + `tauri_plugin_dialog::init()` + `dialog:allow-open` capability; KTD5 canonicalize-on-add in `workbench/mod.rs` (+ remove matches canonical). **111 cargo tests** (106 + 4 ui_state + 1 canonicalization), clippy/fmt clean.
+  - [x] U2 dock shell **GATE PASSED**: `src/workspace/{panels,layout,DockWorkspace}.tsx` — dockview `themeVisualStudio`, restore-or-default, debounced save, flush-on-quit, empty-workspace guard; persistence via `get_ui_state`/`set_ui_state`. App.tsx replaced (placeholders), dark dev-tool App.css, ResizeObserver/matchMedia polyfills. **10 vitest** (layout 5, DockWorkspace 4, App 1), tsc/lint clean. `tauri dev` boot smoke ✓ (dockview mounts, no panics). Interactive split/drag deferred to user; wiring covered by DockWorkspace.test.
+  - [x] U3 bus client/store · U4 dashboard cards · U5 repo panel · U6 tree · U7 workbench mgmt · U8 integration — **ALL COMPLETE.**
+  - **Verification PASS:** cargo 114, vitest 58, tsc/lint/clippy/fmt clean, `tauri dev` boot smoke ✓, `tauri build` exit 0 (deb/rpm/AppImage).
+- [x] **Code review COMPLETE (4 personas, 2026-06-15)** — no P0/P1 correctness (prototype-calibrated); 2 P1s were test gaps. **8 fixes + 10 tests** (loadSnapshot revision-merge, dedup selectors, connection-lifecycle test, AE4 round-trip test, removeRepo/openRepo guards, backend dead-entry remove, RepoPanel log-error state, DockWorkspace cleanup, ui_state/canonicalization tests). Deferred w/ rationale: phantom-repo generation token (backend already discards zombie deltas), TS↔Rust contract codegen, keyboard arrow-nav. See package Review Gate. **Review PASS.**
+- [x] Security gate: not required (read-only local UI + IPC; `dialog:allow-open` only; ui_state corrupt-tolerant + config-dir-scoped).
+- Package → `implemented-verified-awaiting-release`. **Pipeline items 5–6 COMPLETE.** Branch `feat/dashboard-ui`: 9 commits (deps / app / ui-shell / docs / bus / panels / workbench / integration / review-fixes).
+
 ## Next action
 
-**Handoff to `krt-release-marshal`** (do not stop before; the release-plan approval pause lives inside Release Marshal). PR `feat/state-event-bus` → `develop`. Handoff inputs:
-- **Surfaceable decision in the release plan:** P0 allowlist implemented outside the package's prototype scope (see above) — the user may object.
-- **Size/scope decision:** single broad RU (full bus + review hardening); ~half of the Rust is tests. Affirm in the plan.
-- **Merge:** pre-authorized standing rule **whenever the PR includes the updated compound master state** (this file + work package + contract + summary travel on the branch).
-- Jira: omitted (`jira-env-not-configured`); record the degraded handoff.
-- Reviewers: omitted with a note (repo with no collaborators).
-- Backup of the prior WIP on the remote branch `checkpoint/state-event-bus`.
+**Handoff to `krt-release-marshal`** (do not stop before; release-plan approval pause lives inside Release Marshal). PR `feat/dashboard-ui` → `develop`. Handoff inputs:
+- **Size/scope decision:** single broad RU (full dockable frontend; ~half the TS is tests) — affirm `aprobar PR grande` in the release plan.
+- **KTD5 delivered-code touch:** the workbench store now canonicalizes stored repo paths (small RDM-005 amendment) — surface in the release plan.
+- **Merge:** pre-authorized standing rule whenever the PR includes the updated compound-master state (it does — this file travels on the branch).
+- Jira omitted (`jira-env-not-configured`). Reviewers omitted (repo has no collaborators).
+- Commit grouping already clean on the branch (deps/app/ui-shell/docs/bus/panels/workbench/integration/review-fixes); rebase unnecessary (linear atop develop).
 
-After RDM-006 is merged (closes Wave 4 / freezes the event contract): Wave 5 = RDM-007/008 (UI that consumes the contract; the user's UI direction already recorded: per-project tabs + left tree + drill-through card→diff). The frozen contract already has the dry-run table RDM-007..010 with no gaps.
+After RDM-007 merges (closes Wave 5): Wave 6 = RDM-008/009/010 (diff viewer, plane-2 UI, timeline) — all add panels into this dockable shell + the registry/actions/store seams; RDM-008 first (it's the highest-value, drives the file-tree expansion + card→diff drill-through deferred from 007).
+
+- Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state.
+- Jira omitted (missing `.krt/env/jira-scribe.env`).
+- All new code/docs in English (Wave 4 language directive).

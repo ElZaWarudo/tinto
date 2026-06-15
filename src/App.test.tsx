@@ -1,76 +1,64 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
-import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import App from "./App";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, act } from "@testing-library/react";
 
-interface TickPayload {
-  timestamp_ms: number;
-}
-type TickHandler = (event: { event: string; id: number; payload: TickPayload }) => void;
-
-const tickHandlers: TickHandler[] = [];
-
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn((event: string, handler: TickHandler) => {
-    if (event === "tick") tickHandlers.push(handler);
-    return Promise.resolve(() => {});
-  }),
+// Avoid rendering dockview / hitting Tauri in jsdom.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("./bus/connection", () => ({
+  useBusConnection: () => {},
+  reloadActiveWorkbench: vi.fn(),
 }));
 
-describe("App (puente de humo)", () => {
+const captured = vi.hoisted(() => ({
+  components: undefined as Record<string, unknown> | undefined,
+}));
+vi.mock("./workspace/DockWorkspace", () => ({
+  DockWorkspace: (props: { components: Record<string, unknown> }) => {
+    captured.components = props.components;
+    return <div data-testid="workspace-stub" />;
+  },
+}));
+
+import App from "./App";
+import { busStore } from "./bus/store";
+import { PANEL_DASHBOARD, PANEL_REPO, PANEL_TREE } from "./workspace/panels";
+import type { WorkbenchConfig } from "./bus/contract";
+
+describe("App", () => {
   beforeEach(() => {
-    tickHandlers.length = 0;
-    mockIPC((cmd) => {
-      if (cmd === "ping") {
-        return { message: "pong desde el backend de Tinto", timestamp_ms: 1718000000000 };
-      }
-      return undefined;
-    });
+    busStore.resetAll();
+    captured.components = undefined;
   });
 
-  afterEach(() => {
-    clearMocks();
-    vi.clearAllMocks();
-  });
-
-  // Covers AE1
-  it("muestra la respuesta del ping del backend al montar", async () => {
+  it("shows the workspace shell before the snapshot loads", () => {
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("ping")).toHaveTextContent("pong desde el backend de Tinto"),
-    );
+    expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
+    expect(screen.getByText("Tinto")).toBeInTheDocument(); // top bar brand
   });
 
-  // Covers AE2
-  it("refleja el timestamp del ultimo tick recibido", async () => {
+  // Covers AE1 (first-run gate) + R8
+  it("shows first-run when loaded with no active workbench", () => {
+    act(() => busStore.loadSnapshot([], { available: true })); // loaded, no config.active
     render(<App />);
-    expect(screen.getByTestId("tick")).toHaveTextContent("esperando...");
+    expect(screen.getByTestId("first-run")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-stub")).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => expect(tickHandlers.length).toBeGreaterThan(0));
-    const timestamp = Date.UTC(2026, 5, 10, 14, 30, 0);
+  it("shows the workspace with all panel types registered when a workbench is active", () => {
+    const config: WorkbenchConfig = {
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [] }],
+    };
     act(() => {
-      tickHandlers.forEach((handler) =>
-        handler({ event: "tick", id: 1, payload: { timestamp_ms: timestamp } }),
-      );
+      busStore.setConfig(config);
+      busStore.loadSnapshot([], { available: true });
     });
-
-    expect(screen.getByTestId("tick")).not.toHaveTextContent("esperando...");
-    // toLocaleTimeString: patrón hora con separadores (p. ej. 14:30:00 / 2:30:00 PM)
-    expect(screen.getByTestId("tick")).toHaveTextContent(/\d{1,2}:\d{2}:\d{2}/);
-  });
-
-  it("muestra estado de error si el ping falla", async () => {
-    // mockIPC re-registra el interceptor: reemplaza el de beforeEach sin limpiar a mitad de test
-    mockIPC((cmd) => {
-      if (cmd === "ping") {
-        return Promise.reject(new Error("backend caido"));
-      }
-      return undefined;
-    });
-
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByTestId("ping")).toHaveTextContent("error contactando el backend"),
+    expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
+    expect(Object.keys(captured.components ?? {})).toEqual(
+      expect.arrayContaining([PANEL_DASHBOARD, PANEL_TREE, PANEL_REPO]),
     );
   });
 });

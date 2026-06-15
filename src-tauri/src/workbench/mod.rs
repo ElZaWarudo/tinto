@@ -246,6 +246,11 @@ impl WorkbenchStore {
         alias: Option<String>,
         validate: bool,
     ) -> Result<(), WorkbenchError> {
+        // Store the canonical path so it matches the canonical paths the bus
+        // reports in snapshot/deltas (the frontend joins aliases by that key).
+        // Falls back to the raw path when it cannot be canonicalized (e.g. it
+        // does not exist), mirroring the bus's `canonicalize().unwrap_or(path)`.
+        let path = path.canonicalize().unwrap_or(path);
         if validate {
             Git2Engine::open(&path)?;
         }
@@ -262,9 +267,15 @@ impl WorkbenchStore {
     }
 
     pub fn remove_repo(&mut self, workbench: &str, path: &Path) -> Result<(), WorkbenchError> {
+        // Stored paths are canonical (see `add_repo`). Match BOTH the canonical
+        // form (for a live repo) AND the raw query (so a repo whose directory
+        // was deleted — canonicalize now fails — can still be removed by its
+        // stored canonical path).
+        let canon = path.canonicalize().ok();
         let wb = self.find_mut(workbench)?;
         let before = wb.repos.len();
-        wb.repos.retain(|r| r.path != path);
+        wb.repos
+            .retain(|r| Some(r.path.as_path()) != canon.as_deref() && r.path != path);
         if wb.repos.len() == before {
             return Err(WorkbenchError::UnknownRepo(path.to_path_buf()));
         }
@@ -454,6 +465,63 @@ mod tests {
         std::fs::create_dir_all(&no_repo).unwrap();
         let err = store.add_repo("A", no_repo, None, true).unwrap_err();
         assert!(matches!(err, WorkbenchError::InvalidRepo(_)));
+    }
+
+    #[test]
+    fn add_repo_almacena_path_canonico_y_remove_lo_acepta() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+        // Real subdir referenced through a non-canonical path (extra `/.`).
+        let real = dir.path().join("repo");
+        std::fs::create_dir_all(&real).unwrap();
+        let noncanon = real.join(".");
+        store.add_repo("A", noncanon.clone(), None, false).unwrap();
+
+        let canonical = real.canonicalize().unwrap();
+        assert_eq!(
+            store.config().workbenches[0].repos[0].path,
+            canonical,
+            "stored path must be canonical so it matches bus/snapshot paths"
+        );
+        // Removing by the non-canonical form still resolves to the stored repo.
+        store.remove_repo("A", &noncanon).unwrap();
+        assert!(store.config().workbenches[0].repos.is_empty());
+    }
+
+    #[test]
+    fn add_repo_canonicaliza_dot_dot_y_remove_lo_acepta() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+        let real = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&real).unwrap();
+        // A `..` round-trip path that resolves to `real`.
+        let via_dotdot = real.join("..").join("b");
+        store
+            .add_repo("A", via_dotdot.clone(), None, false)
+            .unwrap();
+        assert_eq!(
+            store.config().workbenches[0].repos[0].path,
+            real.canonicalize().unwrap(),
+        );
+        store.remove_repo("A", &via_dotdot).unwrap();
+        assert!(store.config().workbenches[0].repos.is_empty());
+    }
+
+    #[test]
+    fn remove_repo_acepta_entrada_cuyo_directorio_fue_borrado() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+        let real = dir.path().join("dead");
+        std::fs::create_dir_all(&real).unwrap();
+        store.add_repo("A", real.clone(), None, false).unwrap();
+        let stored = store.config().workbenches[0].repos[0].path.clone(); // canonical
+        std::fs::remove_dir_all(&real).unwrap(); // dir gone → canonicalize fails
+                                                 // Removing by the stored canonical path still works (raw-path match).
+        store.remove_repo("A", &stored).unwrap();
+        assert!(store.config().workbenches[0].repos.is_empty());
     }
 
     #[test]
