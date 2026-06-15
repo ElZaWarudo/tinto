@@ -1,0 +1,521 @@
+//! Comandos `invoke` del contrato del bus (ver
+//! `docs/contracts/bus-contract.md`). Las lecturas pesadas (diffs, log,
+//! blob, contenido, árbol) NO pasan por la task del bus: corren en
+//! `spawn_blocking` abriendo `Git2Engine` directamente o leyendo el FS, con
+//! guardas de tamaño/binario y validación de path. Los proxies de estado
+//! (snapshot, suscripción, retry) hablan con la task vía `BusHandle`.
+
+use std::path::{Path, PathBuf};
+
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use serde::Serialize;
+use tauri::State;
+
+use super::contract::{
+    ContentEncoding, FileContent, RepoTree, SubscriptionTarget, TreeEntry, WorkbenchSnapshot,
+    FILE_CONTENT_MAX_BYTES, REPO_TREE_MAX_ENTRIES,
+};
+use super::BusHandle;
+use crate::git::{
+    CommitInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError,
+};
+
+/// Error de comando serializado hacia el frontend (categoría + mensaje
+/// seguro), patrón análogo a `WorkbenchError`.
+#[derive(Debug, Serialize)]
+pub struct CommandError {
+    pub category: String,
+    pub message: String,
+}
+
+impl CommandError {
+    fn new(category: &str, message: impl Into<String>) -> Self {
+        Self {
+            category: category.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<GitError> for CommandError {
+    fn from(e: GitError) -> Self {
+        // Misma categoría que el path de delta (única fuente: GitError::category).
+        CommandError::new(e.category(), e.to_string())
+    }
+}
+
+/// Valida que `repo` pertenezca al workbench activo (allowlist del bus) y
+/// devuelve su path canónico. Las lecturas bajo demanda SOLO operan sobre
+/// repos montados: `resolve_within` contiene el path *dentro* del repo, pero
+/// el repo en sí debe estar acotado al workbench (si no, un frontend
+/// comprometido podría leer cualquier ruta del disco con `repo=/`).
+async fn ensure_known(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
+    let canon = repo
+        .canonicalize()
+        .map_err(|_| CommandError::new("repository-not-found", "el repo no existe"))?;
+    if bus.is_known(canon.clone()).await {
+        Ok(canon)
+    } else {
+        Err(CommandError::new(
+            "repo-not-allowed",
+            "el repo no pertenece al workbench activo",
+        ))
+    }
+}
+
+/// Corre trabajo bloqueante (git/FS) fuera del runtime async.
+async fn blocking<T, F>(f: F) -> Result<T, CommandError>
+where
+    F: FnOnce() -> Result<T, CommandError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|_| CommandError::new("internal", "la tarea de lectura falló"))?
+}
+
+/// Valida que `rel` (relativo al repo) quede contenido dentro de `repo`
+/// tras canonicalizar — rechaza `../` que escape. Devuelve el path absoluto
+/// canónico del archivo. Requiere que el archivo exista.
+fn resolve_within(repo: &Path, rel: &Path) -> Result<PathBuf, CommandError> {
+    let repo_canon = repo
+        .canonicalize()
+        .map_err(|_| CommandError::new("repository-not-found", "el repo no existe"))?;
+    let joined = repo_canon.join(rel);
+    let canon = joined
+        .canonicalize()
+        .map_err(|_| CommandError::new("not-found", "el archivo no existe"))?;
+    if !canon.starts_with(&repo_canon) {
+        return Err(CommandError::new(
+            "path-traversal",
+            "el path se sale del repositorio",
+        ));
+    }
+    // El árbol interno de `.git` no se expone por lectura directa (misma
+    // política que `list_repo_tree`): evita filtrar `.git/config` con
+    // credenciales de remoto, HEAD, index, etc.
+    let inside = canon.strip_prefix(&repo_canon).unwrap_or(&canon);
+    if inside
+        .components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new(".git"))
+    {
+        return Err(CommandError::new(
+            "path-forbidden",
+            "el directorio .git no se expone",
+        ));
+    }
+    Ok(canon)
+}
+
+/// Construye `FileContent` desde bytes con guardas: >1 MiB se trunca; el
+/// contenido no-UTF8 (binario) se codifica en base64.
+fn file_content_from_bytes(bytes: Vec<u8>) -> FileContent {
+    let truncated = bytes.len() > FILE_CONTENT_MAX_BYTES;
+    let slice = if truncated {
+        &bytes[..FILE_CONTENT_MAX_BYTES]
+    } else {
+        &bytes[..]
+    };
+    match std::str::from_utf8(slice) {
+        Ok(text) => FileContent {
+            encoding: ContentEncoding::Utf8,
+            content: text.to_string(),
+            truncated,
+        },
+        // Cuando el corte por truncado parte un carácter multibyte al final
+        // (`error_len() == None`), el archivo SIGUE siendo texto: se conserva
+        // el prefijo UTF-8 válido en vez de degradar a base64. Un byte inválido
+        // real en medio (`error_len() == Some`) sí es binario.
+        Err(e) if truncated && e.error_len().is_none() => {
+            let valid = std::str::from_utf8(&slice[..e.valid_up_to()])
+                .expect("valid_up_to garantiza UTF-8 válido");
+            FileContent {
+                encoding: ContentEncoding::Utf8,
+                content: valid.to_string(),
+                truncated,
+            }
+        }
+        Err(_) => FileContent {
+            encoding: ContentEncoding::Base64,
+            content: STANDARD.encode(slice),
+            truncated,
+        },
+    }
+}
+
+/// Diff sintetizado todo-añadido para un archivo untracked (el agente lo
+/// acaba de crear; `worktree_diff` de git no lo incluye). Binario o >1 MiB
+/// → `FileDiff` sin hunks marcado binario. `None` si no se puede leer.
+pub(crate) fn synthesize_untracked_diff(repo: &Path, rel: &Path) -> Option<FileDiff> {
+    let abs = repo.join(rel);
+    let bytes = std::fs::read(&abs).ok()?;
+    let too_big = bytes.len() > FILE_CONTENT_MAX_BYTES;
+    let text = std::str::from_utf8(&bytes).ok();
+    if too_big || text.is_none() {
+        return Some(FileDiff {
+            path: rel.to_path_buf(),
+            old_path: None,
+            is_binary: true,
+            hunks: Vec::new(),
+        });
+    }
+    let text = text.unwrap();
+    let lines: Vec<DiffLine> = text
+        .lines()
+        .enumerate()
+        .map(|(i, content)| DiffLine {
+            kind: DiffLineKind::Added,
+            content: content.to_string(),
+            old_lineno: None,
+            new_lineno: Some(i as u32 + 1),
+        })
+        .collect();
+    let hunks = if lines.is_empty() {
+        Vec::new()
+    } else {
+        vec![DiffHunk {
+            old_start: 0,
+            new_start: 1,
+            lines,
+        }]
+    };
+    Some(FileDiff {
+        path: rel.to_path_buf(),
+        old_path: None,
+        is_binary: false,
+        hunks,
+    })
+}
+
+// ===========================================================================
+// Lecturas pesadas (spawn_blocking, sin tocar la task del bus)
+// ===========================================================================
+
+#[tauri::command]
+pub async fn get_worktree_diff(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+) -> Result<Vec<FileDiff>, CommandError> {
+    let repo = ensure_known(&bus, &repo).await?;
+    blocking(move || Ok(Git2Engine::open(&repo)?.worktree_diff()?)).await
+}
+
+#[tauri::command]
+pub async fn get_commit_diff(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    commit_id: String,
+) -> Result<Vec<FileDiff>, CommandError> {
+    let repo = ensure_known(&bus, &repo).await?;
+    blocking(move || Ok(Git2Engine::open(&repo)?.commit_diff(&commit_id)?)).await
+}
+
+#[tauri::command]
+pub async fn get_commit_log(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<CommitInfo>, CommandError> {
+    let repo = ensure_known(&bus, &repo).await?;
+    blocking(move || Ok(Git2Engine::open(&repo)?.log(offset, limit)?)).await
+}
+
+#[tauri::command]
+pub async fn get_blob(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    commit_id: String,
+    path: PathBuf,
+) -> Result<FileContent, CommandError> {
+    let repo = ensure_known(&bus, &repo).await?;
+    blocking(move || {
+        let bytes = Git2Engine::open(&repo)?.blob_at(&commit_id, &path)?;
+        Ok(file_content_from_bytes(bytes))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_file_content(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    path: PathBuf,
+) -> Result<FileContent, CommandError> {
+    let repo = ensure_known(&bus, &repo).await?;
+    blocking(move || {
+        let abs = resolve_within(&repo, &path)?;
+        read_file_content_bounded(&abs)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_repo_tree(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+) -> Result<RepoTree, CommandError> {
+    let repo = ensure_known(&bus, &repo).await?;
+    blocking(move || list_repo_tree_capped(&repo, REPO_TREE_MAX_ENTRIES)).await
+}
+
+/// Lee un archivo regular con asignación acotada: rechaza no-regulares
+/// (FIFO/dispositivos/dir, que bloquearían o no tienen sentido) y lee a lo
+/// sumo `FILE_CONTENT_MAX_BYTES + 1` bytes, de modo que la memoria queda
+/// acotada sin importar el tamaño real del archivo.
+fn read_file_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
+    use std::io::Read;
+    let meta = std::fs::metadata(abs)
+        .map_err(|e| CommandError::new("io", format!("no se pudo leer el archivo: {e}")))?;
+    if !meta.file_type().is_file() {
+        return Err(CommandError::new(
+            "not-a-file",
+            "el path no es un archivo regular",
+        ));
+    }
+    let file = std::fs::File::open(abs)
+        .map_err(|e| CommandError::new("io", format!("no se pudo abrir el archivo: {e}")))?;
+    let mut buf = Vec::new();
+    file.take(FILE_CONTENT_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| CommandError::new("io", format!("no se pudo leer el archivo: {e}")))?;
+    Ok(file_content_from_bytes(buf))
+}
+
+/// Walk del árbol respetando `.gitignore`, excluyendo `.git`, con tope de
+/// entradas (parametrizado para test del branch de truncado).
+fn list_repo_tree_capped(repo: &Path, cap: usize) -> Result<RepoTree, CommandError> {
+    {
+        let repo_canon = repo
+            .canonicalize()
+            .map_err(|_| CommandError::new("repository-not-found", "el repo no existe"))?;
+        let mut entries = Vec::new();
+        let mut truncated = false;
+        // Walk respetando .gitignore (mismo crate que el clasificador).
+        for result in ignore::WalkBuilder::new(&repo_canon).hidden(false).build() {
+            let Ok(entry) = result else { continue };
+            let path = entry.path();
+            // Saltar el root y siempre el árbol interno de .git.
+            let Ok(rel) = path.strip_prefix(&repo_canon) else {
+                continue;
+            };
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            if rel
+                .components()
+                .next()
+                .is_some_and(|c| c.as_os_str() == ".git")
+            {
+                continue;
+            }
+            if entries.len() >= cap {
+                truncated = true;
+                break;
+            }
+            entries.push(TreeEntry {
+                path: rel.to_path_buf(),
+                is_dir: entry.file_type().is_some_and(|t| t.is_dir()),
+            });
+        }
+        Ok(RepoTree { entries, truncated })
+    }
+}
+
+// ===========================================================================
+// Proxies de estado (vía la task del bus)
+// ===========================================================================
+
+#[tauri::command]
+pub async fn get_workbench_snapshot(
+    bus: State<'_, BusHandle>,
+) -> Result<WorkbenchSnapshot, CommandError> {
+    bus.snapshot()
+        .await
+        .ok_or_else(|| CommandError::new("bus-unavailable", "el bus no está disponible"))
+}
+
+#[tauri::command]
+pub async fn set_subscriptions(
+    bus: State<'_, BusHandle>,
+    targets: Vec<SubscriptionTarget>,
+) -> Result<(), CommandError> {
+    if bus.subscribe(targets).await {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "bus-unavailable",
+            "el bus no está disponible",
+        ))
+    }
+}
+
+#[tauri::command]
+pub async fn retry_repo(bus: State<'_, BusHandle>, repo: PathBuf) -> Result<(), CommandError> {
+    if bus.retry_repo(repo).await {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "bus-unavailable",
+            "el bus no está disponible",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::test_fixtures::TempRepo;
+
+    #[test]
+    fn file_content_utf8_y_binario() {
+        let utf8 = file_content_from_bytes(b"hola\nmundo".to_vec());
+        assert!(matches!(utf8.encoding, ContentEncoding::Utf8));
+        assert_eq!(utf8.content, "hola\nmundo");
+        assert!(!utf8.truncated);
+
+        let bin = file_content_from_bytes(vec![0u8, 159, 146, 150]);
+        assert!(matches!(bin.encoding, ContentEncoding::Base64));
+    }
+
+    #[test]
+    fn file_content_trunca_sobre_el_limite() {
+        let big = vec![b'a'; FILE_CONTENT_MAX_BYTES + 100];
+        let fc = file_content_from_bytes(big);
+        assert!(fc.truncated);
+        assert_eq!(fc.content.len(), FILE_CONTENT_MAX_BYTES);
+    }
+
+    #[test]
+    fn resolve_within_rechaza_traversal() {
+        let repo = TempRepo::with_initial_commit();
+        // base.txt existe y queda dentro.
+        assert!(resolve_within(repo.path(), Path::new("base.txt")).is_ok());
+        // Target que EXISTE fuera del repo: canonicalize() tiene éxito, así que
+        // solo el guard `starts_with` puede rechazarlo → prueba que el branch
+        // de seguridad efectivamente dispara (no el de not-found).
+        let depth = repo.path().canonicalize().unwrap().components().count();
+        let mut escape = PathBuf::new();
+        for _ in 0..depth {
+            escape.push("..");
+        }
+        escape.push("etc/hostname");
+        let err = resolve_within(repo.path(), &escape).expect_err("debe rechazar el escape");
+        assert_eq!(
+            err.category, "path-traversal",
+            "debe ser el guard starts_with, no not-found"
+        );
+        // Target inexistente: branch not-found, pinned por separado.
+        let err = resolve_within(repo.path(), Path::new("no/existe.txt"))
+            .expect_err("inexistente debe fallar");
+        assert_eq!(err.category, "not-found");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_within_rechaza_symlink_que_escapa() {
+        use std::os::unix::fs::symlink;
+        let repo = TempRepo::with_initial_commit();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "x").unwrap();
+        symlink(outside.path().join("secret"), repo.path().join("link")).unwrap();
+        // canonicalize() resuelve el symlink fuera del repo → debe rechazarse.
+        let err = resolve_within(repo.path(), Path::new("link")).expect_err("symlink escape");
+        assert_eq!(err.category, "path-traversal");
+    }
+
+    #[test]
+    fn resolve_within_rechaza_punto_git() {
+        let repo = TempRepo::with_initial_commit();
+        // `.git/config` existe y queda dentro del repo, pero no se expone.
+        let err =
+            resolve_within(repo.path(), Path::new(".git/config")).expect_err(".git no se expone");
+        assert_eq!(err.category, "path-forbidden");
+    }
+
+    #[test]
+    fn file_content_trunca_en_frontera_utf8_sigue_siendo_texto() {
+        // Un carácter multibyte (é = 2 bytes) que cruza el corte del truncado:
+        // el archivo SIGUE siendo texto, no debe degradar a base64.
+        let mut bytes = vec![b'a'; FILE_CONTENT_MAX_BYTES - 1];
+        bytes.extend_from_slice("é".as_bytes());
+        bytes.extend(std::iter::repeat_n(b'b', 50));
+        let fc = file_content_from_bytes(bytes);
+        assert!(fc.truncated);
+        assert!(
+            matches!(fc.encoding, ContentEncoding::Utf8),
+            "frontera UTF-8 no debe forzar base64"
+        );
+        assert_eq!(fc.content.len(), FILE_CONTENT_MAX_BYTES - 1);
+    }
+
+    #[test]
+    fn read_file_content_acota_y_rechaza_no_regulares() {
+        let repo = TempRepo::with_initial_commit();
+        // Archivo > límite: leído acotado y marcado truncado.
+        let big = "x".repeat(FILE_CONTENT_MAX_BYTES + 500);
+        repo.write("grande.txt", &big);
+        let fc = read_file_content_bounded(&repo.path().join("grande.txt")).expect("lee");
+        assert!(fc.truncated);
+        assert_eq!(fc.content.len(), FILE_CONTENT_MAX_BYTES);
+        // Un directorio no es archivo regular → rechazado sin colgarse.
+        let err = read_file_content_bounded(repo.path()).expect_err("dir no es archivo");
+        assert_eq!(err.category, "not-a-file");
+    }
+
+    #[test]
+    fn synthesize_untracked_diff_todo_anadido() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("nuevo.txt", "a\nb\nc\n");
+        let diff = synthesize_untracked_diff(repo.path(), Path::new("nuevo.txt")).expect("diff");
+        assert!(!diff.is_binary);
+        assert_eq!(diff.hunks.len(), 1);
+        assert_eq!(diff.hunks[0].lines.len(), 3);
+        assert!(diff.hunks[0]
+            .lines
+            .iter()
+            .all(|l| matches!(l.kind, DiffLineKind::Added)));
+    }
+
+    #[test]
+    fn list_repo_tree_excluye_git_y_respeta_gitignore() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write(".gitignore", "target/\n");
+        repo.write("src/main.rs", "fn main() {}");
+        repo.write("target/out.o", "obj");
+
+        let tree = list_repo_tree_capped(repo.path(), REPO_TREE_MAX_ENTRIES).expect("tree");
+        let paths: Vec<String> = tree
+            .entries
+            .iter()
+            .map(|e| e.path.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert!(paths.iter().any(|p| p == "src/main.rs"));
+        assert!(paths.iter().any(|p| p == "base.txt"));
+        assert!(
+            !paths.iter().any(|p| p.starts_with(".git/")),
+            "sin .git interno"
+        );
+        assert!(
+            !paths.iter().any(|p| p.starts_with("target/")),
+            "target gitignoreado"
+        );
+        assert!(!tree.truncated);
+    }
+
+    #[test]
+    fn list_repo_tree_marca_truncated_al_alcanzar_el_cap() {
+        let repo = TempRepo::with_initial_commit();
+        for i in 0..5 {
+            repo.write(&format!("f{i}.txt"), "x");
+        }
+        let tree = list_repo_tree_capped(repo.path(), 2).expect("tree");
+        assert!(tree.truncated, "debe marcar truncado al llegar al cap");
+        assert_eq!(
+            tree.entries.len(),
+            2,
+            "el cap es exclusivo de la entrada que rompe"
+        );
+    }
+}

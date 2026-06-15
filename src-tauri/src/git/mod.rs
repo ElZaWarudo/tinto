@@ -48,6 +48,21 @@ pub enum GitError {
     Internal(#[from] git2::Error),
 }
 
+impl GitError {
+    /// Categoría kebab-case estable para el contrato (frozen): única fuente
+    /// de verdad compartida por el path de delta (`git_error_state`) y el de
+    /// comandos (`CommandError`).
+    pub fn category(&self) -> &'static str {
+        match self {
+            GitError::RepositoryNotFound(_) => "repository-not-found",
+            GitError::NotARepository(_) => "not-a-repository",
+            GitError::UnbornHead => "unborn-head",
+            GitError::NotFound(_) => "not-found",
+            GitError::Internal(_) => "internal",
+        }
+    }
+}
+
 /// Status del working tree de un repo (Plano 1).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct RepoStatus {
