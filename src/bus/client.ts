@@ -55,6 +55,12 @@ export const autodetectReposUnder = (root: string) =>
 export const getCommitLog = (repo: string, offset: number, limit: number) =>
   invoke<CommitInfo[]>("get_commit_log", { repo, offset, limit });
 
+export const getCommitDiff = (repo: string, commitId: string) =>
+  invoke<FileDiff[]>("get_commit_diff", { repo, commitId });
+
+export const getBlob = (repo: string, commitId: string, path: string) =>
+  invoke<FileContent>("get_blob", { repo, commitId, path });
+
 export const retryRepo = (repo: string) => invoke("retry_repo", { repo });
 
 // ---- RDM-008: diff / tree / content / subscriptions ----
