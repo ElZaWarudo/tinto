@@ -14,6 +14,7 @@ import { TopBar } from "./TopBar";
 import { FirstRun } from "./firstRun";
 import { busStore } from "../bus/store";
 import type { WorkbenchConfig } from "../bus/contract";
+import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
 
 const config: WorkbenchConfig = {
   version: 1,
@@ -59,6 +60,25 @@ describe("TopBar", () => {
     });
     render(<TopBar />);
     expect(screen.getByTestId("watch-indicator")).toHaveTextContent("degraded");
+  });
+
+  it("opens the timeline from the top bar", () => {
+    const openTimeline = vi.fn();
+    const actions: WorkspaceActions = {
+      openRepo: vi.fn(),
+      addRepo: vi.fn(),
+      removeRepo: vi.fn(),
+      openDiff: vi.fn(),
+      openTimeline,
+    };
+    act(() => busStore.setConfig(config));
+    render(
+      <WorkspaceActionsContext.Provider value={actions}>
+        <TopBar />
+      </WorkspaceActionsContext.Provider>,
+    );
+    fireEvent.click(screen.getByTestId("open-timeline"));
+    expect(openTimeline).toHaveBeenCalledOnce();
   });
 });
 

@@ -46,8 +46,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import {
-  getWorktreeDiff,
+  getBlob,
+  getCommitDiff,
   getFileContent,
+  getWorktreeDiff,
   listRepoTree,
   setSubscriptions,
   updateRepo,
@@ -78,6 +80,23 @@ describe("RDM-008 client wrappers", () => {
     const targets = [{ repo: "/r/api", path: "src/a.ts" }];
     void setSubscriptions(targets);
     expect(invokeMock).toHaveBeenCalledWith("set_subscriptions", { targets });
+  });
+
+  it("get_commit_diff passes repo + commitId using Tauri camelCase arg keys", () => {
+    void getCommitDiff("/r/api", "abc123");
+    expect(invokeMock).toHaveBeenCalledWith("get_commit_diff", {
+      repo: "/r/api",
+      commitId: "abc123",
+    });
+  });
+
+  it("get_blob passes repo + commitId + path using Tauri camelCase arg keys", () => {
+    void getBlob("/r/api", "abc123", "src/a.ts");
+    expect(invokeMock).toHaveBeenCalledWith("get_blob", {
+      repo: "/r/api",
+      commitId: "abc123",
+      path: "src/a.ts",
+    });
   });
 
   it("update_repo passes fsWatch with Tauri's camelCase arg keys", () => {

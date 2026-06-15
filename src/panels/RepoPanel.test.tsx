@@ -93,6 +93,7 @@ describe("RepoPanel", () => {
       addRepo: vi.fn(),
       removeRepo: vi.fn(),
       openDiff,
+      openTimeline: vi.fn(),
     };
     render(
       <WorkspaceActionsContext.Provider value={value}>

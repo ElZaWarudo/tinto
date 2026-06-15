@@ -671,3 +671,143 @@ body,
 .repo-panel__status li[role="button"]:hover {
   color: var(--accent-fg);
 }
+
+/* ---- RDM-010: timeline / history ---- */
+.timeline {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.timeline__feed,
+.timeline__detail {
+  min-height: 0;
+  overflow: auto;
+}
+.timeline__feed {
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+.timeline__detail {
+  background: #1b1b1b;
+}
+.timeline__head,
+.timeline__detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.timeline__head h2,
+.timeline__detail-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.timeline__detail-head span,
+.timeline__live,
+.timeline__degraded {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.timeline__live {
+  color: var(--accent-fg);
+}
+.timeline__degraded,
+.timeline__error {
+  color: var(--warn);
+}
+.timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.timeline-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.timeline-row--orphan {
+  border-left: 3px solid var(--warn);
+}
+.timeline-row--error {
+  border-left: 3px solid var(--danger);
+}
+.timeline-row--degraded {
+  border-left: 3px solid var(--warn);
+}
+.timeline-row__time {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-row__main,
+.timeline-row__commit {
+  min-width: 0;
+}
+.timeline-row__main small,
+.timeline-row__commit small {
+  display: block;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-row__commit {
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.timeline-row__commit:hover {
+  color: var(--accent-fg);
+}
+.timeline__error,
+.timeline__detail > .repo-panel__muted {
+  padding: 12px;
+}
+.timeline__error button {
+  margin-left: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.timeline-diff {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 0;
+}
+.timeline-files {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+.timeline-files button {
+  width: 100%;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.timeline-files button:hover,
+.timeline-files__btn--on {
+  color: var(--fg);
+  background: var(--bg-elev);
+}

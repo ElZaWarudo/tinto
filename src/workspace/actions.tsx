@@ -10,6 +10,8 @@ export interface WorkspaceActions {
   removeRepo: (canonicalPath: string) => void;
   /** Open (or focus) the diff panel for a file within a repo (RDM-008). */
   openDiff: (canonicalPath: string, filePath: string) => void;
+  /** Open the cross-repo Timeline / history panel (RDM-010). */
+  openTimeline: () => void;
 }
 
 const noop: WorkspaceActions = {
@@ -17,6 +19,7 @@ const noop: WorkspaceActions = {
   addRepo: () => {},
   removeRepo: () => {},
   openDiff: () => {},
+  openTimeline: () => {},
 };
 
 export const WorkspaceActionsContext = createContext<WorkspaceActions>(noop);
