@@ -1,6 +1,7 @@
 pub mod bus;
 pub mod git;
 pub mod paths;
+pub mod ui_state;
 pub mod watcher;
 pub mod workbench;
 
@@ -59,6 +60,7 @@ pub fn run() {
     let mut initial_repos = Some(initial_repos);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(std::sync::Mutex::new(store))
         .manage(bus_handle)
         .invoke_handler(tauri::generate_handler![
@@ -80,7 +82,9 @@ pub fn run() {
             bus::commands::get_file_content,
             bus::commands::list_repo_tree,
             bus::commands::set_subscriptions,
-            bus::commands::retry_repo
+            bus::commands::retry_repo,
+            ui_state::get_ui_state,
+            ui_state::set_ui_state
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
