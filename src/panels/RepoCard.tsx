@@ -14,6 +14,16 @@ export interface RepoCardProps {
   nowMs: number;
   onOpen: () => void;
   onRetry: () => void;
+  /** Open a changed file's diff (RDM-008); omitted = no file drill-through. */
+  onOpenFile?: (path: string) => void;
+}
+
+function changedFiles(status: RepoDelta["status"]): Array<{ path: string; mark: string }> {
+  return [
+    ...status.staged.map((path) => ({ path, mark: "S" })),
+    ...status.modified.map((path) => ({ path, mark: "M" })),
+    ...status.untracked.map((path) => ({ path, mark: "U" })),
+  ];
 }
 
 function branchLabel(branch: BranchInfo | null, head: RepoDelta["head"]): string {
@@ -32,11 +42,20 @@ function upstreamLabel(branch: BranchInfo | null): string | null {
   return `↑${branch.ahead} ↓${branch.behind}`;
 }
 
-function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoCardProps) {
+function RepoCardImpl({
+  delta,
+  name,
+  activityMs,
+  nowMs,
+  onOpen,
+  onRetry,
+  onOpenFile,
+}: RepoCardProps) {
   const [expanded, setExpanded] = useState(false);
   const { status, branch, head, error } = delta;
   const active = nowMs - activityMs < ACTIVITY_WINDOW_MS;
   const upstream = upstreamLabel(branch);
+  const files = onOpenFile ? changedFiles(status) : [];
 
   return (
     <div
@@ -98,6 +117,34 @@ function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoC
             </div>
           ) : (
             <div className="repo-card__commit repo-card__commit--none">no commits yet</div>
+          )}
+          {files.length > 0 && (
+            <ul className="repo-card__files" data-testid="card-files">
+              {files.map(({ path, mark }) => (
+                <li
+                  key={`${mark}:${path}`}
+                  className="repo-card__file"
+                  role="button"
+                  tabIndex={0}
+                  title={`Open diff: ${path}`}
+                  data-testid={`card-file-${path}`}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    onOpenFile?.(path);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onOpenFile?.(path);
+                    }
+                  }}
+                >
+                  <span className="repo-card__file-mark">{mark}</span>
+                  {path}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

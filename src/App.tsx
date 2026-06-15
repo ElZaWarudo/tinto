@@ -1,23 +1,27 @@
 import { useMemo, useRef } from "react";
 import type { DockviewApi } from "dockview-react";
 import { DockWorkspace, type PanelComponents } from "./workspace/DockWorkspace";
-import { PANEL_DASHBOARD, PANEL_REPO, PANEL_TREE, repoPanelId } from "./workspace/panels";
+import { PANEL_DASHBOARD, PANEL_DIFF, PANEL_REPO, PANEL_TREE } from "./workspace/panels";
 import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/actions";
 import { openRepoPanel } from "./workspace/openRepo";
+import { openDiffPanel } from "./workspace/openDiff";
+import { closePanelsForRemovedRepo } from "./workspace/closePanels";
 import { DashboardPanel } from "./panels/DashboardPanel";
 import { RepoPanel } from "./panels/RepoPanel";
 import { RepoTreePanel } from "./panels/RepoTreePanel";
+import { DiffPanel } from "./panels/diff/DiffPanel";
 import { TopBar } from "./workbench/TopBar";
 import { FirstRun } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
 import { useBusConnection } from "./bus/connection";
-import { busStore, useBusState } from "./bus/store";
+import { basename, busStore, useBusState } from "./bus/store";
 import "./App.css";
 
 const components: PanelComponents = {
   [PANEL_DASHBOARD]: DashboardPanel,
   [PANEL_TREE]: RepoTreePanel,
   [PANEL_REPO]: RepoPanel,
+  [PANEL_DIFF]: DiffPanel,
 };
 
 export default function App() {
@@ -40,8 +44,16 @@ export default function App() {
         const active = busStore.getState().config?.active;
         if (!active) return;
         void removeRepoFlow(active, path).then((removed) => {
-          if (removed) apiRef.current?.getPanel(repoPanelId(path))?.api.close();
+          if (!removed) return;
+          const api = apiRef.current;
+          if (!api) return;
+          closePanelsForRemovedRepo(api, path);
         });
+      },
+      openDiff: (path, filePath) => {
+        if (apiRef.current) {
+          openDiffPanel(apiRef.current, path, filePath, basename(filePath));
+        }
       },
     }),
     [],

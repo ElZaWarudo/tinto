@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { BusStore, basename } from "./store";
-import type { RepoDelta, RepoStatus, WorkbenchConfig } from "./contract";
+import { BusStore, basename, getDiff, hasComputedDiffs } from "./store";
+import type { FileDiff, RepoDelta, RepoStatus, WorkbenchConfig } from "./contract";
+
+const fileDiff = (path: string): FileDiff => ({
+  path,
+  old_path: null,
+  is_binary: false,
+  hunks: [{ old_start: 1, new_start: 1, lines: [] }],
+});
 
 const emptyStatus = (): RepoStatus => ({ modified: [], staged: [], untracked: [] });
 
@@ -142,5 +149,76 @@ describe("BusStore", () => {
     expect(basename("/a/b/c")).toBe("c");
     expect(basename("C:\\x\\y")).toBe("y");
     expect(basename("solo")).toBe("solo");
+  });
+});
+
+describe("BusStore diff slice (RDM-008)", () => {
+  let store: BusStore;
+  beforeEach(() => {
+    store = new BusStore();
+  });
+
+  it("fills the slice from a non-null subscribed_diffs (AE5 fill)", () => {
+    store.applyDelta(delta("/r/a", 1, { subscribed_diffs: [fileDiff("src/a.ts")] }));
+    expect(getDiff(store.getState(), "/r/a", "src/a.ts")?.path).toBe("src/a.ts");
+    expect(hasComputedDiffs(store.getState(), "/r/a")).toBe(true);
+  });
+
+  it("retains the open diff across a status-only delta with null diffs (AE5 no-blank)", () => {
+    store.applyDelta(delta("/r/a", 1, { subscribed_diffs: [fileDiff("src/a.ts")] }));
+    // A later status-only / transient delta carries subscribed_diffs == null.
+    store.applyDelta(
+      delta("/r/a", 2, {
+        status: { modified: ["src/a.ts"], staged: [], untracked: [] },
+        subscribed_diffs: null,
+      }),
+    );
+    expect(getDiff(store.getState(), "/r/a", "src/a.ts")?.path).toBe("src/a.ts"); // NOT blanked
+  });
+
+  it("clears a reverted file by omission from a non-null array (clean-clear)", () => {
+    store.applyDelta(delta("/r/a", 1, { subscribed_diffs: [fileDiff("a.ts"), fileDiff("b.ts")] }));
+    expect(getDiff(store.getState(), "/r/a", "b.ts")).toBeDefined();
+    // b.ts reverted → omitted from a fresh non-null array; a.ts still changed.
+    store.applyDelta(delta("/r/a", 2, { subscribed_diffs: [fileDiff("a.ts")] }));
+    expect(getDiff(store.getState(), "/r/a", "a.ts")).toBeDefined();
+    expect(getDiff(store.getState(), "/r/a", "b.ts")).toBeUndefined(); // gone
+  });
+
+  it("an empty array marks computed with no diffs (loading→clean signal)", () => {
+    expect(hasComputedDiffs(store.getState(), "/r/a")).toBe(false); // loading
+    store.applyDelta(delta("/r/a", 1, { subscribed_diffs: [] }));
+    expect(hasComputedDiffs(store.getState(), "/r/a")).toBe(true); // computed, clean
+    expect(getDiff(store.getState(), "/r/a", "x")).toBeUndefined();
+  });
+
+  it("a stale delta does not apply its diffs", () => {
+    store.applyDelta(delta("/r/a", 5, { subscribed_diffs: [fileDiff("a.ts")] }));
+    store.applyDelta(delta("/r/a", 4, { subscribed_diffs: [fileDiff("b.ts")] })); // stale
+    expect(getDiff(store.getState(), "/r/a", "a.ts")).toBeDefined();
+    expect(getDiff(store.getState(), "/r/a", "b.ts")).toBeUndefined();
+  });
+
+  it("dropDiff removes a single target", () => {
+    store.applyDelta(delta("/r/a", 1, { subscribed_diffs: [fileDiff("a.ts"), fileDiff("b.ts")] }));
+    store.dropDiff("/r/a", "a.ts");
+    expect(getDiff(store.getState(), "/r/a", "a.ts")).toBeUndefined();
+    expect(getDiff(store.getState(), "/r/a", "b.ts")).toBeDefined();
+  });
+
+  it("loadSnapshot drops diffs for repos that leave membership; retains in-flight", () => {
+    store.applyDelta(delta("/r/gone", 1, { subscribed_diffs: [fileDiff("x")] }));
+    store.applyDelta(delta("/r/keep", 1, { subscribed_diffs: [fileDiff("y")] }));
+    // Snapshot omits /r/gone; /r/keep present without diffs → in-flight retained.
+    store.loadSnapshot([delta("/r/keep", 2)], { available: true });
+    const s = store.getState();
+    expect(s.diffs["/r/gone"]).toBeUndefined();
+    expect(getDiff(s, "/r/keep", "y")).toBeDefined();
+  });
+
+  it("reset clears the diff slice", () => {
+    store.applyDelta(delta("/r/a", 1, { subscribed_diffs: [fileDiff("a.ts")] }));
+    store.reset();
+    expect(store.getState().diffs).toEqual({});
   });
 });

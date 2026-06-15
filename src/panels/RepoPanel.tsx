@@ -14,7 +14,7 @@ const COMMIT_LOG_LIMIT = 30;
 export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
   const { repos } = useBusState();
-  const { removeRepo } = useWorkspaceActions();
+  const { removeRepo, openDiff } = useWorkspaceActions();
   const delta = repos[repo];
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [logError, setLogError] = useState(false);
@@ -78,9 +78,9 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
       )}
 
       <section className="repo-panel__status" data-testid="status-lists">
-        <StatusList label="Modified" files={status.modified} />
-        <StatusList label="Staged" files={status.staged} />
-        <StatusList label="Untracked" files={status.untracked} />
+        <StatusList label="Modified" files={status.modified} onOpen={(f) => openDiff(repo, f)} />
+        <StatusList label="Staged" files={status.staged} onOpen={(f) => openDiff(repo, f)} />
+        <StatusList label="Untracked" files={status.untracked} onOpen={(f) => openDiff(repo, f)} />
       </section>
 
       <section className="repo-panel__log" data-testid="commit-log">
@@ -111,7 +111,15 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   );
 }
 
-function StatusList({ label, files }: { label: string; files: string[] }) {
+function StatusList({
+  label,
+  files,
+  onOpen,
+}: {
+  label: string;
+  files: string[];
+  onOpen: (file: string) => void;
+}) {
   if (files.length === 0) return null;
   return (
     <div className="status-list">
@@ -120,7 +128,22 @@ function StatusList({ label, files }: { label: string; files: string[] }) {
       </h4>
       <ul>
         {files.map((f) => (
-          <li key={f}>{f}</li>
+          <li
+            key={f}
+            role="button"
+            tabIndex={0}
+            title={`Open diff: ${f}`}
+            data-testid={`status-file-${f}`}
+            onDoubleClick={() => onOpen(f)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(f);
+              }
+            }}
+          >
+            {f}
+          </li>
         ))}
       </ul>
     </div>

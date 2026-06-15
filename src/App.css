@@ -351,3 +351,230 @@ body,
   margin-top: 0;
   background: var(--danger);
 }
+
+/* ---- RDM-008: diff panel, diff view, full file, tree files ---- */
+
+.diff-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.diff-panel__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.diff-panel__path {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.seg__btn {
+  background: var(--bg);
+  color: var(--fg-muted);
+  border: none;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.seg__btn--on {
+  background: var(--accent);
+  color: #fff;
+}
+.seg__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.diff-panel__body {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+.diff-panel__paused {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  background: rgba(204, 167, 0, 0.12);
+  color: var(--warn);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.diff-panel__error,
+.diff-panel__empty,
+.diff-panel__loading {
+  padding: 12px;
+  color: var(--fg-muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.diff-panel__error {
+  color: var(--danger);
+}
+
+.diff-view {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.diff-view__notice {
+  padding: 4px 8px;
+  color: var(--warn);
+  font-size: 12px;
+}
+.diff-view--binary {
+  padding: 12px;
+  color: var(--fg-muted);
+}
+.diff-hunk-header {
+  color: var(--accent-fg);
+  background: var(--bg-elev);
+  padding: 1px 8px;
+}
+.diff-line {
+  display: flex;
+  white-space: pre;
+}
+.diff-gutter {
+  flex: 0 0 auto;
+  width: 40px;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--fg-muted);
+  user-select: none;
+}
+.diff-sign {
+  width: 14px;
+  text-align: center;
+  user-select: none;
+}
+.diff-content {
+  flex: 1 1 auto;
+}
+.diff-line--added {
+  background: rgba(78, 201, 176, 0.12);
+}
+.diff-line--removed {
+  background: rgba(241, 76, 76, 0.12);
+}
+.diff-split {
+  display: flex;
+}
+.diff-side {
+  flex: 1 1 50%;
+  overflow-x: auto;
+  border-right: 1px solid var(--border);
+}
+
+.full-file__code {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.full-file__line {
+  display: flex;
+  white-space: pre;
+}
+.full-file__line--changed {
+  background: rgba(78, 201, 176, 0.12);
+}
+.full-file--binary,
+.full-file--loading,
+.full-file--error {
+  padding: 12px;
+  color: var(--fg-muted);
+}
+
+.tree-repo__row {
+  display: flex;
+  align-items: center;
+}
+.tree-repo__caret {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  width: 18px;
+}
+.tree-repo__files {
+  font-size: 12px;
+}
+.tree-files__msg {
+  padding: 2px 8px 2px 26px;
+  color: var(--fg-muted);
+}
+.tree-dir__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+.tree-dir__caret {
+  color: var(--fg-muted);
+}
+.tree-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--fg);
+}
+.tree-file:hover {
+  background: var(--bg-elev);
+}
+.tree-file--changed {
+  color: var(--accent-fg);
+}
+.tree-file__mark {
+  font-size: 10px;
+  color: var(--warn);
+}
+.tree-file__mark--staged {
+  color: var(--added);
+}
+
+.repo-card__files {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 12px;
+}
+.repo-card__file {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+.repo-card__file:hover {
+  color: var(--fg);
+}
+.repo-card__file-mark {
+  color: var(--warn);
+}
+
+.repo-panel__status li[role="button"] {
+  cursor: pointer;
+}
+.repo-panel__status li[role="button"]:hover {
+  color: var(--accent-fg);
+}

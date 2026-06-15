@@ -22,7 +22,7 @@ const SKELETON_COUNT = 3;
 export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
-  const { openRepo, addRepo } = useWorkspaceActions();
+  const { openRepo, addRepo, openDiff } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
   if (!loaded) {
@@ -64,6 +64,7 @@ export function DashboardPanel() {
               nowMs={nowMs}
               onOpen={() => openRepo(p)}
               onRetry={() => void retryRepo(p)}
+              onOpenFile={(path) => openDiff(p, path)}
             />
           ))}
         </div>

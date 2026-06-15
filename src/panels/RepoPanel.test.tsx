@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { IDockviewPanelProps } from "dockview-react";
+import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
 
 const getCommitLogMock = vi.fn();
 const retryRepoMock = vi.fn();
@@ -74,6 +75,26 @@ describe("RepoPanel", () => {
     act(() => busStore.loadSnapshot([], { available: true }));
     render(<RepoPanel {...panelProps("/r/gone")} />);
     expect(screen.getByText(/no longer in the active workbench/i)).toBeInTheDocument();
+  });
+
+  // Covers AE9: a status-list file opens its diff on double-click.
+  it("opens a diff when a status file is activated", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+    const openDiff = vi.fn();
+    const value: WorkspaceActions = {
+      openRepo: vi.fn(),
+      addRepo: vi.fn(),
+      removeRepo: vi.fn(),
+      openDiff,
+    };
+    render(
+      <WorkspaceActionsContext.Provider value={value}>
+        <RepoPanel {...panelProps("/r/api")} />
+      </WorkspaceActionsContext.Provider>,
+    );
+    fireEvent.doubleClick(screen.getByTestId("status-file-src/a.rs"));
+    expect(openDiff).toHaveBeenCalledWith("/r/api", "src/a.rs");
   });
 });
 
