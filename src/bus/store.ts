@@ -49,13 +49,22 @@ export class BusStore {
     this.listeners.forEach((l) => l());
   }
 
-  /** Seed from a full snapshot (workbench switch / startup). Authoritative. */
+  /** Seed from a full snapshot (workbench switch / startup).
+   *
+   * Authoritative for MEMBERSHIP (repos absent from the snapshot are dropped),
+   * but honors the contract's monotonic-revision rule per repo: a higher-
+   * revision delta that arrived while the snapshot IPC was in flight is kept
+   * rather than clobbered by the older snapshot. Activity is preserved as the
+   * max of any prior (e.g. fs-event) activity and the snapshot's. */
   loadSnapshot(repos: RepoDelta[], watching: WatchingState) {
     const repoMap: Record<string, RepoDelta> = {};
     const activity: Record<string, number> = {};
     for (const d of repos) {
-      repoMap[d.repo] = d;
-      activity[d.repo] = d.last_activity_ms;
+      const existing = this.state.repos[d.repo];
+      const winner = existing && existing.revision > d.revision ? existing : d;
+      repoMap[d.repo] = winner;
+      const prevActivity = this.state.activity[d.repo] ?? 0;
+      activity[d.repo] = Math.max(prevActivity, winner.last_activity_ms);
     }
     this.set({ ...this.state, repos: repoMap, activity, watching, loaded: true });
   }
@@ -111,6 +120,29 @@ export class BusStore {
     const entry = wb?.repos.find((r) => r.path === path);
     return entry?.alias ?? basename(path);
   }
+}
+
+/** Canonical repo paths of the active workbench, ordered by display name. */
+export function sortedRepoPaths(store: BusStore, state: BusState): string[] {
+  return Object.keys(state.repos).sort((a, b) =>
+    store.displayName(a).localeCompare(store.displayName(b)),
+  );
+}
+
+/** Compact status summary: "clean" or "{m}M {s}S {u}U". */
+export function statusSummary(status: {
+  modified: string[];
+  staged: string[];
+  untracked: string[];
+}): string {
+  const { modified, staged, untracked } = status;
+  if (!modified.length && !staged.length && !untracked.length) return "clean";
+  return `${modified.length}M ${staged.length}S ${untracked.length}U`;
+}
+
+/** Convert a CommitInfo unix-seconds timestamp to a JS Date (KTD8). */
+export function commitDate(unixSeconds: number): Date {
+  return new Date(unixSeconds * 1000);
 }
 
 /** Singleton store for the app. */

@@ -4,6 +4,7 @@
 
 import { memo, useState } from "react";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
+import { commitDate } from "../bus/store";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 
 export interface RepoCardProps {
@@ -92,7 +93,7 @@ function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoC
               {head.summary}
               <span className="repo-card__commit-time">
                 {" · "}
-                {new Date(head.timestamp * 1000).toLocaleString()}
+                {commitDate(head.timestamp).toLocaleString()}
               </span>
             </div>
           ) : (

@@ -105,6 +105,31 @@ describe("DockWorkspace", () => {
     expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: PANEL_DASHBOARD }));
   });
 
+  // Covers AE4: the persistence layer round-trips — the bytes saved on a layout
+  // change are exactly what is restored on the next mount. (dockview's own
+  // toJSON/fromJSON serialization is validated by the `tauri dev` smoke.)
+  it("round-trips the saved layout through persistence to restore", async () => {
+    vi.useFakeTimers();
+    const savedLayout = { panels: { dashboard: {}, "repo:/r/a": {} }, grid: { width: 800 } };
+    // Mount with that layout persisted -> restore must hand fromJSON the exact object.
+    invokeMock.mockResolvedValue(JSON.stringify(savedLayout));
+    render(<DockWorkspace components={components} />);
+    const api = makeFakeApi();
+    api.toJSON.mockReturnValue(savedLayout);
+    capturedOnReady!({ api });
+    await vi.waitFor(() => expect(api.fromJSON).toHaveBeenCalled());
+    expect(api.fromJSON.mock.calls[0][0]).toEqual(savedLayout); // restored bytes == saved bytes
+
+    // And a subsequent change persists those exact bytes again.
+    invokeMock.mockClear();
+    api.fireLayoutChange();
+    vi.advanceTimersByTime(500);
+    const savedArg = invokeMock.mock.calls.find((c) => c[0] === "set_ui_state")?.[1] as {
+      state: string;
+    };
+    expect(JSON.parse(savedArg.state)).toEqual(savedLayout);
+  });
+
   it("debounce-saves the layout on change", async () => {
     vi.useFakeTimers();
     invokeMock.mockResolvedValue(null);

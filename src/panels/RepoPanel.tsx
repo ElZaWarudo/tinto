@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { getCommitLog, retryRepo } from "../bus/client";
 import type { CommitInfo } from "../bus/contract";
-import { busStore, useBusState } from "../bus/store";
+import { busStore, commitDate, useBusState } from "../bus/store";
 import { useWorkspaceActions } from "../workspace/actions";
 
 const COMMIT_LOG_LIMIT = 30;
@@ -17,6 +17,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const { removeRepo } = useWorkspaceActions();
   const delta = repos[repo];
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
+  const [logError, setLogError] = useState(false);
 
   // Refetch the log when the repo changes or its revision advances (new commit).
   const revision = delta?.revision ?? -1;
@@ -25,8 +26,15 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
     // Refetch on repo/revision change; keep the prior list visible until the
     // new one arrives (avoids a synchronous setState in the effect body).
     getCommitLog(repo, 0, COMMIT_LOG_LIMIT)
-      .then((c) => active && setCommits(c))
-      .catch(() => active && setCommits([]));
+      .then((c) => {
+        if (active) {
+          setCommits(c);
+          setLogError(false);
+        }
+      })
+      .catch(() => {
+        if (active) setLogError(true); // distinct from an empty repo
+      });
     return () => {
       active = false;
     };
@@ -77,7 +85,9 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
 
       <section className="repo-panel__log" data-testid="commit-log">
         <h3>Commits</h3>
-        {commits === null ? (
+        {logError ? (
+          <p className="repo-panel__muted">Could not load commits.</p>
+        ) : commits === null ? (
           <p className="repo-panel__muted">Loading…</p>
         ) : commits.length === 0 ? (
           <p className="repo-panel__muted">No commits yet</p>
@@ -90,7 +100,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
                   {" · "}
                   {c.author}
                   {" · "}
-                  {new Date(c.timestamp * 1000).toLocaleDateString()}
+                  {commitDate(c.timestamp).toLocaleDateString()}
                 </span>
               </li>
             ))}

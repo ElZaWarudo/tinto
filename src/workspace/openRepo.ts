@@ -12,10 +12,10 @@ export function openRepoPanel(api: DockviewApi, repo: string, title: string): vo
     existing.api.setActive();
     return;
   }
-  api.addPanel({
-    id,
-    component: PANEL_REPO,
-    title,
-    params: { repo },
-  });
+  try {
+    api.addPanel({ id, component: PANEL_REPO, title, params: { repo } });
+  } catch {
+    // Lost a race with a restored layout that already holds this id — focus it.
+    api.getPanel(id)?.api.setActive();
+  }
 }

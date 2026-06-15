@@ -59,7 +59,12 @@ export async function removeRepoFlow(
   confirmFn: (msg: string) => boolean = window.confirm.bind(window),
 ): Promise<boolean> {
   if (!confirmFn(`Remove ${path} from this workbench? Files are not deleted.`)) return false;
-  await removeRepo(active, path);
+  try {
+    await removeRepo(active, path);
+  } catch (e) {
+    console.warn("tinto: remove repo failed", e); // e.g. workbench changed mid-flight
+    return false;
+  }
   await reloadActiveWorkbench();
   return true;
 }

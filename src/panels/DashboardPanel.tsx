@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { retryRepo } from "../bus/client";
-import { busStore, useBusState } from "../bus/store";
+import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
 import { useWorkspaceActions } from "../workspace/actions";
 import { RepoCard } from "./RepoCard";
 
@@ -20,7 +20,8 @@ function useNow(intervalMs: number): number {
 const SKELETON_COUNT = 3;
 
 export function DashboardPanel() {
-  const { repos, activity, watching, loaded } = useBusState();
+  const state = useBusState();
+  const { repos, activity, watching, loaded } = state;
   const { openRepo, addRepo } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
@@ -36,9 +37,7 @@ export function DashboardPanel() {
     );
   }
 
-  const paths = Object.keys(repos).sort((a, b) =>
-    busStore.displayName(a).localeCompare(busStore.displayName(b)),
-  );
+  const paths = sortedRepoPaths(busStore, state);
 
   return (
     <div className="dashboard">

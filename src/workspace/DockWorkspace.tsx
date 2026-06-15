@@ -8,7 +8,7 @@ import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
 import { themeVisualStudio } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { applyLayout, loadUiState, saveUiState } from "./layout";
 import { PANEL_DASHBOARD } from "./panels";
 
@@ -25,6 +25,7 @@ export function DockWorkspace({
 }) {
   const apiRef = useRef<DockviewApi | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cleanups = useRef<Array<() => void>>([]);
 
   const onReady = (event: DockviewReadyEvent) => {
     const api = event.api;
@@ -45,8 +46,8 @@ export function DockWorkspace({
       applyLayout(api, layout);
       // Attach listeners AFTER the restore so the transient initial state never
       // overwrites the persisted layout before it is applied.
-      api.onDidLayoutChange(scheduleSave);
-      api.onDidRemovePanel(() => {
+      const d1 = api.onDidLayoutChange(scheduleSave);
+      const d2 = api.onDidRemovePanel(() => {
         if (api.panels.length === 0) {
           // Guard: never strand the user with an empty workspace.
           api.addPanel({
@@ -56,11 +57,26 @@ export function DockWorkspace({
           });
         }
       });
+      cleanups.current.push(
+        () => d1.dispose(),
+        () => d2.dispose(),
+      );
     })();
 
     // Best-effort flush of the last arrangement on window close.
     window.addEventListener("beforeunload", flush);
+    cleanups.current.push(() => window.removeEventListener("beforeunload", flush));
   };
+
+  // Tear down listeners + any pending save on unmount (StrictMode remount, the
+  // first-run→workspace transition) so stale handlers don't fire on a disposed api.
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      cleanups.current.forEach((c) => c());
+      cleanups.current = [];
+    };
+  }, []);
 
   return <DockviewReact components={components} theme={themeVisualStudio} onReady={onReady} />;
 }

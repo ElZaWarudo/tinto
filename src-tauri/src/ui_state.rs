@@ -75,6 +75,15 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_path_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        // Make the target a directory so read_to_string fails — must be None,
+        // never a panic (the JS side falls back to the default layout).
+        std::fs::create_dir(dir.path().join(UI_STATE_FILE)).unwrap();
+        assert!(load_ui_state(dir.path()).is_none());
+    }
+
+    #[test]
     fn store_creates_dir_if_missing() {
         let base = tempfile::tempdir().unwrap();
         let nested = base.path().join("does/not/exist/yet");

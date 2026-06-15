@@ -58,6 +58,31 @@ describe("BusStore", () => {
     expect(s.watching.available).toBe(false);
   });
 
+  it("loadSnapshot keeps a newer in-flight delta instead of clobbering it (revision rule)", () => {
+    // Delta N+1 arrived while the snapshot (N) was in flight.
+    store.applyDelta(
+      delta("/r/a", 6, { status: { modified: ["fresh"], staged: [], untracked: [] } }),
+    );
+    store.loadSnapshot([delta("/r/a", 5)], { available: true });
+    const s = store.getState();
+    expect(s.repos["/r/a"].revision).toBe(6); // newer delta preserved
+    expect(s.repos["/r/a"].status.modified).toEqual(["fresh"]);
+    // An older-or-equal snapshot for a repo not yet known is taken as-is.
+    store.loadSnapshot([delta("/r/a", 5), delta("/r/b", 2)], { available: true });
+    expect(store.getState().repos["/r/a"].revision).toBe(6); // still kept
+    expect(store.getState().repos["/r/b"].revision).toBe(2);
+  });
+
+  it("loadSnapshot preserves fs-event activity newer than the snapshot's", () => {
+    store.applyDelta(delta("/r/a", 1)); // last_activity_ms = 1000
+    store.applyFsEvents({
+      repo: "/r/a",
+      events: [{ path: "x", kind: "modified", timestamp_ms: 9000, size: 1, size_delta: 0 }],
+    });
+    store.loadSnapshot([delta("/r/a", 2)], { available: true }); // snapshot activity = 2000
+    expect(store.getState().activity["/r/a"]).toBe(9000); // fs activity preserved
+  });
+
   it("fs-events bump activity without changing the delta; ignored for unknown repos", () => {
     store.applyDelta(delta("/r/a", 1)); // last_activity_ms = 1000
     const before = store.getState().repos["/r/a"];
