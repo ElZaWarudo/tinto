@@ -6,7 +6,16 @@
 // their own repo changes.
 
 import { useSyncExternalStore } from "react";
-import type { FileDiff, FsEventBatch, RepoDelta, WatchingState, WorkbenchConfig } from "./contract";
+import type {
+  FileDiff,
+  FsEvent,
+  FsEventBatch,
+  RepoDelta,
+  WatchingState,
+  WorkbenchConfig,
+} from "./contract";
+
+export const MAX_FS_EVENTS_PER_REPO = 50;
 
 export interface BusState {
   /** Latest delta per canonical repo path. */
@@ -16,6 +25,8 @@ export interface BusState {
   /** Live diffs per repo, keyed by file path (RDM-008). A repo key present
    * (even `{}`) means a diff computation has occurred for it — see KTD2. */
   diffs: Record<string, Record<string, FileDiff>>;
+  /** Recent Plane-2 filesystem events per repo, newest first (RDM-009). */
+  fsEventsByRepo: Record<string, FsEvent[]>;
   watching: WatchingState;
   /** Workbench config (names/aliases/active); null until loaded. */
   config: WorkbenchConfig | null;
@@ -27,6 +38,7 @@ const EMPTY: BusState = {
   repos: {},
   activity: {},
   diffs: {},
+  fsEventsByRepo: {},
   watching: { available: true },
   config: null,
   loaded: false,
@@ -74,6 +86,7 @@ export class BusStore {
     const repoMap: Record<string, RepoDelta> = {};
     const activity: Record<string, number> = {};
     const diffs: Record<string, Record<string, FileDiff>> = {};
+    const fsEventsByRepo: Record<string, FsEvent[]> = {};
     for (const d of repos) {
       const existing = this.state.repos[d.repo];
       const winner = existing && existing.revision > d.revision ? existing : d;
@@ -85,8 +98,19 @@ export class BusStore {
       const sliced = sliceFromDelta(winner);
       if (sliced) diffs[d.repo] = sliced;
       else if (this.state.diffs[d.repo]) diffs[d.repo] = this.state.diffs[d.repo];
+      if (this.state.fsEventsByRepo[d.repo]) {
+        fsEventsByRepo[d.repo] = this.state.fsEventsByRepo[d.repo];
+      }
     }
-    this.set({ ...this.state, repos: repoMap, activity, diffs, watching, loaded: true });
+    this.set({
+      ...this.state,
+      repos: repoMap,
+      activity,
+      diffs,
+      fsEventsByRepo,
+      watching,
+      loaded: true,
+    });
   }
 
   /** Apply a delta, honoring the monotonic-revision rule.
@@ -130,10 +154,14 @@ export class BusStore {
     if (!this.state.repos[batch.repo] || batch.events.length === 0) return;
     const maxTs = batch.events.reduce((m, e) => Math.max(m, e.timestamp_ms), 0);
     const prev = this.state.activity[batch.repo] ?? 0;
-    if (maxTs <= prev) return;
+    const nextEvents = [...batch.events, ...(this.state.fsEventsByRepo[batch.repo] ?? [])]
+      .sort((a, b) => b.timestamp_ms - a.timestamp_ms)
+      .slice(0, MAX_FS_EVENTS_PER_REPO);
     this.set({
       ...this.state,
-      activity: { ...this.state.activity, [batch.repo]: maxTs },
+      activity:
+        maxTs > prev ? { ...this.state.activity, [batch.repo]: maxTs } : this.state.activity,
+      fsEventsByRepo: { ...this.state.fsEventsByRepo, [batch.repo]: nextEvents },
     });
   }
 
@@ -147,7 +175,7 @@ export class BusStore {
 
   /** Clear live repo state (on workbench switch); config is reloaded separately. */
   reset() {
-    this.set({ ...this.state, repos: {}, activity: {}, diffs: {} });
+    this.set({ ...this.state, repos: {}, activity: {}, diffs: {}, fsEventsByRepo: {} });
   }
 
   /** Full reset to the empty state (primarily for tests). */
@@ -189,6 +217,11 @@ export function commitDate(unixSeconds: number): Date {
 /** The live diff for a target, or undefined if none is held (RDM-008). */
 export function getDiff(state: BusState, repo: string, path: string): FileDiff | undefined {
   return state.diffs[repo]?.[path];
+}
+
+/** Recent Plane-2 events for a repo, newest first (RDM-009). */
+export function getFsEvents(state: BusState, repo: string): FsEvent[] {
+  return state.fsEventsByRepo[repo] ?? [];
 }
 
 /** True once a diff computation has occurred for a repo (lets a panel tell
