@@ -40,11 +40,314 @@ body,
   background-color: var(--bg);
 }
 
+.app-shell__body {
+  flex: 1;
+  min-height: 0; /* let dockview fill the remaining height */
+  position: relative;
+}
+
 .panel-placeholder {
   padding: 16px;
   color: var(--fg-muted);
 }
 
+/* ---- Top bar ---- */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  font-size: 13px;
+}
+.top-bar__brand {
+  font-weight: 700;
+  color: var(--accent-fg);
+}
+.top-bar__switcher {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.top-bar__spacer {
+  flex: 1;
+}
+.top-bar button {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.top-bar button:hover {
+  border-color: var(--accent);
+}
+.watch--ok {
+  color: var(--accent-fg);
+}
+.watch--bad {
+  color: var(--warn);
+}
+
+/* ---- First run ---- */
+.first-run {
+  margin: auto;
+  max-width: 440px;
+  padding: 15vh 24px;
+  text-align: center;
+}
+.first-run__form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.first-run__form input {
+  flex: 1;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.first-run__form button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+/* ---- Repo panel ---- */
+.repo-panel {
+  height: 100%;
+  overflow: auto;
+  padding: 12px 14px;
+}
+.repo-panel__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.repo-panel__head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.repo-panel__path {
+  color: var(--fg-muted);
+  font-size: 11px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-panel__remove {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.repo-panel__remove:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.repo-panel__error {
+  margin: 8px 0;
+  color: var(--danger);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.repo-panel__muted {
+  color: var(--fg-muted);
+}
+.status-list h4 {
+  margin: 10px 0 2px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.status-list ul,
+.repo-panel__log ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* ---- Repo tree ---- */
+.repo-tree {
+  padding: 4px;
+  height: 100%;
+  overflow: auto;
+}
+.repo-tree--empty {
+  padding: 16px;
+  color: var(--fg-muted);
+}
+.tree-node {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--fg);
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.tree-node:hover {
+  background: var(--bg-elev);
+}
+.tree-node__status {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .error {
   color: var(--danger);
+}
+
+/* ---- Dashboard ---- */
+.dashboard {
+  height: 100%;
+  overflow: auto;
+  padding: 8px;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.banner {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.banner--warn {
+  background: #3a3000;
+  color: var(--warn);
+  border: 1px solid #5c4d00;
+}
+
+.empty-state {
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+.empty-state button,
+.repo-card__retry {
+  margin-top: 8px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+/* ---- Repo card ---- */
+.repo-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: default;
+}
+.repo-card--skeleton {
+  height: 78px;
+  opacity: 0.4;
+  background: linear-gradient(90deg, var(--bg-elev), #2d2d30, var(--bg-elev));
+}
+.repo-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.repo-card__name {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #444;
+  flex: none;
+  transition: background 0.4s ease;
+}
+.activity-dot--active {
+  background: var(--accent-fg);
+  box-shadow: 0 0 6px var(--accent-fg);
+}
+.error-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.repo-card__expand {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+.repo-card__counts {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0;
+  font-variant-numeric: tabular-nums;
+}
+.count--modified {
+  color: var(--warn);
+}
+.count--staged {
+  color: var(--added);
+}
+.count--untracked {
+  color: var(--fg-muted);
+}
+.repo-card__branch {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.repo-card__details {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  font-size: 12px;
+}
+.repo-card__commit-time,
+.repo-card__commit--none {
+  color: var(--fg-muted);
+}
+.repo-card__error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.repo-card__retry {
+  margin-top: 0;
+  background: var(--danger);
 }

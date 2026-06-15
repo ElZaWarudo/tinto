@@ -16,13 +16,20 @@ export type PanelComponents = Record<string, React.FunctionComponent<IDockviewPa
 
 const SAVE_DEBOUNCE_MS = 400;
 
-export function DockWorkspace({ components }: { components: PanelComponents }) {
+export function DockWorkspace({
+  components,
+  onApi,
+}: {
+  components: PanelComponents;
+  onApi?: (api: DockviewApi) => void;
+}) {
   const apiRef = useRef<DockviewApi | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onReady = (event: DockviewReadyEvent) => {
     const api = event.api;
     apiRef.current = api;
+    onApi?.(api);
 
     const flush = () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
