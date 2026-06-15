@@ -197,11 +197,12 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 
 ## Next action
 
-PR #10 is open for RDM-009. Merge is blocked by Release Marshal until GitHub shows a visible human approval on the PR, then the user authorizes that exact merge.
+Handoff RDM-010 to Release Marshal: commit, push, open PR to `develop`, then merge only under the program's visible-gate rule with the updated Compound Master state included.
 
-## Wave 6 — RDM-009 (Watched files UI) — IMPLEMENTED VERIFIED
+## Wave 6 — RDM-009 (Watched files UI) — ✅ COMPLETE (shipped 2026-06-15)
 
 - Branch: `feat/watched-files-ui` from `develop` after PR #9 merge reconciliation.
+- **PR #10 MERGED** to `develop` (merge commit `4e7645a`, merged externally by user after the Release Marshal merge gate block). Branch remains local/remote unless pruned later. Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs). RDM-009 delivered.
 - [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-009-watched-files-ui-requirements.md`.
 - [x] Plan: `docs/plans/2026-06-15-003-feat-watched-files-ui-plan.md`.
 - [x] Work package: `docs/work-packages/RDM-009-watched-files-ui/2026-06-15-001-watched-files-ui-work-package.md` — single RU, branch `feat/watched-files-ui`, base `develop`.
@@ -212,7 +213,20 @@ PR #10 is open for RDM-009. Merge is blocked by Release Marshal until GitHub sho
 - Security gate: not required; no backend contract/capability change and no watched-file content reads.
 - Package status: `implemented-verified-awaiting-release`.
 - [x] Release Marshal handoff started (2026-06-15): 4 semantic commits created on `feat/watched-files-ui`, branch pushed, PR opened: https://github.com/ElZaWarudo/tinto/pull/10 (`feat/watched-files-ui → develop`, ready). Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs).
-- Merge status: blocked by Release Marshal gate. PR #10 is open, clean, and not draft, but GitHub currently shows no human reviews/approval.
+- [x] PR #10 merged externally by user; local `develop` fast-forwarded to `origin/develop`.
+
+## Wave 6 — RDM-010 (Timeline / history) — IMPLEMENTED VERIFIED
+
+- Branch: `feat/timeline-history` from `develop` after PR #10 merge reconciliation.
+- [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-010-timeline-history-requirements.md`.
+- [x] Plan: `docs/plans/2026-06-15-004-feat-timeline-history-plan.md`.
+- [x] Work package: `docs/work-packages/RDM-010-timeline-history/2026-06-15-001-timeline-history-work-package.md` — single RU, branch `feat/timeline-history`, base `develop`.
+- Reviewability Gate: independent single PR; no stack; Jira optional standalone Tarea if configured.
+- [x] RU1 execution complete: timeline model, commit diff/blob TS wrappers, Timeline panel, workspace entry point, TopBar button, tests, and CSS.
+- [x] Review pass: inline review found and fixed stale commit/detail rendering when active repo membership changes and a log reload fails; Timeline now filters commits and selected detail by active repo set.
+- [x] Verification PASS (2026-06-15): focused Vitest 42/42; full `npm test` 126/126; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 114/114; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `rtk timeout 25s npm run tauri dev` launched Vite and the Tauri binary and ended by timeout as expected; EGL warnings were environment-only.
+- Security gate: not required; no backend contract/capability change, no persistence, and no git writes.
+- Package status: `implemented-verified-awaiting-release`.
 
 - Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it).
 - Jira omitted (missing `.krt/env/jira-scribe.env`).
