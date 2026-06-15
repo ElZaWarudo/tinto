@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { BusStore, basename, getDiff, hasComputedDiffs } from "./store";
+import {
+  BusStore,
+  MAX_FS_EVENTS_PER_REPO,
+  basename,
+  getDiff,
+  getFsEvents,
+  hasComputedDiffs,
+} from "./store";
 import type { FileDiff, RepoDelta, RepoStatus, WorkbenchConfig } from "./contract";
 
 const fileDiff = (path: string): FileDiff => ({
@@ -105,6 +112,55 @@ describe("BusStore", () => {
       events: [{ path: "x", kind: "created", timestamp_ms: 9, size: null, size_delta: null }],
     });
     expect(store.getState().activity["/r/unknown"]).toBeUndefined();
+    expect(getFsEvents(store.getState(), "/r/unknown")).toEqual([]);
+  });
+
+  it("stores recent fs-events newest-first and caps them per repo", () => {
+    store.applyDelta(delta("/r/a", 1));
+    store.applyFsEvents({
+      repo: "/r/a",
+      events: [
+        { path: "old.env", kind: "modified", timestamp_ms: 2000, size: 1, size_delta: 0 },
+        { path: "new.env", kind: "created", timestamp_ms: 3000, size: 2, size_delta: 2 },
+      ],
+    });
+    expect(getFsEvents(store.getState(), "/r/a").map((e) => e.path)).toEqual([
+      "new.env",
+      "old.env",
+    ]);
+
+    for (let i = 0; i < MAX_FS_EVENTS_PER_REPO + 5; i++) {
+      store.applyFsEvents({
+        repo: "/r/a",
+        events: [
+          { path: `f${i}.env`, kind: "modified", timestamp_ms: 4000 + i, size: i, size_delta: 1 },
+        ],
+      });
+    }
+    const events = getFsEvents(store.getState(), "/r/a");
+    expect(events).toHaveLength(MAX_FS_EVENTS_PER_REPO);
+    expect(events[0].path).toBe(`f${MAX_FS_EVENTS_PER_REPO + 4}.env`);
+    expect(events[events.length - 1].path).toBe("f5.env");
+  });
+
+  it("loadSnapshot and reset drop fs-events for repos that leave membership", () => {
+    store.applyDelta(delta("/r/gone", 1));
+    store.applyDelta(delta("/r/keep", 1));
+    store.applyFsEvents({
+      repo: "/r/gone",
+      events: [{ path: ".env", kind: "modified", timestamp_ms: 5000, size: 10, size_delta: 1 }],
+    });
+    store.applyFsEvents({
+      repo: "/r/keep",
+      events: [{ path: "local.json", kind: "created", timestamp_ms: 6000, size: 4, size_delta: 4 }],
+    });
+
+    store.loadSnapshot([delta("/r/keep", 2)], { available: true });
+    expect(getFsEvents(store.getState(), "/r/gone")).toEqual([]);
+    expect(getFsEvents(store.getState(), "/r/keep").map((e) => e.path)).toEqual(["local.json"]);
+
+    store.reset();
+    expect(store.getState().fsEventsByRepo).toEqual({});
   });
 
   it("exposes error state from a delta", () => {
