@@ -1,3 +1,4 @@
+pub mod bus;
 pub mod git;
 pub mod paths;
 pub mod watcher;
@@ -5,7 +6,7 @@ pub mod workbench;
 
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct PingResponse {
@@ -45,8 +46,21 @@ pub fn run() {
         workbench::WorkbenchStore::with_default_config(dir)
     });
 
+    // Repos del workbench activo persistido: insumo de montaje inicial del bus.
+    let initial_repos = store
+        .active_workbench()
+        .map(|w| w.repos.clone())
+        .unwrap_or_default();
+
+    // Canal de comandos del bus creado SÍNCRONAMENTE: los `invoke` tempranos
+    // encolan sin carrera con el init async de la task.
+    let (bus_handle, bus_rx) = bus::BusHandle::new_pair();
+    let mut bus_rx = Some(bus_rx);
+    let mut initial_repos = Some(initial_repos);
+
     tauri::Builder::default()
         .manage(std::sync::Mutex::new(store))
+        .manage(bus_handle)
         .invoke_handler(tauri::generate_handler![
             ping,
             workbench::commands::list_workbenches,
@@ -57,9 +71,18 @@ pub fn run() {
             workbench::commands::remove_repo,
             workbench::commands::update_repo,
             workbench::commands::set_active_workbench,
-            workbench::commands::autodetect_repos_under
+            workbench::commands::autodetect_repos_under,
+            bus::commands::get_workbench_snapshot,
+            bus::commands::get_worktree_diff,
+            bus::commands::get_commit_diff,
+            bus::commands::get_commit_log,
+            bus::commands::get_blob,
+            bus::commands::get_file_content,
+            bus::commands::list_repo_tree,
+            bus::commands::set_subscriptions,
+            bus::commands::retry_repo
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -73,10 +96,35 @@ pub fn run() {
                     );
                 }
             });
+
+            // Task del bus: emite vía AppHandle (DeltaSink inyectada).
+            let sink_handle = app.handle().clone();
+            let sink: bus::DeltaSink =
+                std::sync::Arc::new(move |event: &str, payload: serde_json::Value| {
+                    let _ = sink_handle.emit(event, payload);
+                });
+            let rx = bus_rx.take().expect("setup corre una sola vez");
+            let initial = initial_repos.take().unwrap_or_default();
+            tauri::async_runtime::spawn(bus::run_bus(rx, sink, initial));
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Salida limpia: el bus apaga el watcher (flush de lotes
+            // pendientes) antes de morir el proceso.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(bus) = app_handle.try_state::<bus::BusHandle>() {
+                    // Apagado acotado: si el bus/watcher quedó atascado, no
+                    // colgar la salida del proceso indefinidamente.
+                    tauri::async_runtime::block_on(async {
+                        let _ =
+                            tokio::time::timeout(std::time::Duration::from_secs(3), bus.shutdown())
+                                .await;
+                    });
+                }
+            }
+        });
 }
 
 #[cfg(test)]
