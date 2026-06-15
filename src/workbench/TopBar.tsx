@@ -3,10 +3,12 @@
 // untouched (handled by the workspace).
 
 import { useBusState } from "../bus/store";
+import { useWorkspaceActions } from "../workspace/actions";
 import { addRepoFlow, autodetectFlow, switchWorkbench } from "./operations";
 
 export function TopBar() {
   const { config, watching } = useBusState();
+  const { openTimeline } = useWorkspaceActions();
   const active = config?.active ?? "";
   const workbenches = config?.workbenches ?? [];
 
@@ -34,6 +36,9 @@ export function TopBar() {
       </button>
       <button data-testid="autodetect" onClick={() => active && void autodetectFlow(active)}>
         Auto-detect
+      </button>
+      <button data-testid="open-timeline" onClick={openTimeline}>
+        Timeline
       </button>
 
       <span

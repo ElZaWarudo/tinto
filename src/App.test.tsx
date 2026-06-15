@@ -28,6 +28,7 @@ import {
   PANEL_DASHBOARD,
   PANEL_DIFF,
   PANEL_REPO,
+  PANEL_TIMELINE,
   PANEL_TREE,
   repoPanelId,
 } from "./workspace/panels";
@@ -66,7 +67,7 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
     expect(Object.keys(captured.components ?? {})).toEqual(
-      expect.arrayContaining([PANEL_DASHBOARD, PANEL_TREE, PANEL_REPO, PANEL_DIFF]),
+      expect.arrayContaining([PANEL_DASHBOARD, PANEL_TREE, PANEL_REPO, PANEL_DIFF, PANEL_TIMELINE]),
     );
   });
 

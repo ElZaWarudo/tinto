@@ -8,6 +8,7 @@ export const PANEL_DASHBOARD = "dashboard";
 export const PANEL_TREE = "tree";
 export const PANEL_REPO = "repo";
 export const PANEL_DIFF = "diff";
+export const PANEL_TIMELINE = "timeline";
 
 /** Panel id for a repo's detail panel, keyed by its canonical path. */
 export function repoPanelId(canonicalPath: string): string {

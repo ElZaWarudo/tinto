@@ -30,6 +30,7 @@ function renderDash(actions: Partial<WorkspaceActions> = {}) {
     addRepo: vi.fn(),
     removeRepo: vi.fn(),
     openDiff: vi.fn(),
+    openTimeline: vi.fn(),
     ...actions,
   };
   render(

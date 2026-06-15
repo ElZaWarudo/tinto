@@ -1,15 +1,23 @@
 import { useMemo, useRef } from "react";
 import type { DockviewApi } from "dockview-react";
 import { DockWorkspace, type PanelComponents } from "./workspace/DockWorkspace";
-import { PANEL_DASHBOARD, PANEL_DIFF, PANEL_REPO, PANEL_TREE } from "./workspace/panels";
+import {
+  PANEL_DASHBOARD,
+  PANEL_DIFF,
+  PANEL_REPO,
+  PANEL_TIMELINE,
+  PANEL_TREE,
+} from "./workspace/panels";
 import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/actions";
 import { openRepoPanel } from "./workspace/openRepo";
 import { openDiffPanel } from "./workspace/openDiff";
+import { openTimelinePanel } from "./workspace/openTimeline";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
 import { DashboardPanel } from "./panels/DashboardPanel";
 import { RepoPanel } from "./panels/RepoPanel";
 import { RepoTreePanel } from "./panels/RepoTreePanel";
 import { DiffPanel } from "./panels/diff/DiffPanel";
+import { TimelinePanel } from "./panels/timeline/TimelinePanel";
 import { TopBar } from "./workbench/TopBar";
 import { FirstRun } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
@@ -22,6 +30,7 @@ const components: PanelComponents = {
   [PANEL_TREE]: RepoTreePanel,
   [PANEL_REPO]: RepoPanel,
   [PANEL_DIFF]: DiffPanel,
+  [PANEL_TIMELINE]: TimelinePanel,
 };
 
 export default function App() {
@@ -53,6 +62,11 @@ export default function App() {
       openDiff: (path, filePath) => {
         if (apiRef.current) {
           openDiffPanel(apiRef.current, path, filePath, basename(filePath));
+        }
+      },
+      openTimeline: () => {
+        if (apiRef.current) {
+          openTimelinePanel(apiRef.current);
         }
       },
     }),
