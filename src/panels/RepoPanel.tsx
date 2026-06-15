@@ -6,14 +6,17 @@ import { useEffect, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { getCommitLog, retryRepo } from "../bus/client";
 import type { CommitInfo } from "../bus/contract";
-import { busStore, commitDate, useBusState } from "../bus/store";
+import { busStore, commitDate, getFsEvents, useBusState } from "../bus/store";
 import { useWorkspaceActions } from "../workspace/actions";
+import { updateRepoFsWatch } from "../workbench/operations";
+import { WatchedFilesSection } from "./WatchedFilesSection";
 
 const COMMIT_LOG_LIMIT = 30;
 
 export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
-  const { repos } = useBusState();
+  const state = useBusState();
+  const { repos } = state;
   const { removeRepo, openDiff } = useWorkspaceActions();
   const delta = repos[repo];
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
@@ -49,6 +52,9 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   }
 
   const { status, error } = delta;
+  const activeWorkbench = state.config?.active ?? null;
+  const activeConfig = state.config?.workbenches.find((w) => w.name === activeWorkbench);
+  const repoEntry = activeConfig?.repos.find((r) => r.path === repo);
   return (
     <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
       <header className="repo-panel__head">
@@ -82,6 +88,20 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
         <StatusList label="Staged" files={status.staged} onOpen={(f) => openDiff(repo, f)} />
         <StatusList label="Untracked" files={status.untracked} onOpen={(f) => openDiff(repo, f)} />
       </section>
+
+      <WatchedFilesSection
+        key={`${repo}:${(repoEntry?.fs_watch ?? []).join("\0")}`}
+        repo={repo}
+        activeWorkbench={activeWorkbench}
+        patterns={repoEntry?.fs_watch ?? []}
+        events={getFsEvents(state, repo)}
+        watching={state.watching}
+        onSave={(patterns) =>
+          activeWorkbench
+            ? updateRepoFsWatch(activeWorkbench, repo, patterns)
+            : Promise.reject(new Error("No active workbench."))
+        }
+      />
 
       <section className="repo-panel__log" data-testid="commit-log">
         <h3>Commits</h3>

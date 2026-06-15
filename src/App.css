@@ -179,6 +179,99 @@ body,
   padding-left: 18px;
 }
 
+/* ---- Watched files (Plane 2) ---- */
+.watched-files {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.watched-files__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.watched-files__head h3,
+.watch-patterns h4,
+.watch-events h4 {
+  margin: 0 0 6px;
+}
+.watched-files__degraded,
+.watched-files__error {
+  color: var(--warn);
+  font-size: 12px;
+}
+.watch-patterns {
+  margin-bottom: 12px;
+}
+.watch-patterns__row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.watch-patterns__row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.watch-patterns__row button,
+.watch-patterns__actions button {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.watch-patterns__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.watch-patterns__actions button:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+.watch-events ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+.watch-event {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.watch-event__kind {
+  font-size: 11px;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+.watch-event__kind--created {
+  color: var(--added);
+}
+.watch-event__kind--modified {
+  color: var(--warn);
+}
+.watch-event__kind--removed {
+  color: var(--danger);
+}
+.watch-event__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.watch-event__meta {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
 /* ---- Repo tree ---- */
 .repo-tree {
   padding: 4px;

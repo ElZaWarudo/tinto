@@ -5,9 +5,13 @@ import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/act
 
 const getCommitLogMock = vi.fn();
 const retryRepoMock = vi.fn();
+const updateRepoFsWatchMock = vi.fn();
 vi.mock("../bus/client", () => ({
   getCommitLog: (...a: unknown[]) => getCommitLogMock(...a),
   retryRepo: (...a: unknown[]) => retryRepoMock(...a),
+}));
+vi.mock("../workbench/operations", () => ({
+  updateRepoFsWatch: (...a: unknown[]) => updateRepoFsWatchMock(...a),
 }));
 
 import { RepoPanel } from "./RepoPanel";
@@ -36,6 +40,8 @@ describe("RepoPanel", () => {
     busStore.resetAll();
     getCommitLogMock.mockReset();
     retryRepoMock.mockReset();
+    updateRepoFsWatchMock.mockReset();
+    updateRepoFsWatchMock.mockResolvedValue(undefined);
   });
 
   it("renders the full status lists and the commit log", async () => {
@@ -95,6 +101,44 @@ describe("RepoPanel", () => {
     );
     fireEvent.doubleClick(screen.getByTestId("status-file-src/a.rs"));
     expect(openDiff).toHaveBeenCalledWith("/r/api", "src/a.rs");
+  });
+
+  it("renders watched-file events and saves fs_watch through the active workbench", async () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          { name: "Work", repos: [{ path: "/r/api", alias: null, fs_watch: [".env"] }] },
+        ],
+      });
+      busStore.loadSnapshot([delta("/r/api")], { available: true });
+      busStore.applyFsEvents({
+        repo: "/r/api",
+        events: [
+          {
+            path: ".env",
+            kind: "modified",
+            timestamp_ms: 1_700_000_000_000,
+            size: 20,
+            size_delta: 4,
+          },
+        ],
+      });
+    });
+
+    render(<RepoPanel {...panelProps("/r/api")} />);
+
+    expect(screen.getByTestId("watched-files")).toHaveTextContent(".env");
+    expect(screen.getByTestId("watch-events")).toHaveTextContent("20 B (+4 B)");
+    fireEvent.change(screen.getByLabelText("watch pattern 1"), {
+      target: { value: "secrets/*.json" },
+    });
+    fireEvent.click(screen.getByText("Save patterns"));
+    await waitFor(() =>
+      expect(updateRepoFsWatchMock).toHaveBeenCalledWith("Work", "/r/api", ["secrets/*.json"]),
+    );
   });
 });
 
