@@ -197,7 +197,7 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 
 ## Next action
 
-Handoff RDM-009 to Release Marshal: commit, push, open PR to `develop`, then merge only under the program's visible-gate rule with the updated Compound Master state included.
+PR #10 is open for RDM-009. Merge is blocked by Release Marshal until GitHub shows a visible human approval on the PR, then the user authorizes that exact merge.
 
 ## Wave 6 — RDM-009 (Watched files UI) — IMPLEMENTED VERIFIED
 
@@ -211,6 +211,8 @@ Handoff RDM-009 to Release Marshal: commit, push, open PR to `develop`, then mer
 - [x] Verification PASS (2026-06-15): focused Vitest 37/37; full `npm test` 115/115; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 114/114; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `npm run tauri dev` smoke required escalation because sandbox blocked `127.0.0.1:1420`; under `rtk timeout 25s npm run tauri dev`, Vite and the Tauri binary launched and the process ended by timeout as expected. EGL warnings were environment-only.
 - Security gate: not required; no backend contract/capability change and no watched-file content reads.
 - Package status: `implemented-verified-awaiting-release`.
+- [x] Release Marshal handoff started (2026-06-15): 4 semantic commits created on `feat/watched-files-ui`, branch pushed, PR opened: https://github.com/ElZaWarudo/tinto/pull/10 (`feat/watched-files-ui → develop`, ready). Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs).
+- Merge status: blocked by Release Marshal gate. PR #10 is open, clean, and not draft, but GitHub currently shows no human reviews/approval.
 
 - Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it).
 - Jira omitted (missing `.krt/env/jira-scribe.env`).
