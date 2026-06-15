@@ -168,7 +168,7 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 - [x] Security gate: not required (read-only local UI + IPC; `dialog:allow-open` only; ui_state corrupt-tolerant + config-dir-scoped).
 - Package → `implemented-verified-awaiting-release`. **Pipeline items 5–6 COMPLETE.** Branch `feat/dashboard-ui`: 9 commits (deps / app / ui-shell / docs / bus / panels / workbench / integration / review-fixes).
 
-## Wave 6 — RDM-008 (Diff viewer + Live diff) — READY FOR RELEASE HANDOFF
+## Wave 6 — RDM-008 (Diff viewer + Live diff) — PR OPEN, MERGE BLOCKED BY REVIEW GATE
 
 - Branch: `feat/diff-viewer` (from develop; carries the wave 5 closeout state edits + the RDM-008 artifacts). **No backend change** — the frozen contract already serves every need; `cargo` surface untouched (114 tests). One dependency added (`shiki`).
 - **Scope decided with user (2026-06-15, AskUserQuestion):** custom diff renderer over the structured `DiffHunk`/`DiffLine` data (user described VS Code line-reviewer UX: inline stacked old→new, or left/right comparator); **Shiki** for syntax highlighting (lazy `shiki/core` + on-demand grammars, size-capped); **both** inline + side-by-side modes, default inline.
@@ -186,11 +186,23 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 - [x] **Code review PASS (4 personas: correctness, adversarial, testing, maintainability)** — store slice + reconciler judged solid/well-tested. Findings fixed: **1 P1** (DiffPanel stale one-shot after clean-clear) + **P2s** (paused-untracked false clean/dead reload; orphaned diff panels on repo removal; missing renamed-target state; untested full-file degrade paths; dead `reconciler.restore()` code) + P3 trailing-newline. Added/strengthened tests for reverted-after-live, live-before-one-shot, FullFileView base64/truncated/error/trailing newline, renamed state, paused-untracked body, cross-repo cap, and removed-repo panel cleanup.
 - Deferred with rationale (recorded, not blocking): manual-reload cancellation race (P3, prototype-acceptable); full-file/diff revision skew (accepted per R4, documented in code); DiffPanel `useDiffData` extraction + S/M/U mark consolidation (discretionary); reconciler liveKeys perf (negligible at cap 8); workbench-switch diff-panel orphan (bigger flow — defer).
 - Security gate: not required (read-only local UI; no new Tauri command/capability; `shiki` runs in the webview over already-allowlisted content). Covered by the adversarial persona.
-- Package → `implemented-verified-awaiting-release`. **Pipeline items 5–6 COMPLETE.**
+- [x] **Release Marshal handoff started (2026-06-15):** 6 semantic commits created on `feat/diff-viewer`,
+  branch pushed, PR opened: https://github.com/ElZaWarudo/tinto/pull/9 (`feat/diff-viewer → develop`, ready).
+  Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs).
+  PR scope guardrail recorded as approved large PR: ~2580 human-authored lines, ~920 orchestration-doc lines.
+- [ ] **Merge BLOCKED (2026-06-15):** user requested immediate merge, but GitHub-visible gate for PR #9 is
+  `mergeStateStatus=CLEAN`, `reviewDecision=""`, `reviews=[]`, no checks. Because `develop` is a normal base
+  and there is no human reviewer approval visible on GitHub, Release Marshal forbids merge. Internal review,
+  local verification, the standing merge preference, and author approval do not substitute for GitHub-visible
+  human approval under the current release rules.
+- Package → `pr-opened`. **Pipeline items 5–7 COMPLETE through PR creation; merge pending external review
+  gate.**
 
 ## Next action
 
-Hand RU1 to **krt-release-marshal** (release plan → PR `feat/diff-viewer → develop`; the size decision `aprobar PR grande` is pre-noted). Stop at the release plan per the standing pacing.
+Get a GitHub-visible human approval on PR #9, then invoke `krt-release-marshal` / merge inspection again for
+the exact PR. If the rule should be changed for this prototype repo, that is a release-policy decision to make
+outside this blocked merge attempt.
 
 - Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it).
 - Jira omitted (missing `.krt/env/jira-scribe.env`).

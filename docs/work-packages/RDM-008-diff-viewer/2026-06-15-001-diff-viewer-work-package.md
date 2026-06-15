@@ -1,6 +1,6 @@
 ---
 title: Diff viewer — structured render, live diff, full-file view, tree drill-through
-status: implemented-verified-awaiting-release
+status: pr-opened
 roadmap_item: RDM-008
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-15-rdm-008-diff-viewer-requirements.md
@@ -275,6 +275,9 @@ Review-fix coverage added/strengthened:
 
 - Review unit: RU1 — Diff viewer (structured render + live diff + full-file + tree drill-through).
 - Branch name: `feat/diff-viewer`
+- PR: https://github.com/ElZaWarudo/tinto/pull/9
+- Merge status: not merged. GitHub gate is clean, but PR #9 has no GitHub-visible human review approval on
+  the normal `develop` base, so Release Marshal blocks merge despite the user's immediate merge request.
 - Branch/docs rule: this single executable review unit carries the RDM-008 planning artifacts on the same
   branch; no separate docs branch.
 - PR base: develop
