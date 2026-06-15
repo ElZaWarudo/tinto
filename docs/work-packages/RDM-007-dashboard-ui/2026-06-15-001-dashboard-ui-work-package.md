@@ -1,6 +1,6 @@
 ---
 title: Dashboard UI — dockable workspace, repo cards, workbench management
-status: ready
+status: implemented-verified-awaiting-release
 roadmap_item: RDM-007
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-15-rdm-007-dashboard-ui-requirements.md
@@ -155,6 +155,13 @@ dock-engine validation is an internal U2 gate, not a separate PR.
 
 ## Verification Gate
 
+- [x] `cargo fmt --check` ✓ · [x] `cargo clippy --all-targets -- -D warnings` ✓ · [x] `cargo test`
+  **114/114** ✓ · [x] `cargo build` ✓ · [x] `npm run lint` ✓ · [x] `tsc --noEmit` ✓ · [x] `npm test`
+  **58/58** ✓ · [x] `tauri dev` boot smoke ✓ (dockview mounts, app boots, no panics) · [x] `tauri build`
+  exit 0 ✓ (deb/rpm/AppImage bundles). **Status: VERIFIED (2026-06-15).**
+- Note: interactive AE1–AE12 walk-through (split/drag, full first-run→add→cards flow) is exercised by the
+  component/store tests + the dock-engine boot gate; the live click-through is left for the user (headless
+  env can't drive the webview UI). Original gate text below.
 - `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` (existing + ui_state +
   workbench canonicalization) · `cargo build` · `npm run lint` · `npm test` (new Vitest suites) ·
   `tauri dev` smoke covering AE1–AE12 · `tauri build` exit 0.
@@ -171,6 +178,30 @@ dock-engine validation is an internal U2 gate, not a separate PR.
   (AE coverage, dialog/invoke mocking), maintainability (panel/store boundaries, contract mirror drift),
   adversarial (StrictMode double-subscribe, layout-persist corruption/flush-on-quit, canonical-path join
   failure modes, dockview focus/keyboard).
+
+### Code review result (2026-06-15) — 4 personas (correctness, adversarial, testing, maintainability)
+
+No P0/P1 correctness defects (prototype-calibrated); the two P1s were test-coverage gaps. **Fixes applied + verified (8 fixes + 10 new tests):**
+
+| Severity | Finding | Fix |
+|---|---|---|
+| P2 corr/adv | `loadSnapshot` clobbered a newer in-flight delta (violated the contract revision rule) | merge by max revision + preserve max activity |
+| P2 maint | sort-by-name + status-summary duplicated across panels | shared `sortedRepoPaths`/`statusSummary`/`commitDate` selectors |
+| P1 test | `connection.ts` listener lifecycle (StrictMode cleanup) had zero coverage | new `connection.test.ts` (attach/load/unlisten/active-guard) |
+| P1 test | AE4 layout round-trip never proven (all layers mocked) | DockWorkspace test proving saved bytes == restored bytes |
+| P3 adv | `removeRepoFlow` unhandled rejection on mid-switch | try/catch + return false |
+| P3 adv | `openRepoPanel` dup-id throw during restore race | try/catch fallback to focus |
+| P3 adv | backend `remove_repo` couldn't remove a repo whose dir was deleted | match raw OR canonical path |
+| P3 corr | `RepoPanel` masked commit-log fetch failure as "no commits" | distinct "Could not load commits" state |
+| P3 adv/corr | DockWorkspace leaked listeners/timer on unmount | `useEffect` cleanup disposing subs + beforeunload + timer |
+| P3 test | ui_state corrupt-read + canonicalization `..`/dead-entry cases | added cargo tests |
+
+**Deferred with rationale (recorded, not blocking):**
+- *Adv P2 — phantom repo from an old-workbench delta after a switch:* the **backend already discards zombie deltas for unmounted repos** (`bus/mod.rs` set_workbench prune + the results-arm membership guard, verified in RDM-006), so the race doesn't occur in practice. A frontend generation token is defense-in-depth not needed for the prototype. (Backlog.)
+- *Maint P2 — TS↔Rust contract drift guard:* hand-kept mirror with the header note is acceptable for the prototype; full codegen (ts-rs/specta) is a larger change. (Backlog.)
+- *Maint P3 — remove-panel reconciler extraction; P3 keyboard floor* (arrow-nav/Escape; Enter/Space open implemented — the rest was plan-sanctioned mouse-first degrade). (Backlog.)
+
+Re-verification after fixes: 114 cargo + 58 vitest, tsc/lint/clippy/fmt clean. **Review PASS.**
 
 ## Security Gate
 

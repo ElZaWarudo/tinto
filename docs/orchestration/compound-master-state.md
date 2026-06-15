@@ -148,21 +148,31 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 - [x] Security gate: not required (covered by the adversarial persona; traversal/`.git`/allowlist surface now has tests).
 - Package → `implemented-verified-awaiting-release`. **Pipeline items 5 and 6 COMPLETE.**
 
-## Wave 5 — RDM-007 (Dashboard UI) — EN CURSO
+## Wave 5 — RDM-007 (Dashboard UI) — IMPLEMENTED, AWAITING RELEASE
 
 - **Scope decided with user (2026-06-15):** RDM-007 expanded to a VS Code–style **dockable/splittable workspace** (build the shell now, user chose against splitting into 007a/007b). Panel model: Dashboard card grid + per-repo detail tabs + repo-node tree. Global persisted layout. Core workbench mgmt (create/switch/add/remove). Repo tree is **repo-node-level only**; file expansion deferred to RDM-008. RDM-008 = Wave 6 (hard-depends on 007).
 - [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-007-dashboard-ui-requirements.md`. Reviewed (coherence, feasibility, scope-guardian, design-lens). Hardened: differentiated Repo panel (commit log + status list vs card), git edge states, zero-repos/loading/degraded states, activity-indicator spec, dock-library-first gate, plugins/capabilities directive, `list_workbenches` name join.
 - [x] Plan: `docs/plans/2026-06-15-001-feat-dashboard-ui-plan.md` (U1 deps+Tauri wiring, U2 dock shell GATE, U3 bus client+store, U4 dashboard, U5 repo panel, U6 tree, U7 workbench mgmt, U8 integration). Reviewed (coherence, feasibility). Fixes applied: KTD1 dockview; mutation commands need `workbench` name arg; timestamp units (ms vs s); `dialog:allow-open`; ui_state write-failure + flush-on-quit; **KTD5 canonical-path join** (canonicalize stored repo path on add — small RDM-005 amendment).
 - [x] Work package: `docs/work-packages/RDM-007-dashboard-ui/2026-06-15-001-dashboard-ui-work-package.md` — **single RU** (reviewers' split recommendation declined: user prefers fewer cycles + U2 internal gate de-risks). Checker OK; coherence review → 1 fix (dangling finding-ID reference). **PACKAGE SOUND.** Large PR (>1000 lines, ~half tests) → `aprobar PR grande` decision carried to release plan.
-- [~] **Execute RU1 (U1–U8)** — branch `feat/dashboard-ui` from develop. **IN PROGRESS.**
+- [x] **Execute RU1 (U1–U8) — COMPLETE.** Branch `feat/dashboard-ui` from develop.
   - [x] U1 deps + Tauri wiring: dockview-react 6.6.1 + @tauri-apps/plugin-dialog 2.7.1; Rust `ui_state` command (`get_ui_state`/`set_ui_state`, atomic write, corrupt-tolerant) + `tauri_plugin_dialog::init()` + `dialog:allow-open` capability; KTD5 canonicalize-on-add in `workbench/mod.rs` (+ remove matches canonical). **111 cargo tests** (106 + 4 ui_state + 1 canonicalization), clippy/fmt clean.
   - [x] U2 dock shell **GATE PASSED**: `src/workspace/{panels,layout,DockWorkspace}.tsx` — dockview `themeVisualStudio`, restore-or-default, debounced save, flush-on-quit, empty-workspace guard; persistence via `get_ui_state`/`set_ui_state`. App.tsx replaced (placeholders), dark dev-tool App.css, ResizeObserver/matchMedia polyfills. **10 vitest** (layout 5, DockWorkspace 4, App 1), tsc/lint clean. `tauri dev` boot smoke ✓ (dockview mounts, no panics). Interactive split/drag deferred to user; wiring covered by DockWorkspace.test.
-  - [ ] U3 bus client/store · U4 dashboard · U5 repo panel · U6 tree · U7 workbench mgmt · U8 integration — REMAINING.
-  - Foundation committed as checkpoints on the branch (deps / app / ui-shell + docs).
+  - [x] U3 bus client/store · U4 dashboard cards · U5 repo panel · U6 tree · U7 workbench mgmt · U8 integration — **ALL COMPLETE.**
+  - **Verification PASS:** cargo 114, vitest 58, tsc/lint/clippy/fmt clean, `tauri dev` boot smoke ✓, `tauri build` exit 0 (deb/rpm/AppImage).
+- [x] **Code review COMPLETE (4 personas, 2026-06-15)** — no P0/P1 correctness (prototype-calibrated); 2 P1s were test gaps. **8 fixes + 10 tests** (loadSnapshot revision-merge, dedup selectors, connection-lifecycle test, AE4 round-trip test, removeRepo/openRepo guards, backend dead-entry remove, RepoPanel log-error state, DockWorkspace cleanup, ui_state/canonicalization tests). Deferred w/ rationale: phantom-repo generation token (backend already discards zombie deltas), TS↔Rust contract codegen, keyboard arrow-nav. See package Review Gate. **Review PASS.**
+- [x] Security gate: not required (read-only local UI + IPC; `dialog:allow-open` only; ui_state corrupt-tolerant + config-dir-scoped).
+- Package → `implemented-verified-awaiting-release`. **Pipeline items 5–6 COMPLETE.** Branch `feat/dashboard-ui`: 9 commits (deps / app / ui-shell / docs / bus / panels / workbench / integration / review-fixes).
 
 ## Next action
 
-Execute RU1 unit by unit: U1 (deps: dockview-react + plugin-dialog; Rust `ui_state` command + `dialog:allow-open` capability + canonicalize-on-add in workbench store) → U2 dock shell GATE (validate dockview split/drag/serialize-restore in `tauri dev` before panels) → U3 bus client/store → U4–U7 panels + workbench mgmt → U8 integration. Verify per the Verification Gate (cargo + vitest + lint + tauri dev smoke AE1–AE12 + tauri build), then code review (4 personas), then handoff to krt-release-marshal (PR `feat/dashboard-ui`→develop, merge under standing rule with state included, large-PR decision affirmed, KTD5 delivered-code touch surfaced).
+**Handoff to `krt-release-marshal`** (do not stop before; release-plan approval pause lives inside Release Marshal). PR `feat/dashboard-ui` → `develop`. Handoff inputs:
+- **Size/scope decision:** single broad RU (full dockable frontend; ~half the TS is tests) — affirm `aprobar PR grande` in the release plan.
+- **KTD5 delivered-code touch:** the workbench store now canonicalizes stored repo paths (small RDM-005 amendment) — surface in the release plan.
+- **Merge:** pre-authorized standing rule whenever the PR includes the updated compound-master state (it does — this file travels on the branch).
+- Jira omitted (`jira-env-not-configured`). Reviewers omitted (repo has no collaborators).
+- Commit grouping already clean on the branch (deps/app/ui-shell/docs/bus/panels/workbench/integration/review-fixes); rebase unnecessary (linear atop develop).
+
+After RDM-007 merges (closes Wave 5): Wave 6 = RDM-008/009/010 (diff viewer, plane-2 UI, timeline) — all add panels into this dockable shell + the registry/actions/store seams; RDM-008 first (it's the highest-value, drives the file-tree expansion + card→diff drill-through deferred from 007).
 
 - Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state.
 - Jira omitted (missing `.krt/env/jira-scribe.env`).
