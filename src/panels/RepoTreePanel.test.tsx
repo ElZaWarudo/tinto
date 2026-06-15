@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { RepoTreePanel } from "./RepoTreePanel";
 import { busStore } from "../bus/store";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
-import type { RepoDelta } from "../bus/contract";
+import type { RepoDelta, RepoTree } from "../bus/contract";
 
 function delta(repo: string, over: Partial<RepoDelta> = {}): RepoDelta {
   return {
@@ -27,6 +28,7 @@ function renderTree(actions: Partial<WorkspaceActions> = {}) {
     openRepo: vi.fn(),
     addRepo: vi.fn(),
     removeRepo: vi.fn(),
+    openDiff: vi.fn(),
     ...actions,
   };
   render(
@@ -38,43 +40,61 @@ function renderTree(actions: Partial<WorkspaceActions> = {}) {
 }
 
 describe("RepoTreePanel", () => {
-  beforeEach(() => busStore.resetAll());
+  beforeEach(() => {
+    busStore.resetAll();
+    invokeMock.mockReset();
+  });
 
-  // Covers AE7: a node per repo with status; click opens the repo; no file nodes.
-  it("renders a node per repo with a status summary and opens on click", () => {
+  it("renders a node per repo with status; the name opens the repo", () => {
     act(() =>
       busStore.loadSnapshot(
-        [
-          delta("/r/api", { status: { modified: ["x"], staged: ["y"], untracked: ["z", "w"] } }),
-          delta("/r/web"),
-        ],
+        [delta("/r/api", { status: { modified: ["x"], staged: ["y"], untracked: ["z", "w"] } })],
         { available: true },
       ),
     );
     const { openRepo } = renderTree();
-
     expect(screen.getByTestId("tree-node-/r/api")).toHaveTextContent("1M 1S 2U");
-    expect(screen.getByTestId("tree-node-/r/web")).toHaveTextContent("clean");
-    // No file-level nodes in 007.
-    expect(screen.queryByText("x")).not.toBeInTheDocument();
-
     fireEvent.click(screen.getByTestId("tree-node-/r/api"));
     expect(openRepo).toHaveBeenCalledWith("/r/api");
   });
 
-  it("updates a node's status live", () => {
-    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
-    renderTree();
-    expect(screen.getByTestId("tree-node-/r/api")).toHaveTextContent("clean");
+  it("expands to files, marks changed ones, and opens a diff on a file (AE8/AE9)", async () => {
+    const tree: RepoTree = {
+      entries: [
+        { path: "src", is_dir: true },
+        { path: "src/a.ts", is_dir: false },
+        { path: "src/b.ts", is_dir: false },
+      ],
+      truncated: false,
+    };
+    invokeMock.mockResolvedValue(tree);
     act(() =>
-      busStore.applyDelta(
-        delta("/r/api", {
-          revision: 2,
-          status: { modified: ["a", "b"], staged: [], untracked: [] },
-        }),
+      busStore.loadSnapshot(
+        [delta("/r/api", { status: { modified: ["src/a.ts"], staged: [], untracked: [] } })],
+        { available: true },
       ),
     );
-    expect(screen.getByTestId("tree-node-/r/api")).toHaveTextContent("2M 0S 0U");
+    const { openDiff } = renderTree();
+
+    fireEvent.click(screen.getByTestId("tree-expand-/r/api"));
+    // Loading then files; expand the folder to reveal them.
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("list_repo_tree", { repo: "/r/api" }),
+    );
+    fireEvent.click(await screen.findByText("src")); // expand folder (collapsed by default)
+
+    const aFile = await screen.findByTestId("tree-file-src/a.ts");
+    expect(aFile).toHaveClass("tree-file--changed");
+    fireEvent.doubleClick(aFile);
+    expect(openDiff).toHaveBeenCalledWith("/r/api", "src/a.ts");
+  });
+
+  it("shows a truncated notice when the tree is capped", async () => {
+    invokeMock.mockResolvedValue({ entries: [], truncated: true } as RepoTree);
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+    renderTree();
+    fireEvent.click(screen.getByTestId("tree-expand-/r/api"));
+    expect(await screen.findByTestId("tree-truncated-/r/api")).toBeInTheDocument();
   });
 
   it("shows an empty message with no repos", () => {

@@ -128,4 +128,22 @@ describe("RepoCard", () => {
     fireEvent.doubleClick(screen.getByTestId("card-/r/api"));
     expect(onOpen).toHaveBeenCalledOnce();
   });
+
+  // Covers AE9: drill-through from a card changed-file entry opens its diff.
+  it("expanded card lists changed files; double-click opens the diff, not the repo", () => {
+    const onOpenFile = vi.fn();
+    const { onOpen } = renderCard({}, { onOpenFile });
+    fireEvent.click(screen.getByLabelText("expand"));
+    expect(screen.getByTestId("card-files")).toBeInTheDocument();
+    const file = screen.getByTestId("card-file-a");
+    fireEvent.doubleClick(file);
+    expect(onOpenFile).toHaveBeenCalledWith("a");
+    expect(onOpen).not.toHaveBeenCalled(); // stopPropagation kept the card from opening
+  });
+
+  it("omits the changed-files list when no onOpenFile is provided", () => {
+    renderCard();
+    fireEvent.click(screen.getByLabelText("expand"));
+    expect(screen.queryByTestId("card-files")).not.toBeInTheDocument();
+  });
 });
