@@ -8,12 +8,15 @@ export interface WorkspaceActions {
   openRepo: (canonicalPath: string) => void;
   addRepo: () => void;
   removeRepo: (canonicalPath: string) => void;
+  /** Open (or focus) the diff panel for a file within a repo (RDM-008). */
+  openDiff: (canonicalPath: string, filePath: string) => void;
 }
 
 const noop: WorkspaceActions = {
   openRepo: () => {},
   addRepo: () => {},
   removeRepo: () => {},
+  openDiff: () => {},
 };
 
 export const WorkspaceActionsContext = createContext<WorkspaceActions>(noop);

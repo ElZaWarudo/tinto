@@ -1,0 +1,89 @@
+// Full-file view (RDM-008, R4): the file's CURRENT working-tree content with
+// changed lines highlighted in context. Degrades per R4: base64/binary → guard
+// placeholder; truncated → content up to the 1 MiB cut + a notice (no highlight
+// past the cut). Best-effort under mid-edit content/diff skew (no correctness
+// guarantee on the exact highlighted line during an active write).
+
+import { useEffect, useState } from "react";
+import { getFileContent } from "../../bus/client";
+import type { FileContent } from "../../bus/contract";
+
+export function FullFileView({
+  repo,
+  path,
+  changedLines,
+}: {
+  repo: string;
+  path: string;
+  changedLines: Set<number>;
+}) {
+  const [content, setContent] = useState<FileContent | undefined>(undefined);
+  const [error, setError] = useState(false);
+
+  // A diff panel is one (repo, path) target, so this fetches once on mount; the
+  // initial `undefined` state IS the loading state (no synchronous reset needed).
+  useEffect(() => {
+    let active = true;
+    getFileContent(repo, path)
+      .then((c) => {
+        if (active) {
+          setContent(c);
+          setError(false);
+        }
+      })
+      .catch(() => active && setError(true));
+    return () => {
+      active = false;
+    };
+  }, [repo, path]);
+
+  if (error) {
+    return (
+      <div className="full-file full-file--error" data-testid="full-error">
+        Could not load file.
+      </div>
+    );
+  }
+  if (content === undefined) {
+    return (
+      <div className="full-file full-file--loading" data-testid="full-loading">
+        Loading…
+      </div>
+    );
+  }
+  if (content.encoding === "base64") {
+    return (
+      <div className="full-file full-file--binary" data-testid="full-binary">
+        Binary file — cannot show full content.
+      </div>
+    );
+  }
+
+  const raw = content.content.split("\n");
+  // Drop the spurious trailing empty line from a file ending in a newline.
+  const lines = raw.length > 1 && raw[raw.length - 1] === "" ? raw.slice(0, -1) : raw;
+  return (
+    <div className="full-file" data-testid="full-file">
+      <pre className="full-file__code">
+        {lines.map((line, i) => {
+          const lineno = i + 1;
+          const changed = changedLines.has(lineno);
+          return (
+            <div
+              key={i}
+              className={changed ? "full-file__line full-file__line--changed" : "full-file__line"}
+            >
+              <span className="diff-gutter">{lineno}</span>
+              <code className="diff-content">{line}</code>
+            </div>
+          );
+        })}
+      </pre>
+      {content.truncated && (
+        <div className="diff-view__notice" data-testid="full-truncated">
+          File truncated at the read limit — content beyond this point is not shown.
+        </div>
+      )}
+    </div>
+  );
+}
