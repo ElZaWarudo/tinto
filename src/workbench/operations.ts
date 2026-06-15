@@ -9,6 +9,7 @@ import {
   createWorkbench,
   removeRepo,
   setActiveWorkbench,
+  updateRepo,
 } from "../bus/client";
 import { reloadActiveWorkbench } from "../bus/connection";
 import { busStore } from "../bus/store";
@@ -67,4 +68,13 @@ export async function removeRepoFlow(
   }
   await reloadActiveWorkbench();
   return true;
+}
+
+export async function updateRepoFsWatch(
+  active: string,
+  path: string,
+  patterns: string[],
+): Promise<void> {
+  await updateRepo(active, path, { fsWatch: patterns });
+  await reloadActiveWorkbench();
 }

@@ -45,7 +45,13 @@ const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
-import { getWorktreeDiff, getFileContent, listRepoTree, setSubscriptions } from "./client";
+import {
+  getWorktreeDiff,
+  getFileContent,
+  listRepoTree,
+  setSubscriptions,
+  updateRepo,
+} from "./client";
 
 describe("RDM-008 client wrappers", () => {
   beforeEach(() => invokeMock.mockClear());
@@ -72,5 +78,16 @@ describe("RDM-008 client wrappers", () => {
     const targets = [{ repo: "/r/api", path: "src/a.ts" }];
     void setSubscriptions(targets);
     expect(invokeMock).toHaveBeenCalledWith("set_subscriptions", { targets });
+  });
+
+  it("update_repo passes fsWatch with Tauri's camelCase arg keys", () => {
+    void updateRepo("Work", "/r/api", { fsWatch: [".env"], clearAlias: false });
+    expect(invokeMock).toHaveBeenCalledWith("update_repo", {
+      workbench: "Work",
+      path: "/r/api",
+      alias: undefined,
+      clearAlias: false,
+      fsWatch: [".env"],
+    });
   });
 });

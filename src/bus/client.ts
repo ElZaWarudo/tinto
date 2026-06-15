@@ -36,6 +36,19 @@ export const addRepo = (workbench: string, path: string, alias?: string) =>
 export const removeRepo = (workbench: string, path: string) =>
   invoke("remove_repo", { workbench, path });
 
+export const updateRepo = (
+  workbench: string,
+  path: string,
+  options: { alias?: string; clearAlias?: boolean; fsWatch?: string[] },
+) =>
+  invoke("update_repo", {
+    workbench,
+    path,
+    alias: options.alias,
+    clearAlias: options.clearAlias,
+    fsWatch: options.fsWatch,
+  });
+
 export const autodetectReposUnder = (root: string) =>
   invoke<string[]>("autodetect_repos_under", { root });
 
