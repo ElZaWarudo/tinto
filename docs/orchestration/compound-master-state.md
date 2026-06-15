@@ -168,7 +168,7 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 - [x] Security gate: not required (read-only local UI + IPC; `dialog:allow-open` only; ui_state corrupt-tolerant + config-dir-scoped).
 - Package → `implemented-verified-awaiting-release`. **Pipeline items 5–6 COMPLETE.** Branch `feat/dashboard-ui`: 9 commits (deps / app / ui-shell / docs / bus / panels / workbench / integration / review-fixes).
 
-## Wave 6 — RDM-008 (Diff viewer + Live diff) — PR OPEN, MERGE BLOCKED BY REVIEW GATE
+## Wave 6 — RDM-008 (Diff viewer + Live diff) — ✅ COMPLETE (shipped 2026-06-15)
 
 - Branch: `feat/diff-viewer` (from develop; carries the wave 5 closeout state edits + the RDM-008 artifacts). **No backend change** — the frozen contract already serves every need; `cargo` surface untouched (114 tests). One dependency added (`shiki`).
 - **Scope decided with user (2026-06-15, AskUserQuestion):** custom diff renderer over the structured `DiffHunk`/`DiffLine` data (user described VS Code line-reviewer UX: inline stacked old→new, or left/right comparator); **Shiki** for syntax highlighting (lazy `shiki/core` + on-demand grammars, size-capped); **both** inline + side-by-side modes, default inline.
@@ -190,19 +190,27 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
   branch pushed, PR opened: https://github.com/ElZaWarudo/tinto/pull/9 (`feat/diff-viewer → develop`, ready).
   Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs).
   PR scope guardrail recorded as approved large PR: ~2580 human-authored lines, ~920 orchestration-doc lines.
-- [ ] **Merge BLOCKED (2026-06-15):** user requested immediate merge, but GitHub-visible gate for PR #9 is
-  `mergeStateStatus=CLEAN`, `reviewDecision=""`, `reviews=[]`, no checks. Because `develop` is a normal base
-  and there is no human reviewer approval visible on GitHub, Release Marshal forbids merge. Internal review,
-  local verification, the standing merge preference, and author approval do not substitute for GitHub-visible
-  human approval under the current release rules.
-- Package → `pr-opened`. **Pipeline items 5–7 COMPLETE through PR creation; merge pending external review
-  gate.**
+- [x] **PR #9 MERGED** to `develop` (merge commit `b6a35f0`, merged externally by user after the initial
+  Release Marshal merge gate block). Branch `feat/diff-viewer` remains local/remote at the last pushed head
+  unless pruned later. Jira omitted (`jira-env-not-configured`). Reviewers omitted (no collaborators / no clear
+  human approver from recent PRs). RDM-008 delivered.
 
 ## Next action
 
-Get a GitHub-visible human approval on PR #9, then invoke `krt-release-marshal` / merge inspection again for
-the exact PR. If the rule should be changed for this prototype repo, that is a release-policy decision to make
-outside this blocked merge attempt.
+Handoff RDM-009 to Release Marshal: commit, push, open PR to `develop`, then merge only under the program's visible-gate rule with the updated Compound Master state included.
+
+## Wave 6 — RDM-009 (Watched files UI) — IMPLEMENTED VERIFIED
+
+- Branch: `feat/watched-files-ui` from `develop` after PR #9 merge reconciliation.
+- [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-009-watched-files-ui-requirements.md`.
+- [x] Plan: `docs/plans/2026-06-15-003-feat-watched-files-ui-plan.md`.
+- [x] Work package: `docs/work-packages/RDM-009-watched-files-ui/2026-06-15-001-watched-files-ui-work-package.md` — single RU, branch `feat/watched-files-ui`, base `develop`.
+- Reviewability Gate: independent single PR; no stack; Jira optional standalone Tarea if configured.
+- [x] RU1 execution complete: store recent Plane 2 events, expose the existing `update_repo` wrapper/save flow, add the watched-files section and pattern editor, and integrate into `RepoPanel`.
+- [x] Review pass: inline review caught and fixed stale-prop rehydration after a successful pattern save. `RepoPanel` now remounts the section on real `fs_watch` signature changes while the section keeps optimistic saved rows until the parent reload lands.
+- [x] Verification PASS (2026-06-15): focused Vitest 37/37; full `npm test` 115/115; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 114/114; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `npm run tauri dev` smoke required escalation because sandbox blocked `127.0.0.1:1420`; under `rtk timeout 25s npm run tauri dev`, Vite and the Tauri binary launched and the process ended by timeout as expected. EGL warnings were environment-only.
+- Security gate: not required; no backend contract/capability change and no watched-file content reads.
+- Package status: `implemented-verified-awaiting-release`.
 
 - Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it).
 - Jira omitted (missing `.krt/env/jira-scribe.env`).
