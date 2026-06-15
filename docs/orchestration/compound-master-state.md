@@ -148,7 +148,12 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 - [x] Security gate: not required (covered by the adversarial persona; traversal/`.git`/allowlist surface now has tests).
 - Package → `implemented-verified-awaiting-release`. **Pipeline items 5 and 6 COMPLETE.**
 
-## Wave 5 — RDM-007 (Dashboard UI) — IMPLEMENTED, AWAITING RELEASE
+## Wave 5 — RDM-007 (Dashboard UI) — ✅ COMPLETE (shipped 2026-06-15)
+
+- **PR #8 MERGED** to `develop` (merge `e38a994`, gate MERGEABLE/CLEAN, merged under the standing rule with state included). Branch deleted. First Tinto frontend shipped: VS Code–style dockable workspace (dockview), live repo cards, repo panels, repo tree, workbench management — consuming the frozen bus contract. 10 commits; cargo 114 + vitest 58; release build OK (deb/rpm/AppImage). Reviewers omitted (no collaborators); Jira omitted (`jira-env-not-configured`).
+- The dockable shell + panel registry + `WorkspaceActions` + bus store are the seams RDM-008+ extend.
+
+## Wave 5 (historical detail) — RDM-007 (Dashboard UI)
 
 - **Scope decided with user (2026-06-15):** RDM-007 expanded to a VS Code–style **dockable/splittable workspace** (build the shell now, user chose against splitting into 007a/007b). Panel model: Dashboard card grid + per-repo detail tabs + repo-node tree. Global persisted layout. Core workbench mgmt (create/switch/add/remove). Repo tree is **repo-node-level only**; file expansion deferred to RDM-008. RDM-008 = Wave 6 (hard-depends on 007).
 - [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-007-dashboard-ui-requirements.md`. Reviewed (coherence, feasibility, scope-guardian, design-lens). Hardened: differentiated Repo panel (commit log + status list vs card), git edge states, zero-repos/loading/degraded states, activity-indicator spec, dock-library-first gate, plugins/capabilities directive, `list_workbenches` name join.
@@ -163,17 +168,31 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 - [x] Security gate: not required (read-only local UI + IPC; `dialog:allow-open` only; ui_state corrupt-tolerant + config-dir-scoped).
 - Package → `implemented-verified-awaiting-release`. **Pipeline items 5–6 COMPLETE.** Branch `feat/dashboard-ui`: 9 commits (deps / app / ui-shell / docs / bus / panels / workbench / integration / review-fixes).
 
+## Wave 6 — RDM-008 (Diff viewer + Live diff) — READY FOR RELEASE HANDOFF
+
+- Branch: `feat/diff-viewer` (from develop; carries the wave 5 closeout state edits + the RDM-008 artifacts). **No backend change** — the frozen contract already serves every need; `cargo` surface untouched (114 tests). One dependency added (`shiki`).
+- **Scope decided with user (2026-06-15, AskUserQuestion):** custom diff renderer over the structured `DiffHunk`/`DiffLine` data (user described VS Code line-reviewer UX: inline stacked old→new, or left/right comparator); **Shiki** for syntax highlighting (lazy `shiki/core` + on-demand grammars, size-capped); **both** inline + side-by-side modes, default inline.
+- [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-008-diff-viewer-requirements.md`. **Reviewed (5 personas: coherence, feasibility, scope-guardian, design-lens, adversarial).** Hardened with the load-bearing finds: R5/R5a (the diff store slice must RETAIN on `subscribed_diffs==null` and clean-clear by omission on a non-null array — `subscribed_diffs` is a transient per-emit field the store would otherwise blank); R12/D-008-4 (the cap of 8 is a GLOBAL set across repos, frontend-owned); R7 (mandatory tracked/untracked-branched initial load — idle files never recompute, `get_worktree_diff` excludes untracked); R6/R6a (single reconciled subscription set, coalesced); plus design P0s (live-update behavior, drill-through gesture, toggle placement, Hunks·Full control hierarchy) and rename/full-file-degrade edges. AE1–AE13.
+- [x] Plan: `docs/plans/2026-06-15-002-feat-diff-viewer-plan.md` (U1 types+client, U2 store slice + reconciler [internal gate], U3 renderer + Shiki, U4 diff panel, U5 tree expansion + drill-through, U6 integration). **Reviewed (coherence + feasibility).** 2 correctness gaps folded in: clean-clear-by-omission (the backend signals clean by OMITTING a file from a non-null array, not via null/empty → replace-set `diffs[repo]`); untracked idle/None-synth "loading forever" (resolve via `hasComputedDiffs`). Restore batching rides the microtask coalescer. KTD1: no backend / no contract change (STOP+escalate if a gap appears).
+- [x] Work package: `docs/work-packages/RDM-008-diff-viewer/2026-06-15-001-diff-viewer-work-package.md` — **single RU**, branch `feat/diff-viewer`, base develop. `check_work_package.py` PASS; coherence review → commit-grouping precision fixes applied. **PACKAGE SOUND.** Large PR likely (~800–1,000+ human lines incl. tests) → `Decisión de tamaño/alcance` carried to release plan.
+- [x] **Execute RU1 (U1–U6) — COMPLETE** (inline, all in `src/` + `shiki`):
+  - U1: concrete `DiffLineKind`/`DiffLine`/`DiffHunk` + `SubscriptionTarget`/`TreeEntry`/`RepoTree`/`FileContent` in `contract.ts` (replaced `hunks: unknown[]`); client wrappers `getWorktreeDiff`/`getFileContent`/`listRepoTree`/`setSubscriptions`; PascalCase round-trip test.
+  - U2 (gate): `store.ts` diff slice (retain-on-null / replace-set / `getDiff`/`hasComputedDiffs`/`dropDiff`); `workspace/subscriptions.ts` reconciler (global MRU cap 8, coalesced idempotent push, `isLive`, `useIsLive`).
+  - U3: `panels/diff/DiffView.tsx` (inline + side-by-side) + `highlight.ts` (lazy Shiki, size cap, lang-from-ext).
+  - U4: `panels/diff/DiffPanel.tsx` (R7 initial load, live read, Hunks·Full segmented + inline/side toggle, all states) + `FullFileView.tsx`; `panels.ts` `PANEL_DIFF`/`diffPanelId`; `openDiff.ts`; `actions.tsx` `openDiff`.
+  - U5: `panels/tree/fileTree.ts` builder; `RepoTreePanel` file-level expansion (loading/truncated/live markers); drill-through from `RepoCard` (expanded), `RepoPanel` status list, tree (double-click / Enter / Space).
+  - U6: `App.tsx` registers `PANEL_DIFF` + provides `openDiff`; reconciler lifecycle is panel-driven (mount/unmount) so restore batching rides the coalescer (deviation from plan's "App binds onDidAddPanel" — simpler, documented).
+- [x] **Verification PASS (2026-06-15):** `npm test` **106/106**, `npm run lint`, `npm run format:check`, `npm run build`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` **114/114**, `cargo build`, `npm run tauri build` (deb/rpm/AppImage) all pass. `npm run tauri dev` boot smoke passed for startup/process stability; interactive live-edit click-through was not browser-driven in the headless harness, but live-diff behavior is covered by store/reconciler/DiffPanel/drill-through/App tests.
+- [x] **Code review PASS (4 personas: correctness, adversarial, testing, maintainability)** — store slice + reconciler judged solid/well-tested. Findings fixed: **1 P1** (DiffPanel stale one-shot after clean-clear) + **P2s** (paused-untracked false clean/dead reload; orphaned diff panels on repo removal; missing renamed-target state; untested full-file degrade paths; dead `reconciler.restore()` code) + P3 trailing-newline. Added/strengthened tests for reverted-after-live, live-before-one-shot, FullFileView base64/truncated/error/trailing newline, renamed state, paused-untracked body, cross-repo cap, and removed-repo panel cleanup.
+- Deferred with rationale (recorded, not blocking): manual-reload cancellation race (P3, prototype-acceptable); full-file/diff revision skew (accepted per R4, documented in code); DiffPanel `useDiffData` extraction + S/M/U mark consolidation (discretionary); reconciler liveKeys perf (negligible at cap 8); workbench-switch diff-panel orphan (bigger flow — defer).
+- Security gate: not required (read-only local UI; no new Tauri command/capability; `shiki` runs in the webview over already-allowlisted content). Covered by the adversarial persona.
+- Package → `implemented-verified-awaiting-release`. **Pipeline items 5–6 COMPLETE.**
+
 ## Next action
 
-**Handoff to `krt-release-marshal`** (do not stop before; release-plan approval pause lives inside Release Marshal). PR `feat/dashboard-ui` → `develop`. Handoff inputs:
-- **Size/scope decision:** single broad RU (full dockable frontend; ~half the TS is tests) — affirm `aprobar PR grande` in the release plan.
-- **KTD5 delivered-code touch:** the workbench store now canonicalizes stored repo paths (small RDM-005 amendment) — surface in the release plan.
-- **Merge:** pre-authorized standing rule whenever the PR includes the updated compound-master state (it does — this file travels on the branch).
-- Jira omitted (`jira-env-not-configured`). Reviewers omitted (repo has no collaborators).
-- Commit grouping already clean on the branch (deps/app/ui-shell/docs/bus/panels/workbench/integration/review-fixes); rebase unnecessary (linear atop develop).
+Hand RU1 to **krt-release-marshal** (release plan → PR `feat/diff-viewer → develop`; the size decision `aprobar PR grande` is pre-noted). Stop at the release plan per the standing pacing.
 
-After RDM-007 merges (closes Wave 5): Wave 6 = RDM-008/009/010 (diff viewer, plane-2 UI, timeline) — all add panels into this dockable shell + the registry/actions/store seams; RDM-008 first (it's the highest-value, drives the file-tree expansion + card→diff drill-through deferred from 007).
-
-- Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state.
+- Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it).
 - Jira omitted (missing `.krt/env/jira-scribe.env`).
 - All new code/docs in English (Wave 4 language directive).
+- Deferred backlog carried forward across waves: phantom-repo generation token, TS↔Rust contract codegen, keyboard arrow-nav/Escape (RDM-007 Review Gate); fetch opt-in (RDM-002 backlog); plus the RDM-008 deferrals listed above.
