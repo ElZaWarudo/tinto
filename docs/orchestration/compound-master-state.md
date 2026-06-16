@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. A post-closeout, user-driven UX initiative is in progress: the workbench was redesigned into a project-centric, VS Code-style IDE. First tranche shipped to `develop`; a follow-up UI tranche is implemented, locally verified, internally reviewed, and ready for release handoff.
+- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. The post-closeout Workbench IDE Overhaul follow-up tranche is complete: implemented, locally verified, internally reviewed, release-approved, and prepared for direct `develop` push.
 - Active package: post-closeout Workbench IDE Overhaul (no RDM id; iterative UX work directed turn-by-turn by the user, not a roadmap-planned package).
-- Branch/base: `develop` is the integration branch at `2a701e3`, in sync with `origin/develop`. The working tree holds the uncommitted follow-up tranche plus `brand/wordmark.png`, which is unreferenced by the diff and excluded from this review unit unless explicitly assigned.
+- Branch/base: `develop` is the integration branch. Follow-up release branch `feat/workbench-file-dock` contains `8230397` (`feat(workspace): add nested file dock and bento dashboard`) plus orchestration docs commits and is intended to fast-forward `develop` before push.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
-- Required user decisions: release flow approval for the follow-up tranche commit/push plan; whether `brand/wordmark.png` belongs to a later branding task or should remain untracked.
-- Next action: hand the completed follow-up tranche to `krt-release-marshal` for commit planning and the project-preferred no-PR local integration/push path.
+- Required user decisions: whether `brand/wordmark.png` belongs to a later branding task or should remain untracked.
+- Next action: after the approved push completes, continue UX iteration or decide the untracked brand asset's fate.
 
 ## Source Documents
 
@@ -57,7 +57,7 @@ Shipped tranche — merged to `develop` at `2a701e3` (local fast-forward, no PR)
 - `feat(files): file viewer with diff/normal/markdown views and syntax highlighting` — unified FileView (diff for changed files, normal highlighted view otherwise, rendered Markdown for `.md`), Shiki highlighting in the full-file view, `react-markdown` + `remark-gfm` added.
 - `feat(qol): per-file text zoom with Ctrl +/-/0` — scales only the open file's content via a `--file-zoom` CSS variable, persisted to `localStorage`.
 
-Follow-up tranche — implemented, verified, and internally reviewed but UNCOMMITTED in the working tree (pending release handoff):
+Follow-up tranche — implemented, verified, internally reviewed, and release-approved:
 
 - Level-1 project tabs enlarged (dockview height override) and the change-indicator dot given a fixed slot so the title no longer shifts.
 - Level-2 file tabs migrated to a NESTED dockview per project (`fileDock` registry) so files can be dragged into splits and two files can sit on screen at once; VS Code preview/pin re-implemented on top (single reused italic preview panel; double-click pins). Open-file layout (files + splits) persists across sessions in `localStorage` per repo.
@@ -83,14 +83,15 @@ Follow-up tranche — implemented, verified, and internally reviewed but UNCOMMI
 - CI workflow delivery: `e0e91ba` (`ci(github): add validation workflow`), merged locally to `develop` and pushed to `origin/develop` without PR.
 - CI runtime maintenance: `8ebbdd3` (`ci(github): opt actions into node 24 runtime`), merged locally to `develop` and pushed to `origin/develop` without PR.
 - Prior orchestration reconciliation: `2f894d8` (`docs(orchestration): finalize ci maintenance state [skip ci]`), pushed directly to `origin/develop`.
-- Workbench IDE Overhaul shipped tranche: `2a701e3` (`feat(qol): per-file text zoom…`), the tip of a 5-commit `feat/project-workspace-ide` set, fast-forward merged into `develop` and pushed to `origin/develop` without PR. Follow-up tranche (nested file dock, persistence, bento dashboard, level-1 tab polish) remains uncommitted pending the next ship.
+- Workbench IDE Overhaul shipped tranche: `2a701e3` (`feat(qol): per-file text zoom…`), the tip of a 5-commit `feat/project-workspace-ide` set, fast-forward merged into `develop` and pushed to `origin/develop` without PR.
+- Workbench IDE Overhaul follow-up release: `8230397` (`feat(workspace): add nested file dock and bento dashboard`) plus orchestration docs, approved for the same no-PR direct `develop` push path.
 
 ## Verification Baseline
 
 - Roadmap-closeout frontend gate: `npm test` 140/140, `npm run lint`, `npm run format:check`, `npm run build`.
 - Roadmap-closeout Rust/Tauri gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` 117/117, `cargo build`, `npm run tauri build`, and `rtk timeout 25s npm run tauri dev`.
 - Workbench IDE Overhaul shipped tranche (`develop` `2a701e3`): `npm test` 148/148, `npm run lint`, `npm run build` green; `cargo test` 118/118, `cargo clippy -- -D warnings`, `cargo fmt --check` green.
-- Workbench IDE Overhaul working tree (shipped + uncommitted follow-up): `npm test` 149/149, `npm run lint`, `npm run format:check`, `npm run build` green on 2026-06-16; backend unchanged from the shipped tranche (`cargo test` 118/118). CI was not re-run for the uncommitted follow-up because it is not yet pushed.
+- Workbench IDE Overhaul follow-up release: `npm test` 149/149, `npm run lint`, `npm run format:check`, `npm run build` green on 2026-06-16; backend unchanged from the shipped tranche (`cargo test` 118/118). CI was not re-run before push; GitHub Actions will validate the pushed `develop` tip.
 - GitHub Actions CI workflow exists at `.github/workflows/ci.yml`.
 - Local pre-push CI workflow validation: `npm run format:check`, `npm run lint`, `npm test` 140/140, `npm run build`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` 117/117, and `npm run tauri build`.
 - GitHub Actions run `27601639210`: passed. Frontend passed in 58s, Rust passed in 8m44s, and Tauri bundle passed in 10m46s.
