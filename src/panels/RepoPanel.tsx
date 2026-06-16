@@ -1,16 +1,16 @@
 // Per-repo project panel: a level-1 dockview tab laid out like a mini IDE — the
-// repo's own file explorer on the left, and on the right a level-2 tab strip
-// (a pinned "Resumen" overview + open files) over the active file's content. A
-// single click in the explorer previews a file (italic tab); a double click
-// pins it. The repo path comes from the panel params so a restored layout
-// reopens it.
+// repo's own file explorer on the left, and on the right a NESTED dockview that
+// holds the open file panels. Because files are real dockview panels they can be
+// dragged into splits, so two files can sit on screen at once. A single click in
+// the explorer previews a file (italic tab); a double click pins it. When no
+// files are open the project's overview ("Resumen") is shown instead.
 
 import { useEffect, useState } from "react";
-import type { IDockviewPanelProps } from "dockview-react";
+import { DockviewReact, themeVisualStudio } from "dockview-react";
+import type { DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
 import { getCommitLog, retryRepo } from "../bus/client";
 import type { CommitInfo, RepoDelta } from "../bus/contract";
 import {
-  basename,
   busStore,
   commitDate,
   getFsEvents,
@@ -23,11 +23,12 @@ import {
 import { filterFsEvents, filterStatusFiles } from "../qol/filters";
 import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
-import { tabsStore, useRepoTabs, visibleTabs } from "../workspace/tabsStore";
+import { fileDock, useRepoDock } from "../workspace/fileDock";
 import { updateRepoFsWatch } from "../workbench/operations";
 import { MetricsPill, SignalBadges } from "./SignalBadges";
 import { WatchedFilesSection } from "./WatchedFilesSection";
 import { FileView } from "./file/FileView";
+import { FileTab } from "./FileTab";
 import { ProjectExplorer } from "./tree/ProjectExplorer";
 
 const COMMIT_LOG_LIMIT = 30;
@@ -41,59 +42,43 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
+function FilePanel(props: IDockviewPanelProps<{ repo: string; path: string }>) {
+  return <FileView repo={props.params.repo} path={props.params.path} />;
+}
+
+const fileComponents = { file: FilePanel };
+const fileTabComponents = { fileTab: FileTab };
+
 export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
-  const tabs = useRepoTabs(repo);
-  const { active, preview } = tabs;
-  const open = visibleTabs(tabs);
+  const dock = useRepoDock(repo);
+  const empty = dock.open.length === 0;
+
+  // Drop the nested dock binding when the project tab unmounts.
+  useEffect(() => () => fileDock.unregister(repo), [repo]);
+
+  const onReady = (event: DockviewReadyEvent) => fileDock.register(repo, event.api);
 
   return (
     <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
       <ProjectExplorer repo={repo} />
 
       <div className="repo-panel__main">
-        <div className="file-tabs" role="tablist" data-testid="file-tabs">
-          <button
-            role="tab"
-            aria-selected={active === null}
-            className={active === null ? "file-tab file-tab--on" : "file-tab"}
-            data-testid="file-tab-overview"
-            onClick={() => tabsStore.setActive(repo, null)}
-          >
-            Resumen
-          </button>
-          {open.map((f) => {
-            const classes = ["file-tab"];
-            if (active === f) classes.push("file-tab--on");
-            if (preview === f) classes.push("file-tab--preview");
-            return (
-              <span key={f} className={classes.join(" ")} data-testid={`file-tab-${f}`}>
-                <button
-                  role="tab"
-                  aria-selected={active === f}
-                  className="file-tab__label"
-                  title={f}
-                  onClick={() => tabsStore.setActive(repo, f)}
-                  onDoubleClick={() => tabsStore.pinFile(repo, f)}
-                >
-                  {basename(f)}
-                </button>
-                <button
-                  className="file-tab__close"
-                  aria-label={`Close ${f}`}
-                  data-testid={`file-tab-close-${f}`}
-                  onClick={() => tabsStore.closeFile(repo, f)}
-                >
-                  ×
-                </button>
-              </span>
-            );
-          })}
+        {/* The nested dock stays mounted (api stays registered) even when empty;
+            hidden behind the overview until a file is opened. */}
+        <div className="repo-panel__files" style={empty ? { display: "none" } : undefined}>
+          <DockviewReact
+            components={fileComponents}
+            tabComponents={fileTabComponents}
+            theme={themeVisualStudio}
+            onReady={onReady}
+          />
         </div>
-
-        <div className="repo-panel__content">
-          {active === null ? <RepoOverview repo={repo} /> : <FileView repo={repo} path={active} />}
-        </div>
+        {empty && (
+          <div className="repo-panel__overview-wrap" data-testid={`repo-overview-wrap-${repo}`}>
+            <RepoOverview repo={repo} />
+          </div>
+        )}
       </div>
     </div>
   );

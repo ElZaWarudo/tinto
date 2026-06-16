@@ -1,16 +1,12 @@
-// A single repo card. Reading hierarchy (R3): activity + name, error badge,
-// counts, branch, then ahead/behind + last commit (expanded). Handles git edge
-// states (unborn / detached / no upstream / no head) without crashing.
+// A single repo "bento" tile: at-a-glance health, always visible (no expand).
+// Identity + activity, branch/upstream, change counts, passive metrics/signals,
+// and the latest commit. Important repos (errors, critical signals, active work)
+// get a wider tile. A single click opens the project; files are drilled into via
+// the project's own explorer, not here.
 
-import { memo, useState } from "react";
+import { memo } from "react";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
-import {
-  commitDate,
-  getPathSignals,
-  getRepoMetrics,
-  getRepoSignals,
-  signalCounts,
-} from "../bus/store";
+import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import { MetricsPill, SignalBadges } from "./SignalBadges";
 
@@ -21,16 +17,6 @@ export interface RepoCardProps {
   nowMs: number;
   onOpen: () => void;
   onRetry: () => void;
-  /** Open a changed file's diff (RDM-008); omitted = no file drill-through. */
-  onOpenFile?: (path: string) => void;
-}
-
-function changedFiles(status: RepoDelta["status"]): Array<{ path: string; mark: string }> {
-  return [
-    ...status.staged.map((path) => ({ path, mark: "S" })),
-    ...status.modified.map((path) => ({ path, mark: "M" })),
-    ...status.untracked.map((path) => ({ path, mark: "U" })),
-  ];
 }
 
 function branchLabel(branch: BranchInfo | null, head: RepoDelta["head"]): string {
@@ -49,31 +35,32 @@ function upstreamLabel(branch: BranchInfo | null): string | null {
   return `↑${branch.ahead} ↓${branch.behind}`;
 }
 
-function RepoCardImpl({
-  delta,
-  name,
-  activityMs,
-  nowMs,
-  onOpen,
-  onRetry,
-  onOpenFile,
-}: RepoCardProps) {
-  const [expanded, setExpanded] = useState(false);
+function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoCardProps) {
   const { status, branch, head, error } = delta;
   const active = nowMs - activityMs < ACTIVITY_WINDOW_MS;
   const upstream = upstreamLabel(branch);
-  const files = onOpenFile ? changedFiles(status) : [];
   const metrics = getRepoMetrics(delta);
   const signals = getRepoSignals(delta);
   const counts = signalCounts(signals);
+  const changes = status.modified.length + status.staged.length + status.untracked.length;
+
+  // Bento emphasis: feature the repos that warrant attention with a wider tile.
+  const feature = !!error || counts.critical > 0 || (active && changes > 0);
+  const cls = [
+    "repo-card",
+    feature ? "repo-card--feature" : "",
+    error ? "repo-card--error" : active ? "repo-card--active" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div
-      className="repo-card"
+      className={cls}
       data-testid={`card-${delta.repo}`}
       tabIndex={0}
       role="button"
-      onDoubleClick={onOpen}
+      onClick={onOpen}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -95,87 +82,55 @@ function RepoCardImpl({
             {error.class}
           </span>
         )}
+      </header>
+
+      <div className="repo-card__branch" data-testid="branch">
+        <span className="repo-card__branch-name">{branchLabel(branch, head)}</span>
+        {upstream && <span className="repo-card__upstream">{upstream}</span>}
+      </div>
+
+      <div className="repo-card__counts" data-testid="counts">
+        <span className="count count--modified">{status.modified.length}M</span>
+        <span className="count count--staged">{status.staged.length}S</span>
+        <span className="count count--untracked">{status.untracked.length}U</span>
         {signals.length > 0 && (
           <span className="repo-card__signal-count" data-testid="signal-count">
             {counts.critical > 0 ? counts.critical : signals.length} signal
             {(counts.critical > 0 ? counts.critical : signals.length) === 1 ? "" : "s"}
           </span>
         )}
-        <button
-          className="repo-card__expand"
-          aria-label={expanded ? "collapse" : "expand"}
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {expanded ? "▾" : "▸"}
-        </button>
-      </header>
-
-      <div className="repo-card__counts" data-testid="counts">
-        <span className="count count--modified">{status.modified.length}M</span>
-        <span className="count count--staged">{status.staged.length}S</span>
-        <span className="count count--untracked">{status.untracked.length}U</span>
       </div>
 
       <div className="repo-card__metrics">
         <MetricsPill metrics={metrics} />
+        {signals.length > 0 && <SignalBadges signals={signals} limit={feature ? 4 : 2} />}
       </div>
 
-      <div className="repo-card__branch" data-testid="branch">
-        {branchLabel(branch, head)}
-      </div>
-
-      {expanded && (
-        <div className="repo-card__details">
-          {upstream && <div className="repo-card__upstream">{upstream}</div>}
-          {head ? (
-            <div className="repo-card__commit" title={head.id}>
-              {head.summary}
-              <span className="repo-card__commit-time">
-                {" · "}
-                {commitDate(head.timestamp).toLocaleString()}
-              </span>
-            </div>
-          ) : (
-            <div className="repo-card__commit repo-card__commit--none">no commits yet</div>
-          )}
-          {files.length > 0 && (
-            <ul className="repo-card__files" data-testid="card-files">
-              {files.map(({ path, mark }) => (
-                <li
-                  key={`${mark}:${path}`}
-                  className="repo-card__file"
-                  role="button"
-                  tabIndex={0}
-                  title={`Open diff: ${path}`}
-                  data-testid={`card-file-${path}`}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    onOpenFile?.(path);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onOpenFile?.(path);
-                    }
-                  }}
-                >
-                  <span className="repo-card__file-mark">{mark}</span>
-                  {path}
-                  <SignalBadges signals={getPathSignals(delta, path)} limit={1} compact />
-                </li>
-              ))}
-            </ul>
-          )}
-          <SignalBadges signals={signals} />
-        </div>
-      )}
+      <footer className="repo-card__foot">
+        {head ? (
+          <span className="repo-card__commit" title={`${head.summary} · ${head.id}`}>
+            <span className="repo-card__commit-summary">{head.summary}</span>
+            <span className="repo-card__commit-time">
+              {commitDate(head.timestamp).toLocaleDateString()}
+            </span>
+          </span>
+        ) : (
+          <span className="repo-card__commit repo-card__commit--none">no commits yet</span>
+        )}
+      </footer>
 
       {error && (
         <div className="repo-card__error" data-testid="error-detail">
           <span className="repo-card__error-msg">{error.message}</span>
           {error.class === "terminal" && (
-            <button className="repo-card__retry" data-testid="retry" onClick={onRetry}>
+            <button
+              className="repo-card__retry"
+              data-testid="retry"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetry();
+              }}
+            >
               Retry
             </button>
           )}

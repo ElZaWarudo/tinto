@@ -26,7 +26,7 @@ export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
-  const { openRepo, addRepo, openFile } = useWorkspaceActions();
+  const { openRepo, addRepo } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
   if (!loaded) {
@@ -75,7 +75,6 @@ export function DashboardPanel() {
               nowMs={nowMs}
               onOpen={() => openRepo(p)}
               onRetry={() => void retryRepo(p)}
-              onOpenFile={(path) => openFile(p, path)}
             />
           ))}
         </div>

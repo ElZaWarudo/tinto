@@ -9,7 +9,7 @@ vi.mock("../../bus/client", () => ({
 
 import { ProjectExplorer } from "./ProjectExplorer";
 import { busStore } from "../../bus/store";
-import { tabsStore } from "../../workspace/tabsStore";
+import { fileDock } from "../../workspace/fileDock";
 import { repoTreeStore } from "../../workspace/repoTreeStore";
 import type { RepoDelta } from "../../bus/contract";
 
@@ -31,7 +31,7 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
 describe("ProjectExplorer", () => {
   beforeEach(() => {
     busStore.resetAll();
-    tabsStore.reset();
+    fileDock.drop(REPO);
     repoTreeStore.reset();
     listRepoTreeMock.mockClear();
     tree = {
@@ -63,17 +63,18 @@ describe("ProjectExplorer", () => {
     expect(await screen.findByTestId("tree-dir-changed-src")).toBeInTheDocument();
   });
 
-  it("single click previews a file, double click pins it", async () => {
+  it("single click previews a file (pin=false), double click pins it (pin=true)", async () => {
+    const openSpy = vi.spyOn(fileDock, "openFile").mockImplementation(() => {});
     act(() => busStore.loadSnapshot([delta()], { available: true }));
     render(<ProjectExplorer repo={REPO} />);
     const readme = await screen.findByTestId("tree-file-README.md");
 
     fireEvent.click(readme); // preview
-    expect(tabsStore.getRepo(REPO)).toMatchObject({ preview: "README.md", active: "README.md" });
+    expect(openSpy).toHaveBeenLastCalledWith(REPO, "README.md", false);
 
     fireEvent.doubleClick(readme); // pin
-    expect(tabsStore.getRepo(REPO).files).toContain("README.md");
-    expect(tabsStore.getRepo(REPO).preview).toBeNull();
+    expect(openSpy).toHaveBeenLastCalledWith(REPO, "README.md", true);
+    openSpy.mockRestore();
   });
 
   it("serves a cached tree without reloading (no spinner on re-open)", async () => {

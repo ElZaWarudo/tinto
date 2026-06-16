@@ -19,13 +19,13 @@ export function RepoTab(props: IDockviewPanelHeaderProps) {
 
   return (
     <div className="repo-tab">
-      {changed && (
-        <span
-          className="repo-tab__dot"
-          data-testid={`repo-tab-changed-${repo}`}
-          title="Cambios sin ver"
-        />
-      )}
+      {/* The dot slot is always present (fixed width) so the title never shifts
+          when the change indicator toggles on/off. */}
+      <span
+        className={changed ? "repo-tab__dot repo-tab__dot--on" : "repo-tab__dot"}
+        data-testid={changed ? `repo-tab-changed-${repo}` : undefined}
+        title={changed ? "Cambios sin ver" : undefined}
+      />
       <DockviewDefaultTab {...props} />
     </div>
   );

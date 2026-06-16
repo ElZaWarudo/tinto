@@ -7,7 +7,7 @@ import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
 import { openDashboardPanel } from "./workspace/openDashboard";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
-import { tabsStore } from "./workspace/tabsStore";
+import { fileDock } from "./workspace/fileDock";
 import { repoTreeStore } from "./workspace/repoTreeStore";
 import { DashboardPanel } from "./panels/DashboardPanel";
 import { RepoPanel } from "./panels/RepoPanel";
@@ -75,7 +75,7 @@ export default function App() {
         if (!active) return;
         void removeRepoFlow(active, path).then((removed) => {
           if (!removed) return;
-          tabsStore.closeRepo(path);
+          fileDock.drop(path);
           repoTreeStore.drop(path);
           const api = apiRef.current;
           if (!api) return;
@@ -83,11 +83,12 @@ export default function App() {
         });
       },
       openFile: (path, filePath, pin = false) => {
-        // Ensure the repo's project tab exists, then open the file tab in it.
+        // Ensure the repo's project tab exists, then open the file in its nested
+        // dock (queued there until the project's dockview is ready).
         if (apiRef.current) {
           openRepoPanel(apiRef.current, path, busStore.displayName(path));
         }
-        tabsStore.openFile(path, filePath, pin);
+        fileDock.openFile(path, filePath, pin);
       },
       openTimeline: () => {
         if (apiRef.current) {

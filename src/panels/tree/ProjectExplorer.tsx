@@ -8,7 +8,7 @@ import { busStore, getRepoSignals, useBusState } from "../../bus/store";
 import { filterTreeNodes, hasActiveFilters } from "../../qol/filters";
 import { useQualityState } from "../../qol/state";
 import { repoTreeStore, useRepoTree } from "../../workspace/repoTreeStore";
-import { tabsStore, useRepoTabs } from "../../workspace/tabsStore";
+import { fileDock, useRepoDock } from "../../workspace/fileDock";
 import { buildFileTree } from "./fileTree";
 import { FileTreeNode } from "./FileTreeNode";
 
@@ -16,7 +16,7 @@ export function ProjectExplorer({ repo }: { repo: string }) {
   const state = useBusState();
   const { filters } = useQualityState();
   const { tree, loading, error } = useRepoTree(repo);
-  const { active } = useRepoTabs(repo);
+  const { active } = useRepoDock(repo);
   const delta = state.repos[repo];
 
   // Load on mount; the store keeps it cached (stale-while-revalidate) thereafter.
@@ -58,7 +58,7 @@ export function ProjectExplorer({ repo }: { repo: string }) {
                   delta={delta}
                   depth={0}
                   activePath={active}
-                  onOpen={(path, pin) => tabsStore.openFile(repo, path, pin)}
+                  onOpen={(path, pin) => fileDock.openFile(repo, path, pin)}
                 />
               ))}
             {tree?.truncated && (

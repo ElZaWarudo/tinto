@@ -21,11 +21,19 @@ vi.mock("../bus/client", () => ({
 vi.mock("../workbench/operations", () => ({
   updateRepoFsWatch: (...a: unknown[]) => updateRepoFsWatchMock(...a),
 }));
+// The nested file dock can't render in jsdom; stub it. With no onReady firing,
+// the project shows its overview (open file count stays 0), which is what these
+// tests assert against.
+vi.mock("dockview-react", () => ({
+  DockviewReact: () => null,
+  themeVisualStudio: {},
+  DockviewDefaultTab: () => null,
+}));
 
 import { RepoPanel } from "./RepoPanel";
 import { openRepoPanel } from "../workspace/openRepo";
 import { busStore } from "../bus/store";
-import { tabsStore } from "../workspace/tabsStore";
+import { fileDock } from "../workspace/fileDock";
 import { repoTreeStore } from "../workspace/repoTreeStore";
 import type { RepoDelta } from "../bus/contract";
 
@@ -48,7 +56,8 @@ const panelProps = (repo: string) =>
 describe("RepoPanel", () => {
   beforeEach(() => {
     busStore.resetAll();
-    tabsStore.reset();
+    fileDock.drop("/r/api");
+    fileDock.drop("/r/gone");
     repoTreeStore.reset();
     getCommitLogMock.mockReset();
     retryRepoMock.mockReset();
