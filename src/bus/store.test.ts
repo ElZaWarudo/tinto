@@ -5,7 +5,12 @@ import {
   basename,
   getDiff,
   getFsEvents,
+  getPathSignals,
+  getRepoMetrics,
+  getRepoSignals,
   hasComputedDiffs,
+  signalCounts,
+  sortSignals,
 } from "./store";
 import type { FileDiff, RepoDelta, RepoStatus, WorkbenchConfig } from "./contract";
 
@@ -170,6 +175,42 @@ describe("BusStore", () => {
       }),
     );
     expect(store.getState().repos["/r/a"].error?.class).toBe("terminal");
+  });
+
+  it("exposes passive metrics and signals with additive fallbacks", () => {
+    expect(getRepoMetrics(undefined)).toEqual({
+      changed_files: 0,
+      lines_added: 0,
+      lines_removed: 0,
+    });
+    store.applyDelta(
+      delta("/r/a", 1, {
+        metrics: { changed_files: 2, lines_added: 9, lines_removed: 4 },
+        signals: [
+          {
+            kind: "config_change",
+            severity: "warning",
+            path: "package.json",
+            message: "Configuration file changed",
+          },
+          {
+            kind: "possible_secret",
+            severity: "critical",
+            path: "src/config.ts",
+            message: "Possible secret marker added",
+          },
+        ],
+      }),
+    );
+    const repo = store.getState().repos["/r/a"];
+    expect(getRepoMetrics(repo).lines_added).toBe(9);
+    expect(getRepoSignals(repo)).toHaveLength(2);
+    expect(getPathSignals(repo, "src/config.ts").map((s) => s.kind)).toEqual(["possible_secret"]);
+    expect(signalCounts(getRepoSignals(repo))).toEqual({ critical: 1, warning: 1, info: 0 });
+    expect(sortSignals(getRepoSignals(repo)).map((s) => s.severity)).toEqual([
+      "critical",
+      "warning",
+    ]);
   });
 
   it("displayName uses the alias, then the basename", () => {
