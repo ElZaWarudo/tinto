@@ -60,6 +60,7 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 - Post-closeout state archive: `5631c0e` (`docs(orchestration): compact compound master state`).
 - CI workflow delivery: `e0e91ba` (`ci(github): add validation workflow`), merged locally to `develop` and pushed to `origin/develop` without PR.
 - CI runtime maintenance: `8ebbdd3` (`ci(github): opt actions into node 24 runtime`), merged locally to `develop` and pushed to `origin/develop` without PR.
+- Prior orchestration reconciliation: `2f894d8` (`docs(orchestration): finalize ci maintenance state [skip ci]`), pushed directly to `origin/develop`.
 
 ## Verification Baseline
 
@@ -76,6 +77,7 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 - Branch cleanup completed for merged local branches: `docs/compact-compound-state`, `docs/compound-master-closeout`, `feat/diff-viewer`, `feat/passive-signals`, `feat/quality-of-life`, `feat/timeline-history`, and `feat/watched-files-ui`.
 - Remote cleanup completed for merged feature branches: `origin/feat/diff-viewer`, `origin/feat/passive-signals`, `origin/feat/timeline-history`, and `origin/feat/watched-files-ui`.
 - Remote `origin/checkpoint/state-event-bus` and local `checkpoint/state-event-bus` were retained because the remote branch was not listed as merged into `develop`.
+- Final docs-only reconciliation used `[skip ci]`; no third CI run was expected or required.
 - Delivery workflow preference updated by user: avoid GitHub PR merges for this project unless explicitly requested; use local integration into `develop` and push.
 
 ## Residual Backlog

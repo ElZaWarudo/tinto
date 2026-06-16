@@ -73,9 +73,13 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - TypeScript/Rust contract code generation.
 - Keyboard arrow navigation/Escape polish.
 - Diff viewer deferrals: manual-reload cancellation race, full-file/diff revision skew hardening, `useDiffData` extraction, S/M/U mark consolidation, and workbench-switch diff-panel orphan handling.
+
+## CI And Repository Maintenance
+
 - GitHub Actions CI workflow added after roadmap closeout at `.github/workflows/ci.yml`.
 - CI workflow gates: frontend format/lint/test/build, Rust fmt/clippy/test/build, and full Tauri bundle build on Ubuntu.
 - CI workflow delivery: `e0e91ba` (`ci(github): add validation workflow`), merged locally to `develop` and pushed to `origin/develop` without PR.
+- CI runtime maintenance: `8ebbdd3` (`ci(github): opt actions into node 24 runtime`), merged locally to `develop` and pushed to `origin/develop` without PR.
 - GitHub Actions run `27601639210`: passed. Frontend passed in 58s, Rust passed in 8m44s, and Tauri bundle passed in 10m46s.
 - GitHub Actions run `27602696319`: passed after the Node 24 runtime opt-in. Frontend passed in 1m0s, Rust passed in 2m2s, and Tauri bundle passed in 4m27s.
 - CI warning cleanup: `.github/workflows/ci.yml` sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`. GitHub now reports that Node 20-targeting actions are forced to run on Node 24; the remaining annotation is informational until the upstream actions target Node 24 natively.
@@ -87,6 +91,7 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - Merged local branches removed: `docs/compact-compound-state`, `docs/compound-master-closeout`, `feat/diff-viewer`, `feat/passive-signals`, `feat/quality-of-life`, `feat/timeline-history`, and `feat/watched-files-ui`.
 - Merged remote feature branches removed: `origin/feat/diff-viewer`, `origin/feat/passive-signals`, `origin/feat/timeline-history`, and `origin/feat/watched-files-ui`.
 - `checkpoint/state-event-bus` was retained locally and remotely because `origin/checkpoint/state-event-bus` was not listed as merged into `develop`.
+- Prior orchestration reconciliation: `2f894d8` (`docs(orchestration): finalize ci maintenance state [skip ci]`), pushed directly to `origin/develop`; no third CI run was expected or required.
 - Current delivery preference from the user: avoid GitHub PR merges unless requested; integrate locally into `develop` and push.
 
 ## Final Status
