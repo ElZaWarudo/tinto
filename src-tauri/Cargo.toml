@@ -39,6 +39,7 @@ base64 = "0.22"
 toml = "0.9"
 dirs = "6"
 tauri-plugin-dialog = "2.7.1"
+tauri-plugin-notification = "2.3.1"
 
 [dev-dependencies]
 tempfile = "3"
