@@ -106,8 +106,8 @@ After roadmap closeout, the user directed an iterative UX initiative to reshape 
 ## Final Status
 
 - Roadmap status: completed.
-- Post-roadmap initiative: Workbench IDE Overhaul follow-up release approved for the project-preferred direct `develop` push path.
-- Integration branch: `develop` first tranche pushed to `origin/develop` at `2a701e3`; follow-up release prepared on `feat/workbench-file-dock`.
+- Post-roadmap initiative: Workbench IDE Overhaul follow-up release pushed via the project-preferred direct `develop` path.
+- Integration branch: `develop` first tranche pushed to `origin/develop` at `2a701e3`; follow-up release fast-forward merged and pushed after `8230397`.
 - Blockers: none.
 - Remaining roadmap packages: none.
 - Recommended next work: after push validation, continue UX iteration, decide whether `brand/wordmark.png` belongs to a branding task, or pick a new initiative.

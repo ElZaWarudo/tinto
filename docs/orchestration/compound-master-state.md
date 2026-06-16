@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. The post-closeout Workbench IDE Overhaul follow-up tranche is complete: implemented, locally verified, internally reviewed, release-approved, and prepared for direct `develop` push.
+- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. The post-closeout Workbench IDE Overhaul follow-up tranche is complete and pushed to `origin/develop` via the project-preferred no-PR path.
 - Active package: post-closeout Workbench IDE Overhaul (no RDM id; iterative UX work directed turn-by-turn by the user, not a roadmap-planned package).
-- Branch/base: `develop` is the integration branch. Follow-up release branch `feat/workbench-file-dock` contains `8230397` (`feat(workspace): add nested file dock and bento dashboard`) plus orchestration docs commits and is intended to fast-forward `develop` before push.
+- Branch/base: `develop` is the integration branch. Follow-up release branch `feat/workbench-file-dock` was fast-forward merged locally, then `develop` was pushed to `origin/develop`.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
 - Required user decisions: whether `brand/wordmark.png` belongs to a later branding task or should remain untracked.
-- Next action: after the approved push completes, continue UX iteration or decide the untracked brand asset's fate.
+- Next action: continue UX iteration or decide the untracked brand asset's fate.
 
 ## Source Documents
 
@@ -84,7 +84,7 @@ Follow-up tranche — implemented, verified, internally reviewed, and release-ap
 - CI runtime maintenance: `8ebbdd3` (`ci(github): opt actions into node 24 runtime`), merged locally to `develop` and pushed to `origin/develop` without PR.
 - Prior orchestration reconciliation: `2f894d8` (`docs(orchestration): finalize ci maintenance state [skip ci]`), pushed directly to `origin/develop`.
 - Workbench IDE Overhaul shipped tranche: `2a701e3` (`feat(qol): per-file text zoom…`), the tip of a 5-commit `feat/project-workspace-ide` set, fast-forward merged into `develop` and pushed to `origin/develop` without PR.
-- Workbench IDE Overhaul follow-up release: `8230397` (`feat(workspace): add nested file dock and bento dashboard`) plus orchestration docs, approved for the same no-PR direct `develop` push path.
+- Workbench IDE Overhaul follow-up release: `8230397` (`feat(workspace): add nested file dock and bento dashboard`) plus orchestration docs, fast-forward merged into `develop` and pushed to `origin/develop` without PR.
 
 ## Verification Baseline
 
