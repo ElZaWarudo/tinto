@@ -62,6 +62,18 @@ describe("TopBar", () => {
     expect(screen.getByTestId("watch-indicator")).toHaveTextContent("degraded");
   });
 
+  it("does not crash when config is missing workbenches", () => {
+    act(() => {
+      busStore.setConfig({ version: 1, active: "Work" } as WorkbenchConfig);
+      busStore.setWatching({ available: true });
+    });
+
+    render(<TopBar />);
+
+    expect(screen.getByText("Tinto")).toBeInTheDocument();
+    expect(screen.getByTestId("wb-switcher")).toBeInTheDocument();
+  });
+
   it("opens the timeline from the top bar", () => {
     const openTimeline = vi.fn();
     const actions: WorkspaceActions = {

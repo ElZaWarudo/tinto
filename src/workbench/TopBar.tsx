@@ -14,7 +14,7 @@ export function TopBar() {
   const { openTimeline } = useWorkspaceActions();
   const active = config?.active ?? "";
   const workbenches = config?.workbenches ?? [];
-  const activeWorkbench = config?.workbenches.find((workbench) => workbench.name === active);
+  const activeWorkbench = workbenches.find((workbench) => workbench.name === active);
   const repos = activeWorkbench?.repos ?? [];
   const { filters } = quality;
 

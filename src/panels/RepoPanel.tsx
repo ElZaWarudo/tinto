@@ -88,7 +88,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
     nowMs,
   );
   const activeWorkbench = state.config?.active ?? null;
-  const activeConfig = state.config?.workbenches.find((w) => w.name === activeWorkbench);
+  const activeConfig = (state.config?.workbenches ?? []).find((w) => w.name === activeWorkbench);
   const repoEntry = activeConfig?.repos.find((r) => r.path === repo);
   return (
     <div className="repo-panel" data-testid={`repo-panel-${repo}`}>

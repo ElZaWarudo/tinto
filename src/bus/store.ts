@@ -194,7 +194,9 @@ export class BusStore {
 
   /** Display name for a repo path: alias from config, else the basename. */
   displayName(path: string): string {
-    const wb = this.state.config?.workbenches.find((w) => w.repos.some((r) => r.path === path));
+    const wb = (this.state.config?.workbenches ?? []).find((w) =>
+      w.repos.some((r) => r.path === path),
+    );
     const entry = wb?.repos.find((r) => r.path === path);
     return entry?.alias ?? basename(path);
   }
