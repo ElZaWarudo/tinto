@@ -1,6 +1,6 @@
 ---
 title: Quality-of-life filters, notifications, and glance mode
-status: implemented-verified-awaiting-release
+status: completed
 roadmap_item: RDM-012
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-16-rdm-012-quality-of-life-requirements.md
@@ -160,6 +160,12 @@ Review result: PASS inline.
 - Preventive evidence: full local verification complete; first Rust dependency download required network escalation, then Cargo test/build/clippy and Tauri build passed.
 - If CI breaks: invoke `krt-ci-questor` with PR/check context.
 - Escalation rule: keep release-follow-up blocker until cause and owner are recorded.
+
+Release result:
+
+- Completed by local fast-forward merge into `develop` and `git push origin develop` on 2026-06-16, per user direction to skip GitHub PR merges for this project flow.
+- Jira omitted: `jira-env-not-configured`.
+- PR omitted intentionally by user request.
 
 ## Branch and PR Handoff Inputs
 

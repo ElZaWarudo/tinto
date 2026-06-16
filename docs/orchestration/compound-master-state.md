@@ -197,7 +197,7 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 
 ## Next action
 
-Hand RDM-012 RU1 to `krt-release-marshal` for commit planning, Jira optional fallback, push, and PR creation on `feat/quality-of-life` → `develop`.
+Roadmap delivery complete. Next recommended action: optional final Compound Master summary / state archive, then normal repo cleanup.
 
 ## Wave 6 — RDM-009 (Watched files UI) — ✅ COMPLETE (shipped 2026-06-15)
 
@@ -243,7 +243,7 @@ Hand RDM-012 RU1 to `krt-release-marshal` for commit planning, Jira optional fal
 - Security gate: pass inline; no git writes, no new Tauri capability, no persistence/notifications/configurable rules, and tests prove signal messages do not leak matched secret values.
 - Package status: shipped.
 
-## Wave 8 — RDM-012 (Quality of life) — IMPLEMENTED / VERIFIED / AWAITING RELEASE
+## Wave 8 — RDM-012 (Quality of life) — ✅ COMPLETE (shipped 2026-06-16)
 
 - Branch: `feat/quality-of-life` from `develop` after PR #12 merge reconciliation.
 - [x] Brainstorm: `docs/brainstorms/2026-06-16-rdm-012-quality-of-life-requirements.md`.
@@ -254,7 +254,9 @@ Hand RDM-012 RU1 to `krt-release-marshal` for commit planning, Jira optional fal
 - [x] Review pass: inline review found and fixed timeline commit entries not respecting the selected time window; regression test added.
 - [x] Verification PASS (2026-06-16): `npm test` 140/140; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 117/117; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `rtk timeout 25s npm run tauri dev` launched Vite and the Tauri binary and ended by timeout as expected; EGL/MESA warnings were environment-only.
 - Security gate: pass inline/adversarial; notification copy is redacted by construction/test, no git writes or remote runtime behavior were added, and Tauri capability broadening is limited to `notification:default`.
-- Package status: `implemented-verified-awaiting-release`.
+- Release complete: 4 semantic commits plus this closeout were merged locally into `develop` by fast-forward and pushed to `origin/develop`, per user direction to skip GitHub PR creation/merge for this flow.
+- Jira omitted (`jira-env-not-configured`). PR intentionally omitted by user request.
+- Package status: shipped.
 
 - Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it); (c) user preference as of 2026-06-15: when merging is requested, use local merge + push to the base branch rather than GitHub's PR merge action.
 - Jira omitted (missing `.krt/env/jira-scribe.env`).
