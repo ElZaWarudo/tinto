@@ -59,9 +59,10 @@ describe("workbench operations", () => {
     expect(client.createWorkbench).not.toHaveBeenCalled();
   });
 
-  it("addRepoFlow adds the picked folder; cancel is a no-op", async () => {
+  it("addRepoFlow adds the picked folder and returns its canonical path; cancel is a no-op", async () => {
     openMock.mockResolvedValueOnce("/picked/repo");
-    await addRepoFlow("Work");
+    client.addRepo.mockResolvedValueOnce("/canon/picked/repo");
+    await expect(addRepoFlow("Work")).resolves.toBe("/canon/picked/repo");
     expect(client.addRepo).toHaveBeenCalledWith("Work", "/picked/repo");
     expect(reloadMock).toHaveBeenCalled();
 
@@ -72,10 +73,10 @@ describe("workbench operations", () => {
     expect(reloadMock).not.toHaveBeenCalled();
   });
 
-  it("addRepoFlow swallows a failed add but still reloads", async () => {
+  it("addRepoFlow swallows a failed add (resolves null) but still reloads", async () => {
     openMock.mockResolvedValueOnce("/dup");
     client.addRepo.mockRejectedValueOnce(new Error("duplicate"));
-    await expect(addRepoFlow("Work")).resolves.toBeUndefined();
+    await expect(addRepoFlow("Work")).resolves.toBeNull();
     expect(reloadMock).toHaveBeenCalled();
   });
 

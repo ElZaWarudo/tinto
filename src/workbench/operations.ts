@@ -29,15 +29,19 @@ export async function createAndActivate(name: string): Promise<void> {
   await reloadActiveWorkbench();
 }
 
-export async function addRepoFlow(active: string): Promise<void> {
+/** Pick a folder and add it as a repo. Resolves to the stored canonical path so
+ * the caller can open the new project's tab, or null if cancelled / failed. */
+export async function addRepoFlow(active: string): Promise<string | null> {
   const picked = await open({ directory: true, title: "Add a repo" });
-  if (typeof picked !== "string") return; // cancelled
+  if (typeof picked !== "string") return null; // cancelled
+  let canonical: string | null = null;
   try {
-    await addRepo(active, picked);
+    canonical = await addRepo(active, picked);
   } catch (e) {
     console.warn("tinto: add repo failed", e); // e.g. duplicate / not a git repo
   }
   await reloadActiveWorkbench();
+  return canonical;
 }
 
 export async function autodetectFlow(active: string): Promise<void> {

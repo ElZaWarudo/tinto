@@ -19,6 +19,23 @@ fn locked<T>(
     f(&mut guard)
 }
 
+type Bus<'a> = State<'a, crate::bus::BusHandle>;
+
+/// El snapshot en vivo (`get_workbench_snapshot`) lo sirve el bus desde su
+/// estado interno, que solo se actualiza vía `bus.set_workbench`. Tras mutar
+/// los repos de un workbench, si ese workbench es el activo, re-sembramos el
+/// bus para que el repo añadido/quitado/editado aparezca SIN reiniciar la app.
+fn reseed_if_active(store: &Store<'_>, bus: &Bus<'_>, workbench: &str) {
+    let repos = locked(store, |s| {
+        Ok(s.active_workbench()
+            .filter(|w| w.name == workbench)
+            .map(|w| w.repos.clone()))
+    });
+    if let Ok(Some(repos)) = repos {
+        bus.set_workbench(repos);
+    }
+}
+
 #[tauri::command]
 pub fn list_workbenches(store: Store<'_>) -> Result<WorkbenchConfig, WorkbenchError> {
     locked(&store, |s| Ok(s.config().clone()))
@@ -42,20 +59,28 @@ pub fn delete_workbench(store: Store<'_>, name: String) -> Result<(), WorkbenchE
 #[tauri::command]
 pub fn add_repo(
     store: Store<'_>,
+    bus: Bus<'_>,
     workbench: String,
     path: PathBuf,
     alias: Option<String>,
-) -> Result<(), WorkbenchError> {
-    locked(&store, |s| s.add_repo(&workbench, path, alias, true))
+) -> Result<String, WorkbenchError> {
+    // Returns the stored canonical path so the frontend can open the new repo's
+    // project tab bound to the exact key the bus reports it under.
+    let canonical = locked(&store, |s| s.add_repo(&workbench, path, alias, true))?;
+    reseed_if_active(&store, &bus, &workbench);
+    Ok(canonical.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
 pub fn remove_repo(
     store: Store<'_>,
+    bus: Bus<'_>,
     workbench: String,
     path: PathBuf,
 ) -> Result<(), WorkbenchError> {
-    locked(&store, |s| s.remove_repo(&workbench, &path))
+    locked(&store, |s| s.remove_repo(&workbench, &path))?;
+    reseed_if_active(&store, &bus, &workbench);
+    Ok(())
 }
 
 /// `alias: Some(x)` lo cambia; `clear_alias: true` lo borra (JSON no puede
@@ -63,6 +88,7 @@ pub fn remove_repo(
 #[tauri::command]
 pub fn update_repo(
     store: Store<'_>,
+    bus: Bus<'_>,
     workbench: String,
     path: PathBuf,
     alias: Option<String>,
@@ -76,7 +102,9 @@ pub fn update_repo(
     };
     locked(&store, |s| {
         s.update_repo(&workbench, &path, alias_update, fs_watch)
-    })
+    })?;
+    reseed_if_active(&store, &bus, &workbench);
+    Ok(())
 }
 
 #[tauri::command]

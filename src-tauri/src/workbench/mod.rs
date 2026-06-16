@@ -245,11 +245,13 @@ impl WorkbenchStore {
         path: PathBuf,
         alias: Option<String>,
         validate: bool,
-    ) -> Result<(), WorkbenchError> {
+    ) -> Result<PathBuf, WorkbenchError> {
         // Store the canonical path so it matches the canonical paths the bus
         // reports in snapshot/deltas (the frontend joins aliases by that key).
         // Falls back to the raw path when it cannot be canonicalized (e.g. it
         // does not exist), mirroring the bus's `canonicalize().unwrap_or(path)`.
+        // The canonical path is returned so the caller can open its tab — it is
+        // exactly the key the bus will report the repo under.
         let path = path.canonicalize().unwrap_or(path);
         if validate {
             Git2Engine::open(&path)?;
@@ -259,11 +261,12 @@ impl WorkbenchStore {
             return Err(WorkbenchError::DuplicateRepo(path));
         }
         wb.repos.push(RepoEntry {
-            path,
+            path: path.clone(),
             alias,
             fs_watch: Vec::new(),
         });
-        self.persist()
+        self.persist()?;
+        Ok(path)
     }
 
     pub fn remove_repo(&mut self, workbench: &str, path: &Path) -> Result<(), WorkbenchError> {
