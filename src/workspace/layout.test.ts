@@ -5,7 +5,13 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { safeParseLayout, isUsableLayout, loadUiState, saveUiState } from "./layout";
+import {
+  safeParseLayout,
+  isUsableLayout,
+  layoutReferencesTree,
+  loadUiState,
+  saveUiState,
+} from "./layout";
 import type { SerializedDockview } from "dockview-react";
 
 // Loose test fixtures; the runtime helpers only read `.panels`.
@@ -31,6 +37,17 @@ describe("layout persistence helpers", () => {
     expect(isUsableLayout(asLayout({}))).toBe(false);
     expect(isUsableLayout(asLayout({ panels: {} }))).toBe(false);
     expect(isUsableLayout(asLayout({ panels: { dashboard: {} } }))).toBe(true);
+  });
+
+  it("layoutReferencesTree detects the legacy in-dock repo tree panel", () => {
+    expect(layoutReferencesTree(null)).toBe(false);
+    expect(layoutReferencesTree(asLayout({ panels: { dashboard: {} } }))).toBe(false);
+    expect(
+      layoutReferencesTree(asLayout({ panels: { dashboard: { contentComponent: "dashboard" } } })),
+    ).toBe(false);
+    expect(layoutReferencesTree(asLayout({ panels: { tree: { contentComponent: "tree" } } }))).toBe(
+      true,
+    );
   });
 
   it("loadUiState parses the backend string, tolerating errors", async () => {

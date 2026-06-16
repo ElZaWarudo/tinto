@@ -5,7 +5,12 @@
 // touching this shell.
 
 import { DockviewReact } from "dockview-react";
-import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
+import type {
+  DockviewApi,
+  DockviewReadyEvent,
+  IDockviewPanelProps,
+  IDockviewPanelHeaderProps,
+} from "dockview-react";
 import { themeVisualStudio } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { useEffect, useRef } from "react";
@@ -13,14 +18,17 @@ import { applyLayout, loadUiState, saveUiState } from "./layout";
 import { PANEL_DASHBOARD } from "./panels";
 
 export type PanelComponents = Record<string, React.FunctionComponent<IDockviewPanelProps>>;
+export type TabComponents = Record<string, React.FunctionComponent<IDockviewPanelHeaderProps>>;
 
 const SAVE_DEBOUNCE_MS = 400;
 
 export function DockWorkspace({
   components,
+  tabComponents,
   onApi,
 }: {
   components: PanelComponents;
+  tabComponents?: TabComponents;
   onApi?: (api: DockviewApi) => void;
 }) {
   const apiRef = useRef<DockviewApi | null>(null);
@@ -78,5 +86,12 @@ export function DockWorkspace({
     };
   }, []);
 
-  return <DockviewReact components={components} theme={themeVisualStudio} onReady={onReady} />;
+  return (
+    <DockviewReact
+      components={components}
+      tabComponents={tabComponents}
+      theme={themeVisualStudio}
+      onReady={onReady}
+    />
+  );
 }

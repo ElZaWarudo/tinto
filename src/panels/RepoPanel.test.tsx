@@ -9,6 +9,14 @@ const updateRepoFsWatchMock = vi.fn();
 vi.mock("../bus/client", () => ({
   getCommitLog: (...a: unknown[]) => getCommitLogMock(...a),
   retryRepo: (...a: unknown[]) => retryRepoMock(...a),
+  // FileView (imported by RepoPanel) pulls in the subscription reconciler, which
+  // binds setSubscriptions at module load. The overview tests never render it,
+  // but the export must exist.
+  setSubscriptions: vi.fn(() => Promise.resolve(true)),
+  getWorktreeDiff: vi.fn(() => Promise.resolve([])),
+  getFileContent: vi.fn(() => Promise.resolve({ encoding: "utf8", content: "", truncated: false })),
+  // ProjectExplorer (left pane of the project tab) loads the repo's file tree.
+  listRepoTree: vi.fn(() => Promise.resolve({ entries: [], truncated: false })),
 }));
 vi.mock("../workbench/operations", () => ({
   updateRepoFsWatch: (...a: unknown[]) => updateRepoFsWatchMock(...a),
@@ -17,6 +25,8 @@ vi.mock("../workbench/operations", () => ({
 import { RepoPanel } from "./RepoPanel";
 import { openRepoPanel } from "../workspace/openRepo";
 import { busStore } from "../bus/store";
+import { tabsStore } from "../workspace/tabsStore";
+import { repoTreeStore } from "../workspace/repoTreeStore";
 import type { RepoDelta } from "../bus/contract";
 
 function delta(repo: string, over: Partial<RepoDelta> = {}): RepoDelta {
@@ -38,6 +48,8 @@ const panelProps = (repo: string) =>
 describe("RepoPanel", () => {
   beforeEach(() => {
     busStore.resetAll();
+    tabsStore.reset();
+    repoTreeStore.reset();
     getCommitLogMock.mockReset();
     retryRepoMock.mockReset();
     updateRepoFsWatchMock.mockReset();
@@ -109,17 +121,18 @@ describe("RepoPanel", () => {
     expect(screen.getByText(/no longer in the active workbench/i)).toBeInTheDocument();
   });
 
-  // Covers AE9: a status-list file opens its diff on double-click.
-  it("opens a diff when a status file is activated", () => {
+  // Covers AE9: a status-list file pins (opens) its tab on double-click.
+  it("pins a file tab when a status file is double-clicked", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
-    const openDiff = vi.fn();
+    const openFile = vi.fn();
     const value: WorkspaceActions = {
       openRepo: vi.fn(),
       addRepo: vi.fn(),
       removeRepo: vi.fn(),
-      openDiff,
+      openFile,
       openTimeline: vi.fn(),
+      openDashboard: vi.fn(),
     };
     render(
       <WorkspaceActionsContext.Provider value={value}>
@@ -127,7 +140,7 @@ describe("RepoPanel", () => {
       </WorkspaceActionsContext.Provider>,
     );
     fireEvent.doubleClick(screen.getByTestId("status-file-src/a.rs"));
-    expect(openDiff).toHaveBeenCalledWith("/r/api", "src/a.rs");
+    expect(openFile).toHaveBeenCalledWith("/r/api", "src/a.rs", true);
   });
 
   it("renders watched-file events and saves fs_watch through the active workbench", async () => {

@@ -8,6 +8,16 @@ import { invoke } from "@tauri-apps/api/core";
 import type { DockviewApi, SerializedDockview } from "dockview-react";
 import { PANEL_DASHBOARD, PANEL_TREE } from "./panels";
 
+/** True if a persisted layout still references the legacy in-dock repo tree,
+ * which is now a fixed left sidebar. Such layouts must be discarded: dockview
+ * would fail to instantiate the unregistered `tree` component. */
+export function layoutReferencesTree(layout: SerializedDockview | null): boolean {
+  if (!layout) return false;
+  const panels = (layout as { panels?: Record<string, { contentComponent?: string }> }).panels;
+  if (!panels) return false;
+  return Object.values(panels).some((p) => p?.contentComponent === PANEL_TREE);
+}
+
 /** Parse a persisted layout string; returns null on null/empty/corrupt input. */
 export function safeParseLayout(json: string | null | undefined): SerializedDockview | null {
   if (!json) return null;
@@ -45,21 +55,17 @@ export async function saveUiState(layout: SerializedDockview): Promise<void> {
   }
 }
 
-/** Build the first-run default layout: repo tree on the left, dashboard right. */
+/** Build the first-run default layout: the Dashboard as the single open tab.
+ * The repo/file explorer now lives in the fixed left sidebar, outside the dock. */
 export function buildDefaultLayout(api: DockviewApi): void {
   api.clear();
   api.addPanel({ id: PANEL_DASHBOARD, component: PANEL_DASHBOARD, title: "Dashboard" });
-  api.addPanel({
-    id: PANEL_TREE,
-    component: PANEL_TREE,
-    title: "Repos",
-    position: { referencePanel: PANEL_DASHBOARD, direction: "left" },
-  });
 }
 
-/** Restore a persisted layout, falling back to the default if unusable. */
+/** Restore a persisted layout, falling back to the default if unusable or if it
+ * still references the legacy in-dock repo tree (now a fixed sidebar). */
 export function applyLayout(api: DockviewApi, layout: SerializedDockview | null): void {
-  if (layout && isUsableLayout(layout)) {
+  if (layout && isUsableLayout(layout) && !layoutReferencesTree(layout)) {
     try {
       api.fromJSON(layout);
       return;

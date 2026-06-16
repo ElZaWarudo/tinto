@@ -3,7 +3,7 @@
 // a restored layout reopens the same repo, and a repo can never open twice.
 
 import type { DockviewApi } from "dockview-react";
-import { PANEL_REPO, repoPanelId } from "./panels";
+import { PANEL_REPO, TAB_REPO, repoPanelId } from "./panels";
 
 export function openRepoPanel(api: DockviewApi, repo: string, title: string): void {
   const id = repoPanelId(repo);
@@ -13,7 +13,7 @@ export function openRepoPanel(api: DockviewApi, repo: string, title: string): vo
     return;
   }
   try {
-    api.addPanel({ id, component: PANEL_REPO, title, params: { repo } });
+    api.addPanel({ id, component: PANEL_REPO, tabComponent: TAB_REPO, title, params: { repo } });
   } catch {
     // Lost a race with a restored layout that already holds this id — focus it.
     api.getPanel(id)?.api.setActive();

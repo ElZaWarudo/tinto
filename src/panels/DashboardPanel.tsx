@@ -9,6 +9,7 @@ import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
 import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
 import { RepoCard } from "./RepoCard";
+import { DashboardFilters } from "./DashboardFilters";
 
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -25,7 +26,7 @@ export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
-  const { openRepo, addRepo, openDiff } = useWorkspaceActions();
+  const { openRepo, addRepo, openFile } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
   if (!loaded) {
@@ -45,6 +46,8 @@ export function DashboardPanel() {
 
   return (
     <div className="dashboard">
+      <DashboardFilters />
+
       {!watching.available && (
         <div className="banner banner--warn" data-testid="degraded-banner">
           Watching unavailable
@@ -72,7 +75,7 @@ export function DashboardPanel() {
               nowMs={nowMs}
               onOpen={() => openRepo(p)}
               onRetry={() => void retryRepo(p)}
-              onOpenFile={(path) => openDiff(p, path)}
+              onOpenFile={(path) => openFile(p, path)}
             />
           ))}
         </div>

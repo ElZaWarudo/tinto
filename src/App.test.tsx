@@ -23,15 +23,7 @@ vi.mock("./workspace/DockWorkspace", () => ({
 import App from "./App";
 import { busStore } from "./bus/store";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
-import {
-  diffPanelId,
-  PANEL_DASHBOARD,
-  PANEL_DIFF,
-  PANEL_REPO,
-  PANEL_TIMELINE,
-  PANEL_TREE,
-  repoPanelId,
-} from "./workspace/panels";
+import { PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE, repoPanelId } from "./workspace/panels";
 import type { WorkbenchConfig } from "./bus/contract";
 
 describe("App", () => {
@@ -67,19 +59,14 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
     expect(Object.keys(captured.components ?? {})).toEqual(
-      expect.arrayContaining([PANEL_DASHBOARD, PANEL_TREE, PANEL_REPO, PANEL_DIFF, PANEL_TIMELINE]),
+      expect.arrayContaining([PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE]),
     );
   });
 
-  it("closes repo and diff panels for a removed repo without touching other repos", () => {
+  it("closes the project tab for a removed repo without touching other repos", () => {
     const closed: string[] = [];
     const panel = (id: string) => ({ id, api: { close: () => closed.push(id) } });
-    const panels = [
-      panel(repoPanelId("/r/a")),
-      panel(diffPanelId("/r/a", "src/a.ts")),
-      panel(diffPanelId("/r/a", "src/b.ts")),
-      panel(diffPanelId("/r/b", "src/a.ts")),
-    ];
+    const panels = [panel(repoPanelId("/r/a")), panel(repoPanelId("/r/b"))];
     const api = {
       panels,
       getPanel: (id: string) => panels.find((p) => p.id === id),
@@ -87,10 +74,6 @@ describe("App", () => {
 
     closePanelsForRemovedRepo(api as never, "/r/a");
 
-    expect(closed).toEqual([
-      repoPanelId("/r/a"),
-      diffPanelId("/r/a", "src/a.ts"),
-      diffPanelId("/r/a", "src/b.ts"),
-    ]);
+    expect(closed).toEqual([repoPanelId("/r/a")]);
   });
 });

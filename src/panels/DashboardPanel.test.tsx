@@ -29,8 +29,9 @@ function renderDash(actions: Partial<WorkspaceActions> = {}) {
     openRepo: vi.fn(),
     addRepo: vi.fn(),
     removeRepo: vi.fn(),
-    openDiff: vi.fn(),
+    openFile: vi.fn(),
     openTimeline: vi.fn(),
+    openDashboard: vi.fn(),
     ...actions,
   };
   render(

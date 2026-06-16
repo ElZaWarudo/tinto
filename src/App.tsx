@@ -1,46 +1,57 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { DockviewApi } from "dockview-react";
-import { DockWorkspace, type PanelComponents } from "./workspace/DockWorkspace";
-import {
-  PANEL_DASHBOARD,
-  PANEL_DIFF,
-  PANEL_REPO,
-  PANEL_TIMELINE,
-  PANEL_TREE,
-} from "./workspace/panels";
+import { DockWorkspace, type PanelComponents, type TabComponents } from "./workspace/DockWorkspace";
+import { PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE, TAB_REPO } from "./workspace/panels";
 import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/actions";
 import { openRepoPanel } from "./workspace/openRepo";
-import { openDiffPanel } from "./workspace/openDiff";
 import { openTimelinePanel } from "./workspace/openTimeline";
+import { openDashboardPanel } from "./workspace/openDashboard";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
+import { tabsStore } from "./workspace/tabsStore";
+import { repoTreeStore } from "./workspace/repoTreeStore";
 import { DashboardPanel } from "./panels/DashboardPanel";
 import { RepoPanel } from "./panels/RepoPanel";
-import { RepoTreePanel } from "./panels/RepoTreePanel";
-import { DiffPanel } from "./panels/diff/DiffPanel";
+import { RepoTab } from "./panels/RepoTab";
 import { TimelinePanel } from "./panels/timeline/TimelinePanel";
-import { TopBar } from "./workbench/TopBar";
+import { MenuBar } from "./workbench/MenuBar";
 import { FirstRun } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
 import { useBusConnection } from "./bus/connection";
-import { basename, busStore, useBusState } from "./bus/store";
+import { busStore, useBusState } from "./bus/store";
 import { GlanceMode } from "./qol/GlanceMode";
 import { NotificationWatcher } from "./qol/notifications";
 import { useQualityState } from "./qol/state";
+import { installZoomKeybindings, zoomStore } from "./qol/zoom";
 import "./App.css";
 
 const components: PanelComponents = {
   [PANEL_DASHBOARD]: DashboardPanel,
-  [PANEL_TREE]: RepoTreePanel,
   [PANEL_REPO]: RepoPanel,
-  [PANEL_DIFF]: DiffPanel,
   [PANEL_TIMELINE]: TimelinePanel,
+};
+
+const tabComponents: TabComponents = {
+  [TAB_REPO]: RepoTab,
 };
 
 export default function App() {
   useBusConnection();
-  const { config, loaded } = useBusState();
+  const { config, loaded, repos } = useBusState();
   const { glanceMode } = useQualityState();
   const apiRef = useRef<DockviewApi | null>(null);
+
+  // Apply the persisted zoom and bind Ctrl/Cmd +/-/0 (browser-style text size).
+  useEffect(() => {
+    zoomStore.hydrate();
+    return installZoomKeybindings();
+  }, []);
+
+  // Background-preload every repo's file tree so each project's explorer is
+  // "always loaded" — no spinner when its tab opens. ensureLoaded is idempotent.
+  const repoKeys = Object.keys(repos).sort().join("\n");
+  useEffect(() => {
+    if (repoKeys) repoTreeStore.preload(repoKeys.split("\n"));
+  }, [repoKeys]);
 
   const actions = useMemo<WorkspaceActions>(
     () => ({
@@ -51,26 +62,41 @@ export default function App() {
       },
       addRepo: () => {
         const active = busStore.getState().config?.active;
-        if (active) void addRepoFlow(active);
+        if (!active) return;
+        void addRepoFlow(active).then((path) => {
+          // Open the newly added repo's project tab (bound to the canonical key).
+          if (path && apiRef.current) {
+            openRepoPanel(apiRef.current, path, busStore.displayName(path));
+          }
+        });
       },
       removeRepo: (path) => {
         const active = busStore.getState().config?.active;
         if (!active) return;
         void removeRepoFlow(active, path).then((removed) => {
           if (!removed) return;
+          tabsStore.closeRepo(path);
+          repoTreeStore.drop(path);
           const api = apiRef.current;
           if (!api) return;
           closePanelsForRemovedRepo(api, path);
         });
       },
-      openDiff: (path, filePath) => {
+      openFile: (path, filePath, pin = false) => {
+        // Ensure the repo's project tab exists, then open the file tab in it.
         if (apiRef.current) {
-          openDiffPanel(apiRef.current, path, filePath, basename(filePath));
+          openRepoPanel(apiRef.current, path, busStore.displayName(path));
         }
+        tabsStore.openFile(path, filePath, pin);
       },
       openTimeline: () => {
         if (apiRef.current) {
           openTimelinePanel(apiRef.current);
+        }
+      },
+      openDashboard: () => {
+        if (apiRef.current) {
+          openDashboardPanel(apiRef.current);
         }
       },
     }),
@@ -90,13 +116,14 @@ export default function App() {
     <WorkspaceActionsContext.Provider value={actions}>
       <div className="app-shell">
         <NotificationWatcher />
-        <TopBar />
+        <MenuBar />
         <div className="app-shell__body">
           {glanceMode ? (
             <GlanceMode />
           ) : (
             <DockWorkspace
               components={components}
+              tabComponents={tabComponents}
               onApi={(api) => {
                 apiRef.current = api;
               }}

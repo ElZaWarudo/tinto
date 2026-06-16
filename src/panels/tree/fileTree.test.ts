@@ -45,4 +45,21 @@ describe("buildFileTree", () => {
     const tree = buildFileTree(entries, status({ staged: ["x.ts"], modified: ["x.ts"] }));
     expect(tree[0].changed).toBe("staged");
   });
+
+  it("propagates hasChanges up to every ancestor folder of a changed file", () => {
+    const entries: TreeEntry[] = [
+      { path: "a/b/c.ts", is_dir: false },
+      { path: "a/d.ts", is_dir: false },
+      { path: "clean", is_dir: true },
+      { path: "clean/e.ts", is_dir: false },
+    ];
+    const tree = buildFileTree(entries, status({ modified: ["a/b/c.ts"] }));
+    const a = tree.find((n) => n.name === "a")!;
+    const b = a.children.find((n) => n.name === "b")!;
+    expect(a.hasChanges).toBe(true); // ancestor of the change
+    expect(b.hasChanges).toBe(true);
+    expect(b.children[0].hasChanges).toBe(true); // the file itself
+    expect(a.children.find((n) => n.name === "d.ts")!.hasChanges).toBe(false);
+    expect(tree.find((n) => n.name === "clean")!.hasChanges).toBe(false);
+  });
 });

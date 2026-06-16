@@ -18,7 +18,7 @@ vi.mock("dockview-react", () => ({
 }));
 
 import { DockWorkspace } from "./DockWorkspace";
-import { PANEL_DASHBOARD, PANEL_TREE } from "./panels";
+import { PANEL_DASHBOARD } from "./panels";
 
 interface FakeApi {
   panels: { id: string }[];
@@ -60,7 +60,7 @@ function makeFakeApi(): FakeApi {
 }
 
 const dummy = () => null;
-const components = { [PANEL_DASHBOARD]: dummy, [PANEL_TREE]: dummy };
+const components = { [PANEL_DASHBOARD]: dummy };
 
 describe("DockWorkspace", () => {
   beforeEach(() => {
@@ -78,7 +78,6 @@ describe("DockWorkspace", () => {
     await waitFor(() => expect(api.addPanel).toHaveBeenCalled());
     const addedIds = api.addPanel.mock.calls.map((c) => c[0].id);
     expect(addedIds).toContain(PANEL_DASHBOARD);
-    expect(addedIds).toContain(PANEL_TREE);
     expect(api.fromJSON).not.toHaveBeenCalled();
   });
 

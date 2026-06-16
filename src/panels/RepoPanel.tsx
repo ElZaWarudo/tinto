@@ -1,12 +1,16 @@
-// Per-repo detail panel. Differentiated from the card (R4): the full status
-// file lists + a commit log (get_commit_log), plus error detail with retry.
-// The repo path comes from the panel params so a restored layout reopens it.
+// Per-repo project panel: a level-1 dockview tab laid out like a mini IDE — the
+// repo's own file explorer on the left, and on the right a level-2 tab strip
+// (a pinned "Resumen" overview + open files) over the active file's content. A
+// single click in the explorer previews a file (italic tab); a double click
+// pins it. The repo path comes from the panel params so a restored layout
+// reopens it.
 
 import { useEffect, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { getCommitLog, retryRepo } from "../bus/client";
 import type { CommitInfo, RepoDelta } from "../bus/contract";
 import {
+  basename,
   busStore,
   commitDate,
   getFsEvents,
@@ -19,9 +23,12 @@ import {
 import { filterFsEvents, filterStatusFiles } from "../qol/filters";
 import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
+import { tabsStore, useRepoTabs, visibleTabs } from "../workspace/tabsStore";
 import { updateRepoFsWatch } from "../workbench/operations";
 import { MetricsPill, SignalBadges } from "./SignalBadges";
 import { WatchedFilesSection } from "./WatchedFilesSection";
+import { FileView } from "./file/FileView";
+import { ProjectExplorer } from "./tree/ProjectExplorer";
 
 const COMMIT_LOG_LIMIT = 30;
 
@@ -36,10 +43,67 @@ function useNow(intervalMs: number): number {
 
 export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
+  const tabs = useRepoTabs(repo);
+  const { active, preview } = tabs;
+  const open = visibleTabs(tabs);
+
+  return (
+    <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
+      <ProjectExplorer repo={repo} />
+
+      <div className="repo-panel__main">
+        <div className="file-tabs" role="tablist" data-testid="file-tabs">
+          <button
+            role="tab"
+            aria-selected={active === null}
+            className={active === null ? "file-tab file-tab--on" : "file-tab"}
+            data-testid="file-tab-overview"
+            onClick={() => tabsStore.setActive(repo, null)}
+          >
+            Resumen
+          </button>
+          {open.map((f) => {
+            const classes = ["file-tab"];
+            if (active === f) classes.push("file-tab--on");
+            if (preview === f) classes.push("file-tab--preview");
+            return (
+              <span key={f} className={classes.join(" ")} data-testid={`file-tab-${f}`}>
+                <button
+                  role="tab"
+                  aria-selected={active === f}
+                  className="file-tab__label"
+                  title={f}
+                  onClick={() => tabsStore.setActive(repo, f)}
+                  onDoubleClick={() => tabsStore.pinFile(repo, f)}
+                >
+                  {basename(f)}
+                </button>
+                <button
+                  className="file-tab__close"
+                  aria-label={`Close ${f}`}
+                  data-testid={`file-tab-close-${f}`}
+                  onClick={() => tabsStore.closeFile(repo, f)}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+        </div>
+
+        <div className="repo-panel__content">
+          {active === null ? <RepoOverview repo={repo} /> : <FileView repo={repo} path={active} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RepoOverview({ repo }: { repo: string }) {
   const state = useBusState();
   const { filters } = useQualityState();
   const { repos } = state;
-  const { removeRepo, openDiff } = useWorkspaceActions();
+  const { removeRepo, openFile } = useWorkspaceActions();
   const nowMs = useNow(30_000);
   const delta = repos[repo];
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
@@ -68,7 +132,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
 
   if (!delta) {
     return (
-      <div className="repo-panel repo-panel--missing">
+      <div className="repo-overview repo-overview--missing" data-testid="repo-overview-missing">
         This repo is no longer in the active workbench.
       </div>
     );
@@ -91,7 +155,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const activeConfig = (state.config?.workbenches ?? []).find((w) => w.name === activeWorkbench);
   const repoEntry = activeConfig?.repos.find((r) => r.path === repo);
   return (
-    <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
+    <div className="repo-overview" data-testid={`repo-overview-${repo}`}>
       <header className="repo-panel__head">
         <h2>{busStore.displayName(repo)}</h2>
         <span className="repo-panel__path">{repo}</span>
@@ -144,19 +208,19 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
           label="Modified"
           files={filteredModified}
           delta={delta}
-          onOpen={(f) => openDiff(repo, f)}
+          onOpen={(f, pin) => openFile(repo, f, pin)}
         />
         <StatusList
           label="Staged"
           files={filteredStaged}
           delta={delta}
-          onOpen={(f) => openDiff(repo, f)}
+          onOpen={(f, pin) => openFile(repo, f, pin)}
         />
         <StatusList
           label="Untracked"
           files={filteredUntracked}
           delta={delta}
-          onOpen={(f) => openDiff(repo, f)}
+          onOpen={(f, pin) => openFile(repo, f, pin)}
         />
         {status.modified.length + status.staged.length + status.untracked.length > 0 &&
           filteredModified.length + filteredStaged.length + filteredUntracked.length === 0 && (
@@ -218,7 +282,7 @@ function StatusList({
   label: string;
   files: string[];
   delta: RepoDelta;
-  onOpen: (file: string) => void;
+  onOpen: (file: string, pin: boolean) => void;
 }) {
   if (files.length === 0) return null;
   return (
@@ -232,13 +296,17 @@ function StatusList({
             key={f}
             role="button"
             tabIndex={0}
-            title={`Open diff: ${f}`}
+            title={`Preview (click) / open (double-click): ${f}`}
             data-testid={`status-file-${f}`}
-            onDoubleClick={() => onOpen(f)}
+            onClick={() => onOpen(f, false)}
+            onDoubleClick={() => onOpen(f, true)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
+              if (e.key === "Enter") {
                 e.preventDefault();
-                onOpen(f);
+                onOpen(f, true);
+              } else if (e.key === " ") {
+                e.preventDefault();
+                onOpen(f, false);
               }
             }}
           >

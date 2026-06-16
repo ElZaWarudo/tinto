@@ -11,6 +11,9 @@ export interface TreeNode {
   path: string; // repo-relative
   isDir: boolean;
   changed: ChangeKind | null;
+  /** This node, or any descendant, has a change — so collapsed folders that
+   * contain changed files still show an indicator. */
+  hasChanges: boolean;
   children: TreeNode[];
 }
 
@@ -39,16 +42,38 @@ function sortChildren(node: TreeNode): void {
   for (const c of node.children) if (c.isDir) sortChildren(c);
 }
 
+/** Post-order: a node has changes if it is a changed file or any child does. */
+function computeHasChanges(node: TreeNode): boolean {
+  let has = node.changed !== null;
+  for (const c of node.children) has = computeHasChanges(c) || has;
+  node.hasChanges = has;
+  return has;
+}
+
 /** Build the nested tree (top-level nodes) from flat entries + status. */
 export function buildFileTree(entries: TreeEntry[], status: RepoStatus): TreeNode[] {
-  const root: TreeNode = { name: "", path: "", isDir: true, changed: null, children: [] };
+  const root: TreeNode = {
+    name: "",
+    path: "",
+    isDir: true,
+    changed: null,
+    hasChanges: false,
+    children: [],
+  };
   const dirs = new Map<string, TreeNode>([["", root]]);
 
   const ensureDir = (path: string): TreeNode => {
     const found = dirs.get(path);
     if (found) return found;
     const parent = ensureDir(dirname(path));
-    const node: TreeNode = { name: basename(path), path, isDir: true, changed: null, children: [] };
+    const node: TreeNode = {
+      name: basename(path),
+      path,
+      isDir: true,
+      changed: null,
+      hasChanges: false,
+      children: [],
+    };
     parent.children.push(node);
     dirs.set(path, node);
     return node;
@@ -64,11 +89,13 @@ export function buildFileTree(entries: TreeEntry[], status: RepoStatus): TreeNod
         path: e.path,
         isDir: false,
         changed: changeKind(e.path, status),
+        hasChanges: false,
         children: [],
       });
     }
   }
 
   sortChildren(root);
+  for (const c of root.children) computeHasChanges(c);
   return root.children;
 }
