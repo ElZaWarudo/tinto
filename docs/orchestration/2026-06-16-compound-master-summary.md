@@ -73,7 +73,20 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - TypeScript/Rust contract code generation.
 - Keyboard arrow navigation/Escape polish.
 - Diff viewer deferrals: manual-reload cancellation race, full-file/diff revision skew hardening, `useDiffData` extraction, S/M/U mark consolidation, and workbench-switch diff-panel orphan handling.
-- CI workflow remains deferred; local verification is the break-prevention evidence for this prototype.
+- GitHub Actions CI workflow added after roadmap closeout at `.github/workflows/ci.yml`.
+- CI workflow gates: frontend format/lint/test/build, Rust fmt/clippy/test/build, and full Tauri bundle build on Ubuntu.
+- CI workflow delivery: `e0e91ba` (`ci(github): add validation workflow`), merged locally to `develop` and pushed to `origin/develop` without PR.
+- GitHub Actions run `27601639210`: passed. Frontend passed in 58s, Rust passed in 8m44s, and Tauri bundle passed in 10m46s.
+- CI warning cleanup: `.github/workflows/ci.yml` now sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` to opt JavaScript actions into the Node 24 runtime and remove the Node 20 deprecation warning in the next run.
+
+## Post-Closeout Maintenance
+
+- Compact Compound Master state was archived and replaced by a resume-focused state file at `docs/orchestration/compound-master-state.md`.
+- Full archived state snapshot: `docs/orchestration/archive/compound-master-state/2026-06-16-compound-master-state-full-state.md`.
+- Merged local branches removed: `docs/compact-compound-state`, `docs/compound-master-closeout`, `feat/diff-viewer`, `feat/passive-signals`, `feat/quality-of-life`, `feat/timeline-history`, and `feat/watched-files-ui`.
+- Merged remote feature branches removed: `origin/feat/diff-viewer`, `origin/feat/passive-signals`, `origin/feat/timeline-history`, and `origin/feat/watched-files-ui`.
+- `checkpoint/state-event-bus` was retained locally and remotely because `origin/checkpoint/state-event-bus` was not listed as merged into `develop`.
+- Current delivery preference from the user: avoid GitHub PR merges unless requested; integrate locally into `develop` and push.
 
 ## Final Status
 
@@ -81,4 +94,4 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - Integration branch: `develop` pushed to `origin/develop`.
 - Blockers: none.
 - Remaining roadmap packages: none.
-- Recommended next work: choose a new initiative or backlog item, then start a new requirements/roadmap cycle. If no new initiative is chosen, run normal repository cleanup for stale feature branches.
+- Recommended next work: validate the Node 24 actions-runtime mitigation in the next CI run, then choose a new initiative or backlog item and start a fresh requirements/roadmap cycle.
