@@ -88,6 +88,15 @@ pub enum WatcherError {
     BackendInit { message: String },
 }
 
+/// `true` si el fallo de `watch()` recursivo es por permisos (os error 13):
+/// algún subdirectorio del subtree es ilegible. No es un fallo del repo.
+fn is_permission_denied(e: &notify::Error) -> bool {
+    matches!(
+        &e.kind,
+        notify::ErrorKind::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied
+    )
+}
+
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -256,9 +265,20 @@ impl FsWatcher {
                         continue; // ya reportado por el canal
                     }
                     if let Err(e) = self.watcher.watch(&root, RecursiveMode::Recursive) {
-                        // Un fallo parcial (p. ej. límite de inotify a
-                        // mitad del walk) deja watches huérfanos que
-                        // consumen presupuesto del kernel: liberarlos.
+                        if is_permission_denied(&e) {
+                            // Un subdirectorio ilegible (p. ej. el data dir de
+                            // un mongo, un path de otro usuario, un `_tmp` de
+                            // worktree) NO debe degradar el repo entero: el
+                            // walk recursivo de notify ya montó los watches
+                            // accesibles; los conservamos y solo se pierde el
+                            // subtree sin permisos (que igual no podríamos
+                            // leer). Marcamos montado sin reportar error.
+                            self.mounted.insert(root, fs_watch);
+                            continue;
+                        }
+                        // Otro fallo (p. ej. límite de inotify a mitad del
+                        // walk) deja watches huérfanos que consumen presupuesto
+                        // del kernel: liberarlos.
                         let _ = self.watcher.unwatch(&root);
                         let _ = self
                             .router_tx
@@ -537,6 +557,15 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::time::timeout;
+
+    #[test]
+    fn permission_denied_se_distingue_de_otros_io_errors() {
+        let denied =
+            notify::Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert!(is_permission_denied(&denied));
+        let not_found = notify::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(!is_permission_denied(&not_found));
+    }
 
     /// Repo de fixture: dir con `.gitignore`, `.git/HEAD` y `src/`.
     fn fixture_repo(gitignore: &str) -> TempDir {
