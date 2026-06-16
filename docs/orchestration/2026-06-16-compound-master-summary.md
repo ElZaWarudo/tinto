@@ -77,7 +77,8 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - CI workflow gates: frontend format/lint/test/build, Rust fmt/clippy/test/build, and full Tauri bundle build on Ubuntu.
 - CI workflow delivery: `e0e91ba` (`ci(github): add validation workflow`), merged locally to `develop` and pushed to `origin/develop` without PR.
 - GitHub Actions run `27601639210`: passed. Frontend passed in 58s, Rust passed in 8m44s, and Tauri bundle passed in 10m46s.
-- CI warning cleanup: `.github/workflows/ci.yml` now sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` to opt JavaScript actions into the Node 24 runtime and remove the Node 20 deprecation warning in the next run.
+- GitHub Actions run `27602696319`: passed after the Node 24 runtime opt-in. Frontend passed in 1m0s, Rust passed in 2m2s, and Tauri bundle passed in 4m27s.
+- CI warning cleanup: `.github/workflows/ci.yml` sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`. GitHub now reports that Node 20-targeting actions are forced to run on Node 24; the remaining annotation is informational until the upstream actions target Node 24 natively.
 
 ## Post-Closeout Maintenance
 
@@ -94,4 +95,4 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - Integration branch: `develop` pushed to `origin/develop`.
 - Blockers: none.
 - Remaining roadmap packages: none.
-- Recommended next work: validate the Node 24 actions-runtime mitigation in the next CI run, then choose a new initiative or backlog item and start a fresh requirements/roadmap cycle.
+- Recommended next work: choose a new initiative or backlog item and start a fresh requirements/roadmap cycle.
