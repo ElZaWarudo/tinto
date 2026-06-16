@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { FsEvent, WatchingState } from "../bus/contract";
+import { SignalBadges } from "./SignalBadges";
 
 interface Props {
   repo: string;
@@ -166,6 +167,7 @@ export function WatchedFilesSection({
                   {event.kind}
                 </span>
                 <span className="watch-event__path">{event.path}</span>
+                <SignalBadges signals={event.signals ?? []} limit={2} compact />
                 <span className="watch-event__meta">
                   {new Date(event.timestamp_ms).toLocaleString()} · {formatSize(event)}
                 </span>

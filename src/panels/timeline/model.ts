@@ -1,6 +1,6 @@
 import type { BusState } from "../../bus/store";
 import type { FsEventKind, RepoDelta } from "../../bus/contract";
-import { getFsEvents, statusSummary } from "../../bus/store";
+import { getFsEvents, getRepoSignals, statusSummary } from "../../bus/store";
 
 export const ORPHAN_QUIET_MS = 30 * 60 * 1000;
 export const TIMELINE_COMMIT_LIMIT = 8;
@@ -64,6 +64,7 @@ export function buildTimelineEntries(
     }
 
     if (dirty(delta)) {
+      const signals = getRepoSignals(delta);
       entries.push({
         id: `activity:${delta.repo}:${delta.revision}`,
         kind: "activity",
@@ -71,7 +72,12 @@ export function buildTimelineEntries(
         repoName,
         timestampMs: activityMs,
         title: "Working tree changed",
-        detail: statusSummary(delta.status),
+        detail:
+          signals.length > 0
+            ? `${statusSummary(delta.status)} · ${signals.length} passive signal${
+                signals.length === 1 ? "" : "s"
+              }`
+            : statusSummary(delta.status),
       });
 
       if (nowMs - activityMs >= ORPHAN_QUIET_MS) {

@@ -58,6 +58,32 @@ describe("RepoPanel", () => {
     expect(getCommitLogMock).toHaveBeenCalledWith("/r/api", 0, 30);
   });
 
+  it("renders passive metrics, repo signals, and status-file signal chips", async () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() =>
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            metrics: { changed_files: 2, lines_added: 12, lines_removed: 3 },
+            signals: [
+              {
+                kind: "config_change",
+                severity: "warning",
+                path: "src/a.rs",
+                message: "Configuration file changed",
+              },
+            ],
+          }),
+        ],
+        { available: true },
+      ),
+    );
+    render(<RepoPanel {...panelProps("/r/api")} />);
+    expect(screen.getByTestId("repo-signals")).toHaveTextContent("2 files · +12 -3");
+    expect(screen.getByTestId("repo-signals")).toHaveTextContent("Configuration file changed");
+    expect(screen.getByTestId("status-file-src/a.rs")).toHaveTextContent("Config");
+  });
+
   it("shows a terminal error with a working retry", async () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() =>

@@ -54,6 +54,30 @@ describe("timeline model", () => {
     ]);
   });
 
+  it("includes passive signal count in current activity detail", () => {
+    const store = new BusStore();
+    store.loadSnapshot(
+      [
+        delta("/r/api", {
+          status: { modified: ["src/a.ts"], staged: [], untracked: [] },
+          signals: [
+            {
+              kind: "possible_secret",
+              severity: "critical",
+              path: "src/a.ts",
+              message: "Possible secret marker added",
+            },
+          ],
+        }),
+      ],
+      { available: true },
+    );
+
+    const entries = buildTimelineEntries(store.getState(), () => "api", 5000);
+
+    expect(entries.find((e) => e.kind === "activity")?.detail).toContain("1 passive signal");
+  });
+
   it("includes Plane 2 file events without turning them into diffs", () => {
     const store = new BusStore();
     store.loadSnapshot([delta("/r/api")], { available: true });
