@@ -11,6 +11,7 @@ vi.mock("../../bus/client", () => ({
 }));
 
 import { busStore } from "../../bus/store";
+import { qualityStore } from "../../qol/state";
 import { TimelinePanel } from "./TimelinePanel";
 
 function delta(repo: string, over: Partial<RepoDelta> = {}): RepoDelta {
@@ -99,5 +100,28 @@ describe("TimelinePanel", () => {
     expect(await screen.findByTestId("timeline-diff-error")).toHaveTextContent("missing commit");
     fireEvent.click(screen.getByText("Retry"));
     expect(await screen.findByTestId("timeline-files")).toHaveTextContent("src/a.ts");
+  });
+
+  it("applies the time filter to commit entries", async () => {
+    getCommitLogMock.mockResolvedValue([
+      { id: "oldc0de", summary: "old commit", author: "me", timestamp: 1_700_000_100 },
+    ]);
+    act(() => {
+      qualityStore.setFilters({ timeWindow: "15m" });
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            status: { modified: [], staged: [], untracked: [] },
+            last_activity_ms: 1_700_000_000_000,
+          }),
+        ],
+        { available: true },
+      );
+    });
+
+    render(<TimelinePanel {...panelProps} />);
+
+    expect(await screen.findByTestId("timeline-no-matches")).toHaveTextContent("No timeline");
+    expect(screen.queryByText(/old commit/)).not.toBeInTheDocument();
   });
 });

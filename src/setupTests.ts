@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { qualityStore } from "./qol/state";
 
 // jsdom lacks ResizeObserver / matchMedia, which dockview and themed UI touch.
 if (!("ResizeObserver" in globalThis)) {
@@ -26,5 +27,6 @@ if (!window.matchMedia) {
 }
 
 afterEach(() => {
+  qualityStore.reset();
   cleanup();
 });

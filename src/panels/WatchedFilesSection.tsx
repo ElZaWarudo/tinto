@@ -7,6 +7,7 @@ interface Props {
   activeWorkbench: string | null;
   patterns: string[];
   events: FsEvent[];
+  filtersActive?: boolean;
   watching: WatchingState;
   onSave: (patterns: string[]) => Promise<void>;
 }
@@ -39,6 +40,7 @@ export function WatchedFilesSection({
   activeWorkbench,
   patterns,
   events,
+  filtersActive = false,
   watching,
   onSave,
 }: Props) {
@@ -157,7 +159,9 @@ export function WatchedFilesSection({
         <h4>Recent events</h4>
         {events.length === 0 ? (
           <p className="repo-panel__muted" data-testid="watch-no-events">
-            No watched file events yet.
+            {filtersActive
+              ? "No watched file events match the current filters."
+              : "No watched file events yet."}
           </p>
         ) : (
           <ul>

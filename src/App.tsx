@@ -23,6 +23,9 @@ import { FirstRun } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
 import { useBusConnection } from "./bus/connection";
 import { basename, busStore, useBusState } from "./bus/store";
+import { GlanceMode } from "./qol/GlanceMode";
+import { NotificationWatcher } from "./qol/notifications";
+import { useQualityState } from "./qol/state";
 import "./App.css";
 
 const components: PanelComponents = {
@@ -36,6 +39,7 @@ const components: PanelComponents = {
 export default function App() {
   useBusConnection();
   const { config, loaded } = useBusState();
+  const { glanceMode } = useQualityState();
   const apiRef = useRef<DockviewApi | null>(null);
 
   const actions = useMemo<WorkspaceActions>(
@@ -85,14 +89,19 @@ export default function App() {
   return (
     <WorkspaceActionsContext.Provider value={actions}>
       <div className="app-shell">
+        <NotificationWatcher />
         <TopBar />
         <div className="app-shell__body">
-          <DockWorkspace
-            components={components}
-            onApi={(api) => {
-              apiRef.current = api;
-            }}
-          />
+          {glanceMode ? (
+            <GlanceMode />
+          ) : (
+            <DockWorkspace
+              components={components}
+              onApi={(api) => {
+                apiRef.current = api;
+              }}
+            />
+          )}
         </div>
       </div>
     </WorkspaceActionsContext.Provider>

@@ -13,6 +13,8 @@ import {
   statusSummary,
   useBusState,
 } from "../bus/store";
+import { filterRepoPaths, filterTreeNodes, hasActiveFilters } from "../qol/filters";
+import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
 import { SignalBadges } from "./SignalBadges";
 import { buildFileTree, type TreeNode } from "./tree/fileTree";
@@ -21,10 +23,20 @@ const MARK: Record<string, string> = { staged: "S", modified: "M", untracked: "U
 
 export function RepoTreePanel() {
   const state = useBusState();
-  const paths = sortedRepoPaths(busStore, state);
+  const { filters } = useQualityState();
+  const allPaths = sortedRepoPaths(busStore, state);
+  const paths = filterRepoPaths(state, allPaths, filters, (repo) => busStore.displayName(repo));
 
-  if (paths.length === 0) {
+  if (allPaths.length === 0) {
     return <div className="repo-tree repo-tree--empty">No repos.</div>;
+  }
+
+  if (paths.length === 0 && hasActiveFilters(filters)) {
+    return (
+      <div className="repo-tree repo-tree--empty" data-testid="tree-no-matches">
+        No repos match the current filters.
+      </div>
+    );
   }
 
   return (
@@ -46,6 +58,7 @@ function RepoTreeNode({
   status: RepoStatus;
 }) {
   const { openRepo, openDiff } = useWorkspaceActions();
+  const { filters } = useQualityState();
   const [expanded, setExpanded] = useState(false);
   const [tree, setTree] = useState<RepoTree | undefined>(undefined); // undefined=not loaded
   const [error, setError] = useState(false);
@@ -61,7 +74,10 @@ function RepoTreeNode({
   };
 
   // Markers update live: rebuild when entries or status change.
-  const nodes = useMemo(() => (tree ? buildFileTree(tree.entries, status) : []), [tree, status]);
+  const nodes = useMemo(() => {
+    if (!tree) return [];
+    return filterTreeNodes(buildFileTree(tree.entries, status), filters, delta.signals ?? []);
+  }, [delta, filters, status, tree]);
 
   return (
     <div className="tree-repo">
@@ -90,6 +106,10 @@ function RepoTreeNode({
             <div className="tree-files__msg">Could not load files.</div>
           ) : tree === undefined ? (
             <div className="tree-files__msg">Loading…</div>
+          ) : nodes.length === 0 && hasActiveFilters(filters) ? (
+            <div className="tree-files__msg" data-testid={`tree-files-no-matches-${repo}`}>
+              No files match the current filters.
+            </div>
           ) : (
             <>
               {nodes.map((n) => (

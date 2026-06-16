@@ -3,6 +3,13 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { getCommitDiff, getCommitLog } from "../../bus/client";
 import type { CommitInfo, FileDiff } from "../../bus/contract";
 import { busStore, commitDate, sortedRepoPaths, useBusState } from "../../bus/store";
+import {
+  filterRepoPaths,
+  filterTimelineEntries,
+  matchesExtension,
+  matchesTimeWindow,
+} from "../../qol/filters";
+import { useQualityState } from "../../qol/state";
 import { DiffView } from "../diff/DiffView";
 import { buildTimelineEntries, TIMELINE_COMMIT_LIMIT } from "./model";
 
@@ -37,8 +44,13 @@ function useNow(intervalMs: number): number {
 export function TimelinePanel(props: IDockviewPanelProps) {
   void props;
   const state = useBusState();
+  const { filters } = useQualityState();
   const nowMs = useNow(30_000);
-  const repoPaths = useMemo(() => sortedRepoPaths(busStore, state), [state]);
+  const allRepoPaths = useMemo(() => sortedRepoPaths(busStore, state), [state]);
+  const repoPaths = useMemo(
+    () => filterRepoPaths(state, allRepoPaths, filters, (repo) => busStore.displayName(repo)),
+    [allRepoPaths, filters, state],
+  );
   const repoKey = repoPaths.join("\0");
   const repoSet = useMemo(() => new Set(repoPaths), [repoPaths]);
 
@@ -71,8 +83,13 @@ export function TimelinePanel(props: IDockviewPanelProps) {
   }, [repoKey, repoPaths]);
 
   const activityEntries = useMemo(
-    () => buildTimelineEntries(state, (repo) => busStore.displayName(repo), nowMs),
-    [state, nowMs],
+    () =>
+      filterTimelineEntries(
+        buildTimelineEntries(state, (repo) => busStore.displayName(repo), nowMs),
+        filters,
+        nowMs,
+      ),
+    [filters, state, nowMs],
   );
 
   const commitEntries = useMemo<CommitEntry[]>(() => {
@@ -84,8 +101,22 @@ export function TimelinePanel(props: IDockviewPanelProps) {
           commit,
         })),
       )
+      .filter((entry) => {
+        if (!matchesTimeWindow(entry.commit.timestamp * 1000, filters, nowMs)) return false;
+        const text = [
+          entry.repoName,
+          entry.repo,
+          entry.commit.summary,
+          entry.commit.author,
+          entry.commit.id,
+        ]
+          .join(" ")
+          .toLowerCase();
+        const needle = filters.search.trim().toLowerCase();
+        return !needle || text.includes(needle);
+      })
       .sort((a, b) => b.commit.timestamp - a.commit.timestamp);
-  }, [commits, repoPaths]);
+  }, [commits, filters, nowMs, repoPaths]);
 
   const activeSelected = selected && repoSet.has(selected.repo) ? selected : null;
 
@@ -104,7 +135,12 @@ export function TimelinePanel(props: IDockviewPanelProps) {
       .finally(() => setLoadingDiff(false));
   }, []);
 
-  const selectedDiff = diffs?.find((d) => d.path === selectedPath) ?? null;
+  const filteredDiffs = useMemo(
+    () => (diffs ?? []).filter((diff) => matchesExtension(diff.path, filters)),
+    [diffs, filters],
+  );
+  const selectedDiff =
+    filteredDiffs.find((d) => d.path === selectedPath) ?? filteredDiffs[0] ?? null;
 
   return (
     <div className="timeline" data-testid="timeline-panel">
@@ -120,9 +156,13 @@ export function TimelinePanel(props: IDockviewPanelProps) {
           )}
         </header>
 
-        {repoPaths.length === 0 ? (
+        {allRepoPaths.length === 0 ? (
           <p className="repo-panel__muted" data-testid="timeline-empty">
             No repos in this workbench.
+          </p>
+        ) : activityEntries.length === 0 && commitEntries.length === 0 ? (
+          <p className="repo-panel__muted" data-testid="timeline-no-matches">
+            No timeline entries match the current filters.
           </p>
         ) : (
           <ul className="timeline-list" data-testid="timeline-feed">
@@ -192,10 +232,14 @@ export function TimelinePanel(props: IDockviewPanelProps) {
               <p className="repo-panel__muted" data-testid="timeline-no-diffs">
                 No file diffs for this commit.
               </p>
+            ) : diffs && filteredDiffs.length === 0 ? (
+              <p className="repo-panel__muted" data-testid="timeline-no-diff-matches">
+                No commit diffs match the current filters.
+              </p>
             ) : diffs ? (
               <div className="timeline-diff">
                 <ul className="timeline-files" data-testid="timeline-files">
-                  {diffs.map((diff) => (
+                  {filteredDiffs.map((diff) => (
                     <li key={diff.path}>
                       <button
                         className={diff.path === selectedPath ? "timeline-files__btn--on" : ""}

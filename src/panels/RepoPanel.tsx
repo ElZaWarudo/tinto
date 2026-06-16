@@ -16,6 +16,8 @@ import {
   sortSignals,
   useBusState,
 } from "../bus/store";
+import { filterFsEvents, filterStatusFiles } from "../qol/filters";
+import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
 import { updateRepoFsWatch } from "../workbench/operations";
 import { MetricsPill, SignalBadges } from "./SignalBadges";
@@ -23,11 +25,22 @@ import { WatchedFilesSection } from "./WatchedFilesSection";
 
 const COMMIT_LOG_LIMIT = 30;
 
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
   const state = useBusState();
+  const { filters } = useQualityState();
   const { repos } = state;
   const { removeRepo, openDiff } = useWorkspaceActions();
+  const nowMs = useNow(30_000);
   const delta = repos[repo];
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [logError, setLogError] = useState(false);
@@ -64,6 +77,16 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const { status, error } = delta;
   const metrics = getRepoMetrics(delta);
   const signals = getRepoSignals(delta);
+  const filteredModified = filterStatusFiles(status.modified, filters, signals);
+  const filteredStaged = filterStatusFiles(status.staged, filters, signals);
+  const filteredUntracked = filterStatusFiles(status.untracked, filters, signals);
+  const filteredEvents = filterFsEvents(
+    repo,
+    getFsEvents(state, repo),
+    filters,
+    busStore.displayName(repo),
+    nowMs,
+  );
   const activeWorkbench = state.config?.active ?? null;
   const activeConfig = state.config?.workbenches.find((w) => w.name === activeWorkbench);
   const repoEntry = activeConfig?.repos.find((r) => r.path === repo);
@@ -119,22 +142,28 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
       <section className="repo-panel__status" data-testid="status-lists">
         <StatusList
           label="Modified"
-          files={status.modified}
+          files={filteredModified}
           delta={delta}
           onOpen={(f) => openDiff(repo, f)}
         />
         <StatusList
           label="Staged"
-          files={status.staged}
+          files={filteredStaged}
           delta={delta}
           onOpen={(f) => openDiff(repo, f)}
         />
         <StatusList
           label="Untracked"
-          files={status.untracked}
+          files={filteredUntracked}
           delta={delta}
           onOpen={(f) => openDiff(repo, f)}
         />
+        {status.modified.length + status.staged.length + status.untracked.length > 0 &&
+          filteredModified.length + filteredStaged.length + filteredUntracked.length === 0 && (
+            <p className="repo-panel__muted" data-testid="status-no-matches">
+              No status files match the current filters.
+            </p>
+          )}
       </section>
 
       <WatchedFilesSection
@@ -142,7 +171,8 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
         repo={repo}
         activeWorkbench={activeWorkbench}
         patterns={repoEntry?.fs_watch ?? []}
-        events={getFsEvents(state, repo)}
+        events={filteredEvents}
+        filtersActive={filteredEvents.length !== getFsEvents(state, repo).length}
         watching={state.watching}
         onSave={(patterns) =>
           activeWorkbench

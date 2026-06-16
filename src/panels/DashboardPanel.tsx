@@ -5,6 +5,8 @@
 import { useEffect, useState } from "react";
 import { retryRepo } from "../bus/client";
 import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
+import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
+import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
 import { RepoCard } from "./RepoCard";
 
@@ -22,6 +24,7 @@ const SKELETON_COUNT = 3;
 export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
+  const { filters } = useQualityState();
   const { openRepo, addRepo, openDiff } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
@@ -37,7 +40,8 @@ export function DashboardPanel() {
     );
   }
 
-  const paths = sortedRepoPaths(busStore, state);
+  const allPaths = sortedRepoPaths(busStore, state);
+  const paths = filterRepoPaths(state, allPaths, filters, (repo) => busStore.displayName(repo));
 
   return (
     <div className="dashboard">
@@ -48,10 +52,14 @@ export function DashboardPanel() {
         </div>
       )}
 
-      {paths.length === 0 ? (
+      {allPaths.length === 0 ? (
         <div className="empty-state" data-testid="zero-repos">
           <p>No repos in this workbench.</p>
           <button onClick={addRepo}>Add repo</button>
+        </div>
+      ) : paths.length === 0 && hasActiveFilters(filters) ? (
+        <div className="empty-state" data-testid="dashboard-no-matches">
+          <p>No repos match the current filters.</p>
         </div>
       ) : (
         <div className="card-grid">
