@@ -197,7 +197,7 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 
 ## Next action
 
-Handoff RDM-011 to Release Marshal: commit, push, open PR to `develop`, then merge by the user's local-merge preference only after the explicit merge gate.
+Hand RDM-012 RU1 to `krt-release-marshal` for commit planning, Jira optional fallback, push, and PR creation on `feat/quality-of-life` → `develop`.
 
 ## Wave 6 — RDM-009 (Watched files UI) — ✅ COMPLETE (shipped 2026-06-15)
 
@@ -229,9 +229,10 @@ Handoff RDM-011 to Release Marshal: commit, push, open PR to `develop`, then mer
 - Security gate: not required; no backend contract/capability change, no persistence, and no git writes.
 - Package status: shipped.
 
-## Wave 7 — RDM-011 (Passive signals) — IMPLEMENTED VERIFIED
+## Wave 7 — RDM-011 (Passive signals) — ✅ COMPLETE (shipped 2026-06-16)
 
 - Branch: `feat/passive-signals` from `develop` after PR #11 merge reconciliation.
+- **PR #12 MERGED** to `develop` (merge commit `e140988`, merged externally by user after Release Marshal created the PR). Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs). RDM-011 delivered.
 - [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-011-passive-signals-requirements.md`.
 - [x] Plan: `docs/plans/2026-06-15-005-feat-passive-signals-plan.md`.
 - [x] Work package: `docs/work-packages/RDM-011-passive-signals/2026-06-15-001-passive-signals-work-package.md` — single RU, branch `feat/passive-signals`, base `develop`.
@@ -240,6 +241,19 @@ Handoff RDM-011 to Release Marshal: commit, push, open PR to `develop`, then mer
 - [x] Review pass: inline review corrected deterministic cap ordering so `large_delete` cannot be truncated behind lower-value path warnings. Reviewed the new unconditional `worktree_diff()` metrics path against the existing git implementation; unborn HEAD remains supported because worktree diff handles no HEAD tree.
 - [x] Verification PASS (2026-06-15): focused Vitest 73/73; full `npm test` 132/132; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 117/117; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `rtk timeout 25s npm run tauri dev` launched Vite and the Tauri binary and ended by timeout as expected; EGL/MESA warnings were environment-only.
 - Security gate: pass inline; no git writes, no new Tauri capability, no persistence/notifications/configurable rules, and tests prove signal messages do not leak matched secret values.
+- Package status: shipped.
+
+## Wave 8 — RDM-012 (Quality of life) — IMPLEMENTED / VERIFIED / AWAITING RELEASE
+
+- Branch: `feat/quality-of-life` from `develop` after PR #12 merge reconciliation.
+- [x] Brainstorm: `docs/brainstorms/2026-06-16-rdm-012-quality-of-life-requirements.md`.
+- [x] Plan: `docs/plans/2026-06-16-001-feat-quality-of-life-plan.md`.
+- [x] Work package: `docs/work-packages/RDM-012-quality-of-life/2026-06-16-001-quality-of-life-work-package.md` — single RU, branch `feat/quality-of-life`, base `develop`.
+- Reviewability Gate: independent single PR; no stack; Jira optional standalone Tarea if configured. Broadness accepted because filters, notifications, and glance share the same top-bar/state layer and existing bus facts.
+- [x] RU1 execution complete: session QoL state, pure filters/search/time helpers, global TopBar controls, filtered dashboard/tree/repo/watch/timeline surfaces, opt-in redacted native notifications via Tauri notification plugin, and in-app glance mode.
+- [x] Review pass: inline review found and fixed timeline commit entries not respecting the selected time window; regression test added.
+- [x] Verification PASS (2026-06-16): `npm test` 140/140; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 117/117; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `rtk timeout 25s npm run tauri dev` launched Vite and the Tauri binary and ended by timeout as expected; EGL/MESA warnings were environment-only.
+- Security gate: pass inline/adversarial; notification copy is redacted by construction/test, no git writes or remote runtime behavior were added, and Tauri capability broadening is limited to `notification:default`.
 - Package status: `implemented-verified-awaiting-release`.
 
 - Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it); (c) user preference as of 2026-06-15: when merging is requested, use local merge + push to the base branch rather than GitHub's PR merge action.
