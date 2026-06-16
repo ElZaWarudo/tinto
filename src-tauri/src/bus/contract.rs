@@ -39,6 +39,44 @@ pub struct RepoErrorState {
     pub message: String,
 }
 
+/// Severidad factual de una señal pasiva. No implica juicio de calidad.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum SignalSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+/// Tipo de señal pasiva detectada por reglas determinísticas.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PassiveSignalKind {
+    SensitivePath,
+    PossibleSecret,
+    LargeDelete,
+    ConfigChange,
+    TestChange,
+}
+
+/// Señal pasiva: hecho detectado, sin valores secretos ni resumen interpretativo.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PassiveSignal {
+    pub kind: PassiveSignalKind,
+    pub severity: SignalSeverity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    pub message: String,
+}
+
+/// Métricas livianas del estado actual del repo.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+pub struct RepoMetrics {
+    pub changed_files: usize,
+    pub lines_added: usize,
+    pub lines_removed: usize,
+}
+
 /// Delta de estado de un repo (evento `tinto://workbench-delta` y entrada
 /// del snapshot).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -52,6 +90,9 @@ pub struct RepoDelta {
     pub head: Option<CommitInfo>,
     pub last_activity_ms: u64,
     pub error: Option<RepoErrorState>,
+    pub metrics: RepoMetrics,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signals: Vec<PassiveSignal>,
     /// Diffs de los objetivos suscritos de este repo; `None` sin suscripción.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscribed_diffs: Option<Vec<FileDiff>>,
@@ -76,6 +117,9 @@ pub struct FsEvent {
     pub size: Option<u64>,
     /// Delta vs el último tamaño conocido; `None` sin tamaño previo.
     pub size_delta: Option<i64>,
+    /// Señales aplicables a este evento.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signals: Vec<PassiveSignal>,
 }
 
 /// Lote de eventos FS de un repo (evento `tinto://fs-events`).
@@ -156,12 +200,26 @@ mod tests {
                 category: "repo-removed".into(),
                 message: "el root fue removido".into(),
             }),
+            metrics: RepoMetrics {
+                changed_files: 1,
+                lines_added: 2,
+                lines_removed: 3,
+            },
+            signals: vec![PassiveSignal {
+                kind: PassiveSignalKind::SensitivePath,
+                severity: SignalSeverity::Warning,
+                path: Some(".env".into()),
+                message: "Sensitive filename changed".into(),
+            }],
             subscribed_diffs: None,
         };
         let json = serde_json::to_value(&delta).unwrap();
         assert_eq!(json["repo"], "/r/a");
         assert_eq!(json["revision"], 7);
         assert_eq!(json["error"]["class"], "terminal");
+        assert_eq!(json["metrics"]["changed_files"], 1);
+        assert_eq!(json["signals"][0]["kind"], "sensitive_path");
+        assert_eq!(json["signals"][0]["severity"], "warning");
         assert!(json.get("subscribed_diffs").is_none(), "None se omite");
         for key in ["status", "branch", "head", "last_activity_ms"] {
             assert!(json.get(key).is_some(), "falta {key}");
@@ -185,9 +243,16 @@ mod tests {
             timestamp_ms: 1,
             size: Some(10),
             size_delta: Some(-2),
+            signals: vec![PassiveSignal {
+                kind: PassiveSignalKind::ConfigChange,
+                severity: SignalSeverity::Warning,
+                path: Some("ci.yml".into()),
+                message: "Config file changed".into(),
+            }],
         };
         let json = serde_json::to_value(&ev).unwrap();
         assert_eq!(json["kind"], "modified");
         assert_eq!(json["size_delta"], -2);
+        assert_eq!(json["signals"][0]["kind"], "config_change");
     }
 }
