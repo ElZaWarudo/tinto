@@ -4,55 +4,16 @@
 // structure paints and is bounded by a size cap; binary and oversized files
 // fall back to a placeholder / plain monospace.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { DiffHunk, DiffLine, FileDiff } from "../../bus/contract";
-import {
-  type HighlighterCore,
-  MAX_HIGHLIGHT_BYTES,
-  highlightLine,
-  languageFromPath,
-  loadHighlighter,
-} from "./highlight";
+import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
+import { useLineHighlighter, type RenderLine } from "./lineHighlighter";
 
 export type DiffMode = "inline" | "side-by-side";
-
-type RenderLine = (content: string) => ReactNode;
 
 function diffSize(diff: FileDiff): number {
   let n = 0;
   for (const h of diff.hunks) for (const l of h.lines) n += l.content.length;
   return n;
-}
-
-/** Lazy-load Shiki and return a per-line render fn; plain until (or unless) it
- * loads. Disabled for unknown languages / oversized files. */
-function useLineHighlighter(lang: string | null, enabled: boolean): RenderLine {
-  const [hl, setHl] = useState<HighlighterCore | null>(null);
-  useEffect(() => {
-    if (!enabled || !lang) return;
-    let active = true;
-    void loadHighlighter().then((h) => active && setHl(h));
-    return () => {
-      active = false;
-    };
-  }, [enabled, lang]);
-
-  return useCallback(
-    (content: string): ReactNode => {
-      if (hl && lang && enabled) {
-        const toks = highlightLine(hl, content, lang);
-        if (toks) {
-          return toks.map((t, i) => (
-            <span key={i} style={t.color ? { color: t.color } : undefined}>
-              {t.content}
-            </span>
-          ));
-        }
-      }
-      return content;
-    },
-    [hl, lang, enabled],
-  );
 }
 
 const SIGN: Record<DiffLine["kind"], string> = { Added: "+", Removed: "-", Context: " " };

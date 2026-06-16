@@ -7,6 +7,8 @@
 import { useEffect, useState } from "react";
 import { getFileContent } from "../../bus/client";
 import type { FileContent } from "../../bus/contract";
+import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
+import { useLineHighlighter } from "./lineHighlighter";
 
 export function FullFileView({
   repo,
@@ -19,6 +21,13 @@ export function FullFileView({
 }) {
   const [content, setContent] = useState<FileContent | undefined>(undefined);
   const [error, setError] = useState(false);
+
+  // Highlighting layers on after the text paints; disabled for binary content,
+  // oversized files, and unknown languages (the hook falls back to plain).
+  const lang = languageFromPath(path);
+  const highlightable =
+    content?.encoding === "utf8" && content.content.length <= MAX_HIGHLIGHT_BYTES;
+  const renderLine = useLineHighlighter(lang, !!highlightable);
 
   // A diff panel is one (repo, path) target, so this fetches once on mount; the
   // initial `undefined` state IS the loading state (no synchronous reset needed).
@@ -74,7 +83,7 @@ export function FullFileView({
               className={changed ? "full-file__line full-file__line--changed" : "full-file__line"}
             >
               <span className="diff-gutter">{lineno}</span>
-              <code className="diff-content">{line}</code>
+              <code className="diff-content">{renderLine(line)}</code>
             </div>
           );
         })}
