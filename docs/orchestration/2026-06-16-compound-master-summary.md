@@ -94,10 +94,20 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - Prior orchestration reconciliation: `2f894d8` (`docs(orchestration): finalize ci maintenance state [skip ci]`), pushed directly to `origin/develop`; no third CI run was expected or required.
 - Current delivery preference from the user: avoid GitHub PR merges unless requested; integrate locally into `develop` and push.
 
+## Post-Closeout Enhancement Initiative — Workbench IDE Overhaul
+
+After roadmap closeout, the user directed an iterative UX initiative to reshape the dockable workbench into a project-centric, VS Code-style IDE. This work is intentionally outside the brainstorm/plan/work-package gating and is tracked in the live state file rather than this closeout summary.
+
+- Shipped tranche: merged to `develop` at `2a701e3` (local fast-forward, no PR), 5 atomic commits — watcher permission-denied tolerance, live bus reflection of repo mutations + open-added-tab, project-centric tabbed workspace with menu bar and per-project explorer, unified file viewer (diff/normal/Markdown) with Shiki highlighting, and per-file text zoom.
+- Follow-up tranche (implemented, uncommitted): level-1 tab sizing + stable change indicator, level-2 nested dockview with drag-to-split and preview/pin, cross-session persistence of the per-project file layout, and a bento-grid dashboard redesign.
+- Verification/review: shipped tranche green at frontend 148 / Rust 118; working tree green at frontend 149 plus `npm run lint`, `npm run format:check`, and `npm run build`. Local Compound Master code review found no P0-P2 findings. CI not re-run for the uncommitted follow-up because it is not yet pushed.
+- Live tracker: `docs/orchestration/compound-master-state.md` (status `active`).
+
 ## Final Status
 
 - Roadmap status: completed.
-- Integration branch: `develop` pushed to `origin/develop`.
+- Post-roadmap initiative: Workbench IDE Overhaul in progress; first tranche on `origin/develop`, follow-up tranche uncommitted.
+- Integration branch: `develop` pushed to `origin/develop` at `2a701e3`.
 - Blockers: none.
 - Remaining roadmap packages: none.
-- Recommended next work: choose a new initiative or backlog item and start a fresh requirements/roadmap cycle.
+- Recommended next work: ship the uncommitted follow-up tranche on user request (local ff merge + push, no PR), then continue UX iteration or pick a new initiative.
