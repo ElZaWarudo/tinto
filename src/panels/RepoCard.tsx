@@ -4,8 +4,15 @@
 
 import { memo, useState } from "react";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
-import { commitDate } from "../bus/store";
+import {
+  commitDate,
+  getPathSignals,
+  getRepoMetrics,
+  getRepoSignals,
+  signalCounts,
+} from "../bus/store";
 import { ACTIVITY_WINDOW_MS } from "./constants";
+import { MetricsPill, SignalBadges } from "./SignalBadges";
 
 export interface RepoCardProps {
   delta: RepoDelta;
@@ -56,6 +63,9 @@ function RepoCardImpl({
   const active = nowMs - activityMs < ACTIVITY_WINDOW_MS;
   const upstream = upstreamLabel(branch);
   const files = onOpenFile ? changedFiles(status) : [];
+  const metrics = getRepoMetrics(delta);
+  const signals = getRepoSignals(delta);
+  const counts = signalCounts(signals);
 
   return (
     <div
@@ -85,6 +95,12 @@ function RepoCardImpl({
             {error.class}
           </span>
         )}
+        {signals.length > 0 && (
+          <span className="repo-card__signal-count" data-testid="signal-count">
+            {counts.critical > 0 ? counts.critical : signals.length} signal
+            {(counts.critical > 0 ? counts.critical : signals.length) === 1 ? "" : "s"}
+          </span>
+        )}
         <button
           className="repo-card__expand"
           aria-label={expanded ? "collapse" : "expand"}
@@ -98,6 +114,10 @@ function RepoCardImpl({
         <span className="count count--modified">{status.modified.length}M</span>
         <span className="count count--staged">{status.staged.length}S</span>
         <span className="count count--untracked">{status.untracked.length}U</span>
+      </div>
+
+      <div className="repo-card__metrics">
+        <MetricsPill metrics={metrics} />
       </div>
 
       <div className="repo-card__branch" data-testid="branch">
@@ -142,10 +162,12 @@ function RepoCardImpl({
                 >
                   <span className="repo-card__file-mark">{mark}</span>
                   {path}
+                  <SignalBadges signals={getPathSignals(delta, path)} limit={1} compact />
                 </li>
               ))}
             </ul>
           )}
+          <SignalBadges signals={signals} />
         </div>
       )}
 

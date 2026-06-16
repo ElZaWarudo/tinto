@@ -13,26 +13,29 @@
 pub mod commands;
 pub mod contract;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 
-use crate::git::{Git2Engine, GitEngine, GitError};
+use crate::git::{DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError};
 use crate::paths::Classification;
 use crate::watcher::{ClassifiedEvent, EventType, FsWatcher, WatcherError, WatcherMessage};
 use crate::workbench::RepoEntry;
 use contract::{
-    FsEvent, FsEventBatch, FsEventKind, RepoDelta, RepoErrorClass, RepoErrorState,
-    SubscriptionTarget, WatchingState, WorkbenchSnapshot, EVENT_FS_EVENTS, EVENT_WATCHING_STATE,
-    EVENT_WORKBENCH_DELTA, MAX_SUBSCRIPTIONS,
+    FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
+    RepoErrorClass, RepoErrorState, RepoMetrics, SignalSeverity, SubscriptionTarget, WatchingState,
+    WorkbenchSnapshot, EVENT_FS_EVENTS, EVENT_WATCHING_STATE, EVENT_WORKBENCH_DELTA,
+    MAX_SUBSCRIPTIONS,
 };
 
 /// Concurrencia máxima de recálculos git en vuelo (acota el broadcast de
 /// `RescanNeeded` sin matar el principio liviano).
 const RECALC_CONCURRENCY: usize = 2;
+const MAX_SIGNALS_PER_REPO: usize = 12;
+const LARGE_DELETE_LINES: usize = 100;
 
 /// Emisión inyectada (en la app: `AppHandle::emit`; en tests: un canal).
 /// No llamarlo `Emitter`: colisiona con `tauri::Emitter`.
@@ -73,6 +76,8 @@ pub(crate) struct RecalcOutcome {
     pub branch: Option<crate::git::BranchInfo>,
     pub head: Option<Option<crate::git::CommitInfo>>,
     pub subscribed_diffs: Option<Vec<crate::git::FileDiff>>,
+    pub metrics: RepoMetrics,
+    pub signals: Vec<PassiveSignal>,
 }
 
 /// Estado en vivo de un repo.
@@ -84,6 +89,8 @@ pub(crate) struct RepoLiveState {
     last_activity_ms: u64,
     error: Option<RepoErrorState>,
     revision: u64,
+    metrics: RepoMetrics,
+    signals: Vec<PassiveSignal>,
     /// Último tamaño conocido por path vigilado (delta de tamaño, Plano 2).
     last_known_sizes: HashMap<PathBuf, u64>,
 }
@@ -98,6 +105,8 @@ impl RepoLiveState {
             head: self.head.clone(),
             last_activity_ms: self.last_activity_ms,
             error: self.error.clone(),
+            metrics: self.metrics.clone(),
+            signals: self.signals.clone(),
             subscribed_diffs: None,
         }
     }
@@ -116,6 +125,8 @@ impl RepoLiveState {
         // retry/remount, que dispara este recálculo). El estado de watching
         // degradado se reporta aparte por `tinto://watching-state`.
         self.error = None;
+        self.metrics = outcome.metrics.clone();
+        self.signals = outcome.signals.clone();
         self.revision += 1;
     }
 
@@ -159,6 +170,7 @@ impl RepoLiveState {
                         self.last_known_sizes.remove(&rel);
                     }
                 }
+                let signals = signals_for_path(&rel, SignalSurface::Plane2);
                 FsEvent {
                     path: rel,
                     kind: match e.kind {
@@ -169,10 +181,281 @@ impl RepoLiveState {
                     timestamp_ms: e.timestamp_ms,
                     size,
                     size_delta,
+                    signals,
                 }
             })
             .collect()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SignalSurface {
+    Repo,
+    Plane2,
+}
+
+fn path_text(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn lower_path(path: &Path) -> String {
+    path_text(path).to_ascii_lowercase()
+}
+
+fn base_name_lower(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn is_sensitive_path(path: &Path) -> bool {
+    let lower = lower_path(path);
+    let base = base_name_lower(path);
+    base == ".env"
+        || base.starts_with(".env.")
+        || base.ends_with(".pem")
+        || base.ends_with(".key")
+        || base.ends_with(".p12")
+        || base.ends_with(".pfx")
+        || base == "id_rsa"
+        || lower.contains("secret")
+        || lower.contains("credential")
+        || lower.contains("token")
+}
+
+fn is_config_path(path: &Path) -> bool {
+    let lower = lower_path(path);
+    matches!(
+        base_name_lower(path).as_str(),
+        "package.json"
+            | "package-lock.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "cargo.toml"
+            | "cargo.lock"
+            | "dockerfile"
+            | "docker-compose.yml"
+            | "docker-compose.yaml"
+            | "tsconfig.json"
+            | "vite.config.ts"
+            | "eslint.config.js"
+    ) || lower.starts_with(".github/workflows/")
+        || lower.ends_with(".config.js")
+        || lower.ends_with(".config.ts")
+        || lower.ends_with(".toml")
+        || lower.ends_with(".yaml")
+        || lower.ends_with(".yml")
+}
+
+fn is_test_path(path: &Path) -> bool {
+    let lower = lower_path(path);
+    lower.contains("/test/")
+        || lower.contains("/tests/")
+        || lower.contains("__tests__")
+        || lower.ends_with(".test.ts")
+        || lower.ends_with(".test.tsx")
+        || lower.ends_with(".spec.ts")
+        || lower.ends_with(".spec.tsx")
+        || lower.ends_with("_test.rs")
+}
+
+fn secret_line_marker(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("-----begin ") && lower.contains("private key")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("access_token")
+        || lower.contains("auth_token")
+        || lower.contains("secret=")
+        || lower.contains("secret:")
+        || lower.contains("token=")
+        || lower.contains("token:")
+        || lower.contains("password=")
+        || lower.contains("password:")
+        || lower.contains("private_key")
+}
+
+fn signal(
+    kind: PassiveSignalKind,
+    severity: SignalSeverity,
+    path: Option<PathBuf>,
+    message: impl Into<String>,
+) -> PassiveSignal {
+    PassiveSignal {
+        kind,
+        severity,
+        path,
+        message: message.into(),
+    }
+}
+
+fn push_signal(
+    signals: &mut Vec<PassiveSignal>,
+    seen: &mut HashSet<(PassiveSignalKind, Option<PathBuf>)>,
+    signal: PassiveSignal,
+) {
+    let key = (signal.kind, signal.path.clone());
+    if seen.insert(key) {
+        signals.push(signal);
+    }
+}
+
+fn signals_for_path(path: &Path, surface: SignalSurface) -> Vec<PassiveSignal> {
+    let mut signals = Vec::new();
+    let mut seen = HashSet::new();
+    if is_sensitive_path(path) {
+        push_signal(
+            &mut signals,
+            &mut seen,
+            signal(
+                PassiveSignalKind::SensitivePath,
+                SignalSeverity::Warning,
+                Some(path.to_path_buf()),
+                match surface {
+                    SignalSurface::Repo => "Sensitive filename changed",
+                    SignalSurface::Plane2 => "Sensitive watched file changed",
+                },
+            ),
+        );
+    }
+    if is_config_path(path) {
+        push_signal(
+            &mut signals,
+            &mut seen,
+            signal(
+                PassiveSignalKind::ConfigChange,
+                SignalSeverity::Warning,
+                Some(path.to_path_buf()),
+                "Configuration file changed",
+            ),
+        );
+    }
+    if is_test_path(path) {
+        push_signal(
+            &mut signals,
+            &mut seen,
+            signal(
+                PassiveSignalKind::TestChange,
+                SignalSeverity::Info,
+                Some(path.to_path_buf()),
+                "Test file changed",
+            ),
+        );
+    }
+    signals
+}
+
+fn kind_rank(kind: PassiveSignalKind) -> u8 {
+    match kind {
+        PassiveSignalKind::PossibleSecret => 0,
+        PassiveSignalKind::LargeDelete => 1,
+        PassiveSignalKind::SensitivePath => 2,
+        PassiveSignalKind::ConfigChange => 3,
+        PassiveSignalKind::TestChange => 4,
+    }
+}
+
+fn signal_rank(signal: &PassiveSignal) -> (u8, u8, String) {
+    let severity = match signal.severity {
+        SignalSeverity::Critical => 0,
+        SignalSeverity::Warning => 1,
+        SignalSeverity::Info => 2,
+    };
+    (
+        severity,
+        kind_rank(signal.kind),
+        signal
+            .path
+            .as_deref()
+            .map(path_text)
+            .unwrap_or_else(|| "~".into()),
+    )
+}
+
+fn bounded_sorted(mut signals: Vec<PassiveSignal>) -> Vec<PassiveSignal> {
+    signals.sort_by_key(signal_rank);
+    signals.truncate(MAX_SIGNALS_PER_REPO);
+    signals
+}
+
+fn metrics_and_signals(
+    status: &crate::git::RepoStatus,
+    diffs: &[FileDiff],
+) -> (RepoMetrics, Vec<PassiveSignal>) {
+    let mut changed_paths = BTreeSet::new();
+    for path in status
+        .modified
+        .iter()
+        .chain(status.staged.iter())
+        .chain(status.untracked.iter())
+    {
+        changed_paths.insert(path.clone());
+    }
+    for diff in diffs {
+        changed_paths.insert(diff.path.clone());
+        if let Some(old) = &diff.old_path {
+            changed_paths.insert(old.clone());
+        }
+    }
+
+    let mut signals = Vec::new();
+    let mut seen = HashSet::new();
+    for path in &changed_paths {
+        for s in signals_for_path(path, SignalSurface::Repo) {
+            push_signal(&mut signals, &mut seen, s);
+        }
+    }
+
+    let mut lines_added = 0;
+    let mut lines_removed = 0;
+    for diff in diffs {
+        let mut removed_for_file = 0;
+        for line in diff.hunks.iter().flat_map(|h| h.lines.iter()) {
+            match line.kind {
+                DiffLineKind::Added => {
+                    lines_added += 1;
+                    if secret_line_marker(&line.content) {
+                        push_signal(
+                            &mut signals,
+                            &mut seen,
+                            signal(
+                                PassiveSignalKind::PossibleSecret,
+                                SignalSeverity::Critical,
+                                Some(diff.path.clone()),
+                                "Possible secret marker added",
+                            ),
+                        );
+                    }
+                }
+                DiffLineKind::Removed => {
+                    lines_removed += 1;
+                    removed_for_file += 1;
+                }
+                DiffLineKind::Context => {}
+            }
+        }
+        if removed_for_file >= LARGE_DELETE_LINES {
+            push_signal(
+                &mut signals,
+                &mut seen,
+                signal(
+                    PassiveSignalKind::LargeDelete,
+                    SignalSeverity::Warning,
+                    Some(diff.path.clone()),
+                    format!("{removed_for_file} removed lines"),
+                ),
+            );
+        }
+    }
+
+    (
+        RepoMetrics {
+            changed_files: changed_paths.len(),
+            lines_added,
+            lines_removed,
+        },
+        bounded_sorted(signals),
+    )
 }
 
 /// Decide el scope de recálculo git de un lote (None = solo Plano 2).
@@ -655,10 +938,16 @@ fn recalc_blocking(
         }
     };
 
+    // RDM-011 metrics/signals are computed from the current worktree diff.
+    // This is intentionally read-only and runs inside the existing bounded
+    // spawn_blocking recompute path.
+    let worktree_diffs = engine.worktree_diff()?;
+    let (metrics, signals) = metrics_and_signals(&status, &worktree_diffs);
+
     let subscribed_diffs = if subs.is_empty() {
         None
     } else {
-        let mut diffs = engine.worktree_diff()?;
+        let mut diffs = worktree_diffs.clone();
         // Objetivo con archivo: filtrar al archivo; repo completo: todo.
         let file_targets: Vec<&PathBuf> = subs.iter().filter_map(|t| t.path.as_ref()).collect();
         let whole_repo = subs.iter().any(|t| t.path.is_none());
@@ -684,6 +973,8 @@ fn recalc_blocking(
         branch,
         head,
         subscribed_diffs,
+        metrics,
+        signals,
     })
 }
 
@@ -754,6 +1045,8 @@ mod tests {
             branch: None,
             head: None,
             subscribed_diffs: None,
+            metrics: RepoMetrics::default(),
+            signals: Vec::new(),
         };
         state.apply_recalc(&outcome);
         assert_eq!(state.revision, 1);
@@ -788,6 +1081,8 @@ mod tests {
             branch: None,
             head: None,
             subscribed_diffs: None,
+            metrics: RepoMetrics::default(),
+            signals: Vec::new(),
         };
         state.apply_recalc(&outcome);
         assert!(
@@ -813,6 +1108,13 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].size, Some(5));
         assert_eq!(first[0].size_delta, None, "sin tamaño previo");
+        assert!(
+            first[0]
+                .signals
+                .iter()
+                .any(|s| s.kind == PassiveSignalKind::SensitivePath),
+            ".env emite señal sensible en Plane 2"
+        );
 
         repo.write(".env", "ABCDEFG"); // 7 bytes
         let second = state.fs_events(
@@ -836,6 +1138,101 @@ mod tests {
             )],
         );
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn signals_detectan_paths_sensibles_config_y_tests() {
+        let status = crate::git::RepoStatus {
+            modified: vec![
+                ".env.local".into(),
+                "package.json".into(),
+                "src/app.test.ts".into(),
+            ],
+            staged: Vec::new(),
+            untracked: Vec::new(),
+        };
+        let (_metrics, signals) = metrics_and_signals(&status, &[]);
+        assert!(signals
+            .iter()
+            .any(|s| s.kind == PassiveSignalKind::SensitivePath));
+        assert!(signals
+            .iter()
+            .any(|s| s.kind == PassiveSignalKind::ConfigChange));
+        assert!(signals
+            .iter()
+            .any(|s| s.kind == PassiveSignalKind::TestChange));
+    }
+
+    #[test]
+    fn metrics_y_secret_marker_no_exponen_valor() {
+        let diff = FileDiff {
+            path: "src/config.rs".into(),
+            old_path: None,
+            is_binary: false,
+            hunks: vec![crate::git::DiffHunk {
+                old_start: 1,
+                new_start: 1,
+                lines: vec![
+                    crate::git::DiffLine {
+                        kind: DiffLineKind::Added,
+                        content: "api_key = \"super-secret-value\"".into(),
+                        old_lineno: None,
+                        new_lineno: Some(1),
+                    },
+                    crate::git::DiffLine {
+                        kind: DiffLineKind::Removed,
+                        content: "old".into(),
+                        old_lineno: Some(1),
+                        new_lineno: None,
+                    },
+                ],
+            }],
+        };
+        let (metrics, signals) = metrics_and_signals(&crate::git::RepoStatus::default(), &[diff]);
+        assert_eq!(metrics.changed_files, 1);
+        assert_eq!(metrics.lines_added, 1);
+        assert_eq!(metrics.lines_removed, 1);
+        let secret = signals
+            .iter()
+            .find(|s| s.kind == PassiveSignalKind::PossibleSecret)
+            .expect("secret signal");
+        assert_eq!(secret.severity, SignalSeverity::Critical);
+        assert!(
+            !secret.message.contains("super-secret-value"),
+            "signal message must not leak matched value"
+        );
+    }
+
+    #[test]
+    fn large_delete_y_cap_son_deterministicos() {
+        let removed_lines = (0..LARGE_DELETE_LINES)
+            .map(|i| crate::git::DiffLine {
+                kind: DiffLineKind::Removed,
+                content: format!("line {i}"),
+                old_lineno: Some(i as u32 + 1),
+                new_lineno: None,
+            })
+            .collect();
+        let diff = FileDiff {
+            path: "src/big.ts".into(),
+            old_path: None,
+            is_binary: false,
+            hunks: vec![crate::git::DiffHunk {
+                old_start: 1,
+                new_start: 1,
+                lines: removed_lines,
+            }],
+        };
+        let status = crate::git::RepoStatus {
+            modified: (0..20).map(|i| format!("secret-{i}.txt").into()).collect(),
+            staged: Vec::new(),
+            untracked: Vec::new(),
+        };
+        let (_metrics, signals) = metrics_and_signals(&status, &[diff]);
+        assert!(signals.len() <= MAX_SIGNALS_PER_REPO);
+        assert!(signals
+            .iter()
+            .any(|s| s.kind == PassiveSignalKind::LargeDelete));
     }
 
     // ---- U3: integración (bus + watcher real sobre fixtures) ----

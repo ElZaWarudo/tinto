@@ -54,6 +54,27 @@ describe("RepoCard", () => {
     expect(screen.getByText(/↑1 ↓0/)).toBeInTheDocument();
   });
 
+  it("shows passive metrics and path-level signal chips", () => {
+    renderCard(
+      {
+        metrics: { changed_files: 2, lines_added: 10, lines_removed: 5 },
+        signals: [
+          {
+            kind: "possible_secret",
+            severity: "critical",
+            path: "a",
+            message: "Possible secret marker added",
+          },
+        ],
+      },
+      { onOpenFile: vi.fn() },
+    );
+    expect(screen.getByTestId("repo-metrics")).toHaveTextContent("2 files · +10 -5");
+    expect(screen.getByTestId("signal-count")).toHaveTextContent("1 signal");
+    fireEvent.click(screen.getByLabelText("expand"));
+    expect(screen.getByTestId("card-file-a")).toHaveTextContent("Possible secret");
+  });
+
   // Covers AE11: git edge states render without crashing
   it("renders unborn HEAD", () => {
     renderCard({

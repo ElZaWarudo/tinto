@@ -197,7 +197,7 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 
 ## Next action
 
-Handoff RDM-010 to Release Marshal: commit, push, open PR to `develop`, then merge only under the program's visible-gate rule with the updated Compound Master state included.
+Handoff RDM-011 to Release Marshal: commit, push, open PR to `develop`, then merge by the user's local-merge preference only after the explicit merge gate.
 
 ## Wave 6 — RDM-009 (Watched files UI) — ✅ COMPLETE (shipped 2026-06-15)
 
@@ -215,9 +215,10 @@ Handoff RDM-010 to Release Marshal: commit, push, open PR to `develop`, then mer
 - [x] Release Marshal handoff started (2026-06-15): 4 semantic commits created on `feat/watched-files-ui`, branch pushed, PR opened: https://github.com/ElZaWarudo/tinto/pull/10 (`feat/watched-files-ui → develop`, ready). Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs).
 - [x] PR #10 merged externally by user; local `develop` fast-forwarded to `origin/develop`.
 
-## Wave 6 — RDM-010 (Timeline / history) — IMPLEMENTED VERIFIED
+## Wave 6 — RDM-010 (Timeline / history) — ✅ COMPLETE (shipped 2026-06-15)
 
 - Branch: `feat/timeline-history` from `develop` after PR #10 merge reconciliation.
+- **PR #11 MERGED** to `develop` (merge commit `feac12e`, merged externally by user after Release Marshal created the PR). Jira omitted (`jira-env-not-configured`). Reviewers omitted (no clear human approver from recent PRs). RDM-010 delivered.
 - [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-010-timeline-history-requirements.md`.
 - [x] Plan: `docs/plans/2026-06-15-004-feat-timeline-history-plan.md`.
 - [x] Work package: `docs/work-packages/RDM-010-timeline-history/2026-06-15-001-timeline-history-work-package.md` — single RU, branch `feat/timeline-history`, base `develop`.
@@ -226,9 +227,22 @@ Handoff RDM-010 to Release Marshal: commit, push, open PR to `develop`, then mer
 - [x] Review pass: inline review found and fixed stale commit/detail rendering when active repo membership changes and a log reload fails; Timeline now filters commits and selected detail by active repo set.
 - [x] Verification PASS (2026-06-15): focused Vitest 42/42; full `npm test` 126/126; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 114/114; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `rtk timeout 25s npm run tauri dev` launched Vite and the Tauri binary and ended by timeout as expected; EGL warnings were environment-only.
 - Security gate: not required; no backend contract/capability change, no persistence, and no git writes.
+- Package status: shipped.
+
+## Wave 7 — RDM-011 (Passive signals) — IMPLEMENTED VERIFIED
+
+- Branch: `feat/passive-signals` from `develop` after PR #11 merge reconciliation.
+- [x] Brainstorm: `docs/brainstorms/2026-06-15-rdm-011-passive-signals-requirements.md`.
+- [x] Plan: `docs/plans/2026-06-15-005-feat-passive-signals-plan.md`.
+- [x] Work package: `docs/work-packages/RDM-011-passive-signals/2026-06-15-001-passive-signals-work-package.md` — single RU, branch `feat/passive-signals`, base `develop`.
+- Reviewability Gate: independent single PR; no stack; Jira optional standalone Tarea if configured. Broadness is accepted because one additive contract extension drives backend computation, TS selectors, and existing-view rendering.
+- [x] RU1 execution complete: additive `RepoDelta.metrics`, `RepoDelta.signals`, and `FsEvent.signals`; backend read-only metrics/rule computation; TS contract/store helpers; signal chips/metrics rendered across RepoCard, RepoPanel, RepoTreePanel, DiffPanel, WatchedFilesSection, and Timeline activity details.
+- [x] Review pass: inline review corrected deterministic cap ordering so `large_delete` cannot be truncated behind lower-value path warnings. Reviewed the new unconditional `worktree_diff()` metrics path against the existing git implementation; unborn HEAD remains supported because worktree diff handles no HEAD tree.
+- [x] Verification PASS (2026-06-15): focused Vitest 73/73; full `npm test` 132/132; `npm run lint`; `npm run format:check`; `npm run build`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test` 117/117; `cargo build`; `npm run tauri build` (deb/rpm/AppImage). `rtk timeout 25s npm run tauri dev` launched Vite and the Tauri binary and ended by timeout as expected; EGL/MESA warnings were environment-only.
+- Security gate: pass inline; no git writes, no new Tauri capability, no persistence/notifications/configurable rules, and tests prove signal messages do not leak matched secret values.
 - Package status: `implemented-verified-awaiting-release`.
 
-- Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it).
+- Standing flow agreements: (a) update+commit compound-master docs at each unit close; (b) merge pre-authorized for program PRs whenever the PR includes the updated compound-master state (the release plan must affirm it); (c) user preference as of 2026-06-15: when merging is requested, use local merge + push to the base branch rather than GitHub's PR merge action.
 - Jira omitted (missing `.krt/env/jira-scribe.env`).
 - All new code/docs in English (Wave 4 language directive).
 - Deferred backlog carried forward across waves: phantom-repo generation token, TS↔Rust contract codegen, keyboard arrow-nav/Escape (RDM-007 Review Gate); fetch opt-in (RDM-002 backlog); plus the RDM-008 deferrals listed above.

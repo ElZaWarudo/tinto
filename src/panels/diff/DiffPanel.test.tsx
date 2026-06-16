@@ -94,6 +94,27 @@ describe("DiffPanel", () => {
     expect(screen.queryByText("from one-shot")).not.toBeInTheDocument();
   });
 
+  it("shows passive signal chips for the open path", async () => {
+    worktree = { value: [fileDiff(PATH, "from one-shot")] };
+    act(() =>
+      busStore.applyDelta(
+        delta({
+          signals: [
+            {
+              kind: "possible_secret",
+              severity: "critical",
+              path: PATH,
+              message: "Possible secret marker added",
+            },
+          ],
+        }),
+      ),
+    );
+    renderPanel();
+    expect(await screen.findByText("from one-shot")).toBeInTheDocument();
+    expect(screen.getByTestId("signal-possible_secret")).toHaveTextContent("Possible secret");
+  });
+
   it("does not resurface the one-shot when a fresh live compute clears a reverted file", async () => {
     worktree = { value: [fileDiff(PATH, "stale one-shot")] };
     renderPanel();

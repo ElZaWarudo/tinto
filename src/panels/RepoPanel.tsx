@@ -5,10 +5,20 @@
 import { useEffect, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { getCommitLog, retryRepo } from "../bus/client";
-import type { CommitInfo } from "../bus/contract";
-import { busStore, commitDate, getFsEvents, useBusState } from "../bus/store";
+import type { CommitInfo, RepoDelta } from "../bus/contract";
+import {
+  busStore,
+  commitDate,
+  getFsEvents,
+  getPathSignals,
+  getRepoMetrics,
+  getRepoSignals,
+  sortSignals,
+  useBusState,
+} from "../bus/store";
 import { useWorkspaceActions } from "../workspace/actions";
 import { updateRepoFsWatch } from "../workbench/operations";
+import { MetricsPill, SignalBadges } from "./SignalBadges";
 import { WatchedFilesSection } from "./WatchedFilesSection";
 
 const COMMIT_LOG_LIMIT = 30;
@@ -52,6 +62,8 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   }
 
   const { status, error } = delta;
+  const metrics = getRepoMetrics(delta);
+  const signals = getRepoSignals(delta);
   const activeWorkbench = state.config?.active ?? null;
   const activeConfig = state.config?.workbenches.find((w) => w.name === activeWorkbench);
   const repoEntry = activeConfig?.repos.find((r) => r.path === repo);
@@ -83,10 +95,46 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
         </div>
       )}
 
+      <section className="repo-panel__signals" data-testid="repo-signals">
+        <h3>Passive signals</h3>
+        <MetricsPill metrics={metrics} />
+        {signals.length === 0 ? (
+          <p className="repo-panel__muted">No passive signals.</p>
+        ) : (
+          <ul className="signal-list">
+            {sortSignals(signals).map((signal, index) => (
+              <li
+                key={`${signal.kind}:${signal.path ?? "repo"}:${index}`}
+                className={`signal-list__item signal-list__item--${signal.severity}`}
+              >
+                <span className="signal-list__kind">{signal.kind.replace(/_/g, " ")}</span>
+                <span className="signal-list__message">{signal.message}</span>
+                {signal.path && <span className="signal-list__path">{signal.path}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <section className="repo-panel__status" data-testid="status-lists">
-        <StatusList label="Modified" files={status.modified} onOpen={(f) => openDiff(repo, f)} />
-        <StatusList label="Staged" files={status.staged} onOpen={(f) => openDiff(repo, f)} />
-        <StatusList label="Untracked" files={status.untracked} onOpen={(f) => openDiff(repo, f)} />
+        <StatusList
+          label="Modified"
+          files={status.modified}
+          delta={delta}
+          onOpen={(f) => openDiff(repo, f)}
+        />
+        <StatusList
+          label="Staged"
+          files={status.staged}
+          delta={delta}
+          onOpen={(f) => openDiff(repo, f)}
+        />
+        <StatusList
+          label="Untracked"
+          files={status.untracked}
+          delta={delta}
+          onOpen={(f) => openDiff(repo, f)}
+        />
       </section>
 
       <WatchedFilesSection
@@ -134,10 +182,12 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
 function StatusList({
   label,
   files,
+  delta,
   onOpen,
 }: {
   label: string;
   files: string[];
+  delta: RepoDelta;
   onOpen: (file: string) => void;
 }) {
   if (files.length === 0) return null;
@@ -163,6 +213,7 @@ function StatusList({
             }}
           >
             {f}
+            <SignalBadges signals={getPathSignals(delta, f)} limit={2} compact />
           </li>
         ))}
       </ul>

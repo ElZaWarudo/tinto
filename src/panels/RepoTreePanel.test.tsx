@@ -71,7 +71,19 @@ describe("RepoTreePanel", () => {
     invokeMock.mockResolvedValue(tree);
     act(() =>
       busStore.loadSnapshot(
-        [delta("/r/api", { status: { modified: ["src/a.ts"], staged: [], untracked: [] } })],
+        [
+          delta("/r/api", {
+            status: { modified: ["src/a.ts"], staged: [], untracked: [] },
+            signals: [
+              {
+                kind: "possible_secret",
+                severity: "critical",
+                path: "src/a.ts",
+                message: "Possible secret marker added",
+              },
+            ],
+          }),
+        ],
         { available: true },
       ),
     );
@@ -86,6 +98,7 @@ describe("RepoTreePanel", () => {
 
     const aFile = await screen.findByTestId("tree-file-src/a.ts");
     expect(aFile).toHaveClass("tree-file--changed");
+    expect(aFile).toHaveTextContent("Possible secret");
     fireEvent.doubleClick(aFile);
     expect(openDiff).toHaveBeenCalledWith("/r/api", "src/a.ts");
   });

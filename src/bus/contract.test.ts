@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DiffLineKind, FileDiff } from "./contract";
+import type { DiffLineKind, FileDiff, RepoDelta } from "./contract";
 
 // D-008-5: the TS diff types must match the backend's serde output exactly.
 // The Rust enum `DiffLineKind` derives Serialize with no rename_all, so it
@@ -35,6 +35,33 @@ describe("diff contract types", () => {
     // Per-side line numbers: Removed has no new line; Added has no old line.
     expect(diff.hunks[0].lines[1].new_lineno).toBeNull();
     expect(diff.hunks[0].lines[2].old_lineno).toBeNull();
+  });
+});
+
+describe("passive signal contract types", () => {
+  it("accepts additive RepoDelta metrics and signals with snake_case kinds", () => {
+    const wire = JSON.stringify({
+      repo: "/r/api",
+      revision: 2,
+      status: { modified: [".env"], staged: [], untracked: [] },
+      branch: null,
+      head: null,
+      last_activity_ms: 1000,
+      error: null,
+      metrics: { changed_files: 1, lines_added: 3, lines_removed: 1 },
+      signals: [
+        {
+          kind: "sensitive_path",
+          severity: "warning",
+          path: ".env",
+          message: "Sensitive filename changed",
+        },
+      ],
+    });
+    const delta = JSON.parse(wire) as RepoDelta;
+    expect(delta.metrics?.lines_added).toBe(3);
+    expect(delta.signals?.[0].kind).toBe("sensitive_path");
+    expect(delta.signals?.[0].severity).toBe("warning");
   });
 });
 

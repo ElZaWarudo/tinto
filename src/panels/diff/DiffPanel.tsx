@@ -9,8 +9,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { getWorktreeDiff } from "../../bus/client";
 import type { FileDiff } from "../../bus/contract";
-import { busStore, getDiff, hasComputedDiffs, useBusState } from "../../bus/store";
+import { busStore, getDiff, getPathSignals, hasComputedDiffs, useBusState } from "../../bus/store";
 import { reconciler, useIsLive } from "../../workspace/subscriptions";
+import { SignalBadges } from "../SignalBadges";
 import { DiffView, type DiffMode } from "./DiffView";
 import { FullFileView } from "./FullFileView";
 
@@ -40,6 +41,7 @@ export function DiffPanel(props: IDockviewPanelProps<{ repo: string; path: strin
   const { repo, path } = props.params;
   const state = useBusState();
   const live = getDiff(state, repo, path);
+  const pathSignals = getPathSignals(state.repos[repo], path);
   const isLive = useIsLive(repo, path);
 
   const [oneShot, setOneShot] = useState<FileDiff | null | undefined>(undefined);
@@ -123,6 +125,7 @@ export function DiffPanel(props: IDockviewPanelProps<{ repo: string; path: strin
         <span className="diff-panel__path" title={`${repo} — ${path}`}>
           {path}
         </span>
+        <SignalBadges signals={pathSignals} limit={3} compact />
       </div>
 
       {!isLive && (

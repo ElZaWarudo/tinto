@@ -42,6 +42,29 @@ export interface RepoErrorState {
   message: string;
 }
 
+// ---- Passive signals (RDM-011) ----
+export type SignalSeverity = "info" | "warning" | "critical";
+
+export type PassiveSignalKind =
+  | "sensitive_path"
+  | "possible_secret"
+  | "large_delete"
+  | "config_change"
+  | "test_change";
+
+export interface PassiveSignal {
+  kind: PassiveSignalKind;
+  severity: SignalSeverity;
+  path?: string | null;
+  message: string;
+}
+
+export interface RepoMetrics {
+  changed_files: number;
+  lines_added: number;
+  lines_removed: number;
+}
+
 // ---- Diff types (consumed by RDM-008) ----
 // serde serializes the Rust enum variants as-is: PascalCase (no rename_all).
 export type DiffLineKind = "Added" | "Removed" | "Context";
@@ -74,6 +97,8 @@ export interface RepoDelta {
   head: CommitInfo | null;
   last_activity_ms: number; // epoch ms
   error: RepoErrorState | null;
+  metrics?: RepoMetrics; // RDM-011 additive
+  signals?: PassiveSignal[]; // RDM-011 additive
   subscribed_diffs?: FileDiff[] | null; // RDM-008
 }
 
@@ -86,6 +111,7 @@ export interface FsEvent {
   timestamp_ms: number; // epoch ms
   size: number | null;
   size_delta: number | null;
+  signals?: PassiveSignal[]; // RDM-011 additive
 }
 
 export interface FsEventBatch {

@@ -33,12 +33,25 @@
   },
   "last_activity_ms": 1760000000000,
   "error": null,                   // RepoErrorState | null — see classes below
+  "metrics": {                      // RepoMetrics (RDM-011)
+    "changed_files": 2,
+    "lines_added": 30,
+    "lines_removed": 8
+  },
+  "signals": [                      // Vec<PassiveSignal>, omitted when empty
+    { "kind": "possible_secret",
+      "severity": "critical",
+      "path": "src/config.ts",
+      "message": "Possible secret marker added" }
+  ],
   "subscribed_diffs": null         // Vec<FileDiff> | null — only if the repo has subscribed targets
 }
 ```
 
 - `error.class`: `"transient"` (recomputation GitError) | `"terminal"` (watcher: repo removed/mount failure/classifier). Both classes are cleared when a later recomputation succeeds: the transient one on the next valid recomputation; the terminal one when a successful remount/retry (`retry_repo`, workbench switch, or `get_workbench_snapshot`) triggers a recomputation that re-reads the repo.
 - `subscribed_diffs`: target with a file → a list with one `FileDiff` (the file's); full-repo target → the full `worktree_diff`. Subscribed untracked → an all-added synthesized `FileDiff` (with binary/size guards).
+- `metrics`: current lightweight repo metrics. `changed_files` counts the current changed path set from status/diff; `lines_added` and `lines_removed` come from the structured worktree diff.
+- `signals`: bounded deterministic passive facts. Kinds: `"sensitive_path"`, `"possible_secret"`, `"large_delete"`, `"config_change"`, `"test_change"`. Severities: `"info"`, `"warning"`, `"critical"`. Messages must not include matched secret values or raw added-line content.
 
 ### `tinto://fs-events` — Plane 2 events for ONE repo
 
@@ -49,7 +62,13 @@
     { "path": ".env", "kind": "modified",      // "created" | "modified" | "removed"
       "timestamp_ms": 1760000000000,
       "size": 1024,                             // null if the file no longer exists
-      "size_delta": 12 }                        // null if there is no known previous size
+      "size_delta": 12,                         // null if there is no known previous size
+      "signals": [                              // omitted when empty
+        { "kind": "sensitive_path",
+          "severity": "warning",
+          "path": ".env",
+          "message": "Sensitive watched file changed" }
+      ] }
   ]
 }
 ```
@@ -99,7 +118,7 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 | Timeline (010) | cross-repo chronological feed | frontend accumulation of `workbench-delta`/`fs-events` (timestamps) |
 | Timeline (010) | navigation through commits with their diffs | `get_commit_log` + `get_commit_diff` |
 | Timeline (010) | orphan detection (dirty without a commit for a while) | `status` + `head.timestamp` + `last_activity_ms` (frontend heuristic) |
-| Signals (011) | raw facts for highlights/metrics | same events; backend computation arrives as additive fields in its item |
+| Signals (011) | raw facts for highlights/metrics | `RepoDelta.metrics`, `RepoDelta.signals`, `FsEvent.signals` additive fields |
 | Degraded | "watching unavailable" visible | `tinto://watching-state` |
 
 No gaps: each need maps to an existing event/command. (RDM-011 will add additive fields; RDM-012 consumes via the views.)

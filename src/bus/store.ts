@@ -10,12 +10,21 @@ import type {
   FileDiff,
   FsEvent,
   FsEventBatch,
+  PassiveSignal,
   RepoDelta,
+  RepoMetrics,
+  SignalSeverity,
   WatchingState,
   WorkbenchConfig,
 } from "./contract";
 
 export const MAX_FS_EVENTS_PER_REPO = 50;
+
+export const EMPTY_METRICS: RepoMetrics = {
+  changed_files: 0,
+  lines_added: 0,
+  lines_removed: 0,
+};
 
 export interface BusState {
   /** Latest delta per canonical repo path. */
@@ -222,6 +231,47 @@ export function getDiff(state: BusState, repo: string, path: string): FileDiff |
 /** Recent Plane-2 events for a repo, newest first (RDM-009). */
 export function getFsEvents(state: BusState, repo: string): FsEvent[] {
   return state.fsEventsByRepo[repo] ?? [];
+}
+
+export function getRepoMetrics(delta: RepoDelta | undefined): RepoMetrics {
+  return delta?.metrics ?? EMPTY_METRICS;
+}
+
+export function getRepoSignals(delta: RepoDelta | undefined): PassiveSignal[] {
+  return delta?.signals ?? [];
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+export function getPathSignals(delta: RepoDelta | undefined, path: string): PassiveSignal[] {
+  const target = normalizePath(path);
+  return getRepoSignals(delta).filter(
+    (signal) => signal.path && normalizePath(signal.path) === target,
+  );
+}
+
+function severityRank(severity: SignalSeverity): number {
+  if (severity === "critical") return 0;
+  if (severity === "warning") return 1;
+  return 2;
+}
+
+export function sortSignals(signals: PassiveSignal[]): PassiveSignal[] {
+  return [...signals].sort((a, b) => {
+    const bySeverity = severityRank(a.severity) - severityRank(b.severity);
+    if (bySeverity !== 0) return bySeverity;
+    return `${a.path ?? ""}:${a.kind}`.localeCompare(`${b.path ?? ""}:${b.kind}`);
+  });
+}
+
+export function signalCounts(signals: PassiveSignal[]): Record<SignalSeverity, number> {
+  return {
+    critical: signals.filter((s) => s.severity === "critical").length,
+    warning: signals.filter((s) => s.severity === "warning").length,
+    info: signals.filter((s) => s.severity === "info").length,
+  };
 }
 
 /** True once a diff computation has occurred for a repo (lets a panel tell

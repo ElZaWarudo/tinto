@@ -32,7 +32,20 @@ describe("WatchedFilesSection", () => {
     renderSection({
       patterns: [".env", "secrets/*.json"],
       events: [
-        event({ path: ".env", kind: "modified", size: 12, size_delta: 2 }),
+        event({
+          path: ".env",
+          kind: "modified",
+          size: 12,
+          size_delta: 2,
+          signals: [
+            {
+              kind: "sensitive_path",
+              severity: "warning",
+              path: ".env",
+              message: "Sensitive watched file changed",
+            },
+          ],
+        }),
         event({ path: "secret.json", kind: "created", size: 4, size_delta: 4 }),
       ],
     });
@@ -42,6 +55,7 @@ describe("WatchedFilesSection", () => {
     expect(screen.getByTestId("watch-events")).toHaveTextContent(".env");
     expect(screen.getByTestId("watch-events")).toHaveTextContent("modified");
     expect(screen.getByTestId("watch-events")).toHaveTextContent("12 B (+2 B)");
+    expect(screen.getByTestId("watch-events")).toHaveTextContent("Sensitive file");
     expect(screen.getByTestId("watch-events")).toHaveTextContent("secret.json");
   });
 

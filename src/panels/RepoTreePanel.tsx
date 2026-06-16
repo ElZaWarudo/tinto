@@ -5,9 +5,16 @@
 
 import { useMemo, useState } from "react";
 import { listRepoTree } from "../bus/client";
-import type { RepoStatus, RepoTree } from "../bus/contract";
-import { busStore, sortedRepoPaths, statusSummary, useBusState } from "../bus/store";
+import type { RepoDelta, RepoStatus, RepoTree } from "../bus/contract";
+import {
+  busStore,
+  getPathSignals,
+  sortedRepoPaths,
+  statusSummary,
+  useBusState,
+} from "../bus/store";
 import { useWorkspaceActions } from "../workspace/actions";
+import { SignalBadges } from "./SignalBadges";
 import { buildFileTree, type TreeNode } from "./tree/fileTree";
 
 const MARK: Record<string, string> = { staged: "S", modified: "M", untracked: "U" };
@@ -23,13 +30,21 @@ export function RepoTreePanel() {
   return (
     <div className="repo-tree" data-testid="repo-tree">
       {paths.map((p) => (
-        <RepoTreeNode key={p} repo={p} status={state.repos[p].status} />
+        <RepoTreeNode key={p} repo={p} delta={state.repos[p]} status={state.repos[p].status} />
       ))}
     </div>
   );
 }
 
-function RepoTreeNode({ repo, status }: { repo: string; status: RepoStatus }) {
+function RepoTreeNode({
+  repo,
+  delta,
+  status,
+}: {
+  repo: string;
+  delta: RepoDelta;
+  status: RepoStatus;
+}) {
   const { openRepo, openDiff } = useWorkspaceActions();
   const [expanded, setExpanded] = useState(false);
   const [tree, setTree] = useState<RepoTree | undefined>(undefined); // undefined=not loaded
@@ -81,6 +96,7 @@ function RepoTreeNode({ repo, status }: { repo: string; status: RepoStatus }) {
                 <FileTreeNode
                   key={n.path}
                   node={n}
+                  delta={delta}
                   depth={0}
                   onOpen={(path) => openDiff(repo, path)}
                 />
@@ -100,10 +116,12 @@ function RepoTreeNode({ repo, status }: { repo: string; status: RepoStatus }) {
 
 function FileTreeNode({
   node,
+  delta,
   depth,
   onOpen,
 }: {
   node: TreeNode;
+  delta: RepoDelta;
   depth: number;
   onOpen: (path: string) => void;
 }) {
@@ -119,7 +137,7 @@ function FileTreeNode({
         </button>
         {open &&
           node.children.map((c) => (
-            <FileTreeNode key={c.path} node={c} depth={depth + 1} onOpen={onOpen} />
+            <FileTreeNode key={c.path} node={c} delta={delta} depth={depth + 1} onOpen={onOpen} />
           ))}
       </div>
     );
@@ -146,6 +164,7 @@ function FileTreeNode({
           {MARK[node.changed]}
         </span>
       )}
+      <SignalBadges signals={getPathSignals(delta, node.path)} limit={1} compact />
     </div>
   );
 }

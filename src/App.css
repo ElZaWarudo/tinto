@@ -811,3 +811,87 @@ body,
   color: var(--fg);
   background: var(--bg-elev);
 }
+
+/* ---- RDM-011: passive signals ---- */
+.signal-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.signal-badges--compact {
+  margin-left: 6px;
+}
+.signal-chip,
+.metrics-pill,
+.repo-card__signal-count {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: 1px 7px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.signal-chip--critical {
+  border-color: rgba(255, 94, 94, 0.55);
+  color: #ff9a9a;
+  background: rgba(255, 94, 94, 0.1);
+}
+.signal-chip--warning {
+  border-color: rgba(255, 196, 87, 0.55);
+  color: #ffd58a;
+  background: rgba(255, 196, 87, 0.1);
+}
+.signal-chip--info,
+.signal-chip--more,
+.metrics-pill {
+  color: var(--fg-muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+.repo-card__signal-count {
+  color: #ffd58a;
+  background: rgba(255, 196, 87, 0.09);
+}
+.repo-card__metrics {
+  margin-top: 6px;
+}
+.repo-panel__signals {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.repo-panel__signals h3 {
+  margin: 0 0 8px;
+}
+.signal-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.signal-list__item {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) minmax(90px, 160px);
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.signal-list__kind {
+  text-transform: capitalize;
+}
+.signal-list__message,
+.signal-list__path {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signal-list__item--critical .signal-list__kind {
+  color: #ff9a9a;
+}
+.signal-list__item--warning .signal-list__kind {
+  color: #ffd58a;
+}
