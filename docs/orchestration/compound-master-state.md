@@ -197,7 +197,7 @@ PR #6 (watcher) merged to `develop`. Backend: git engine + classifier + workbenc
 
 ## Next action
 
-Roadmap delivery complete. Next recommended action: optional final Compound Master summary / state archive, then normal repo cleanup.
+Roadmap delivery complete. Final summary written at `docs/orchestration/2026-06-16-compound-master-summary.md`. Next recommended action: normal repo cleanup for stale feature branches, or choose a new initiative/backlog item for a fresh requirements/roadmap cycle.
 
 ## Wave 6 — RDM-009 (Watched files UI) — ✅ COMPLETE (shipped 2026-06-15)
 
