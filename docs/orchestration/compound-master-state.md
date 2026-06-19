@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: Agent Console Integration initiative in artifact generation phase. Roadmap complete and reviewed. ACI-001 plan and work package ready for execution.
+- Current phase/status: Agent Console Integration initiative ready for execution. Roadmap, plan, and work package complete. ACI-001 work package validated and ready for implementation.
 - Active package: ACI-001 Backend PTY Runtime + Agent Process Lifecycle (docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md).
-- Branch/base: current branch `develop` over `origin/develop`. Working tree has uncommitted keyboard shortcuts feature (shortcuts.ts, KeyboardShortcuts.tsx, tests) that should be committed before starting ACI-001.
+- Branch/base: `develop` at `bf75b09` over `origin/develop`. Working tree clean.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
-- Required user decisions: none for artifact generation. Execution will require user approval to proceed.
-- Next action: commit current keyboard shortcuts work, then execute ACI-001 work package (mode:execute package:docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md review-unit:RU1).
+- Required user decisions: none. Ready to execute ACI-001 RU1.
+- Next action: execute ACI-001 work package (mode:execute package:docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md review-unit:RU1).
 
 ## Source Documents
 
@@ -100,6 +100,7 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 - Prior orchestration reconciliation: `2f894d8` (`docs(orchestration): finalize ci maintenance state [skip ci]`), pushed directly to `origin/develop`.
 - Workbench IDE Overhaul shipped tranche: `2a701e3` (`feat(qol): per-file text zoom…`), the tip of a 5-commit `feat/project-workspace-ide` set, fast-forward merged into `develop` and pushed to `origin/develop` without PR.
 - Workbench IDE Overhaul follow-up release: `8230397` (`feat(workspace): add nested file dock and bento dashboard`) plus orchestration docs, fast-forward merged into `develop` and pushed to `origin/develop` without PR.
+- Brand and UX improvements release (2026-06-19): `bf75b09` (`docs(orchestration): add Agent Console Integration artifacts`), the tip of a 6-commit `feat/brand-and-ux-improvements` set, fast-forward merged into `develop` and pushed to `origin/develop` without PR. Commits: `chore(brand): replace default icons and add Tinto brand assets`, `feat(workbench): show brand wordmark and compact menu bar`, `feat(qol): add global keyboard shortcuts and help menu`, `feat(explorer): add context menu and collapsible project tree`, `docs(orchestration): add Agent Console Integration artifacts`.
 
 ## Verification Baseline
 
