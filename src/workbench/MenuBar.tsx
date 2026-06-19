@@ -10,9 +10,11 @@ import { enableNotifications, disableNotifications } from "../qol/notifications"
 import { qualityStore, useQualityState } from "../qol/state";
 import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
+import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
 import { autodetectFlow, switchWorkbench } from "./operations";
+import { KeyboardShortcuts } from "./KeyboardShortcuts";
 
-type MenuId = "repos" | "projects" | "view";
+type MenuId = "repos" | "projects" | "view" | "help";
 
 function MenuItem({
   label,
@@ -50,6 +52,7 @@ export function MenuBar() {
   const quality = useQualityState();
   const { openTimeline, openDashboard, openRepo, addRepo } = useWorkspaceActions();
   const [open, setOpen] = useState<MenuId | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   const active = config?.active ?? "";
   const workbenches = config?.workbenches ?? [];
@@ -62,20 +65,35 @@ export function MenuBar() {
 
   return (
     <div className="menu-bar" role="menubar">
-      <span className="menu-bar__brand">Tinto</span>
+      <span className="menu-bar__brand">
+        <img
+          className="menu-bar__brand-img"
+          src={tintoWordmarkDark}
+          alt="Tinto"
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+        <span className="menu-bar__brand-fallback" aria-hidden="true">
+          Tinto
+        </span>
+      </span>
 
-      <select
-        className="menu-bar__switcher"
-        data-testid="wb-switcher"
-        value={active}
-        onChange={(e) => void switchWorkbench(e.target.value, active || null)}
-      >
-        {workbenches.map((w) => (
-          <option key={w.name} value={w.name}>
-            {w.name}
-          </option>
-        ))}
-      </select>
+      {workbenches.length > 1 && (
+        <select
+          className="menu-bar__switcher"
+          data-testid="wb-switcher"
+          value={active}
+          onChange={(e) => void switchWorkbench(e.target.value, active || null)}
+          title="Cambiar espacio de trabajo"
+        >
+          {workbenches.map((w) => (
+            <option key={w.name} value={w.name}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+      )}
 
       <div className="menu">
         <button
@@ -204,6 +222,29 @@ export function MenuBar() {
         )}
       </div>
 
+      <div className="menu">
+        <button
+          type="button"
+          className={open === "help" ? "menu__trigger menu__trigger--open" : "menu__trigger"}
+          data-testid="menu-help"
+          aria-haspopup="menu"
+          aria-expanded={open === "help"}
+          onClick={() => toggle("help")}
+        >
+          Ayuda
+        </button>
+        {open === "help" && (
+          <div className="menu__list" role="menu">
+            <MenuItem
+              label="Atajos de teclado"
+              testid="show-shortcuts"
+              close={close}
+              onSelect={() => setShowShortcuts(true)}
+            />
+          </div>
+        )}
+      </div>
+
       <span className="menu-bar__spacer" />
 
       {quality.notificationStatus === "denied" || quality.notificationStatus === "unavailable" ? (
@@ -231,6 +272,8 @@ export function MenuBar() {
           onClick={close}
         />
       )}
+
+      {showShortcuts && <KeyboardShortcuts onClose={() => setShowShortcuts(false)} />}
     </div>
   );
 }

@@ -35,7 +35,7 @@ describe("App", () => {
   it("shows the workspace shell before the snapshot loads", () => {
     render(<App />);
     expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
-    expect(screen.getByText("Tinto")).toBeInTheDocument(); // top bar brand
+    expect(screen.getByAltText("Tinto")).toBeInTheDocument(); // top bar brand
   });
 
   // Covers AE1 (first-run gate) + R8

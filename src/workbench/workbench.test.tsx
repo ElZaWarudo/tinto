@@ -31,6 +31,12 @@ describe("MenuBar", () => {
     busStore.resetAll();
   });
 
+  it("renders the Tinto brand asset", () => {
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+    expect(screen.getByAltText("Tinto")).toHaveAttribute("src", expect.stringContaining(".png"));
+  });
+
   // Covers AE5 (switch trigger) + R7
   it("lists workbenches, marks the active one, and switches on change", () => {
     act(() => {
@@ -87,8 +93,9 @@ describe("MenuBar", () => {
 
     render(<MenuBar />);
 
-    expect(screen.getByText("Tinto")).toBeInTheDocument();
-    expect(screen.getByTestId("wb-switcher")).toBeInTheDocument();
+    expect(screen.getByAltText("Tinto")).toBeInTheDocument();
+    // Switcher is hidden when there's only one or no workbench
+    expect(screen.queryByTestId("wb-switcher")).not.toBeInTheDocument();
   });
 
   it("opens the dashboard and timeline from the Ver menu", () => {
@@ -166,6 +173,7 @@ describe("FirstRun", () => {
   it("creates a workbench from the entered name", async () => {
     ops.createAndActivate.mockResolvedValue(undefined);
     render(<FirstRun />);
+    expect(screen.getByAltText("Tinto")).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("wb-name"), { target: { value: "My Work" } });
     fireEvent.click(screen.getByTestId("create-wb"));
     expect(ops.createAndActivate).toHaveBeenCalledWith("My Work");

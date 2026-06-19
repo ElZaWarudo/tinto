@@ -2,6 +2,7 @@
 // creation the app shows the workspace (zero-repos state prompts adding repos).
 
 import { useState } from "react";
+import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
 import { createAndActivate } from "./operations";
 
 export function FirstRun() {
@@ -20,6 +21,9 @@ export function FirstRun() {
 
   return (
     <div className="first-run" data-testid="first-run">
+      <div className="first-run__brand">
+        <img src={tintoWordmarkDark} alt="Tinto" />
+      </div>
       <h1>Welcome to Tinto</h1>
       <p>Create a workbench to start monitoring repositories.</p>
       <div className="first-run__form">
