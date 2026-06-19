@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev:wsl": "WEBKIT_DISABLE_COMPOSITING_MODE=1 tauri dev",
+    "brand:generate": "python3 scripts/generate_brand_assets.py",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
