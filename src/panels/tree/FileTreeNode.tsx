@@ -3,7 +3,7 @@
 // pin=false), a double click PINS (pin=true); Enter pins, Space previews. The
 // active file row is highlighted. Shared by the in-project explorer.
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import type { RepoDelta } from "../../bus/contract";
 import { getPathSignals } from "../../bus/store";
 import { SignalBadges } from "../SignalBadges";
@@ -16,22 +16,38 @@ export function FileTreeNode({
   delta,
   depth,
   activePath,
+  expandedDirs,
+  onToggleDir,
   onOpen,
+  onContextMenu,
 }: {
   node: TreeNode;
   delta: RepoDelta;
   depth: number;
   activePath: string | null;
+  expandedDirs?: Set<string>;
+  onToggleDir?: (path: string) => void;
   onOpen: (path: string, pin: boolean) => void;
+  onContextMenu?: (event: MouseEvent, node: TreeNode) => void;
 }) {
-  const [open, setOpen] = useState(false); // folders collapsed by default
+  const [localOpen, setLocalOpen] = useState(false); // fallback for standalone use
+  const open = expandedDirs ? expandedDirs.has(node.path) : localOpen;
   const pad = { paddingLeft: `${depth * 12 + 8}px` };
+  const toggleDir = () => {
+    if (onToggleDir) onToggleDir(node.path);
+    else setLocalOpen((o) => !o);
+  };
 
   if (node.isDir) {
     const dirClass = node.hasChanges ? "tree-dir__row tree-dir__row--changed" : "tree-dir__row";
     return (
       <div className="tree-dir">
-        <button className={dirClass} style={pad} onClick={() => setOpen((o) => !o)}>
+        <button
+          className={dirClass}
+          style={pad}
+          onClick={toggleDir}
+          onContextMenu={(event) => onContextMenu?.(event, node)}
+        >
           <span className="tree-dir__caret">{open ? "▾" : "▸"}</span>
           <span className="tree-dir__name">{node.name}</span>
           {node.hasChanges && (
@@ -52,7 +68,10 @@ export function FileTreeNode({
               delta={delta}
               depth={depth + 1}
               activePath={activePath}
+              expandedDirs={expandedDirs}
+              onToggleDir={onToggleDir}
               onOpen={onOpen}
+              onContextMenu={onContextMenu}
             />
           ))}
       </div>
@@ -72,6 +91,7 @@ export function FileTreeNode({
       data-testid={`tree-file-${node.path}`}
       onClick={() => onOpen(node.path, false)}
       onDoubleClick={() => onOpen(node.path, true)}
+      onContextMenu={(event) => onContextMenu?.(event, node)}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();

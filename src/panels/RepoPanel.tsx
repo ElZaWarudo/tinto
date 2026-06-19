@@ -30,6 +30,7 @@ import { WatchedFilesSection } from "./WatchedFilesSection";
 import { FileView } from "./file/FileView";
 import { FileTab } from "./FileTab";
 import { ProjectExplorer } from "./tree/ProjectExplorer";
+import { useExplorerCollapsed } from "./tree/explorerCollapseState";
 
 const COMMIT_LOG_LIMIT = 30;
 
@@ -53,6 +54,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
   const dock = useRepoDock(repo);
   const empty = dock.open.length === 0;
+  const [explorerCollapsed, toggleExplorer] = useExplorerCollapsed(repo);
 
   // Drop the nested dock binding when the project tab unmounts.
   useEffect(() => () => fileDock.unregister(repo), [repo]);
@@ -61,7 +63,11 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
 
   return (
     <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
-      <ProjectExplorer repo={repo} />
+      <ProjectExplorer
+        repo={repo}
+        collapsed={explorerCollapsed}
+        onToggleCollapse={toggleExplorer}
+      />
 
       <div className="repo-panel__main">
         {/* The nested dock stays mounted (api stays registered) even when empty;

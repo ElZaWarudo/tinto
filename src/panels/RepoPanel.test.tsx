@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
 
@@ -55,6 +55,7 @@ const panelProps = (repo: string) =>
 
 describe("RepoPanel", () => {
   beforeEach(() => {
+    localStorage.clear();
     busStore.resetAll();
     fileDock.drop("/r/api");
     fileDock.drop("/r/gone");
@@ -77,6 +78,58 @@ describe("RepoPanel", () => {
     expect(screen.getByTestId("status-lists")).toHaveTextContent("new.txt");
     await waitFor(() => expect(screen.getByTestId("commit-log")).toHaveTextContent("fix parser"));
     expect(getCommitLogMock).toHaveBeenCalledWith("/r/api", 0, 30);
+  });
+
+  it("collapses and restores the project file tree", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+    render(<RepoPanel {...panelProps("/r/api")} />);
+
+    fireEvent.click(screen.getByTestId("project-explorer-collapse-/r/api"));
+    expect(screen.getByTestId("project-explorer-expand-/r/api")).toBeInTheDocument();
+    expect(localStorage.getItem("tinto:explorer-collapsed:/r/api")).toBe("1");
+
+    fireEvent.click(screen.getByTestId("project-explorer-expand-/r/api"));
+    expect(screen.getByTestId("project-explorer-collapse-/r/api")).toBeInTheDocument();
+    expect(localStorage.getItem("tinto:explorer-collapsed:/r/api")).toBe("0");
+  });
+
+  it("restores the collapsed project file tree from localStorage", () => {
+    localStorage.setItem("tinto:explorer-collapsed:/r/api", "1");
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+
+    render(<RepoPanel {...panelProps("/r/api")} />);
+
+    expect(screen.getByTestId("project-explorer-expand-/r/api")).toBeInTheDocument();
+    expect(screen.queryByTestId("project-explorer-collapse-/r/api")).not.toBeInTheDocument();
+  });
+
+  it("keeps the collapsed project file tree in sync between mounted views", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+
+    render(
+      <>
+        <div data-testid="repo-view-a">
+          <RepoPanel {...panelProps("/r/api")} />
+        </div>
+        <div data-testid="repo-view-b">
+          <RepoPanel {...panelProps("/r/api")} />
+        </div>
+      </>,
+    );
+
+    fireEvent.click(
+      within(screen.getByTestId("repo-view-a")).getByTestId("project-explorer-collapse-/r/api"),
+    );
+
+    expect(
+      within(screen.getByTestId("repo-view-a")).getByTestId("project-explorer-expand-/r/api"),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("repo-view-b")).getByTestId("project-explorer-expand-/r/api"),
+    ).toBeInTheDocument();
   });
 
   it("renders passive metrics, repo signals, and status-file signal chips", async () => {
