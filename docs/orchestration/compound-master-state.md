@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. Current post-closeout PDF/Image Viewer iteration is implementation-complete, verified, internally reviewed, committed on `feat/file-media-previews`, and locally fast-forward merged into `develop`.
-- Active package: post-closeout PDF/Image Viewer (no RDM id; iterative UX work directed turn-by-turn by the user, not a roadmap-planned package).
-- Branch/base: release branch `feat/file-media-previews` was created from `develop` over `origin/develop`; local `develop` has been fast-forwarded. Remote `origin/develop` is intentionally untouched.
+- Current phase/status: Agent Console Integration initiative in artifact generation phase. Roadmap complete and reviewed. ACI-001 plan and work package ready for execution.
+- Active package: ACI-001 Backend PTY Runtime + Agent Process Lifecycle (docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md).
+- Branch/base: current branch `develop` over `origin/develop`. Working tree has uncommitted keyboard shortcuts feature (shortcuts.ts, KeyboardShortcuts.tsx, tests) that should be committed before starting ACI-001.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
-- Required user decisions: none for implementation or local merge. Push remains unapproved.
-- Next action: optional explicit push approval if this local release should be published to `origin/develop`; otherwise continue local UX iteration.
+- Required user decisions: none for artifact generation. Execution will require user approval to proceed.
+- Next action: commit current keyboard shortcuts work, then execute ACI-001 work package (mode:execute package:docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md review-unit:RU1).
 
 ## Source Documents
 
