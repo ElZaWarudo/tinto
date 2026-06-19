@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. Current post-closeout PDF/Image Viewer iteration is implementation-complete, verified, internally reviewed, and ready for `krt-release-marshal` handoff.
+- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. Current post-closeout PDF/Image Viewer iteration is implementation-complete, verified, internally reviewed, committed on `feat/file-media-previews`, and approved for local no-PR fast-forward merge into `develop`.
 - Active package: post-closeout PDF/Image Viewer (no RDM id; iterative UX work directed turn-by-turn by the user, not a roadmap-planned package).
-- Branch/base: current checkout is `develop` over `origin/develop`; this iteration is uncommitted pending Release Marshal-owned commit/release handling.
+- Branch/base: release branch `feat/file-media-previews` was created from `develop` over `origin/develop`; local merge target is `develop`.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
-- Required user decisions: none for implementation. Release Marshal may still ask for explicit release-plan approval before commit/push.
-- Next action: invoke `krt-release-marshal` for the release handoff of PDF/Image Viewer.
+- Required user decisions: none for implementation or local merge. Push remains unapproved.
+- Next action: fast-forward merge `feat/file-media-previews` into local `develop`; leave remote `origin/develop` untouched.
 
 ## Source Documents
 
@@ -88,7 +88,7 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 - Verification (2026-06-19): targeted `npm test -- FileView.test.tsx MediaView.test.tsx contract.test.ts` passed 29/29 before the stale-path fix; targeted `npm test -- MediaView.test.tsx FileView.test.tsx` passed 20/20 after the fix; full `npm test` passed 158/158; `npm run lint`, `npm run format:check`, `npm run build`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` passed 121/121; `git diff --check` clean.
 - Visual/server smoke (2026-06-19): Vite dev server is running at `http://127.0.0.1:1420`; `curl -I http://127.0.0.1:1420` returned HTTP 200. Earlier Chrome DevTools MCP screenshot verification remained blocked by browser-target tooling (`Protocol error (Target.setDiscoverTargets): Target closed`), and the available DevTools session currently points at an unrelated app with no navigation tool exposed. Treat this as a tooling/environment blocker for screenshot verification, not evidence that the app failed to serve. Re-attempt visual verification later with a working Chrome DevTools MCP session, Tauri manual smoke, or packaged app run.
 - Release handoff readiness: ready for `krt-release-marshal` with Jira policy optional/no-Jira fallback. Current branch/base: `develop` over `origin/develop`. Suggested semantic commit grouping: `feat(files): preview PDFs and images in file tabs` covering bus contract/command, frontend media view, CSP, docs, and tests. Suggested release title: `Preview PDFs and images in file tabs`. Suggested release bullets: add read-only PDF/image previews in existing file tabs; keep text, Markdown, and diff behavior unchanged; bound media reads and reject unsupported media extensions.
-- Release Marshal preflight (2026-06-19): branch `develop`, selected base `origin/develop`, origin remote `https://github.com/ElZaWarudo/tinto.git`, no existing PR for `develop`, Jira readiness `jira-env-not-configured`, scope guard `human_lines=193`, `generated_lines=0`, `orchestration_doc_lines=0`, `untracked_files_count=3` with no blocking scope warning. Pending decision: approve Release Marshal plan and choose whether to follow the project-standing no-PR/direct-push path or the standard branch + PR path.
+- Release Marshal preflight (2026-06-19): starting branch `develop`, selected base `origin/develop`, origin remote `https://github.com/ElZaWarudo/tinto.git`, no existing PR for `develop`, Jira readiness `jira-env-not-configured`, scope guard `human_lines=193`, `generated_lines=0`, `orchestration_doc_lines=0`, `untracked_files_count=3` with no blocking scope warning. User approved local no-PR merge; push remains intentionally out of scope.
 
 ## Release State
 
