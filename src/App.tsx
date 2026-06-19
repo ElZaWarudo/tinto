@@ -22,6 +22,7 @@ import { GlanceMode } from "./qol/GlanceMode";
 import { NotificationWatcher } from "./qol/notifications";
 import { useQualityState } from "./qol/state";
 import { installZoomKeybindings, zoomStore } from "./qol/zoom";
+import { installShortcuts } from "./qol/shortcuts";
 import "./App.css";
 
 const components: PanelComponents = {
@@ -45,6 +46,7 @@ export default function App() {
     zoomStore.hydrate();
     return installZoomKeybindings();
   }, []);
+
 
   // Background-preload every repo's file tree so each project's explorer is
   // "always loaded" — no spinner when its tab opens. ensureLoaded is idempotent.
@@ -103,6 +105,15 @@ export default function App() {
     }),
     [],
   );
+
+  // Install global keyboard shortcuts (navigation, view toggles, etc.)
+  useEffect(() => {
+    return installShortcuts(apiRef, {
+      openDashboard: () => actions.openDashboard(),
+      openTimeline: () => actions.openTimeline(),
+      addRepo: () => actions.addRepo(),
+    });
+  }, [actions]);
 
   // First-run: once loaded, no active workbench → the create flow.
   if (loaded && !config?.active) {
