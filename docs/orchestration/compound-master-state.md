@@ -1,7 +1,7 @@
 ---
 title: Compound Master State - Tinto
 status: active
-date: 2026-06-16
+date: 2026-06-19
 initiative: tinto
 mode: full
 production_posture: prototype
@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. The post-closeout Workbench IDE Overhaul follow-up tranche is complete and pushed to `origin/develop` via the project-preferred no-PR path.
-- Active package: post-closeout Workbench IDE Overhaul (no RDM id; iterative UX work directed turn-by-turn by the user, not a roadmap-planned package).
-- Branch/base: `develop` is the integration branch. Follow-up release branch `feat/workbench-file-dock` was fast-forward merged locally, then `develop` was pushed to `origin/develop`.
+- Current phase/status: original roadmap (RDM-001 through RDM-012) complete and closed. Current post-closeout PDF/Image Viewer iteration is implementation-complete, verified, internally reviewed, and ready for `krt-release-marshal` handoff.
+- Active package: post-closeout PDF/Image Viewer (no RDM id; iterative UX work directed turn-by-turn by the user, not a roadmap-planned package).
+- Branch/base: current checkout is `develop` over `origin/develop`; this iteration is uncommitted pending Release Marshal-owned commit/release handling.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
-- Required user decisions: whether `brand/wordmark.png` belongs to a later branding task or should remain untracked.
-- Next action: continue UX iteration or decide the untracked brand asset's fate.
+- Required user decisions: none for implementation. Release Marshal may still ask for explicit release-plan approval before commit/push.
+- Next action: invoke `krt-release-marshal` for the release handoff of PDF/Image Viewer.
 
 ## Source Documents
 
@@ -74,6 +74,21 @@ Follow-up tranche — implemented, verified, internally reviewed, and release-ap
 - Work packages: `docs/work-packages/`.
 - Contract docs: `docs/contracts/`.
 - Backlog: `docs/backlog/`.
+
+## Current Release-Ready Work — PDF/Image Viewer
+
+Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs and common image formats inside the existing file tab surface.
+
+- Intended implementation shape: extend the existing read-only file viewer, not a separate app route. Keep diff/text/Markdown behavior unchanged.
+- Implementation status: complete. Added `get_media_content` as an additive Tauri bus command, a 12 MiB media read guard, backend media-extension validation, frontend PDF/image detection, `MediaView`, CSP allowances for data/blob media rendering, and contract docs/tests.
+- Scope guard: media previews skip the live-diff subscription path, so opening PDFs/images does not consume the diff subscription cap or show diff-paused UI.
+- Impact Scan (2026-06-19): changed IPC command contract, frontend client wrapper, Tauri command registration, CSP media directives, and file-view UI. Consumers found via `rg get_media_content|MEDIA_CONTENT_MAX_BYTES|mediaKind|iframe|svg`: `src/bus/client.ts`, `src/panels/file/FileView.tsx`, `src/panels/file/MediaView.tsx`, `src/panels/file/mediaTypes.ts`, `src/bus/contract.test.ts`, `src/panels/file/FileView.test.tsx`, `src/panels/file/MediaView.test.tsx`, and `docs/contracts/bus-contract.md`. Required consumer tests added/updated.
+- Security Watch (2026-06-19): media command preserves active-workbench repo allowlist, canonical containment, `.git` exclusion, regular-file-only reads, bounded allocation, and rejects non-media extensions with `unsupported-media`. CSP is widened only for `img-src`, `frame-src`, and `object-src` data/blob media. No auth, tenant, secrets, persistence, external integration, or destructive behavior changed; focused Security Sentinel not required for this prototype-local read-only preview.
+- Internal review gate (2026-06-19): direct Compound Master fallback review used because subagent spawning requires explicit user authorization in this runtime. Review found and fixed one P2 stale-content bug where `MediaView` could keep showing the prior file while a new media path loaded. No remaining P0-P2 findings after fix.
+- Verification (2026-06-19): targeted `npm test -- FileView.test.tsx MediaView.test.tsx contract.test.ts` passed 29/29 before the stale-path fix; targeted `npm test -- MediaView.test.tsx FileView.test.tsx` passed 20/20 after the fix; full `npm test` passed 158/158; `npm run lint`, `npm run format:check`, `npm run build`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` passed 121/121; `git diff --check` clean.
+- Visual/server smoke (2026-06-19): Vite dev server is running at `http://127.0.0.1:1420`; `curl -I http://127.0.0.1:1420` returned HTTP 200. Earlier Chrome DevTools MCP screenshot verification remained blocked by browser-target tooling (`Protocol error (Target.setDiscoverTargets): Target closed`), and the available DevTools session currently points at an unrelated app with no navigation tool exposed. Treat this as a tooling/environment blocker for screenshot verification, not evidence that the app failed to serve. Re-attempt visual verification later with a working Chrome DevTools MCP session, Tauri manual smoke, or packaged app run.
+- Release handoff readiness: ready for `krt-release-marshal` with Jira policy optional/no-Jira fallback. Current branch/base: `develop` over `origin/develop`. Suggested semantic commit grouping: `feat(files): preview PDFs and images in file tabs` covering bus contract/command, frontend media view, CSP, docs, and tests. Suggested release title: `Preview PDFs and images in file tabs`. Suggested release bullets: add read-only PDF/image previews in existing file tabs; keep text, Markdown, and diff behavior unchanged; bound media reads and reject unsupported media extensions.
+- Release Marshal preflight (2026-06-19): branch `develop`, selected base `origin/develop`, origin remote `https://github.com/ElZaWarudo/tinto.git`, no existing PR for `develop`, Jira readiness `jira-env-not-configured`, scope guard `human_lines=193`, `generated_lines=0`, `orchestration_doc_lines=0`, `untracked_files_count=3` with no blocking scope warning. Pending decision: approve Release Marshal plan and choose whether to follow the project-standing no-PR/direct-push path or the standard branch + PR path.
 
 ## Release State
 
