@@ -15,6 +15,8 @@ pub const EVENT_WATCHING_STATE: &str = "tinto://watching-state";
 
 /// Guarda de tamaño para contenido de archivos/blobs.
 pub const FILE_CONTENT_MAX_BYTES: usize = 1024 * 1024;
+/// Guarda de tamaño para vistas multimedia embebidas (PDF/imágenes).
+pub const MEDIA_CONTENT_MAX_BYTES: usize = 12 * 1024 * 1024;
 /// Cap de entradas del árbol del repo.
 pub const REPO_TREE_MAX_ENTRIES: usize = 20_000;
 /// Cap del conjunto de suscripciones.

@@ -146,7 +146,7 @@ export type FileEncoding = "utf8" | "base64";
 export interface FileContent {
   encoding: FileEncoding;
   content: string;
-  truncated: boolean; // true when the 1 MiB read guard cut the content
+  truncated: boolean; // true when the command-specific read guard cut the content
 }
 
 // ---- Snapshot ----

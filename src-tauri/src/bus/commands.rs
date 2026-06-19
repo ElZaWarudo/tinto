@@ -14,7 +14,7 @@ use tauri::State;
 
 use super::contract::{
     ContentEncoding, FileContent, RepoTree, SubscriptionTarget, TreeEntry, WorkbenchSnapshot,
-    FILE_CONTENT_MAX_BYTES, REPO_TREE_MAX_ENTRIES,
+    FILE_CONTENT_MAX_BYTES, MEDIA_CONTENT_MAX_BYTES, REPO_TREE_MAX_ENTRIES,
 };
 use super::BusHandle;
 use crate::git::{
@@ -111,9 +111,13 @@ fn resolve_within(repo: &Path, rel: &Path) -> Result<PathBuf, CommandError> {
 /// Construye `FileContent` desde bytes con guardas: >1 MiB se trunca; el
 /// contenido no-UTF8 (binario) se codifica en base64.
 fn file_content_from_bytes(bytes: Vec<u8>) -> FileContent {
-    let truncated = bytes.len() > FILE_CONTENT_MAX_BYTES;
+    file_content_from_bytes_with_limit(bytes, FILE_CONTENT_MAX_BYTES)
+}
+
+fn file_content_from_bytes_with_limit(bytes: Vec<u8>, max_bytes: usize) -> FileContent {
+    let truncated = bytes.len() > max_bytes;
     let slice = if truncated {
-        &bytes[..FILE_CONTENT_MAX_BYTES]
+        &bytes[..max_bytes]
     } else {
         &bytes[..]
     };
@@ -141,6 +145,43 @@ fn file_content_from_bytes(bytes: Vec<u8>) -> FileContent {
             content: STANDARD.encode(slice),
             truncated,
         },
+    }
+}
+
+/// Media is always returned as base64 so the frontend can build stable data URLs
+/// even when an ASCII-only PDF or SVG would otherwise decode as UTF-8 text.
+fn media_content_from_bytes(bytes: Vec<u8>) -> FileContent {
+    let truncated = bytes.len() > MEDIA_CONTENT_MAX_BYTES;
+    let slice = if truncated {
+        &bytes[..MEDIA_CONTENT_MAX_BYTES]
+    } else {
+        &bytes[..]
+    };
+    FileContent {
+        encoding: ContentEncoding::Base64,
+        content: STANDARD.encode(slice),
+        truncated,
+    }
+}
+
+fn validate_media_path(path: &Path) -> Result<(), CommandError> {
+    let supported = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "avif" | "bmp" | "gif" | "ico" | "jpeg" | "jpg" | "pdf" | "png" | "svg" | "webp"
+            )
+        })
+        .unwrap_or(false);
+    if supported {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "unsupported-media",
+            "el archivo no tiene una extensión multimedia soportada",
+        ))
     }
 }
 
@@ -252,6 +293,21 @@ pub async fn get_file_content(
 }
 
 #[tauri::command]
+pub async fn get_media_content(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    path: PathBuf,
+) -> Result<FileContent, CommandError> {
+    let repo = ensure_known(&bus, &repo).await?;
+    blocking(move || {
+        let abs = resolve_within(&repo, &path)?;
+        validate_media_path(&path)?;
+        read_media_content_bounded(&abs)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_repo_tree(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
@@ -265,6 +321,24 @@ pub async fn list_repo_tree(
 /// sumo `FILE_CONTENT_MAX_BYTES + 1` bytes, de modo que la memoria queda
 /// acotada sin importar el tamaño real del archivo.
 fn read_file_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
+    read_regular_file_bounded(
+        abs,
+        FILE_CONTENT_MAX_BYTES,
+        file_content_from_bytes_with_limit,
+    )
+}
+
+fn read_media_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
+    read_regular_file_bounded(abs, MEDIA_CONTENT_MAX_BYTES, |bytes, _| {
+        media_content_from_bytes(bytes)
+    })
+}
+
+fn read_regular_file_bounded(
+    abs: &Path,
+    max_bytes: usize,
+    encode: fn(Vec<u8>, usize) -> FileContent,
+) -> Result<FileContent, CommandError> {
     use std::io::Read;
     let meta = std::fs::metadata(abs)
         .map_err(|e| CommandError::new("io", format!("no se pudo leer el archivo: {e}")))?;
@@ -277,10 +351,10 @@ fn read_file_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
     let file = std::fs::File::open(abs)
         .map_err(|e| CommandError::new("io", format!("no se pudo abrir el archivo: {e}")))?;
     let mut buf = Vec::new();
-    file.take(FILE_CONTENT_MAX_BYTES as u64 + 1)
+    file.take(max_bytes as u64 + 1)
         .read_to_end(&mut buf)
         .map_err(|e| CommandError::new("io", format!("no se pudo leer el archivo: {e}")))?;
-    Ok(file_content_from_bytes(buf))
+    Ok(encode(buf, max_bytes))
 }
 
 /// Walk del árbol respetando `.gitignore`, excluyendo `.git`, con tope de
@@ -388,6 +462,32 @@ mod tests {
     }
 
     #[test]
+    fn media_content_siempre_base64_y_usa_limite_multimedia() {
+        let ascii_pdf = b"%PDF-1.7\n%%EOF".to_vec();
+        let fc = media_content_from_bytes(ascii_pdf);
+        assert!(matches!(fc.encoding, ContentEncoding::Base64));
+        assert!(!fc.truncated);
+        assert_eq!(fc.content, STANDARD.encode(b"%PDF-1.7\n%%EOF"));
+
+        let big = vec![b'a'; MEDIA_CONTENT_MAX_BYTES + 50];
+        let fc = media_content_from_bytes(big);
+        assert!(fc.truncated);
+        assert_eq!(
+            fc.content,
+            STANDARD.encode(vec![b'a'; MEDIA_CONTENT_MAX_BYTES])
+        );
+    }
+
+    #[test]
+    fn validate_media_path_acepta_solo_pdf_e_imagenes_soportadas() {
+        assert!(validate_media_path(Path::new("docs/spec.PDF")).is_ok());
+        assert!(validate_media_path(Path::new("assets/logo.png")).is_ok());
+        assert!(validate_media_path(Path::new("assets/icon.svg")).is_ok());
+        let err = validate_media_path(Path::new("src/main.rs")).expect_err("no media");
+        assert_eq!(err.category, "unsupported-media");
+    }
+
+    #[test]
     fn resolve_within_rechaza_traversal() {
         let repo = TempRepo::with_initial_commit();
         // base.txt existe y queda dentro.
@@ -462,6 +562,17 @@ mod tests {
         // Un directorio no es archivo regular → rechazado sin colgarse.
         let err = read_file_content_bounded(repo.path()).expect_err("dir no es archivo");
         assert_eq!(err.category, "not-a-file");
+    }
+
+    #[test]
+    fn read_media_content_lee_binarios_mayores_a_un_mebibyte() {
+        let repo = TempRepo::with_initial_commit();
+        let bytes = vec![7u8; FILE_CONTENT_MAX_BYTES + 128];
+        std::fs::write(repo.path().join("image.png"), &bytes).unwrap();
+        let fc = read_media_content_bounded(&repo.path().join("image.png")).expect("lee media");
+        assert!(matches!(fc.encoding, ContentEncoding::Base64));
+        assert!(!fc.truncated);
+        assert_eq!(fc.content, STANDARD.encode(bytes));
     }
 
     #[test]

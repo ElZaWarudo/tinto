@@ -8,7 +8,7 @@
 - File paths: relative to the repo root.
 - Timestamps: epoch ms (`u64`) unless otherwise noted.
 - Command errors: `{ category: string, message: string }` (safe message, no secrets) — `WorkbenchError` pattern. Git categories: see `error.class` below. Read-containment categories: `repo-not-allowed` (the repo is not in the active workbench), `path-traversal` (the path escapes the repo after canonicalizing), `path-forbidden` (`.git` is not exposed), `not-a-file` (not a regular file), `not-found`, `repository-not-found`.
-- **Read allowlist:** every read command (`get_worktree_diff`, `get_commit_diff`, `get_commit_log`, `get_blob`, `get_file_content`, `list_repo_tree`) requires `repo` to belong to the active workbench; if not, `repo-not-allowed`. Per-file containment: `get_file_content` confines the path within the repo and excludes `.git`; it reads with bounds (≤ limit + binary→base64).
+- **Read allowlist:** every read command (`get_worktree_diff`, `get_commit_diff`, `get_commit_log`, `get_blob`, `get_file_content`, `get_media_content`, `list_repo_tree`) requires `repo` to belong to the active workbench; if not, `repo-not-allowed`. Per-file containment: `get_file_content` and `get_media_content` confine the path within the repo and exclude `.git`; they read with bounds (≤ limit + binary/media→base64).
 - Revision: `revision: u64`, monotonic **per repo** and **durable**: if a repo is unmounted and comes back, the counter continues (it does not reset to 0). Consumer rule: apply a delta/snapshot only if its `revision` is greater than the one already known.
 
 ## Events (backend `emit` → frontend)
@@ -91,11 +91,13 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 | `get_commit_log` | `repo, offset, limit` | `Vec<CommitInfo>` | Paginated by offset. |
 | `get_blob` | `repo, commit_id, path` | `FileContent` | Content at a commit. |
 | `get_file_content` | `repo, path` | `FileContent` | CURRENT working-tree content (full-file view). |
+| `get_media_content` | `repo, path` | `FileContent` | CURRENT working-tree PDF/image content for previews; always base64, 12 MiB guard; rejects non-media extensions. |
 | `list_repo_tree` | `repo` | `{ entries: Vec<TreeEntry>, truncated: bool }` | Full working-tree tree respecting `.gitignore` (`ignore` walk), cap 20,000 entries. |
 | `set_subscriptions` | `targets: Vec<{repo, path?}>` | `()` | Set of open targets (cap 8); applies from the next recomputation. |
 | `retry_repo` | `repo` | `()` | Retries the remount of a repo in terminal error. |
 
 - `FileContent`: `{ encoding: "utf8" | "base64", content: string, truncated: bool }` — 1 MiB guard (truncated) and binary detection (→ base64). Validated relative paths: after canonicalizing they must stay within the repo (no `../`).
+- `get_media_content` returns the same `FileContent` shape but always uses `"base64"` and a 12 MiB guard, so visual previews can build `data:` URLs without ambiguity. Supported extensions: `pdf`, `avif`, `bmp`, `gif`, `ico`, `jpeg`, `jpg`, `png`, `svg`, `webp`; anything else returns `unsupported-media`.
 - `TreeEntry`: `{ path: string, is_dir: bool }` — flat list; the frontend builds the tree.
 - `set_active_workbench` (existing, RDM-005) now additionally triggers the watcher remount and the snapshot of the new workbench (asynchronous — the deltas arrive via the stream).
 
@@ -112,6 +114,7 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 | Diff viewer (008) | working-tree diff of a repo | `get_worktree_diff` |
 | Live diff (008) | diff updated only while the agent writes | subscription (`set_subscriptions`) → `workbench-delta.subscribed_diffs` |
 | Highlighted full file (008) | CURRENT content + hunks | `get_file_content` + the target's `FileDiff` |
+| PDF/image preview | CURRENT media bytes + extension-derived MIME | `get_media_content` |
 | New agent file (008) | diff of an untracked file | all-added synthesized `subscribed_diffs` |
 | Plane 2 (009) | list of FS events with kind/timestamp/size/delta | `tinto://fs-events` |
 | fs_watch editor (009) | edit per-repo patterns | RDM-005 commands (`update_repo`) — outside this contract |

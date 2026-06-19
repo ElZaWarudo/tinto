@@ -76,6 +76,7 @@ import {
   getBlob,
   getCommitDiff,
   getFileContent,
+  getMediaContent,
   getWorktreeDiff,
   listRepoTree,
   setSubscriptions,
@@ -95,6 +96,14 @@ describe("RDM-008 client wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_file_content", {
       repo: "/r/api",
       path: "src/a.ts",
+    });
+  });
+
+  it("get_media_content passes repo + path", () => {
+    void getMediaContent("/r/api", "brand/logo.png");
+    expect(invokeMock).toHaveBeenCalledWith("get_media_content", {
+      repo: "/r/api",
+      path: "brand/logo.png",
     });
   });
 

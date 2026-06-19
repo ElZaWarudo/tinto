@@ -14,6 +14,8 @@ import { reconciler, useIsLive } from "../../workspace/subscriptions";
 import { SignalBadges } from "../SignalBadges";
 import { DiffView, type DiffMode } from "../diff/DiffView";
 import { FullFileView } from "../diff/FullFileView";
+import { MediaView } from "./MediaView";
+import { mediaKind } from "./mediaTypes";
 import { MarkdownView } from "./MarkdownView";
 
 interface CmdError {
@@ -60,6 +62,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   const pathSignals = getPathSignals(state.repos[repo], path);
   const isLive = useIsLive(repo, path);
   const markdown = isMarkdown(path);
+  const media = mediaKind(path);
 
   const [oneShot, setOneShot] = useState<FileDiff | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<CmdError | null>(null);
@@ -87,6 +90,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   // Subscribe for live updates + run the one-shot initial load. On unmount drop
   // both the subscription and the cached diff (the single reconciled set — R6).
   useEffect(() => {
+    if (media) return;
     reconciler.add(repo, path);
     const cancel = loadOneShot();
     return () => {
@@ -94,7 +98,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
       reconciler.remove(repo, path);
       busStore.dropDiff(repo, path);
     };
-  }, [repo, path, loadOneShot]);
+  }, [repo, path, loadOneShot, media]);
 
   // Once a diff computation has occurred for the repo, the live slice is
   // authoritative (KTD2/R7): the one-shot must NOT resurface a diff the slice
@@ -121,7 +125,11 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   return (
     <div className="file-view" data-testid={`file-view-${repo}::${path}`}>
       <div className="file-view__toolbar">
-        {markdown ? (
+        {media ? (
+          <span className="file-view__mode" data-testid="media-mode">
+            {media === "pdf" ? "PDF preview" : "Image preview"}
+          </span>
+        ) : markdown ? (
           <div className="seg" role="group" aria-label="markdown view">
             <button
               className={mdView === "rendered" ? "seg__btn seg__btn--on" : "seg__btn"}
@@ -176,7 +184,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
         <SignalBadges signals={pathSignals} limit={3} compact />
       </div>
 
-      {!isLive && (
+      {!media && !isLive && (
         <div className="file-view__paused" data-testid="diff-paused">
           <span>Live updates paused (subscription limit reached).</span>
           <button onClick={loadOneShot} data-testid="diff-paused-reload">
@@ -186,7 +194,9 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
       )}
 
       <div className="file-view__body">
-        {markdown ? (
+        {media ? (
+          <MediaView repo={repo} path={path} kind={media} />
+        ) : markdown ? (
           mdView === "rendered" ? (
             <MarkdownView repo={repo} path={path} />
           ) : (

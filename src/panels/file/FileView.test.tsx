@@ -17,10 +17,12 @@ vi.mock("remark-gfm", () => ({ default: {} }));
 
 let worktree: { value: unknown; reject?: unknown } = { value: [] };
 let fileContent: unknown = { encoding: "utf8", content: "a\nb\nc", truncated: false };
+let mediaContent: unknown = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
 const invokeMock = vi.fn((cmd: string) => {
   if (cmd === "get_worktree_diff")
     return worktree.reject ? Promise.reject(worktree.reject) : Promise.resolve(worktree.value);
   if (cmd === "get_file_content") return Promise.resolve(fileContent);
+  if (cmd === "get_media_content") return Promise.resolve(mediaContent);
   return Promise.resolve(undefined);
 });
 vi.mock("@tauri-apps/api/core", () => ({
@@ -69,6 +71,7 @@ describe("FileView", () => {
     invokeMock.mockClear();
     worktree = { value: [] };
     fileContent = { encoding: "utf8", content: "a\nb\nc", truncated: false };
+    mediaContent = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
   });
 
   it("a clean file shows the normal full-file view by default (not a diff)", async () => {
@@ -121,6 +124,26 @@ describe("FileView", () => {
     expect(screen.getByTestId("md-rendered")).toHaveTextContent("# Title");
     fireEvent.click(screen.getByText("Fuente"));
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
+  });
+
+  it("renders visual media with the media preview surface", async () => {
+    render(<FileView repo={REPO} path="brand/logo.png" />);
+    expect(await screen.findByTestId("image-view")).toBeInTheDocument();
+    expect(screen.getByTestId("media-mode")).toHaveTextContent("Image preview");
+    expect(screen.queryByText("Hunks")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diff-paused")).not.toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("get_media_content", {
+      repo: REPO,
+      path: "brand/logo.png",
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("get_worktree_diff", { repo: REPO });
+  });
+
+  it("renders PDFs with the media preview surface", async () => {
+    mediaContent = { encoding: "base64", content: "JVBERi0x", truncated: false };
+    render(<FileView repo={REPO} path="docs/spec.pdf" />);
+    expect(await screen.findByTestId("pdf-view")).toBeInTheDocument();
+    expect(screen.getByTestId("media-mode")).toHaveTextContent("PDF preview");
   });
 
   it("a live delta supersedes the one-shot diff", async () => {

@@ -71,6 +71,9 @@ export const getWorktreeDiff = (repo: string) => invoke<FileDiff[]>("get_worktre
 export const getFileContent = (repo: string, path: string) =>
   invoke<FileContent>("get_file_content", { repo, path });
 
+export const getMediaContent = (repo: string, path: string) =>
+  invoke<FileContent>("get_media_content", { repo, path });
+
 export const listRepoTree = (repo: string) => invoke<RepoTree>("list_repo_tree", { repo });
 
 export const setSubscriptions = (targets: SubscriptionTarget[]) =>

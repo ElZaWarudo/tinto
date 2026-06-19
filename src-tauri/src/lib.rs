@@ -81,6 +81,7 @@ pub fn run() {
             bus::commands::get_commit_log,
             bus::commands::get_blob,
             bus::commands::get_file_content,
+            bus::commands::get_media_content,
             bus::commands::list_repo_tree,
             bus::commands::set_subscriptions,
             bus::commands::retry_repo,
