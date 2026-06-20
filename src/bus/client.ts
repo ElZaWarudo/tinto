@@ -75,6 +75,9 @@ export const stopAgentSession = (sessionId: string) => invoke("stop_agent_sessio
 
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
 
+export const agentBinaryAvailable = (agentType: string) =>
+  invoke<boolean>("agent_binary_available", { agentType });
+
 export const writeAgentSessionInput = (sessionId: string, input: string | Uint8Array) =>
   invoke("write_agent_session_input", {
     sessionId,

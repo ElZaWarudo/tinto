@@ -110,6 +110,7 @@ Chunks are live only; the first ACI-002 stream bridge does not replay historical
 | `start_agent_session` | `repo, agent_type` | `session_id: string` | Starts an allowlisted agent (`claude`, `codex`, `opencode`) in a PTY for a repo in the active workbench. |
 | `stop_agent_session` | `session_id` | `()` | Stops the tracked PTY process/session. |
 | `list_agent_sessions` | none | `Vec<AgentSession>` | Returns known sessions after refreshing completed process statuses. |
+| `agent_binary_available` | `agent_type` | `bool` | Checks the allowlisted agent binary through PATH lookup. Known missing binaries return `false`; unsupported agent ids return `unsupported_agent`. |
 | `write_agent_session_input` | `session_id, input_base64` | `()` | Writes decoded bytes to a running session's PTY stdin. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
 | `resize_agent_session` | `session_id, cols, rows` | `()` | Resizes a running session's PTY. `cols` and `rows` must be positive; invalid dimensions return `invalid_terminal_size`. |
 

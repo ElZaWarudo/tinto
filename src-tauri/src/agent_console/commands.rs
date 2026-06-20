@@ -14,7 +14,7 @@ use crate::bus::{
     BusHandle,
 };
 
-use super::{AgentConsoleError, AgentSessionRegistry};
+use super::{validation::resolve_agent_binary, AgentConsoleError, AgentSessionRegistry};
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -74,6 +74,15 @@ pub fn list_agent_sessions(
         .refresh_session_statuses()
         .map_err(CommandError::from)?;
     Ok(registry.list_sessions())
+}
+
+#[tauri::command]
+pub fn agent_binary_available(agent_type: String) -> Result<bool, CommandError> {
+    match resolve_agent_binary(&agent_type) {
+        Ok(_) => Ok(true),
+        Err(error) if error.category == "binary_not_found" => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[tauri::command]
@@ -193,5 +202,12 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.category, "invalid_input");
+    }
+
+    #[test]
+    fn agent_binary_available_rejects_unsupported_agent() {
+        let error = agent_binary_available("powershell".into()).unwrap_err();
+
+        assert_eq!(error.category, "unsupported_agent");
     }
 }

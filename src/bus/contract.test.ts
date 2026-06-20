@@ -118,6 +118,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listenMoc
 
 import {
   getBlob,
+  agentBinaryAvailable,
   getCommitDiff,
   getFileContent,
   getMediaContent,
@@ -213,6 +214,11 @@ describe("RDM-008 client wrappers", () => {
 
     void listAgentSessions();
     expect(invokeMock).toHaveBeenCalledWith("list_agent_sessions");
+
+    void agentBinaryAvailable("codex");
+    expect(invokeMock).toHaveBeenCalledWith("agent_binary_available", {
+      agentType: "codex",
+    });
   });
 
   it("agent terminal stream wrappers encode input and resize dimensions", () => {
