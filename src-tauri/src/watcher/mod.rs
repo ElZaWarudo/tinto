@@ -23,6 +23,7 @@ pub mod normalize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use thiserror::Error;
@@ -376,6 +377,7 @@ async fn router(
     dead_roots: Arc<Mutex<HashSet<PathBuf>>>,
 ) {
     let mut repos: HashMap<PathBuf, MountedRepo> = HashMap::new();
+    let mut root_health = tokio::time::interval(Duration::from_millis(200));
 
     loop {
         tokio::select! {
@@ -406,6 +408,9 @@ async fn router(
             }
             Some(batch) = batches.recv() => {
                 forward_batch(batch, &mut repos, &debounce_tx, &public_tx);
+            }
+            _ = root_health.tick() => {
+                mark_missing_roots(&mut repos, &debounce_tx, &public_tx, &dead_roots);
             }
         }
     }
@@ -459,16 +464,10 @@ fn route_event(
         // Borrado del root: notify removió el watch en silencio; el
         // watcher sintetiza el error y desmonta su estado (R3/AE5). El
         // root queda marcado para que watch_workbench pueda remontarlo.
-        if normalized.path == root && normalized.kind == EventType::Removed {
-            repos.remove(&root);
-            if let Ok(mut dead) = dead_roots.lock() {
-                dead.insert(root.clone());
-            }
-            let _ = debounce_tx.send(DebounceInput::ForgetRepo { repo: root.clone() });
-            let _ = public_tx.send(WatcherMessage::RepoError {
-                repo: root.clone(),
-                error: WatcherError::RepoRemoved { repo: root },
-            });
+        let root_removed = normalized.path == root && normalized.kind == EventType::Removed;
+        let root_missing = root.try_exists().is_ok_and(|exists| !exists);
+        if root_removed || root_missing {
+            mark_repo_removed(&root, repos, debounce_tx, public_tx, dead_roots);
             continue;
         }
 
@@ -512,6 +511,40 @@ fn route_event(
 /// Ejecuta el rebuild coalescido si el lote lo trae y reenvía el lote no
 /// vacío al canal público. Los lotes de repos ya desmontados/removidos no
 /// se reenvían (el consumidor ya recibió su `RepoError`/desmonte).
+fn mark_missing_roots(
+    repos: &mut HashMap<PathBuf, MountedRepo>,
+    debounce_tx: &mpsc::UnboundedSender<DebounceInput>,
+    public_tx: &mpsc::UnboundedSender<WatcherMessage>,
+    dead_roots: &Arc<Mutex<HashSet<PathBuf>>>,
+) {
+    let missing: Vec<PathBuf> = repos
+        .keys()
+        .filter(|root| root.try_exists().is_ok_and(|exists| !exists))
+        .cloned()
+        .collect();
+    for root in missing {
+        mark_repo_removed(&root, repos, debounce_tx, public_tx, dead_roots);
+    }
+}
+
+fn mark_repo_removed(
+    root: &PathBuf,
+    repos: &mut HashMap<PathBuf, MountedRepo>,
+    debounce_tx: &mpsc::UnboundedSender<DebounceInput>,
+    public_tx: &mpsc::UnboundedSender<WatcherMessage>,
+    dead_roots: &Arc<Mutex<HashSet<PathBuf>>>,
+) {
+    repos.remove(root);
+    if let Ok(mut dead) = dead_roots.lock() {
+        dead.insert(root.clone());
+    }
+    let _ = debounce_tx.send(DebounceInput::ForgetRepo { repo: root.clone() });
+    let _ = public_tx.send(WatcherMessage::RepoError {
+        repo: root.clone(),
+        error: WatcherError::RepoRemoved { repo: root.clone() },
+    });
+}
+
 fn forward_batch(
     batch: EmittedBatch,
     repos: &mut HashMap<PathBuf, MountedRepo>,
