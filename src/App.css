@@ -21,6 +21,8 @@
   --active: rgba(255, 255, 255, 0.16);
   --accent-soft: rgba(78, 201, 176, 0.14);
   --ease: 120ms ease;
+  --scrollbar-thumb: rgba(121, 121, 121, 0.5);
+  --scrollbar-thumb-hover: rgba(154, 154, 154, 0.68);
   /* Open-file text scale (Ctrl +/-/0); only file-content rules consume it. */
   --file-zoom: 1;
 
@@ -246,7 +248,9 @@ body,
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  transition: background var(--ease), color var(--ease);
+  transition:
+    background var(--ease),
+    color var(--ease);
 }
 .shortcuts-modal__close:hover {
   background: var(--hover);
@@ -444,6 +448,33 @@ body,
   overflow: auto;
   padding: 4px;
   font-size: 13px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+.project-explorer__body::-webkit-scrollbar,
+.tree-menu::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.project-explorer__body::-webkit-scrollbar-track,
+.tree-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+.project-explorer__body::-webkit-scrollbar-thumb,
+.tree-menu::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: content-box;
+}
+.project-explorer__body::-webkit-scrollbar-thumb:hover,
+.tree-menu::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+.project-explorer__body::-webkit-scrollbar-corner,
+.tree-menu::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Repo overview (shown when no files are open in the project). */
@@ -1092,6 +1123,8 @@ body,
   background: var(--bg-elev);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
   color: var(--fg);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .tree-menu__title {
   padding: 5px 8px 7px;
@@ -1648,10 +1681,409 @@ a:focus-visible {
   min-height: 28px;
   border-radius: 4px;
   gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .tree-dir__row:hover {
   background: var(--hover);
   color: var(--fg);
+}
+.tree-dir__caret {
+  flex: none;
+  width: 12px;
+  text-align: center;
+}
+.tree-icon {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.tree-icon--folder::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 5px;
+  width: 14px;
+  height: 9px;
+  border-radius: 1px 2px 2px;
+  background: #c09553;
+}
+.tree-icon--folder::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 3px;
+  width: 7px;
+  height: 4px;
+  border-radius: 2px 2px 0 0;
+  background: #d7ba7d;
+}
+.tree-icon--folder-open::before {
+  background: #d7ba7d;
+}
+.tree-icon--file {
+  --tree-icon-bg: rgba(137, 137, 137, 0.2);
+  --tree-icon-border: rgba(180, 180, 180, 0.3);
+  --tree-icon-fg: #c8c8c8;
+  --tree-icon-label: "";
+}
+.tree-icon--file::before {
+  content: var(--tree-icon-label);
+  position: absolute;
+  inset: 1px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--tree-icon-border);
+  border-radius: 4px;
+  background: var(--tree-icon-bg);
+  color: var(--tree-icon-fg);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 6px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.tree-icon--typescript {
+  --tree-icon-bg: rgba(49, 120, 198, 0.26);
+  --tree-icon-border: rgba(81, 154, 186, 0.52);
+  --tree-icon-fg: #9cdcfe;
+  --tree-icon-label: "TS";
+}
+.tree-icon--types {
+  --tree-icon-bg: rgba(49, 120, 198, 0.16);
+  --tree-icon-border: rgba(81, 154, 186, 0.38);
+  --tree-icon-fg: #9cdcfe;
+  --tree-icon-label: "D";
+}
+.tree-icon--react {
+  --tree-icon-bg: rgba(77, 173, 224, 0.24);
+  --tree-icon-border: rgba(97, 218, 251, 0.5);
+  --tree-icon-fg: #8cdcfe;
+  --tree-icon-label: "RX";
+}
+.tree-icon--javascript {
+  --tree-icon-bg: rgba(203, 203, 65, 0.22);
+  --tree-icon-border: rgba(203, 203, 65, 0.48);
+  --tree-icon-fg: #dcdcaa;
+  --tree-icon-label: "JS";
+}
+.tree-icon--rust {
+  --tree-icon-bg: rgba(215, 161, 93, 0.2);
+  --tree-icon-border: rgba(215, 161, 93, 0.5);
+  --tree-icon-fg: #d7a15d;
+  --tree-icon-label: "RS";
+}
+.tree-icon--python {
+  --tree-icon-bg: rgba(78, 148, 206, 0.22);
+  --tree-icon-border: rgba(78, 148, 206, 0.5);
+  --tree-icon-fg: #ffd866;
+  --tree-icon-label: "PY";
+}
+.tree-icon--go {
+  --tree-icon-bg: rgba(0, 173, 216, 0.2);
+  --tree-icon-border: rgba(0, 173, 216, 0.5);
+  --tree-icon-fg: #7ddfff;
+  --tree-icon-label: "GO";
+}
+.tree-icon--ruby {
+  --tree-icon-bg: rgba(204, 52, 45, 0.2);
+  --tree-icon-border: rgba(204, 52, 45, 0.5);
+  --tree-icon-fg: #f48771;
+  --tree-icon-label: "RB";
+}
+.tree-icon--java {
+  --tree-icon-bg: rgba(185, 92, 52, 0.2);
+  --tree-icon-border: rgba(185, 92, 52, 0.5);
+  --tree-icon-fg: #f2b38f;
+  --tree-icon-label: "JV";
+}
+.tree-icon--cpp {
+  --tree-icon-bg: rgba(92, 112, 214, 0.22);
+  --tree-icon-border: rgba(92, 112, 214, 0.52);
+  --tree-icon-fg: #b5c5ff;
+  --tree-icon-label: "C+";
+}
+.tree-icon--csharp {
+  --tree-icon-bg: rgba(149, 88, 178, 0.24);
+  --tree-icon-border: rgba(149, 88, 178, 0.52);
+  --tree-icon-fg: #d7a3ff;
+  --tree-icon-label: "C#";
+}
+.tree-icon--php {
+  --tree-icon-bg: rgba(119, 123, 179, 0.24);
+  --tree-icon-border: rgba(119, 123, 179, 0.52);
+  --tree-icon-fg: #c7caf7;
+  --tree-icon-label: "PH";
+}
+.tree-icon--json {
+  --tree-icon-bg: rgba(244, 203, 79, 0.2);
+  --tree-icon-border: rgba(244, 203, 79, 0.48);
+  --tree-icon-fg: #f4cb4f;
+  --tree-icon-label: "{}";
+}
+.tree-icon--markdown {
+  --tree-icon-bg: rgba(126, 178, 221, 0.2);
+  --tree-icon-border: rgba(126, 178, 221, 0.48);
+  --tree-icon-fg: #9cdcfe;
+  --tree-icon-label: "MD";
+}
+.tree-icon--css {
+  --tree-icon-bg: rgba(66, 165, 245, 0.22);
+  --tree-icon-border: rgba(66, 165, 245, 0.5);
+  --tree-icon-fg: #8cdcfe;
+  --tree-icon-label: "#";
+}
+.tree-icon--html {
+  --tree-icon-bg: rgba(227, 121, 51, 0.22);
+  --tree-icon-border: rgba(227, 121, 51, 0.5);
+  --tree-icon-fg: #f2b38f;
+  --tree-icon-label: "<>";
+}
+.tree-icon--xml {
+  --tree-icon-bg: rgba(227, 121, 51, 0.18);
+  --tree-icon-border: rgba(227, 121, 51, 0.42);
+  --tree-icon-fg: #f2b38f;
+  --tree-icon-label: "XML";
+  font-size: 5px;
+}
+.tree-icon--yaml,
+.tree-icon--toml {
+  --tree-icon-bg: rgba(197, 134, 192, 0.2);
+  --tree-icon-border: rgba(197, 134, 192, 0.48);
+  --tree-icon-fg: #d7a3ff;
+  --tree-icon-label: "Y";
+}
+.tree-icon--toml {
+  --tree-icon-label: "T";
+}
+.tree-icon--config {
+  --tree-icon-bg: rgba(156, 220, 254, 0.17);
+  --tree-icon-border: rgba(156, 220, 254, 0.42);
+  --tree-icon-fg: #9cdcfe;
+  --tree-icon-label: "CFG";
+}
+.tree-icon--env {
+  --tree-icon-bg: rgba(206, 145, 120, 0.2);
+  --tree-icon-border: rgba(206, 145, 120, 0.48);
+  --tree-icon-fg: #ce9178;
+  --tree-icon-label: "ENV";
+}
+.tree-icon--shell {
+  --tree-icon-bg: rgba(181, 206, 168, 0.18);
+  --tree-icon-border: rgba(181, 206, 168, 0.42);
+  --tree-icon-fg: #b5cea8;
+  --tree-icon-label: "$";
+}
+.tree-icon--image {
+  --tree-icon-bg: rgba(181, 206, 168, 0.18);
+  --tree-icon-border: rgba(181, 206, 168, 0.42);
+  --tree-icon-fg: #b5cea8;
+  --tree-icon-label: "IMG";
+}
+.tree-icon--pdf {
+  --tree-icon-bg: rgba(241, 76, 76, 0.18);
+  --tree-icon-border: rgba(241, 76, 76, 0.5);
+  --tree-icon-fg: #ff9a9a;
+  --tree-icon-label: "PDF";
+}
+.tree-icon--git {
+  --tree-icon-bg: rgba(240, 80, 51, 0.18);
+  --tree-icon-border: rgba(240, 80, 51, 0.5);
+  --tree-icon-fg: #f48771;
+  --tree-icon-label: "G";
+}
+.tree-icon--test {
+  --tree-icon-bg: rgba(197, 134, 192, 0.22);
+  --tree-icon-border: rgba(197, 134, 192, 0.52);
+  --tree-icon-fg: #d7a3ff;
+  --tree-icon-label: "T";
+}
+.tree-icon--npm {
+  --tree-icon-bg: rgba(203, 58, 73, 0.18);
+  --tree-icon-border: rgba(203, 58, 73, 0.5);
+  --tree-icon-fg: #f48771;
+  --tree-icon-label: "N";
+}
+.tree-icon--lock {
+  --tree-icon-bg: rgba(133, 133, 133, 0.18);
+  --tree-icon-border: rgba(133, 133, 133, 0.42);
+  --tree-icon-fg: #c8c8c8;
+  --tree-icon-label: "LK";
+}
+.tree-icon--docker {
+  --tree-icon-bg: rgba(36, 150, 237, 0.2);
+  --tree-icon-border: rgba(36, 150, 237, 0.5);
+  --tree-icon-fg: #7ddfff;
+  --tree-icon-label: "DK";
+}
+.tree-icon--database {
+  --tree-icon-bg: rgba(78, 201, 176, 0.18);
+  --tree-icon-border: rgba(78, 201, 176, 0.44);
+  --tree-icon-fg: #4ec9b0;
+  --tree-icon-label: "DB";
+}
+.tree-icon--text {
+  --tree-icon-bg: rgba(156, 220, 254, 0.14);
+  --tree-icon-border: rgba(156, 220, 254, 0.32);
+  --tree-icon-fg: #c8c8c8;
+  --tree-icon-label: "TXT";
+}
+.tree-icon--archive {
+  --tree-icon-bg: rgba(204, 167, 0, 0.18);
+  --tree-icon-border: rgba(204, 167, 0, 0.44);
+  --tree-icon-fg: #ffd58a;
+  --tree-icon-label: "ZIP";
+}
+.tree-icon--font {
+  --tree-icon-bg: rgba(197, 134, 192, 0.16);
+  --tree-icon-border: rgba(197, 134, 192, 0.38);
+  --tree-icon-fg: #d7a3ff;
+  --tree-icon-label: "Aa";
+}
+.tree-icon--config::before,
+.tree-icon--env::before,
+.tree-icon--image::before,
+.tree-icon--pdf::before,
+.tree-icon--text::before,
+.tree-icon--archive::before {
+  font-size: 5px;
+}
+.tree-icon::before,
+.tree-icon::after {
+  content: none !important;
+}
+.tree-icon {
+  display: inline-grid;
+  place-items: center;
+  color: #c8c8c8;
+}
+.tree-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+}
+.tree-icon__page {
+  fill: currentColor;
+  fill-opacity: 0.12;
+  stroke: currentColor;
+  stroke-opacity: 0.7;
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+.tree-icon__fold {
+  fill: none;
+  stroke: currentColor;
+  stroke-opacity: 0.55;
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+.tree-icon__line,
+.tree-icon__line-heavy,
+.tree-icon__frame {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tree-icon__line {
+  stroke-width: 1.1;
+  stroke-opacity: 0.86;
+}
+.tree-icon__line-heavy,
+.tree-icon__frame {
+  stroke-width: 1.35;
+}
+.tree-icon__fill-soft {
+  fill: currentColor;
+  fill-opacity: 0.22;
+}
+.tree-icon__fill-strong {
+  fill: currentColor;
+  fill-opacity: 0.88;
+}
+.tree-icon__knockout {
+  fill: var(--bg);
+}
+.tree-icon__folder-tab {
+  fill: #d7ba7d;
+}
+.tree-icon__folder-body {
+  fill: #c09553;
+}
+.tree-icon__folder-open {
+  fill: #e3c17f;
+}
+.tree-icon--folder,
+.tree-icon--folder-open {
+  color: #d7ba7d;
+}
+.tree-icon--typescript,
+.tree-icon--types {
+  color: #519aba;
+}
+.tree-icon--react,
+.tree-icon--go,
+.tree-icon--docker {
+  color: #4fc1ff;
+}
+.tree-icon--javascript,
+.tree-icon--json {
+  color: #dcdcaa;
+}
+.tree-icon--rust,
+.tree-icon--java,
+.tree-icon--html,
+.tree-icon--xml {
+  color: #e37933;
+}
+.tree-icon--python,
+.tree-icon--archive {
+  color: #ffd866;
+}
+.tree-icon--ruby,
+.tree-icon--pdf,
+.tree-icon--npm,
+.tree-icon--git {
+  color: #f48771;
+}
+.tree-icon--cpp,
+.tree-icon--csharp,
+.tree-icon--php {
+  color: #b5c5ff;
+}
+.tree-icon--markdown,
+.tree-icon--css,
+.tree-icon--config,
+.tree-icon--text {
+  color: #9cdcfe;
+}
+.tree-icon--yaml,
+.tree-icon--toml,
+.tree-icon--test,
+.tree-icon--font {
+  color: #c586c0;
+}
+.tree-icon--env,
+.tree-icon--shell,
+.tree-icon--image,
+.tree-icon--database {
+  color: #4ec9b0;
+}
+.tree-icon--lock {
+  color: #858585;
+}
+.tree-dir__name,
+.tree-file__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tree-file {
   padding-top: 5px;
@@ -1660,6 +2092,9 @@ a:focus-visible {
   min-height: 28px;
   border-radius: 4px;
   border-left: 2px solid transparent;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .tree-file:hover {
   background: var(--hover-strong);
@@ -1667,6 +2102,10 @@ a:focus-visible {
 }
 .tree-file--changed {
   border-left-color: var(--accent-fg);
+}
+.tree-file__mark,
+.tree-file .signal-badges {
+  flex: none;
 }
 
 /* Status-file rows in the repo overview: real rows, not bare list items. */

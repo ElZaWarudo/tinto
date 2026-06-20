@@ -31,6 +31,7 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
 
 describe("ProjectExplorer", () => {
   beforeEach(() => {
+    localStorage.clear();
     busStore.resetAll();
     qualityStore.reset();
     fileDock.drop(REPO);
@@ -44,6 +45,10 @@ describe("ProjectExplorer", () => {
       entries: [
         { path: "src", is_dir: true },
         { path: "src/a.ts", is_dir: false },
+        { path: "src/App.tsx", is_dir: false },
+        { path: "src/App.css", is_dir: false },
+        { path: ".env", is_dir: false },
+        { path: "package.json", is_dir: false },
         { path: "README.md", is_dir: false },
       ],
       truncated: false,
@@ -57,9 +62,26 @@ describe("ProjectExplorer", () => {
     // README is at the root; the src folder is collapsed by default.
     const readme = await screen.findByTestId("tree-file-README.md");
     expect(readme).toBeInTheDocument();
+    expect(readme.querySelector(".tree-icon--markdown")).toBeInTheDocument();
+    expect(
+      (await screen.findByTestId("tree-file-package.json")).querySelector(".tree-icon--npm"),
+    ).toBeInTheDocument();
+    expect(
+      (await screen.findByTestId("tree-file-.env")).querySelector(".tree-icon--env"),
+    ).toBeInTheDocument();
     fireEvent.click(await screen.findByText("src")); // expand folder
+    expect(
+      screen.getByText("src").parentElement?.querySelector(".tree-icon--folder"),
+    ).toBeInTheDocument();
     const aFile = await screen.findByTestId("tree-file-src/a.ts");
     expect(aFile).toHaveClass("tree-file--changed");
+    expect(aFile.querySelector(".tree-icon--typescript")).toBeInTheDocument();
+    expect(
+      (await screen.findByTestId("tree-file-src/App.tsx")).querySelector(".tree-icon--react"),
+    ).toBeInTheDocument();
+    expect(
+      (await screen.findByTestId("tree-file-src/App.css")).querySelector(".tree-icon--css"),
+    ).toBeInTheDocument();
   });
 
   it("marks a collapsed folder that contains changed files", async () => {
@@ -94,6 +116,34 @@ describe("ProjectExplorer", () => {
     // Cached: the file is there immediately and no second fetch fires.
     expect(screen.getByTestId("tree-file-README.md")).toBeInTheDocument();
     expect(listRepoTreeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores expanded folders when the explorer remounts", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    const first = render(<ProjectExplorer repo={REPO} />);
+
+    fireEvent.click(await screen.findByText("src"));
+    expect(await screen.findByTestId("tree-file-src/a.ts")).toBeInTheDocument();
+    expect(localStorage.getItem("tinto:explorer-expanded:/r/api")).toBe('["src"]');
+    first.unmount();
+
+    render(<ProjectExplorer repo={REPO} />);
+
+    expect(await screen.findByTestId("tree-file-src/a.ts")).toBeInTheDocument();
+  });
+
+  it("keeps expanded folders in sync between mounted explorer views", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(
+      <>
+        <ProjectExplorer repo={REPO} />
+        <ProjectExplorer repo={REPO} />
+      </>,
+    );
+
+    fireEvent.click((await screen.findAllByText("src"))[0]);
+
+    await waitFor(() => expect(screen.getAllByTestId("tree-file-src/a.ts")).toHaveLength(2));
   });
 
   it("opens the file context menu actions", async () => {
