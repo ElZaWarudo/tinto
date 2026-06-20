@@ -10,6 +10,7 @@ pub mod validation;
 use std::{
     collections::HashMap,
     fmt,
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -67,6 +68,11 @@ pub struct AgentSessionRegistry {
     process_factory: Arc<dyn AgentProcessFactory>,
 }
 
+pub struct StartedAgentSession {
+    pub id: String,
+    pub output_reader: Option<Box<dyn Read + Send>>,
+}
+
 impl AgentSessionRegistry {
     pub fn new() -> Self {
         Self::with_process_factory(Arc::new(PortablePtyFactory))
@@ -84,24 +90,45 @@ impl AgentSessionRegistry {
         repo: PathBuf,
         agent_type: String,
     ) -> Result<String, AgentConsoleError> {
-        let repo = canonical_repo(&repo)?;
-        let binary_path = resolve_agent_binary(&agent_type)?;
-        self.start_session_with_binary(repo, agent_type, binary_path)
+        Ok(self.start_session_with_output(repo, agent_type)?.id)
     }
 
+    pub fn start_session_with_output(
+        &mut self,
+        repo: PathBuf,
+        agent_type: String,
+    ) -> Result<StartedAgentSession, AgentConsoleError> {
+        let repo = canonical_repo(&repo)?;
+        let binary_path = resolve_agent_binary(&agent_type)?;
+        self.start_session_with_binary_and_output(repo, agent_type, binary_path)
+    }
+
+    #[cfg(test)]
     fn start_session_with_binary(
         &mut self,
         repo: PathBuf,
         agent_type: String,
         binary_path: PathBuf,
     ) -> Result<String, AgentConsoleError> {
+        Ok(self
+            .start_session_with_binary_and_output(repo, agent_type, binary_path)?
+            .id)
+    }
+
+    fn start_session_with_binary_and_output(
+        &mut self,
+        repo: PathBuf,
+        agent_type: String,
+        binary_path: PathBuf,
+    ) -> Result<StartedAgentSession, AgentConsoleError> {
         let repo = canonical_repo(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
-        let process = self.process_factory.spawn_agent(&binary_path, &repo)?;
+        let mut process = self.process_factory.spawn_agent(&binary_path, &repo)?;
+        let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(id.clone(), repo, agent_type);
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
-        Ok(id)
+        Ok(StartedAgentSession { id, output_reader })
     }
 
     pub fn stop_session(&mut self, session_id: &str) -> Result<(), AgentConsoleError> {
@@ -117,6 +144,38 @@ impl AgentSessionRegistry {
             session.refresh_status()?;
         }
         Ok(())
+    }
+
+    pub fn write_session_input(
+        &mut self,
+        session_id: &str,
+        input: &[u8],
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.write_input(input)
+    }
+
+    pub fn resize_session(
+        &mut self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), AgentConsoleError> {
+        if cols == 0 || rows == 0 {
+            return Err(AgentConsoleError::new(
+                "invalid_terminal_size",
+                "cols y rows deben ser mayores que cero",
+            ));
+        }
+
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.resize(cols, rows)
     }
 
     pub fn list_sessions(&self) -> Vec<AgentSession> {
@@ -168,15 +227,21 @@ fn canonical_repo(repo: &Path) -> Result<PathBuf, AgentConsoleError> {
 mod tests {
     use super::*;
     use crate::{agent_console::pty::AgentProcess, bus::contract::AgentSessionStatus};
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
+    use std::{
+        io::{Cursor, Read},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
     };
 
     #[derive(Default)]
     struct FakeProcessFactory {
         next_pid: AtomicUsize,
         spawned: Mutex<Vec<PathBuf>>,
+        writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        resizes: Arc<Mutex<Vec<(u16, u16)>>>,
+        output: Mutex<Option<Vec<u8>>>,
     }
 
     impl AgentProcessFactory for FakeProcessFactory {
@@ -191,15 +256,25 @@ mod tests {
                 pid,
                 exit_code: None,
                 killed: false,
+                writes: Arc::clone(&self.writes),
+                resizes: Arc::clone(&self.resizes),
+                output: self
+                    .output
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .map(|bytes| Box::new(Cursor::new(bytes)) as Box<dyn Read + Send>),
             }))
         }
     }
 
-    #[derive(Debug)]
     struct FakeProcess {
         pid: u32,
         exit_code: Option<i32>,
         killed: bool,
+        writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        resizes: Arc<Mutex<Vec<(u16, u16)>>>,
+        output: Option<Box<dyn Read + Send>>,
     }
 
     impl AgentProcess for FakeProcess {
@@ -215,6 +290,20 @@ mod tests {
             self.killed = true;
             self.exit_code = Some(0);
             Ok(())
+        }
+
+        fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
+            self.writes.lock().unwrap().push(input.to_vec());
+            Ok(())
+        }
+
+        fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
+            self.resizes.lock().unwrap().push((cols, rows));
+            Ok(())
+        }
+
+        fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+            self.output.take()
         }
     }
 
@@ -256,6 +345,81 @@ mod tests {
         let session = registry.get_session(&id).unwrap();
         assert_eq!(session.status, AgentSessionStatus::Exited);
         assert_eq!(session.exit_code, Some(0));
+    }
+
+    #[test]
+    fn registry_routes_input_and_resize_to_running_process() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory.clone());
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+
+        registry.write_session_input(&id, b"hello\r").unwrap();
+        registry.resize_session(&id, 120, 36).unwrap();
+
+        assert_eq!(
+            factory.writes.lock().unwrap().as_slice(),
+            &[b"hello\r".to_vec()]
+        );
+        assert_eq!(factory.resizes.lock().unwrap().as_slice(), &[(120, 36)]);
+    }
+
+    #[test]
+    fn registry_rejects_invalid_terminal_size() {
+        let mut registry =
+            AgentSessionRegistry::with_process_factory(Arc::new(FakeProcessFactory::default()));
+
+        let error = registry.resize_session("missing", 0, 24).unwrap_err();
+
+        assert_eq!(error.category, "invalid_terminal_size");
+    }
+
+    #[test]
+    fn registry_rejects_input_for_missing_or_stopped_session() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+
+        let missing = registry.write_session_input("missing", b"x").unwrap_err();
+        assert_eq!(missing.category, "session_not_found");
+
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+        registry.stop_session(&id).unwrap();
+
+        let stopped = registry.write_session_input(&id, b"x").unwrap_err();
+        assert_eq!(stopped.category, "session_not_running");
+    }
+
+    #[test]
+    fn registry_start_session_can_return_output_reader() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        *factory.output.lock().unwrap() = Some(b"ready".to_vec());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+
+        let mut started = registry
+            .start_session_with_binary_and_output(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+        let mut output = Vec::new();
+        started
+            .output_reader
+            .as_mut()
+            .unwrap()
+            .read_to_end(&mut output)
+            .unwrap();
+
+        assert_eq!(output, b"ready");
+        assert!(registry.get_session(&started.id).is_some());
     }
 
     #[test]

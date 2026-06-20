@@ -92,6 +92,8 @@ pub fn run() {
             agent_console::commands::start_agent_session,
             agent_console::commands::stop_agent_session,
             agent_console::commands::list_agent_sessions,
+            agent_console::commands::write_agent_session_input,
+            agent_console::commands::resize_agent_session,
             ui_state::get_ui_state,
             ui_state::set_ui_state
         ])

@@ -12,6 +12,7 @@ use crate::git::{BranchInfo, CommitInfo, FileDiff, RepoStatus};
 pub const EVENT_WORKBENCH_DELTA: &str = "tinto://workbench-delta";
 pub const EVENT_FS_EVENTS: &str = "tinto://fs-events";
 pub const EVENT_WATCHING_STATE: &str = "tinto://watching-state";
+pub const EVENT_AGENT_SESSION_OUTPUT: &str = "tinto://agent-session-output";
 
 /// Estado lifecycle de una sesion de agente gestionada por el backend.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -41,6 +42,15 @@ pub struct AgentSession {
     pub started_at_ms: u64,
     pub exit_code: Option<i32>,
     pub error: Option<AgentSessionError>,
+}
+
+/// Chunk binario del PTY de una sesion de agente, transportado en base64 para
+/// preservar ANSI y bytes parciales.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentSessionOutput {
+    pub session_id: String,
+    pub chunk_base64: String,
+    pub timestamp_ms: u64,
 }
 
 /// Guarda de tamaño para contenido de archivos/blobs.
@@ -313,5 +323,19 @@ mod tests {
         assert_eq!(json["started_at_ms"], 1760000000000u64);
         assert!(json["exit_code"].is_null());
         assert_eq!(json["error"]["category"], "spawn_failed");
+    }
+
+    #[test]
+    fn agent_session_output_serializa_chunk_base64() {
+        let output = AgentSessionOutput {
+            session_id: "sess-1".into(),
+            chunk_base64: "SG9sYQ0K".into(),
+            timestamp_ms: 1760000000001,
+        };
+
+        let json = serde_json::to_value(&output).unwrap();
+        assert_eq!(json["session_id"], "sess-1");
+        assert_eq!(json["chunk_base64"], "SG9sYQ0K");
+        assert_eq!(json["timestamp_ms"], 1760000000001u64);
     }
 }

@@ -13,6 +13,9 @@ pub trait AgentProcess: Send {
     fn pid(&self) -> Option<u32>;
     fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError>;
     fn kill(&mut self) -> Result<(), AgentConsoleError>;
+    fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError>;
+    fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
+    fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
 }
 
 pub trait AgentProcessFactory: Send + Sync {
@@ -39,7 +42,7 @@ impl AgentProcessFactory for PortablePtyFactory {
 pub struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
-    reader: Box<dyn Read + Send>,
+    reader: Option<Box<dyn Read + Send>>,
     writer: Box<dyn Write + Send>,
 }
 
@@ -66,12 +69,12 @@ impl PtyHandle {
         Ok(Self {
             master: pair.master,
             child,
-            reader,
+            reader: Some(reader),
             writer,
         })
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
+    fn resize_pty(&self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
         self.master
             .resize(PtySize {
                 rows,
@@ -82,7 +85,7 @@ impl PtyHandle {
             .map_err(|e| AgentConsoleError::new("pty_resize_failed", e.to_string()))
     }
 
-    pub fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
+    fn write_input_pty(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
         self.writer
             .write_all(input)
             .map_err(|e| AgentConsoleError::new("pty_write_failed", e.to_string()))
@@ -90,6 +93,10 @@ impl PtyHandle {
 
     pub fn read_output(&mut self, output: &mut [u8]) -> Result<usize, AgentConsoleError> {
         self.reader
+            .as_mut()
+            .ok_or_else(|| {
+                AgentConsoleError::new("pty_reader_taken", "el lector PTY ya fue movido")
+            })?
             .read(output)
             .map_err(|e| AgentConsoleError::new("pty_read_failed", e.to_string()))
     }
@@ -118,6 +125,18 @@ impl AgentProcess for PtyHandle {
         self.child
             .kill()
             .map_err(|e| AgentConsoleError::new("process_kill_failed", e.to_string()))
+    }
+
+    fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
+        self.write_input_pty(input)
+    }
+
+    fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
+        self.resize_pty(cols, rows)
+    }
+
+    fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.reader.take()
     }
 }
 

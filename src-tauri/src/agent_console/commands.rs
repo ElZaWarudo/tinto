@@ -1,12 +1,18 @@
 use std::{
+    io::Read,
     path::{Path, PathBuf},
     sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
-use crate::bus::{contract::AgentSession, BusHandle};
+use crate::bus::{
+    contract::{AgentSession, AgentSessionOutput, EVENT_AGENT_SESSION_OUTPUT},
+    BusHandle,
+};
 
 use super::{AgentConsoleError, AgentSessionRegistry};
 
@@ -33,14 +39,21 @@ impl From<AgentConsoleError> for CommandError {
 
 #[tauri::command]
 pub async fn start_agent_session(
+    app: AppHandle,
     bus: State<'_, BusHandle>,
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     repo: PathBuf,
     agent_type: String,
 ) -> Result<String, CommandError> {
     let repo = ensure_known_agent_repo(&bus, &repo).await?;
-    let mut registry = lock_registry(&registry)?;
-    registry.start_session(repo, agent_type).map_err(Into::into)
+    let started = {
+        let mut registry = lock_registry(&registry)?;
+        registry.start_session_with_output(repo, agent_type)?
+    };
+    if let Some(output_reader) = started.output_reader {
+        spawn_output_reader(app, started.id.clone(), output_reader);
+    }
+    Ok(started.id)
 }
 
 #[tauri::command]
@@ -63,6 +76,34 @@ pub fn list_agent_sessions(
     Ok(registry.list_sessions())
 }
 
+#[tauri::command]
+pub fn write_agent_session_input(
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    input_base64: String,
+) -> Result<(), CommandError> {
+    let input = STANDARD
+        .decode(input_base64)
+        .map_err(|e| CommandError::new("invalid_input", e.to_string()))?;
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .write_session_input(&session_id, &input)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn resize_agent_session(
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .resize_session(&session_id, cols, rows)
+        .map_err(Into::into)
+}
+
 async fn ensure_known_agent_repo(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
     let canon = repo
         .canonicalize()
@@ -83,6 +124,37 @@ fn lock_registry(
     registry
         .lock()
         .map_err(|_| CommandError::new("lock_poisoned", "el registro de agentes fallo"))
+}
+
+fn spawn_output_reader(
+    app: AppHandle,
+    session_id: String,
+    mut output_reader: Box<dyn Read + Send>,
+) {
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+        loop {
+            match output_reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let payload = AgentSessionOutput {
+                        session_id: session_id.clone(),
+                        chunk_base64: STANDARD.encode(&buffer[..read]),
+                        timestamp_ms: now_ms(),
+                    };
+                    let _ = app.emit(EVENT_AGENT_SESSION_OUTPUT, payload);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -111,5 +183,15 @@ mod tests {
         };
 
         assert_eq!(error.category, "lock_poisoned");
+    }
+
+    #[test]
+    fn invalid_input_base64_maps_to_command_error() {
+        let error = STANDARD
+            .decode("not base64!")
+            .map_err(|e| CommandError::new("invalid_input", e.to_string()))
+            .unwrap_err();
+
+        assert_eq!(error.category, "invalid_input");
     }
 }

@@ -77,6 +77,16 @@ impl AgentSessionRecord {
         Ok(())
     }
 
+    pub fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
+        let process = self.running_process_mut()?;
+        process.write_input(input)
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
+        let process = self.running_process_mut()?;
+        process.resize(cols, rows)
+    }
+
     pub fn refresh_status(&mut self) -> Result<(), AgentConsoleError> {
         if self.status != AgentSessionStatus::Running {
             return Ok(());
@@ -91,6 +101,18 @@ impl AgentSessionRecord {
         }
 
         Ok(())
+    }
+
+    fn running_process_mut(&mut self) -> Result<&mut Box<dyn AgentProcess>, AgentConsoleError> {
+        if self.status != AgentSessionStatus::Running {
+            return Err(AgentConsoleError::new(
+                "session_not_running",
+                "la sesion no esta ejecutandose",
+            ));
+        }
+        self.process.as_mut().ok_or_else(|| {
+            AgentConsoleError::new("session_not_running", "la sesion no esta ejecutandose")
+        })
     }
 
     pub fn to_contract(&self) -> AgentSession {
@@ -117,6 +139,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[derive(Debug)]
     struct FakeProcess {
@@ -140,6 +163,18 @@ mod tests {
         fn kill(&mut self) -> Result<(), AgentConsoleError> {
             self.exit_code = Some(0);
             Ok(())
+        }
+
+        fn write_input(&mut self, _input: &[u8]) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+            None
         }
     }
 
