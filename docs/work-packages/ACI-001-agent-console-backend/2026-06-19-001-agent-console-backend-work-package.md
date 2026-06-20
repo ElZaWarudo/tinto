@@ -154,7 +154,7 @@ Rules:
   - PASS: `cargo fmt --check`.
   - PASS: `cargo test` (135/135).
   - PASS: `cargo clippy --all-targets -- -D warnings`.
-- RU3 status (2026-06-20): implementation complete, direct review passed, and local verification passed on `feat/agent-console-commands`; commit/release handoff pending.
+- RU3 status (2026-06-20): implementation complete, direct review passed, local verification passed, fast-forward merged into `develop`, and pushed to `origin/develop` at `0065c3d`.
 - RU3 changed surfaces: `src-tauri/src/agent_console/commands.rs`, `src-tauri/src/agent_console/mod.rs`, `src-tauri/src/agent_console/pty.rs`, `src-tauri/src/lib.rs`, `src/bus/client.ts`, `src/bus/contract.test.ts`, and `docs/contracts/bus-contract.md`.
 - RU3 implementation notes:
   - Added `start_agent_session`, `stop_agent_session`, and `list_agent_sessions` Tauri commands.

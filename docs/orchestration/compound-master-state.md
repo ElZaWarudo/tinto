@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: ACI-001 RU1 was split into atomic commits, fast-forward merged into `develop`, and pushed to `origin/develop` at `2c21f79`; ACI-001 RU2 core runtime was fast-forward merged into `develop` and pushed to `origin/develop` at `a903e03`; ACI-001 RU3 commands/integration implemented, direct-reviewed, and locally verified on `feat/agent-console-commands`.
+- Current phase/status: ACI-001 is delivered on `develop`: RU1 pushed at `2c21f79`, RU2 pushed at `a903e03`, and RU3 session lifecycle commands/integration pushed at `0065c3d`.
 - Active package: ACI-001 Backend PTY Runtime + Agent Process Lifecycle (docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md).
-- Branch/base: `feat/agent-console-commands` from pushed `develop` at `ee0ce6e`. Working tree contains RU3 implementation (`agent_console::commands`, Tauri registry/commands/shutdown wiring, process-tree kill, TS wrappers, contract docs/tests). Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
+- Branch/base: `develop`/`origin/develop` at `0065c3d`. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
 - Required user decisions: none.
-- Next action: commit RU3, then fast-forward merge to `develop` and push if scope remains clean.
+- Next action: decide whether to begin ACI-002 PTY output streaming or first do a manual app smoke once the local `tinto.exe` lock is gone.
 
 ## Source Documents
 
