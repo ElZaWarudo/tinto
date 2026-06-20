@@ -1,6 +1,6 @@
 ---
 title: ACI-001 Backend PTY Runtime + Agent Process Lifecycle
-status: ready
+status: review-passed
 roadmap_item: ACI-001
 origin_roadmap: docs/roadmaps/2026-06-19-002-agent-console-integration.md
 origin_plan: docs/plans/2026-06-19-001-feat-agent-console-backend-plan.md
@@ -91,6 +91,44 @@ Rules:
 - Stacked PRs: RU1 → RU2 → RU3, max 2 open at a time
 - At-cap action: wait for parent to merge into develop before opening next PR
 
+## Execution Status
+
+- RU1 status (2026-06-20): implementation complete and direct review passed on `feat/agent-console-contract`; local full-suite verification gap resolved; release handoff pending.
+- RU1 changed surfaces: `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `src-tauri/src/bus/contract.rs`, `src/bus/contract.ts`, `src/bus/contract.test.ts`, `docs/contracts/bus-contract.md`, orchestration state, one CI-hygiene fix outside RU1 (`src/qol/shortcuts.test.ts` unused import removal), and local full-suite gap fixes in `src-tauri/src/bus/commands.rs` and `src-tauri/src/watcher/mod.rs`.
+- RU1 assumptions recorded:
+  - `portable-pty = "0.9.0"` selected from current crates.io search; RU1 does not call the API yet, so API compatibility is deferred to RU2.
+  - RU1 intentionally adds session metadata types only. Tauri lifecycle commands remain RU3, and PTY output/input streaming remains ACI-002.
+- RU1 Impact Scan:
+  - Changed contracts/dependencies: additive `AgentSessionStatus`, `AgentSessionError`, and `AgentSession` Rust/TypeScript contract types; new Rust dependency `portable-pty`.
+  - Consumer scan patterns: `AgentSession`, `AgentSessionStatus`, `AgentSessionError`, `agent_session`, `agent_type`, `started_at_ms`, `exit_code`, `portable-pty`.
+  - Consumers found: contract docs/tests and ACI planning artifacts only; no runtime consumers yet.
+  - Contract-drift tests: `src-tauri/src/bus/contract.rs` serialization test and `src/bus/contract.test.ts` TypeScript shape test updated and passing.
+- RU1 Verification:
+  - PASS: `python C:\Users\Mayor\.agents\skills\krt-compound-master\scripts\check_work_package.py docs\work-packages\ACI-001-agent-console-backend\2026-06-19-001-agent-console-backend-work-package.md`.
+  - PASS: `cargo check`.
+  - PASS: `cargo fmt --check`.
+  - PASS: `cargo test bus::contract` (3/3).
+  - PASS: `cargo test agent_session_serializa_con_estado_snake_case`.
+  - PASS after gap fix: `cargo test resolve_within_rechaza_traversal`.
+  - PASS after gap fix: `cargo test ae8_repo_removido_estado_terminal`.
+  - PASS after gap fix: `cargo test ae5_borrado_del_root_sintetiza_error`.
+  - PASS after gap fix: `cargo test remount_tras_repo_removed_revive_el_repo`.
+  - PASS after gap fix: `cargo test` (121/121).
+  - PASS: `cargo clippy --all-targets -- -D warnings`.
+  - PASS: `npm test -- contract.test.ts` (11/11).
+  - PASS after the CI-hygiene fix: `npm test -- shortcuts.test.ts contract.test.ts` (32/32).
+  - PASS: `npx prettier --check src/bus/contract.ts src/bus/contract.test.ts src/qol/shortcuts.test.ts`.
+  - PASS: `npx eslint src/bus/contract.ts src/bus/contract.test.ts src/qol/shortcuts.test.ts`.
+  - PASS after `npm install` and CI-hygiene fix: `npm run lint`, `npm run build`.
+  - GAP: `npm run format:check` still fails globally on 85 pre-existing files; RU1 TypeScript files pass targeted Prettier.
+- Local full-suite gap resolution:
+  - `resolve_within_rechaza_traversal` depended on Unix `/etc/hostname`; fixed by creating a real temp external file so the traversal assertion is portable on Windows.
+  - Windows `notify` did not emit the exact removed-root event when deleting a watched root; fixed by adding a lightweight router health tick that detects missing mounted roots and synthesizes the same `RepoRemoved` path used by event-based routing.
+- RU1 Review/Security Watch:
+  - Direct Compound Master diff review found no P0-P2 findings in the additive contract types, docs, tests, or dependency manifest.
+  - Security Watch: dependency surface changed, but RU1 does not execute `portable-pty`, add commands, accept user input, spawn processes, or widen Tauri capabilities. Runtime execution, binary allowlist, env sanitization, and process-tree kill remain gated to RU2/RU3 security review.
+  - `cargo tree -p portable-pty` reviewed for transitive dependency awareness; no code-level use exists in RU1.
+
 ## Reviewability Diagnosis
 - Reviewer-experience check: yes, each PR is understandable and verifiable on its own
   - RU1: contract changes are isolated and testable
@@ -170,8 +208,8 @@ Rules:
 
 ## CI Break-Prevention And Escalation
 - CI risk surfaces:
-  - Build: new dependencies (portable-pty, uuid, which) may have platform-specific build requirements
-  - Tests: new tests may fail on different platforms (Unix/Windows/WSL)
+  - Build: new dependency (`portable-pty`) may have platform-specific build requirements
+  - Tests: new contract serialization tests must pass on Rust and TypeScript sides
   - Lint: new code must pass clippy
 - Preventive evidence:
   - Local `cargo build` on target platform
@@ -187,12 +225,12 @@ Rules:
 - PR base: develop
 - Suggested commit grouping for RU1:
   - `feat(agent-console): add portable-pty dependency` - Cargo.toml - foundational dependency
-  - `feat(bus-contract): add agent session types` - bus/contract.rs, bus-contract.md - contract extension
+  - `feat(bus-contract): add agent session types` - Rust/TS contract mirrors, tests, and docs
 - PR title: feat(agent-console): add PTY runtime dependencies and bus contract
 - PR body bullets:
-  - Add portable-pty, uuid, which dependencies for agent console backend
+  - Add portable-pty dependency for the agent console backend
   - Extend bus contract with AgentSession, AgentSessionStatus, AgentSessionError types
-  - Document new types in bus-contract.md
+  - Mirror and test the new types in TypeScript and document them in bus-contract.md
 - Verification results location: CI run link
 - Production/deployment notes: none (prototype)
 - Autonomous mutation request: none

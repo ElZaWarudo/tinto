@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: Agent Console Integration initiative ready for execution. Roadmap, plan, and work package complete. ACI-001 work package validated and ready for implementation.
+- Current phase/status: ACI-001 RU1 implementation complete, local full-suite gap resolved, direct review passed, and local commit organization pending before release handoff.
 - Active package: ACI-001 Backend PTY Runtime + Agent Process Lifecycle (docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md).
-- Branch/base: `develop` at `bf75b09` over `origin/develop`. Working tree clean.
+- Branch/base: `feat/agent-console-contract` from `develop`/`origin/develop` at `dfe6ff6`. Working tree contains RU1 implementation, contract docs, one CI-hygiene fix outside RU1 (`src/qol/shortcuts.test.ts` unused import removal), the local Rust full-suite gap fixes, and post-RU1 explorer follow-ups outside ACI-001 (Windows tree path nesting, expanded-folder persistence, scrollbar/file-row polish, and visual file icons).
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
-- Required user decisions: none. Ready to execute ACI-001 RU1.
-- Next action: execute ACI-001 work package (mode:execute package:docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md review-unit:RU1).
+- Required user decisions: none.
+- Next action: create local atomic commits separating ACI-001 RU1 from explorer follow-ups, then invoke `krt-release-marshal` for ACI-001 RU1 when the release scope is clean.
 
 ## Source Documents
 
