@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { DockviewApi } from "dockview-react";
 import { DockWorkspace, type PanelComponents, type TabComponents } from "./workspace/DockWorkspace";
-import { PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE, TAB_REPO } from "./workspace/panels";
+import {
+  PANEL_AGENT_TERMINAL,
+  PANEL_DASHBOARD,
+  PANEL_REPO,
+  PANEL_TIMELINE,
+  TAB_REPO,
+} from "./workspace/panels";
 import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/actions";
 import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
@@ -13,6 +19,7 @@ import { DashboardPanel } from "./panels/DashboardPanel";
 import { RepoPanel } from "./panels/RepoPanel";
 import { RepoTab } from "./panels/RepoTab";
 import { TimelinePanel } from "./panels/timeline/TimelinePanel";
+import { TerminalPanel } from "./panels/terminal/TerminalPanel";
 import { MenuBar } from "./workbench/MenuBar";
 import { FirstRun } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
@@ -29,6 +36,7 @@ const components: PanelComponents = {
   [PANEL_DASHBOARD]: DashboardPanel,
   [PANEL_REPO]: RepoPanel,
   [PANEL_TIMELINE]: TimelinePanel,
+  [PANEL_AGENT_TERMINAL]: TerminalPanel,
 };
 
 const tabComponents: TabComponents = {
@@ -46,7 +54,6 @@ export default function App() {
     zoomStore.hydrate();
     return installZoomKeybindings();
   }, []);
-
 
   // Background-preload every repo's file tree so each project's explorer is
   // "always loaded" — no spinner when its tab opens. ensureLoaded is idempotent.

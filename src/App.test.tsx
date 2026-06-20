@@ -9,6 +9,9 @@ vi.mock("./bus/connection", () => ({
   useBusConnection: () => {},
   reloadActiveWorkbench: vi.fn(),
 }));
+vi.mock("./panels/terminal/TerminalPanel", () => ({
+  TerminalPanel: () => null,
+}));
 
 const captured = vi.hoisted(() => ({
   components: undefined as Record<string, unknown> | undefined,
@@ -23,7 +26,13 @@ vi.mock("./workspace/DockWorkspace", () => ({
 import App from "./App";
 import { busStore } from "./bus/store";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
-import { PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE, repoPanelId } from "./workspace/panels";
+import {
+  PANEL_AGENT_TERMINAL,
+  PANEL_DASHBOARD,
+  PANEL_REPO,
+  PANEL_TIMELINE,
+  repoPanelId,
+} from "./workspace/panels";
 import type { WorkbenchConfig } from "./bus/contract";
 
 describe("App", () => {
@@ -59,7 +68,7 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
     expect(Object.keys(captured.components ?? {})).toEqual(
-      expect.arrayContaining([PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE]),
+      expect.arrayContaining([PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE, PANEL_AGENT_TERMINAL]),
     );
   });
 
