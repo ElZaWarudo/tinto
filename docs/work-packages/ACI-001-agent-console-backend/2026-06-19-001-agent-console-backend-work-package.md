@@ -154,6 +154,33 @@ Rules:
   - PASS: `cargo fmt --check`.
   - PASS: `cargo test` (135/135).
   - PASS: `cargo clippy --all-targets -- -D warnings`.
+- RU3 status (2026-06-20): implementation complete, direct review passed, and local verification passed on `feat/agent-console-commands`; commit/release handoff pending.
+- RU3 changed surfaces: `src-tauri/src/agent_console/commands.rs`, `src-tauri/src/agent_console/mod.rs`, `src-tauri/src/agent_console/pty.rs`, `src-tauri/src/lib.rs`, `src/bus/client.ts`, `src/bus/contract.test.ts`, and `docs/contracts/bus-contract.md`.
+- RU3 implementation notes:
+  - Added `start_agent_session`, `stop_agent_session`, and `list_agent_sessions` Tauri commands.
+  - Wired `AgentSessionRegistry` into Tauri managed state and registered commands in `generate_handler`.
+  - `start_agent_session` fail-closes through `BusHandle::is_known`, so agents only launch for repos in the active workbench.
+  - App exit cleanup now calls `AgentSessionRegistry::cleanup_all()` after bus shutdown.
+  - Added process-tree kill best effort: `taskkill /F /T /PID` on Windows, process-group `kill` on Unix/WSL, fallback to `portable-pty` child kill.
+  - Added frontend typed wrappers and contract docs for the new commands.
+- RU3 Security Watch:
+  - New exposed spawn command is guarded by active-workbench repo allowlist, binary allowlist, PATH lookup without shell expansion, and sanitized PTY environment inherited from RU2.
+  - Command errors keep `{ category, message }` shape and do not include env values or command output except process-tree stderr in backend-only lifecycle errors.
+  - Process-tree kill is best effort and falls back to child kill; platform-specific hardening can continue in later runtime polishing.
+- RU3 Review:
+  - Direct Compound Master review found no P0-P2 findings after checking repo allowlist, command registration, shutdown cleanup, process kill fallback, and TS command wrappers.
+- RU3 Verification:
+  - PASS: `cargo test agent_console` (17/17).
+  - PASS: `cargo fmt --check`.
+  - PASS: `cargo clippy --all-targets -- -D warnings`.
+  - PASS: `cargo test` (138/138).
+  - PASS: `cargo check`.
+  - PASS: `cargo build --lib`.
+  - PASS: `npm test -- contract.test.ts` (12/12).
+  - PASS: `npm test` (192/192).
+  - PASS: `npm run lint`.
+  - PASS: `npm run build`.
+  - GAP: `cargo build` for the binary could not replace `src-tauri/target/debug/tinto.exe` because Windows reported `Acceso denegado`, likely an open app instance. `cargo check`, `cargo test`, and `cargo build --lib` passed.
 
 ## Reviewability Diagnosis
 - Reviewer-experience check: yes, each PR is understandable and verifiable on its own

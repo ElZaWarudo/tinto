@@ -64,6 +64,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(std::sync::Mutex::new(store))
+        .manage(std::sync::Mutex::new(
+            agent_console::AgentSessionRegistry::new(),
+        ))
         .manage(bus_handle)
         .invoke_handler(tauri::generate_handler![
             ping,
@@ -86,6 +89,9 @@ pub fn run() {
             bus::commands::list_repo_tree,
             bus::commands::set_subscriptions,
             bus::commands::retry_repo,
+            agent_console::commands::start_agent_session,
+            agent_console::commands::stop_agent_session,
+            agent_console::commands::list_agent_sessions,
             ui_state::get_ui_state,
             ui_state::set_ui_state
         ])
@@ -129,6 +135,13 @@ pub fn run() {
                             tokio::time::timeout(std::time::Duration::from_secs(3), bus.shutdown())
                                 .await;
                     });
+                }
+                if let Some(registry) =
+                    app_handle.try_state::<std::sync::Mutex<agent_console::AgentSessionRegistry>>()
+                {
+                    if let Ok(mut registry) = registry.lock() {
+                        registry.cleanup_all();
+                    }
                 }
             }
         });

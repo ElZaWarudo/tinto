@@ -2,6 +2,7 @@ use std::{
     ffi::OsStr,
     io::{Read, Write},
     path::Path,
+    process::Command,
 };
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -107,6 +108,13 @@ impl AgentProcess for PtyHandle {
     }
 
     fn kill(&mut self) -> Result<(), AgentConsoleError> {
+        if let Some(pid) = self.child.process_id() {
+            if kill_process_tree(pid).is_ok() {
+                let _ = self.child.kill();
+                return Ok(());
+            }
+        }
+
         self.child
             .kill()
             .map_err(|e| AgentConsoleError::new("process_kill_failed", e.to_string()))
@@ -151,6 +159,51 @@ fn spawn_error(message: String) -> AgentConsoleError {
     AgentConsoleError::new("pty_spawn_failed", message)
 }
 
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
+    let output = Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .output()
+        .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AgentConsoleError::new(
+            "process_tree_kill_failed",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
+    let process_group = format!("-{pid}");
+    let term = Command::new("kill")
+        .args(["-TERM", &process_group])
+        .status()
+        .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
+    if !term.success() {
+        return Err(AgentConsoleError::new(
+            "process_tree_kill_failed",
+            "no se pudo senalizar el grupo de proceso",
+        ));
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let _ = Command::new("kill")
+        .args(["-KILL", &process_group])
+        .status();
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_process_tree(_pid: u32) -> Result<(), AgentConsoleError> {
+    Err(AgentConsoleError::new(
+        "process_tree_kill_unsupported",
+        "process tree kill no esta soportado en esta plataforma",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +224,14 @@ mod tests {
         assert!(command.get_env("OPENAI_API_KEY").is_none());
         assert!(command.get_env("ANTHROPIC_API_KEY").is_none());
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
+    }
+
+    #[test]
+    fn unsupported_process_tree_kill_path_is_structured() {
+        #[cfg(not(any(unix, windows)))]
+        {
+            let error = kill_process_tree(123).unwrap_err();
+            assert_eq!(error.category, "process_tree_kill_unsupported");
+        }
     }
 }

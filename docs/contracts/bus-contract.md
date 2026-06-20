@@ -95,6 +95,9 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 | `list_repo_tree` | `repo` | `{ entries: Vec<TreeEntry>, truncated: bool }` | Full working-tree tree respecting `.gitignore` (`ignore` walk), cap 20,000 entries. |
 | `set_subscriptions` | `targets: Vec<{repo, path?}>` | `()` | Set of open targets (cap 8); applies from the next recomputation. |
 | `retry_repo` | `repo` | `()` | Retries the remount of a repo in terminal error. |
+| `start_agent_session` | `repo, agent_type` | `session_id: string` | Starts an allowlisted agent (`claude`, `codex`, `opencode`) in a PTY for a repo in the active workbench. |
+| `stop_agent_session` | `session_id` | `()` | Stops the tracked PTY process/session. |
+| `list_agent_sessions` | none | `Vec<AgentSession>` | Returns known sessions after refreshing completed process statuses. |
 
 - `FileContent`: `{ encoding: "utf8" | "base64", content: string, truncated: bool }` — 1 MiB guard (truncated) and binary detection (→ base64). Validated relative paths: after canonicalizing they must stay within the repo (no `../`).
 - `get_media_content` returns the same `FileContent` shape but always uses `"base64"` and a 12 MiB guard, so visual previews can build `data:` URLs without ambiguity. Supported extensions: `pdf`, `avif`, `bmp`, `gif`, `ico`, `jpeg`, `jpg`, `png`, `svg`, `webp`; anything else returns `unsupported-media`.
@@ -103,7 +106,7 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 
 ## Agent Console Session Types (ACI-001)
 
-The agent console backend exposes session lifecycle metadata through additive contract types. Lifecycle commands are introduced by the later ACI-001 integration RU; PTY output/input streaming is introduced by ACI-002.
+The agent console backend exposes session lifecycle metadata through additive contract types. PTY output/input streaming is introduced by ACI-002.
 
 ```jsonc
 {
@@ -122,6 +125,7 @@ The agent console backend exposes session lifecycle metadata through additive co
 - `AgentSessionError`: `{ category: string, message: string }`; messages are safe for UI display and must not include secrets.
 - `agent_type`: canonical supported agent id, currently planned as `"claude"`, `"codex"`, or `"opencode"`.
 - `repo`: canonical repo identity, using the same opaque path convention as `RepoDelta.repo`.
+- `start_agent_session` rejects repos outside the active workbench before spawning. Errors use the same `{ category, message }` command-error shape as other Tauri commands.
 
 ## Dry-run: view needs → contract
 

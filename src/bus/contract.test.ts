@@ -104,8 +104,11 @@ import {
   getFileContent,
   getMediaContent,
   getWorktreeDiff,
+  listAgentSessions,
   listRepoTree,
   setSubscriptions,
+  startAgentSession,
+  stopAgentSession,
   updateRepo,
 } from "./client";
 
@@ -170,5 +173,21 @@ describe("RDM-008 client wrappers", () => {
       clearAlias: false,
       fsWatch: [".env"],
     });
+  });
+
+  it("agent session wrappers use registered command names", () => {
+    void startAgentSession("/r/api", "codex");
+    expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
+      repo: "/r/api",
+      agentType: "codex",
+    });
+
+    void stopAgentSession("sess-1");
+    expect(invokeMock).toHaveBeenCalledWith("stop_agent_session", {
+      sessionId: "sess-1",
+    });
+
+    void listAgentSessions();
+    expect(invokeMock).toHaveBeenCalledWith("list_agent_sessions");
   });
 });

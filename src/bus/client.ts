@@ -10,6 +10,7 @@ import {
   EVENT_WATCHING_STATE,
   EVENT_WORKBENCH_DELTA,
   type CommitInfo,
+  type AgentSession,
   type FileContent,
   type FileDiff,
   type FsEventBatch,
@@ -64,6 +65,14 @@ export const getBlob = (repo: string, commitId: string, path: string) =>
   invoke<FileContent>("get_blob", { repo, commitId, path });
 
 export const retryRepo = (repo: string) => invoke("retry_repo", { repo });
+
+export const startAgentSession = (repo: string, agentType: string) =>
+  invoke<string>("start_agent_session", { repo, agentType });
+
+export const stopAgentSession = (sessionId: string) =>
+  invoke("stop_agent_session", { sessionId });
+
+export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
 
 // ---- RDM-008: diff / tree / content / subscriptions ----
 export const getWorktreeDiff = (repo: string) => invoke<FileDiff[]>("get_worktree_diff", { repo });

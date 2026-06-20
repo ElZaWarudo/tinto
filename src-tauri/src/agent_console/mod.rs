@@ -2,6 +2,7 @@
 //! conectan en el siguiente review unit; este modulo mantiene el lifecycle
 //! testeable sin exponer todavia nueva superficie IPC.
 
+pub mod commands;
 pub mod pty;
 pub mod session;
 pub mod validation;
