@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   AgentSession,
+  AgentSessionOutput,
   AgentSessionStatus,
   DiffLineKind,
   FileDiff,
@@ -89,14 +90,28 @@ describe("agent session contract types", () => {
     expect(session.agent_type).toBe("codex");
     expect(session.error?.category).toBe("spawn_failed");
   });
+
+  it("accepts output chunks with base64 payloads", () => {
+    const wire = JSON.stringify({
+      session_id: "sess-1",
+      chunk_base64: "SG9sYQ0K",
+      timestamp_ms: 1760000000001,
+    });
+
+    const output = JSON.parse(wire) as AgentSessionOutput;
+    expect(output.session_id).toBe("sess-1");
+    expect(output.chunk_base64).toBe("SG9sYQ0K");
+    expect(output.timestamp_ms).toBe(1760000000001);
+  });
 });
 
 // Client wrappers must issue the exact registered snake_case command names with
 // single-word arg keys (Tauri maps camelCase→snake_case, but these are all
 // single-word so identical either way).
 const invokeMock = vi.fn();
+const listenMock = vi.fn((..._args: unknown[]) => Promise.resolve(() => {}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listenMock(...a) }));
 
 import {
   getBlob,
@@ -106,14 +121,20 @@ import {
   getWorktreeDiff,
   listAgentSessions,
   listRepoTree,
+  onAgentSessionOutput,
+  resizeAgentSession,
   setSubscriptions,
   startAgentSession,
   stopAgentSession,
   updateRepo,
+  writeAgentSessionInput,
 } from "./client";
 
 describe("RDM-008 client wrappers", () => {
-  beforeEach(() => invokeMock.mockClear());
+  beforeEach(() => {
+    invokeMock.mockClear();
+    listenMock.mockClear();
+  });
 
   it("get_worktree_diff passes repo", () => {
     void getWorktreeDiff("/r/api");
@@ -189,5 +210,32 @@ describe("RDM-008 client wrappers", () => {
 
     void listAgentSessions();
     expect(invokeMock).toHaveBeenCalledWith("list_agent_sessions");
+  });
+
+  it("agent terminal stream wrappers encode input and resize dimensions", () => {
+    void writeAgentSessionInput("sess-1", "hi\r");
+    expect(invokeMock).toHaveBeenCalledWith("write_agent_session_input", {
+      sessionId: "sess-1",
+      inputBase64: "aGkN",
+    });
+
+    void writeAgentSessionInput("sess-1", new Uint8Array([0x1b, 0x5b, 0x41]));
+    expect(invokeMock).toHaveBeenCalledWith("write_agent_session_input", {
+      sessionId: "sess-1",
+      inputBase64: "G1tB",
+    });
+
+    void resizeAgentSession("sess-1", 120, 36);
+    expect(invokeMock).toHaveBeenCalledWith("resize_agent_session", {
+      sessionId: "sess-1",
+      cols: 120,
+      rows: 36,
+    });
+  });
+
+  it("listens for agent session output event", () => {
+    void onAgentSessionOutput(() => {});
+
+    expect(listenMock).toHaveBeenCalledWith("tinto://agent-session-output", expect.any(Function));
   });
 });

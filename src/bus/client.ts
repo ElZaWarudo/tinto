@@ -6,10 +6,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  EVENT_AGENT_SESSION_OUTPUT,
   EVENT_FS_EVENTS,
   EVENT_WATCHING_STATE,
   EVENT_WORKBENCH_DELTA,
   type CommitInfo,
+  type AgentSessionOutput,
   type AgentSession,
   type FileContent,
   type FileDiff,
@@ -69,10 +71,18 @@ export const retryRepo = (repo: string) => invoke("retry_repo", { repo });
 export const startAgentSession = (repo: string, agentType: string) =>
   invoke<string>("start_agent_session", { repo, agentType });
 
-export const stopAgentSession = (sessionId: string) =>
-  invoke("stop_agent_session", { sessionId });
+export const stopAgentSession = (sessionId: string) => invoke("stop_agent_session", { sessionId });
 
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
+
+export const writeAgentSessionInput = (sessionId: string, input: string | Uint8Array) =>
+  invoke("write_agent_session_input", {
+    sessionId,
+    inputBase64: encodeAgentInput(input),
+  });
+
+export const resizeAgentSession = (sessionId: string, cols: number, rows: number) =>
+  invoke("resize_agent_session", { sessionId, cols, rows });
 
 // ---- RDM-008: diff / tree / content / subscriptions ----
 export const getWorktreeDiff = (repo: string) => invoke<FileDiff[]>("get_worktree_diff", { repo });
@@ -99,3 +109,19 @@ export const onFsEvents = (cb: (b: FsEventBatch) => void): Promise<UnlistenFn> =
 
 export const onWatchingState = (cb: (w: WatchingState) => void): Promise<UnlistenFn> =>
   listen<WatchingState>(EVENT_WATCHING_STATE, (e) => cb(e.payload));
+
+export const onAgentSessionOutput = (
+  cb: (output: AgentSessionOutput) => void,
+): Promise<UnlistenFn> =>
+  listen<AgentSessionOutput>(EVENT_AGENT_SESSION_OUTPUT, (e) => cb(e.payload));
+
+const encodeAgentInput = (input: string | Uint8Array) => {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+};

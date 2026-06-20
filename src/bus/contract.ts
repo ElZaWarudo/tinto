@@ -10,6 +10,7 @@
 export const EVENT_WORKBENCH_DELTA = "tinto://workbench-delta";
 export const EVENT_FS_EVENTS = "tinto://fs-events";
 export const EVENT_WATCHING_STATE = "tinto://watching-state";
+export const EVENT_AGENT_SESSION_OUTPUT = "tinto://agent-session-output";
 
 // ---- Agent console sessions (ACI-001) ----
 export type AgentSessionStatus = "starting" | "running" | "exited" | "error";
@@ -28,6 +29,12 @@ export interface AgentSession {
   started_at_ms: number;
   exit_code: number | null;
   error: AgentSessionError | null;
+}
+
+export interface AgentSessionOutput {
+  session_id: string;
+  chunk_base64: string;
+  timestamp_ms: number;
 }
 
 // ---- Git value types ----

@@ -81,6 +81,18 @@
 
 Emitted at startup and on changes. `available: false` = degraded mode: data arrives only on demand (`invoke`); deltas do not flow.
 
+### `tinto://agent-session-output` - PTY output chunk for ONE agent session
+
+```jsonc
+{
+  "session_id": "sess-1",
+  "chunk_base64": "SG9sYQ0K",
+  "timestamp_ms": 1760000000000
+}
+```
+
+Chunks are live only; the first ACI-002 stream bridge does not replay historical output produced before a frontend listener attaches. `chunk_base64` preserves PTY bytes, ANSI escape sequences, and partial UTF-8 boundaries. The frontend decodes the bytes at the terminal surface boundary.
+
 ## Commands (frontend `invoke` → backend)
 
 | Command | Args | Response | Notes |
@@ -98,15 +110,17 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 | `start_agent_session` | `repo, agent_type` | `session_id: string` | Starts an allowlisted agent (`claude`, `codex`, `opencode`) in a PTY for a repo in the active workbench. |
 | `stop_agent_session` | `session_id` | `()` | Stops the tracked PTY process/session. |
 | `list_agent_sessions` | none | `Vec<AgentSession>` | Returns known sessions after refreshing completed process statuses. |
+| `write_agent_session_input` | `session_id, input_base64` | `()` | Writes decoded bytes to a running session's PTY stdin. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
+| `resize_agent_session` | `session_id, cols, rows` | `()` | Resizes a running session's PTY. `cols` and `rows` must be positive; invalid dimensions return `invalid_terminal_size`. |
 
 - `FileContent`: `{ encoding: "utf8" | "base64", content: string, truncated: bool }` — 1 MiB guard (truncated) and binary detection (→ base64). Validated relative paths: after canonicalizing they must stay within the repo (no `../`).
 - `get_media_content` returns the same `FileContent` shape but always uses `"base64"` and a 12 MiB guard, so visual previews can build `data:` URLs without ambiguity. Supported extensions: `pdf`, `avif`, `bmp`, `gif`, `ico`, `jpeg`, `jpg`, `png`, `svg`, `webp`; anything else returns `unsupported-media`.
 - `TreeEntry`: `{ path: string, is_dir: bool }` — flat list; the frontend builds the tree.
 - `set_active_workbench` (existing, RDM-005) now additionally triggers the watcher remount and the snapshot of the new workbench (asynchronous — the deltas arrive via the stream).
 
-## Agent Console Session Types (ACI-001)
+## Agent Console Session Types (ACI-001/ACI-002)
 
-The agent console backend exposes session lifecycle metadata through additive contract types. PTY output/input streaming is introduced by ACI-002.
+The agent console backend exposes session lifecycle metadata through additive contract types. ACI-002 adds live PTY output, input, and resize without changing the lifecycle metadata shape.
 
 ```jsonc
 {
@@ -126,6 +140,7 @@ The agent console backend exposes session lifecycle metadata through additive co
 - `agent_type`: canonical supported agent id, currently planned as `"claude"`, `"codex"`, or `"opencode"`.
 - `repo`: canonical repo identity, using the same opaque path convention as `RepoDelta.repo`.
 - `start_agent_session` rejects repos outside the active workbench before spawning. Errors use the same `{ category, message }` command-error shape as other Tauri commands.
+- `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live PTY output chunks.
 
 ## Dry-run: view needs → contract
 
