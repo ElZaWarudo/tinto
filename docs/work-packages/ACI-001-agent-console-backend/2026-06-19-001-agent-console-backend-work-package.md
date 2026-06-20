@@ -128,6 +128,32 @@ Rules:
   - Direct Compound Master diff review found no P0-P2 findings in the additive contract types, docs, tests, or dependency manifest.
   - Security Watch: dependency surface changed, but RU1 does not execute `portable-pty`, add commands, accept user input, spawn processes, or widen Tauri capabilities. Runtime execution, binary allowlist, env sanitization, and process-tree kill remain gated to RU2/RU3 security review.
   - `cargo tree -p portable-pty` reviewed for transitive dependency awareness; no code-level use exists in RU1.
+- RU1 Release:
+  - Local atomic commits created on `feat/agent-console-contract`, then fast-forward merged into `develop` and pushed to `origin/develop` at `2c21f79`.
+  - RU1-related commits: `90e9779 feat(bus-contract): add agent sessions and portable tree paths`, `38f97a5 fix(watcher): detect missing repo roots on Windows`, `7654e99 test(qol): remove stale shortcuts import`, and `2c21f79 docs(orchestration): sync agent console handoff state`.
+  - Adjacent explorer follow-ups shipped in the same pushed tranche by user direction: `7c1b038 fix(explorer): persist expanded folders` and `6ca13a9 feat(explorer): refine file tree presentation`.
+- RU2 status (2026-06-20): implementation complete, direct review passed after fix, and local verification passed on `feat/agent-console-runtime`; commit/release handoff pending.
+- RU2 changed surfaces: `src-tauri/src/agent_console/mod.rs`, `src-tauri/src/agent_console/session.rs`, `src-tauri/src/agent_console/validation.rs`, `src-tauri/src/agent_console/pty.rs`, `src-tauri/src/lib.rs`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock`.
+- RU2 implementation notes:
+  - Added internal `AgentSessionRegistry` with injectable `AgentProcessFactory`, deterministic listing, stop/cleanup lifecycle, and contract conversion.
+  - Added `AgentSessionRecord` state transitions: starting, running, exited, error; stop is idempotent once exited.
+  - Added binary validation with strict allowlist (`claude`, `codex`, `opencode`) and PATH lookup via `which`, with no shell expansion or aliases.
+  - Added `PtyHandle` wrapper around `portable-pty` with spawn, resize, input write, output read, PID, exit polling, and kill hooks for RU3/ACI-002.
+  - Added sanitized PTY command environment allowlist. Common secret-like env vars are not inherited; PATH and minimal OS/user/terminal variables are preserved.
+- RU2 Security Watch:
+  - Process execution is now represented in code, but no Tauri command or frontend/user input path can reach it yet. Runtime exposure remains gated to RU3.
+  - The public registry start path always resolves through the allowlist and `which`; the binary-injection helper is private to tests/internal code so commands cannot bypass validation accidentally.
+  - Environment inheritance is allowlist-based and tests assert API keys are absent from the command builder.
+  - Platform-wide process-tree cleanup remains explicitly deferred to RU3; RU2 only wraps `portable-pty` child kill.
+- RU2 Review:
+  - Direct Compound Master review found one lifecycle bug: if `kill()` succeeded but exit-code polling failed, `stop()` returned early without recording an error status.
+  - Fixed in `AgentSessionRecord::stop()` by recording `AgentSessionStatus::Error` and a structured `process_status_failed` error before returning. Added `stop_records_error_when_exit_poll_fails`.
+  - No remaining P0-P2 findings after the fix.
+- RU2 Verification:
+  - PASS: `cargo test agent_console` (14/14).
+  - PASS: `cargo fmt --check`.
+  - PASS: `cargo test` (135/135).
+  - PASS: `cargo clippy --all-targets -- -D warnings`.
 
 ## Reviewability Diagnosis
 - Reviewer-experience check: yes, each PR is understandable and verifiable on its own

@@ -1,3 +1,4 @@
+pub mod agent_console;
 pub mod bus;
 pub mod git;
 pub mod paths;

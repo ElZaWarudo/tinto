@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: ACI-001 RU1 implementation complete, local full-suite gap resolved, direct review passed, and local commit organization pending before release handoff.
+- Current phase/status: ACI-001 RU1 was split into atomic commits, fast-forward merged into `develop`, and pushed to `origin/develop` at `2c21f79`; ACI-001 RU2 core runtime is implemented, direct-reviewed, and locally verified on `feat/agent-console-runtime`.
 - Active package: ACI-001 Backend PTY Runtime + Agent Process Lifecycle (docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md).
-- Branch/base: `feat/agent-console-contract` from `develop`/`origin/develop` at `dfe6ff6`. Working tree contains RU1 implementation, contract docs, one CI-hygiene fix outside RU1 (`src/qol/shortcuts.test.ts` unused import removal), the local Rust full-suite gap fixes, and post-RU1 explorer follow-ups outside ACI-001 (Windows tree path nesting, expanded-folder persistence, scrollbar/file-row polish, and visual file icons).
+- Branch/base: `feat/agent-console-runtime` from pushed `develop` at `2c21f79`. Working tree contains RU2 implementation (`src-tauri/src/agent_console/*`, `uuid`/`which`, `Cargo.lock`, module export) plus this orchestration update. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
 - Required user decisions: none.
-- Next action: create local atomic commits separating ACI-001 RU1 from explorer follow-ups, then invoke `krt-release-marshal` for ACI-001 RU1 when the release scope is clean.
+- Next action: commit RU2, then proceed to RU3 (Tauri commands, app state wiring, process cleanup hardening, and integration tests) on top of RU2.
 
 ## Source Documents
 
