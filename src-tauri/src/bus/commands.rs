@@ -389,12 +389,19 @@ fn list_repo_tree_capped(repo: &Path, cap: usize) -> Result<RepoTree, CommandErr
                 break;
             }
             entries.push(TreeEntry {
-                path: rel.to_path_buf(),
+                path: repo_relative_tree_path(rel),
                 is_dir: entry.file_type().is_some_and(|t| t.is_dir()),
             });
         }
         Ok(RepoTree { entries, truncated })
     }
+}
+
+fn repo_relative_tree_path(rel: &Path) -> String {
+    rel.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 // ===========================================================================
@@ -495,13 +502,10 @@ mod tests {
         // Target que EXISTE fuera del repo: canonicalize() tiene éxito, así que
         // solo el guard `starts_with` puede rechazarlo → prueba que el branch
         // de seguridad efectivamente dispara (no el de not-found).
-        let depth = repo.path().canonicalize().unwrap().components().count();
-        let mut escape = PathBuf::new();
-        for _ in 0..depth {
-            escape.push("..");
-        }
-        escape.push("etc/hostname");
-        let err = resolve_within(repo.path(), &escape).expect_err("debe rechazar el escape");
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("secret.txt");
+        std::fs::write(&outside_file, "x").unwrap();
+        let err = resolve_within(repo.path(), &outside_file).expect_err("debe rechazar el escape");
         assert_eq!(
             err.category, "path-traversal",
             "debe ser el guard starts_with, no not-found"
@@ -597,13 +601,13 @@ mod tests {
         repo.write("target/out.o", "obj");
 
         let tree = list_repo_tree_capped(repo.path(), REPO_TREE_MAX_ENTRIES).expect("tree");
-        let paths: Vec<String> = tree
-            .entries
-            .iter()
-            .map(|e| e.path.to_string_lossy().replace('\\', "/"))
-            .collect();
-        assert!(paths.iter().any(|p| p == "src/main.rs"));
-        assert!(paths.iter().any(|p| p == "base.txt"));
+        let paths: Vec<&str> = tree.entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"src/main.rs"));
+        assert!(paths.contains(&"base.txt"));
+        assert!(
+            paths.iter().all(|p| !p.contains('\\')),
+            "paths del árbol deben usar separadores POSIX"
+        );
         assert!(
             !paths.iter().any(|p| p.starts_with(".git/")),
             "sin .git interno"

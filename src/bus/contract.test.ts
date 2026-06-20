@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DiffLineKind, FileDiff, RepoDelta } from "./contract";
+import type {
+  AgentSession,
+  AgentSessionStatus,
+  DiffLineKind,
+  FileDiff,
+  RepoDelta,
+} from "./contract";
 
 // D-008-5: the TS diff types must match the backend's serde output exactly.
 // The Rust enum `DiffLineKind` derives Serialize with no rename_all, so it
@@ -62,6 +68,26 @@ describe("passive signal contract types", () => {
     expect(delta.metrics?.lines_added).toBe(3);
     expect(delta.signals?.[0].kind).toBe("sensitive_path");
     expect(delta.signals?.[0].severity).toBe("warning");
+  });
+});
+
+describe("agent session contract types", () => {
+  it("accepts session lifecycle metadata with snake_case status", () => {
+    const wire = JSON.stringify({
+      id: "sess-1",
+      repo: "/r/api",
+      agent_type: "codex",
+      status: "running",
+      pid: 42,
+      started_at_ms: 1760000000000,
+      exit_code: null,
+      error: { category: "spawn_failed", message: "no se pudo iniciar la sesion" },
+    });
+
+    const session = JSON.parse(wire) as AgentSession;
+    expect(session.status).toEqual<AgentSessionStatus>("running");
+    expect(session.agent_type).toBe("codex");
+    expect(session.error?.category).toBe("spawn_failed");
   });
 });
 

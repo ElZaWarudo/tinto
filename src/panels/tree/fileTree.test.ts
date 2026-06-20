@@ -22,7 +22,7 @@ describe("buildFileTree", () => {
       status({ modified: ["src/a.ts"], untracked: ["README.md"] }),
     );
 
-    // Dirs first, then files by name → [src/, README.md].
+    // Dirs first, then files by name -> [src/, README.md].
     expect(tree.map((n) => n.name)).toEqual(["src", "README.md"]);
     const src = tree[0];
     expect(src.isDir).toBe(true);
@@ -38,6 +38,19 @@ describe("buildFileTree", () => {
     expect(tree[0].name).toBe("a");
     expect(tree[0].children[0].name).toBe("b");
     expect(tree[0].children[0].children[0].name).toBe("c.ts");
+  });
+
+  it("normalizes Windows separators before building folders", () => {
+    const entries: TreeEntry[] = [
+      { path: "docs\\contracts", is_dir: true },
+      { path: "docs\\contracts\\bus-contract.md", is_dir: false },
+    ];
+    const tree = buildFileTree(entries, status({ modified: ["docs/contracts/bus-contract.md"] }));
+
+    expect(tree.map((n) => n.name)).toEqual(["docs"]);
+    expect(tree[0].children.map((n) => n.name)).toEqual(["contracts"]);
+    expect(tree[0].children[0].children[0].path).toBe("docs/contracts/bus-contract.md");
+    expect(tree[0].children[0].children[0].changed).toBe("modified");
   });
 
   it("staged wins over modified for the change mark", () => {

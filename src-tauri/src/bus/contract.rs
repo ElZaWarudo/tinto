@@ -13,6 +13,36 @@ pub const EVENT_WORKBENCH_DELTA: &str = "tinto://workbench-delta";
 pub const EVENT_FS_EVENTS: &str = "tinto://fs-events";
 pub const EVENT_WATCHING_STATE: &str = "tinto://watching-state";
 
+/// Estado lifecycle de una sesion de agente gestionada por el backend.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionStatus {
+    Starting,
+    Running,
+    Exited,
+    Error,
+}
+
+/// Error estructurado y seguro para comandos/lifecycle de sesiones de agente.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentSessionError {
+    pub category: String,
+    pub message: String,
+}
+
+/// Metadata publica de una sesion de agente. La E/S PTY se anade en ACI-002.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentSession {
+    pub id: String,
+    pub repo: PathBuf,
+    pub agent_type: String,
+    pub status: AgentSessionStatus,
+    pub pid: Option<u32>,
+    pub started_at_ms: u64,
+    pub exit_code: Option<i32>,
+    pub error: Option<AgentSessionError>,
+}
+
 /// Guarda de tamaño para contenido de archivos/blobs.
 pub const FILE_CONTENT_MAX_BYTES: usize = 1024 * 1024;
 /// Guarda de tamaño para vistas multimedia embebidas (PDF/imágenes).
@@ -150,7 +180,7 @@ pub struct SubscriptionTarget {
 /// Entrada del árbol del repo (lista plana; el frontend arma el árbol).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TreeEntry {
-    pub path: PathBuf,
+    pub path: String,
     pub is_dir: bool,
 }
 
@@ -256,5 +286,32 @@ mod tests {
         assert_eq!(json["kind"], "modified");
         assert_eq!(json["size_delta"], -2);
         assert_eq!(json["signals"][0]["kind"], "config_change");
+    }
+
+    #[test]
+    fn agent_session_serializa_con_estado_snake_case() {
+        let session = AgentSession {
+            id: "sess-1".into(),
+            repo: "/r/api".into(),
+            agent_type: "codex".into(),
+            status: AgentSessionStatus::Running,
+            pid: Some(42),
+            started_at_ms: 1760000000000,
+            exit_code: None,
+            error: Some(AgentSessionError {
+                category: "spawn_failed".into(),
+                message: "no se pudo iniciar la sesion".into(),
+            }),
+        };
+
+        let json = serde_json::to_value(&session).unwrap();
+        assert_eq!(json["id"], "sess-1");
+        assert_eq!(json["repo"], "/r/api");
+        assert_eq!(json["agent_type"], "codex");
+        assert_eq!(json["status"], "running");
+        assert_eq!(json["pid"], 42);
+        assert_eq!(json["started_at_ms"], 1760000000000u64);
+        assert!(json["exit_code"].is_null());
+        assert_eq!(json["error"]["category"], "spawn_failed");
     }
 }

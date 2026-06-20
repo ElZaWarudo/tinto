@@ -11,6 +11,25 @@ export const EVENT_WORKBENCH_DELTA = "tinto://workbench-delta";
 export const EVENT_FS_EVENTS = "tinto://fs-events";
 export const EVENT_WATCHING_STATE = "tinto://watching-state";
 
+// ---- Agent console sessions (ACI-001) ----
+export type AgentSessionStatus = "starting" | "running" | "exited" | "error";
+
+export interface AgentSessionError {
+  category: string;
+  message: string;
+}
+
+export interface AgentSession {
+  id: string;
+  repo: string;
+  agent_type: string;
+  status: AgentSessionStatus;
+  pid: number | null;
+  started_at_ms: number;
+  exit_code: number | null;
+  error: AgentSessionError | null;
+}
+
 // ---- Git value types ----
 export interface RepoStatus {
   modified: string[];
@@ -132,7 +151,7 @@ export interface SubscriptionTarget {
 }
 
 export interface TreeEntry {
-  path: string; // relative to the repo root
+  path: string; // relative to the repo root, with "/" separators
   is_dir: boolean;
 }
 

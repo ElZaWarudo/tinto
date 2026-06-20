@@ -26,6 +26,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
 # Watcher de FS nativo multiplataforma (inotify / ReadDirectoryChangesW)
 notify = "8"
+portable-pty = "0.9.0"
 # Capa de lectura de git: libgit2 vendored (build estático, sin red — no se necesitan
 # features ssh/https porque Tinto nunca hace fetch/push)
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }

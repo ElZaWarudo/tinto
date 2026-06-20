@@ -101,6 +101,28 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 - `TreeEntry`: `{ path: string, is_dir: bool }` — flat list; the frontend builds the tree.
 - `set_active_workbench` (existing, RDM-005) now additionally triggers the watcher remount and the snapshot of the new workbench (asynchronous — the deltas arrive via the stream).
 
+## Agent Console Session Types (ACI-001)
+
+The agent console backend exposes session lifecycle metadata through additive contract types. Lifecycle commands are introduced by the later ACI-001 integration RU; PTY output/input streaming is introduced by ACI-002.
+
+```jsonc
+{
+  "id": "sess-1",
+  "repo": "/canonical/path/to/repo",
+  "agent_type": "codex",
+  "status": "running",              // "starting" | "running" | "exited" | "error"
+  "pid": 12345,                      // null before spawn or when unavailable
+  "started_at_ms": 1760000000000,
+  "exit_code": null,                 // process exit code after completion, when available
+  "error": null                      // AgentSessionError | null
+}
+```
+
+- `AgentSessionStatus`: `"starting" | "running" | "exited" | "error"`.
+- `AgentSessionError`: `{ category: string, message: string }`; messages are safe for UI display and must not include secrets.
+- `agent_type`: canonical supported agent id, currently planned as `"claude"`, `"codex"`, or `"opencode"`.
+- `repo`: canonical repo identity, using the same opaque path convention as `RepoDelta.repo`.
+
 ## Dry-run: view needs → contract
 
 | View (item) | Read/render need | Served by |

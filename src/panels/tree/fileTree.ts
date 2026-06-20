@@ -26,6 +26,10 @@ function basename(path: string): string {
   return i < 0 ? path : path.slice(i + 1);
 }
 
+function normalizeTreePath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
 /** Change kind for a file path; staged wins over modified wins over untracked. */
 function changeKind(path: string, status: RepoStatus): ChangeKind | null {
   if (status.staged.includes(path)) return "staged";
@@ -80,15 +84,16 @@ export function buildFileTree(entries: TreeEntry[], status: RepoStatus): TreeNod
   };
 
   for (const e of entries) {
+    const path = normalizeTreePath(e.path);
     if (e.is_dir) {
-      ensureDir(e.path);
+      ensureDir(path);
     } else {
-      const parent = ensureDir(dirname(e.path));
+      const parent = ensureDir(dirname(path));
       parent.children.push({
-        name: basename(e.path),
-        path: e.path,
+        name: basename(path),
+        path,
         isDir: false,
-        changed: changeKind(e.path, status),
+        changed: changeKind(path, status),
         hasChanges: false,
         children: [],
       });
