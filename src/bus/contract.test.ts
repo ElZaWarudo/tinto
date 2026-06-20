@@ -109,7 +109,10 @@ describe("agent session contract types", () => {
 // single-word arg keys (Tauri maps camelCase→snake_case, but these are all
 // single-word so identical either way).
 const invokeMock = vi.fn();
-const listenMock = vi.fn((..._args: unknown[]) => Promise.resolve(() => {}));
+const listenMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve(() => {});
+});
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listenMock(...a) }));
 
