@@ -189,7 +189,12 @@ class FileDock {
     clearLayout(repo);
   }
 
-  private add(api: DockviewApi, id: string, repo: string, path: string) {
+  private add(api: DockviewApi, id: string, repo: string, path: string, split = false) {
+    const activePath = this.pathOf(api.activePanel);
+    const position =
+      split && activePath && api.activePanel
+        ? { direction: "right" as const, referencePanel: api.activePanel.id }
+        : undefined;
     try {
       api.addPanel({
         id,
@@ -197,6 +202,7 @@ class FileDock {
         tabComponent: "fileTab",
         title: basename(path),
         params: { repo, path },
+        position,
       });
     } catch {
       api.getPanel(id)?.api.setActive();
@@ -229,7 +235,7 @@ class FileDock {
         api.getPanel(FILE_PREVIEW_ID)?.api.close();
         e.preview = null;
       }
-      this.add(api, filePanelId(path), repo, path);
+      this.add(api, filePanelId(path), repo, path, true);
       return;
     }
 

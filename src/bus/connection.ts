@@ -12,6 +12,7 @@ import {
   listAgentSessions,
   listWorkbenches,
   onAgentSessionChangeLog,
+  onAgentSessionOutput,
   onFsEvents,
   onWatchingState,
   onWorkbenchDelta,
@@ -48,6 +49,7 @@ export function useBusConnection(): void {
       onAgentSessionChangeLog(
         (log) => active && agentSessionStore.applyChangeLog(log.session_id, log.changes),
       ),
+      onAgentSessionOutput((output) => active && agentSessionStore.appendOutput(output)),
     ];
     void reloadActiveWorkbench();
     return () => {

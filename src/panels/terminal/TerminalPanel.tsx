@@ -6,12 +6,15 @@ import "@xterm/xterm/css/xterm.css";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   listAgentSessions,
-  onAgentSessionOutput,
   resizeAgentSession,
   revertSession,
   writeAgentSessionInput,
 } from "../../bus/client";
-import { agentSessionStore, useAgentSession } from "../../agent/sessionStore";
+import {
+  agentSessionStore,
+  useAgentSession,
+  useAgentSessionState,
+} from "../../agent/sessionStore";
 import type { AgentSession } from "../../bus/contract";
 
 export interface TerminalPanelParams {
@@ -28,8 +31,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const agentType = params?.agentType ?? "agent";
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const session = useAgentSession(sessionId);
+  const output = useAgentSessionState().output[sessionId] ?? [];
   const [error, setError] = useState<string | null>(null);
   const [reverting, setReverting] = useState(false);
+  const terminalInstanceRef = useRef<Terminal | null>(null);
+  const writtenOutputRef = useRef(0);
 
   const shortSession = useMemo(
     () => (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId),
@@ -58,6 +64,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(container);
+    terminalInstanceRef.current = terminal;
+    writtenOutputRef.current = 0;
 
     const publishSize = () => {
       try {
@@ -84,11 +92,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         if (active) setError(commandMessage(e));
       });
     });
-    const outputSubscription = onAgentSessionOutput((output) => {
-      if (!active || output.session_id !== sessionId) return;
-      terminal.write(decodeBase64(output.chunk_base64));
-    });
-
     publishSize();
     const frame = window.requestAnimationFrame(scheduleFit);
     const observer =
@@ -105,11 +108,20 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       window.clearTimeout(resizeTimer);
       observer?.disconnect();
       dataSubscription.dispose();
-      void outputSubscription.then((unlisten) => unlisten());
       fitAddon.dispose();
       terminal.dispose();
+      terminalInstanceRef.current = null;
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    const terminal = terminalInstanceRef.current;
+    if (!terminal) return;
+    for (let index = writtenOutputRef.current; index < output.length; index += 1) {
+      terminal.write(decodeBase64(output[index].chunk_base64));
+    }
+    writtenOutputRef.current = output.length;
+  }, [output]);
 
   useEffect(() => {
     let active = true;

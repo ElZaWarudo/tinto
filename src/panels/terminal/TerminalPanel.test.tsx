@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSession, AgentSessionOutput } from "../../bus/contract";
+import type { AgentSession } from "../../bus/contract";
 
 const writeAgentSessionInputMock = vi.fn((...args: unknown[]) => {
   void args;
@@ -37,18 +37,12 @@ const confirmMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(true);
 });
-const unlistenMock = vi.fn();
-let outputHandler: ((output: AgentSessionOutput) => void) | null = null;
 
 vi.mock("../../bus/client", () => ({
   listAgentSessions: () => listAgentSessionsMock(),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
   writeAgentSessionInput: (...a: unknown[]) => writeAgentSessionInputMock(...a),
   resizeAgentSession: (...a: unknown[]) => resizeAgentSessionMock(...a),
-  onAgentSessionOutput: (cb: (output: AgentSessionOutput) => void) => {
-    outputHandler = cb;
-    return Promise.resolve(unlistenMock);
-  },
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -135,14 +129,12 @@ describe("TerminalPanel", () => {
   beforeEach(() => {
     xtermMocks.terminalInstances.length = 0;
     xtermMocks.fitInstances.length = 0;
-    outputHandler = null;
     agentSessionStore.reset();
     writeAgentSessionInputMock.mockClear();
     resizeAgentSessionMock.mockClear();
     listAgentSessionsMock.mockClear();
     revertSessionMock.mockClear();
     confirmMock.mockClear();
-    unlistenMock.mockClear();
   });
 
   it("opens an xterm surface and publishes the initial fitted size", async () => {
@@ -168,12 +160,12 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1" })} />);
 
     await act(async () => {
-      outputHandler?.({
+      agentSessionStore.appendOutput({
         session_id: "other",
         chunk_base64: "b3RoZXI=",
         timestamp_ms: 1,
       });
-      outputHandler?.({
+      agentSessionStore.appendOutput({
         session_id: "sess-1",
         chunk_base64: "aGkN",
         timestamp_ms: 2,
@@ -186,13 +178,27 @@ describe("TerminalPanel", () => {
     ]);
   });
 
-  it("cleans up listener and xterm resources on unmount", async () => {
+  it("replays output buffered before the terminal panel opens", async () => {
+    agentSessionStore.appendOutput({
+      session_id: "sess-1",
+      chunk_base64: "Q29kZXggcmVhZHkN",
+      timestamp_ms: 1,
+    });
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1" })} />);
+
+    expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1);
+    expect(Array.from(xtermMocks.terminalInstances[0].writes[0] as Uint8Array)).toEqual([
+      67, 111, 100, 101, 120, 32, 114, 101, 97, 100, 121, 13,
+    ]);
+  });
+
+  it("cleans up xterm resources on unmount", async () => {
     const { unmount } = render(<TerminalPanel {...props({ sessionId: "sess-1" })} />);
 
     unmount();
     await act(async () => {});
 
-    expect(unlistenMock).toHaveBeenCalledOnce();
     expect(xtermMocks.terminalInstances[0].disposed).toBe(true);
     expect(xtermMocks.fitInstances[0].disposed).toBe(true);
   });

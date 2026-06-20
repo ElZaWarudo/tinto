@@ -1,13 +1,17 @@
 import { useSyncExternalStore } from "react";
-import type { AgentSession, AgentSessionChange } from "../bus/contract";
+import type { AgentSession, AgentSessionChange, AgentSessionOutput } from "../bus/contract";
 
 export interface AgentSessionState {
   sessions: Record<string, AgentSession>;
+  output: Record<string, AgentSessionOutput[]>;
 }
 
 const EMPTY: AgentSessionState = {
   sessions: {},
+  output: {},
 };
+
+const MAX_OUTPUT_CHUNKS_PER_SESSION = 400;
 
 export class AgentSessionStore {
   private state: AgentSessionState = EMPTY;
@@ -28,11 +32,12 @@ export class AgentSessionStore {
   setSessions(sessions: AgentSession[]) {
     const next: Record<string, AgentSession> = {};
     for (const session of sessions) next[session.id] = normalizeSession(session);
-    this.set({ sessions: next });
+    this.set({ ...this.state, sessions: next });
   }
 
   upsertSession(session: AgentSession) {
     this.set({
+      ...this.state,
       sessions: {
         ...this.state.sessions,
         [session.id]: normalizeSession(session),
@@ -44,6 +49,17 @@ export class AgentSessionStore {
     const session = this.state.sessions[sessionId];
     if (!session) return;
     this.upsertSession({ ...session, change_log: changes });
+  }
+
+  appendOutput(output: AgentSessionOutput) {
+    const current = this.state.output[output.session_id] ?? [];
+    this.set({
+      ...this.state,
+      output: {
+        ...this.state.output,
+        [output.session_id]: [...current, output].slice(-MAX_OUTPUT_CHUNKS_PER_SESSION),
+      },
+    });
   }
 
   reset() {

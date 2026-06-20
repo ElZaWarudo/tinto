@@ -260,10 +260,22 @@ describe("RepoPanel", () => {
 describe("openRepoPanel (dedup)", () => {
   // Covers AE6: opening the same repo focuses the existing panel, no duplicate.
   function fakeApi() {
-    const panels: Record<string, { api: { setActive: ReturnType<typeof vi.fn> } }> = {};
+    const panels: Record<string, { id: string; api: { setActive: ReturnType<typeof vi.fn> } }> = {};
+    let activePanel: { id: string; api: { setActive: ReturnType<typeof vi.fn> } } | null = null;
     return {
+      get activePanel() {
+        return activePanel;
+      },
       addPanel: vi.fn((opts: { id: string }) => {
-        panels[opts.id] = { api: { setActive: vi.fn() } };
+        panels[opts.id] = {
+          id: opts.id,
+          api: {
+            setActive: vi.fn(() => {
+              activePanel = panels[opts.id];
+            }),
+          },
+        };
+        activePanel = panels[opts.id];
         return panels[opts.id];
       }),
       getPanel: vi.fn((id: string) => panels[id]),
@@ -281,5 +293,22 @@ describe("openRepoPanel (dedup)", () => {
     openRepoPanel(api as never, "/r/api", "api");
     expect(api.addPanel).toHaveBeenCalledTimes(1);
     expect(created.api.setActive).toHaveBeenCalledOnce();
+  });
+
+  it("opens a second repo as a right split of the active repo", () => {
+    const api = fakeApi();
+
+    openRepoPanel(api as never, "/r/api", "api");
+    openRepoPanel(api as never, "/r/web", "web");
+
+    expect(api.addPanel).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: "repo:/r/web",
+        position: {
+          direction: "right",
+          referencePanel: "repo:/r/api",
+        },
+      }),
+    );
   });
 });

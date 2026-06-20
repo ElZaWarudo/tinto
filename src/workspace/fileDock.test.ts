@@ -22,7 +22,12 @@ function makeFakeApi() {
       return active;
     },
     getPanel: (id: string) => panels.find((p) => p.id === id),
-    addPanel: vi.fn((opts: { id: string; params?: Record<string, unknown> }) => {
+    addPanel: vi.fn(
+      (opts: {
+        id: string;
+        params?: Record<string, unknown>;
+        position?: { direction: "right"; referencePanel: string };
+      }) => {
       const panel = {
         id: opts.id,
         params: { ...(opts.params ?? {}) },
@@ -48,7 +53,8 @@ function makeFakeApi() {
       addCbs.forEach((cb) => cb(panel));
       activeCbs.forEach((cb) => cb());
       return panel;
-    }),
+      },
+    ),
     onDidAddPanel: (cb: (p: unknown) => void) => (addCbs.push(cb), { dispose() {} }),
     onDidRemovePanel: (cb: (p: { id: string }) => void) => (removeCbs.push(cb), { dispose() {} }),
     onDidActivePanelChange: (cb: () => void) => (activeCbs.push(cb), { dispose() {} }),
@@ -101,12 +107,21 @@ describe("fileDock", () => {
     expect(panel.api.setActive).toHaveBeenCalled();
   });
 
-  it("can host two pinned files at once (split-ready)", () => {
+  it("opens the next pinned file as a right split of the active file", () => {
     const api = makeFakeApi();
     fileDock.register(REPO, api as never);
     fileDock.openFile(REPO, "a.ts", true);
     fileDock.openFile(REPO, "b.ts", true);
     expect(fileDock.getState(REPO).open).toEqual(["a.ts", "b.ts"]);
+    expect(api.addPanel).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: filePanelId("b.ts"),
+        position: {
+          direction: "right",
+          referencePanel: filePanelId("a.ts"),
+        },
+      }),
+    );
   });
 
   it("persists the layout on unmount and restores it on the next mount", () => {

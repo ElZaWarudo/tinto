@@ -12,8 +12,19 @@ export function openRepoPanel(api: DockviewApi, repo: string, title: string): vo
     existing.api.setActive();
     return;
   }
+  const position =
+    api.activePanel?.id.startsWith("repo:")
+      ? { direction: "right" as const, referencePanel: api.activePanel.id }
+      : undefined;
   try {
-    api.addPanel({ id, component: PANEL_REPO, tabComponent: TAB_REPO, title, params: { repo } });
+    api.addPanel({
+      id,
+      component: PANEL_REPO,
+      tabComponent: TAB_REPO,
+      title,
+      params: { repo },
+      position,
+    });
   } catch {
     // Lost a race with a restored layout that already holds this id — focus it.
     api.getPanel(id)?.api.setActive();

@@ -7,10 +7,12 @@ const h = vi.hoisted(() => ({
   fsCb: null as ((b: unknown) => void) | null,
   watchCb: null as ((w: unknown) => void) | null,
   changeLogCb: null as ((log: unknown) => void) | null,
+  outputCb: null as ((output: unknown) => void) | null,
   unlistenDelta: vi.fn(),
   unlistenFs: vi.fn(),
   unlistenWatch: vi.fn(),
   unlistenChangeLog: vi.fn(),
+  unlistenOutput: vi.fn(),
   getSnapshot: vi.fn(),
   listWb: vi.fn(),
   listSessions: vi.fn(),
@@ -33,12 +35,17 @@ vi.mock("./client", () => ({
     h.changeLogCb = cb;
     return Promise.resolve(h.unlistenChangeLog);
   }),
+  onAgentSessionOutput: vi.fn((cb) => {
+    h.outputCb = cb;
+    return Promise.resolve(h.unlistenOutput);
+  }),
   getWorkbenchSnapshot: () => h.getSnapshot(),
   listWorkbenches: () => h.listWb(),
   listAgentSessions: () => h.listSessions(),
 }));
 
 import { useBusConnection } from "./connection";
+import { agentSessionStore } from "../agent/sessionStore";
 import { busStore } from "./store";
 import type { RepoDelta } from "./contract";
 
@@ -63,6 +70,7 @@ describe("useBusConnection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     busStore.resetAll();
+    agentSessionStore.reset();
     h.getSnapshot.mockResolvedValue({ watching: { available: true }, repos: [] });
     h.listWb.mockResolvedValue({ version: 1, active: "Work", workbenches: [] });
     h.listSessions.mockResolvedValue([]);
@@ -75,6 +83,7 @@ describe("useBusConnection", () => {
     expect(h.fsCb).toBeTypeOf("function");
     expect(h.watchCb).toBeTypeOf("function");
     expect(h.changeLogCb).toBeTypeOf("function");
+    expect(h.outputCb).toBeTypeOf("function");
     expect(busStore.getState().config?.active).toBe("Work");
   });
 
@@ -93,11 +102,27 @@ describe("useBusConnection", () => {
     expect(h.unlistenFs).toHaveBeenCalled();
     expect(h.unlistenWatch).toHaveBeenCalled();
     expect(h.unlistenChangeLog).toHaveBeenCalled();
+    expect(h.unlistenOutput).toHaveBeenCalled();
 
     // A late event after unmount must be ignored (the `active` guard).
     const before = Object.keys(busStore.getState().repos).length;
     act(() => h.deltaCb!(makeDelta("/r/late")));
     expect(Object.keys(busStore.getState().repos)).toHaveLength(before);
+  });
+
+  it("buffers agent output received before a terminal panel mounts", async () => {
+    render(createElement(Probe));
+    await waitFor(() => expect(h.outputCb).toBeTypeOf("function"));
+
+    act(() =>
+      h.outputCb!({
+        session_id: "sess-1",
+        chunk_base64: "aGk=",
+        timestamp_ms: 2,
+      }),
+    );
+
+    expect(agentSessionStore.getState().output["sess-1"]).toHaveLength(1);
   });
 
   it("swallows a failed config load without throwing", async () => {

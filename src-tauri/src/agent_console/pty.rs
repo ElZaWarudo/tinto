@@ -143,6 +143,9 @@ impl AgentProcess for PtyHandle {
 pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> CommandBuilder {
     let mut command = CommandBuilder::new(binary_path.as_os_str());
     command.cwd(working_dir.as_os_str());
+    for arg in default_agent_args(binary_path) {
+        command.arg(arg);
+    }
     command.env_clear();
     for key in SANITIZED_ENV_ALLOWLIST {
         if let Some(value) = std::env::var_os(key) {
@@ -153,6 +156,18 @@ pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> Com
         command.env("TERM", "xterm-256color");
     }
     command
+}
+
+fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
+    if binary_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("codex"))
+    {
+        &["--no-alt-screen"]
+    } else {
+        &[]
+    }
 }
 
 const SANITIZED_ENV_ALLOWLIST: &[&str] = &[
@@ -238,7 +253,10 @@ mod tests {
     fn build_agent_command_uses_binary_and_working_dir() {
         let command = build_agent_command(Path::new("codex"), Path::new("/tmp/repo"));
 
-        assert_eq!(command.get_argv(), &[OsString::from("codex")]);
+        assert_eq!(
+            command.get_argv(),
+            &[OsString::from("codex"), OsString::from("--no-alt-screen")]
+        );
         assert_eq!(command.get_cwd(), Some(&OsString::from("/tmp/repo")));
     }
 
