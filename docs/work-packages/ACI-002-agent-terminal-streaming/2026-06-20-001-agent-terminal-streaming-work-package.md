@@ -111,7 +111,7 @@ Rules:
 - Consumers found: pending implementation; expected consumers are `src/bus/client.ts`, `src/bus/contract.test.ts`, `src/panels/terminal/TerminalPanel.tsx`, `src/workspace/panels.ts`, and `src/App.tsx`.
 - Contract-drift tests searched: `src/bus/contract.test.ts` and `src-tauri/src/bus/contract.rs` serialization tests.
 - Required consumer tests: contract wrapper tests, terminal panel tests, workspace open helper tests.
-- Consumer tests run/skipped: RU1 ran `src/bus/contract.test.ts`; RU2 ran `src/panels/terminal/TerminalPanel.test.tsx` plus contract regression; workspace opener tests remain pending for RU3.
+- Consumer tests run/skipped: RU1 ran `src/bus/contract.test.ts`; RU2 ran `src/panels/terminal/TerminalPanel.test.tsx` plus contract regression; RU3 ran `src/workspace/openAgentTerminal.test.ts`, `src/App.test.tsx`, and the terminal panel regression.
 
 ## Verification Gate
 
@@ -182,5 +182,11 @@ Rules:
 - RU2 implementation notes: added the xterm-backed terminal attachment surface, fit-addon resize publication, session-filtered output rendering, input forwarding, cleanup of terminal/listener resources, and compact IDE styling. No dock panel registration/open helper or launch UI was added in RU2.
 - RU2 direct review result: no P0-P2 findings. A TypeScript/ESLint mock varargs issue was fixed before closeout.
 - RU2 verification: `npx vitest run src/panels/terminal/TerminalPanel.test.tsx src/bus/contract.test.ts` passed 19/19; `npm run build` passed with only the existing Vite chunk-size warning; `npm run lint` passed.
-- RU2 release marshal status: pending local semantic commits, fast-forward merge to `develop`, and push.
-- Next review unit after RU2 release: RU3 dock panel registration/open helper and persistence compatibility.
+- RU2 release marshal status: complete. Commits: `e4f3361`, `de67219`; fast-forward merged and pushed to `origin/develop`.
+- RU3 implementation status: complete locally on `feat/agent-terminal-dock`.
+- RU3 changed surfaces: `src/workspace/panels.ts`, `src/workspace/openAgentTerminal.ts`, `src/workspace/openAgentTerminal.test.ts`, `src/App.tsx`, `src/App.test.tsx`, and this orchestration state.
+- RU3 implementation notes: registered `TerminalPanel` under `PANEL_AGENT_TERMINAL`, added stable panel ids derived from session ids, added a deduplicating open/focus helper, and verified the app component registry includes the terminal panel. No launch UI, checkpoint, revert, or session-history behavior was added.
+- RU3 direct review result: no P0-P2 findings. Build warning remains for large chunks; xterm registration increases the main desktop bundle, accepted for this prototype package.
+- RU3 verification: `npx vitest run src/workspace/openAgentTerminal.test.ts src/App.test.tsx src/panels/terminal/TerminalPanel.test.tsx` passed 10/10; `npm run build` passed with Vite chunk-size warning; `npm run lint` passed.
+- RU3 release marshal status: pending local semantic commits, fast-forward merge to `develop`, and push.
+- ACI-002 package status after RU3 release: complete.
