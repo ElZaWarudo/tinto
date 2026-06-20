@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: ACI-001 is delivered on `develop`: RU1 pushed at `2c21f79`, RU2 pushed at `a903e03`, and RU3 session lifecycle commands/integration pushed at `0065c3d`; ACI-002 is complete and pushed at `5b7a5c3`; ACI-003 implementation is complete locally, pending release marshal.
-- Active package: ACI-003 Repo Agent Launcher UI (docs/work-packages/ACI-003-agent-launcher-ui/2026-06-20-002-agent-launcher-ui-work-package.md), release.
-- Branch/base: `feat/agent-launcher-ui` from `develop`/`origin/develop` at `5b7a5c3`. Working tree carries ACI-003 artifacts plus launcher implementation and updated orchestration state. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
+- Current phase/status: ACI-001, ACI-002, and ACI-003 are delivered on `develop` and pushed. ACI-004 implementation is in progress locally: backend checkpoints/revert, frontend session store, terminal revert UI, and contract docs are implemented with focused tests passing.
+- Active package: ACI-004 Filesystem-first session checkpoints and opt-in revert (docs/roadmaps/2026-06-19-002-agent-console-integration.md).
+- Branch/base: `develop` over `origin/develop`. Working tree carries ACI-004 implementation and contract/orchestration updates. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
 - Required user decisions: none.
-- Next action: create local ACI-003 semantic commits, fast-forward merge to `develop`, push, then select next Agent Console Integration item (ACI-004 checkpoints or ACI-005 orchestration).
+- Next action: finish ACI-004 validation gate, run release marshal locally, commit/push, then continue with ACI-005 multi-agent orchestration.
 
 ## Source Documents
 
