@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: ACI-001 is delivered on `develop`: RU1 pushed at `2c21f79`, RU2 pushed at `a903e03`, and RU3 session lifecycle commands/integration pushed at `0065c3d`; ACI-002 RU1 is released to `develop` and pushed at `3ed1075`; ACI-002 RU2 is released to `develop` and pushed at `de67219`; ACI-002 RU3 implementation is complete locally, pending release marshal.
-- Active package: ACI-002 PTY Stream Bridge + Dockable Terminal Panel (docs/work-packages/ACI-002-agent-terminal-streaming/2026-06-20-001-agent-terminal-streaming-work-package.md), review unit RU3 release.
-- Branch/base: `feat/agent-terminal-dock` from `develop`/`origin/develop` at `de67219`. Working tree carries RU3 terminal dock registration/open-helper implementation and updated orchestration state. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
+- Current phase/status: ACI-001 is delivered on `develop`: RU1 pushed at `2c21f79`, RU2 pushed at `a903e03`, and RU3 session lifecycle commands/integration pushed at `0065c3d`; ACI-002 is complete and pushed at `5b7a5c3`; ACI-003 implementation is complete locally, pending release marshal.
+- Active package: ACI-003 Repo Agent Launcher UI (docs/work-packages/ACI-003-agent-launcher-ui/2026-06-20-002-agent-launcher-ui-work-package.md), release.
+- Branch/base: `feat/agent-launcher-ui` from `develop`/`origin/develop` at `5b7a5c3`. Working tree carries ACI-003 artifacts plus launcher implementation and updated orchestration state. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
 - Required user decisions: none.
-- Next action: create local RU3 semantic commits, fast-forward merge to `develop`, push, then select the next roadmap item from Agent Console Integration (likely ACI-003 launch controls).
+- Next action: create local ACI-003 semantic commits, fast-forward merge to `develop`, push, then select next Agent Console Integration item (ACI-004 checkpoints or ACI-005 orchestration).
 
 ## Source Documents
 
