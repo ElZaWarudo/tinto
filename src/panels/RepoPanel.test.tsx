@@ -195,6 +195,7 @@ describe("RepoPanel", () => {
       openFile,
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
+      openAgentTerminal: vi.fn(),
     };
     render(
       <WorkspaceActionsContext.Provider value={value}>

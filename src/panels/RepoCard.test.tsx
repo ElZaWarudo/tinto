@@ -1,10 +1,23 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { RepoCard } from "./RepoCard";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import type { RepoDelta } from "../bus/contract";
 
 const NOW = 1_700_000_000_000;
+const clientMocks = vi.hoisted(() => ({
+  agentBinaryAvailable: vi.fn((...args: unknown[]) => {
+    void args;
+    return Promise.resolve(true);
+  }),
+}));
+vi.mock("../bus/client", () => ({
+  agentBinaryAvailable: (...args: unknown[]) => {
+    void args;
+    return clientMocks.agentBinaryAvailable(...args);
+  },
+}));
+
+import { RepoCard } from "./RepoCard";
 
 function makeDelta(over: Partial<RepoDelta> = {}): RepoDelta {
   return {
@@ -25,6 +38,7 @@ function renderCard(
 ) {
   const onOpen = vi.fn();
   const onRetry = vi.fn();
+  const onLaunch = vi.fn(() => Promise.resolve());
   render(
     <RepoCard
       delta={makeDelta(over)}
@@ -33,13 +47,19 @@ function renderCard(
       nowMs={NOW}
       onOpen={onOpen}
       onRetry={onRetry}
+      onLaunch={onLaunch}
       {...props}
     />,
   );
-  return { onOpen, onRetry };
+  return { onOpen, onRetry, onLaunch };
 }
 
 describe("RepoCard", () => {
+  beforeEach(() => {
+    clientMocks.agentBinaryAvailable.mockReset();
+    clientMocks.agentBinaryAvailable.mockResolvedValue(true);
+  });
+
   it("shows name, counts, branch, upstream and the latest commit at a glance", () => {
     renderCard();
     expect(screen.getByText("api")).toBeInTheDocument();
@@ -103,6 +123,7 @@ describe("RepoCard", () => {
         nowMs={NOW}
         onOpen={() => {}}
         onRetry={() => {}}
+        onLaunch={() => {}}
       />,
     );
     expect(screen.getByTestId("activity")).toHaveClass("activity-dot--active");
@@ -114,6 +135,7 @@ describe("RepoCard", () => {
         nowMs={NOW + ACTIVITY_WINDOW_MS + 1}
         onOpen={() => {}}
         onRetry={() => {}}
+        onLaunch={() => {}}
       />,
     );
     expect(screen.getByTestId("activity")).not.toHaveClass("activity-dot--active");
@@ -141,5 +163,33 @@ describe("RepoCard", () => {
     const { onOpen } = renderCard();
     fireEvent.click(screen.getByTestId("card-/r/api"));
     expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("disables launch when the selected agent binary is missing", async () => {
+    clientMocks.agentBinaryAvailable.mockResolvedValue(false);
+    const { onLaunch } = renderCard();
+
+    expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent("Codex not found");
+    expect(screen.getByTestId("agent-launch")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("agent-launch"));
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it("launches the selected agent without opening the card", async () => {
+    const { onOpen, onLaunch } = renderCard();
+
+    const button = await screen.findByTestId("agent-launch");
+    fireEvent.click(button);
+
+    expect(onLaunch).toHaveBeenCalledWith("codex");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("checks availability when the selected agent changes", async () => {
+    renderCard();
+
+    fireEvent.change(screen.getByLabelText("agent type"), { target: { value: "claude" } });
+
+    expect(clientMocks.agentBinaryAvailable).toHaveBeenCalledWith("claude");
   });
 });

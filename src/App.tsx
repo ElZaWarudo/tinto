@@ -12,6 +12,7 @@ import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/acti
 import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
 import { openDashboardPanel } from "./workspace/openDashboard";
+import { openAgentTerminalPanel } from "./workspace/openAgentTerminal";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
 import { fileDock } from "./workspace/fileDock";
 import { repoTreeStore } from "./workspace/repoTreeStore";
@@ -107,6 +108,11 @@ export default function App() {
       openDashboard: () => {
         if (apiRef.current) {
           openDashboardPanel(apiRef.current);
+        }
+      },
+      openAgentTerminal: (params) => {
+        if (apiRef.current) {
+          openAgentTerminalPanel(apiRef.current, params);
         }
       },
     }),

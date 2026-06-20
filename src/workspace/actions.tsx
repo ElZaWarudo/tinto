@@ -3,6 +3,7 @@
 // portals, which preserve context, so panel components can consume this.
 
 import { createContext, useContext } from "react";
+import type { AgentTerminalOpenParams } from "./openAgentTerminal";
 
 export interface WorkspaceActions {
   openRepo: (canonicalPath: string) => void;
@@ -17,6 +18,8 @@ export interface WorkspaceActions {
   openTimeline: () => void;
   /** Open (or focus) the always-available Dashboard tab. */
   openDashboard: () => void;
+  /** Open (or focus) an attached terminal for an agent session. */
+  openAgentTerminal: (params: AgentTerminalOpenParams) => void;
 }
 
 const noop: WorkspaceActions = {
@@ -26,6 +29,7 @@ const noop: WorkspaceActions = {
   openFile: () => {},
   openTimeline: () => {},
   openDashboard: () => {},
+  openAgentTerminal: () => {},
 };
 
 export const WorkspaceActionsContext = createContext<WorkspaceActions>(noop);

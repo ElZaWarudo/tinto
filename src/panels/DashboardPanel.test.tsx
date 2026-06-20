@@ -1,9 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 
+const clientMocks = vi.hoisted(() => ({
+  retryRepo: vi.fn((...args: unknown[]) => {
+    void args;
+    return Promise.resolve();
+  }),
+  startAgentSession: vi.fn((...args: unknown[]) => {
+    void args;
+    return Promise.resolve("sess-1");
+  }),
+  agentBinaryAvailable: vi.fn((...args: unknown[]) => {
+    void args;
+    return Promise.resolve(true);
+  }),
+}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("../bus/client", () => ({
+  retryRepo: (...args: unknown[]) => clientMocks.retryRepo(...args),
+  startAgentSession: (...args: unknown[]) => clientMocks.startAgentSession(...args),
+  agentBinaryAvailable: (...args: unknown[]) => clientMocks.agentBinaryAvailable(...args),
 }));
 
 import { DashboardPanel } from "./DashboardPanel";
@@ -32,6 +51,7 @@ function renderDash(actions: Partial<WorkspaceActions> = {}) {
     openFile: vi.fn(),
     openTimeline: vi.fn(),
     openDashboard: vi.fn(),
+    openAgentTerminal: vi.fn(),
     ...actions,
   };
   render(
@@ -43,7 +63,13 @@ function renderDash(actions: Partial<WorkspaceActions> = {}) {
 }
 
 describe("DashboardPanel", () => {
-  beforeEach(() => busStore.resetAll());
+  beforeEach(() => {
+    busStore.resetAll();
+    clientMocks.retryRepo.mockClear();
+    clientMocks.startAgentSession.mockClear();
+    clientMocks.agentBinaryAvailable.mockReset();
+    clientMocks.agentBinaryAvailable.mockResolvedValue(true);
+  });
 
   // Covers AE12: loading skeletons before the snapshot
   it("shows skeletons until the snapshot is loaded", () => {
@@ -104,5 +130,22 @@ describe("DashboardPanel", () => {
     act(() => busStore.loadSnapshot([delta("/r/a", 1)], { available: false, reason: "inotify" }));
     renderDash();
     expect(screen.getByTestId("degraded-banner")).toHaveTextContent("inotify");
+  });
+
+  it("launches an agent session and opens the terminal for the returned session", async () => {
+    act(() => busStore.loadSnapshot([delta("/r/a", 1)], { available: true }));
+    const openAgentTerminal = vi.fn();
+    renderDash({ openAgentTerminal });
+
+    fireEvent.click(await screen.findByTestId("agent-launch"));
+
+    await waitFor(() =>
+      expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/a", "codex"),
+    );
+    expect(openAgentTerminal).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      repo: "/r/a",
+      agentType: "codex",
+    });
   });
 });

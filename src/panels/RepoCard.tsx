@@ -4,7 +4,8 @@
 // get a wider tile. A single click opens the project; files are drilled into via
 // the project's own explorer, not here.
 
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
+import { agentBinaryAvailable } from "../bus/client";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
 import { ACTIVITY_WINDOW_MS } from "./constants";
@@ -17,7 +18,14 @@ export interface RepoCardProps {
   nowMs: number;
   onOpen: () => void;
   onRetry: () => void;
+  onLaunch: (agentType: string) => Promise<void> | void;
 }
+
+const AGENT_OPTIONS = [
+  { id: "codex", label: "Codex" },
+  { id: "claude", label: "Claude Code" },
+  { id: "opencode", label: "OpenCode" },
+];
 
 function branchLabel(branch: BranchInfo | null, head: RepoDelta["head"]): string {
   if (!branch) return "…";
@@ -35,14 +43,46 @@ function upstreamLabel(branch: BranchInfo | null): string | null {
   return `↑${branch.ahead} ↓${branch.behind}`;
 }
 
-function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoCardProps) {
+function RepoCardImpl({
+  delta,
+  name,
+  activityMs,
+  nowMs,
+  onOpen,
+  onRetry,
+  onLaunch,
+}: RepoCardProps) {
   const { status, branch, head, error } = delta;
+  const [agentType, setAgentType] = useState("codex");
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
+  const [launching, setLaunching] = useState(false);
+  const [launchMessage, setLaunchMessage] = useState<string | null>(null);
   const active = nowMs - activityMs < ACTIVITY_WINDOW_MS;
   const upstream = upstreamLabel(branch);
   const metrics = getRepoMetrics(delta);
   const signals = getRepoSignals(delta);
   const counts = signalCounts(signals);
   const changes = status.modified.length + status.staged.length + status.untracked.length;
+  const selectedAgent = AGENT_OPTIONS.find((a) => a.id === agentType) ?? AGENT_OPTIONS[0];
+
+  useEffect(() => {
+    let alive = true;
+    agentBinaryAvailable(agentType)
+      .then((ok) => {
+        if (!alive) return;
+        setAvailable(ok);
+        setAvailabilityMessage(ok ? null : `${selectedAgent.label} not found`);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setAvailable(false);
+        setAvailabilityMessage(commandMessage(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [agentType, selectedAgent.label]);
 
   // Bento emphasis: feature the repos that warrant attention with a wider tile.
   const feature = !!error || counts.critical > 0 || (active && changes > 0);
@@ -53,6 +93,15 @@ function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoC
   ]
     .filter(Boolean)
     .join(" ");
+
+  const launch = () => {
+    if (!available || launching) return;
+    setLaunching(true);
+    setLaunchMessage(null);
+    Promise.resolve(onLaunch(agentType))
+      .catch((e) => setLaunchMessage(commandMessage(e)))
+      .finally(() => setLaunching(false));
+  };
 
   return (
     <div
@@ -106,6 +155,43 @@ function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoC
         {signals.length > 0 && <SignalBadges signals={signals} limit={feature ? 4 : 2} />}
       </div>
 
+      <div
+        className="repo-card__launcher"
+        data-testid={`agent-launcher-${delta.repo}`}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <select
+          className="repo-card__agent-select"
+          aria-label="agent type"
+          value={agentType}
+          onChange={(e) => {
+            setAvailable(null);
+            setAvailabilityMessage(null);
+            setAgentType(e.target.value);
+          }}
+        >
+          {AGENT_OPTIONS.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.label}
+            </option>
+          ))}
+        </select>
+        <button
+          className="repo-card__launch"
+          data-testid="agent-launch"
+          disabled={available !== true || launching}
+          onClick={launch}
+        >
+          {launching ? "Starting" : "Launch"}
+        </button>
+        {(availabilityMessage || launchMessage) && (
+          <span className="repo-card__launch-msg" data-testid="agent-launch-message">
+            {launchMessage ?? availabilityMessage}
+          </span>
+        )}
+      </div>
+
       <footer className="repo-card__foot">
         {head ? (
           <span className="repo-card__commit" title={`${head.summary} · ${head.id}`}>
@@ -141,3 +227,10 @@ function RepoCardImpl({ delta, name, activityMs, nowMs, onOpen, onRetry }: RepoC
 }
 
 export const RepoCard = memo(RepoCardImpl);
+
+function commandMessage(error: unknown): string {
+  if (error && typeof error === "object" && "message" in error) {
+    return String((error as { message?: unknown }).message ?? "Command failed");
+  }
+  return String(error || "Command failed");
+}

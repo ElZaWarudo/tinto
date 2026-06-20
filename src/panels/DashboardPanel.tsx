@@ -3,7 +3,7 @@
 // updates (memoized cards re-render only on their own repo's change).
 
 import { useEffect, useState } from "react";
-import { retryRepo } from "../bus/client";
+import { retryRepo, startAgentSession } from "../bus/client";
 import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
 import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
 import { useQualityState } from "../qol/state";
@@ -26,7 +26,7 @@ export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
-  const { openRepo, addRepo } = useWorkspaceActions();
+  const { openRepo, addRepo, openAgentTerminal } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
   if (!loaded) {
@@ -75,6 +75,10 @@ export function DashboardPanel() {
               nowMs={nowMs}
               onOpen={() => openRepo(p)}
               onRetry={() => void retryRepo(p)}
+              onLaunch={async (agentType) => {
+                const sessionId = await startAgentSession(p, agentType);
+                openAgentTerminal({ sessionId, repo: p, agentType });
+              }}
             />
           ))}
         </div>

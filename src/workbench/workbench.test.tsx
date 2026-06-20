@@ -61,6 +61,7 @@ describe("MenuBar", () => {
       openFile: vi.fn(),
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
+      openAgentTerminal: vi.fn(),
     };
     act(() => busStore.setConfig(config));
     render(
@@ -108,6 +109,7 @@ describe("MenuBar", () => {
       openFile: vi.fn(),
       openTimeline,
       openDashboard,
+      openAgentTerminal: vi.fn(),
     };
     act(() => busStore.setConfig(config));
     render(
@@ -132,6 +134,7 @@ describe("MenuBar", () => {
       openFile: vi.fn(),
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
+      openAgentTerminal: vi.fn(),
     };
     act(() => {
       busStore.setConfig({
