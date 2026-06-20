@@ -111,7 +111,7 @@ Rules:
 - Consumers found: pending implementation; expected consumers are `src/bus/client.ts`, `src/bus/contract.test.ts`, `src/panels/terminal/TerminalPanel.tsx`, `src/workspace/panels.ts`, and `src/App.tsx`.
 - Contract-drift tests searched: `src/bus/contract.test.ts` and `src-tauri/src/bus/contract.rs` serialization tests.
 - Required consumer tests: contract wrapper tests, terminal panel tests, workspace open helper tests.
-- Consumer tests run/skipped: RU1 ran `src/bus/contract.test.ts`; terminal panel and workspace opener tests remain pending for RU2/RU3.
+- Consumer tests run/skipped: RU1 ran `src/bus/contract.test.ts`; RU2 ran `src/panels/terminal/TerminalPanel.test.tsx` plus contract regression; workspace opener tests remain pending for RU3.
 
 ## Verification Gate
 
@@ -131,7 +131,7 @@ Rules:
 - Security Watch during work: enabled for all RUs because this roadmap executes local processes and forwards input/output.
 - Security Watch notes: validate repo/session allowlists, avoid secret-bearing env or logs in errors, keep output events scoped by session id, and avoid spawning extra shells.
 - Security reviewer: inline fallback acceptable if `krt-security-sentinel` is not invoked.
-- Security review result: RU1 direct security watch passed on 2026-06-20. `start_agent_session` still fail-closes through the active-workbench repo allowlist; `write_agent_session_input` and `resize_agent_session` only target existing running session ids; invalid base64 returns `invalid_input`; invalid dimensions return `invalid_terminal_size`; missing/stopped sessions are rejected with structured errors. Output events carry live PTY bytes scoped by session id and do not log command input or read errors.
+- Security review result: RU1 direct security watch passed on 2026-06-20. `start_agent_session` still fail-closes through the active-workbench repo allowlist; `write_agent_session_input` and `resize_agent_session` only target existing running session ids; invalid base64 returns `invalid_input`; invalid dimensions return `invalid_terminal_size`; missing/stopped sessions are rejected with structured errors. Output events carry live PTY bytes scoped by session id and do not log command input or read errors. RU2 dependency watch notes: `@xterm/xterm@6.0.0` and `@xterm/addon-fit@0.11.0` are MIT packages; `npm audit` reports remaining transitive vulnerabilities in `vite -> esbuild@0.27.7` (low) and `jsdom -> undici@7.27.2` (high), not introduced by xterm directly. No remote network surface is added by the terminal panel itself.
 - Required security verification: command paths reject missing sessions and invalid dimensions; no command reconstructs shell input.
 
 ## CI Break-Prevention And Escalation
@@ -171,10 +171,16 @@ Rules:
 
 ## Execution Status
 
-- RU1 implementation status: complete locally on `feat/agent-terminal-streaming`.
+- RU1 implementation status: released to `develop` and pushed at `3ed1075`.
 - RU1 changed surfaces: `src-tauri/src/agent_console/*`, `src-tauri/src/bus/contract.rs`, `src-tauri/src/lib.rs`, `src/bus/contract.ts`, `src/bus/client.ts`, `src/bus/contract.test.ts`, and `docs/contracts/bus-contract.md`.
 - RU1 implementation notes: added `tinto://agent-session-output`, `AgentSessionOutput`, a PTY output reader handoff, live output emission, `write_agent_session_input`, `resize_agent_session`, frontend wrappers, and contract tests. No xterm dependency, terminal panel, dock registration, launch UI, replay buffer, checkpoint, or revert behavior was added in RU1.
 - RU1 direct review result: no P0-P2 findings. One local TypeScript mock typing issue found by `npm run build` was fixed before closeout.
 - RU1 verification: `cargo fmt --check` passed; `cargo clippy --all-targets -- -D warnings` passed; `cargo test agent_console --lib` passed 22/22; `cargo test bus::contract --lib` passed 4/4; `npx vitest run src/bus/contract.test.ts` passed 15/15; `npm run build` passed with only the existing Vite chunk-size warning.
-- RU1 release marshal status: pending local semantic commits, fast-forward merge to `develop`, and push.
-- Next review unit after RU1 release: RU2 xterm terminal panel surface.
+- RU1 release marshal status: complete. Commits: `ade10c3`, `28e9849`, `3ed1075`; fast-forward merged and pushed to `origin/develop`.
+- RU2 implementation status: complete locally on `feat/agent-terminal-panel`.
+- RU2 changed surfaces: `package.json`, `package-lock.json`, `src/panels/terminal/TerminalPanel.tsx`, `src/panels/terminal/TerminalPanel.test.tsx`, `src/App.css`, and `src/bus/contract.test.ts`.
+- RU2 implementation notes: added the xterm-backed terminal attachment surface, fit-addon resize publication, session-filtered output rendering, input forwarding, cleanup of terminal/listener resources, and compact IDE styling. No dock panel registration/open helper or launch UI was added in RU2.
+- RU2 direct review result: no P0-P2 findings. A TypeScript/ESLint mock varargs issue was fixed before closeout.
+- RU2 verification: `npx vitest run src/panels/terminal/TerminalPanel.test.tsx src/bus/contract.test.ts` passed 19/19; `npm run build` passed with only the existing Vite chunk-size warning; `npm run lint` passed.
+- RU2 release marshal status: pending local semantic commits, fast-forward merge to `develop`, and push.
+- Next review unit after RU2 release: RU3 dock panel registration/open helper and persistence compatibility.
