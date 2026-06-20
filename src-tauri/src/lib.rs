@@ -95,6 +95,7 @@ pub fn run() {
             agent_console::commands::agent_binary_available,
             agent_console::commands::write_agent_session_input,
             agent_console::commands::resize_agent_session,
+            agent_console::commands::revert_session,
             ui_state::get_ui_state,
             ui_state::set_ui_state
         ])

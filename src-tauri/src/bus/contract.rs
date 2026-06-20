@@ -13,6 +13,7 @@ pub const EVENT_WORKBENCH_DELTA: &str = "tinto://workbench-delta";
 pub const EVENT_FS_EVENTS: &str = "tinto://fs-events";
 pub const EVENT_WATCHING_STATE: &str = "tinto://watching-state";
 pub const EVENT_AGENT_SESSION_OUTPUT: &str = "tinto://agent-session-output";
+pub const EVENT_AGENT_SESSION_CHANGE_LOG: &str = "tinto://agent-session-change-log";
 
 /// Estado lifecycle de una sesion de agente gestionada por el backend.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -22,6 +23,9 @@ pub enum AgentSessionStatus {
     Running,
     Exited,
     Error,
+    Completed,
+    Failed,
+    Reverted,
 }
 
 /// Error estructurado y seguro para comandos/lifecycle de sesiones de agente.
@@ -29,6 +33,42 @@ pub enum AgentSessionStatus {
 pub struct AgentSessionError {
     pub category: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionCheckpointType {
+    GitRef,
+    FsSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentSessionCheckpoint {
+    pub checkpoint_type: AgentSessionCheckpointType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_hash: Option<String>,
+    pub snapshot_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentSessionChangeKind {
+    Created,
+    Modified,
+    Removed,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentSessionChange {
+    pub path: PathBuf,
+    pub kind: AgentSessionChangeKind,
+    pub timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentSessionChangeLog {
+    pub session_id: String,
+    pub changes: Vec<AgentSessionChange>,
 }
 
 /// Metadata publica de una sesion de agente. La E/S PTY se anade en ACI-002.
@@ -40,8 +80,16 @@ pub struct AgentSession {
     pub status: AgentSessionStatus,
     pub pid: Option<u32>,
     pub started_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
     pub exit_code: Option<i32>,
     pub error: Option<AgentSessionError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<AgentSessionCheckpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub change_log: Vec<AgentSessionChange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverted_at_ms: Option<u64>,
 }
 
 /// Chunk binario del PTY de una sesion de agente, transportado en base64 para
@@ -307,11 +355,23 @@ mod tests {
             status: AgentSessionStatus::Running,
             pid: Some(42),
             started_at_ms: 1760000000000,
+            ended_at_ms: None,
             exit_code: None,
             error: Some(AgentSessionError {
                 category: "spawn_failed".into(),
                 message: "no se pudo iniciar la sesion".into(),
             }),
+            checkpoint: Some(AgentSessionCheckpoint {
+                checkpoint_type: AgentSessionCheckpointType::GitRef,
+                git_hash: Some("abc123".into()),
+                snapshot_files: Vec::new(),
+            }),
+            change_log: vec![AgentSessionChange {
+                path: "src/a.rs".into(),
+                kind: AgentSessionChangeKind::Modified,
+                timestamp_ms: 1760000000001,
+            }],
+            reverted_at_ms: None,
         };
 
         let json = serde_json::to_value(&session).unwrap();
@@ -323,6 +383,8 @@ mod tests {
         assert_eq!(json["started_at_ms"], 1760000000000u64);
         assert!(json["exit_code"].is_null());
         assert_eq!(json["error"]["category"], "spawn_failed");
+        assert_eq!(json["checkpoint"]["checkpoint_type"], "git_ref");
+        assert_eq!(json["change_log"][0]["kind"], "modified");
     }
 
     #[test]

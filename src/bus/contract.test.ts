@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   AgentSession,
+  AgentSessionChangeLog,
   AgentSessionOutput,
   AgentSessionStatus,
   DiffLineKind,
@@ -81,14 +82,24 @@ describe("agent session contract types", () => {
       status: "running",
       pid: 42,
       started_at_ms: 1760000000000,
+      ended_at_ms: null,
       exit_code: null,
       error: { category: "spawn_failed", message: "no se pudo iniciar la sesion" },
+      checkpoint: {
+        checkpoint_type: "git_ref",
+        git_hash: "abc123",
+        snapshot_files: [],
+      },
+      change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 1760000000001 }],
+      reverted_at_ms: null,
     });
 
     const session = JSON.parse(wire) as AgentSession;
     expect(session.status).toEqual<AgentSessionStatus>("running");
     expect(session.agent_type).toBe("codex");
     expect(session.error?.category).toBe("spawn_failed");
+    expect(session.checkpoint?.checkpoint_type).toBe("git_ref");
+    expect(session.change_log?.[0].kind).toBe("modified");
   });
 
   it("accepts output chunks with base64 payloads", () => {
@@ -102,6 +113,17 @@ describe("agent session contract types", () => {
     expect(output.session_id).toBe("sess-1");
     expect(output.chunk_base64).toBe("SG9sYQ0K");
     expect(output.timestamp_ms).toBe(1760000000001);
+  });
+
+  it("accepts change-log events with changed paths", () => {
+    const wire = JSON.stringify({
+      session_id: "sess-1",
+      changes: [{ path: "src/a.ts", kind: "created", timestamp_ms: 1760000000002 }],
+    });
+
+    const log = JSON.parse(wire) as AgentSessionChangeLog;
+    expect(log.session_id).toBe("sess-1");
+    expect(log.changes[0].kind).toBe("created");
   });
 });
 
@@ -126,7 +148,9 @@ import {
   listAgentSessions,
   listRepoTree,
   onAgentSessionOutput,
+  onAgentSessionChangeLog,
   resizeAgentSession,
+  revertSession,
   setSubscriptions,
   startAgentSession,
   stopAgentSession,
@@ -215,6 +239,12 @@ describe("RDM-008 client wrappers", () => {
     void listAgentSessions();
     expect(invokeMock).toHaveBeenCalledWith("list_agent_sessions");
 
+    void revertSession("sess-1", true);
+    expect(invokeMock).toHaveBeenCalledWith("revert_session", {
+      sessionId: "sess-1",
+      userConsent: true,
+    });
+
     void agentBinaryAvailable("codex");
     expect(invokeMock).toHaveBeenCalledWith("agent_binary_available", {
       agentType: "codex",
@@ -246,5 +276,14 @@ describe("RDM-008 client wrappers", () => {
     void onAgentSessionOutput(() => {});
 
     expect(listenMock).toHaveBeenCalledWith("tinto://agent-session-output", expect.any(Function));
+  });
+
+  it("listens for agent session change-log events", () => {
+    void onAgentSessionChangeLog(() => {});
+
+    expect(listenMock).toHaveBeenCalledWith(
+      "tinto://agent-session-change-log",
+      expect.any(Function),
+    );
   });
 });

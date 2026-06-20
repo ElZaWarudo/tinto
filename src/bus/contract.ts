@@ -11,13 +11,42 @@ export const EVENT_WORKBENCH_DELTA = "tinto://workbench-delta";
 export const EVENT_FS_EVENTS = "tinto://fs-events";
 export const EVENT_WATCHING_STATE = "tinto://watching-state";
 export const EVENT_AGENT_SESSION_OUTPUT = "tinto://agent-session-output";
+export const EVENT_AGENT_SESSION_CHANGE_LOG = "tinto://agent-session-change-log";
 
 // ---- Agent console sessions (ACI-001) ----
-export type AgentSessionStatus = "starting" | "running" | "exited" | "error";
+export type AgentSessionStatus =
+  | "starting"
+  | "running"
+  | "exited"
+  | "error"
+  | "completed"
+  | "failed"
+  | "reverted";
 
 export interface AgentSessionError {
   category: string;
   message: string;
+}
+
+export type AgentSessionCheckpointType = "git_ref" | "fs_snapshot";
+
+export interface AgentSessionCheckpoint {
+  checkpoint_type: AgentSessionCheckpointType;
+  git_hash?: string | null;
+  snapshot_files: string[];
+}
+
+export type AgentSessionChangeKind = "created" | "modified" | "removed";
+
+export interface AgentSessionChange {
+  path: string;
+  kind: AgentSessionChangeKind;
+  timestamp_ms: number;
+}
+
+export interface AgentSessionChangeLog {
+  session_id: string;
+  changes: AgentSessionChange[];
 }
 
 export interface AgentSession {
@@ -27,8 +56,12 @@ export interface AgentSession {
   status: AgentSessionStatus;
   pid: number | null;
   started_at_ms: number;
+  ended_at_ms?: number | null;
   exit_code: number | null;
   error: AgentSessionError | null;
+  checkpoint?: AgentSessionCheckpoint | null;
+  change_log?: AgentSessionChange[];
+  reverted_at_ms?: number | null;
 }
 
 export interface AgentSessionOutput {

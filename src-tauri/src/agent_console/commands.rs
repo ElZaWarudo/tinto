@@ -10,7 +10,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::bus::{
-    contract::{AgentSession, AgentSessionOutput, EVENT_AGENT_SESSION_OUTPUT},
+    contract::{
+        AgentSession, AgentSessionChangeLog, AgentSessionOutput, EVENT_AGENT_SESSION_CHANGE_LOG,
+        EVENT_AGENT_SESSION_OUTPUT,
+    },
     BusHandle,
 };
 
@@ -67,13 +70,16 @@ pub fn stop_agent_session(
 
 #[tauri::command]
 pub fn list_agent_sessions(
+    app: AppHandle,
     registry: State<'_, Mutex<AgentSessionRegistry>>,
 ) -> Result<Vec<AgentSession>, CommandError> {
     let mut registry = lock_registry(&registry)?;
     registry
         .refresh_session_statuses()
         .map_err(CommandError::from)?;
-    Ok(registry.list_sessions())
+    let sessions = registry.list_sessions();
+    emit_change_logs(&app, &sessions);
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -111,6 +117,21 @@ pub fn resize_agent_session(
     registry
         .resize_session(&session_id, cols, rows)
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn revert_session(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    user_consent: bool,
+) -> Result<AgentSession, CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    let session = registry
+        .revert_session(&session_id, user_consent)
+        .map_err(CommandError::from)?;
+    emit_change_logs(&app, std::slice::from_ref(&session));
+    Ok(session)
 }
 
 async fn ensure_known_agent_repo(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
@@ -157,6 +178,16 @@ fn spawn_output_reader(
             }
         }
     });
+}
+
+fn emit_change_logs(app: &AppHandle, sessions: &[AgentSession]) {
+    for session in sessions {
+        let payload = AgentSessionChangeLog {
+            session_id: session.id.clone(),
+            changes: session.change_log.clone(),
+        };
+        let _ = app.emit(EVENT_AGENT_SESSION_CHANGE_LOG, payload);
+    }
 }
 
 fn now_ms() -> u64 {

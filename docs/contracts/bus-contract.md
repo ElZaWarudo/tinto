@@ -93,6 +93,19 @@ Emitted at startup and on changes. `available: false` = degraded mode: data arri
 
 Chunks are live only; the first ACI-002 stream bridge does not replay historical output produced before a frontend listener attaches. `chunk_base64` preserves PTY bytes, ANSI escape sequences, and partial UTF-8 boundaries. The frontend decodes the bytes at the terminal surface boundary.
 
+### `tinto://agent-session-change-log` - changed paths for ONE agent session
+
+```jsonc
+{
+  "session_id": "sess-1",
+  "changes": [
+    { "path": "src/a.ts", "kind": "modified", "timestamp_ms": 1760000000000 }
+  ]
+}
+```
+
+`kind` is `"created" | "modified" | "removed"`. Change logs are emitted when sessions are listed or reverted; they are also embedded in `AgentSession.change_log`.
+
 ## Commands (frontend `invoke` → backend)
 
 | Command | Args | Response | Notes |
@@ -113,6 +126,7 @@ Chunks are live only; the first ACI-002 stream bridge does not replay historical
 | `agent_binary_available` | `agent_type` | `bool` | Checks the allowlisted agent binary through PATH lookup. Known missing binaries return `false`; unsupported agent ids return `unsupported_agent`. |
 | `write_agent_session_input` | `session_id, input_base64` | `()` | Writes decoded bytes to a running session's PTY stdin. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
 | `resize_agent_session` | `session_id, cols, rows` | `()` | Resizes a running session's PTY. `cols` and `rows` must be positive; invalid dimensions return `invalid_terminal_size`. |
+| `revert_session` | `session_id, user_consent` | `AgentSession` | Restores the repo to the session checkpoint. `user_consent=false` returns `consent_required`; running sessions return `session_still_running`; repeated revert is idempotent. |
 
 - `FileContent`: `{ encoding: "utf8" | "base64", content: string, truncated: bool }` — 1 MiB guard (truncated) and binary detection (→ base64). Validated relative paths: after canonicalizing they must stay within the repo (no `../`).
 - `get_media_content` returns the same `FileContent` shape but always uses `"base64"` and a 12 MiB guard, so visual previews can build `data:` URLs without ambiguity. Supported extensions: `pdf`, `avif`, `bmp`, `gif`, `ico`, `jpeg`, `jpg`, `png`, `svg`, `webp`; anything else returns `unsupported-media`.
@@ -131,17 +145,29 @@ The agent console backend exposes session lifecycle metadata through additive co
   "status": "running",              // "starting" | "running" | "exited" | "error"
   "pid": 12345,                      // null before spawn or when unavailable
   "started_at_ms": 1760000000000,
+  "ended_at_ms": null,
   "exit_code": null,                 // process exit code after completion, when available
-  "error": null                      // AgentSessionError | null
+  "error": null,                     // AgentSessionError | null
+  "checkpoint": {
+    "checkpoint_type": "git_ref",    // "git_ref" | "fs_snapshot"
+    "git_hash": "abc...",
+    "snapshot_files": []
+  },
+  "change_log": [
+    { "path": "src/a.ts", "kind": "modified", "timestamp_ms": 1760000000000 }
+  ],
+  "reverted_at_ms": null
 }
 ```
 
-- `AgentSessionStatus`: `"starting" | "running" | "exited" | "error"`.
+- `AgentSessionStatus`: `"starting" | "running" | "exited" | "error" | "completed" | "failed" | "reverted"`. `exited` remains in the additive contract for compatibility; new completed sessions report `completed` for exit code 0 and `failed` for non-zero exit.
 - `AgentSessionError`: `{ category: string, message: string }`; messages are safe for UI display and must not include secrets.
 - `agent_type`: canonical supported agent id, currently planned as `"claude"`, `"codex"`, or `"opencode"`.
 - `repo`: canonical repo identity, using the same opaque path convention as `RepoDelta.repo`.
 - `start_agent_session` rejects repos outside the active workbench before spawning. Errors use the same `{ category, message }` command-error shape as other Tauri commands.
 - `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live PTY output chunks.
+- `AgentSessionCheckpoint`: git checkpoints are used only when the repo is clean and HEAD is readable; dirty or non-git repos use a filesystem snapshot under `~/.tinto/checkpoints/<repo-hash>/<session-id>/` with bounded size and per-repo retention.
+- `AgentSessionChangeLog`: `{ session_id, changes }`; emitted on `tinto://agent-session-change-log` and mirrored in the session record.
 
 ## Dry-run: view needs → contract
 

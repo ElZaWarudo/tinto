@@ -7,10 +7,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENT_AGENT_SESSION_OUTPUT,
+  EVENT_AGENT_SESSION_CHANGE_LOG,
   EVENT_FS_EVENTS,
   EVENT_WATCHING_STATE,
   EVENT_WORKBENCH_DELTA,
   type CommitInfo,
+  type AgentSessionChangeLog,
   type AgentSessionOutput,
   type AgentSession,
   type FileContent,
@@ -75,6 +77,9 @@ export const stopAgentSession = (sessionId: string) => invoke("stop_agent_sessio
 
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
 
+export const revertSession = (sessionId: string, userConsent: boolean) =>
+  invoke<AgentSession>("revert_session", { sessionId, userConsent });
+
 export const agentBinaryAvailable = (agentType: string) =>
   invoke<boolean>("agent_binary_available", { agentType });
 
@@ -117,6 +122,11 @@ export const onAgentSessionOutput = (
   cb: (output: AgentSessionOutput) => void,
 ): Promise<UnlistenFn> =>
   listen<AgentSessionOutput>(EVENT_AGENT_SESSION_OUTPUT, (e) => cb(e.payload));
+
+export const onAgentSessionChangeLog = (
+  cb: (changeLog: AgentSessionChangeLog) => void,
+): Promise<UnlistenFn> =>
+  listen<AgentSessionChangeLog>(EVENT_AGENT_SESSION_CHANGE_LOG, (e) => cb(e.payload));
 
 const encodeAgentInput = (input: string | Uint8Array) => {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;

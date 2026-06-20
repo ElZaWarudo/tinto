@@ -2,6 +2,7 @@
 //! conectan en el siguiente review unit; este modulo mantiene el lifecycle
 //! testeable sin exponer todavia nueva superficie IPC.
 
+pub mod checkpoint;
 pub mod commands;
 pub mod pty;
 pub mod session;
@@ -16,6 +17,7 @@ use std::{
 };
 
 use crate::bus::contract::{AgentSession, AgentSessionError};
+use checkpoint::{create_checkpoint, CheckpointConfig};
 use pty::{AgentProcessFactory, PortablePtyFactory};
 use session::AgentSessionRecord;
 use validation::resolve_agent_binary;
@@ -66,6 +68,7 @@ impl From<AgentConsoleError> for AgentSessionError {
 pub struct AgentSessionRegistry {
     sessions: HashMap<String, AgentSessionRecord>,
     process_factory: Arc<dyn AgentProcessFactory>,
+    checkpoint_config: CheckpointConfig,
 }
 
 pub struct StartedAgentSession {
@@ -82,7 +85,14 @@ impl AgentSessionRegistry {
         Self {
             sessions: HashMap::new(),
             process_factory,
+            checkpoint_config: CheckpointConfig::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_checkpoint_config(mut self, checkpoint_config: CheckpointConfig) -> Self {
+        self.checkpoint_config = checkpoint_config;
+        self
     }
 
     pub fn start_session(
@@ -123,9 +133,12 @@ impl AgentSessionRegistry {
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         let repo = canonical_repo(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
+        let started_at_ms = now_ms();
+        let checkpoint = create_checkpoint(&repo, &id, started_at_ms, &self.checkpoint_config)?;
         let mut process = self.process_factory.spawn_agent(&binary_path, &repo)?;
         let output_reader = process.take_output_reader();
-        let mut session = AgentSessionRecord::new(id.clone(), repo, agent_type);
+        let mut session =
+            AgentSessionRecord::new(id.clone(), repo, agent_type, started_at_ms, checkpoint);
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession { id, output_reader })
@@ -178,6 +191,25 @@ impl AgentSessionRegistry {
         session.resize(cols, rows)
     }
 
+    pub fn revert_session(
+        &mut self,
+        session_id: &str,
+        user_consent: bool,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        if !user_consent {
+            return Err(AgentConsoleError::new(
+                "consent_required",
+                "revert requires explicit user consent",
+            ));
+        }
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.revert()?;
+        Ok(session.to_contract())
+    }
+
     pub fn list_sessions(&self) -> Vec<AgentSession> {
         let mut sessions = self
             .sessions
@@ -204,6 +236,14 @@ impl AgentSessionRegistry {
         }
         self.sessions.clear();
     }
+}
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 impl Default for AgentSessionRegistry {
@@ -343,8 +383,41 @@ mod tests {
         registry.stop_session(&id).unwrap();
 
         let session = registry.get_session(&id).unwrap();
-        assert_eq!(session.status, AgentSessionStatus::Exited);
+        assert_eq!(session.status, AgentSessionStatus::Completed);
         assert_eq!(session.exit_code, Some(0));
+    }
+
+    #[test]
+    fn registry_revert_requires_user_consent() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+        registry.stop_session(&id).unwrap();
+
+        let error = registry.revert_session(&id, false).unwrap_err();
+
+        assert_eq!(error.category, "consent_required");
+    }
+
+    #[test]
+    fn registry_rejects_revert_for_running_session() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+
+        let error = registry.revert_session(&id, true).unwrap_err();
+
+        assert_eq!(error.category, "session_still_running");
     }
 
     #[test]
