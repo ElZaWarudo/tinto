@@ -20,6 +20,7 @@ import { repoTreeStore, useRepoTree } from "../../workspace/repoTreeStore";
 import { fileDock, useRepoDock } from "../../workspace/fileDock";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { FileTreeNode } from "./FileTreeNode";
+import { useExplorerExpanded } from "./explorerCollapseState";
 
 interface ContextMenuState {
   node: TreeNode;
@@ -72,7 +73,7 @@ export function ProjectExplorer({
   const { tree, loading, error } = useRepoTree(repo);
   const { active } = useRepoDock(repo);
   const delta = state.repos[repo];
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set());
+  const [expandedDirs, setExpandedDirs] = useExplorerExpanded(repo);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
 
   // Load on mount; the store keeps it cached (stale-while-revalidate) thereafter.
