@@ -132,7 +132,7 @@ Rules:
   - Local atomic commits created on `feat/agent-console-contract`, then fast-forward merged into `develop` and pushed to `origin/develop` at `2c21f79`.
   - RU1-related commits: `90e9779 feat(bus-contract): add agent sessions and portable tree paths`, `38f97a5 fix(watcher): detect missing repo roots on Windows`, `7654e99 test(qol): remove stale shortcuts import`, and `2c21f79 docs(orchestration): sync agent console handoff state`.
   - Adjacent explorer follow-ups shipped in the same pushed tranche by user direction: `7c1b038 fix(explorer): persist expanded folders` and `6ca13a9 feat(explorer): refine file tree presentation`.
-- RU2 status (2026-06-20): implementation complete, direct review passed after fix, and local verification passed on `feat/agent-console-runtime`; commit/release handoff pending.
+- RU2 status (2026-06-20): implementation complete, direct review passed after fix, local verification passed, fast-forward merged into `develop`, and pushed to `origin/develop` at `a903e03`.
 - RU2 changed surfaces: `src-tauri/src/agent_console/mod.rs`, `src-tauri/src/agent_console/session.rs`, `src-tauri/src/agent_console/validation.rs`, `src-tauri/src/agent_console/pty.rs`, `src-tauri/src/lib.rs`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock`.
 - RU2 implementation notes:
   - Added internal `AgentSessionRegistry` with injectable `AgentProcessFactory`, deterministic listing, stop/cleanup lifecycle, and contract conversion.
