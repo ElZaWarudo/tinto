@@ -9,9 +9,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 // dockview cannot render in jsdom; capture the onReady callback and drive a
 // fake api so we can test the shell's restore/guard/save wiring directly.
 let capturedOnReady: ((e: { api: FakeApi }) => void) | null = null;
+let capturedDockviewProps: Record<string, unknown> | null = null;
 vi.mock("dockview-react", () => ({
-  DockviewReact: (props: { onReady: (e: { api: FakeApi }) => void }) => {
+  DockviewReact: (props: { onReady: (e: { api: FakeApi }) => void; dndStrategy?: string }) => {
     capturedOnReady = props.onReady;
+    capturedDockviewProps = props;
     return null;
   },
   themeVisualStudio: {},
@@ -66,6 +68,7 @@ describe("DockWorkspace", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     capturedOnReady = null;
+    capturedDockviewProps = null;
   });
   afterEach(() => vi.useRealTimers());
 
@@ -79,6 +82,13 @@ describe("DockWorkspace", () => {
     const addedIds = api.addPanel.mock.calls.map((c) => c[0].id);
     expect(addedIds).toContain(PANEL_DASHBOARD);
     expect(api.fromJSON).not.toHaveBeenCalled();
+  });
+
+  it("uses pointer-driven drag and drop for embedded Windows webviews", () => {
+    invokeMock.mockResolvedValue(null);
+    render(<DockWorkspace components={components} />);
+
+    expect(capturedDockviewProps?.dndStrategy).toBe("pointer");
   });
 
   it("restores a usable persisted layout instead of the default", async () => {

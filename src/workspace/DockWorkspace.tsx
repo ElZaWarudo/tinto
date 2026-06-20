@@ -90,6 +90,7 @@ export function DockWorkspace({
     <DockviewReact
       components={components}
       tabComponents={tabComponents}
+      dndStrategy="pointer"
       theme={themeVisualStudio}
       onReady={onReady}
     />

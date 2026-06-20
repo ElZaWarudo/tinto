@@ -81,6 +81,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
           <DockviewReact
             components={fileComponents}
             tabComponents={fileTabComponents}
+            dndStrategy="pointer"
             theme={themeVisualStudio}
             onReady={onReady}
           />
