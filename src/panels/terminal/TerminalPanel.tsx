@@ -208,6 +208,8 @@ function auditTitle(session: AgentSession): string {
       : null,
     session.checkpoint?.git_hash ? `Git: ${session.checkpoint.git_hash.slice(0, 12)}` : null,
     `Changes: ${session.change_log?.length ?? 0}`,
+    `Age: ${Math.round(session.age_ms / 1000)}s`,
+    `Active sessions: ${session.active_sessions}`,
   ];
   return pieces.filter(Boolean).join(" · ");
 }

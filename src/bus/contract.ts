@@ -49,6 +49,12 @@ export interface AgentSessionChangeLog {
   changes: AgentSessionChange[];
 }
 
+export interface AgentSessionLimits {
+  max_sessions: number;
+  max_sessions_per_repo: number;
+  max_lifetime_ms: number;
+}
+
 export interface AgentSession {
   id: string;
   repo: string;
@@ -62,6 +68,9 @@ export interface AgentSession {
   checkpoint?: AgentSessionCheckpoint | null;
   change_log?: AgentSessionChange[];
   reverted_at_ms?: number | null;
+  active_sessions: number;
+  age_ms: number;
+  output_bytes_per_second?: number | null;
 }
 
 export interface AgentSessionOutput {

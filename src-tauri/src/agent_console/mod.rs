@@ -16,7 +16,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::bus::contract::{AgentSession, AgentSessionError};
+use crate::bus::contract::{AgentSession, AgentSessionError, AgentSessionLimits};
 use checkpoint::{create_checkpoint, CheckpointConfig};
 use pty::{AgentProcessFactory, PortablePtyFactory};
 use session::AgentSessionRecord;
@@ -69,6 +69,7 @@ pub struct AgentSessionRegistry {
     sessions: HashMap<String, AgentSessionRecord>,
     process_factory: Arc<dyn AgentProcessFactory>,
     checkpoint_config: CheckpointConfig,
+    limits: AgentSessionLimits,
 }
 
 pub struct StartedAgentSession {
@@ -86,12 +87,19 @@ impl AgentSessionRegistry {
             sessions: HashMap::new(),
             process_factory,
             checkpoint_config: CheckpointConfig::default(),
+            limits: default_limits(),
         }
     }
 
     #[cfg(test)]
     pub fn with_checkpoint_config(mut self, checkpoint_config: CheckpointConfig) -> Self {
         self.checkpoint_config = checkpoint_config;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_limits(mut self, limits: AgentSessionLimits) -> Self {
+        self.limits = limits;
         self
     }
 
@@ -132,6 +140,8 @@ impl AgentSessionRegistry {
         binary_path: PathBuf,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         let repo = canonical_repo(&repo)?;
+        self.refresh_session_statuses()?;
+        self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
         let checkpoint = create_checkpoint(&repo, &id, started_at_ms, &self.checkpoint_config)?;
@@ -153,8 +163,10 @@ impl AgentSessionRegistry {
     }
 
     pub fn refresh_session_statuses(&mut self) -> Result<(), AgentConsoleError> {
+        let now = now_ms();
         for session in self.sessions.values_mut() {
             session.refresh_status()?;
+            session.enforce_lifetime(now, self.limits.max_lifetime_ms)?;
         }
         Ok(())
     }
@@ -211,10 +223,12 @@ impl AgentSessionRegistry {
     }
 
     pub fn list_sessions(&self) -> Vec<AgentSession> {
+        let now = now_ms();
+        let active = self.active_session_count();
         let mut sessions = self
             .sessions
             .values()
-            .map(AgentSessionRecord::to_contract)
+            .map(|session| session.to_contract_with_telemetry(active, now))
             .collect::<Vec<_>>();
         sessions.sort_by(|a, b| {
             a.started_at_ms
@@ -236,6 +250,41 @@ impl AgentSessionRegistry {
         }
         self.sessions.clear();
     }
+
+    fn ensure_capacity(&self, repo: &Path) -> Result<(), AgentConsoleError> {
+        let active_total = self.active_session_count();
+        if active_total >= self.limits.max_sessions {
+            return Err(AgentConsoleError::new(
+                "max_sessions_reached",
+                format!(
+                    "maximum active sessions reached ({})",
+                    self.limits.max_sessions
+                ),
+            ));
+        }
+        let active_for_repo = self
+            .sessions
+            .values()
+            .filter(|session| session.is_active() && session.repo() == repo)
+            .count();
+        if active_for_repo >= self.limits.max_sessions_per_repo {
+            return Err(AgentConsoleError::new(
+                "max_sessions_per_repo_reached",
+                format!(
+                    "maximum active sessions per repo reached ({})",
+                    self.limits.max_sessions_per_repo
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn active_session_count(&self) -> usize {
+        self.sessions
+            .values()
+            .filter(|session| session.is_active())
+            .count()
+    }
 }
 
 fn now_ms() -> u64 {
@@ -244,6 +293,14 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn default_limits() -> AgentSessionLimits {
+    AgentSessionLimits {
+        max_sessions: 5,
+        max_sessions_per_repo: 1,
+        max_lifetime_ms: 4 * 60 * 60 * 1000,
+    }
 }
 
 impl Default for AgentSessionRegistry {
@@ -266,7 +323,10 @@ fn canonical_repo(repo: &Path) -> Result<PathBuf, AgentConsoleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{agent_console::pty::AgentProcess, bus::contract::AgentSessionStatus};
+    use crate::{
+        agent_console::pty::AgentProcess,
+        bus::contract::{AgentSessionLimits, AgentSessionStatus},
+    };
     use std::{
         io::{Cursor, Read},
         sync::{
@@ -418,6 +478,89 @@ mod tests {
         let error = registry.revert_session(&id, true).unwrap_err();
 
         assert_eq!(error.category, "session_still_running");
+    }
+
+    #[test]
+    fn registry_enforces_total_session_limit() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry =
+            AgentSessionRegistry::with_process_factory(factory).with_limits(AgentSessionLimits {
+                max_sessions: 1,
+                max_sessions_per_repo: 1,
+                max_lifetime_ms: 60_000,
+            });
+        let repo_a = tempfile::tempdir().unwrap();
+        let binary_a = repo_a.path().join("codex-bin");
+        std::fs::write(&binary_a, "fake").unwrap();
+        registry
+            .start_session_with_binary(repo_a.path().into(), "codex".into(), binary_a)
+            .unwrap();
+
+        let repo_b = tempfile::tempdir().unwrap();
+        let binary_b = repo_b.path().join("codex-bin");
+        std::fs::write(&binary_b, "fake").unwrap();
+        let error = registry
+            .start_session_with_binary(repo_b.path().into(), "codex".into(), binary_b)
+            .unwrap_err();
+
+        assert_eq!(error.category, "max_sessions_reached");
+    }
+
+    #[test]
+    fn registry_enforces_per_repo_session_limit() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry =
+            AgentSessionRegistry::with_process_factory(factory).with_limits(AgentSessionLimits {
+                max_sessions: 5,
+                max_sessions_per_repo: 1,
+                max_lifetime_ms: 60_000,
+            });
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary.clone())
+            .unwrap();
+
+        let error = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap_err();
+
+        assert_eq!(error.category, "max_sessions_per_repo_reached");
+    }
+
+    #[test]
+    fn registry_lifetime_timeout_marks_failed_and_releases_capacity() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry =
+            AgentSessionRegistry::with_process_factory(factory).with_limits(AgentSessionLimits {
+                max_sessions: 1,
+                max_sessions_per_repo: 1,
+                max_lifetime_ms: 1,
+            });
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary.clone())
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        registry.refresh_session_statuses().unwrap();
+
+        let session = registry.get_session(&id).unwrap();
+        assert_eq!(session.status, AgentSessionStatus::Failed);
+        assert_eq!(
+            session.error.as_ref().map(|e| e.category.as_str()),
+            Some("session_lifetime_exceeded")
+        );
+
+        let repo_b = tempfile::tempdir().unwrap();
+        let binary_b = repo_b.path().join("codex-bin");
+        std::fs::write(&binary_b, "fake").unwrap();
+        registry
+            .start_session_with_binary(repo_b.path().into(), "codex".into(), binary_b)
+            .unwrap();
     }
 
     #[test]

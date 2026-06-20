@@ -92,6 +92,9 @@ describe("agent session contract types", () => {
       },
       change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 1760000000001 }],
       reverted_at_ms: null,
+      active_sessions: 1,
+      age_ms: 100,
+      output_bytes_per_second: null,
     });
 
     const session = JSON.parse(wire) as AgentSession;
@@ -100,6 +103,8 @@ describe("agent session contract types", () => {
     expect(session.error?.category).toBe("spawn_failed");
     expect(session.checkpoint?.checkpoint_type).toBe("git_ref");
     expect(session.change_log?.[0].kind).toBe("modified");
+    expect(session.active_sessions).toBe(1);
+    expect(session.age_ms).toBe(100);
   });
 
   it("accepts output chunks with base64 payloads", () => {

@@ -28,6 +28,9 @@ const revertSessionMock = vi.fn((...args: unknown[]) => {
     checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
     change_log: [],
     reverted_at_ms: 3,
+    active_sessions: 0,
+    age_ms: 2,
+    output_bytes_per_second: null,
   });
 });
 const confirmMock = vi.fn((...args: unknown[]) => {
@@ -210,6 +213,9 @@ describe("TerminalPanel", () => {
         checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
         change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
         reverted_at_ms: null,
+        active_sessions: 1,
+        age_ms: 1,
+        output_bytes_per_second: null,
       },
     ]);
 

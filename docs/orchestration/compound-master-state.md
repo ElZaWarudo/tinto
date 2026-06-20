@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: ACI-001 through ACI-004 are delivered on `develop` and pushed. ACI-005 deterministic terminal auto-layout is implemented locally with frontend tests passing; it is pending commit/push.
-- Active package: ACI-005 Multi-agent orchestration with auto-splitting layout (docs/roadmaps/2026-06-19-002-agent-console-integration.md).
-- Branch/base: `develop` over `origin/develop`. Working tree carries ACI-005 auto-layout helper/tests and this orchestration update. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
+- Current phase/status: Agent Console Integration roadmap ACI-001 through ACI-005 are delivered on `develop` and pushed. ACI-006 resource limits and telemetry is implemented locally with focused validation passing; it is pending final frontend test, commit, and push.
+- Active package: ACI-006 Resource limits and session telemetry (docs/roadmaps/2026-06-19-002-agent-console-integration.md).
+- Branch/base: `develop` over `origin/develop`. Working tree carries ACI-006 limits/telemetry plus contract/orchestration updates. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
 - Required user decisions: none.
-- Next action: commit/push ACI-005, then continue with ACI-006 resource limits and telemetry.
+- Next action: run final frontend validation, commit/push ACI-006, then prepare a compact release/closeout note for the completed Agent Console Integration roadmap.
 
 ## Source Documents
 

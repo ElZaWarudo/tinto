@@ -71,6 +71,13 @@ pub struct AgentSessionChangeLog {
     pub changes: Vec<AgentSessionChange>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentSessionLimits {
+    pub max_sessions: usize,
+    pub max_sessions_per_repo: usize,
+    pub max_lifetime_ms: u64,
+}
+
 /// Metadata publica de una sesion de agente. La E/S PTY se anade en ACI-002.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AgentSession {
@@ -90,6 +97,10 @@ pub struct AgentSession {
     pub change_log: Vec<AgentSessionChange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
+    pub active_sessions: usize,
+    pub age_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_bytes_per_second: Option<u64>,
 }
 
 /// Chunk binario del PTY de una sesion de agente, transportado en base64 para
@@ -372,6 +383,9 @@ mod tests {
                 timestamp_ms: 1760000000001,
             }],
             reverted_at_ms: None,
+            active_sessions: 1,
+            age_ms: 42,
+            output_bytes_per_second: None,
         };
 
         let json = serde_json::to_value(&session).unwrap();
@@ -385,6 +399,8 @@ mod tests {
         assert_eq!(json["error"]["category"], "spawn_failed");
         assert_eq!(json["checkpoint"]["checkpoint_type"], "git_ref");
         assert_eq!(json["change_log"][0]["kind"], "modified");
+        assert_eq!(json["active_sessions"], 1);
+        assert_eq!(json["age_ms"], 42);
     }
 
     #[test]

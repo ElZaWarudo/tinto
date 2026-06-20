@@ -130,6 +130,27 @@ impl AgentSessionRecord {
         Ok(())
     }
 
+    pub fn enforce_lifetime(
+        &mut self,
+        now_ms: u64,
+        max_lifetime_ms: u64,
+    ) -> Result<(), AgentConsoleError> {
+        if !self.is_active() || max_lifetime_ms == 0 {
+            return Ok(());
+        }
+        if now_ms.saturating_sub(self.started_at_ms) <= max_lifetime_ms {
+            return Ok(());
+        }
+        let _ = self.stop();
+        self.status = AgentSessionStatus::Failed;
+        self.error = Some(AgentConsoleError::new(
+            "session_lifetime_exceeded",
+            "session exceeded the configured lifetime limit",
+        ));
+        self.ended_at_ms = Some(now_ms);
+        Ok(())
+    }
+
     pub fn revert(&mut self) -> Result<(), AgentConsoleError> {
         self.refresh_status()?;
         if self.status == AgentSessionStatus::Running || self.status == AgentSessionStatus::Starting
@@ -155,6 +176,17 @@ impl AgentSessionRecord {
         Ok(())
     }
 
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.status,
+            AgentSessionStatus::Starting | AgentSessionStatus::Running
+        )
+    }
+
+    pub fn repo(&self) -> &std::path::Path {
+        &self.repo
+    }
+
     fn running_process_mut(&mut self) -> Result<&mut Box<dyn AgentProcess>, AgentConsoleError> {
         if self.status != AgentSessionStatus::Running {
             return Err(AgentConsoleError::new(
@@ -168,6 +200,10 @@ impl AgentSessionRecord {
     }
 
     pub fn to_contract(&self) -> AgentSession {
+        self.to_contract_with_telemetry(0, now_ms())
+    }
+
+    pub fn to_contract_with_telemetry(&self, active_sessions: usize, now_ms: u64) -> AgentSession {
         AgentSession {
             id: self.id.clone(),
             repo: self.repo.clone(),
@@ -181,6 +217,9 @@ impl AgentSessionRecord {
             checkpoint: Some(self.checkpoint.contract.clone()),
             change_log: self.change_log.clone(),
             reverted_at_ms: self.reverted_at_ms,
+            active_sessions,
+            age_ms: now_ms.saturating_sub(self.started_at_ms),
+            output_bytes_per_second: None,
         }
     }
 }

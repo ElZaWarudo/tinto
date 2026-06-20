@@ -122,7 +122,7 @@ Chunks are live only; the first ACI-002 stream bridge does not replay historical
 | `retry_repo` | `repo` | `()` | Retries the remount of a repo in terminal error. |
 | `start_agent_session` | `repo, agent_type` | `session_id: string` | Starts an allowlisted agent (`claude`, `codex`, `opencode`) in a PTY for a repo in the active workbench. |
 | `stop_agent_session` | `session_id` | `()` | Stops the tracked PTY process/session. |
-| `list_agent_sessions` | none | `Vec<AgentSession>` | Returns known sessions after refreshing completed process statuses. |
+| `list_agent_sessions` | none | `Vec<AgentSession>` | Returns known sessions after refreshing completed process statuses and applying lifetime limits. |
 | `agent_binary_available` | `agent_type` | `bool` | Checks the allowlisted agent binary through PATH lookup. Known missing binaries return `false`; unsupported agent ids return `unsupported_agent`. |
 | `write_agent_session_input` | `session_id, input_base64` | `()` | Writes decoded bytes to a running session's PTY stdin. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
 | `resize_agent_session` | `session_id, cols, rows` | `()` | Resizes a running session's PTY. `cols` and `rows` must be positive; invalid dimensions return `invalid_terminal_size`. |
@@ -156,7 +156,10 @@ The agent console backend exposes session lifecycle metadata through additive co
   "change_log": [
     { "path": "src/a.ts", "kind": "modified", "timestamp_ms": 1760000000000 }
   ],
-  "reverted_at_ms": null
+  "reverted_at_ms": null,
+  "active_sessions": 1,
+  "age_ms": 1200,
+  "output_bytes_per_second": null
 }
 ```
 
@@ -168,6 +171,8 @@ The agent console backend exposes session lifecycle metadata through additive co
 - `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live PTY output chunks.
 - `AgentSessionCheckpoint`: git checkpoints are used only when the repo is clean and HEAD is readable; dirty or non-git repos use a filesystem snapshot under `~/.tinto/checkpoints/<repo-hash>/<session-id>/` with bounded size and per-repo retention.
 - `AgentSessionChangeLog`: `{ session_id, changes }`; emitted on `tinto://agent-session-change-log` and mirrored in the session record.
+- `AgentSessionLimits`: `{ max_sessions, max_sessions_per_repo, max_lifetime_ms }`; default runtime limits are 5 active sessions per workbench, 1 active session per repo, and 4 hours max lifetime. Capacity errors are `max_sessions_reached`, `max_sessions_per_repo_reached`, and `session_lifetime_exceeded`.
+- Telemetry fields are best-effort and local-only. `active_sessions` is the current active count at listing time, `age_ms` is computed from `started_at_ms`, and `output_bytes_per_second` is reserved for sampled PTY throughput.
 
 ## Dry-run: view needs → contract
 
