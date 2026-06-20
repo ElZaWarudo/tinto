@@ -1,13 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { installShortcuts, SHORTCUTS } from "./shortcuts";
 import type { DockviewApi } from "dockview-react";
-import { fileDock } from "../workspace/fileDock";
 
 describe("shortcuts", () => {
   describe("SHORTCUTS", () => {
     it("defines all expected shortcuts", () => {
       expect(SHORTCUTS).toHaveLength(12);
-      
+
       const actions = SHORTCUTS.map((s) => s.action);
       expect(actions).toContain("Alternar árbol de archivos");
       expect(actions).toContain("Siguiente proyecto");
