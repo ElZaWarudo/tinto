@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: ACI-001 is delivered on `develop`: RU1 pushed at `2c21f79`, RU2 pushed at `a903e03`, and RU3 session lifecycle commands/integration pushed at `0065c3d`.
-- Active package: ACI-001 Backend PTY Runtime + Agent Process Lifecycle (docs/work-packages/ACI-001-agent-console-backend/2026-06-19-001-agent-console-backend-work-package.md).
-- Branch/base: `develop`/`origin/develop` at `0065c3d`. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
+- Current phase/status: ACI-001 is delivered on `develop`: RU1 pushed at `2c21f79`, RU2 pushed at `a903e03`, and RU3 session lifecycle commands/integration pushed at `0065c3d`; ACI-002 artifacts are created/reviewed and RU1 implementation is complete locally, pending release marshal.
+- Active package: ACI-002 PTY Stream Bridge + Dockable Terminal Panel (docs/work-packages/ACI-002-agent-terminal-streaming/2026-06-20-001-agent-terminal-streaming-work-package.md), review unit RU1 release.
+- Branch/base: `feat/agent-terminal-streaming` from `develop`/`origin/develop` at `eca0e40`. Working tree carries ACI-002 brainstorm/plan/work-package artifacts plus RU1 implementation. Untracked screenshot `Captura de pantalla 2026-06-20 155731.png` remains intentionally outside scope.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none.
 - Required user decisions: none.
-- Next action: decide whether to begin ACI-002 PTY output streaming or first do a manual app smoke once the local `tinto.exe` lock is gone.
+- Next action: create local RU1 semantic commits, fast-forward merge to `develop`, push, then continue with ACI-002 RU2 xterm terminal panel surface.
 
 ## Source Documents
 
