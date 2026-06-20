@@ -7,6 +7,7 @@ use std::{
 };
 
 use git2::{Repository, StatusOptions};
+use ignore::WalkBuilder;
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -313,7 +314,11 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<(), AgentConsoleError> {
 
 fn collect_repo_files(repo: &Path) -> Result<Vec<PathBuf>, AgentConsoleError> {
     let mut files = Vec::new();
-    for entry in WalkDir::new(repo).follow_links(false).into_iter() {
+    let walker = WalkBuilder::new(repo)
+        .follow_links(false)
+        .hidden(false)
+        .build();
+    for entry in walker {
         let entry = entry.map_err(|e| AgentConsoleError::new("io", e.to_string()))?;
         let path = entry.path();
         let Ok(rel) = path.strip_prefix(repo) else {
@@ -322,7 +327,10 @@ fn collect_repo_files(repo: &Path) -> Result<Vec<PathBuf>, AgentConsoleError> {
         if rel.as_os_str().is_empty() || has_git_component(rel) {
             continue;
         }
-        if entry.file_type().is_file() {
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
             files.push(rel.to_path_buf());
         }
     }
@@ -506,6 +514,39 @@ mod tests {
             .snapshot_files
             .contains(&PathBuf::from("base.txt")));
         assert!(record.checkpoint_dir.join("files/base.txt").is_file());
+    }
+
+    #[test]
+    fn filesystem_snapshot_respects_gitignore_for_large_ignored_dirs() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write(".gitignore", "node_modules/\n");
+        fs::create_dir_all(repo.path().join("node_modules/pkg")).unwrap();
+        fs::write(
+            repo.path().join("node_modules/pkg/big.bin"),
+            vec![1u8; 2048],
+        )
+        .unwrap();
+        repo.write("base.txt", "dirty\n");
+        let config = CheckpointConfig {
+            max_checkpoint_bytes: 1024,
+            ..CheckpointConfig::default()
+        };
+
+        let record = create_checkpoint(repo.path(), "sess-ignore", 1, &config).unwrap();
+
+        assert_eq!(
+            record.contract.checkpoint_type,
+            AgentSessionCheckpointType::FsSnapshot
+        );
+        assert!(record
+            .contract
+            .snapshot_files
+            .contains(&PathBuf::from("base.txt")));
+        assert!(!record
+            .contract
+            .snapshot_files
+            .iter()
+            .any(|path| path.starts_with("node_modules")));
     }
 
     #[test]
