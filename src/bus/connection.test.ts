@@ -6,11 +6,14 @@ const h = vi.hoisted(() => ({
   deltaCb: null as ((d: unknown) => void) | null,
   fsCb: null as ((b: unknown) => void) | null,
   watchCb: null as ((w: unknown) => void) | null,
+  changeLogCb: null as ((log: unknown) => void) | null,
   unlistenDelta: vi.fn(),
   unlistenFs: vi.fn(),
   unlistenWatch: vi.fn(),
+  unlistenChangeLog: vi.fn(),
   getSnapshot: vi.fn(),
   listWb: vi.fn(),
+  listSessions: vi.fn(),
 }));
 
 vi.mock("./client", () => ({
@@ -26,8 +29,13 @@ vi.mock("./client", () => ({
     h.watchCb = cb;
     return Promise.resolve(h.unlistenWatch);
   }),
+  onAgentSessionChangeLog: vi.fn((cb) => {
+    h.changeLogCb = cb;
+    return Promise.resolve(h.unlistenChangeLog);
+  }),
   getWorkbenchSnapshot: () => h.getSnapshot(),
   listWorkbenches: () => h.listWb(),
+  listAgentSessions: () => h.listSessions(),
 }));
 
 import { useBusConnection } from "./connection";
@@ -57,14 +65,16 @@ describe("useBusConnection", () => {
     busStore.resetAll();
     h.getSnapshot.mockResolvedValue({ watching: { available: true }, repos: [] });
     h.listWb.mockResolvedValue({ version: 1, active: "Work", workbenches: [] });
+    h.listSessions.mockResolvedValue([]);
   });
 
-  it("attaches all three listeners and loads config + snapshot", async () => {
+  it("attaches listeners and loads config + snapshot", async () => {
     render(createElement(Probe));
     await waitFor(() => expect(h.getSnapshot).toHaveBeenCalled());
     expect(h.deltaCb).toBeTypeOf("function");
     expect(h.fsCb).toBeTypeOf("function");
     expect(h.watchCb).toBeTypeOf("function");
+    expect(h.changeLogCb).toBeTypeOf("function");
     expect(busStore.getState().config?.active).toBe("Work");
   });
 
@@ -82,6 +92,7 @@ describe("useBusConnection", () => {
     await waitFor(() => expect(h.unlistenDelta).toHaveBeenCalled());
     expect(h.unlistenFs).toHaveBeenCalled();
     expect(h.unlistenWatch).toHaveBeenCalled();
+    expect(h.unlistenChangeLog).toHaveBeenCalled();
 
     // A late event after unmount must be ignored (the `active` guard).
     const before = Object.keys(busStore.getState().repos).length;

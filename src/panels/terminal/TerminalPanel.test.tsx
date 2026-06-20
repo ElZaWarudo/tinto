@@ -1,7 +1,8 @@
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSessionOutput } from "../../bus/contract";
+import type { AgentSession, AgentSessionOutput } from "../../bus/contract";
 
 const writeAgentSessionInputMock = vi.fn((...args: unknown[]) => {
   void args;
@@ -11,16 +12,44 @@ const resizeAgentSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
 });
+const listAgentSessionsMock = vi.fn<() => Promise<AgentSession[]>>(() => Promise.resolve([]));
+const revertSessionMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve({
+    id: "sess-1",
+    repo: "/r/a",
+    agent_type: "codex",
+    status: "reverted",
+    pid: null,
+    started_at_ms: 1,
+    ended_at_ms: 2,
+    exit_code: 0,
+    error: null,
+    checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
+    change_log: [],
+    reverted_at_ms: 3,
+  });
+});
+const confirmMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve(true);
+});
 const unlistenMock = vi.fn();
 let outputHandler: ((output: AgentSessionOutput) => void) | null = null;
 
 vi.mock("../../bus/client", () => ({
+  listAgentSessions: () => listAgentSessionsMock(),
+  revertSession: (...a: unknown[]) => revertSessionMock(...a),
   writeAgentSessionInput: (...a: unknown[]) => writeAgentSessionInputMock(...a),
   resizeAgentSession: (...a: unknown[]) => resizeAgentSessionMock(...a),
   onAgentSessionOutput: (cb: (output: AgentSessionOutput) => void) => {
     outputHandler = cb;
     return Promise.resolve(unlistenMock);
   },
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  confirm: (...a: unknown[]) => confirmMock(...a),
 }));
 
 const xtermMocks = vi.hoisted(() => {
@@ -93,6 +122,7 @@ vi.mock("@xterm/addon-fit", () => ({
 }));
 
 import { TerminalPanel, type TerminalPanelParams } from "./TerminalPanel";
+import { agentSessionStore } from "../../agent/sessionStore";
 
 function props(params: TerminalPanelParams) {
   return { params } as IDockviewPanelProps<TerminalPanelParams>;
@@ -103,8 +133,12 @@ describe("TerminalPanel", () => {
     xtermMocks.terminalInstances.length = 0;
     xtermMocks.fitInstances.length = 0;
     outputHandler = null;
+    agentSessionStore.reset();
     writeAgentSessionInputMock.mockClear();
     resizeAgentSessionMock.mockClear();
+    listAgentSessionsMock.mockClear();
+    revertSessionMock.mockClear();
+    confirmMock.mockClear();
     unlistenMock.mockClear();
   });
 
@@ -158,5 +192,33 @@ describe("TerminalPanel", () => {
     expect(unlistenMock).toHaveBeenCalledOnce();
     expect(xtermMocks.terminalInstances[0].disposed).toBe(true);
     expect(xtermMocks.fitInstances[0].disposed).toBe(true);
+  });
+
+  it("confirms and reverts completed sessions", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        repo: "/r/a",
+        agent_type: "codex",
+        status: "completed",
+        pid: null,
+        started_at_ms: 1,
+        ended_at_ms: 2,
+        exit_code: 0,
+        error: null,
+        checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
+        change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
+        reverted_at_ms: null,
+      },
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", agentType: "codex" })} />);
+
+    const button = await screen.findByRole("button", { name: "Revert" });
+    await user.click(button);
+
+    expect(confirmMock).toHaveBeenCalled();
+    expect(revertSessionMock).toHaveBeenCalledWith("sess-1", true);
   });
 });

@@ -6,9 +6,12 @@
 import { useEffect } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { busStore } from "./store";
+import { agentSessionStore } from "../agent/sessionStore";
 import {
   getWorkbenchSnapshot,
+  listAgentSessions,
   listWorkbenches,
+  onAgentSessionChangeLog,
   onFsEvents,
   onWatchingState,
   onWorkbenchDelta,
@@ -27,6 +30,12 @@ export async function reloadActiveWorkbench(): Promise<void> {
   } catch {
     /* leave prior state; a watching banner / errors surface separately */
   }
+  try {
+    const sessions = await listAgentSessions();
+    agentSessionStore.setSessions(sessions);
+  } catch {
+    /* agent sessions are best-effort and ephemeral */
+  }
 }
 
 export function useBusConnection(): void {
@@ -36,6 +45,9 @@ export function useBusConnection(): void {
       onWorkbenchDelta((d) => active && busStore.applyDelta(d)),
       onFsEvents((b) => active && busStore.applyFsEvents(b)),
       onWatchingState((w) => active && busStore.setWatching(w)),
+      onAgentSessionChangeLog(
+        (log) => active && agentSessionStore.applyChangeLog(log.session_id, log.changes),
+      ),
     ];
     void reloadActiveWorkbench();
     return () => {

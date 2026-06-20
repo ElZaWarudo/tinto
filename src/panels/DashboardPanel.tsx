@@ -3,7 +3,8 @@
 // updates (memoized cards re-render only on their own repo's change).
 
 import { useEffect, useState } from "react";
-import { retryRepo, startAgentSession } from "../bus/client";
+import { listAgentSessions, retryRepo, startAgentSession } from "../bus/client";
+import { agentSessionStore } from "../agent/sessionStore";
 import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
 import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
 import { useQualityState } from "../qol/state";
@@ -77,6 +78,8 @@ export function DashboardPanel() {
               onRetry={() => void retryRepo(p)}
               onLaunch={async (agentType) => {
                 const sessionId = await startAgentSession(p, agentType);
+                const sessions = await listAgentSessions();
+                agentSessionStore.setSessions(sessions);
                 openAgentTerminal({ sessionId, repo: p, agentType });
               }}
             />

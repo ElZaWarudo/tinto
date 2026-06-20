@@ -1056,9 +1056,35 @@ body,
   white-space: nowrap;
   color: var(--fg-muted);
 }
-.terminal-panel__error {
+.terminal-panel__audit {
   margin-left: auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+.terminal-panel__revert {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  border-radius: 4px;
+  background: rgba(127, 29, 29, 0.24);
+  color: #fecaca;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.terminal-panel__revert:disabled {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--fg-muted);
+  cursor: default;
+}
+.terminal-panel__error {
+  min-width: 0;
+  max-width: 30%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

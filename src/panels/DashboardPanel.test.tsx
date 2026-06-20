@@ -10,6 +10,7 @@ const clientMocks = vi.hoisted(() => ({
     void args;
     return Promise.resolve("sess-1");
   }),
+  listAgentSessions: vi.fn(() => Promise.resolve([])),
   agentBinaryAvailable: vi.fn((...args: unknown[]) => {
     void args;
     return Promise.resolve(true);
@@ -22,6 +23,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("../bus/client", () => ({
   retryRepo: (...args: unknown[]) => clientMocks.retryRepo(...args),
   startAgentSession: (...args: unknown[]) => clientMocks.startAgentSession(...args),
+  listAgentSessions: () => clientMocks.listAgentSessions(),
   agentBinaryAvailable: (...args: unknown[]) => clientMocks.agentBinaryAvailable(...args),
 }));
 
@@ -67,6 +69,7 @@ describe("DashboardPanel", () => {
     busStore.resetAll();
     clientMocks.retryRepo.mockClear();
     clientMocks.startAgentSession.mockClear();
+    clientMocks.listAgentSessions.mockClear();
     clientMocks.agentBinaryAvailable.mockReset();
     clientMocks.agentBinaryAvailable.mockResolvedValue(true);
   });
@@ -142,10 +145,12 @@ describe("DashboardPanel", () => {
     await waitFor(() =>
       expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/a", "codex"),
     );
-    expect(openAgentTerminal).toHaveBeenCalledWith({
-      sessionId: "sess-1",
-      repo: "/r/a",
-      agentType: "codex",
-    });
+    await waitFor(() =>
+      expect(openAgentTerminal).toHaveBeenCalledWith({
+        sessionId: "sess-1",
+        repo: "/r/a",
+        agentType: "codex",
+      }),
+    );
   });
 });

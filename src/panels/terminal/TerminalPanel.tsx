@@ -3,7 +3,16 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { onAgentSessionOutput, resizeAgentSession, writeAgentSessionInput } from "../../bus/client";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import {
+  listAgentSessions,
+  onAgentSessionOutput,
+  resizeAgentSession,
+  revertSession,
+  writeAgentSessionInput,
+} from "../../bus/client";
+import { agentSessionStore, useAgentSession } from "../../agent/sessionStore";
+import type { AgentSession } from "../../bus/contract";
 
 export interface TerminalPanelParams {
   sessionId: string;
@@ -18,7 +27,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const repo = params?.repo;
   const agentType = params?.agentType ?? "agent";
   const terminalRef = useRef<HTMLDivElement | null>(null);
+  const session = useAgentSession(sessionId);
   const [error, setError] = useState<string | null>(null);
+  const [reverting, setReverting] = useState(false);
 
   const shortSession = useMemo(
     () => (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId),
@@ -100,6 +111,47 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     };
   }, [sessionId]);
 
+  useEffect(() => {
+    let active = true;
+    void listAgentSessions()
+      .then((sessions) => {
+        if (active) agentSessionStore.setSessions(sessions);
+      })
+      .catch((e) => {
+        if (active) setError(commandMessage(e));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const canRevert =
+    !!session &&
+    session.status !== "running" &&
+    session.status !== "starting" &&
+    session.status !== "reverted";
+
+  const onRevert = async () => {
+    if (!sessionId || !canRevert || reverting) return;
+    const ok = await confirm("This will undo all changes made by this session. Continue?", {
+      title: "Revert agent session",
+      kind: "warning",
+      okLabel: "Revert",
+      cancelLabel: "Cancel",
+    });
+    if (!ok) return;
+    setReverting(true);
+    setError(null);
+    try {
+      const updated = await revertSession(sessionId, true);
+      agentSessionStore.upsertSession(updated);
+    } catch (e) {
+      setError(commandMessage(e));
+    } finally {
+      setReverting(false);
+    }
+  };
+
   return (
     <div className="terminal-panel" data-testid={`terminal-panel-${sessionId}`}>
       <header className="terminal-panel__head">
@@ -110,6 +162,29 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         >
           {agentType} · {shortSession}
         </span>
+        {session && (
+          <span className="terminal-panel__audit" title={auditTitle(session)}>
+            {session.status}
+            {session.checkpoint ? ` · ${checkpointLabel(session.checkpoint.checkpoint_type)}` : ""}
+            {(session.change_log?.length ?? 0) > 0
+              ? ` · ${session.change_log?.length} changes`
+              : ""}
+          </span>
+        )}
+        <button
+          className="terminal-panel__revert"
+          disabled={!canRevert || reverting}
+          onClick={onRevert}
+          title={
+            session?.status === "reverted"
+              ? "Session already reverted"
+              : canRevert
+                ? "Revert this agent session"
+                : "Stop the session before reverting"
+          }
+        >
+          {reverting ? "Reverting" : "Revert"}
+        </button>
         {error && (
           <span className="terminal-panel__error" data-testid="terminal-panel-error">
             {error}
@@ -119,6 +194,22 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       <div className="terminal-panel__surface" ref={terminalRef} data-testid="terminal-surface" />
     </div>
   );
+}
+
+function checkpointLabel(type: string): string {
+  return type === "git_ref" ? "git checkpoint" : "filesystem checkpoint";
+}
+
+function auditTitle(session: AgentSession): string {
+  const pieces = [
+    `Status: ${session.status}`,
+    session.checkpoint
+      ? `Checkpoint: ${checkpointLabel(session.checkpoint.checkpoint_type)}`
+      : null,
+    session.checkpoint?.git_hash ? `Git: ${session.checkpoint.git_hash.slice(0, 12)}` : null,
+    `Changes: ${session.change_log?.length ?? 0}`,
+  ];
+  return pieces.filter(Boolean).join(" · ");
 }
 
 function decodeBase64(chunk: string): Uint8Array {
