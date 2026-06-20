@@ -165,6 +165,12 @@ const SANITIZED_ENV_ALLOWLIST: &[&str] = &[
     "USERPROFILE",
     "HOMEDRIVE",
     "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "CODEX_HOME",
     "USER",
     "USERNAME",
     "TMP",
@@ -243,6 +249,17 @@ mod tests {
         assert!(command.get_env("OPENAI_API_KEY").is_none());
         assert!(command.get_env("ANTHROPIC_API_KEY").is_none());
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
+    }
+
+    #[test]
+    fn build_agent_command_preserves_agent_profile_environment() {
+        let command = build_agent_command(Path::new("codex"), Path::new("/tmp/repo"));
+
+        for key in ["APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "CODEX_HOME"] {
+            if let Some(value) = std::env::var_os(key) {
+                assert_eq!(command.get_env(key), Some(value.as_os_str()));
+            }
+        }
     }
 
     #[test]

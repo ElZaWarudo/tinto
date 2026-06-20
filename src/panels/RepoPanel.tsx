@@ -72,7 +72,12 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
       <div className="repo-panel__main">
         {/* The nested dock stays mounted (api stays registered) even when empty;
             hidden behind the overview until a file is opened. */}
-        <div className="repo-panel__files" style={empty ? { display: "none" } : undefined}>
+        <div
+          className={
+            empty ? "repo-panel__files repo-panel__files--empty" : "repo-panel__files"
+          }
+          aria-hidden={empty}
+        >
           <DockviewReact
             components={fileComponents}
             tabComponents={fileTabComponents}

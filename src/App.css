@@ -369,11 +369,16 @@ body,
   min-height: 0;
   position: relative;
 }
+.repo-panel__files--empty {
+  visibility: hidden;
+  pointer-events: none;
+}
 /* Shown in place of the dock when no files are open. */
 .repo-panel__overview-wrap {
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   overflow: auto;
+  background: var(--bg);
 }
 
 /* In-project file explorer (left pane of a project tab). */

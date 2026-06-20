@@ -25,7 +25,7 @@ vi.mock("../workbench/operations", () => ({
 // the project shows its overview (open file count stays 0), which is what these
 // tests assert against.
 vi.mock("dockview-react", () => ({
-  DockviewReact: () => null,
+  DockviewReact: () => <div data-testid="mock-dockview" />,
   themeVisualStudio: {},
   DockviewDefaultTab: () => null,
 }));
@@ -78,6 +78,18 @@ describe("RepoPanel", () => {
     expect(screen.getByTestId("status-lists")).toHaveTextContent("new.txt");
     await waitFor(() => expect(screen.getByTestId("commit-log")).toHaveTextContent("fix parser"));
     expect(getCommitLogMock).toHaveBeenCalledWith("/r/api", 0, 30);
+  });
+
+  it("keeps the nested file dock mounted and measurable behind the overview", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+
+    render(<RepoPanel {...panelProps("/r/api")} />);
+
+    const dockHost = screen.getByTestId("mock-dockview").parentElement;
+    expect(dockHost).toHaveClass("repo-panel__files", "repo-panel__files--empty");
+    expect(dockHost).not.toHaveStyle({ display: "none" });
+    expect(screen.getByTestId("repo-overview-wrap-/r/api")).toBeInTheDocument();
   });
 
   it("collapses and restores the project file tree", () => {
