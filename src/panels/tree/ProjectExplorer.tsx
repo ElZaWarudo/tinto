@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type PointerEvent,
   type ReactNode,
 } from "react";
 import type { PassiveSignal } from "../../bus/contract";
@@ -26,9 +27,11 @@ import { OverwriteConfirmModal } from "../file/OverwriteConfirmModal";
 import {
   sendFromOs,
   sendWithinRepo,
+  deleteWithinRepo,
   needsConfirmation,
   type FileOpReport,
 } from "../file/fileOps";
+import { deleteUndoManager } from "../file/deleteUndo";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -40,6 +43,29 @@ interface ContextMenuState {
 }
 
 const MENU_VIEWPORT_MARGIN = 8;
+const EXPLORER_MIN_WIDTH = 160;
+const EXPLORER_DEFAULT_WIDTH = 240;
+const EXPLORER_MAX_WIDTH = 520;
+
+function explorerWidthStorageKey(repo: string): string {
+  return `tinto:explorer-width:${repo}`;
+}
+
+function clampExplorerWidth(width: number): number {
+  const viewportMax = typeof window === "undefined" ? EXPLORER_MAX_WIDTH : window.innerWidth * 0.55;
+  return Math.round(
+    Math.min(Math.max(width, EXPLORER_MIN_WIDTH), Math.min(EXPLORER_MAX_WIDTH, viewportMax)),
+  );
+}
+
+function loadExplorerWidth(repo: string): number {
+  try {
+    const stored = localStorage.getItem(explorerWidthStorageKey(repo));
+    return stored ? clampExplorerWidth(Number(stored)) : EXPLORER_DEFAULT_WIDTH;
+  } catch {
+    return EXPLORER_DEFAULT_WIDTH;
+  }
+}
 
 function absolutePath(repo: string, path: string): string {
   return `${repo.replace(/[\\/]+$/, "")}/${path}`;
@@ -59,6 +85,11 @@ function descendantDirs(node: TreeNode): string[] {
 function changedFiles(node: TreeNode): string[] {
   if (!node.isDir) return node.changed ? [node.path] : [];
   return node.children.flatMap(changedFiles);
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return !!target.closest("input, textarea, select, [contenteditable='true']");
 }
 
 function signalMatches(repoSignals: PassiveSignal[], node: TreeNode): PassiveSignal[] {
@@ -89,17 +120,38 @@ export function ProjectExplorer({
   const [draggingNode, setDraggingNode] = useState<TreeNode | null>(null);
   const [osDraggingOver, setOsDraggingOver] = useState(false);
   const [treeDropTarget, setTreeDropTarget] = useState<string | null>(null);
+  const [explorerWidth, setExplorerWidth] = useState(() => loadExplorerWidth(repo));
   const [pendingOp, setPendingOp] = useState<{
     retry: () => Promise<void> | void;
     report: FileOpReport;
   } | null>(null);
   const [osDraggedFiles, setOsDraggedFiles] = useState<string[] | null>(null);
   const [fileOpError, setFileOpError] = useState<string | null>(null);
+  const explorerRef = useRef<HTMLDivElement | null>(null);
+  // Refs para mantener referencias actualizadas en closures de useEffect
+  const handleOsDropRef = useRef<((paths: string[], destDir: string) => Promise<void>) | null>(
+    null,
+  );
+  const handleTreeDropRef = useRef<((targetPath: string) => Promise<void>) | null>(null);
+  const handlePasteRef = useRef<((destDir: string) => Promise<void>) | null>(null);
 
   // Load on mount; the store keeps it cached (stale-while-revalidate) thereafter.
   useEffect(() => {
     repoTreeStore.ensureLoaded(repo);
   }, [repo]);
+
+  useEffect(() => {
+    const width = loadExplorerWidth(repo);
+    setExplorerWidth(width);
+  }, [repo]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(explorerWidthStorageKey(repo), String(explorerWidth));
+    } catch {
+      /* ignore storage unavailable */
+    }
+  }, [repo, explorerWidth]);
 
   useEffect(() => {
     if (!menu) return;
@@ -143,7 +195,7 @@ export function ProjectExplorer({
           setOsDraggingOver(false);
           const paths = payload.paths;
           setOsDraggedFiles(paths);
-          void handleOsDrop(paths, "");
+          handleOsDropRef.current?.(paths, "");
         } else if (payload.type === "leave") {
           setOsDraggingOver(false);
           setOsDraggedFiles(null);
@@ -207,6 +259,25 @@ export function ProjectExplorer({
   const runMenuAction = (action: () => void) => {
     action();
     closeMenu();
+  };
+
+  const startResize = (event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const measuredWidth = explorerRef.current?.getBoundingClientRect().width ?? 0;
+    const startWidth = measuredWidth > 0 ? measuredWidth : explorerWidth;
+
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      setExplorerWidth(clampExplorerWidth(startWidth + moveEvent.clientX - startX));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
   };
 
   /** Refresca el árbol para reflejar los cambios recién escritos. */
@@ -301,6 +372,59 @@ export function ProjectExplorer({
     });
   };
 
+  const handleDelete = async (node: TreeNode) => {
+    const label = node.isDir ? "carpeta" : "archivo";
+    if (
+      !window.confirm(
+        `Eliminar ${label} "${node.path}" del disco?\n\nPuedes restaurarlo con Ctrl+Z mientras Tinto siga abierto.`,
+      )
+    ) {
+      return;
+    }
+    const report = await deleteWithinRepo({ repo, sources: [node.path] });
+    if (report.fatalError) {
+      setFileOpError(report.fatalError);
+      return;
+    }
+    if (report.deleteResult) {
+      deleteUndoManager.recordDelete(repo, report.deleteResult);
+    }
+    refreshTree();
+  };
+
+  const undoDelete = async () => {
+    const report = await deleteUndoManager.undo();
+    if (report?.fatalError) setFileOpError(report.fatalError);
+  };
+
+  const redoDelete = async () => {
+    const report = await deleteUndoManager.redo();
+    if (report?.fatalError) setFileOpError(report.fatalError);
+  };
+
+  const deleteActiveFile = () => {
+    if (!active) return;
+    void handleDelete({
+      path: active,
+      name: active.split("/").pop() ?? active,
+      isDir: false,
+      children: [],
+      changed: null,
+      hasChanges: false,
+    });
+  };
+
+  // Sincronizar refs con las funciones para evitar stale closures en useEffect.
+  useEffect(() => {
+    handleOsDropRef.current = handleOsDrop;
+  }, [handleOsDrop]);
+  useEffect(() => {
+    handleTreeDropRef.current = handleTreeDrop;
+  }, [handleTreeDrop]);
+  useEffect(() => {
+    handlePasteRef.current = handlePaste;
+  }, [handlePaste]);
+
   const confirmOverwrite = async () => {
     if (!pendingOp) return;
     setPendingOp(null);
@@ -330,13 +454,34 @@ export function ProjectExplorer({
 
   return (
     <div
+      ref={explorerRef}
       className="project-explorer"
       data-testid={`project-explorer-${repo}`}
+      style={{ width: explorerWidth }}
       onKeyDown={(event) => {
+        if (event.key === "Delete") {
+          if (
+            isEditableTarget(event.target) ||
+            (event.target as HTMLElement | null)?.closest(".tree-menu")
+          ) {
+            return;
+          }
+          if (active) {
+            event.preventDefault();
+            deleteActiveFile();
+          }
+          return;
+        }
         const ctrl = event.ctrlKey || event.metaKey;
         if (!ctrl) return;
         const key = event.key.toLowerCase();
-        if (key === "c" && active) {
+        if (key === "z" && event.shiftKey) {
+          event.preventDefault();
+          void redoDelete();
+        } else if (key === "z") {
+          event.preventDefault();
+          void undoDelete();
+        } else if (key === "c" && active) {
           event.preventDefault();
           treeClipboard.copy(repo, [active]);
         } else if (key === "x" && active) {
@@ -416,6 +561,7 @@ export function ProjectExplorer({
                   onTreeDrop={(targetPath) => void handleTreeDrop(targetPath)}
                   dropTargetPath={treeDropTarget}
                   onPasteInto={(destDir) => void handlePaste(destDir)}
+                  onDelete={(node) => void handleDelete(node)}
                 />
               ))}
             {tree?.truncated && (
@@ -426,7 +572,10 @@ export function ProjectExplorer({
           </>
         )}
         {osDraggingOver && (
-          <div className="project-explorer__drop-overlay" data-testid={`project-explorer-drop-overlay-${repo}`}>
+          <div
+            className="project-explorer__drop-overlay"
+            data-testid={`project-explorer-drop-overlay-${repo}`}
+          >
             <span className="project-explorer__drop-text">
               Soltar para copiar al repo
               {osDraggedFiles && osDraggedFiles.length > 0
@@ -437,7 +586,11 @@ export function ProjectExplorer({
         )}
       </div>
       {fileOpError && (
-        <div className="tree-files__msg tree-files__msg--error" role="alert" data-testid="file-op-error">
+        <div
+          className="tree-files__msg tree-files__msg--error"
+          role="alert"
+          data-testid="file-op-error"
+        >
           {fileOpError}
           <button
             type="button"
@@ -474,6 +627,7 @@ export function ProjectExplorer({
           onCopyAbsolute={() => runMenuAction(() => copyText(absolutePath(repo, menu.node.path)))}
           onCopyName={() => runMenuAction(() => copyText(menu.node.name))}
           onShowSignals={() => setMenu({ ...menu, showSignals: true })}
+          onDelete={() => runMenuAction(() => void handleDelete(menu.node))}
           onOpenChanged={() =>
             runMenuAction(() =>
               changedFiles(menu.node).forEach((path) => fileDock.openFile(repo, path, true)),
@@ -484,6 +638,14 @@ export function ProjectExplorer({
           }
         />
       )}
+      <div
+        className="project-explorer__resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Redimensionar árbol de archivos"
+        title="Redimensionar árbol de archivos"
+        onPointerDown={startResize}
+      />
     </div>
   );
 }
@@ -505,6 +667,7 @@ function TreeContextMenu({
   onCopyAbsolute,
   onCopyName,
   onShowSignals,
+  onDelete,
   onOpenChanged,
   onFilterFolder,
 }: {
@@ -524,6 +687,7 @@ function TreeContextMenu({
   onCopyAbsolute: () => void;
   onCopyName: () => void;
   onShowSignals: () => void;
+  onDelete: () => void;
   onOpenChanged: () => void;
   onFilterFolder: () => void;
 }) {
@@ -584,6 +748,10 @@ function TreeContextMenu({
       <MenuButton onClick={onCopyRelative}>Copiar ruta relativa</MenuButton>
       <MenuButton onClick={onCopyAbsolute}>Copiar ruta absoluta</MenuButton>
       {!node.isDir && <MenuButton onClick={onCopyName}>Copiar nombre</MenuButton>}
+      <div className="tree-menu__sep" />
+      <MenuButton onClick={onDelete} danger>
+        Eliminar
+      </MenuButton>
 
       {menu.showSignals && (
         <>
@@ -605,15 +773,17 @@ function TreeContextMenu({
 function MenuButton({
   children,
   disabled = false,
+  danger = false,
   onClick,
 }: {
   children: ReactNode;
   disabled?: boolean;
+  danger?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
-      className="tree-menu__item"
+      className={danger ? "tree-menu__item tree-menu__item--danger" : "tree-menu__item"}
       type="button"
       role="menuitem"
       disabled={disabled}

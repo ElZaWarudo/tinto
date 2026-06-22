@@ -13,6 +13,7 @@ import type {
   PassiveSignal,
   RepoDelta,
   RepoMetrics,
+  SecretFinding,
   SignalSeverity,
   WatchingState,
   WorkbenchConfig,
@@ -252,6 +253,11 @@ export function getPathSignals(delta: RepoDelta | undefined, path: string): Pass
   return getRepoSignals(delta).filter(
     (signal) => signal.path && normalizePath(signal.path) === target,
   );
+}
+
+export function getPathSecretFindings(delta: RepoDelta | undefined, path: string): SecretFinding[] {
+  const target = normalizePath(path);
+  return (delta?.secret_findings ?? []).filter((finding) => normalizePath(finding.path) === target);
 }
 
 function severityRank(severity: SignalSeverity): number {

@@ -6,6 +6,7 @@ import {
   getDiff,
   getFsEvents,
   getPathSignals,
+  getPathSecretFindings,
   getRepoMetrics,
   getRepoSignals,
   hasComputedDiffs,
@@ -197,7 +198,15 @@ describe("BusStore", () => {
             kind: "possible_secret",
             severity: "critical",
             path: "src/config.ts",
-            message: "Possible secret marker added",
+            message: "Possible secret detected",
+          },
+        ],
+        secret_findings: [
+          {
+            path: "src/config.ts",
+            line: 18,
+            rule_id: "generic-api-key",
+            description: "Possible secret",
           },
         ],
       }),
@@ -206,6 +215,7 @@ describe("BusStore", () => {
     expect(getRepoMetrics(repo).lines_added).toBe(9);
     expect(getRepoSignals(repo)).toHaveLength(2);
     expect(getPathSignals(repo, "src/config.ts").map((s) => s.kind)).toEqual(["possible_secret"]);
+    expect(getPathSecretFindings(repo, "src/config.ts").map((f) => f.line)).toEqual([18]);
     expect(signalCounts(getRepoSignals(repo))).toEqual({ critical: 1, warning: 1, info: 0 });
     expect(sortSignals(getRepoSignals(repo)).map((s) => s.severity)).toEqual([
       "critical",

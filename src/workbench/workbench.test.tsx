@@ -7,8 +7,14 @@ const ops = vi.hoisted(() => ({
   autodetectFlow: vi.fn(),
   createAndActivate: vi.fn(),
   removeRepoFlow: vi.fn(),
+  getGitleaksSetupStatus: vi.fn(),
+  installGitleaks: vi.fn(),
 }));
 vi.mock("./operations", () => ops);
+vi.mock("../bus/client", async () => ({
+  getGitleaksSetupStatus: ops.getGitleaksSetupStatus,
+  installGitleaks: ops.installGitleaks,
+}));
 
 import { MenuBar } from "./MenuBar";
 import { FirstRun } from "./firstRun";
@@ -125,6 +131,35 @@ describe("MenuBar", () => {
     expect(openTimeline).toHaveBeenCalledOnce();
   });
 
+  it("opens the addons manager from Complementos menu", async () => {
+    const actions: WorkspaceActions = {
+      openRepo: vi.fn(),
+      addRepo: vi.fn(),
+      removeRepo: vi.fn(),
+      openFile: vi.fn(),
+      openTimeline: vi.fn(),
+      openDashboard: vi.fn(),
+      openAgentTerminal: vi.fn(),
+    };
+    ops.getGitleaksSetupStatus.mockResolvedValue({
+      installed: false,
+      version: null,
+      binary_path: null,
+    });
+
+    act(() => busStore.setConfig(config));
+    render(
+      <WorkspaceActionsContext.Provider value={actions}>
+        <MenuBar />
+      </WorkspaceActionsContext.Provider>,
+    );
+    fireEvent.click(screen.getByTestId("menu-addons"));
+    fireEvent.click(screen.getByTestId("manage-addons"));
+
+    expect(screen.getByRole("heading", { name: "Complementos" })).toBeInTheDocument();
+    expect(ops.getGitleaksSetupStatus).toHaveBeenCalledOnce();
+  });
+
   it("opens a project from the Proyectos menu", () => {
     const openRepo = vi.fn();
     const actions: WorkspaceActions = {
@@ -166,6 +201,55 @@ describe("MenuBar", () => {
     fireEvent.click(screen.getByTestId("menu-projects"));
     fireEvent.click(screen.getByTestId("open-project-/r/api"));
     expect(openRepo).toHaveBeenCalledWith("/r/api");
+  });
+
+  it("installs Gitleaks only when requested from the addons modal", async () => {
+    const actions: WorkspaceActions = {
+      openRepo: vi.fn(),
+      addRepo: vi.fn(),
+      removeRepo: vi.fn(),
+      openFile: vi.fn(),
+      openTimeline: vi.fn(),
+      openDashboard: vi.fn(),
+      openAgentTerminal: vi.fn(),
+    };
+    ops.getGitleaksSetupStatus.mockResolvedValue({
+      installed: false,
+      version: null,
+      binary_path: null,
+    });
+    ops.installGitleaks.mockResolvedValue({
+      installed: true,
+      version: "8.18.0",
+      binary_path: "/usr/local/bin/gitleaks",
+      method: "brew",
+      message: "Gitleaks instalado con éxito",
+    });
+
+    act(() => busStore.setConfig(config));
+    render(
+      <WorkspaceActionsContext.Provider value={actions}>
+        <MenuBar />
+      </WorkspaceActionsContext.Provider>,
+    );
+    fireEvent.click(screen.getByTestId("menu-addons"));
+    fireEvent.click(screen.getByTestId("manage-addons"));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(ops.installGitleaks).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("gitleaks-install"));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(ops.installGitleaks).toHaveBeenCalled();
+    expect(screen.getByText("Gitleaks instalado con éxito")).toBeInTheDocument();
   });
 });
 

@@ -12,9 +12,10 @@ import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
 import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
 import { autodetectFlow, switchWorkbench } from "./operations";
+import { AddonsManager } from "./AddonsManager";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 
-type MenuId = "repos" | "projects" | "view" | "help";
+type MenuId = "repos" | "projects" | "view" | "addons" | "help";
 
 function MenuItem({
   label,
@@ -53,6 +54,7 @@ export function MenuBar() {
   const { openTimeline, openDashboard, openRepo, addRepo } = useWorkspaceActions();
   const [open, setOpen] = useState<MenuId | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showAddons, setShowAddons] = useState(false);
 
   const active = config?.active ?? "";
   const workbenches = config?.workbenches ?? [];
@@ -225,6 +227,29 @@ export function MenuBar() {
       <div className="menu">
         <button
           type="button"
+          className={open === "addons" ? "menu__trigger menu__trigger--open" : "menu__trigger"}
+          data-testid="menu-addons"
+          aria-haspopup="menu"
+          aria-expanded={open === "addons"}
+          onClick={() => toggle("addons")}
+        >
+          Complementos
+        </button>
+        {open === "addons" && (
+          <div className="menu__list" role="menu">
+            <MenuItem
+              label="Gestionar complementos"
+              testid="manage-addons"
+              close={close}
+              onSelect={() => setShowAddons(true)}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="menu">
+        <button
+          type="button"
           className={open === "help" ? "menu__trigger menu__trigger--open" : "menu__trigger"}
           data-testid="menu-help"
           aria-haspopup="menu"
@@ -274,6 +299,7 @@ export function MenuBar() {
       )}
 
       {showShortcuts && <KeyboardShortcuts onClose={() => setShowShortcuts(false)} />}
+      {showAddons && <AddonsManager onClose={() => setShowAddons(false)} />}
     </div>
   );
 }

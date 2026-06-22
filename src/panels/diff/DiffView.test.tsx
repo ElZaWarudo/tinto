@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 
 // Keep Shiki out of jsdom: the highlighter never loads, so DiffView renders the
@@ -31,6 +31,10 @@ const sample: FileDiff = {
 };
 
 describe("DiffView", () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
   it("renders inline rows with correct per-side line numbers (AE1)", () => {
     render(<DiffView diff={sample} mode="inline" />);
     expect(screen.getByTestId("diff-view")).toHaveClass("diff-view--inline");
@@ -75,5 +79,23 @@ describe("DiffView", () => {
     render(<DiffView diff={big} mode="inline" />);
     expect(screen.getByTestId("diff-large")).toBeInTheDocument();
     expect(screen.getByText("x".repeat(100))).toBeInTheDocument(); // still rendered, plain
+  });
+
+  it("renders overview markers and highlights the matching added line", () => {
+    render(
+      <DiffView
+        diff={sample}
+        mode="inline"
+        overviewMarkers={[{ line: 13, severity: "critical", label: "Possible secret" }]}
+        overviewTotalLines={20}
+      />,
+    );
+
+    expect(screen.getByTestId("overview-summary")).toHaveTextContent("1");
+    expect(screen.getByTestId("overview-marker-13")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Possible secret, línea 13" })).toBeInTheDocument();
+    expect(screen.getByText("new line").closest(".diff-line")).toHaveClass(
+      "diff-line--signal-critical",
+    );
   });
 });

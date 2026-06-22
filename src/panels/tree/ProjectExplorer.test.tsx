@@ -3,8 +3,20 @@ import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 
 let tree: unknown = { entries: [], truncated: false };
 const listRepoTreeMock = vi.fn(() => Promise.resolve(tree));
+const deleteFromRepoMock = vi.fn((_repo: string, _sources: string[]) =>
+  Promise.resolve({ token: "11111111-1111-4111-8111-111111111111", entries: [] }),
+);
+const restoreDeletedFromRepoMock = vi.fn((_repo: string, _token: string) => Promise.resolve());
+const redoDeletedFromRepoMock = vi.fn((_repo: string, _token: string) => Promise.resolve());
 vi.mock("../../bus/client", () => ({
   listRepoTree: () => listRepoTreeMock(),
+  copyToRepo: vi.fn(),
+  copyWithinRepo: vi.fn(),
+  moveWithinRepo: vi.fn(),
+  exportFromRepo: vi.fn(),
+  deleteFromRepo: (repo: string, sources: string[]) => deleteFromRepoMock(repo, sources),
+  restoreDeletedFromRepo: (repo: string, token: string) => restoreDeletedFromRepoMock(repo, token),
+  redoDeletedFromRepo: (repo: string, token: string) => redoDeletedFromRepoMock(repo, token),
 }));
 
 import { ProjectExplorer } from "./ProjectExplorer";
@@ -12,6 +24,7 @@ import { busStore } from "../../bus/store";
 import { qualityStore } from "../../qol/state";
 import { fileDock } from "../../workspace/fileDock";
 import { repoTreeStore } from "../../workspace/repoTreeStore";
+import { deleteUndoManager } from "../file/deleteUndo";
 import type { RepoDelta } from "../../bus/contract";
 
 const REPO = "/r/api";
@@ -36,7 +49,15 @@ describe("ProjectExplorer", () => {
     qualityStore.reset();
     fileDock.drop(REPO);
     repoTreeStore.reset();
+    deleteUndoManager.reset();
     listRepoTreeMock.mockClear();
+    deleteFromRepoMock.mockClear();
+    restoreDeletedFromRepoMock.mockClear();
+    redoDeletedFromRepoMock.mockClear();
+    Object.defineProperty(window, "confirm", {
+      configurable: true,
+      value: vi.fn(() => true),
+    });
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: vi.fn(() => Promise.resolve()) },
@@ -146,6 +167,20 @@ describe("ProjectExplorer", () => {
     await waitFor(() => expect(screen.getAllByTestId("tree-file-src/a.ts")).toHaveLength(2));
   });
 
+  it("resizes the file tree with the drag handle", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const explorer = await screen.findByTestId(`project-explorer-${REPO}`);
+    const handle = screen.getByRole("separator", { name: "Redimensionar árbol de archivos" });
+
+    fireEvent.pointerDown(handle, { clientX: 240 });
+    fireEvent.pointerMove(window, { clientX: 340 });
+    fireEvent.pointerUp(window);
+
+    expect(explorer).toHaveStyle({ width: "340px" });
+  });
+
   it("opens the file context menu actions", async () => {
     const openSpy = vi.spyOn(fileDock, "openFile").mockImplementation(() => {});
     act(() =>
@@ -184,6 +219,67 @@ describe("ProjectExplorer", () => {
     fireEvent.click(screen.getByText("Abrir fijo"));
     expect(openSpy).toHaveBeenLastCalledWith(REPO, "README.md", true);
     openSpy.mockRestore();
+  });
+
+  it("deletes a file from the context menu after confirmation", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const readme = await screen.findByTestId("tree-file-README.md");
+    fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
+    fireEvent.click(screen.getByText("Eliminar"));
+
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"]));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('archivo "README.md"'));
+    await waitFor(() => expect(listRepoTreeMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("restores and redoes a deleted file with Ctrl+Z and Ctrl+Shift+Z", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const explorer = await screen.findByTestId(`project-explorer-${REPO}`);
+    const readme = await screen.findByTestId("tree-file-README.md");
+    fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
+    fireEvent.click(screen.getByText("Eliminar"));
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"]));
+
+    fireEvent.keyDown(explorer, { key: "z", ctrlKey: true });
+    await waitFor(() =>
+      expect(restoreDeletedFromRepoMock).toHaveBeenCalledWith(
+        REPO,
+        "11111111-1111-4111-8111-111111111111",
+      ),
+    );
+
+    fireEvent.keyDown(explorer, { key: "z", ctrlKey: true, shiftKey: true });
+    await waitFor(() =>
+      expect(redoDeletedFromRepoMock).toHaveBeenCalledWith(
+        REPO,
+        "11111111-1111-4111-8111-111111111111",
+      ),
+    );
+  });
+
+  it("deletes the focused file with the Delete key", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const readme = await screen.findByTestId("tree-file-README.md");
+    fireEvent.keyDown(readme, { key: "Delete" });
+
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"]));
+  });
+
+  it("deletes a folder from the context menu after confirmation", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    fireEvent.contextMenu(await screen.findByText("src"), { clientX: 20, clientY: 30 });
+    fireEvent.click(screen.getByText("Eliminar"));
+
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["src"]));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('carpeta "src"'));
   });
 
   it("enables diff for changed files and opens folder changed files", async () => {

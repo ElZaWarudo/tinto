@@ -3,16 +3,17 @@
 //! (destination already exists) are reported; the caller sets the overwrite
 //! policy. Never auto-overwrites.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use tauri::State;
+use uuid::Uuid;
 
+use crate::bus::commands::{ensure_known, CommandError};
 use crate::bus::BusHandle;
-use crate::bus::commands::{CommandError, ensure_known};
 
-use super::{FileConflict, FileConflictKind, safe_join};
+use super::{safe_join, FileConflict, FileConflictKind};
 
 /// Recursively copia un archivo o directorio a `dest`.
 fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
@@ -36,6 +37,21 @@ pub struct CopyResult {
     pub copied: Vec<String>,
     /// Conflictos detectados (vacío si todo OK).
     pub conflicts: Vec<FileConflict>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeletedEntry {
+    /// Path relativo al repo.
+    pub path: PathBuf,
+    pub is_dir: bool,
+    /// Nombre interno del backup dentro del staging temporal.
+    backup_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteResult {
+    pub token: String,
+    pub entries: Vec<DeletedEntry>,
 }
 
 enum ResolveOutcome {
@@ -69,7 +85,7 @@ fn classify(src: &Path, dest: &Path, overwrite: bool) -> ResolveOutcome {
 pub async fn copy_to_repo(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
-    dest_dir: PathBuf, // relativo al repo; "" = raíz
+    dest_dir: PathBuf,     // relativo al repo; "" = raíz
     sources: Vec<PathBuf>, // absolutos del OS
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
@@ -90,10 +106,7 @@ pub async fn copy_to_repo(
             .file_name()
             .ok_or_else(|| CommandError::new("invalid-source", "source sin file_name"))?;
         let dest = dest_abs.join(name);
-        let dest_rel = dest
-            .strip_prefix(&repo_abs)
-            .unwrap_or(&dest)
-            .to_path_buf();
+        let dest_rel = dest.strip_prefix(&repo_abs).unwrap_or(&dest).to_path_buf();
 
         match classify(src, &dest, overwrite) {
             ResolveOutcome::Proceed => to_copy.push((src.clone(), dest)),
@@ -126,7 +139,7 @@ pub async fn copy_within_repo(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
     sources: Vec<PathBuf>, // relativas al repo
-    dest_dir: PathBuf, // relativa al repo
+    dest_dir: PathBuf,     // relativa al repo
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
     let repo_abs = ensure_known(&bus, &repo).await?;
@@ -147,10 +160,7 @@ pub async fn copy_within_repo(
             .file_name()
             .ok_or_else(|| CommandError::new("invalid-source", "source sin file_name"))?;
         let dest = dest_abs.join(name);
-        let dest_rel = dest
-            .strip_prefix(&repo_abs)
-            .unwrap_or(&dest)
-            .to_path_buf();
+        let dest_rel = dest.strip_prefix(&repo_abs).unwrap_or(&dest).to_path_buf();
         if src_abs == dest {
             return Err(CommandError::new(
                 "same-src-dest",
@@ -189,7 +199,7 @@ pub async fn move_within_repo(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
     sources: Vec<PathBuf>, // relativas al repo
-    dest_dir: PathBuf, // relativa al repo
+    dest_dir: PathBuf,     // relativa al repo
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
     let repo_abs = ensure_known(&bus, &repo).await?;
@@ -210,10 +220,7 @@ pub async fn move_within_repo(
             .file_name()
             .ok_or_else(|| CommandError::new("invalid-source", "source sin file_name"))?;
         let dest = dest_abs.join(name);
-        let dest_rel = dest
-            .strip_prefix(&repo_abs)
-            .unwrap_or(&dest)
-            .to_path_buf();
+        let dest_rel = dest.strip_prefix(&repo_abs).unwrap_or(&dest).to_path_buf();
         if src_abs == dest {
             return Err(CommandError::new(
                 "same-src-dest",
@@ -251,7 +258,7 @@ pub async fn export_from_repo(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
     sources: Vec<PathBuf>, // relativas al repo
-    dest_dir: PathBuf, // absoluto del OS
+    dest_dir: PathBuf,     // absoluto del OS
 ) -> Result<(), CommandError> {
     let repo_abs = ensure_known(&bus, &repo).await?;
     if !dest_dir.is_dir() {
@@ -296,6 +303,178 @@ pub async fn export_from_repo(
     Ok(())
 }
 
+/// Elimina archivos o directorios dentro del repo. Rechaza el root del repo y
+/// cualquier path fuera del repo o dentro de `.git/` vía `safe_join`.
+#[tauri::command]
+pub async fn delete_from_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    sources: Vec<PathBuf>, // relativas al repo
+) -> Result<DeleteResult, CommandError> {
+    let repo_abs = ensure_known(&bus, &repo).await?;
+    let mut targets = Vec::with_capacity(sources.len());
+
+    for src_rel in &sources {
+        let src_abs = safe_join(&repo_abs, src_rel)?;
+        if src_abs == repo_abs {
+            return Err(CommandError::new(
+                "delete-root-forbidden",
+                "no se puede eliminar el root del repo",
+            ));
+        }
+        if !src_abs.exists() {
+            return Err(CommandError::new(
+                "source-missing",
+                format!("no existe {} en el repo", src_rel.display()),
+            ));
+        }
+        let rel = src_abs
+            .strip_prefix(&repo_abs)
+            .unwrap_or(&src_abs)
+            .to_path_buf();
+        let is_dir = src_abs.is_dir();
+        targets.push((rel, src_abs, is_dir));
+    }
+
+    targets.sort_by(|a, b| a.1.cmp(&b.1));
+    targets.dedup_by(|a, b| a.1 == b.1);
+    let mut filtered: Vec<(PathBuf, PathBuf, bool)> = Vec::with_capacity(targets.len());
+    'targets: for target in targets {
+        for kept in &filtered {
+            if target.1.starts_with(&kept.1) {
+                continue 'targets;
+            }
+        }
+        filtered.push(target);
+    }
+
+    let token = Uuid::new_v4().to_string();
+    let backup_root = undo_backup_root(&token)?;
+    let objects_root = backup_root.join("objects");
+    let entries: Vec<DeletedEntry> = filtered
+        .iter()
+        .enumerate()
+        .map(|(index, (path, _, is_dir))| DeletedEntry {
+            path: path.clone(),
+            is_dir: *is_dir,
+            backup_name: index.to_string(),
+        })
+        .collect();
+    write_delete_manifest(
+        &backup_root,
+        &DeleteResult {
+            token: token.clone(),
+            entries: entries.clone(),
+        },
+    )?;
+
+    std::thread::spawn(move || -> std::io::Result<()> {
+        fs::create_dir_all(&objects_root)?;
+        for (index, (_, target, _)) in filtered.into_iter().enumerate() {
+            move_path(&target, &objects_root.join(index.to_string()))?;
+        }
+        Ok(())
+    })
+    .join()
+    .map_err(|_| CommandError::new("delete-panic", "thread panicked"))?
+    .map_err(|e| CommandError::new("delete-failed", format!("no se pudo eliminar: {e}")))?;
+
+    Ok(DeleteResult { token, entries })
+}
+
+#[tauri::command]
+pub async fn restore_deleted_from_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    token: String,
+) -> Result<(), CommandError> {
+    let repo_abs = ensure_known(&bus, &repo).await?;
+    let backup_root = undo_backup_root(&token)?;
+    let manifest = read_delete_manifest(&backup_root)?;
+    let objects_root = backup_root.join("objects");
+    let mut targets = Vec::with_capacity(manifest.entries.len());
+    for entry in manifest.entries {
+        let dest = safe_join(&repo_abs, &entry.path)?;
+        if dest == repo_abs {
+            return Err(CommandError::new(
+                "restore-root-forbidden",
+                "no se puede restaurar sobre el root del repo",
+            ));
+        }
+        targets.push((dest, entry.path, entry.backup_name));
+    }
+
+    std::thread::spawn(move || -> std::io::Result<()> {
+        for (dest, rel, backup_name) in targets {
+            if dest.exists() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("{} ya existe", rel.display()),
+                ));
+            }
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            move_path(&objects_root.join(backup_name), &dest)?;
+        }
+        Ok(())
+    })
+    .join()
+    .map_err(|_| CommandError::new("restore-panic", "thread panicked"))?
+    .map_err(|e| CommandError::new("restore-failed", format!("no se pudo restaurar: {e}")))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn redo_deleted_from_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    token: String,
+) -> Result<(), CommandError> {
+    let repo_abs = ensure_known(&bus, &repo).await?;
+    let backup_root = undo_backup_root(&token)?;
+    let manifest = read_delete_manifest(&backup_root)?;
+    let objects_root = backup_root.join("objects");
+    let mut targets = Vec::with_capacity(manifest.entries.len());
+    for entry in manifest.entries {
+        let src = safe_join(&repo_abs, &entry.path)?;
+        if src == repo_abs {
+            return Err(CommandError::new(
+                "redo-root-forbidden",
+                "no se puede rehacer el borrado del root del repo",
+            ));
+        }
+        targets.push((src, entry.path, entry.backup_name));
+    }
+
+    std::thread::spawn(move || -> std::io::Result<()> {
+        fs::create_dir_all(&objects_root)?;
+        for (src, rel, backup_name) in targets {
+            if !src.exists() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("{} no existe", rel.display()),
+                ));
+            }
+            let backup = objects_root.join(backup_name);
+            if backup.exists() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("backup {} ya existe", backup.display()),
+                ));
+            }
+            move_path(&src, &backup)?;
+        }
+        Ok(())
+    })
+    .join()
+    .map_err(|_| CommandError::new("redo-delete-panic", "thread panicked"))?
+    .map_err(|e| CommandError::new("redo-delete-failed", format!("no se pudo rehacer: {e}")))?;
+
+    Ok(())
+}
+
 fn run_copy_blocking(
     repo_abs: PathBuf,
     to_copy: Vec<(PathBuf, PathBuf)>,
@@ -311,11 +490,12 @@ fn run_copy_blocking(
                 }
             }
             copy_recursive(&src, &dest)?;
-            out.push(dest
-                .strip_prefix(&repo_abs)
-                .unwrap_or(&dest)
-                .display()
-                .to_string());
+            out.push(
+                dest.strip_prefix(&repo_abs)
+                    .unwrap_or(&dest)
+                    .display()
+                    .to_string(),
+            );
         }
         Ok(out)
     })
@@ -346,15 +526,66 @@ fn run_move_blocking(
                     fs::remove_file(&src)?;
                 }
             }
-            out.push(dest
-                .strip_prefix(&repo_abs)
-                .unwrap_or(&dest)
-                .display()
-                .to_string());
+            out.push(
+                dest.strip_prefix(&repo_abs)
+                    .unwrap_or(&dest)
+                    .display()
+                    .to_string(),
+            );
         }
         Ok(out)
     })
     .join()
     .map_err(|_| CommandError::new("move-panic", "thread panicked"))?
     .map_err(|e| CommandError::new("move-failed", format!("no se pudo mover: {e}")))
+}
+
+fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if fs::rename(src, dest).is_err() {
+        copy_recursive(src, dest)?;
+        if src.is_dir() {
+            fs::remove_dir_all(src)?;
+        } else {
+            fs::remove_file(src)?;
+        }
+    }
+    Ok(())
+}
+
+fn undo_backup_root(token: &str) -> Result<PathBuf, CommandError> {
+    Uuid::parse_str(token)
+        .map_err(|_| CommandError::new("invalid-undo-token", "token inválido"))?;
+    Ok(std::env::temp_dir().join("tinto-delete-undo").join(token))
+}
+
+fn write_delete_manifest(root: &Path, manifest: &DeleteResult) -> Result<(), CommandError> {
+    fs::create_dir_all(root).map_err(|e| {
+        CommandError::new(
+            "undo-backup-failed",
+            format!("no se pudo preparar undo: {e}"),
+        )
+    })?;
+    let bytes = serde_json::to_vec(manifest).map_err(|e| {
+        CommandError::new("undo-manifest-failed", format!("manifest inválido: {e}"))
+    })?;
+    fs::write(root.join("manifest.json"), bytes).map_err(|e| {
+        CommandError::new(
+            "undo-manifest-failed",
+            format!("no se pudo escribir manifest: {e}"),
+        )
+    })
+}
+
+fn read_delete_manifest(root: &Path) -> Result<DeleteResult, CommandError> {
+    let bytes = fs::read(root.join("manifest.json")).map_err(|e| {
+        CommandError::new(
+            "undo-manifest-missing",
+            format!("no se pudo leer manifest: {e}"),
+        )
+    })?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| CommandError::new("undo-manifest-invalid", format!("manifest inválido: {e}")))
 }

@@ -13,7 +13,10 @@ use crate::bus::commands::CommandError;
 
 pub mod commands;
 
-pub use commands::{copy_to_repo, copy_within_repo, export_from_repo, move_within_repo};
+pub use commands::{
+    copy_to_repo, copy_within_repo, delete_from_repo, export_from_repo, move_within_repo,
+    redo_deleted_from_repo, restore_deleted_from_repo,
+};
 
 /// Conflict reported while resolving multiple `copy_into_repo` operations.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

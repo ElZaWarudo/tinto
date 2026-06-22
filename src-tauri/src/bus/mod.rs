@@ -12,6 +12,7 @@
 
 pub mod commands;
 pub mod contract;
+mod secret_scan;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,8 +27,8 @@ use crate::watcher::{ClassifiedEvent, EventType, FsWatcher, WatcherError, Watche
 use crate::workbench::RepoEntry;
 use contract::{
     FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
-    RepoErrorClass, RepoErrorState, RepoMetrics, SignalSeverity, SubscriptionTarget, WatchingState,
-    WorkbenchSnapshot, EVENT_FS_EVENTS, EVENT_WATCHING_STATE, EVENT_WORKBENCH_DELTA,
+    RepoErrorClass, RepoErrorState, RepoMetrics, SecretFinding, SignalSeverity, SubscriptionTarget,
+    WatchingState, WorkbenchSnapshot, EVENT_FS_EVENTS, EVENT_WATCHING_STATE, EVENT_WORKBENCH_DELTA,
     MAX_SUBSCRIPTIONS,
 };
 
@@ -77,7 +78,9 @@ pub(crate) struct RecalcOutcome {
     pub head: Option<Option<crate::git::CommitInfo>>,
     pub subscribed_diffs: Option<Vec<crate::git::FileDiff>>,
     pub metrics: RepoMetrics,
+    pub gitleaks_configured: bool,
     pub signals: Vec<PassiveSignal>,
+    pub secret_findings: Vec<SecretFinding>,
 }
 
 /// Estado en vivo de un repo.
@@ -90,7 +93,9 @@ pub(crate) struct RepoLiveState {
     error: Option<RepoErrorState>,
     revision: u64,
     metrics: RepoMetrics,
+    gitleaks_configured: bool,
     signals: Vec<PassiveSignal>,
+    secret_findings: Vec<SecretFinding>,
     /// Último tamaño conocido por path vigilado (delta de tamaño, Plano 2).
     last_known_sizes: HashMap<PathBuf, u64>,
 }
@@ -106,7 +111,9 @@ impl RepoLiveState {
             last_activity_ms: self.last_activity_ms,
             error: self.error.clone(),
             metrics: self.metrics.clone(),
+            gitleaks_configured: self.gitleaks_configured,
             signals: self.signals.clone(),
+            secret_findings: self.secret_findings.clone(),
             subscribed_diffs: None,
         }
     }
@@ -126,7 +133,9 @@ impl RepoLiveState {
         // degradado se reporta aparte por `tinto://watching-state`.
         self.error = None;
         self.metrics = outcome.metrics.clone();
+        self.gitleaks_configured = outcome.gitleaks_configured;
         self.signals = outcome.signals.clone();
+        self.secret_findings = outcome.secret_findings.clone();
         self.revision += 1;
     }
 
@@ -259,22 +268,6 @@ fn is_test_path(path: &Path) -> bool {
         || lower.ends_with("_test.rs")
 }
 
-fn secret_line_marker(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    lower.contains("-----begin ") && lower.contains("private key")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("access_token")
-        || lower.contains("auth_token")
-        || lower.contains("secret=")
-        || lower.contains("secret:")
-        || lower.contains("token=")
-        || lower.contains("token:")
-        || lower.contains("password=")
-        || lower.contains("password:")
-        || lower.contains("private_key")
-}
-
 fn signal(
     kind: PassiveSignalKind,
     severity: SignalSeverity,
@@ -381,6 +374,7 @@ fn bounded_sorted(mut signals: Vec<PassiveSignal>) -> Vec<PassiveSignal> {
 fn metrics_and_signals(
     status: &crate::git::RepoStatus,
     diffs: &[FileDiff],
+    secret_findings: &[SecretFinding],
 ) -> (RepoMetrics, Vec<PassiveSignal>) {
     let mut changed_paths = BTreeSet::new();
     for path in status
@@ -412,21 +406,7 @@ fn metrics_and_signals(
         let mut removed_for_file = 0;
         for line in diff.hunks.iter().flat_map(|h| h.lines.iter()) {
             match line.kind {
-                DiffLineKind::Added => {
-                    lines_added += 1;
-                    if secret_line_marker(&line.content) {
-                        push_signal(
-                            &mut signals,
-                            &mut seen,
-                            signal(
-                                PassiveSignalKind::PossibleSecret,
-                                SignalSeverity::Critical,
-                                Some(diff.path.clone()),
-                                "Possible secret marker added",
-                            ),
-                        );
-                    }
-                }
+                DiffLineKind::Added => lines_added += 1,
                 DiffLineKind::Removed => {
                     lines_removed += 1;
                     removed_for_file += 1;
@@ -446,6 +426,19 @@ fn metrics_and_signals(
                 ),
             );
         }
+    }
+
+    for finding in secret_findings {
+        push_signal(
+            &mut signals,
+            &mut seen,
+            signal(
+                PassiveSignalKind::PossibleSecret,
+                SignalSeverity::Critical,
+                Some(finding.path.clone()),
+                "Possible secret detected",
+            ),
+        );
     }
 
     (
@@ -942,7 +935,9 @@ fn recalc_blocking(
     // This is intentionally read-only and runs inside the existing bounded
     // spawn_blocking recompute path.
     let worktree_diffs = engine.worktree_diff()?;
-    let (metrics, signals) = metrics_and_signals(&status, &worktree_diffs);
+    let secret_findings = secret_scan::detect_secret_findings(repo, &status, &worktree_diffs);
+    let gitleaks_configured = secret_scan::has_repo_gitleaks_config(repo);
+    let (metrics, signals) = metrics_and_signals(&status, &worktree_diffs, &secret_findings);
 
     let subscribed_diffs = if subs.is_empty() {
         None
@@ -974,7 +969,9 @@ fn recalc_blocking(
         head,
         subscribed_diffs,
         metrics,
+        gitleaks_configured,
         signals,
+        secret_findings,
     })
 }
 
@@ -1046,7 +1043,9 @@ mod tests {
             head: None,
             subscribed_diffs: None,
             metrics: RepoMetrics::default(),
+            gitleaks_configured: false,
             signals: Vec::new(),
+            secret_findings: Vec::new(),
         };
         state.apply_recalc(&outcome);
         assert_eq!(state.revision, 1);
@@ -1082,7 +1081,9 @@ mod tests {
             head: None,
             subscribed_diffs: None,
             metrics: RepoMetrics::default(),
+            gitleaks_configured: false,
             signals: Vec::new(),
+            secret_findings: Vec::new(),
         };
         state.apply_recalc(&outcome);
         assert!(
@@ -1151,7 +1152,7 @@ mod tests {
             staged: Vec::new(),
             untracked: Vec::new(),
         };
-        let (_metrics, signals) = metrics_and_signals(&status, &[]);
+        let (_metrics, signals) = metrics_and_signals(&status, &[], &[]);
         assert!(signals
             .iter()
             .any(|s| s.kind == PassiveSignalKind::SensitivePath));
@@ -1188,7 +1189,14 @@ mod tests {
                 ],
             }],
         };
-        let (metrics, signals) = metrics_and_signals(&crate::git::RepoStatus::default(), &[diff]);
+        let findings = vec![SecretFinding {
+            path: "src/config.rs".into(),
+            line: 1,
+            rule_id: "generic-api-key".into(),
+            description: "Possible secret".into(),
+        }];
+        let (metrics, signals) =
+            metrics_and_signals(&crate::git::RepoStatus::default(), &[diff], &findings);
         assert_eq!(metrics.changed_files, 1);
         assert_eq!(metrics.lines_added, 1);
         assert_eq!(metrics.lines_removed, 1);
@@ -1228,7 +1236,7 @@ mod tests {
             staged: Vec::new(),
             untracked: Vec::new(),
         };
-        let (_metrics, signals) = metrics_and_signals(&status, &[diff]);
+        let (_metrics, signals) = metrics_and_signals(&status, &[diff], &[]);
         assert!(signals.len() <= MAX_SIGNALS_PER_REPO);
         assert!(signals
             .iter()

@@ -6,6 +6,9 @@
 //! (snapshot, suscripción, retry) hablan con la task vía `BusHandle`.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::str;
+use std::{fs, io};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -16,10 +19,113 @@ use super::contract::{
     ContentEncoding, FileContent, RepoTree, SubscriptionTarget, TreeEntry, WorkbenchSnapshot,
     FILE_CONTENT_MAX_BYTES, MEDIA_CONTENT_MAX_BYTES, REPO_TREE_MAX_ENTRIES,
 };
+use super::secret_scan;
 use super::BusHandle;
 use crate::git::{
     CommitInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError,
 };
+
+const GITLEAKS_TEMPLATE: &str = r#"# .gitleaks.toml
+title = "Tinto local scan policy"
+
+[allowlist]
+paths = [
+  "(?i)^(?:\.git|node_modules|dist|build|\.next)/",
+]
+"#;
+
+#[derive(Debug, Serialize)]
+pub struct GitleaksSetupStatus {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub binary_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GitleaksInstallResult {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub binary_path: Option<String>,
+    pub method: Option<String>,
+    pub message: String,
+}
+
+#[tauri::command]
+pub fn get_gitleaks_setup_status() -> Result<GitleaksSetupStatus, CommandError> {
+    Ok(gitleaks_setup_status())
+}
+
+#[tauri::command]
+pub async fn install_gitleaks() -> Result<GitleaksInstallResult, CommandError> {
+    let install_outcome = tokio::task::spawn_blocking(secret_scan::install_gitleaks)
+        .await
+        .map_err(|_| CommandError::new("internal", "la tarea de instalación falló"))?;
+    let status = gitleaks_setup_status();
+    let method = install_outcome.method.map(|method| method.to_string());
+    let message = install_outcome.message;
+
+    Ok(GitleaksInstallResult {
+        installed: status.installed,
+        version: status.version,
+        binary_path: status.binary_path,
+        method,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn create_repo_gitleaks_config(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+) -> Result<(), CommandError> {
+    let repo_abs = ensure_known(&bus, &repo).await?;
+    blocking(move || write_repo_gitleaks_config(&repo_abs)).await
+}
+
+fn gitleaks_setup_status() -> GitleaksSetupStatus {
+    let Some(path) = secret_scan::gitleaks_binary_path() else {
+        return GitleaksSetupStatus {
+            installed: false,
+            version: None,
+            binary_path: None,
+        };
+    };
+
+    let version = Command::new(&path)
+        .arg("version")
+        .output()
+        .ok()
+        .and_then(|output| {
+            if !output.status.success() {
+                return None;
+            }
+            let raw = str::from_utf8(&output.stdout).ok()?;
+            raw.lines()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| line.trim().to_string())
+        });
+
+    GitleaksSetupStatus {
+        installed: true,
+        version,
+        binary_path: Some(path.to_string_lossy().to_string()),
+    }
+}
+
+fn write_repo_gitleaks_config(repo: &Path) -> Result<(), CommandError> {
+    if secret_scan::has_repo_gitleaks_config(repo) {
+        return Ok(());
+    }
+    let target = repo.join(".gitleaks.toml");
+    fs::write(&target, GITLEAKS_TEMPLATE).map_err(map_gitleaks_write_error)
+}
+
+fn map_gitleaks_write_error(error: io::Error) -> CommandError {
+    CommandError::new(
+        "gitleaks-config-write-failed",
+        format!("no se pudo crear .gitleaks.toml: {error}"),
+    )
+}
 
 /// Error de comando serializado hacia el frontend (categoría + mensaje
 /// seguro), patrón análogo a `WorkbenchError`.

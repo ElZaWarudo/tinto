@@ -422,6 +422,7 @@ export function FileTreeNode({
   onTreeDrop,
   dropTargetPath,
   onPasteInto,
+  onDelete,
 }: {
   node: TreeNode;
   delta: RepoDelta;
@@ -436,6 +437,7 @@ export function FileTreeNode({
   onTreeDrop?: (targetPath: string) => void;
   dropTargetPath?: string | null;
   onPasteInto?: (destDirPath: string) => void;
+  onDelete?: (node: TreeNode) => void;
 }) {
   const [localOpen, setLocalOpen] = useState(false); // fallback for standalone use
   const open = expandedDirs ? expandedDirs.has(node.path) : localOpen;
@@ -446,9 +448,7 @@ export function FileTreeNode({
   };
 
   if (node.isDir) {
-    const dirClassBase = node.hasChanges
-      ? "tree-dir__row tree-dir__row--changed"
-      : "tree-dir__row";
+    const dirClassBase = node.hasChanges ? "tree-dir__row tree-dir__row--changed" : "tree-dir__row";
     const isDropTarget = dropTargetPath === node.path;
     const dirClass = isDropTarget
       ? `${dirClassBase} tree-dir__row--drop-target tree-dir__row--drop-target-hover`
@@ -483,6 +483,13 @@ export function FileTreeNode({
           }}
           onClick={toggleDir}
           onContextMenu={(event) => onContextMenu?.(event, node)}
+          onKeyDown={(event) => {
+            if (event.key === "Delete") {
+              event.preventDefault();
+              event.stopPropagation();
+              onDelete?.(node);
+            }
+          }}
         >
           <span className="tree-dir__caret">{open ? "▾" : "▸"}</span>
           <TreeIcon kind="folder" open={open} />
@@ -516,6 +523,7 @@ export function FileTreeNode({
               onTreeDrop={onTreeDrop}
               dropTargetPath={dropTargetPath}
               onPasteInto={onPasteInto}
+              onDelete={onDelete}
             />
           ))}
       </div>
@@ -547,6 +555,10 @@ export function FileTreeNode({
         } else if (e.key === " ") {
           e.preventDefault();
           onOpen(node.path, false);
+        } else if (e.key === "Delete") {
+          e.preventDefault();
+          e.stopPropagation();
+          onDelete?.(node);
         }
       }}
     >

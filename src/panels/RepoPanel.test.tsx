@@ -6,10 +6,12 @@ import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/act
 const getCommitLogMock = vi.fn();
 const retryRepoMock = vi.fn();
 const updateRepoFsWatchMock = vi.fn();
+const createRepoGitleaksConfigMock = vi.fn();
 let nestedDockviewProps: Record<string, unknown> | null = null;
 vi.mock("../bus/client", () => ({
   getCommitLog: (...a: unknown[]) => getCommitLogMock(...a),
   retryRepo: (...a: unknown[]) => retryRepoMock(...a),
+  createRepoGitleaksConfig: (...a: unknown[]) => createRepoGitleaksConfigMock(...a),
   // FileView (imported by RepoPanel) pulls in the subscription reconciler, which
   // binds setSubscriptions at module load. The overview tests never render it,
   // but the export must exist.
@@ -67,7 +69,9 @@ describe("RepoPanel", () => {
     getCommitLogMock.mockReset();
     retryRepoMock.mockReset();
     updateRepoFsWatchMock.mockReset();
+    createRepoGitleaksConfigMock.mockReset();
     updateRepoFsWatchMock.mockResolvedValue(undefined);
+    createRepoGitleaksConfigMock.mockResolvedValue(undefined);
     nestedDockviewProps = null;
   });
 
@@ -182,6 +186,19 @@ describe("RepoPanel", () => {
     expect(screen.getByTestId("repo-signals")).toHaveTextContent("2 files · +12 -3");
     expect(screen.getByTestId("repo-signals")).toHaveTextContent("Configuration file changed");
     expect(screen.getByTestId("status-file-src/a.rs")).toHaveTextContent("Config");
+  });
+
+  it("configures the repo Gitleaks file from the overview notice", async () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() =>
+      busStore.loadSnapshot([delta("/r/api", { gitleaks_configured: false })], { available: true }),
+    );
+    render(<RepoPanel {...panelProps("/r/api")} />);
+
+    fireEvent.click(screen.getByText("Configurar"));
+
+    expect(createRepoGitleaksConfigMock).toHaveBeenCalledWith("/r/api");
+    expect(await screen.findByText("Configurado")).toBeInTheDocument();
   });
 
   it("shows a terminal error with a working retry", async () => {

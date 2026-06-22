@@ -178,6 +178,15 @@ pub struct RepoMetrics {
     pub lines_removed: usize,
 }
 
+/// Hallazgo de secreto asociado a una línea concreta del archivo actual.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SecretFinding {
+    pub path: PathBuf,
+    pub line: u32,
+    pub rule_id: String,
+    pub description: String,
+}
+
 /// Delta de estado de un repo (evento `tinto://workbench-delta` y entrada
 /// del snapshot).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -192,8 +201,11 @@ pub struct RepoDelta {
     pub last_activity_ms: u64,
     pub error: Option<RepoErrorState>,
     pub metrics: RepoMetrics,
+    pub gitleaks_configured: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signals: Vec<PassiveSignal>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_findings: Vec<SecretFinding>,
     /// Diffs de los objetivos suscritos de este repo; `None` sin suscripción.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscribed_diffs: Option<Vec<FileDiff>>,
@@ -306,11 +318,18 @@ mod tests {
                 lines_added: 2,
                 lines_removed: 3,
             },
+            gitleaks_configured: false,
             signals: vec![PassiveSignal {
                 kind: PassiveSignalKind::SensitivePath,
                 severity: SignalSeverity::Warning,
                 path: Some(".env".into()),
                 message: "Sensitive filename changed".into(),
+            }],
+            secret_findings: vec![SecretFinding {
+                path: "src/config.ts".into(),
+                line: 12,
+                rule_id: "generic-api-key".into(),
+                description: "Possible secret".into(),
             }],
             subscribed_diffs: None,
         };
@@ -319,8 +338,11 @@ mod tests {
         assert_eq!(json["revision"], 7);
         assert_eq!(json["error"]["class"], "terminal");
         assert_eq!(json["metrics"]["changed_files"], 1);
+        assert_eq!(json["gitleaks_configured"], false);
         assert_eq!(json["signals"][0]["kind"], "sensitive_path");
         assert_eq!(json["signals"][0]["severity"], "warning");
+        assert_eq!(json["secret_findings"][0]["line"], 12);
+        assert_eq!(json["secret_findings"][0]["rule_id"], "generic-api-key");
         assert!(json.get("subscribed_diffs").is_none(), "None se omite");
         for key in ["status", "branch", "head", "last_activity_ms"] {
             assert!(json.get(key).is_some(), "falta {key}");

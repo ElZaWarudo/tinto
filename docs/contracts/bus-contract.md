@@ -118,6 +118,8 @@ Chunks are live only; the first ACI-002 stream bridge does not replay historical
 | `get_file_content` | `repo, path` | `FileContent` | CURRENT working-tree content (full-file view). |
 | `get_media_content` | `repo, path` | `FileContent` | CURRENT working-tree PDF/image content for previews; always base64, 12 MiB guard; rejects non-media extensions. |
 | `list_repo_tree` | `repo` | `{ entries: Vec<TreeEntry>, truncated: bool }` | Full working-tree tree respecting `.gitignore` (`ignore` walk), cap 20,000 entries. |
+| `get_gitleaks_setup_status` | none | `{ installed: bool, version: string | null, binary_path: string | null }` | Checks whether `gitleaks` is available either in the Tinto-managed addon location or on the host system and returns version/path when found. |
+| `install_gitleaks` | none | `{ installed: bool, version: string | null, binary_path: string | null, method: string | null, message: string }` | Attempts a Tinto-managed install first (downloads the current release into Tinto's addon directory), then falls back to host installers (winget/choco/scoop on Windows; brew/go on macOS; brew/apt/dnf/yum/pacman/zypper/apk/go on Linux). Returns updated status plus a diagnostic message. |
 | `set_subscriptions` | `targets: Vec<{repo, path?}>` | `()` | Set of open targets (cap 8); applies from the next recomputation. |
 | `retry_repo` | `repo` | `()` | Retries the remount of a repo in terminal error. |
 | `start_agent_session` | `repo, agent_type` | `session_id: string` | Starts an allowlisted agent (`claude`, `codex`, `opencode`) in a PTY for a repo in the active workbench. |

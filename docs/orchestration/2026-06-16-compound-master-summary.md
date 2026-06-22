@@ -72,6 +72,7 @@ This closes the Compound Master delivery run for Tinto's original roadmap from `
 - Phantom-repo generation token after workbench switch.
 - TypeScript/Rust contract code generation.
 - Keyboard arrow navigation/Escape polish.
+- File overview ruler UX gap: the right-side rail now exposes alert markers, but it does not yet provide the Visual Studio Code-style whole-file follow/navigation behavior that the UI should converge to.
 - Diff viewer deferrals: manual-reload cancellation race, full-file/diff revision skew hardening, `useDiffData` extraction, S/M/U mark consolidation, and workbench-switch diff-panel orphan handling.
 
 ## CI And Repository Maintenance
@@ -100,6 +101,7 @@ After roadmap closeout, the user directed an iterative UX initiative to reshape 
 
 - Shipped tranche: merged to `develop` at `2a701e3` (local fast-forward, no PR), 5 atomic commits — watcher permission-denied tolerance, live bus reflection of repo mutations + open-added-tab, project-centric tabbed workspace with menu bar and per-project explorer, unified file viewer (diff/normal/Markdown) with Shiki highlighting, and per-file text zoom.
 - Follow-up tranche: level-1 tab sizing + stable change indicator, level-2 nested dockview with drag-to-split and preview/pin, cross-session persistence of the per-project file layout, and a bento-grid dashboard redesign. Release commit: `8230397` (`feat(workspace): add nested file dock and bento dashboard`) plus orchestration docs.
+- Known UX constraint carried forward: the right-side file overview/alert rail is useful for surfacing markers, but it should not be treated as done until it behaves like Visual Studio Code's global file overview, with document-scale follow/navigation rather than standalone alert placement.
 - Verification/review: shipped tranche green at frontend 148 / Rust 118; follow-up release green at frontend 149 plus `npm run lint`, `npm run format:check`, and `npm run build`. Local Compound Master code review found no P0-P2 findings. CI will validate the pushed `develop` tip.
 - Live tracker: `docs/orchestration/compound-master-state.md` (status `active`).
 

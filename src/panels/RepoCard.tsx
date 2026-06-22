@@ -9,6 +9,7 @@ import { agentBinaryAvailable } from "../bus/client";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
 import { ACTIVITY_WINDOW_MS } from "./constants";
+import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
 import { MetricsPill, SignalBadges } from "./SignalBadges";
 
 export interface RepoCardProps {
@@ -65,6 +66,7 @@ function RepoCardImpl({
   const counts = signalCounts(signals);
   const changes = status.modified.length + status.staged.length + status.untracked.length;
   const selectedAgent = AGENT_OPTIONS.find((a) => a.id === agentType) ?? AGENT_OPTIONS[0];
+  const missingGitleaksConfig = delta.gitleaks_configured === false;
 
   useEffect(() => {
     let alive = true;
@@ -154,6 +156,16 @@ function RepoCardImpl({
         <MetricsPill metrics={metrics} />
         {signals.length > 0 && <SignalBadges signals={signals} limit={feature ? 4 : 2} />}
       </div>
+
+      {missingGitleaksConfig && (
+        <div
+          className="repo-card__notice"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <GitleaksConfigNotice repo={delta.repo} compact />
+        </div>
+      )}
 
       <div
         className="repo-card__launcher"

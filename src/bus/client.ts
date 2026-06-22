@@ -15,7 +15,10 @@ import {
   type AgentSessionChangeLog,
   type AgentSessionOutput,
   type AgentSession,
+  type GitleaksSetupStatus,
+  type GitleaksInstallResult,
   type CopyResult,
+  type DeleteResult,
   type FileContent,
   type FileDiff,
   type FsEventBatch,
@@ -78,6 +81,11 @@ export const stopAgentSession = (sessionId: string) => invoke("stop_agent_sessio
 
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
 
+export const getGitleaksSetupStatus = () => invoke<GitleaksSetupStatus>("get_gitleaks_setup_status");
+export const installGitleaks = () => invoke<GitleaksInstallResult>("install_gitleaks");
+export const createRepoGitleaksConfig = (repo: string) =>
+  invoke("create_repo_gitleaks_config", { repo });
+
 export const revertSession = (sessionId: string, userConsent: boolean) =>
   invoke<AgentSession>("revert_session", { sessionId, userConsent });
 
@@ -108,12 +116,7 @@ export const setSubscriptions = (targets: SubscriptionTarget[]) =>
   invoke("set_subscriptions", { targets });
 
 // ---- File operations (drag/drop/paste/move) ----
-export const copyToRepo = (
-  repo: string,
-  destDir: string,
-  sources: string[],
-  overwrite: boolean,
-) =>
+export const copyToRepo = (repo: string, destDir: string, sources: string[], overwrite: boolean) =>
   invoke<CopyResult>("copy_to_repo", {
     repo,
     destDir,
@@ -147,11 +150,17 @@ export const moveWithinRepo = (
     overwrite,
   });
 
-export const exportFromRepo = (
-  repo: string,
-  sources: string[],
-  destDir: string,
-) => invoke("export_from_repo", { repo, sources, destDir });
+export const exportFromRepo = (repo: string, sources: string[], destDir: string) =>
+  invoke("export_from_repo", { repo, sources, destDir });
+
+export const deleteFromRepo = (repo: string, sources: string[]) =>
+  invoke<DeleteResult>("delete_from_repo", { repo, sources });
+
+export const restoreDeletedFromRepo = (repo: string, token: string) =>
+  invoke("restore_deleted_from_repo", { repo, token });
+
+export const redoDeletedFromRepo = (repo: string, token: string) =>
+  invoke("redo_deleted_from_repo", { repo, token });
 
 // ---- Event listeners (StrictMode-safe; see KTD6) ----
 // Each returns a promise resolving to an unlisten fn. Callers attach in an

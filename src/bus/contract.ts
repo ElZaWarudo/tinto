@@ -127,10 +127,31 @@ export interface PassiveSignal {
   message: string;
 }
 
+export interface SecretFinding {
+  path: string;
+  line: number;
+  rule_id: string;
+  description: string;
+}
+
 export interface RepoMetrics {
   changed_files: number;
   lines_added: number;
   lines_removed: number;
+}
+
+export interface GitleaksSetupStatus {
+  installed: boolean;
+  version: string | null;
+  binary_path: string | null;
+}
+
+export interface GitleaksInstallResult {
+  installed: boolean;
+  version: string | null;
+  binary_path: string | null;
+  method: string | null;
+  message: string;
 }
 
 // ---- Diff types (consumed by RDM-008) ----
@@ -166,7 +187,9 @@ export interface RepoDelta {
   last_activity_ms: number; // epoch ms
   error: RepoErrorState | null;
   metrics?: RepoMetrics; // RDM-011 additive
+  gitleaks_configured?: boolean; // additive
   signals?: PassiveSignal[]; // RDM-011 additive
+  secret_findings?: SecretFinding[]; // additive
   subscribed_diffs?: FileDiff[] | null; // RDM-008
 }
 
@@ -242,11 +265,7 @@ export interface WorkbenchConfig {
 }
 
 // ---- File operations (drag/drop/paste/move) ----
-export type FileConflictKind =
-  | "file_exists"
-  | "dir_exists"
-  | "source_missing"
-  | "overwrite";
+export type FileConflictKind = "file_exists" | "dir_exists" | "source_missing" | "overwrite";
 
 export interface FileConflict {
   /** Destino relativo al repo. */
@@ -259,4 +278,14 @@ export interface CopyResult {
   copied: string[];
   /** Conflictos detectados (vacío si todo OK). */
   conflicts: FileConflict[];
+}
+
+export interface DeletedEntry {
+  path: string;
+  is_dir: boolean;
+}
+
+export interface DeleteResult {
+  token: string;
+  entries: DeletedEntry[];
 }

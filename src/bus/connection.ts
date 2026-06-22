@@ -6,7 +6,9 @@
 import { useEffect } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { busStore } from "./store";
+import type { FsEventBatch, RepoDelta } from "./contract";
 import { agentSessionStore } from "../agent/sessionStore";
+import { repoTreeStore } from "../workspace/repoTreeStore";
 import {
   getWorkbenchSnapshot,
   listAgentSessions,
@@ -42,9 +44,19 @@ export async function reloadActiveWorkbench(): Promise<void> {
 export function useBusConnection(): void {
   useEffect(() => {
     let active = true;
+    const applyDelta = (delta: RepoDelta) => {
+      if (!active) return;
+      busStore.applyDelta(delta);
+      repoTreeStore.refresh(delta.repo);
+    };
+    const applyFsEvents = (batch: FsEventBatch) => {
+      if (!active) return;
+      busStore.applyFsEvents(batch);
+      repoTreeStore.refresh(batch.repo);
+    };
     const pending: Promise<UnlistenFn>[] = [
-      onWorkbenchDelta((d) => active && busStore.applyDelta(d)),
-      onFsEvents((b) => active && busStore.applyFsEvents(b)),
+      onWorkbenchDelta(applyDelta),
+      onFsEvents(applyFsEvents),
       onWatchingState((w) => active && busStore.setWatching(w)),
       onAgentSessionChangeLog(
         (log) => active && agentSessionStore.applyChangeLog(log.session_id, log.changes),

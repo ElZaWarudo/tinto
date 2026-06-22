@@ -21,9 +21,9 @@ pub mod debounce;
 pub mod normalize;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use thiserror::Error;
@@ -122,6 +122,21 @@ enum RouterInput {
         repo: PathBuf,
         error: WatcherError,
     },
+    /// Resultados del polling de respaldo (WSL2): paths que cambiaron
+    /// según el snapshot del poller. El router los clasifica y alimenta
+    /// el debounce igual que los eventos de notify.
+    PollDetected {
+        repo: PathBuf,
+        changes: Vec<PollChange>,
+    },
+}
+
+/// Cambio detectado por el polling de respaldo.
+#[derive(Debug, Clone)]
+struct PollChange {
+    path: PathBuf,
+    is_dir: bool,
+    kind: EventType,
 }
 
 struct MountedRepo {
@@ -142,7 +157,10 @@ pub struct FsWatcher {
     /// el diff de `watch_workbench` los trata como NO montados para que el
     /// remount explícito funcione (el kernel ya removió sus watches).
     dead_roots: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Roots montados compartidos con el poller de respaldo (WSL2).
+    poll_roots: Arc<Mutex<Vec<PathBuf>>>,
     router_handle: Option<JoinHandle<()>>,
+    poll_handle: Option<JoinHandle<()>>,
 }
 
 impl FsWatcher {
@@ -157,6 +175,7 @@ impl FsWatcher {
         let (debounce_tx, debounce_rx) = mpsc::unbounded_channel::<DebounceInput>();
         let (batch_tx, batch_rx) = mpsc::unbounded_channel::<EmittedBatch>();
         let dead_roots = Arc::new(Mutex::new(HashSet::new()));
+        let poll_roots: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
 
         let raw_tx = router_tx.clone();
         let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -170,12 +189,13 @@ impl FsWatcher {
         let debounce_handle = tokio::spawn(debounce::run(debounce_rx, batch_tx));
         let router_handle = tokio::spawn(router(
             router_rx,
-            debounce_tx,
+            debounce_tx.clone(),
             batch_rx,
-            public_tx,
+            public_tx.clone(),
             debounce_handle,
             Arc::clone(&dead_roots),
         ));
+        let poll_handle = tokio::spawn(poll_loop(Arc::clone(&poll_roots), router_tx.clone()));
 
         Ok((
             Self {
@@ -183,7 +203,9 @@ impl FsWatcher {
                 router_tx,
                 mounted: HashMap::new(),
                 dead_roots,
+                poll_roots,
                 router_handle: Some(router_handle),
+                poll_handle: Some(poll_handle),
             },
             public_rx,
         ))
@@ -274,7 +296,8 @@ impl FsWatcher {
                             // accesibles; los conservamos y solo se pierde el
                             // subtree sin permisos (que igual no podríamos
                             // leer). Marcamos montado sin reportar error.
-                            self.mounted.insert(root, fs_watch);
+                            self.mounted.insert(root.clone(), fs_watch);
+                            self.add_poll_root(&root);
                             continue;
                         }
                         // Otro fallo (p. ej. límite de inotify a mitad del
@@ -294,8 +317,18 @@ impl FsWatcher {
                         self.mounted.remove(&root);
                         continue;
                     }
-                    self.mounted.insert(root, fs_watch);
+                    self.mounted.insert(root.clone(), fs_watch);
+                    self.add_poll_root(&root);
                 }
+            }
+        }
+    }
+
+    /// Agrega un root al listado compartido con el poller de respaldo.
+    fn add_poll_root(&self, root: &PathBuf) {
+        if let Ok(mut roots) = self.poll_roots.lock() {
+            if !roots.contains(root) {
+                roots.push(root.clone());
             }
         }
     }
@@ -333,6 +366,9 @@ impl FsWatcher {
         if let Ok(mut dead) = self.dead_roots.lock() {
             dead.remove(root);
         }
+        if let Ok(mut roots) = self.poll_roots.lock() {
+            roots.retain(|r| r != root);
+        }
         let _ = self
             .router_tx
             .send(RouterInput::RemoveRepo { root: root.clone() });
@@ -345,10 +381,14 @@ impl FsWatcher {
     /// olvidaría sus buffers pendientes).
     pub async fn shutdown(mut self) {
         let router_handle = self.router_handle.take();
+        let poll_handle = self.poll_handle.take();
         // Drop cierra notify (sus threads) y el puente router_tx; el
         // router al ver el canal cerrado cierra el debounce, que hace su
         // flush final, y el router lo reenvía antes de terminar.
         drop(self); // Drop: aborta solo si quedara handle; aquí ya fue tomado.
+        if let Some(handle) = poll_handle {
+            handle.abort();
+        }
         if let Some(handle) = router_handle {
             let _ = handle.await;
         }
@@ -360,6 +400,9 @@ impl Drop for FsWatcher {
         // Best-effort: shutdown() es la vía con garantías; Drop solo evita
         // tasks colgadas si el handle se descarta sin apagar.
         if let Some(handle) = self.router_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.poll_handle.take() {
             handle.abort();
         }
     }
@@ -400,6 +443,9 @@ async fn router(
                     }
                     Some(RouterInput::ReportError { repo, error }) => {
                         let _ = public_tx.send(WatcherMessage::RepoError { repo, error });
+                    }
+                    Some(RouterInput::PollDetected { repo: _, changes }) => {
+                        route_poll_changes(&changes, &mut repos, &debounce_tx);
                     }
                     // Puente cerrado (shutdown): cerrar el debounce y
                     // drenar sus lotes finales.
@@ -580,6 +626,155 @@ fn forward_batch(
             repo: batch.repo,
             events: batch.events,
         });
+    }
+}
+
+/// Task de polling de respaldo para WSL2: escanea periódicamente los
+/// roots montados y reporta cambios al router. inotify no detecta
+/// modificaciones hechas desde Windows en filesystems 9P/mounted.
+async fn poll_loop(
+    poll_roots: Arc<Mutex<Vec<PathBuf>>>,
+    router_tx: mpsc::UnboundedSender<RouterInput>,
+) {
+    let mut snapshots: HashMap<PathBuf, HashMap<PathBuf, SystemTime>> = HashMap::new();
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    let mut first_scan = true;
+
+    loop {
+        interval.tick().await;
+        let roots = poll_roots.lock().map(|r| r.clone()).unwrap_or_default();
+
+        for root in roots {
+            let current = scan_directory(&root);
+            let prev = snapshots.entry(root.clone()).or_insert_with(HashMap::new);
+
+            // Primer escaneo: solo capturar snapshot, no emitir eventos.
+            if first_scan || prev.is_empty() {
+                *prev = current;
+                continue;
+            }
+
+            let mut changes = Vec::new();
+
+            // Detectar nuevos y modificados.
+            for (path, mtime) in &current {
+                match prev.get(path) {
+                    None => {
+                        changes.push(PollChange {
+                            path: path.clone(),
+                            is_dir: path.is_dir(),
+                            kind: EventType::Created,
+                        });
+                    }
+                    Some(prev_mtime) if prev_mtime != mtime => {
+                        changes.push(PollChange {
+                            path: path.clone(),
+                            is_dir: path.is_dir(),
+                            kind: EventType::Modified,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+
+            // Detectar removidos.
+            for path in prev.keys() {
+                if !current.contains_key(path) {
+                    changes.push(PollChange {
+                        path: path.clone(),
+                        is_dir: false,
+                        kind: EventType::Removed,
+                    });
+                }
+            }
+
+            if !changes.is_empty() {
+                let _ = router_tx.send(RouterInput::PollDetected {
+                    repo: root.clone(),
+                    changes,
+                });
+            }
+
+            *prev = current;
+        }
+
+        first_scan = false;
+    }
+}
+/// Escanea un directorio recursivamente y retorna un mapa de paths a
+/// modification times. Ignora `.git` y `node_modules`.
+fn scan_directory(root: &Path) -> HashMap<PathBuf, SystemTime> {
+    let mut result = HashMap::new();
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+
+            // Ignorar .git y node_modules.
+            if name == ".git" || name == "node_modules" {
+                continue;
+            }
+
+            if let Ok(metadata) = entry.metadata() {
+                if let Ok(mtime) = metadata.modified() {
+                    result.insert(path.clone(), mtime);
+                    if metadata.is_dir() {
+                        stack.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Enruta cambios detectados por el polling: clasifica y alimenta el
+/// debounce igual que los eventos de notify.
+fn route_poll_changes(
+    changes: &[PollChange],
+    repos: &mut HashMap<PathBuf, MountedRepo>,
+    debounce_tx: &mpsc::UnboundedSender<DebounceInput>,
+) {
+    let timestamp_ms = now_ms();
+
+    for change in changes {
+        // Repo dueño del path: el root montado más profundo que lo prefija.
+        let Some(root) = repos
+            .keys()
+            .filter(|root| change.path.starts_with(root))
+            .max_by_key(|root| root.as_os_str().len())
+            .cloned()
+        else {
+            continue;
+        };
+
+        let repo = repos.get(&root).expect("recién resuelto");
+        let classification = repo.classifier.classify(&change.path, change.is_dir);
+
+        match classification {
+            Classification::GitInternal | Classification::Ignored | Classification::OutsideRepo => {
+                continue;
+            }
+            Classification::GitMeta | Classification::Plane1 | Classification::Plane2 => {
+                let _ = debounce_tx.send(DebounceInput::Event {
+                    repo: root,
+                    event: ClassifiedEvent {
+                        path: change.path.clone(),
+                        classification,
+                        kind: change.kind,
+                        timestamp_ms,
+                    },
+                });
+            }
+        }
     }
 }
 

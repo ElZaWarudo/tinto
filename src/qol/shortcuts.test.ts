@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { installShortcuts, SHORTCUTS } from "./shortcuts";
+import { deleteUndoManager } from "../panels/file/deleteUndo";
 import type { DockviewApi } from "dockview-react";
 
 describe("shortcuts", () => {
   describe("SHORTCUTS", () => {
     it("defines all expected shortcuts", () => {
-      expect(SHORTCUTS).toHaveLength(12);
+      expect(SHORTCUTS).toHaveLength(14);
 
       const actions = SHORTCUTS.map((s) => s.action);
       expect(actions).toContain("Alternar árbol de archivos");
@@ -20,11 +21,13 @@ describe("shortcuts", () => {
       expect(actions).toContain("Abrir Timeline");
       expect(actions).toContain("Refrescar proyecto");
       expect(actions).toContain("Añadir proyecto");
+      expect(actions).toContain("Restaurar archivo eliminado");
+      expect(actions).toContain("Rehacer eliminación de archivo");
     });
 
     it("groups shortcuts correctly", () => {
       const groups = new Set(SHORTCUTS.map((s) => s.group));
-      expect(groups).toEqual(new Set(["Navegación", "Cerrar", "Vista", "Proyecto"]));
+      expect(groups).toEqual(new Set(["Navegación", "Cerrar", "Vista", "Proyecto", "Archivos"]));
     });
   });
 
@@ -45,6 +48,7 @@ describe("shortcuts", () => {
       };
 
       vi.clearAllMocks();
+      deleteUndoManager.reset();
     });
 
     it("returns a cleanup function", () => {
@@ -127,6 +131,24 @@ describe("shortcuts", () => {
       window.dispatchEvent(event);
 
       expect(mockActions.addRepo).toHaveBeenCalled();
+      cleanup();
+    });
+
+    it("calls file undo and redo on Ctrl+Z and Ctrl+Shift+Z", async () => {
+      const undoSpy = vi.spyOn(deleteUndoManager, "undo").mockResolvedValue(null);
+      const redoSpy = vi.spyOn(deleteUndoManager, "redo").mockResolvedValue(null);
+      const apiRef = { current: mockApi };
+      const cleanup = installShortcuts(apiRef, mockActions);
+
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Z", ctrlKey: true, shiftKey: true }),
+      );
+
+      expect(undoSpy).toHaveBeenCalled();
+      expect(redoSpy).toHaveBeenCalled();
+      undoSpy.mockRestore();
+      redoSpy.mockRestore();
       cleanup();
     });
 

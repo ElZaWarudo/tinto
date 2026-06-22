@@ -6,6 +6,7 @@
 import type { DockviewApi } from "dockview-react";
 import { fileDock } from "../workspace/fileDock";
 import { getExplorerCollapsed, setExplorerCollapsed } from "../panels/tree/explorerCollapseState";
+import { deleteUndoManager } from "../panels/file/deleteUndo";
 import { qualityStore } from "./state";
 import { retryRepo } from "../bus/client";
 
@@ -38,6 +39,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   // Proyecto
   { action: "Refrescar proyecto", keys: `${mod} R`, group: "Proyecto" },
   { action: "Añadir proyecto", keys: `${mod} Shift A`, group: "Proyecto" },
+  { action: "Restaurar archivo eliminado", keys: `${mod} Z`, group: "Archivos" },
+  { action: "Rehacer eliminación de archivo", keys: `${mod} Shift Z`, group: "Archivos" },
 ];
 
 /** Get the currently active project repo path from the dockview api. */
@@ -100,7 +103,9 @@ function closeActiveFile(api: DockviewApi): void {
 
   // The file panel ID is file:<path>
   const panelId = `file:${state.active}`;
-  const entry = (fileDock as unknown as { entries: Map<string, { api: DockviewApi | null }> }).entries.get(repo);
+  const entry = (
+    fileDock as unknown as { entries: Map<string, { api: DockviewApi | null }> }
+  ).entries.get(repo);
   if (entry?.api) {
     const panel = entry.api.getPanel(panelId);
     if (panel) {
@@ -149,6 +154,7 @@ export function installShortcuts(
   actions: ShortcutActions,
 ): () => void {
   const handler = (e: KeyboardEvent) => {
+    if (e.defaultPrevented) return;
     // Ignore if user is typing in an input/textarea
     const target = e.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
@@ -160,6 +166,15 @@ export function installShortcuts(
 
     const modPressed = e.ctrlKey || e.metaKey;
     if (!modPressed) return;
+
+    // Undo/redo file deletion: Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z
+    if (e.key === "z" || e.key === "Z") {
+      e.preventDefault();
+      void (e.shiftKey ? deleteUndoManager.redo() : deleteUndoManager.undo()).then((report) => {
+        if (report?.fatalError) console.warn("tinto: file undo failed", report.fatalError);
+      });
+      return;
+    }
 
     // Toggle explorer: Ctrl/Cmd+B
     if (e.key === "b" || e.key === "B") {

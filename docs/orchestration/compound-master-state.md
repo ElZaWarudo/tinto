@@ -1,7 +1,7 @@
 ---
 title: Compound Master State - Tinto
 status: active
-date: 2026-06-19
+date: 2026-06-22
 initiative: tinto
 mode: full
 production_posture: prototype
@@ -15,13 +15,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: Agent Console Integration roadmap (ACI-001 through ACI-006) is complete and delivered on `develop`. All 373 tests passing (215 frontend + 158 backend).
-- Active package: none. Roadmap closed.
-- Branch/base: `develop` at `e4deaa5` synchronized with `origin/develop`. Working tree clean.
+- Current phase/status: post-closeout UX/security-tooling iteration in progress. WSL2 watcher fallback, file/tree UX polish, external file operations, delete undo/redo, file overview ruler marks, and Gitleaks addon/configuration flows are implemented and locally verified.
+- Active package: none. Iterative develop-branch work, not a roadmap package.
+- Branch/base: `develop` with a dirty worktree containing the post-closeout iterations; current Gitleaks-related changes are uncommitted in frontend and `src-tauri` backend files.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
-- Blockers: none.
+- Blockers: none known in code. Automatic host installation of Gitleaks remains environment-dependent by design; the repo-local `.gitleaks.toml` setup is now handled directly by Tinto. Open UX gap: the right-side file overview ruler currently shows alert markers, but it does not yet behave like the global file-follow/navigation rail expected from Visual Studio Code.
 - Required user decisions: none.
-- Next action: await user direction for next initiative or feature work.
+- Next action: continue integrating and then commit the current post-closeout develop worktree once the UX slice is accepted.
 
 ## Source Documents
 
@@ -67,6 +67,51 @@ Follow-up tranche — implemented, verified, internally reviewed, and release-ap
 - Impact Scan (2026-06-16): no backend, Tauri command, auth, persistence schema, API payload, generated binding, fixture contract, or CI workflow contract changed. Changed surfaces are frontend UI state and browser `localStorage` keys (`tinto:filedock:<repo>`), covered by `src/workspace/fileDock.test.ts`.
 - Excluded from this review unit: untracked `brand/wordmark.png`; no references to `wordmark` or `brand/` exist in the source tree.
 
+## Post-Closeout Iteration — WSL2 Filesystem Watcher Fix (2026-06-22)
+
+User-reported bug: files pasted from Windows Explorer into WSL2 repos did not appear in the project tree. Root cause: `inotify` cannot detect filesystem changes made from Windows on 9P/mounted filesystems (`/mnt/...`).
+
+Fix: added a periodic polling fallback (`poll_loop`) in `src-tauri/src/watcher/mod.rs` that scans mounted repo roots every 2 seconds, compares modification times against a snapshot, and emits synthetic `PollDetected` events into the existing router pipeline. The router classifies and debounces these events identically to native `notify` events, so the downstream contract is unchanged.
+
+Implementation details:
+- `FsWatcher` gained `poll_roots: Arc<Mutex<Vec<PathBuf>>>` (shared with the poller) and `poll_handle: Option<JoinHandle<()>>`.
+- `poll_loop` maintains per-root `HashMap<PathBuf, SystemTime>` snapshots. First scan captures the baseline without emitting events (avoids false positives on pre-existing files).
+- `scan_directory` recursively walks the repo, ignoring `.git` and `node_modules`.
+- `RouterInput::PollDetected` variant carries `Vec<PollChange>` (path, is_dir, kind).
+- `route_poll_changes` classifies via the existing `PathClassifier` and feeds `DebounceInput::Event`, reusing the full debounce/rebuild/forward pipeline.
+- `shutdown()` and `Drop` abort the poll handle.
+
+Also fixed stale-closure risk in `src/panels/tree/ProjectExplorer.tsx`: `handleOsDropRef`, `handleTreeDropRef`, `handlePasteRef` were declared as `useRef` but never synced. Added `useEffect` hooks to keep refs current with the handler functions, and corrected the ref type signatures to include `| null` with explicit `null` initial values.
+
+Verification: `cargo test --lib watcher::` 29/29, `cargo test --lib` 158/158, `npx tsc --noEmit` clean.
+
+## Post-Closeout Iteration — Gitleaks Addon and Repo Configuration Flow (2026-06-22)
+
+User-directed security-tooling UX iteration: replace heuristic-only explanations with an optional Gitleaks addon flow, but keep repo configuration contextual instead of forcing shell commands or modal-only guidance.
+
+Delivered behavior:
+- Added additive Tauri commands `get_gitleaks_setup_status`, `install_gitleaks`, and `create_repo_gitleaks_config`.
+- Gitleaks detection now checks both the host system and a Tinto-managed addon location.
+- Automatic install no longer depends only on the GitHub API. Tinto first resolves the latest public release, downloads the current asset for the active OS/architecture, extracts it into Tinto's addon directory, and uses that binary directly. Host package-manager fallbacks remain in place.
+- The Complementos modal now acts as a global addon manager only: it shows status and lets the user explicitly request installation, but it does not auto-install on open.
+- Repo deltas gained additive field `gitleaks_configured: bool`, computed from whether `.gitleaks.toml` or `gitleaks.toml` exists at the repo root.
+- Repo UI surfaces a per-repo alert when local Gitleaks configuration is missing. That alert no longer asks the user to copy a template manually; it calls `create_repo_gitleaks_config` so Tinto writes `.gitleaks.toml` directly into the repo root.
+
+Implementation notes:
+- Backend: `src-tauri/src/bus/secret_scan.rs`, `src-tauri/src/bus/commands.rs`, `src-tauri/src/bus/mod.rs`, `src-tauri/src/bus/contract.rs`, `src-tauri/src/lib.rs`, and `src-tauri/Cargo.toml`.
+- Frontend: `src/bus/client.ts`, `src/bus/contract.ts`, `src/workbench/AddonsManager.tsx`, `src/panels/GitleaksConfigNotice.tsx`, `src/panels/RepoCard.tsx`, `src/panels/RepoPanel.tsx`, and `src/App.css`.
+- Contract docs updated in `docs/contracts/bus-contract.md`.
+
+Verification:
+- `rtk tsc --noEmit`
+- `rtk npm run test -- src/workbench/workbench.test.tsx src/panels/RepoCard.test.tsx src/panels/RepoPanel.test.tsx src/bus/contract.test.ts`
+- `cd src-tauri && rtk cargo test --lib secret_scan -- --nocapture`
+- `cd src-tauri && rtk cargo check`
+
+Known constraints:
+- Managed install still needs network access to GitHub release assets.
+- Host package-manager fallbacks can fail due to missing installers, missing privileges, or unavailable distro packages.
+- The per-repo `.gitleaks.toml` creation is intentionally minimal and idempotent; deeper rule editing remains outside this slice.
 ## Canonical Artifact Roots
 
 - Brainstorms: `docs/brainstorms/`.
@@ -128,6 +173,7 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 - Phantom-repo generation token after workbench switch.
 - TypeScript/Rust contract code generation.
 - Keyboard arrow navigation/Escape polish.
+- File overview ruler parity with Visual Studio Code: the right-side alert rail must act as a true whole-file navigation/follow surface, synced to the full document rather than only showing isolated alert chips.
 - Diff viewer hardening/polish: manual-reload cancellation race, full-file/diff revision skew hardening, `useDiffData` extraction, S/M/U mark consolidation, and workbench-switch diff-panel orphan handling.
 
 ## Archive Status

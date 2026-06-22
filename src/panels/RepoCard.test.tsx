@@ -9,12 +9,17 @@ const clientMocks = vi.hoisted(() => ({
     void args;
     return Promise.resolve(true);
   }),
+  createRepoGitleaksConfig: vi.fn((repo: string) => {
+    void repo;
+    return Promise.resolve();
+  }),
 }));
 vi.mock("../bus/client", () => ({
   agentBinaryAvailable: (...args: unknown[]) => {
     void args;
     return clientMocks.agentBinaryAvailable(...args);
   },
+  createRepoGitleaksConfig: (repo: string) => clientMocks.createRepoGitleaksConfig(repo),
 }));
 
 import { RepoCard } from "./RepoCard";
@@ -58,6 +63,8 @@ describe("RepoCard", () => {
   beforeEach(() => {
     clientMocks.agentBinaryAvailable.mockReset();
     clientMocks.agentBinaryAvailable.mockResolvedValue(true);
+    clientMocks.createRepoGitleaksConfig.mockReset();
+    clientMocks.createRepoGitleaksConfig.mockResolvedValue(undefined);
   });
 
   it("shows name, counts, branch, upstream and the latest commit at a glance", () => {
@@ -80,13 +87,30 @@ describe("RepoCard", () => {
           kind: "possible_secret",
           severity: "critical",
           path: "a",
-          message: "Possible secret marker added",
+          message: "Possible secret detected",
         },
       ],
     });
     expect(screen.getByTestId("repo-metrics")).toHaveTextContent("2 files · +10 -5");
     expect(screen.getByTestId("signal-count")).toHaveTextContent("1 signal");
     expect(screen.getByText(/Possible secret/)).toBeInTheDocument();
+  });
+
+  it("shows a per-repo Gitleaks config notice when the repo has no local config", () => {
+    renderCard({ gitleaks_configured: false });
+    expect(screen.getByTestId("gitleaks-config-notice-compact")).toHaveTextContent(
+      "Gitleaks sin configuración local",
+    );
+    expect(screen.getByText(/\.gitleaks\.toml/)).toBeInTheDocument();
+  });
+
+  it("configures Gitleaks directly for the repo from the notice", async () => {
+    renderCard({ gitleaks_configured: false });
+
+    fireEvent.click(screen.getByText("Configurar"));
+
+    expect(clientMocks.createRepoGitleaksConfig).toHaveBeenCalledWith("/r/api");
+    expect(await screen.findByText("Configurado")).toBeInTheDocument();
   });
 
   // Covers AE11: git edge states render without crashing

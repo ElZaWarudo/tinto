@@ -8,8 +8,11 @@ import {
   copyWithinRepo,
   moveWithinRepo,
   exportFromRepo,
+  deleteFromRepo,
+  restoreDeletedFromRepo,
+  redoDeletedFromRepo,
 } from "../../bus/client";
-import type { CopyResult, FileConflict } from "../../bus/contract";
+import type { CopyResult, DeleteResult, FileConflict } from "../../bus/contract";
 
 export type CopyStrategy = "copy" | "move";
 export type RetryFn = () => Promise<void> | void;
@@ -18,6 +21,10 @@ export interface FileOpReport {
   conflicts: FileConflict[];
   /** Error fatal si el comando falló con algo que no son conflictos. */
   fatalError?: string;
+}
+
+export interface DeleteOpReport extends FileOpReport {
+  deleteResult?: DeleteResult;
 }
 
 export class FatalFileOpError extends Error {}
@@ -93,11 +100,49 @@ export async function sendToOs(params: {
   }
 }
 
+/** Elimina archivos o carpetas dentro del repo. */
+export async function deleteWithinRepo(params: {
+  repo: string;
+  sources: string[]; // relativas al repo
+}): Promise<DeleteOpReport> {
+  try {
+    const deleteResult = await deleteFromRepo(params.repo, params.sources);
+    return { copied: [], conflicts: [], deleteResult };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { copied: [], conflicts: [], fatalError: `delete_from_repo: ${message}` };
+  }
+}
+
+export async function restoreDeletedWithinRepo(params: {
+  repo: string;
+  token: string;
+}): Promise<FileOpReport> {
+  try {
+    await restoreDeletedFromRepo(params.repo, params.token);
+    return { copied: [], conflicts: [] };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { copied: [], conflicts: [], fatalError: `restore_deleted_from_repo: ${message}` };
+  }
+}
+
+export async function redoDeletedWithinRepo(params: {
+  repo: string;
+  token: string;
+}): Promise<FileOpReport> {
+  try {
+    await redoDeletedFromRepo(params.repo, params.token);
+    return { copied: [], conflicts: [] };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { copied: [], conflicts: [], fatalError: `redo_deleted_from_repo: ${message}` };
+  }
+}
+
 /** ¿Este reporte tiene conflictos que requieren confirmación del usuario? */
 export function needsConfirmation(report: FileOpReport): boolean {
-  return report.conflicts.some(
-    (c) => c.kind === "file_exists" || c.kind === "dir_exists",
-  );
+  return report.conflicts.some((c) => c.kind === "file_exists" || c.kind === "dir_exists");
 }
 
 /** Mensaje legible para un conflicto. */

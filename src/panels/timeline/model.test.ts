@@ -65,7 +65,7 @@ describe("timeline model", () => {
               kind: "possible_secret",
               severity: "critical",
               path: "src/a.ts",
-              message: "Possible secret marker added",
+              message: "Possible secret detected",
             },
           ],
         }),

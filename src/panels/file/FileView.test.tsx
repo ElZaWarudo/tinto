@@ -69,6 +69,7 @@ describe("FileView", () => {
     busStore.resetAll();
     reconciler.reset();
     invokeMock.mockClear();
+    Element.prototype.scrollIntoView = vi.fn();
     worktree = { value: [] };
     fileContent = { encoding: "utf8", content: "a\nb\nc", truncated: false };
     mediaContent = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
@@ -91,6 +92,41 @@ describe("FileView", () => {
     expect(screen.getByText("Inline")).toBeDisabled();
     fireEvent.click(screen.getByText("Hunks"));
     expect(await screen.findByText("code")).toBeInTheDocument();
+  });
+
+  it("shows overview markers for added possible secret lines", async () => {
+    worktree = { value: [fileDiff(PATH, 'api_key = "secret"')] };
+    render(<FileView repo={REPO} path={PATH} />);
+
+    expect(await screen.findByTestId("overview-marker-1")).toBeInTheDocument();
+    expect(screen.getByText('api_key = "secret"').closest(".diff-line")).toHaveClass(
+      "diff-line--signal-critical",
+    );
+  });
+
+  it("prefers backend secret findings for overview markers when present", async () => {
+    act(() =>
+      busStore.applyDelta(
+        delta({
+          revision: 2,
+          secret_findings: [
+            {
+              path: PATH,
+              line: 1,
+              rule_id: "generic-api-key",
+              description: "Possible secret",
+            },
+          ],
+        }),
+      ),
+    );
+    worktree = { value: [fileDiff(PATH, 'const tokenLabel = "public";')] };
+    render(<FileView repo={REPO} path={PATH} />);
+
+    expect(await screen.findByTestId("overview-marker-1")).toBeInTheDocument();
+    expect(screen.getByText('const tokenLabel = "public";').closest(".diff-line")).toHaveClass(
+      "diff-line--signal-critical",
+    );
   });
 
   it("an untracked status file defaults to the diff surface even before its diff loads", async () => {

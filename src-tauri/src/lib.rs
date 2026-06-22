@@ -90,6 +90,9 @@ pub fn run() {
             bus::commands::list_repo_tree,
             bus::commands::set_subscriptions,
             bus::commands::retry_repo,
+            bus::commands::get_gitleaks_setup_status,
+            bus::commands::install_gitleaks,
+            bus::commands::create_repo_gitleaks_config,
             agent_console::commands::start_agent_session,
             agent_console::commands::stop_agent_session,
             agent_console::commands::list_agent_sessions,
@@ -101,6 +104,9 @@ pub fn run() {
             file_ops::commands::copy_within_repo,
             file_ops::commands::move_within_repo,
             file_ops::commands::export_from_repo,
+            file_ops::commands::delete_from_repo,
+            file_ops::commands::restore_deleted_from_repo,
+            file_ops::commands::redo_deleted_from_repo,
             ui_state::get_ui_state,
             ui_state::set_ui_state
         ])

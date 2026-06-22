@@ -57,6 +57,7 @@ describe("passive signal contract types", () => {
       last_activity_ms: 1000,
       error: null,
       metrics: { changed_files: 1, lines_added: 3, lines_removed: 1 },
+      gitleaks_configured: false,
       signals: [
         {
           kind: "sensitive_path",
@@ -65,11 +66,21 @@ describe("passive signal contract types", () => {
           message: "Sensitive filename changed",
         },
       ],
+      secret_findings: [
+        {
+          path: "src/config.ts",
+          line: 12,
+          rule_id: "generic-api-key",
+          description: "Possible secret",
+        },
+      ],
     });
     const delta = JSON.parse(wire) as RepoDelta;
     expect(delta.metrics?.lines_added).toBe(3);
+    expect(delta.gitleaks_configured).toBe(false);
     expect(delta.signals?.[0].kind).toBe("sensitive_path");
     expect(delta.signals?.[0].severity).toBe("warning");
+    expect(delta.secret_findings?.[0].line).toBe(12);
   });
 });
 
@@ -147,9 +158,12 @@ import {
   getBlob,
   agentBinaryAvailable,
   getCommitDiff,
+  getGitleaksSetupStatus,
   getFileContent,
   getMediaContent,
   getWorktreeDiff,
+  installGitleaks,
+  createRepoGitleaksConfig,
   listAgentSessions,
   listRepoTree,
   onAgentSessionOutput,
@@ -290,5 +304,16 @@ describe("RDM-008 client wrappers", () => {
       "tinto://agent-session-change-log",
       expect.any(Function),
     );
+  });
+
+  it("addon wrappers call registered command names", () => {
+    void getGitleaksSetupStatus();
+    expect(invokeMock).toHaveBeenCalledWith("get_gitleaks_setup_status");
+
+    void installGitleaks();
+    expect(invokeMock).toHaveBeenCalledWith("install_gitleaks");
+
+    void createRepoGitleaksConfig("/r/api");
+    expect(invokeMock).toHaveBeenCalledWith("create_repo_gitleaks_config", { repo: "/r/api" });
   });
 });

@@ -1,0 +1,7 @@
+# .gitleaks.toml
+title = "Tinto local scan policy"
+
+[allowlist]
+paths = [
+  "(?i)^(?:\.git|node_modules|dist|build|\.next)/",
+]

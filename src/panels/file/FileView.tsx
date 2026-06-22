@@ -8,12 +8,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getWorktreeDiff } from "../../bus/client";
-import type { FileDiff, RepoDelta } from "../../bus/contract";
-import { busStore, getDiff, getPathSignals, hasComputedDiffs, useBusState } from "../../bus/store";
+import type { FileDiff, RepoDelta, SecretFinding } from "../../bus/contract";
+import {
+  busStore,
+  getDiff,
+  getPathSecretFindings,
+  getPathSignals,
+  hasComputedDiffs,
+  useBusState,
+} from "../../bus/store";
 import { reconciler, useIsLive } from "../../workspace/subscriptions";
 import { SignalBadges } from "../SignalBadges";
 import { DiffView, type DiffMode } from "../diff/DiffView";
 import { FullFileView } from "../diff/FullFileView";
+import type { FileOverviewMarker } from "./FileOverviewRuler";
 import { MediaView } from "./MediaView";
 import { mediaKind } from "./mediaTypes";
 import { MarkdownView } from "./MarkdownView";
@@ -56,10 +64,80 @@ function isMarkdown(path: string): boolean {
   return ext === "md" || ext === "markdown";
 }
 
+function possibleSecretLineMarker(line: string): boolean {
+  const lower = line.toLowerCase();
+  return (
+    (lower.includes("-----begin ") && lower.includes("private key")) ||
+    lower.includes("api_key") ||
+    lower.includes("apikey") ||
+    lower.includes("access_token") ||
+    lower.includes("auth_token") ||
+    lower.includes("secret=") ||
+    lower.includes("secret:") ||
+    lower.includes("token=") ||
+    lower.includes("token:") ||
+    lower.includes("password=") ||
+    lower.includes("password:") ||
+    lower.includes("private_key")
+  );
+}
+
+function secretOverviewMarkers(diff: FileDiff | null | undefined): FileOverviewMarker[] {
+  if (!diff) return [];
+  const markers: FileOverviewMarker[] = [];
+  const seen = new Set<number>();
+  for (const hunk of diff.hunks) {
+    for (const line of hunk.lines) {
+      if (
+        line.kind === "Added" &&
+        line.new_lineno != null &&
+        possibleSecretLineMarker(line.content) &&
+        !seen.has(line.new_lineno)
+      ) {
+        seen.add(line.new_lineno);
+        markers.push({
+          line: line.new_lineno,
+          severity: "critical",
+          label: "Possible secret",
+        });
+      }
+    }
+  }
+  return markers;
+}
+
+function findingsOverviewMarkers(findings: SecretFinding[]): FileOverviewMarker[] {
+  const markers: FileOverviewMarker[] = [];
+  const seen = new Set<number>();
+  for (const finding of findings) {
+    if (seen.has(finding.line)) continue;
+    seen.add(finding.line);
+    markers.push({
+      line: finding.line,
+      severity: "critical",
+      label: "Possible secret",
+    });
+  }
+  return markers;
+}
+
+function maxNewLine(diff: FileDiff | null | undefined): number {
+  if (!diff) return 0;
+  let max = 0;
+  for (const hunk of diff.hunks) {
+    for (const line of hunk.lines) {
+      if (line.new_lineno != null) max = Math.max(max, line.new_lineno);
+    }
+  }
+  return max;
+}
+
 export function FileView({ repo, path }: { repo: string; path: string }) {
   const state = useBusState();
   const live = getDiff(state, repo, path);
+  const repoDelta = state.repos[repo];
   const pathSignals = getPathSignals(state.repos[repo], path);
+  const pathSecretFindings = getPathSecretFindings(repoDelta, path);
   const isLive = useIsLive(repo, path);
   const markdown = isMarkdown(path);
   const media = mediaKind(path);
@@ -106,6 +184,21 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   const computed = hasComputedDiffs(state, repo);
   const diff = computed ? live : (live ?? oneShot);
   const changed = useMemo(() => addedLines(diff), [diff]);
+  const overviewMarkers = useMemo(
+    () =>
+      pathSecretFindings.length > 0
+        ? findingsOverviewMarkers(pathSecretFindings)
+        : secretOverviewMarkers(diff),
+    [diff, pathSecretFindings],
+  );
+  const overviewTotalLines = useMemo(() => {
+    const diffLines = maxNewLine(diff);
+    const findingLines = pathSecretFindings.reduce(
+      (max, finding) => Math.max(max, finding.line),
+      0,
+    );
+    return Math.max(diffLines, findingLines);
+  }, [diff, pathSecretFindings]);
 
   // Rename detection (R11/AE10): a repo diff whose old_path is our path means
   // the file was renamed away — a distinct state from clean/reverted.
@@ -200,10 +293,20 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
           mdView === "rendered" ? (
             <MarkdownView repo={repo} path={path} />
           ) : (
-            <FullFileView repo={repo} path={path} changedLines={changed} />
+            <FullFileView
+              repo={repo}
+              path={path}
+              changedLines={changed}
+              overviewMarkers={overviewMarkers}
+            />
           )
         ) : viewKind === "full" ? (
-          <FullFileView repo={repo} path={path} changedLines={changed} />
+          <FullFileView
+            repo={repo}
+            path={path}
+            changedLines={changed}
+            overviewMarkers={overviewMarkers}
+          />
         ) : loadError ? (
           <div className="file-view__error" data-testid="diff-error">
             <span>
@@ -214,7 +317,12 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
             </button>
           </div>
         ) : diff ? (
-          <DiffView diff={diff} mode={mode} />
+          <DiffView
+            diff={diff}
+            mode={mode}
+            overviewMarkers={overviewMarkers}
+            overviewTotalLines={overviewTotalLines}
+          />
         ) : renamedTo ? (
           <div className="file-view__empty" data-testid="diff-renamed">
             <span>This file was renamed to “{renamedTo}”. Reopen it from the tree.</span>
@@ -236,7 +344,12 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
         ) : (
           // Settled with no diff and nothing in status: the file is clean, so
           // show its normal content rather than an empty "no changes" box.
-          <FullFileView repo={repo} path={path} changedLines={changed} />
+          <FullFileView
+            repo={repo}
+            path={path}
+            changedLines={changed}
+            overviewMarkers={overviewMarkers}
+          />
         )}
       </div>
     </div>

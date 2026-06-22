@@ -29,6 +29,7 @@ import { MetricsPill, SignalBadges } from "./SignalBadges";
 import { WatchedFilesSection } from "./WatchedFilesSection";
 import { FileView } from "./file/FileView";
 import { FileTab } from "./FileTab";
+import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
 import { ProjectExplorer } from "./tree/ProjectExplorer";
 import { useExplorerCollapsed } from "./tree/explorerCollapseState";
 
@@ -177,6 +178,10 @@ function RepoOverview({ repo }: { repo: string }) {
             </button>
           )}
         </div>
+      )}
+
+      {delta.gitleaks_configured === false && (
+        <GitleaksConfigNotice repo={repo} />
       )}
 
       <section className="repo-panel__signals" data-testid="repo-signals">

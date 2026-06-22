@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
   listWb: vi.fn(),
   listSessions: vi.fn(),
+  refreshTree: vi.fn(),
 }));
 
 vi.mock("./client", () => ({
@@ -42,6 +43,12 @@ vi.mock("./client", () => ({
   getWorkbenchSnapshot: () => h.getSnapshot(),
   listWorkbenches: () => h.listWb(),
   listAgentSessions: () => h.listSessions(),
+}));
+
+vi.mock("../workspace/repoTreeStore", () => ({
+  repoTreeStore: {
+    refresh: h.refreshTree,
+  },
 }));
 
 import { useBusConnection } from "./connection";
@@ -92,6 +99,20 @@ describe("useBusConnection", () => {
     await waitFor(() => expect(h.deltaCb).toBeTypeOf("function"));
     act(() => h.deltaCb!(makeDelta("/r/a")));
     expect(busStore.getState().repos["/r/a"]).toBeDefined();
+    expect(h.refreshTree).toHaveBeenCalledWith("/r/a");
+  });
+
+  it("refreshes the tree for filesystem-only event batches", async () => {
+    render(createElement(Probe));
+    await waitFor(() => expect(h.fsCb).toBeTypeOf("function"));
+    act(() => busStore.loadSnapshot([makeDelta("/r/a")], { available: true }));
+    act(() =>
+      h.fsCb!({
+        repo: "/r/a",
+        events: [{ path: ".env", kind: "created", timestamp_ms: 2, size: 4, size_delta: null }],
+      }),
+    );
+    expect(h.refreshTree).toHaveBeenCalledWith("/r/a");
   });
 
   it("unlistens on unmount and drops callbacks fired after (active guard)", async () => {

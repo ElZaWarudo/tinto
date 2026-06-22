@@ -18,6 +18,7 @@ describe("FullFileView", () => {
   beforeEach(() => {
     content = { encoding: "utf8", content: "one\ntwo\n", truncated: false };
     reject = false;
+    Element.prototype.scrollIntoView = vi.fn();
   });
 
   it("renders utf8 content, highlights changed lines, and drops one trailing newline row", async () => {
@@ -57,5 +58,24 @@ describe("FullFileView", () => {
     render(<FullFileView repo="/r/a" path="missing.ts" changedLines={new Set()} />);
 
     expect(await screen.findByTestId("full-error")).toHaveTextContent("Could not load file.");
+  });
+
+  it("renders overview markers and highlights the matching full-file line", async () => {
+    const { container } = render(
+      <FullFileView
+        repo="/r/a"
+        path="src/a.ts"
+        changedLines={new Set()}
+        overviewMarkers={[{ line: 2, severity: "critical", label: "Possible secret" }]}
+      />,
+    );
+
+    expect(await screen.findByTestId("overview-summary")).toHaveTextContent("1");
+    expect(await screen.findByTestId("overview-marker-2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Possible secret, línea 2" })).toBeInTheDocument();
+    expect(screen.getByText("two").closest(".full-file__line")).toHaveClass(
+      "full-file__line--signal-critical",
+    );
+    expect(container.querySelector('[data-line="2"]')).toBeInTheDocument();
   });
 });

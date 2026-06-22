@@ -5,6 +5,7 @@
 // fall back to a placeholder / plain monospace.
 
 import type { DiffHunk, DiffLine, FileDiff } from "../../bus/contract";
+import { FileOverviewRuler, type FileOverviewMarker } from "../file/FileOverviewRuler";
 import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
 import { useLineHighlighter, type RenderLine } from "./lineHighlighter";
 
@@ -18,10 +19,21 @@ function diffSize(diff: FileDiff): number {
 
 const SIGN: Record<DiffLine["kind"], string> = { Added: "+", Removed: "-", Context: " " };
 
-export function DiffView({ diff, mode }: { diff: FileDiff; mode: DiffMode }) {
+export function DiffView({
+  diff,
+  mode,
+  overviewMarkers = [],
+  overviewTotalLines = 0,
+}: {
+  diff: FileDiff;
+  mode: DiffMode;
+  overviewMarkers?: FileOverviewMarker[];
+  overviewTotalLines?: number;
+}) {
   const oversized = diffSize(diff) > MAX_HIGHLIGHT_BYTES;
   const lang = languageFromPath(diff.path);
   const render = useLineHighlighter(lang, !diff.is_binary && !oversized);
+  const markedLines = new Set(overviewMarkers.map((marker) => marker.line));
 
   if (diff.is_binary) {
     return (
@@ -33,6 +45,11 @@ export function DiffView({ diff, mode }: { diff: FileDiff; mode: DiffMode }) {
 
   return (
     <div className={`diff-view diff-view--${mode}`} data-testid="diff-view">
+      <FileOverviewRuler
+        markers={overviewMarkers}
+        totalLines={overviewTotalLines}
+        targetAttribute="data-new-line"
+      />
       {oversized && (
         <div className="diff-view__notice" data-testid="diff-large">
           Large file — syntax highlighting disabled.
@@ -43,9 +60,13 @@ export function DiffView({ diff, mode }: { diff: FileDiff; mode: DiffMode }) {
           No textual changes.
         </div>
       ) : mode === "inline" ? (
-        diff.hunks.map((h, i) => <InlineHunk key={i} hunk={h} render={render} />)
+        diff.hunks.map((h, i) => (
+          <InlineHunk key={i} hunk={h} render={render} markedLines={markedLines} />
+        ))
       ) : (
-        diff.hunks.map((h, i) => <SplitHunk key={i} hunk={h} render={render} />)
+        diff.hunks.map((h, i) => (
+          <SplitHunk key={i} hunk={h} render={render} markedLines={markedLines} />
+        ))
       )}
     </div>
   );
@@ -59,12 +80,32 @@ function HunkHeader({ hunk }: { hunk: DiffHunk }) {
   );
 }
 
-function InlineHunk({ hunk, render }: { hunk: DiffHunk; render: RenderLine }) {
+function lineClass(line: DiffLine, markedLines: Set<number>): string {
+  const classes = [`diff-line`, `diff-line--${line.kind.toLowerCase()}`];
+  if (line.new_lineno != null && markedLines.has(line.new_lineno)) {
+    classes.push("diff-line--signal-critical");
+  }
+  return classes.join(" ");
+}
+
+function InlineHunk({
+  hunk,
+  render,
+  markedLines,
+}: {
+  hunk: DiffHunk;
+  render: RenderLine;
+  markedLines: Set<number>;
+}) {
   return (
     <div className="diff-hunk">
       <HunkHeader hunk={hunk} />
       {hunk.lines.map((l, i) => (
-        <div key={i} className={`diff-line diff-line--${l.kind.toLowerCase()}`}>
+        <div
+          key={i}
+          className={lineClass(l, markedLines)}
+          data-new-line={l.new_lineno ?? undefined}
+        >
           <span className="diff-gutter">{l.old_lineno ?? ""}</span>
           <span className="diff-gutter">{l.new_lineno ?? ""}</span>
           <span className="diff-sign">{SIGN[l.kind]}</span>
@@ -75,7 +116,15 @@ function InlineHunk({ hunk, render }: { hunk: DiffHunk; render: RenderLine }) {
   );
 }
 
-function SplitHunk({ hunk, render }: { hunk: DiffHunk; render: RenderLine }) {
+function SplitHunk({
+  hunk,
+  render,
+  markedLines,
+}: {
+  hunk: DiffHunk;
+  render: RenderLine;
+  markedLines: Set<number>;
+}) {
   // Left = old file slice (context + removed); right = new (context + added).
   const left = hunk.lines.filter((l) => l.kind !== "Added");
   const right = hunk.lines.filter((l) => l.kind !== "Removed");
@@ -85,7 +134,11 @@ function SplitHunk({ hunk, render }: { hunk: DiffHunk; render: RenderLine }) {
       <div className="diff-split">
         <div className="diff-side diff-side--old" data-testid="diff-old">
           {left.map((l, i) => (
-            <div key={i} className={`diff-line diff-line--${l.kind.toLowerCase()}`}>
+            <div
+              key={i}
+              className={lineClass(l, markedLines)}
+              data-new-line={l.new_lineno ?? undefined}
+            >
               <span className="diff-gutter">{l.old_lineno ?? ""}</span>
               <code className="diff-content">{render(l.content)}</code>
             </div>
@@ -93,7 +146,11 @@ function SplitHunk({ hunk, render }: { hunk: DiffHunk; render: RenderLine }) {
         </div>
         <div className="diff-side diff-side--new" data-testid="diff-new">
           {right.map((l, i) => (
-            <div key={i} className={`diff-line diff-line--${l.kind.toLowerCase()}`}>
+            <div
+              key={i}
+              className={lineClass(l, markedLines)}
+              data-new-line={l.new_lineno ?? undefined}
+            >
               <span className="diff-gutter">{l.new_lineno ?? ""}</span>
               <code className="diff-content">{render(l.content)}</code>
             </div>

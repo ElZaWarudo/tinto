@@ -44,9 +44,12 @@ dirs = "6"
 walkdir = "2"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-notification = "2.3.1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
 # start_paused/advance para tests deterministas del debounce (reloj pausado)
 tokio = { version = "1", features = ["macros", "rt", "test-util"] }
-
