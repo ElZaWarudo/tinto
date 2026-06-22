@@ -1,6 +1,6 @@
 ---
 title: ACI-003 Repo Agent Launcher UI
-status: package-review-passed
+status: delivered
 roadmap_item: ACI-003
 origin_roadmap: docs/roadmaps/2026-06-19-002-agent-console-integration.md
 origin_brainstorm: docs/brainstorms/2026-06-20-002-agent-launcher-ui-requirements.md

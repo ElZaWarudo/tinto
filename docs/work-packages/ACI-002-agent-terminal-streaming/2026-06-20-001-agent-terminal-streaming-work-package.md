@@ -1,6 +1,6 @@
 ---
 title: ACI-002 PTY Stream Bridge + Dockable Terminal Panel
-status: package-review-passed
+status: delivered
 roadmap_item: ACI-002
 origin_roadmap: docs/roadmaps/2026-06-19-002-agent-console-integration.md
 origin_brainstorm: docs/brainstorms/2026-06-20-001-agent-terminal-streaming-requirements.md

@@ -2,7 +2,7 @@
 artifact_kind: roadmap
 artifact_path: docs/roadmaps/2026-06-19-002-agent-console-integration.md
 title: Tinto — Agent Console Integration (auto-splitting)
-status: reviewed
+status: delivered
 date: 2026-06-19
 source_docs:
   - tinto-design.md

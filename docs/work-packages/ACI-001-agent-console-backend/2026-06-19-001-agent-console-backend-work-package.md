@@ -1,6 +1,6 @@
 ---
 title: ACI-001 Backend PTY Runtime + Agent Process Lifecycle
-status: review-passed
+status: delivered
 roadmap_item: ACI-001
 origin_roadmap: docs/roadmaps/2026-06-19-002-agent-console-integration.md
 origin_plan: docs/plans/2026-06-19-001-feat-agent-console-backend-plan.md
