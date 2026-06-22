@@ -148,13 +148,14 @@ pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> Com
     }
     command.env_clear();
     for key in SANITIZED_ENV_ALLOWLIST {
+        if *key == "TERM" {
+            continue;
+        }
         if let Some(value) = std::env::var_os(key) {
             command.env(OsStr::new(key), value);
         }
     }
-    if command.get_env("TERM").is_none() {
-        command.env("TERM", "xterm-256color");
-    }
+    command.env("TERM", "xterm-256color");
     command
 }
 

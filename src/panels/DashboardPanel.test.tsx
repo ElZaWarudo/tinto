@@ -140,6 +140,7 @@ describe("DashboardPanel", () => {
     const openAgentTerminal = vi.fn();
     renderDash({ openAgentTerminal });
 
+    await waitFor(() => expect(clientMocks.agentBinaryAvailable).toHaveBeenCalledWith("codex"));
     fireEvent.click(await screen.findByTestId("agent-launch"));
 
     await waitFor(() =>
