@@ -240,3 +240,23 @@ export interface WorkbenchConfig {
   active: string | null;
   workbenches: Workbench[];
 }
+
+// ---- File operations (drag/drop/paste/move) ----
+export type FileConflictKind =
+  | "file_exists"
+  | "dir_exists"
+  | "source_missing"
+  | "overwrite";
+
+export interface FileConflict {
+  /** Destino relativo al repo. */
+  dest_rel: string;
+  kind: FileConflictKind;
+}
+
+export interface CopyResult {
+  /** Paths relativos al repo de los archivos/actualizados. */
+  copied: string[];
+  /** Conflictos detectados (vacío si todo OK). */
+  conflicts: FileConflict[];
+}

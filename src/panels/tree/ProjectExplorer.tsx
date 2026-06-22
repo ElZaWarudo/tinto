@@ -21,6 +21,16 @@ import { fileDock, useRepoDock } from "../../workspace/fileDock";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { FileTreeNode } from "./FileTreeNode";
 import { useExplorerExpanded } from "./explorerCollapseState";
+import { treeClipboard } from "./treeClipboard";
+import { OverwriteConfirmModal } from "../file/OverwriteConfirmModal";
+import {
+  sendFromOs,
+  sendWithinRepo,
+  needsConfirmation,
+  type FileOpReport,
+} from "../file/fileOps";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 interface ContextMenuState {
   node: TreeNode;
@@ -75,6 +85,16 @@ export function ProjectExplorer({
   const delta = state.repos[repo];
   const [expandedDirs, setExpandedDirs] = useExplorerExpanded(repo);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  // Drag/drop + paste state
+  const [draggingNode, setDraggingNode] = useState<TreeNode | null>(null);
+  const [osDraggingOver, setOsDraggingOver] = useState(false);
+  const [treeDropTarget, setTreeDropTarget] = useState<string | null>(null);
+  const [pendingOp, setPendingOp] = useState<{
+    retry: () => Promise<void> | void;
+    report: FileOpReport;
+  } | null>(null);
+  const [osDraggedFiles, setOsDraggedFiles] = useState<string[] | null>(null);
+  const [fileOpError, setFileOpError] = useState<string | null>(null);
 
   // Load on mount; the store keeps it cached (stale-while-revalidate) thereafter.
   useEffect(() => {
@@ -96,6 +116,54 @@ export function ProjectExplorer({
       window.removeEventListener("keydown", onKey);
     };
   }, [menu]);
+
+  // OS-level drag/drop: listen to Tauri's native `onDragDropEvent`.
+  useEffect(() => {
+    if (collapsed) return;
+    let active = true;
+    let unlisten: UnlistenFn | undefined;
+    // En entornos sin runtime Tauri (tests jsdom), getCurrentWebview lanza.
+    // Guardamos el accceso con try/catch para no romper el mount.
+    let webview: ReturnType<typeof getCurrentWebview> | null = null;
+    try {
+      webview = getCurrentWebview();
+    } catch {
+      webview = null;
+    }
+    if (!webview) return;
+    webview
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          setOsDraggingOver(true);
+          if (payload.type === "enter") {
+            setOsDraggedFiles(payload.paths);
+          }
+        } else if (payload.type === "drop") {
+          setOsDraggingOver(false);
+          const paths = payload.paths;
+          setOsDraggedFiles(paths);
+          void handleOsDrop(paths, "");
+        } else if (payload.type === "leave") {
+          setOsDraggingOver(false);
+          setOsDraggedFiles(null);
+        }
+      })
+      .then((un) => {
+        if (!active) {
+          void un();
+          return;
+        }
+        unlisten = un;
+      })
+      .catch(() => {
+        // ignore: webview event unavailable (older Tauri build)
+      });
+    return () => {
+      active = false;
+      if (unlisten) unlisten();
+    };
+  }, [collapsed, repo]);
 
   const nodes = useMemo(() => {
     if (!tree || !delta) return [];
@@ -141,6 +209,105 @@ export function ProjectExplorer({
     closeMenu();
   };
 
+  /** Refresca el árbol para reflejar los cambios recién escritos. */
+  const refreshTree = () => repoTreeStore.refresh(repo);
+
+  /** Procesa el reporte de una operación: si hay conflictos, abre el modal
+   * para confirmar overwrite; si hay error fatal lo muestra; si todo OK,
+   * refresca el árbol. */
+  const processReport = (report: FileOpReport, retry: () => Promise<void> | void) => {
+    if (report.fatalError) {
+      setFileOpError(report.fatalError);
+      return;
+    }
+    if (needsConfirmation(report)) {
+      setPendingOp({ retry, report });
+      return;
+    }
+    refreshTree();
+  };
+
+  /**
+   * Copia archivos del OS a una carpeta del repo. `destDir` es path relativo
+   * al repo ("" = raíz).
+   */
+  const handleOsDrop = async (paths: string[], destDir: string) => {
+    if (!paths.length) return;
+    const report = await sendFromOs({
+      repo,
+      destDir,
+      sources: paths,
+      strategy: "copy",
+      overwrite: false,
+    });
+    processReport(report, () => handleOsDrop(paths, destDir));
+  };
+
+  /**
+   * Copia (drag con Ctrl) o mueve (drag sin Ctrl) archivos dentro del repo
+   * desde el nodo que se está arrastrando a `targetPath` (carpeta destino).
+   */
+  const handleTreeDrop = async (targetPath: string) => {
+    if (!draggingNode) return;
+    if (targetPath === draggingNode.path || targetPath.startsWith(`${draggingNode.path}/`)) {
+      // No mover un directorio dentro de sí mismo.
+      setDraggingNode(null);
+      setTreeDropTarget(null);
+      return;
+    }
+    const report = await sendWithinRepo({
+      repo,
+      sources: [draggingNode.path],
+      destDir: targetPath,
+      strategy: "move",
+      overwrite: false,
+    });
+    setDraggingNode(null);
+    setTreeDropTarget(null);
+    processReport(report, () => {
+      void sendWithinRepo({
+        repo,
+        sources: [draggingNode.path],
+        destDir: targetPath,
+        strategy: "move",
+        overwrite: true,
+      }).then((r) => processReport(r, () => Promise.resolve()));
+    });
+  };
+
+  /** Pega archivos del clipboard interno (Ctrl+C en cualquier nodo) a una
+   * carpeta destino. Soporta copia y corte. */
+  const handlePaste = async (destDir: string) => {
+    const clip = treeClipboard.get();
+    if (!clip) return;
+    const report = await sendWithinRepo({
+      repo,
+      sources: clip.paths,
+      destDir,
+      strategy: clip.mode === "cut" ? "move" : "copy",
+      overwrite: false,
+    });
+    processReport(report, () => {
+      void sendWithinRepo({
+        repo,
+        sources: clip.paths,
+        destDir,
+        strategy: clip.mode === "cut" ? "move" : "copy",
+        overwrite: true,
+      }).then((r) => {
+        processReport(r, () => Promise.resolve());
+        if (clip.mode === "cut") treeClipboard.clear();
+      });
+    });
+  };
+
+  const confirmOverwrite = async () => {
+    if (!pendingOp) return;
+    setPendingOp(null);
+    await pendingOp.retry();
+  };
+  const cancelOverwrite = () => setPendingOp(null);
+
   if (collapsed) {
     return (
       <div
@@ -162,7 +329,40 @@ export function ProjectExplorer({
   }
 
   return (
-    <div className="project-explorer" data-testid={`project-explorer-${repo}`}>
+    <div
+      className="project-explorer"
+      data-testid={`project-explorer-${repo}`}
+      onKeyDown={(event) => {
+        const ctrl = event.ctrlKey || event.metaKey;
+        if (!ctrl) return;
+        const key = event.key.toLowerCase();
+        if (key === "c" && active) {
+          event.preventDefault();
+          treeClipboard.copy(repo, [active]);
+        } else if (key === "x" && active) {
+          event.preventDefault();
+          treeClipboard.cut(repo, [active]);
+        } else if (key === "v") {
+          event.preventDefault();
+          // Pegar al raíz del repositorio.
+          void handlePaste("");
+        }
+      }}
+      onDragOver={(event) => {
+        // Solo previene default si NO viene del OS (el OS se maneja via
+        // onDragDropEvent). Para HTML5 drag dentro del árbol, es necesario
+        // para que onDrop dispare.
+        if (draggingNode) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (draggingNode) {
+          event.preventDefault();
+          // Drop al raíz del repo (sin target folder específico).
+          void handleTreeDrop("");
+        }
+      }}
+      tabIndex={0}
+    >
       <div className="project-explorer__head">
         <span className="project-explorer__title">{busStore.displayName(repo)}</span>
         {onToggleCollapse && (
@@ -178,7 +378,10 @@ export function ProjectExplorer({
           </button>
         )}
       </div>
-      <div className="project-explorer__body">
+      <div
+        className={`project-explorer__body${osDraggingOver ? " project-explorer--dragging-active" : ""}`}
+        data-testid={`project-explorer-body-${repo}`}
+      >
         {error && !tree ? (
           <div className="tree-files__msg">Could not load files.</div>
         ) : !tree && loading ? (
@@ -205,6 +408,14 @@ export function ProjectExplorer({
                   onToggleDir={toggleDir}
                   onOpen={(path, pin) => fileDock.openFile(repo, path, pin)}
                   onContextMenu={openContextMenu}
+                  onTreeDragStart={(node) => setDraggingNode(node)}
+                  onTreeDragEnd={() => {
+                    setDraggingNode(null);
+                    setTreeDropTarget(null);
+                  }}
+                  onTreeDrop={(targetPath) => void handleTreeDrop(targetPath)}
+                  dropTargetPath={treeDropTarget}
+                  onPasteInto={(destDir) => void handlePaste(destDir)}
                 />
               ))}
             {tree?.truncated && (
@@ -214,7 +425,37 @@ export function ProjectExplorer({
             )}
           </>
         )}
+        {osDraggingOver && (
+          <div className="project-explorer__drop-overlay" data-testid={`project-explorer-drop-overlay-${repo}`}>
+            <span className="project-explorer__drop-text">
+              Soltar para copiar al repo
+              {osDraggedFiles && osDraggedFiles.length > 0
+                ? ` (${osDraggedFiles.length} archivos)`
+                : ""}
+            </span>
+          </div>
+        )}
       </div>
+      {fileOpError && (
+        <div className="tree-files__msg tree-files__msg--error" role="alert" data-testid="file-op-error">
+          {fileOpError}
+          <button
+            type="button"
+            className="tree-files__msg-close"
+            onClick={() => setFileOpError(null)}
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      {pendingOp && (
+        <OverwriteConfirmModal
+          report={pendingOp.report}
+          onConfirm={() => void confirmOverwrite()}
+          onCancel={cancelOverwrite}
+        />
+      )}
       {menu && delta && (
         <TreeContextMenu
           repo={repo}

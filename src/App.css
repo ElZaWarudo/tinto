@@ -2340,3 +2340,156 @@ a:focus-visible {
 .tree-file--active:hover {
   background: var(--accent-soft);
 }
+/* ---- File operations: drag/drop + paste + conflict modal ---- */
+.file-op-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.file-op-modal {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 18px 20px 14px;
+  min-width: 360px;
+  max-width: 520px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.file-op-modal__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.file-op-modal__body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.file-op-modal__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.file-op-modal__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.file-op-modal__item:last-child {
+  border-bottom: none;
+}
+.file-op-modal__kind {
+  flex: none;
+  width: 28px;
+  padding: 1px 4px;
+  font-size: 10px;
+  text-align: center;
+  border-radius: 3px;
+  background: var(--border);
+  color: var(--fg);
+}
+.file-op-modal__path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, "Cascadia Code", "SF Mono", monospace);
+}
+.file-op-modal__warning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--warn);
+}
+.file-op-modal__warning--dir {
+  color: var(--danger);
+}
+.file-op-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.file-op-modal__button {
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+.file-op-modal__button:hover {
+  background: var(--hover);
+}
+.file-op-modal__button--cancel {
+  color: var(--fg-muted);
+}
+.file-op-modal__button--confirm {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+.file-op-modal__button--confirm:hover {
+  filter: brightness(1.1);
+}
+.file-op-modal__hint {
+  margin: 0;
+  font-size: 10px;
+  color: var(--fg-muted);
+  text-align: right;
+}
+
+/* Drop zones for OS drag-into and within-tree reordering. */
+.tree-dir__row--drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--accent-soft) !important;
+}
+.tree-dir__row--drop-target-hover {
+  background: rgba(78, 201, 176, 0.22) !important;
+}
+.project-explorer--dragging-active {
+  position: relative;
+}
+.project-explorer__drop-overlay {
+  position: absolute;
+  inset: 24px 0 0 0;
+  border: 2px dashed var(--accent);
+  border-radius: 6px;
+  margin: 4px;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-fg);
+  font-size: 13px;
+  font-weight: 500;
+  background: rgba(78, 201, 176, 0.1);
+}
+.project-explorer__drop-text {
+  pointer-events: none;
+}
+.tree-file--dragging {
+  opacity: 0.4;
+}
+.tree-file--selected {
+  background: var(--accent-soft);
+}

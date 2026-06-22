@@ -1,5 +1,6 @@
 pub mod agent_console;
 pub mod bus;
+pub mod file_ops;
 pub mod git;
 pub mod paths;
 pub mod ui_state;
@@ -96,6 +97,10 @@ pub fn run() {
             agent_console::commands::write_agent_session_input,
             agent_console::commands::resize_agent_session,
             agent_console::commands::revert_session,
+            file_ops::commands::copy_to_repo,
+            file_ops::commands::copy_within_repo,
+            file_ops::commands::move_within_repo,
+            file_ops::commands::export_from_repo,
             ui_state::get_ui_state,
             ui_state::set_ui_state
         ])

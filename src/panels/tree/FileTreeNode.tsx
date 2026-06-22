@@ -417,6 +417,11 @@ export function FileTreeNode({
   onToggleDir,
   onOpen,
   onContextMenu,
+  onTreeDragStart,
+  onTreeDragEnd,
+  onTreeDrop,
+  dropTargetPath,
+  onPasteInto,
 }: {
   node: TreeNode;
   delta: RepoDelta;
@@ -426,6 +431,11 @@ export function FileTreeNode({
   onToggleDir?: (path: string) => void;
   onOpen: (path: string, pin: boolean) => void;
   onContextMenu?: (event: MouseEvent, node: TreeNode) => void;
+  onTreeDragStart?: (node: TreeNode) => void;
+  onTreeDragEnd?: () => void;
+  onTreeDrop?: (targetPath: string) => void;
+  dropTargetPath?: string | null;
+  onPasteInto?: (destDirPath: string) => void;
 }) {
   const [localOpen, setLocalOpen] = useState(false); // fallback for standalone use
   const open = expandedDirs ? expandedDirs.has(node.path) : localOpen;
@@ -436,13 +446,41 @@ export function FileTreeNode({
   };
 
   if (node.isDir) {
-    const dirClass = node.hasChanges ? "tree-dir__row tree-dir__row--changed" : "tree-dir__row";
+    const dirClassBase = node.hasChanges
+      ? "tree-dir__row tree-dir__row--changed"
+      : "tree-dir__row";
+    const isDropTarget = dropTargetPath === node.path;
+    const dirClass = isDropTarget
+      ? `${dirClassBase} tree-dir__row--drop-target tree-dir__row--drop-target-hover`
+      : dirClassBase;
     return (
       <div className="tree-dir">
         <button
           className={dirClass}
           type="button"
           style={pad}
+          draggable={!!onTreeDragStart}
+          onDragStart={() => onTreeDragStart?.(node)}
+          onDragEnd={() => onTreeDragEnd?.()}
+          onDragOver={(event) => {
+            if (onTreeDrop) {
+              event.preventDefault();
+            }
+          }}
+          onDrop={(event) => {
+            if (onTreeDrop) {
+              event.preventDefault();
+              event.stopPropagation();
+              onTreeDrop(node.path);
+            }
+          }}
+          onPaste={(event) => {
+            // onPaste del webview: los archivos del clipboard del navegador no
+            // traen paths del SO, así que delegamos al clipboard interno
+            // (Ctrl+C dentro del árbol) en lugar de usarlo aquí.
+            // (Ctrl+V en la carpeta se maneja vía keydown abajo.)
+            void event;
+          }}
           onClick={toggleDir}
           onContextMenu={(event) => onContextMenu?.(event, node)}
         >
@@ -473,6 +511,11 @@ export function FileTreeNode({
               onToggleDir={onToggleDir}
               onOpen={onOpen}
               onContextMenu={onContextMenu}
+              onTreeDragStart={onTreeDragStart}
+              onTreeDragEnd={onTreeDragEnd}
+              onTreeDrop={onTreeDrop}
+              dropTargetPath={dropTargetPath}
+              onPasteInto={onPasteInto}
             />
           ))}
       </div>
@@ -491,6 +534,9 @@ export function FileTreeNode({
       role="button"
       tabIndex={0}
       data-testid={`tree-file-${node.path}`}
+      draggable={!!onTreeDragStart}
+      onDragStart={() => onTreeDragStart?.(node)}
+      onDragEnd={() => onTreeDragEnd?.()}
       onClick={() => onOpen(node.path, false)}
       onDoubleClick={() => onOpen(node.path, true)}
       onContextMenu={(event) => onContextMenu?.(event, node)}

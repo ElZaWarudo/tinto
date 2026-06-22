@@ -30,7 +30,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(category: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(category: &str, message: impl Into<String>) -> Self {
         Self {
             category: category.into(),
             message: message.into(),
@@ -50,7 +50,7 @@ impl From<GitError> for CommandError {
 /// repos montados: `resolve_within` contiene el path *dentro* del repo, pero
 /// el repo en sí debe estar acotado al workbench (si no, un frontend
 /// comprometido podría leer cualquier ruta del disco con `repo=/`).
-async fn ensure_known(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
+pub(crate) async fn ensure_known(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
     let canon = repo
         .canonicalize()
         .map_err(|_| CommandError::new("repository-not-found", "el repo no existe"))?;

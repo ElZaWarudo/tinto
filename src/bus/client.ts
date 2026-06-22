@@ -15,6 +15,7 @@ import {
   type AgentSessionChangeLog,
   type AgentSessionOutput,
   type AgentSession,
+  type CopyResult,
   type FileContent,
   type FileDiff,
   type FsEventBatch,
@@ -105,6 +106,52 @@ export const listRepoTree = (repo: string) => invoke<RepoTree>("list_repo_tree",
 
 export const setSubscriptions = (targets: SubscriptionTarget[]) =>
   invoke("set_subscriptions", { targets });
+
+// ---- File operations (drag/drop/paste/move) ----
+export const copyToRepo = (
+  repo: string,
+  destDir: string,
+  sources: string[],
+  overwrite: boolean,
+) =>
+  invoke<CopyResult>("copy_to_repo", {
+    repo,
+    destDir,
+    sources,
+    overwrite,
+  });
+
+export const copyWithinRepo = (
+  repo: string,
+  sources: string[],
+  destDir: string,
+  overwrite: boolean,
+) =>
+  invoke<CopyResult>("copy_within_repo", {
+    repo,
+    sources,
+    destDir,
+    overwrite,
+  });
+
+export const moveWithinRepo = (
+  repo: string,
+  sources: string[],
+  destDir: string,
+  overwrite: boolean,
+) =>
+  invoke<CopyResult>("move_within_repo", {
+    repo,
+    sources,
+    destDir,
+    overwrite,
+  });
+
+export const exportFromRepo = (
+  repo: string,
+  sources: string[],
+  destDir: string,
+) => invoke("export_from_repo", { repo, sources, destDir });
 
 // ---- Event listeners (StrictMode-safe; see KTD6) ----
 // Each returns a promise resolving to an unlisten fn. Callers attach in an
