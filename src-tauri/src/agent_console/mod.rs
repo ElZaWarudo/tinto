@@ -17,10 +17,14 @@ use std::{
 };
 
 use crate::bus::contract::{AgentSession, AgentSessionError, AgentSessionLimits};
-use checkpoint::{create_checkpoint, CheckpointConfig};
+use crate::wsl_agent::{
+    launcher::request_ubuntu_agent,
+    protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
+};
+use checkpoint::{create_checkpoint, CheckpointConfig, CheckpointRecord};
 use pty::{AgentProcessFactory, PortablePtyFactory};
-use session::AgentSessionRecord;
-use validation::resolve_agent_binary;
+use session::{AgentSessionRecord, CheckpointBackend};
+use validation::{ensure_wsl_agent_binary, resolve_agent_binary, validate_agent_type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConsoleError {
@@ -147,8 +151,72 @@ impl AgentSessionRegistry {
         let checkpoint = create_checkpoint(&repo, &id, started_at_ms, &self.checkpoint_config)?;
         let mut process = self.process_factory.spawn_agent(&binary_path, &repo)?;
         let output_reader = process.take_output_reader();
-        let mut session =
-            AgentSessionRecord::new(id.clone(), repo, agent_type, started_at_ms, checkpoint);
+        let mut session = AgentSessionRecord::new(
+            id.clone(),
+            repo,
+            agent_type,
+            started_at_ms,
+            Some(checkpoint),
+            CheckpointBackend::Local,
+        );
+        session.start(process)?;
+        self.sessions.insert(id.clone(), session);
+        Ok(StartedAgentSession { id, output_reader })
+    }
+
+    pub fn start_wsl_session_with_output(
+        &mut self,
+        repo: PathBuf,
+        distro: String,
+        agent_type: String,
+    ) -> Result<StartedAgentSession, AgentConsoleError> {
+        self.start_wsl_session_with_output_inner(repo, distro, agent_type, true, true)
+    }
+
+    #[cfg(test)]
+    fn start_wsl_session_with_output_for_test(
+        &mut self,
+        repo: PathBuf,
+        distro: String,
+        agent_type: String,
+    ) -> Result<StartedAgentSession, AgentConsoleError> {
+        self.start_wsl_session_with_output_inner(repo, distro, agent_type, false, false)
+    }
+
+    fn start_wsl_session_with_output_inner(
+        &mut self,
+        repo: PathBuf,
+        distro: String,
+        agent_type: String,
+        check_binary: bool,
+        create_remote_checkpoint: bool,
+    ) -> Result<StartedAgentSession, AgentConsoleError> {
+        validate_wsl_repo(&repo)?;
+        validate_agent_type(&agent_type)?;
+        if check_binary {
+            ensure_wsl_agent_binary(&distro, &agent_type)?;
+        }
+        self.refresh_session_statuses()?;
+        self.ensure_capacity(&repo)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let started_at_ms = now_ms();
+        let checkpoint = if create_remote_checkpoint {
+            Some(create_wsl_checkpoint(&repo, &id, started_at_ms)?)
+        } else {
+            None
+        };
+        let mut process = self
+            .process_factory
+            .spawn_wsl_agent(&agent_type, &distro, &repo)?;
+        let output_reader = process.take_output_reader();
+        let mut session = AgentSessionRecord::new(
+            id.clone(),
+            repo,
+            agent_type,
+            started_at_ms,
+            checkpoint,
+            CheckpointBackend::Wsl,
+        );
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession { id, output_reader })
@@ -320,6 +388,51 @@ fn canonical_repo(repo: &Path) -> Result<PathBuf, AgentConsoleError> {
     }
 }
 
+fn validate_wsl_repo(repo: &Path) -> Result<(), AgentConsoleError> {
+    let text = repo.to_string_lossy();
+    if text.is_empty() || !text.starts_with('/') || text.contains('\\') {
+        return Err(AgentConsoleError::repo_not_found());
+    }
+    if text.split('/').any(|part| part == "." || part == "..") {
+        return Err(AgentConsoleError::new(
+            "path_traversal",
+            "el path WSL no puede contener navegacion",
+        ));
+    }
+    Ok(())
+}
+
+fn create_wsl_checkpoint(
+    repo: &Path,
+    session_id: &str,
+    created_at_ms: u64,
+) -> Result<CheckpointRecord, AgentConsoleError> {
+    let response = request_ubuntu_agent(&AgentRequest::AgentCheckpointCreate {
+        protocol_version: PROTOCOL_VERSION,
+        repo: repo.to_path_buf(),
+        allowed_repos: vec![repo.to_path_buf()],
+        session_id: session_id.into(),
+        created_at_ms,
+    })
+    .map_err(map_wsl_agent_error)?;
+
+    match response {
+        AgentResponse::AgentCheckpoint { checkpoint } => Ok(checkpoint),
+        AgentResponse::Error { category, message } => {
+            Err(AgentConsoleError::new(category, message))
+        }
+        _ => Err(unexpected_wsl_response()),
+    }
+}
+
+fn map_wsl_agent_error(error: crate::wsl_agent::protocol::AgentError) -> AgentConsoleError {
+    AgentConsoleError::new(error.safe_category(), error.message)
+}
+
+fn unexpected_wsl_response() -> AgentConsoleError {
+    AgentConsoleError::new("malformed_response", "respuesta inesperada del agente WSL")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +464,32 @@ mod tests {
             _working_dir: &Path,
         ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
             self.spawned.lock().unwrap().push(binary_path.to_path_buf());
+            let pid = self.next_pid.fetch_add(1, Ordering::SeqCst) as u32 + 100;
+            Ok(Box::new(FakeProcess {
+                pid,
+                exit_code: None,
+                killed: false,
+                writes: Arc::clone(&self.writes),
+                resizes: Arc::clone(&self.resizes),
+                output: self
+                    .output
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .map(|bytes| Box::new(Cursor::new(bytes)) as Box<dyn Read + Send>),
+            }))
+        }
+
+        fn spawn_wsl_agent(
+            &self,
+            agent_type: &str,
+            distro: &str,
+            working_dir: &Path,
+        ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+            self.spawned.lock().unwrap().push(PathBuf::from(format!(
+                "{distro}:{agent_type}:{}",
+                working_dir.display()
+            )));
             let pid = self.next_pid.fetch_add(1, Ordering::SeqCst) as u32 + 100;
             Ok(Box::new(FakeProcess {
                 pid,
@@ -662,5 +801,45 @@ mod tests {
         registry.cleanup_all();
 
         assert!(registry.list_sessions().is_empty());
+    }
+
+    #[test]
+    fn registry_starts_wsl_session_without_fake_checkpoint() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory.clone());
+
+        let started = registry
+            .start_wsl_session_with_output_for_test(
+                PathBuf::from("/home/me/repo"),
+                "Ubuntu".into(),
+                "codex".into(),
+            )
+            .unwrap();
+
+        let session = registry.get_session(&started.id).unwrap();
+        assert_eq!(session.repo, PathBuf::from("/home/me/repo"));
+        assert_eq!(session.checkpoint, None);
+        assert_eq!(
+            factory.spawned.lock().unwrap().as_slice(),
+            &[PathBuf::from("Ubuntu:codex:/home/me/repo")]
+        );
+    }
+
+    #[test]
+    fn registry_rejects_wsl_revert_without_checkpoint() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let started = registry
+            .start_wsl_session_with_output_for_test(
+                PathBuf::from("/home/me/repo"),
+                "Ubuntu".into(),
+                "codex".into(),
+            )
+            .unwrap();
+        registry.stop_session(&started.id).unwrap();
+
+        let error = registry.revert_session(&started.id, true).unwrap_err();
+
+        assert_eq!(error.category, "checkpoint_unsupported");
     }
 }

@@ -8,7 +8,7 @@ use std::{
 
 use git2::{Repository, StatusOptions};
 use ignore::WalkBuilder;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::bus::contract::{
@@ -38,7 +38,7 @@ impl Default for CheckpointConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CheckpointRecord {
     pub contract: AgentSessionCheckpoint,
     pub repo: PathBuf,

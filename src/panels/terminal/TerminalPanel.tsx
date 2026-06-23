@@ -139,6 +139,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const canRevert =
     !!session &&
+    !!session.checkpoint &&
     session.status !== "running" &&
     session.status !== "starting" &&
     session.status !== "reverted";
@@ -190,6 +191,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           title={
             session?.status === "reverted"
               ? "Session already reverted"
+              : session && !session.checkpoint
+                ? "This session has no reversible checkpoint"
               : canRevert
                 ? "Revert this agent session"
                 : "Stop the session before reverting"

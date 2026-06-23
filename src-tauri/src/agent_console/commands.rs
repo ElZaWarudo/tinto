@@ -16,8 +16,12 @@ use crate::bus::{
     },
     BusHandle, RepoResolveError,
 };
+use crate::workbench::RepoSource;
 
-use super::{validation::resolve_agent_binary, AgentConsoleError, AgentSessionRegistry};
+use super::{
+    validation::{resolve_agent_binary, wsl_agent_binary_available},
+    AgentConsoleError, AgentSessionRegistry,
+};
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -48,10 +52,19 @@ pub async fn start_agent_session(
     repo: PathBuf,
     agent_type: String,
 ) -> Result<String, CommandError> {
-    let repo = ensure_known_agent_repo(&bus, &repo).await?;
+    let resolved = ensure_known_agent_repo(&bus, &repo).await?;
     let started = {
         let mut registry = lock_registry(&registry)?;
-        registry.start_session_with_output(repo, agent_type)?
+        match resolved.source {
+            RepoSource::Local => registry.start_session_with_output(resolved.path, agent_type)?,
+            RepoSource::Wsl => registry.start_wsl_session_with_output(
+                resolved.path,
+                resolved
+                    .distro
+                    .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?,
+                agent_type,
+            )?,
+        }
     };
     if let Some(output_reader) = started.output_reader {
         spawn_output_reader(app, started.id.clone(), output_reader);
@@ -88,6 +101,26 @@ pub fn agent_binary_available(agent_type: String) -> Result<bool, CommandError> 
         Ok(_) => Ok(true),
         Err(error) if error.category == "binary_not_found" => Ok(false),
         Err(error) => Err(error.into()),
+    }
+}
+
+#[tauri::command]
+pub async fn agent_binary_available_for_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    agent_type: String,
+) -> Result<bool, CommandError> {
+    let resolved = ensure_known_agent_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => agent_binary_available(agent_type),
+        RepoSource::Wsl => wsl_agent_binary_available(
+            resolved
+                .distro
+                .as_deref()
+                .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?,
+            &agent_type,
+        )
+        .map_err(Into::into),
     }
 }
 
@@ -134,8 +167,11 @@ pub fn revert_session(
     Ok(session)
 }
 
-async fn ensure_known_agent_repo(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
-    bus.resolve_repo(repo.to_path_buf())
+async fn ensure_known_agent_repo(
+    bus: &BusHandle,
+    repo: &Path,
+) -> Result<crate::bus::ResolvedRepo, CommandError> {
+    bus.resolve_repo_identity(repo.to_path_buf())
         .await
         .map_err(map_repo_resolve_error)
 }

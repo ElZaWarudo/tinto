@@ -24,6 +24,19 @@ pub trait AgentProcessFactory: Send + Sync {
         binary_path: &Path,
         working_dir: &Path,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError>;
+
+    fn spawn_wsl_agent(
+        &self,
+        agent_type: &str,
+        distro: &str,
+        working_dir: &Path,
+    ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        let _ = (agent_type, distro, working_dir);
+        Err(AgentConsoleError::new(
+            "wsl_agent_unsupported",
+            "este runtime no soporta sesiones WSL",
+        ))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -37,6 +50,19 @@ impl AgentProcessFactory for PortablePtyFactory {
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         Ok(Box::new(PtyHandle::spawn(binary_path, working_dir)?))
     }
+
+    fn spawn_wsl_agent(
+        &self,
+        agent_type: &str,
+        distro: &str,
+        working_dir: &Path,
+    ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        Ok(Box::new(PtyHandle::spawn_wsl_agent(
+            agent_type,
+            distro,
+            working_dir,
+        )?))
+    }
 }
 
 pub struct PtyHandle {
@@ -48,11 +74,22 @@ pub struct PtyHandle {
 
 impl PtyHandle {
     pub fn spawn(binary_path: &Path, working_dir: &Path) -> Result<Self, AgentConsoleError> {
+        Self::spawn_command_builder(build_agent_command(binary_path, working_dir))
+    }
+
+    pub fn spawn_wsl_agent(
+        agent_type: &str,
+        distro: &str,
+        working_dir: &Path,
+    ) -> Result<Self, AgentConsoleError> {
+        Self::spawn_command_builder(build_wsl_agent_command(distro, agent_type, working_dir)?)
+    }
+
+    fn spawn_command_builder(command: CommandBuilder) -> Result<Self, AgentConsoleError> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize::default())
             .map_err(|e| spawn_error(e.to_string()))?;
-        let command = build_agent_command(binary_path, working_dir);
         let child = pair
             .slave
             .spawn_command(command)
@@ -146,6 +183,59 @@ pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> Com
     for arg in default_agent_args(binary_path) {
         command.arg(arg);
     }
+    apply_sanitized_env(&mut command);
+    command
+}
+
+pub(crate) fn build_wsl_agent_command(
+    distro: &str,
+    agent_type: &str,
+    working_dir: &Path,
+) -> Result<CommandBuilder, AgentConsoleError> {
+    if distro.trim().is_empty() {
+        return Err(AgentConsoleError::new(
+            "missing_distro",
+            "no se configuro la distro WSL",
+        ));
+    }
+    let mut command = CommandBuilder::new("wsl.exe");
+    command.arg("-d");
+    command.arg(distro);
+    command.arg("--");
+    command.arg("sh");
+    command.arg("-lc");
+    command.arg("cd \"$1\" || exit 127; shift; exec \"$@\"");
+    command.arg("tinto-agent-console");
+    command.arg(working_dir.as_os_str());
+    command.arg(agent_type);
+    for arg in default_agent_args_for_name(agent_type) {
+        command.arg(arg);
+    }
+    apply_sanitized_env(&mut command);
+    Ok(command)
+}
+
+fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
+    if binary_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("codex"))
+    {
+        default_agent_args_for_name("codex")
+    } else {
+        &[]
+    }
+}
+
+fn default_agent_args_for_name(agent_type: &str) -> &'static [&'static str] {
+    if agent_type.eq_ignore_ascii_case("codex") {
+        &["--no-alt-screen"]
+    } else {
+        &[]
+    }
+}
+
+fn apply_sanitized_env(command: &mut CommandBuilder) {
     command.env_clear();
     for key in SANITIZED_ENV_ALLOWLIST {
         if *key == "TERM" {
@@ -156,19 +246,6 @@ pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> Com
         }
     }
     command.env("TERM", "xterm-256color");
-    command
-}
-
-fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
-    if binary_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .is_some_and(|stem| stem.eq_ignore_ascii_case("codex"))
-    {
-        &["--no-alt-screen"]
-    } else {
-        &[]
-    }
 }
 
 const SANITIZED_ENV_ALLOWLIST: &[&str] = &[
@@ -288,5 +365,30 @@ mod tests {
             let error = kill_process_tree(123).unwrap_err();
             assert_eq!(error.category, "process_tree_kill_unsupported");
         }
+    }
+
+    #[test]
+    fn build_wsl_agent_command_passes_repo_and_agent_as_argv() {
+        let command =
+            build_wsl_agent_command("Ubuntu", "codex", Path::new("/home/me/repo")).unwrap();
+
+        assert_eq!(
+            command.get_argv(),
+            &[
+                OsString::from("wsl.exe"),
+                OsString::from("-d"),
+                OsString::from("Ubuntu"),
+                OsString::from("--"),
+                OsString::from("sh"),
+                OsString::from("-lc"),
+                OsString::from("cd \"$1\" || exit 127; shift; exec \"$@\""),
+                OsString::from("tinto-agent-console"),
+                OsString::from("/home/me/repo"),
+                OsString::from("codex"),
+                OsString::from("--no-alt-screen"),
+            ]
+        );
+        assert!(command.get_cwd().is_none());
+        assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
     }
 }

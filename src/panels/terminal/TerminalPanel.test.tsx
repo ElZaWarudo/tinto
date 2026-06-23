@@ -233,4 +233,33 @@ describe("TerminalPanel", () => {
     expect(confirmMock).toHaveBeenCalled();
     expect(revertSessionMock).toHaveBeenCalledWith("sess-1", true);
   });
+
+  it("disables revert when a completed session has no checkpoint", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        repo: "/home/me/repo",
+        agent_type: "codex",
+        status: "completed",
+        pid: null,
+        started_at_ms: 1,
+        ended_at_ms: 2,
+        exit_code: 0,
+        error: null,
+        checkpoint: null,
+        change_log: [],
+        reverted_at_ms: null,
+        active_sessions: 0,
+        age_ms: 1,
+        output_bytes_per_second: null,
+      },
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", agentType: "codex" })} />);
+
+    const button = await screen.findByRole("button", { name: "Revert" });
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "This session has no reversible checkpoint");
+  });
 });

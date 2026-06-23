@@ -3,6 +3,10 @@ use std::path::PathBuf;
 use crate::bus::contract::{
     AgentSession, AgentSessionChange, AgentSessionError, AgentSessionStatus,
 };
+use crate::wsl_agent::{
+    launcher::request_ubuntu_agent,
+    protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
+};
 
 use super::{
     checkpoint::{revert_checkpoint, scan_change_log, CheckpointRecord},
@@ -21,9 +25,16 @@ pub struct AgentSessionRecord {
     exit_code: Option<i32>,
     error: Option<AgentConsoleError>,
     process: Option<Box<dyn AgentProcess>>,
-    checkpoint: CheckpointRecord,
+    checkpoint: Option<CheckpointRecord>,
+    checkpoint_backend: CheckpointBackend,
     change_log: Vec<AgentSessionChange>,
     reverted_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointBackend {
+    Local,
+    Wsl,
 }
 
 impl AgentSessionRecord {
@@ -32,7 +43,8 @@ impl AgentSessionRecord {
         repo: PathBuf,
         agent_type: String,
         started_at_ms: u64,
-        checkpoint: CheckpointRecord,
+        checkpoint: Option<CheckpointRecord>,
+        checkpoint_backend: CheckpointBackend,
     ) -> Self {
         Self {
             id,
@@ -46,6 +58,7 @@ impl AgentSessionRecord {
             error: None,
             process: None,
             checkpoint,
+            checkpoint_backend,
             change_log: Vec::new(),
             reverted_at_ms: None,
         }
@@ -164,7 +177,16 @@ impl AgentSessionRecord {
             return Ok(());
         }
         self.refresh_change_log()?;
-        revert_checkpoint(&self.checkpoint)?;
+        let checkpoint = self.checkpoint.as_ref().ok_or_else(|| {
+            AgentConsoleError::new(
+                "checkpoint_unsupported",
+                "esta sesion no tiene checkpoint reversible",
+            )
+        })?;
+        match self.checkpoint_backend {
+            CheckpointBackend::Local => revert_checkpoint(checkpoint)?,
+            CheckpointBackend::Wsl => revert_wsl_checkpoint(checkpoint)?,
+        }
         self.reverted_at_ms = Some(now_ms());
         self.status = AgentSessionStatus::Reverted;
         self.refresh_change_log()?;
@@ -172,7 +194,11 @@ impl AgentSessionRecord {
     }
 
     fn refresh_change_log(&mut self) -> Result<(), AgentConsoleError> {
-        self.change_log = scan_change_log(&self.checkpoint, now_ms())?;
+        self.change_log = match (self.checkpoint.as_ref(), self.checkpoint_backend) {
+            (Some(checkpoint), CheckpointBackend::Local) => scan_change_log(checkpoint, now_ms())?,
+            (Some(checkpoint), CheckpointBackend::Wsl) => scan_wsl_change_log(checkpoint)?,
+            (None, _) => Vec::new(),
+        };
         Ok(())
     }
 
@@ -214,7 +240,10 @@ impl AgentSessionRecord {
             ended_at_ms: self.ended_at_ms,
             exit_code: self.exit_code,
             error: self.error.clone().map(AgentSessionError::from),
-            checkpoint: Some(self.checkpoint.contract.clone()),
+            checkpoint: self
+                .checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.contract.clone()),
             change_log: self.change_log.clone(),
             reverted_at_ms: self.reverted_at_ms,
             active_sessions,
@@ -222,6 +251,51 @@ impl AgentSessionRecord {
             output_bytes_per_second: None,
         }
     }
+}
+
+fn scan_wsl_change_log(
+    checkpoint: &CheckpointRecord,
+) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    let response = request_ubuntu_agent(&AgentRequest::AgentCheckpointScan {
+        protocol_version: PROTOCOL_VERSION,
+        allowed_repos: vec![checkpoint.repo.clone()],
+        checkpoint: checkpoint.clone(),
+        timestamp_ms: now_ms(),
+    })
+    .map_err(map_wsl_agent_error)?;
+
+    match response {
+        AgentResponse::AgentChangeLog { changes } => Ok(changes),
+        AgentResponse::Error { category, message } => {
+            Err(AgentConsoleError::new(category, message))
+        }
+        _ => Err(unexpected_wsl_response()),
+    }
+}
+
+fn revert_wsl_checkpoint(checkpoint: &CheckpointRecord) -> Result<(), AgentConsoleError> {
+    let response = request_ubuntu_agent(&AgentRequest::AgentCheckpointRevert {
+        protocol_version: PROTOCOL_VERSION,
+        allowed_repos: vec![checkpoint.repo.clone()],
+        checkpoint: checkpoint.clone(),
+    })
+    .map_err(map_wsl_agent_error)?;
+
+    match response {
+        AgentResponse::Unit => Ok(()),
+        AgentResponse::Error { category, message } => {
+            Err(AgentConsoleError::new(category, message))
+        }
+        _ => Err(unexpected_wsl_response()),
+    }
+}
+
+fn map_wsl_agent_error(error: crate::wsl_agent::protocol::AgentError) -> AgentConsoleError {
+    AgentConsoleError::new(error.safe_category(), error.message)
+}
+
+fn unexpected_wsl_response() -> AgentConsoleError {
+    AgentConsoleError::new("malformed_response", "respuesta inesperada del agente WSL")
 }
 
 fn status_from_exit_code(exit_code: Option<i32>) -> AgentSessionStatus {
@@ -300,7 +374,8 @@ mod tests {
             repo.path().to_path_buf(),
             "codex".into(),
             1,
-            checkpoint,
+            Some(checkpoint),
+            CheckpointBackend::Local,
         );
         (repo, checkpoint_dir, record)
     }
