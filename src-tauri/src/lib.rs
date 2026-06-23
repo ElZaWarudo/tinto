@@ -246,9 +246,14 @@ name = "A"
 
         let repos = initial_runtime_repos(&store);
 
-        assert_eq!(repos.len(), 1);
+        let expected_visible = if cfg!(target_os = "windows") { 2 } else { 1 };
+        assert_eq!(repos.len(), expected_visible);
         assert_eq!(repos[0].path, std::path::PathBuf::from("/tmp/local"));
         assert_eq!(repos[0].fs_watch, vec![".env"]);
+        if cfg!(target_os = "windows") {
+            assert_eq!(repos[1].source, workbench::RepoSource::Wsl);
+            assert_eq!(repos[1].distro.as_deref(), Some("Ubuntu"));
+        }
     }
 
     #[test]
@@ -277,8 +282,8 @@ name = "Solo WSL"
             assert_eq!(repos.len(), 1);
             assert_eq!(repos[0].source, workbench::RepoSource::Wsl);
             assert!(
-                !repos[0].is_runtime_supported(),
-                "WSL config entries seed the bus as unsupported until RDM-004"
+                repos[0].is_runtime_supported(),
+                "WSL config entries seed the bus on Windows"
             );
         } else {
             assert!(repos.is_empty());

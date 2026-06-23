@@ -1839,8 +1839,9 @@ mod tests {
 
     fn navigation_alias_for(path: &Path) -> PathBuf {
         let name = path.file_name().expect("path has file name");
+        let sep = std::path::MAIN_SEPARATOR;
         PathBuf::from(format!(
-            "{}\\..\\{}",
+            "{}{sep}..{sep}{}",
             path.to_string_lossy(),
             name.to_string_lossy()
         ))
@@ -1939,6 +1940,15 @@ mod tests {
         let snap = handle.snapshot().await.expect("snapshot");
 
         assert!(snap.repos.iter().any(|repo| repo.repo == ca));
+        if !cfg!(target_os = "windows") {
+            assert!(!snap.repos.iter().any(|repo| repo.repo == wsl_path));
+            assert!(
+                !handle.retry_repo(PathBuf::from("/home/me/proyecto")).await,
+                "non-Windows runtime does not mount WSL repos"
+            );
+            handle.shutdown().await;
+            return;
+        }
         assert!(
             snap.repos.iter().any(|repo| repo.repo == wsl_path),
             "RDM-004 mounts WSL repos into the runtime snapshot on Windows"
