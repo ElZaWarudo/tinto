@@ -303,7 +303,7 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 
 ## Release State
 
-- Final Windows-only WSL complement batch (2026-06-24): pushed directly to `origin/develop` without PR or Jira, matching the approved release plan. Commits: `a054101` (`feat(files): add file overview minimap`), `35b4771` (`feat(workbench): add Windows WSL repo tracking`), `f9d7611` (`feat(wsl): route repo reads and file operations through agent`), `f672e49` (`feat(agent-console): run and revert sessions in WSL`), `e8ee2e1` (`ci(wsl): bundle packaged Linux agent resource`), and `236a5e3` (`docs(orchestration): document WSL complement delivery [skip ci]`). Jira omitted because checkout readiness reported `env-loaded-without-project-secret-file`. A follow-up state commit without `[skip ci]` records this release and intentionally triggers CI on the final tip.
+- Final Windows-only WSL complement batch (2026-06-24): pushed directly to `origin/develop` without PR or Jira, matching the approved release plan. Delivered commits: `a054101` (`feat(files): add file overview minimap`), `35b4771` (`feat(workbench): add Windows WSL repo tracking`), `f9d7611` (`feat(wsl): route repo reads and file operations through agent`), `f672e49` (`feat(agent-console): run and revert sessions in WSL`), `e8ee2e1` (`ci(wsl): bundle packaged Linux agent resource`), `236a5e3` (`docs(orchestration): document WSL complement delivery [skip ci]`), `cc216a0` (`docs(orchestration): record WSL complement release`), `02aeaf4` (`ci: fix release formatting gates`), `53d61f2` (`ci: satisfy rust clippy gates`), `9466415` (`test: align runtime expectations with WSL support`), and `62f9ce5` (`test: stabilize WSL runtime CI expectations`). Jira omitted because checkout readiness reported `env-loaded-without-project-secret-file`. Final GitHub Actions validation passed on run `28062526450`; Windows installer artifacts are available from the `tinto-windows-bundle` workflow artifact and were also downloaded locally under `.ci-artifacts/` for handoff inspection (`Tinto_0.1.0_x64-setup.exe`, `Tinto_0.1.0_x64_en-US.msi`).
 - RDM-001 Windows-gated repo identity and backend boundary release (2026-06-23): pushed directly to `origin/develop` without PR or Jira, matching standing project preference. Commits: `b79e3b4` (`docs(orchestration): reconcile preflight state [skip ci]`), `bc3c13f` (`feat(repo): add source-aware Windows WSL repo boundary`), and `2462f04` (`docs(orchestration): add Windows WSL identity delivery artifacts [skip ci]`). Jira omitted because checkout reported `jira-env-not-configured`.
 - PR-based deliveries: PR #1, #2, #3, #4, #6, #7, #8, #9, #10, #11, and #12.
 - RDM-012 delivery: local fast-forward merge into `develop` and push to `origin/develop`, intentionally without PR by user request.
@@ -325,6 +325,7 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 - Local pre-push CI workflow validation: `npm run format:check`, `npm run lint`, `npm test` 140/140, `npm run build`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` 117/117, and `npm run tauri build`.
 - GitHub Actions run `27601639210`: passed. Frontend passed in 58s, Rust passed in 8m44s, and Tauri bundle passed in 10m46s.
 - GitHub Actions run `27602696319`: passed after the Node 24 runtime opt-in. Frontend passed in 1m0s, Rust passed in 2m2s, and Tauri bundle passed in 4m27s.
+- GitHub Actions run `28062526450`: passed on the final WSL complement release tip `62f9ce5`. Frontend, Rust, WSL agent artifact packaging, Linux Tauri bundle, and Windows Tauri bundle all completed successfully. Windows artifacts published: `Tinto_0.1.0_x64-setup.exe` and `Tinto_0.1.0_x64_en-US.msi`.
 - CI warning cleanup: `.github/workflows/ci.yml` sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`. GitHub now reports that Node 20-targeting actions are forced to run on Node 24; the remaining annotation is informational until the upstream actions target Node 24 natively.
 
 ## Post-Closeout Maintenance
@@ -341,7 +342,6 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 - Phantom-repo generation token after workbench switch.
 - TypeScript/Rust contract code generation.
 - Keyboard arrow navigation/Escape polish.
-- File overview ruler parity with Visual Studio Code: the right-side alert rail must act as a true whole-file navigation/follow surface, synced to the full document rather than only showing isolated alert chips.
 - Diff viewer hardening/polish: manual-reload cancellation race, full-file/diff revision skew hardening, `useDiffData` extraction, S/M/U mark consolidation, and workbench-switch diff-panel orphan handling.
 
 ## Archive Status
