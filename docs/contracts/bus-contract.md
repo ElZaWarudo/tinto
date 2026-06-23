@@ -5,6 +5,7 @@
 ## Conventions
 
 - Repo paths: **canonical** (the backend canonicalizes; the frontend uses the path exactly as it receives it in the snapshot/deltas, as an opaque identity).
+- Public WSL repo identity is intentionally deferred beyond RDM-001. The workbench config may preserve future internal WSL entries on disk, but Linux/non-WSL runtime projections omit them from `list_workbenches`, bus snapshots, deltas, watcher mounts, repo command allowlists, and UI surfaces. Current public `repo` values remain local canonical paths only.
 - File paths: relative to the repo root.
 - Timestamps: epoch ms (`u64`) unless otherwise noted.
 - Command errors: `{ category: string, message: string }` (safe message, no secrets) — `WorkbenchError` pattern. Git categories: see `error.class` below. Read-containment categories: `repo-not-allowed` (the repo is not in the active workbench), `path-traversal` (the path escapes the repo after canonicalizing), `path-forbidden` (`.git` is not exposed), `not-a-file` (not a regular file), `not-found`, `repository-not-found`.

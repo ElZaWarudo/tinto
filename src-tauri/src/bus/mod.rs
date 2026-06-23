@@ -24,7 +24,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use crate::git::{DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError};
 use crate::paths::Classification;
 use crate::watcher::{ClassifiedEvent, EventType, FsWatcher, WatcherError, WatcherMessage};
-use crate::workbench::RepoEntry;
+use crate::workbench::{RepoEntry, RepoSource};
 use contract::{
     FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
     RepoErrorClass, RepoErrorState, RepoMetrics, SecretFinding, SignalSeverity, SubscriptionTarget,
@@ -502,10 +502,19 @@ pub enum BusCommand {
     GetSnapshot(oneshot::Sender<WorkbenchSnapshot>),
     Subscribe(Vec<SubscriptionTarget>, oneshot::Sender<()>),
     RetryRepo(PathBuf, oneshot::Sender<()>),
+    ResolveRepo(PathBuf, oneshot::Sender<Result<PathBuf, RepoResolveError>>),
     /// ¿El path canónico pertenece al workbench activo? Allowlist que acota
     /// las lecturas bajo demanda al conjunto de repos montado.
     IsKnownRepo(PathBuf, oneshot::Sender<bool>),
     Shutdown(oneshot::Sender<()>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoResolveError {
+    UnsupportedRepoSource { source: RepoSource },
+    RepositoryNotFound,
+    RepoNotAllowed,
+    BusUnavailable,
 }
 
 /// Handle clonable hacia el bus; vive como managed state de Tauri.
@@ -545,6 +554,14 @@ impl BusHandle {
             return false;
         }
         rx.await.is_ok()
+    }
+
+    pub async fn resolve_repo(&self, repo: PathBuf) -> Result<PathBuf, RepoResolveError> {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(BusCommand::ResolveRepo(repo, reply)).is_err() {
+            return Err(RepoResolveError::BusUnavailable);
+        }
+        rx.await.unwrap_or(Err(RepoResolveError::BusUnavailable))
     }
 
     /// `true` si `repo` (path canónico) está en el workbench activo. Si el bus
@@ -622,6 +639,7 @@ async fn run_bus_inner(
 
     let mut states: HashMap<PathBuf, RepoLiveState> = HashMap::new();
     let mut current_entries: Vec<RepoEntry> = Vec::new();
+    let mut unsupported_entries: Vec<RepoEntry> = Vec::new();
     let mut subscriptions: Vec<SubscriptionTarget> = Vec::new();
     // Revisión durable por path canónico: sobrevive al desmontaje para que un
     // repo re-añadido continúe su contador (el contrato exige revisión
@@ -640,6 +658,7 @@ async fn run_bus_inner(
         &mut watcher,
         &mut states,
         &mut current_entries,
+        &mut unsupported_entries,
         &mut revisions,
         &subscriptions,
         &semaphore,
@@ -654,7 +673,7 @@ async fn run_bus_inner(
                 match maybe {
                     Some(BusCommand::SetWorkbench(repos)) => {
                         set_workbench(repos, &mut watcher, &mut states, &mut current_entries,
-                            &mut revisions, &subscriptions, &semaphore, &results_tx,
+                            &mut unsupported_entries, &mut revisions, &subscriptions, &semaphore, &results_tx,
                             &mut inflight, &mut pending);
                     }
                     Some(BusCommand::GetSnapshot(reply)) => {
@@ -688,10 +707,19 @@ async fn run_bus_inner(
                     }
                     Some(BusCommand::Subscribe(mut targets, reply)) => {
                         targets.truncate(MAX_SUBSCRIPTIONS);
-                        // Identidad canónica también en suscripciones.
-                        for t in &mut targets {
-                            t.repo = t.repo.canonicalize().unwrap_or_else(|_| t.repo.clone());
-                        }
+                        let targets: Vec<SubscriptionTarget> = targets
+                            .into_iter()
+                            .filter_map(|mut target| {
+                                let repo = resolve_repo_for_command(
+                                    target.repo,
+                                    &current_entries,
+                                    &unsupported_entries,
+                                )
+                                .ok()?;
+                                target.repo = repo;
+                                Some(target)
+                            })
+                            .collect();
                         let affected: HashSet<PathBuf> =
                             targets.iter().map(|t| t.repo.clone()).collect();
                         subscriptions = targets;
@@ -704,19 +732,34 @@ async fn run_bus_inner(
                         let _ = reply.send(());
                     }
                     Some(BusCommand::RetryRepo(repo, reply)) => {
-                        let repo = repo.canonicalize().unwrap_or(repo);
-                        if let Some(w) = watcher.as_mut() {
-                            w.watch_workbench(&current_entries);
-                        }
-                        if states.contains_key(&repo) {
-                            trigger_recalc(repo, RecalcScope::Everything, &subscriptions,
-                                &semaphore, &results_tx, &mut inflight, &mut pending);
+                        if let Ok(repo) =
+                            resolve_repo_for_command(repo, &current_entries, &unsupported_entries)
+                        {
+                            if let Some(w) = watcher.as_mut() {
+                                w.watch_workbench(&current_entries);
+                            }
+                            if states.contains_key(&repo) {
+                                trigger_recalc(repo, RecalcScope::Everything, &subscriptions,
+                                    &semaphore, &results_tx, &mut inflight, &mut pending);
+                            }
                         }
                         let _ = reply.send(());
                     }
+                    Some(BusCommand::ResolveRepo(repo, reply)) => {
+                        let resolved = resolve_repo_for_command(
+                            repo,
+                            &current_entries,
+                            &unsupported_entries,
+                        );
+                        let _ = reply.send(resolved);
+                    }
                     Some(BusCommand::IsKnownRepo(repo, reply)) => {
-                        let canon = repo.canonicalize().unwrap_or(repo);
-                        let known = current_entries.iter().any(|e| e.path == canon);
+                        let known = resolve_repo_for_command(
+                            repo,
+                            &current_entries,
+                            &unsupported_entries,
+                        )
+                        .is_ok();
                         let _ = reply.send(known);
                     }
                     Some(BusCommand::Shutdown(ack)) => {
@@ -816,6 +859,7 @@ fn set_workbench(
     watcher: &mut Option<FsWatcher>,
     states: &mut HashMap<PathBuf, RepoLiveState>,
     current_entries: &mut Vec<RepoEntry>,
+    unsupported_entries: &mut Vec<RepoEntry>,
     revisions: &mut HashMap<PathBuf, u64>,
     subscriptions: &[SubscriptionTarget],
     semaphore: &Arc<Semaphore>,
@@ -823,7 +867,12 @@ fn set_workbench(
     inflight: &mut HashSet<PathBuf>,
     pending: &mut HashMap<PathBuf, RecalcScope>,
 ) {
-    let canonical: Vec<RepoEntry> = repos
+    let (supported, unsupported): (Vec<RepoEntry>, Vec<RepoEntry>) = repos
+        .into_iter()
+        .partition(|repo| repo.is_runtime_supported());
+    *unsupported_entries = unsupported;
+
+    let canonical: Vec<RepoEntry> = supported
         .into_iter()
         .map(|mut r| {
             r.path = r.path.canonicalize().unwrap_or(r.path);
@@ -865,6 +914,31 @@ fn set_workbench(
         );
     }
     *current_entries = canonical;
+}
+
+fn resolve_repo_for_command(
+    repo: PathBuf,
+    current_entries: &[RepoEntry],
+    unsupported_entries: &[RepoEntry],
+) -> Result<PathBuf, RepoResolveError> {
+    if current_entries.iter().any(|entry| entry.path == repo) {
+        return Ok(repo);
+    }
+
+    if let Some(entry) = unsupported_entries.iter().find(|entry| entry.path == repo) {
+        return Err(RepoResolveError::UnsupportedRepoSource {
+            source: entry.source,
+        });
+    }
+
+    let canon = repo
+        .canonicalize()
+        .map_err(|_| RepoResolveError::RepositoryNotFound)?;
+    if current_entries.iter().any(|entry| entry.path == canon) {
+        Ok(canon)
+    } else {
+        Err(RepoResolveError::RepoNotAllowed)
+    }
 }
 
 /// Dispara un recálculo de un repo (o lo deja pendiente si hay uno en
@@ -1248,9 +1322,15 @@ mod tests {
     type Events = mpsc::UnboundedReceiver<(String, serde_json::Value)>;
 
     fn entry(repo: &TempRepo) -> RepoEntry {
+        RepoEntry::local(repo.path().to_path_buf(), None, Vec::new())
+    }
+
+    fn wsl_entry(path: &str) -> RepoEntry {
         RepoEntry {
-            path: repo.path().to_path_buf(),
-            alias: None,
+            source: RepoSource::Wsl,
+            path: PathBuf::from(path),
+            distro: Some("Ubuntu".into()),
+            alias: Some("WSL".into()),
             fs_watch: Vec::new(),
         }
     }
@@ -1338,6 +1418,128 @@ mod tests {
         );
         // Un path fuera de todo workbench (raíz) tampoco.
         assert!(!handle.is_known(PathBuf::from("/")).await);
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wsl_source_is_not_mounted_and_resolves_as_unsupported() {
+        let a = TempRepo::with_initial_commit();
+        let wsl_path = PathBuf::from("/home/me/proyecto");
+        let (handle, mut rx) = spawn_bus_degraded(vec![entry(&a), wsl_entry("/home/me/proyecto")]);
+        let ca = canonical(&a);
+
+        wait_event(&mut rx, |e, _| e == EVENT_WATCHING_STATE).await;
+        let snap = handle.snapshot().await.expect("snapshot");
+
+        assert!(snap.repos.iter().any(|repo| repo.repo == ca));
+        assert!(
+            !snap.repos.iter().any(|repo| repo.repo == wsl_path),
+            "future WSL sources must not enter the runtime snapshot"
+        );
+        assert!(!handle.is_known(wsl_path.clone()).await);
+        assert!(matches!(
+            handle.resolve_repo(wsl_path).await,
+            Err(RepoResolveError::UnsupportedRepoSource {
+                source: RepoSource::Wsl
+            })
+        ));
+        assert!(handle.retry_repo(PathBuf::from("/home/me/proyecto")).await);
+        assert!(
+            handle
+                .subscribe(vec![SubscriptionTarget {
+                    repo: PathBuf::from("/home/me/proyecto"),
+                    path: Some("base.txt".into()),
+                }])
+                .await
+        );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn same_path_wsl_source_does_not_block_mounted_local_repo() {
+        let a = TempRepo::with_initial_commit();
+        let ca = canonical(&a);
+        let (handle, mut rx) =
+            spawn_bus_degraded(vec![entry(&a), wsl_entry(ca.to_string_lossy().as_ref())]);
+
+        wait_event(&mut rx, |e, _| e == EVENT_WATCHING_STATE).await;
+        assert_eq!(handle.resolve_repo(ca.clone()).await, Ok(ca.clone()));
+        assert!(handle.is_known(ca).await);
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsupported_wsl_subscription_does_not_canonicalize_into_local_repo() {
+        let a = TempRepo::with_initial_commit();
+        let ca = canonical(&a);
+        let unsupported_alias = ca.join(".");
+        let (handle, mut rx) = spawn_bus_degraded(vec![
+            entry(&a),
+            wsl_entry(unsupported_alias.to_string_lossy().as_ref()),
+        ]);
+
+        wait_event(&mut rx, |e, p| is_delta_for(e, p, &ca)).await;
+        while rx.try_recv().is_ok() {}
+        a.write("base.txt", "changed\n");
+
+        assert!(
+            handle
+                .subscribe(vec![SubscriptionTarget {
+                    repo: unsupported_alias,
+                    path: Some("base.txt".into()),
+                }])
+                .await
+        );
+
+        let leaked = timeout(Duration::from_secs(1), async {
+            loop {
+                let (e, p) = rx.recv().await?;
+                if is_delta_for(&e, &p, &ca) {
+                    return Some(());
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        assert!(
+            leaked.is_none(),
+            "unsupported WSL subscription must not resolve into a local repo"
+        );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsupported_wsl_retry_does_not_canonicalize_into_local_repo() {
+        let a = TempRepo::with_initial_commit();
+        let ca = canonical(&a);
+        let unsupported_alias = ca.join(".");
+        let (handle, mut rx) = spawn_bus_degraded(vec![
+            entry(&a),
+            wsl_entry(unsupported_alias.to_string_lossy().as_ref()),
+        ]);
+
+        wait_event(&mut rx, |e, p| is_delta_for(e, p, &ca)).await;
+        while rx.try_recv().is_ok() {}
+        a.write("retry.txt", "changed\n");
+
+        assert!(handle.retry_repo(unsupported_alias).await);
+
+        let leaked = timeout(Duration::from_secs(1), async {
+            loop {
+                let (e, p) = rx.recv().await?;
+                if is_delta_for(&e, &p, &ca) {
+                    return Some(());
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        assert!(
+            leaked.is_none(),
+            "unsupported WSL retry must not resolve into a local repo"
+        );
         handle.shutdown().await;
     }
 
@@ -1539,11 +1741,7 @@ mod tests {
             idx.write().unwrap();
         }
         let cb = b_path.canonicalize().unwrap();
-        let entry_b = RepoEntry {
-            path: cb.clone(),
-            alias: None,
-            fs_watch: Vec::new(),
-        };
+        let entry_b = RepoEntry::local(cb.clone(), None, Vec::new());
         let (handle, mut rx) = spawn_bus(vec![entry(&a), entry_b]);
         wait_event(&mut rx, |e, p| is_delta_for(e, p, &cb)).await;
 

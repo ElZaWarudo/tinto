@@ -5,7 +5,9 @@ use std::sync::Mutex;
 
 use tauri::State;
 
-use super::{autodetect_repos, Workbench, WorkbenchConfig, WorkbenchError, WorkbenchStore};
+use super::{
+    autodetect_repos, RepoEntry, Workbench, WorkbenchConfig, WorkbenchError, WorkbenchStore,
+};
 
 type Store<'a> = State<'a, Mutex<WorkbenchStore>>;
 
@@ -26,19 +28,29 @@ type Bus<'a> = State<'a, crate::bus::BusHandle>;
 /// los repos de un workbench, si ese workbench es el activo, re-sembramos el
 /// bus para que el repo añadido/quitado/editado aparezca SIN reiniciar la app.
 fn reseed_if_active(store: &Store<'_>, bus: &Bus<'_>, workbench: &str) {
-    let repos = locked(store, |s| {
-        Ok(s.active_workbench()
-            .filter(|w| w.name == workbench)
-            .map(|w| w.repos.clone()))
-    });
+    let repos = locked(store, |s| Ok(active_runtime_repos_for(s, workbench)));
     if let Ok(Some(repos)) = repos {
         bus.set_workbench(repos);
     }
 }
 
+pub(crate) fn active_runtime_repos_for(
+    store: &WorkbenchStore,
+    workbench: &str,
+) -> Option<Vec<RepoEntry>> {
+    store
+        .active_workbench_runtime()
+        .filter(|w| w.name == workbench)
+        .map(|w| w.repos)
+}
+
+pub(crate) fn list_workbenches_from_store(store: &WorkbenchStore) -> WorkbenchConfig {
+    store.runtime_config()
+}
+
 #[tauri::command]
 pub fn list_workbenches(store: Store<'_>) -> Result<WorkbenchConfig, WorkbenchError> {
-    locked(&store, |s| Ok(s.config().clone()))
+    locked(&store, |s| Ok(list_workbenches_from_store(s)))
 }
 
 #[tauri::command]
@@ -123,4 +135,81 @@ pub fn set_active_workbench(
 #[tauri::command]
 pub fn autodetect_repos_under(root: PathBuf) -> Vec<PathBuf> {
     autodetect_repos(root)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::workbench::{RepoSource, CONFIG_FILE};
+
+    fn store_with_config(raw: &str) -> (tempfile::TempDir, WorkbenchStore) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(CONFIG_FILE), raw).unwrap();
+        let store = WorkbenchStore::open(dir.path()).expect("store");
+        (dir, store)
+    }
+
+    #[test]
+    fn list_workbenches_from_store_proyecta_runtime_sin_borrar_persistido() {
+        let (_dir, store) = store_with_config(
+            r#"
+version = 1
+active = "A"
+
+[[workbench]]
+name = "A"
+
+  [[workbench.repos]]
+  path = "/tmp/local"
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+"#,
+        );
+
+        let visible = list_workbenches_from_store(&store);
+
+        assert_eq!(visible.workbenches[0].repos.len(), 1);
+        assert_eq!(visible.workbenches[0].repos[0].source, RepoSource::Local);
+        assert_eq!(store.config().workbenches[0].repos.len(), 2);
+    }
+
+    #[test]
+    fn active_runtime_repos_for_filtra_wsl_en_reseed_activo() {
+        let (_dir, store) = store_with_config(
+            r#"
+version = 1
+active = "A"
+
+[[workbench]]
+name = "A"
+
+  [[workbench.repos]]
+  path = "/tmp/local"
+  fs_watch = [".env"]
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+
+[[workbench]]
+name = "B"
+
+  [[workbench.repos]]
+  path = "/tmp/other"
+"#,
+        );
+
+        let repos = active_runtime_repos_for(&store, "A").expect("active repos");
+
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, PathBuf::from("/tmp/local"));
+        assert_eq!(repos[0].fs_watch, vec![".env"]);
+        assert_eq!(active_runtime_repos_for(&store, "B"), None);
+    }
 }

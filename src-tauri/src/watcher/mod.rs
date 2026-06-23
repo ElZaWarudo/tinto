@@ -806,11 +806,11 @@ mod tests {
     }
 
     fn entry(dir: &TempDir, fs_watch: &[&str]) -> RepoEntry {
-        RepoEntry {
-            path: dir.path().canonicalize().unwrap(),
-            alias: None,
-            fs_watch: fs_watch.iter().map(|s| s.to_string()).collect(),
-        }
+        RepoEntry::local(
+            dir.path().canonicalize().unwrap(),
+            None,
+            fs_watch.iter().map(|s| s.to_string()).collect(),
+        )
     }
 
     /// Espera mensajes hasta que `pred` se cumpla o venza el timeout.
@@ -956,11 +956,7 @@ mod tests {
         // garantizada sin depender del namespace global de /tmp.
         let phantom_base = TempDir::new().unwrap();
         let phantom_path = phantom_base.path().join("no-existe");
-        let fantasma = RepoEntry {
-            path: phantom_path.clone(),
-            alias: None,
-            fs_watch: vec![],
-        };
+        let fantasma = RepoEntry::local(phantom_path.clone(), None, vec![]);
         watcher.watch_workbench(&[entry(&vivo, &[]), fantasma]);
 
         let err = wait_for(&mut rx, |m| matches!(m, WatcherMessage::RepoError { .. }))
@@ -998,11 +994,7 @@ mod tests {
         let otro = fixture_repo("");
         let (mut watcher, mut rx) = FsWatcher::new().unwrap();
         watcher.watch_workbench(&[
-            RepoEntry {
-                path: canonical.clone(),
-                alias: None,
-                fs_watch: vec![],
-            },
+            RepoEntry::local(canonical.clone(), None, vec![]),
             entry(&otro, &[]),
         ]);
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1151,11 +1143,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join(".gitignore"), "").unwrap();
         let canonical = root.canonicalize().unwrap();
-        let entry = RepoEntry {
-            path: canonical.clone(),
-            alias: None,
-            fs_watch: vec![],
-        };
+        let entry = RepoEntry::local(canonical.clone(), None, vec![]);
 
         let (mut watcher, mut rx) = FsWatcher::new().unwrap();
         watcher.watch_workbench(std::slice::from_ref(&entry));

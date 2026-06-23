@@ -20,7 +20,7 @@ use super::contract::{
     FILE_CONTENT_MAX_BYTES, MEDIA_CONTENT_MAX_BYTES, REPO_TREE_MAX_ENTRIES,
 };
 use super::secret_scan;
-use super::BusHandle;
+use super::{BusHandle, RepoResolveError};
 use crate::git::{
     CommitInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError,
 };
@@ -157,16 +157,27 @@ impl From<GitError> for CommandError {
 /// el repo en sí debe estar acotado al workbench (si no, un frontend
 /// comprometido podría leer cualquier ruta del disco con `repo=/`).
 pub(crate) async fn ensure_known(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
-    let canon = repo
-        .canonicalize()
-        .map_err(|_| CommandError::new("repository-not-found", "el repo no existe"))?;
-    if bus.is_known(canon.clone()).await {
-        Ok(canon)
-    } else {
-        Err(CommandError::new(
+    bus.resolve_repo(repo.to_path_buf())
+        .await
+        .map_err(map_repo_resolve_error)
+}
+
+pub(crate) fn map_repo_resolve_error(error: RepoResolveError) -> CommandError {
+    match error {
+        RepoResolveError::UnsupportedRepoSource { .. } => CommandError::new(
+            "unsupported_repo_source",
+            "la fuente del repo no está soportada por este backend local",
+        ),
+        RepoResolveError::RepositoryNotFound => {
+            CommandError::new("repository-not-found", "el repo no existe")
+        }
+        RepoResolveError::RepoNotAllowed => CommandError::new(
             "repo-not-allowed",
             "el repo no pertenece al workbench activo",
-        ))
+        ),
+        RepoResolveError::BusUnavailable => {
+            CommandError::new("bus-unavailable", "el bus no está disponible")
+        }
     }
 }
 
@@ -598,6 +609,16 @@ mod tests {
         assert!(validate_media_path(Path::new("assets/icon.svg")).is_ok());
         let err = validate_media_path(Path::new("src/main.rs")).expect_err("no media");
         assert_eq!(err.category, "unsupported-media");
+    }
+
+    #[test]
+    fn unsupported_repo_resolve_error_maps_to_safe_category() {
+        let err = map_repo_resolve_error(RepoResolveError::UnsupportedRepoSource {
+            source: crate::workbench::RepoSource::Wsl,
+        });
+
+        assert_eq!(err.category, "unsupported_repo_source");
+        assert!(!err.message.contains("/home/me/proyecto"));
     }
 
     #[test]

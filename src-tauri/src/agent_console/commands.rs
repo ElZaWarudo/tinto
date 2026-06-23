@@ -14,7 +14,7 @@ use crate::bus::{
         AgentSession, AgentSessionChangeLog, AgentSessionOutput, EVENT_AGENT_SESSION_CHANGE_LOG,
         EVENT_AGENT_SESSION_OUTPUT,
     },
-    BusHandle,
+    BusHandle, RepoResolveError,
 };
 
 use super::{validation::resolve_agent_binary, AgentConsoleError, AgentSessionRegistry};
@@ -135,16 +135,27 @@ pub fn revert_session(
 }
 
 async fn ensure_known_agent_repo(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
-    let canon = repo
-        .canonicalize()
-        .map_err(|_| CommandError::new("repository_not_found", "el repo no existe"))?;
-    if bus.is_known(canon.clone()).await {
-        Ok(canon)
-    } else {
-        Err(CommandError::new(
+    bus.resolve_repo(repo.to_path_buf())
+        .await
+        .map_err(map_repo_resolve_error)
+}
+
+fn map_repo_resolve_error(error: RepoResolveError) -> CommandError {
+    match error {
+        RepoResolveError::UnsupportedRepoSource { .. } => CommandError::new(
+            "unsupported_repo_source",
+            "la fuente del repo no está soportada por este backend local",
+        ),
+        RepoResolveError::RepositoryNotFound => {
+            CommandError::new("repository_not_found", "el repo no existe")
+        }
+        RepoResolveError::RepoNotAllowed => CommandError::new(
             "repo_not_allowed",
             "el repo no pertenece al workbench activo",
-        ))
+        ),
+        RepoResolveError::BusUnavailable => {
+            CommandError::new("bus_unavailable", "el bus no está disponible")
+        }
     }
 }
 
@@ -233,6 +244,16 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.category, "invalid_input");
+    }
+
+    #[test]
+    fn unsupported_repo_resolve_error_maps_to_safe_category() {
+        let error = map_repo_resolve_error(RepoResolveError::UnsupportedRepoSource {
+            source: crate::workbench::RepoSource::Wsl,
+        });
+
+        assert_eq!(error.category, "unsupported_repo_source");
+        assert!(!error.message.contains("/home/me/proyecto"));
     }
 
     #[test]

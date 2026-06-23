@@ -29,6 +29,13 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn initial_runtime_repos(store: &workbench::WorkbenchStore) -> Vec<workbench::RepoEntry> {
+    store
+        .active_workbench_runtime()
+        .map(|w| w.repos)
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 fn ping() -> PingResponse {
     PingResponse {
@@ -49,14 +56,11 @@ pub fn run() {
         workbench::WorkbenchStore::with_default_config(dir)
     });
 
-    // Repos del workbench activo persistido: insumo de montaje inicial del bus.
-    let initial_repos = store
-        .active_workbench()
-        .map(|w| w.repos.clone())
-        .unwrap_or_default();
+    // Runtime repos from the persisted active workbench seed the initial bus mount.
+    let initial_repos = initial_runtime_repos(&store);
 
-    // Canal de comandos del bus creado SÍNCRONAMENTE: los `invoke` tempranos
-    // encolan sin carrera con el init async de la task.
+    // The bus command channel is created synchronously so early invokes can
+    // enqueue without racing the async task startup.
     let (bus_handle, bus_rx) = bus::BusHandle::new_pair();
     let mut bus_rx = Some(bus_rx);
     let mut initial_repos = Some(initial_repos);
@@ -178,5 +182,80 @@ mod tests {
         let json = serde_json::to_value(ping()).expect("serializa");
         assert!(json.get("message").is_some());
         assert!(json.get("timestamp_ms").is_some());
+    }
+
+    #[test]
+    fn invoke_handler_does_not_register_wsl_commands_for_rdm_001() {
+        let source = include_str!("lib.rs");
+        let handler_block = source
+            .split(".invoke_handler")
+            .nth(1)
+            .and_then(|tail| tail.split(".setup").next())
+            .expect("invoke handler block");
+
+        assert!(
+            !handler_block.to_ascii_lowercase().contains("wsl"),
+            "RDM-001 must not register public WSL commands"
+        );
+        assert!(
+            !handler_block.contains("tinto_agent"),
+            "RDM-001 must not register tinto-agent launchers"
+        );
+    }
+
+    #[test]
+    fn initial_runtime_repos_filter_wsl_sources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(workbench::CONFIG_FILE),
+            r#"
+version = 1
+active = "A"
+
+[[workbench]]
+name = "A"
+
+  [[workbench.repos]]
+  path = "/tmp/local"
+  fs_watch = [".env"]
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+"#,
+        )
+        .unwrap();
+        let store = workbench::WorkbenchStore::open(dir.path()).expect("store");
+
+        let repos = initial_runtime_repos(&store);
+
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, std::path::PathBuf::from("/tmp/local"));
+        assert_eq!(repos[0].fs_watch, vec![".env"]);
+    }
+
+    #[test]
+    fn initial_runtime_repos_do_not_mount_wsl_only_workbench() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(workbench::CONFIG_FILE),
+            r#"
+version = 1
+active = "Solo WSL"
+
+[[workbench]]
+name = "Solo WSL"
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+"#,
+        )
+        .unwrap();
+        let store = workbench::WorkbenchStore::open(dir.path()).expect("store");
+
+        assert!(initial_runtime_repos(&store).is_empty());
     }
 }

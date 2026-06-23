@@ -74,12 +74,50 @@ impl Serialize for WorkbenchError {
 /// Un repo dentro de un workbench.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoEntry {
+    #[serde(default, skip_serializing_if = "RepoSource::is_local")]
+    pub source: RepoSource,
     pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
     /// Patrones opt-in del Plano 2 (gitignoreados a vigilar igual).
     #[serde(default)]
     pub fs_watch: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RepoSource {
+    #[default]
+    Local,
+    Wsl,
+}
+
+impl RepoSource {
+    fn is_local(&self) -> bool {
+        matches!(self, RepoSource::Local)
+    }
+}
+
+impl RepoEntry {
+    pub fn local(path: PathBuf, alias: Option<String>, fs_watch: Vec<String>) -> Self {
+        Self {
+            source: RepoSource::Local,
+            path,
+            distro: None,
+            alias,
+            fs_watch,
+        }
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.source.is_local()
+    }
+
+    pub fn is_runtime_supported(&self) -> bool {
+        self.source.is_local()
+    }
 }
 
 /// Conjunto nombrado de repos (diseño §2).
@@ -168,9 +206,37 @@ impl WorkbenchStore {
         &self.config
     }
 
+    /// Config visible/runtime para la app actual. RDM-001 conserva en disco
+    /// entradas futuras WSL, pero no las monta ni las expone a la UI todavía.
+    pub fn runtime_config(&self) -> WorkbenchConfig {
+        let workbenches: Vec<Workbench> = self
+            .config
+            .workbenches
+            .iter()
+            .filter_map(runtime_workbench)
+            .collect();
+        let active = match &self.config.active {
+            Some(active) if workbenches.iter().any(|w| &w.name == active) => Some(active.clone()),
+            Some(_) => workbenches.first().map(|w| w.name.clone()),
+            None => None,
+        };
+
+        WorkbenchConfig {
+            version: self.config.version,
+            active,
+            workbenches,
+        }
+    }
+
     pub fn active_workbench(&self) -> Option<&Workbench> {
         let name = self.config.active.as_deref()?;
         self.config.workbenches.iter().find(|w| w.name == name)
+    }
+
+    pub fn active_workbench_runtime(&self) -> Option<Workbench> {
+        let runtime = self.runtime_config();
+        let active = runtime.active.as_deref()?;
+        runtime.workbenches.into_iter().find(|w| w.name == active)
     }
 
     /// Persistencia atómica: tmp único por proceso + rename (reemplaza
@@ -257,14 +323,11 @@ impl WorkbenchStore {
             Git2Engine::open(&path)?;
         }
         let wb = self.find_mut(workbench)?;
-        if wb.repos.iter().any(|r| r.path == path) {
+        if wb.repos.iter().any(|r| r.is_local() && r.path == path) {
             return Err(WorkbenchError::DuplicateRepo(path));
         }
-        wb.repos.push(RepoEntry {
-            path: path.clone(),
-            alias,
-            fs_watch: Vec::new(),
-        });
+        wb.repos
+            .push(RepoEntry::local(path.clone(), alias, Vec::new()));
         self.persist()?;
         Ok(path)
     }
@@ -277,8 +340,9 @@ impl WorkbenchStore {
         let canon = path.canonicalize().ok();
         let wb = self.find_mut(workbench)?;
         let before = wb.repos.len();
-        wb.repos
-            .retain(|r| Some(r.path.as_path()) != canon.as_deref() && r.path != path);
+        wb.repos.retain(|r| {
+            !r.is_local() || (Some(r.path.as_path()) != canon.as_deref() && r.path != path)
+        });
         if wb.repos.len() == before {
             return Err(WorkbenchError::UnknownRepo(path.to_path_buf()));
         }
@@ -297,7 +361,7 @@ impl WorkbenchStore {
         let repo = wb
             .repos
             .iter_mut()
-            .find(|r| r.path == path)
+            .find(|r| r.is_local() && r.path == path)
             .ok_or_else(|| WorkbenchError::UnknownRepo(path.to_path_buf()))?;
         if let Some(alias) = alias {
             repo.alias = alias;
@@ -316,10 +380,14 @@ impl WorkbenchStore {
     ) -> Result<(), WorkbenchError> {
         let wb = self.find_mut(workbench)?;
         wb.repos.sort_by_key(|r| {
-            order
-                .iter()
-                .position(|p| p == &r.path)
-                .unwrap_or(usize::MAX)
+            if r.is_local() {
+                order
+                    .iter()
+                    .position(|p| p == &r.path)
+                    .unwrap_or(usize::MAX)
+            } else {
+                usize::MAX
+            }
         });
         self.persist()
     }
@@ -333,10 +401,36 @@ impl WorkbenchStore {
             .find(|w| w.name == name)
             .cloned()
             .ok_or_else(|| WorkbenchError::UnknownWorkbench(name.to_string()))?;
+        let runtime = runtime_workbench(&wb)
+            .ok_or_else(|| WorkbenchError::UnknownWorkbench(name.to_string()))?;
         self.config.active = Some(name.to_string());
         self.persist()?;
-        Ok(wb)
+        Ok(runtime)
     }
+}
+
+fn runtime_workbench(workbench: &Workbench) -> Option<Workbench> {
+    let repos: Vec<RepoEntry> = workbench
+        .repos
+        .iter()
+        .filter(|repo| repo.is_runtime_supported())
+        .map(|repo| {
+            let mut repo = repo.clone();
+            if repo.is_local() {
+                repo.distro = None;
+            }
+            repo
+        })
+        .collect();
+
+    if repos.is_empty() && !workbench.repos.is_empty() {
+        return None;
+    }
+
+    Some(Workbench {
+        name: workbench.name.clone(),
+        repos,
+    })
 }
 
 #[cfg(test)]
@@ -595,5 +689,236 @@ mod tests {
         let wb = store.set_active("A").unwrap();
         assert_eq!(wb.name, "A");
         assert_eq!(wb.repos.len(), 1);
+    }
+
+    #[test]
+    fn runtime_config_filtra_fuentes_wsl_sin_borrarlas() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            r#"
+version = 1
+active = "A"
+
+[[workbench]]
+name = "A"
+
+  [[workbench.repos]]
+  path = "/tmp/local"
+  alias = "Local"
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+  alias = "WSL"
+"#,
+        )
+        .unwrap();
+
+        let mut store = store_in(&dir);
+        assert_eq!(
+            store.config().workbenches[0].repos.len(),
+            2,
+            "la config persistida conserva futuras entradas WSL"
+        );
+        assert_eq!(store.runtime_config().workbenches[0].repos.len(), 1);
+        assert_eq!(
+            store.active_workbench_runtime().unwrap().repos[0]
+                .alias
+                .as_deref(),
+            Some("Local")
+        );
+
+        store.create_workbench("B").unwrap();
+        let reloaded = store_in(&dir);
+        let persisted = &reloaded.config().workbenches[0].repos;
+        assert_eq!(persisted.len(), 2);
+        let wsl = persisted
+            .iter()
+            .find(|repo| repo.source == RepoSource::Wsl)
+            .expect("la entrada WSL futura sigue persistida");
+        assert_eq!(wsl.path, PathBuf::from("/home/me/proyecto"));
+        assert_eq!(wsl.distro.as_deref(), Some("Ubuntu"));
+        assert_eq!(wsl.alias.as_deref(), Some("WSL"));
+        assert_eq!(reloaded.runtime_config().workbenches[0].repos.len(), 1);
+    }
+
+    #[test]
+    fn set_active_devuelve_solo_repos_runtime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            r#"
+version = 1
+
+[[workbench]]
+name = "A"
+
+  [[workbench.repos]]
+  path = "/tmp/local"
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+"#,
+        )
+        .unwrap();
+
+        let mut store = store_in(&dir);
+        let active = store.set_active("A").unwrap();
+
+        assert_eq!(active.repos.len(), 1);
+        assert_eq!(active.repos[0].source, RepoSource::Local);
+        assert_eq!(store.config().workbenches[0].repos.len(), 2);
+    }
+
+    #[test]
+    fn runtime_config_oculta_workbench_solo_wsl_y_remapea_active_visible() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            r#"
+version = 1
+active = "Solo WSL"
+
+[[workbench]]
+name = "Solo WSL"
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+
+[[workbench]]
+name = "Vacio local"
+
+[[workbench]]
+name = "Local"
+
+  [[workbench.repos]]
+  path = "/tmp/local"
+"#,
+        )
+        .unwrap();
+
+        let store = store_in(&dir);
+        let runtime = store.runtime_config();
+        let names: Vec<_> = runtime
+            .workbenches
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect();
+
+        assert_eq!(runtime.active.as_deref(), Some("Vacio local"));
+        assert_eq!(names, vec!["Vacio local", "Local"]);
+        assert!(store.active_workbench_runtime().unwrap().repos.is_empty());
+        assert_eq!(
+            store.config().active.as_deref(),
+            Some("Solo WSL"),
+            "la proyección runtime no debe borrar el active persistido"
+        );
+    }
+
+    #[test]
+    fn set_active_rechaza_workbench_solo_wsl_en_runtime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            r#"
+version = 1
+
+[[workbench]]
+name = "Solo WSL"
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/home/me/proyecto"
+  distro = "Ubuntu"
+"#,
+        )
+        .unwrap();
+
+        let mut store = store_in(&dir);
+        assert!(matches!(
+            store.set_active("Solo WSL").unwrap_err(),
+            WorkbenchError::UnknownWorkbench(_)
+        ));
+        assert_eq!(store.config().active, None);
+    }
+
+    #[test]
+    fn comandos_locales_no_colisionan_con_fuentes_wsl_ocultas() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            r#"
+version = 1
+
+[[workbench]]
+name = "A"
+
+  [[workbench.repos]]
+  source = "wsl"
+  path = "/tmp/shared"
+  distro = "Ubuntu"
+"#,
+        )
+        .unwrap();
+
+        let mut store = store_in(&dir);
+        store
+            .add_repo(
+                "A",
+                PathBuf::from("/tmp/shared"),
+                Some("Local".into()),
+                false,
+            )
+            .unwrap();
+
+        let repos = &store.config().workbenches[0].repos;
+        assert_eq!(repos.len(), 2);
+        assert!(repos.iter().any(
+            |repo| repo.source == RepoSource::Wsl && repo.path == PathBuf::from("/tmp/shared")
+        ));
+        assert!(repos
+            .iter()
+            .any(|repo| repo.source == RepoSource::Local
+                && repo.path == PathBuf::from("/tmp/shared")));
+
+        store
+            .remove_repo("A", Path::new("/tmp/shared"))
+            .expect("remove local");
+        let remaining = &store.config().workbenches[0].repos;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].source, RepoSource::Wsl);
+    }
+
+    #[test]
+    fn runtime_config_limpia_distro_de_entradas_locales_malformadas() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            r#"
+version = 1
+
+[[workbench]]
+name = "A"
+
+  [[workbench.repos]]
+  source = "local"
+  path = "/tmp/local"
+  distro = "Ubuntu"
+"#,
+        )
+        .unwrap();
+
+        let store = store_in(&dir);
+        assert_eq!(
+            store.config().workbenches[0].repos[0].distro.as_deref(),
+            Some("Ubuntu")
+        );
+        assert_eq!(store.runtime_config().workbenches[0].repos[0].distro, None);
     }
 }
