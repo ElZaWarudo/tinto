@@ -17,11 +17,11 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 - Current phase/status: post-closeout UX/security-tooling iteration in progress. WSL2 watcher fallback, file/tree UX polish, external file operations, delete undo/redo, file overview ruler marks, and Gitleaks addon/configuration flows are implemented and locally verified.
 - Active package: none. Iterative develop-branch work, not a roadmap package.
-- Branch/base: `develop` with a dirty worktree containing the post-closeout iterations; current Gitleaks-related changes are uncommitted in frontend and `src-tauri` backend files.
+- Branch/base: `develop` at `233bd41`, synchronized with `origin/develop`. Working tree clean apart from local untracked `AGENTS.md`.
 - Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
 - Blockers: none known in code. Automatic host installation of Gitleaks remains environment-dependent by design; the repo-local `.gitleaks.toml` setup is now handled directly by Tinto. Open UX gap: the right-side file overview ruler currently shows alert markers, but it does not yet behave like the global file-follow/navigation rail expected from Visual Studio Code.
 - Required user decisions: none.
-- Next action: continue integrating and then commit the current post-closeout develop worktree once the UX slice is accepted.
+- Next action: continue post-closeout UX iteration from the synced `develop` baseline, with the file overview ruler/global file-follow behavior still open.
 
 ## Source Documents
 
