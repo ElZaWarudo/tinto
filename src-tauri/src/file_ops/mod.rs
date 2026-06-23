@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::bus::commands::CommandError;
 
@@ -19,13 +19,13 @@ pub use commands::{
 };
 
 /// Conflict reported while resolving multiple `copy_into_repo` operations.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileConflict {
     pub dest_rel: PathBuf,
     pub kind: FileConflictKind,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FileConflictKind {
     /// Ya existe un archivo regular en el destino.
@@ -45,7 +45,7 @@ impl FileConflict {
 }
 
 /// Normaliza un repo root: resuelve el path canónico absoluto.
-fn repo_canonical(repo: &Path) -> Result<PathBuf, CommandError> {
+pub(crate) fn repo_canonical(repo: &Path) -> Result<PathBuf, CommandError> {
     repo.canonicalize()
         .map_err(|_| CommandError::new("repository-not-found", "el repo no existe"))
 }
@@ -53,7 +53,7 @@ fn repo_canonical(repo: &Path) -> Result<PathBuf, CommandError> {
 /// Une `repo` + `rel` y valida que `joined` quede contenido dentro de `repo`
 /// y no toque `.git/`. No exige que el path exista (a diferencia de
 /// `resolve_within`).
-fn safe_join(repo: &Path, rel: &Path) -> Result<PathBuf, CommandError> {
+pub(crate) fn safe_join(repo: &Path, rel: &Path) -> Result<PathBuf, CommandError> {
     let repo_canon = repo_canonical(repo)?;
     // Normaliza separadores y normaliza `..` relativos sin tocar el FS.
     let joined = repo_canon.join(rel);

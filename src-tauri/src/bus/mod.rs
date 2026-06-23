@@ -12,11 +12,12 @@
 
 pub mod commands;
 pub mod contract;
-mod secret_scan;
+pub(crate) mod secret_scan;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot, Semaphore};
@@ -25,6 +26,8 @@ use crate::git::{DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError};
 use crate::paths::Classification;
 use crate::watcher::{ClassifiedEvent, EventType, FsWatcher, WatcherError, WatcherMessage};
 use crate::workbench::{RepoEntry, RepoSource};
+use crate::wsl_agent::launcher::request_ubuntu_agent;
+use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, FileFingerprint, PROTOCOL_VERSION};
 use contract::{
     FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
     RepoErrorClass, RepoErrorState, RepoMetrics, SecretFinding, SignalSeverity, SubscriptionTarget,
@@ -37,6 +40,8 @@ use contract::{
 const RECALC_CONCURRENCY: usize = 2;
 const MAX_SIGNALS_PER_REPO: usize = 12;
 const LARGE_DELETE_LINES: usize = 100;
+const WSL_POLL_INTERVAL: Duration = Duration::from_secs(3);
+const MAX_WSL_FS_EVENTS_PER_POLL: usize = 200;
 
 /// Emisión inyectada (en la app: `AppHandle::emit`; en tests: un canal).
 /// No llamarlo `Emitter`: colisiona con `tauri::Emitter`.
@@ -98,6 +103,7 @@ pub(crate) struct RepoLiveState {
     secret_findings: Vec<SecretFinding>,
     /// Último tamaño conocido por path vigilado (delta de tamaño, Plano 2).
     last_known_sizes: HashMap<PathBuf, u64>,
+    wsl_fingerprints: HashMap<PathBuf, FileFingerprint>,
 }
 
 impl RepoLiveState {
@@ -142,6 +148,19 @@ impl RepoLiveState {
     /// Aplica un error (sube revisión para que el consumidor lo aplique).
     pub(crate) fn apply_error(&mut self, error: RepoErrorState) {
         self.error = Some(error);
+        self.revision += 1;
+    }
+
+    pub(crate) fn apply_external_delta(&mut self, delta: &RepoDelta) {
+        self.status = delta.status.clone();
+        self.branch = delta.branch.clone();
+        self.head = delta.head.clone();
+        self.last_activity_ms = delta.last_activity_ms;
+        self.error = delta.error.clone();
+        self.metrics = delta.metrics.clone();
+        self.gitleaks_configured = delta.gitleaks_configured;
+        self.signals = delta.signals.clone();
+        self.secret_findings = delta.secret_findings.clone();
         self.revision += 1;
     }
 
@@ -194,6 +213,90 @@ impl RepoLiveState {
                 }
             })
             .collect()
+    }
+
+    pub(crate) fn wsl_fs_events(&mut self, fingerprints: Vec<FileFingerprint>) -> Vec<FsEvent> {
+        let mut current = HashMap::new();
+        for fingerprint in fingerprints {
+            current.insert(fingerprint.path.clone(), fingerprint);
+        }
+
+        if self.wsl_fingerprints.is_empty() {
+            self.wsl_fingerprints = current;
+            return Vec::new();
+        }
+
+        let mut events = Vec::new();
+        for (path, fingerprint) in &current {
+            match self.wsl_fingerprints.get(path) {
+                None => events.push(wsl_fs_event(
+                    path,
+                    FsEventKind::Created,
+                    Some(fingerprint.size),
+                    None,
+                    fingerprint.modified_ms,
+                )),
+                Some(previous)
+                    if previous.size != fingerprint.size
+                        || previous.modified_ms != fingerprint.modified_ms =>
+                {
+                    events.push(wsl_fs_event(
+                        path,
+                        FsEventKind::Modified,
+                        Some(fingerprint.size),
+                        Some(fingerprint.size as i64 - previous.size as i64),
+                        fingerprint.modified_ms,
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+
+        for path in self.wsl_fingerprints.keys() {
+            if !current.contains_key(path) {
+                events.push(wsl_fs_event(
+                    path,
+                    FsEventKind::Removed,
+                    None,
+                    None,
+                    now_ms(),
+                ));
+            }
+        }
+
+        events.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| fs_event_kind_name(a.kind).cmp(fs_event_kind_name(b.kind)))
+        });
+        events.truncate(MAX_WSL_FS_EVENTS_PER_POLL);
+        self.wsl_fingerprints = current;
+        events
+    }
+}
+
+fn wsl_fs_event(
+    path: &Path,
+    kind: FsEventKind,
+    size: Option<u64>,
+    size_delta: Option<i64>,
+    timestamp_ms: u64,
+) -> FsEvent {
+    FsEvent {
+        path: path.to_path_buf(),
+        kind,
+        timestamp_ms,
+        size,
+        size_delta,
+        signals: signals_for_path(path, SignalSurface::Plane2),
+    }
+}
+
+fn fs_event_kind_name(kind: FsEventKind) -> &'static str {
+    match kind {
+        FsEventKind::Created => "created",
+        FsEventKind::Modified => "modified",
+        FsEventKind::Removed => "removed",
     }
 }
 
@@ -483,7 +586,7 @@ fn watcher_error_state(error: &WatcherError) -> RepoErrorState {
     }
 }
 
-fn git_error_state(error: &GitError) -> RepoErrorState {
+pub(crate) fn git_error_state(error: &GitError) -> RepoErrorState {
     RepoErrorState {
         class: RepoErrorClass::Transient,
         category: error.category().into(),
@@ -503,6 +606,10 @@ pub enum BusCommand {
     Subscribe(Vec<SubscriptionTarget>, oneshot::Sender<()>),
     RetryRepo(PathBuf, oneshot::Sender<()>),
     ResolveRepo(PathBuf, oneshot::Sender<Result<PathBuf, RepoResolveError>>),
+    ResolveRepoIdentity(
+        PathBuf,
+        oneshot::Sender<Result<ResolvedRepo, RepoResolveError>>,
+    ),
     /// ¿El path canónico pertenece al workbench activo? Allowlist que acota
     /// las lecturas bajo demanda al conjunto de repos montado.
     IsKnownRepo(PathBuf, oneshot::Sender<bool>),
@@ -515,6 +622,14 @@ pub enum RepoResolveError {
     RepositoryNotFound,
     RepoNotAllowed,
     BusUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRepo {
+    pub source: RepoSource,
+    pub path: PathBuf,
+    pub distro: Option<String>,
+    pub wsl_repos: Vec<PathBuf>,
 }
 
 /// Handle clonable hacia el bus; vive como managed state de Tauri.
@@ -564,6 +679,21 @@ impl BusHandle {
         rx.await.unwrap_or(Err(RepoResolveError::BusUnavailable))
     }
 
+    pub async fn resolve_repo_identity(
+        &self,
+        repo: PathBuf,
+    ) -> Result<ResolvedRepo, RepoResolveError> {
+        let (reply, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(BusCommand::ResolveRepoIdentity(repo, reply))
+            .is_err()
+        {
+            return Err(RepoResolveError::BusUnavailable);
+        }
+        rx.await.unwrap_or(Err(RepoResolveError::BusUnavailable))
+    }
+
     /// `true` si `repo` (path canónico) está en el workbench activo. Si el bus
     /// no responde, devuelve `false` (fail-closed).
     pub async fn is_known(&self, repo: PathBuf) -> bool {
@@ -585,7 +715,15 @@ impl BusHandle {
 /// Resultado de un recálculo en vuelo, de vuelta a la task.
 struct RecalcResult {
     repo: PathBuf,
-    outcome: Result<RecalcOutcome, GitError>,
+    payload: RecalcPayload,
+}
+
+enum RecalcPayload {
+    Outcome(Result<RecalcOutcome, RepoErrorState>),
+    WslPoll {
+        delta: RepoDelta,
+        fingerprints: Option<Vec<FileFingerprint>>,
+    },
 }
 
 /// Corre la task del bus. `initial` es el workbench activo al arrancar
@@ -651,6 +789,11 @@ async fn run_bus_inner(
     let (results_tx, mut results_rx) = mpsc::unbounded_channel::<RecalcResult>();
     let mut inflight: HashSet<PathBuf> = HashSet::new();
     let mut pending: HashMap<PathBuf, RecalcScope> = HashMap::new();
+    let mut wsl_poll = tokio::time::interval_at(
+        tokio::time::Instant::now() + WSL_POLL_INTERVAL,
+        WSL_POLL_INTERVAL,
+    );
+    wsl_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // Montaje inicial.
     set_workbench(
@@ -689,11 +832,14 @@ async fn run_bus_inner(
                             .collect();
                         if !terminal.is_empty() {
                             if let Some(w) = watcher.as_mut() {
-                                w.watch_workbench(&current_entries);
+                                let local_entries = local_runtime_entries(&current_entries);
+                                w.watch_workbench(&local_entries);
                             }
                             for repo in terminal {
-                                trigger_recalc(repo, RecalcScope::Everything, &subscriptions,
-                                    &semaphore, &results_tx, &mut inflight, &mut pending);
+                                if let Some(entry) = current_entries.iter().find(|entry| entry.path == repo).cloned() {
+                                    trigger_entry_recalc(entry, &current_entries, RecalcScope::Everything, &subscriptions,
+                                        &semaphore, &results_tx, &mut inflight, &mut pending);
+                                }
                             }
                         }
                         let snapshot = WorkbenchSnapshot {
@@ -710,13 +856,13 @@ async fn run_bus_inner(
                         let targets: Vec<SubscriptionTarget> = targets
                             .into_iter()
                             .filter_map(|mut target| {
-                                let repo = resolve_repo_for_command(
+                                let entry = resolve_repo_entry_for_command(
                                     target.repo,
                                     &current_entries,
                                     &unsupported_entries,
                                 )
                                 .ok()?;
-                                target.repo = repo;
+                                target.repo = entry.path;
                                 Some(target)
                             })
                             .collect();
@@ -724,8 +870,8 @@ async fn run_bus_inner(
                             targets.iter().map(|t| t.repo.clone()).collect();
                         subscriptions = targets;
                         for repo in affected {
-                            if states.contains_key(&repo) {
-                                trigger_recalc(repo, RecalcScope::Everything, &subscriptions,
+                            if let Some(entry) = current_entries.iter().find(|entry| entry.path == repo).cloned() {
+                                trigger_entry_recalc(entry, &current_entries, RecalcScope::Everything, &subscriptions,
                                     &semaphore, &results_tx, &mut inflight, &mut pending);
                             }
                         }
@@ -733,13 +879,14 @@ async fn run_bus_inner(
                     }
                     Some(BusCommand::RetryRepo(repo, reply)) => {
                         if let Ok(repo) =
-                            resolve_repo_for_command(repo, &current_entries, &unsupported_entries)
+                            resolve_repo_entry_for_command(repo, &current_entries, &unsupported_entries)
                         {
                             if let Some(w) = watcher.as_mut() {
-                                w.watch_workbench(&current_entries);
+                                let local_entries = local_runtime_entries(&current_entries);
+                                w.watch_workbench(&local_entries);
                             }
-                            if states.contains_key(&repo) {
-                                trigger_recalc(repo, RecalcScope::Everything, &subscriptions,
+                            if states.contains_key(&repo.path) {
+                                trigger_entry_recalc(repo, &current_entries, RecalcScope::Everything, &subscriptions,
                                     &semaphore, &results_tx, &mut inflight, &mut pending);
                             }
                         }
@@ -751,6 +898,20 @@ async fn run_bus_inner(
                             &current_entries,
                             &unsupported_entries,
                         );
+                        let _ = reply.send(resolved);
+                    }
+                    Some(BusCommand::ResolveRepoIdentity(repo, reply)) => {
+                        let resolved = resolve_repo_entry_for_command(
+                            repo,
+                            &current_entries,
+                            &unsupported_entries,
+                        )
+                        .map(|entry| ResolvedRepo {
+                            source: entry.source,
+                            path: entry.path,
+                            distro: entry.distro,
+                            wsl_repos: wsl_repo_paths(&current_entries),
+                        });
                         let _ = reply.send(resolved);
                     }
                     Some(BusCommand::IsKnownRepo(repo, reply)) => {
@@ -819,6 +980,17 @@ async fn run_bus_inner(
                     }
                 }
             }
+            _ = wsl_poll.tick(), if current_entries.iter().any(|entry| entry.source == RepoSource::Wsl) => {
+                let wsl_entries: Vec<RepoEntry> = current_entries
+                    .iter()
+                    .filter(|entry| entry.source == RepoSource::Wsl)
+                    .cloned()
+                    .collect();
+                for entry in wsl_entries {
+                    trigger_entry_recalc(entry, &current_entries, RecalcScope::Everything, &subscriptions,
+                        &semaphore, &results_tx, &mut inflight, &mut pending);
+                }
+            }
             Some(result) = results_rx.recv() => {
                 inflight.remove(&result.repo);
                 // Si el repo se desmontó mientras el recálculo estaba en vuelo,
@@ -827,24 +999,50 @@ async fn run_bus_inner(
                     pending.remove(&result.repo);
                     continue;
                 };
-                match result.outcome {
-                    Ok(outcome) => {
+                match result.payload {
+                    RecalcPayload::Outcome(Ok(outcome)) => {
                         state.apply_recalc(&outcome);
                         let mut delta = state.delta(&result.repo);
                         delta.subscribed_diffs = outcome.subscribed_diffs;
                         emit(&sink, EVENT_WORKBENCH_DELTA, &delta);
                     }
-                    Err(e) => {
-                        state.apply_error(git_error_state(&e));
+                    RecalcPayload::Outcome(Err(error)) => {
+                        state.apply_error(error);
                         let delta = state.delta(&result.repo);
+                        emit(&sink, EVENT_WORKBENCH_DELTA, &delta);
+                    }
+                    RecalcPayload::WslPoll {
+                        delta: external,
+                        fingerprints,
+                    } => {
+                        if let Some(fingerprints) = fingerprints {
+                            let fs_events = state.wsl_fs_events(fingerprints);
+                            if !fs_events.is_empty() {
+                                state.last_activity_ms = now_ms();
+                                emit(
+                                    &sink,
+                                    EVENT_FS_EVENTS,
+                                    &FsEventBatch {
+                                        repo: result.repo.clone(),
+                                        events: fs_events,
+                                    },
+                                );
+                            }
+                        }
+                        let subscribed_diffs = external.subscribed_diffs.clone();
+                        state.apply_external_delta(&external);
+                        let mut delta = state.delta(&result.repo);
+                        delta.subscribed_diffs = subscribed_diffs;
                         emit(&sink, EVENT_WORKBENCH_DELTA, &delta);
                     }
                 }
                 // Coalescing: si llegaron disparadores durante el vuelo, un
                 // recálculo más (no una cola).
                 if let Some(scope) = pending.remove(&result.repo) {
-                    trigger_recalc(result.repo, scope, &subscriptions,
-                        &semaphore, &results_tx, &mut inflight, &mut pending);
+                    if let Some(entry) = current_entries.iter().find(|entry| entry.path == result.repo).cloned() {
+                        trigger_entry_recalc(entry, &current_entries, scope, &subscriptions,
+                            &semaphore, &results_tx, &mut inflight, &mut pending);
+                    }
                 }
             }
         }
@@ -872,19 +1070,22 @@ fn set_workbench(
         .partition(|repo| repo.is_runtime_supported());
     *unsupported_entries = unsupported;
 
-    let canonical: Vec<RepoEntry> = supported
+    let runtime_entries: Vec<RepoEntry> = supported
         .into_iter()
         .map(|mut r| {
-            r.path = r.path.canonicalize().unwrap_or(r.path);
+            if r.is_local() {
+                r.path = r.path.canonicalize().unwrap_or(r.path);
+            }
             r
         })
         .collect();
+    let local_entries = local_runtime_entries(&runtime_entries);
 
     if let Some(w) = watcher.as_mut() {
-        w.watch_workbench(&canonical);
+        w.watch_workbench(&local_entries);
     }
 
-    let keep: HashSet<PathBuf> = canonical.iter().map(|r| r.path.clone()).collect();
+    let keep: HashSet<PathBuf> = runtime_entries.iter().map(|r| r.path.clone()).collect();
     // Persistir la revisión de los repos que se desmontan, para reanudarla si
     // vuelven (revisión monotónica por repo del contrato).
     for (repo, state) in states.iter() {
@@ -894,7 +1095,7 @@ fn set_workbench(
     }
     states.retain(|repo, _| keep.contains(repo));
     pending.retain(|repo, _| keep.contains(repo));
-    for entry in &canonical {
+    for entry in &runtime_entries {
         // Repo re-añadido: continuar su contador desde la última revisión
         // conocida en vez de reiniciar a 0.
         states
@@ -903,8 +1104,9 @@ fn set_workbench(
                 revision: revisions.get(&entry.path).copied().unwrap_or(0),
                 ..Default::default()
             });
-        trigger_recalc(
-            entry.path.clone(),
+        trigger_entry_recalc(
+            entry.clone(),
+            &runtime_entries,
             RecalcScope::Everything,
             subscriptions,
             semaphore,
@@ -913,7 +1115,159 @@ fn set_workbench(
             pending,
         );
     }
-    *current_entries = canonical;
+    *current_entries = runtime_entries;
+}
+
+fn local_runtime_entries(entries: &[RepoEntry]) -> Vec<RepoEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.is_local())
+        .cloned()
+        .collect()
+}
+
+fn wsl_repo_paths(entries: &[RepoEntry]) -> Vec<PathBuf> {
+    entries
+        .iter()
+        .filter(|entry| entry.source == RepoSource::Wsl)
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trigger_entry_recalc(
+    entry: RepoEntry,
+    current_entries: &[RepoEntry],
+    scope: RecalcScope,
+    subscriptions: &[SubscriptionTarget],
+    semaphore: &Arc<Semaphore>,
+    results_tx: &mpsc::UnboundedSender<RecalcResult>,
+    inflight: &mut HashSet<PathBuf>,
+    pending: &mut HashMap<PathBuf, RecalcScope>,
+) {
+    match entry.source {
+        RepoSource::Local => trigger_recalc(
+            entry.path,
+            scope,
+            subscriptions,
+            semaphore,
+            results_tx,
+            inflight,
+            pending,
+        ),
+        RepoSource::Wsl => trigger_wsl_recalc(
+            entry,
+            wsl_repo_paths(current_entries),
+            subscriptions,
+            results_tx,
+            inflight,
+            pending,
+        ),
+    }
+}
+
+fn trigger_wsl_recalc(
+    entry: RepoEntry,
+    _wsl_repos: Vec<PathBuf>,
+    subscriptions: &[SubscriptionTarget],
+    results_tx: &mpsc::UnboundedSender<RecalcResult>,
+    inflight: &mut HashSet<PathBuf>,
+    pending: &mut HashMap<PathBuf, RecalcScope>,
+) {
+    let repo = entry.path.clone();
+    if inflight.contains(&repo) {
+        pending.insert(repo, RecalcScope::Everything);
+        return;
+    }
+    inflight.insert(repo.clone());
+
+    let subs: Vec<SubscriptionTarget> = subscriptions
+        .iter()
+        .filter(|target| target.repo == repo)
+        .cloned()
+        .collect();
+    let tx = results_tx.clone();
+
+    tokio::spawn(async move {
+        let repo_for_request = repo.clone();
+        let payload = tokio::task::spawn_blocking(move || {
+            let request = AgentRequest::RepoSnapshotWithFsEvents {
+                protocol_version: PROTOCOL_VERSION,
+                repos: vec![repo_for_request.clone()],
+                subscriptions: subs,
+            };
+            match request_ubuntu_agent(&request) {
+                Ok(AgentResponse::RepoSnapshotWithFsEvents {
+                    repos,
+                    fingerprints,
+                }) => {
+                    let delta = repos.into_iter().next().unwrap_or_else(|| {
+                        empty_wsl_error_delta(
+                            &repo_for_request,
+                            "empty-response",
+                            "el agente WSL no devolvio el repo",
+                        )
+                    });
+                    let fingerprints = fingerprints
+                        .into_iter()
+                        .find(|snapshot| snapshot.repo == repo_for_request)
+                        .map(|snapshot| snapshot.files);
+                    RecalcPayload::WslPoll {
+                        delta,
+                        fingerprints,
+                    }
+                }
+                Ok(AgentResponse::Error { category, message }) => RecalcPayload::WslPoll {
+                    delta: empty_wsl_error_delta(&repo_for_request, &category, &message),
+                    fingerprints: None,
+                },
+                Ok(_) => RecalcPayload::WslPoll {
+                    delta: empty_wsl_error_delta(
+                        &repo_for_request,
+                        "malformed_response",
+                        "respuesta inesperada del agente WSL",
+                    ),
+                    fingerprints: None,
+                },
+                Err(error) => RecalcPayload::WslPoll {
+                    delta: empty_wsl_error_delta(
+                        &repo_for_request,
+                        error.safe_category(),
+                        &error.message,
+                    ),
+                    fingerprints: None,
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|_| RecalcPayload::WslPoll {
+            delta: empty_wsl_error_delta(&repo, "internal", "la tarea WSL fallo"),
+            fingerprints: None,
+        });
+
+        let _ = tx.send(RecalcResult { repo, payload });
+    });
+}
+
+fn empty_wsl_error_delta(repo: &Path, category: &str, message: &str) -> RepoDelta {
+    RepoDelta {
+        repo: repo.to_path_buf(),
+        revision: 0,
+        status: Default::default(),
+        branch: None,
+        head: None,
+        last_activity_ms: now_ms(),
+        error: Some(RepoErrorState {
+            class: RepoErrorClass::Terminal,
+            category: category.into(),
+            message: message.into(),
+        }),
+        metrics: RepoMetrics::default(),
+        gitleaks_configured: false,
+        signals: Vec::new(),
+        secret_findings: Vec::new(),
+        subscribed_diffs: None,
+    }
 }
 
 fn resolve_repo_for_command(
@@ -921,11 +1275,50 @@ fn resolve_repo_for_command(
     current_entries: &[RepoEntry],
     unsupported_entries: &[RepoEntry],
 ) -> Result<PathBuf, RepoResolveError> {
-    if current_entries.iter().any(|entry| entry.path == repo) {
-        return Ok(repo);
+    let entry = resolve_repo_entry_for_command(repo, current_entries, unsupported_entries)?;
+    if entry.is_local() {
+        Ok(entry.path)
+    } else {
+        Err(RepoResolveError::UnsupportedRepoSource {
+            source: entry.source,
+        })
+    }
+}
+
+fn resolve_repo_entry_for_command(
+    repo: PathBuf,
+    current_entries: &[RepoEntry],
+    unsupported_entries: &[RepoEntry],
+) -> Result<RepoEntry, RepoResolveError> {
+    let repo_lexical = normalize_path_lexically(&repo);
+    if path_has_navigation_component(&repo) {
+        let repo_canon = repo.canonicalize().ok();
+        if let Some(entry) = unsupported_entries.iter().find(|entry| {
+            unsupported_entry_matches_request(entry, &repo, &repo_lexical, repo_canon.as_ref())
+        }) {
+            return Err(RepoResolveError::UnsupportedRepoSource {
+                source: entry.source,
+            });
+        }
+        if let Some(entry) = current_entries.iter().find(|entry| {
+            entry.source == RepoSource::Wsl
+                && (entry.path == repo || normalize_path_lexically(&entry.path) == repo_lexical)
+        }) {
+            return Ok(entry.clone());
+        }
     }
 
-    if let Some(entry) = unsupported_entries.iter().find(|entry| entry.path == repo) {
+    if let Some(entry) = current_entries
+        .iter()
+        .find(|entry| entry.path == repo || normalize_path_lexically(&entry.path) == repo_lexical)
+    {
+        return Ok(entry.clone());
+    }
+
+    if let Some(entry) = unsupported_entries
+        .iter()
+        .find(|entry| entry.path == repo || normalize_path_lexically(&entry.path) == repo_lexical)
+    {
         return Err(RepoResolveError::UnsupportedRepoSource {
             source: entry.source,
         });
@@ -934,11 +1327,52 @@ fn resolve_repo_for_command(
     let canon = repo
         .canonicalize()
         .map_err(|_| RepoResolveError::RepositoryNotFound)?;
-    if current_entries.iter().any(|entry| entry.path == canon) {
-        Ok(canon)
+    if let Some(entry) = current_entries
+        .iter()
+        .find(|entry| entry.is_local() && entry.path == canon)
+    {
+        Ok(entry.clone())
     } else {
         Err(RepoResolveError::RepoNotAllowed)
     }
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn path_has_navigation_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    }) || path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .split('\\')
+        .any(|segment| segment == "." || segment == "..")
+}
+
+fn unsupported_entry_matches_request(
+    entry: &RepoEntry,
+    repo: &Path,
+    repo_lexical: &Path,
+    repo_canon: Option<&PathBuf>,
+) -> bool {
+    entry.path == repo
+        || normalize_path_lexically(&entry.path) == repo_lexical
+        || repo_canon.is_some_and(|canon| entry.path.canonicalize().ok().as_ref() == Some(canon))
 }
 
 /// Dispara un recálculo de un repo (o lo deja pendiente si hay uno en
@@ -978,14 +1412,18 @@ fn trigger_recalc(
         let outcome =
             tokio::task::spawn_blocking(move || recalc_blocking(&repo_for_task, scope, &subs))
                 .await
-                .unwrap_or_else(|_| Err(GitError::NotFound("recalc task panicked".into())));
-        let _ = tx.send(RecalcResult { repo, outcome });
+                .unwrap_or_else(|_| Err(GitError::NotFound("recalc task panicked".into())))
+                .map_err(|error| git_error_state(&error));
+        let _ = tx.send(RecalcResult {
+            repo,
+            payload: RecalcPayload::Outcome(outcome),
+        });
     });
 }
 
 /// El recálculo bloqueante: abre el engine, lee según scope y computa los
 /// diffs suscritos (incluido el sintetizado para untracked).
-fn recalc_blocking(
+pub(crate) fn recalc_blocking(
     repo: &Path,
     scope: RecalcScope,
     subs: &[SubscriptionTarget],
@@ -1216,6 +1654,66 @@ mod tests {
     }
 
     #[test]
+    fn wsl_fs_events_prime_and_diff_fingerprints() {
+        let mut state = RepoLiveState::default();
+
+        let initial = state.wsl_fs_events(vec![
+            FileFingerprint {
+                path: "base.txt".into(),
+                size: 5,
+                modified_ms: 10,
+            },
+            FileFingerprint {
+                path: ".env".into(),
+                size: 4,
+                modified_ms: 10,
+            },
+        ]);
+        assert!(initial.is_empty(), "first WSL scan only primes state");
+
+        let events = state.wsl_fs_events(vec![
+            FileFingerprint {
+                path: "base.txt".into(),
+                size: 7,
+                modified_ms: 20,
+            },
+            FileFingerprint {
+                path: "new.txt".into(),
+                size: 3,
+                modified_ms: 20,
+            },
+        ]);
+
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().any(|event| {
+            event.path == Path::new(".env")
+                && event.kind == FsEventKind::Removed
+                && event.size.is_none()
+        }));
+        assert!(events.iter().any(|event| {
+            event.path == Path::new("base.txt")
+                && event.kind == FsEventKind::Modified
+                && event.size == Some(7)
+                && event.size_delta == Some(2)
+        }));
+        assert!(events.iter().any(|event| {
+            event.path == Path::new("new.txt")
+                && event.kind == FsEventKind::Created
+                && event.size == Some(3)
+        }));
+        assert!(
+            events
+                .iter()
+                .find(|event| event.path == Path::new(".env"))
+                .unwrap()
+                .signals
+                .iter()
+                .any(|signal| signal.kind == PassiveSignalKind::SensitivePath),
+            "WSL fs-events should reuse Plane 2 signals"
+        );
+    }
+
+    #[test]
     fn signals_detectan_paths_sensibles_config_y_tests() {
         let status = crate::git::RepoStatus {
             modified: vec![
@@ -1339,6 +1837,15 @@ mod tests {
         repo.path().canonicalize().unwrap()
     }
 
+    fn navigation_alias_for(path: &Path) -> PathBuf {
+        let name = path.file_name().expect("path has file name");
+        PathBuf::from(format!(
+            "{}\\..\\{}",
+            path.to_string_lossy(),
+            name.to_string_lossy()
+        ))
+    }
+
     fn spawn_bus(initial: Vec<RepoEntry>) -> (BusHandle, Events) {
         let (handle, rx) = BusHandle::new_pair();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
@@ -1422,7 +1929,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn wsl_source_is_not_mounted_and_resolves_as_unsupported() {
+    async fn wsl_source_enters_runtime_but_local_resolver_stays_unsupported() {
         let a = TempRepo::with_initial_commit();
         let wsl_path = PathBuf::from("/home/me/proyecto");
         let (handle, mut rx) = spawn_bus_degraded(vec![entry(&a), wsl_entry("/home/me/proyecto")]);
@@ -1433,16 +1940,25 @@ mod tests {
 
         assert!(snap.repos.iter().any(|repo| repo.repo == ca));
         assert!(
-            !snap.repos.iter().any(|repo| repo.repo == wsl_path),
-            "future WSL sources must not enter the runtime snapshot"
+            snap.repos.iter().any(|repo| repo.repo == wsl_path),
+            "RDM-004 mounts WSL repos into the runtime snapshot on Windows"
         );
-        assert!(!handle.is_known(wsl_path.clone()).await);
+        assert!(
+            !handle.is_known(wsl_path.clone()).await,
+            "local-only allowlist remains closed for WSL repos"
+        );
         assert!(matches!(
-            handle.resolve_repo(wsl_path).await,
+            handle.resolve_repo(wsl_path.clone()).await,
             Err(RepoResolveError::UnsupportedRepoSource {
                 source: RepoSource::Wsl
             })
         ));
+        let resolved = handle
+            .resolve_repo_identity(wsl_path.clone())
+            .await
+            .expect("WSL identity is available to read routing");
+        assert_eq!(resolved.source, RepoSource::Wsl);
+        assert_eq!(resolved.path, wsl_path);
         assert!(handle.retry_repo(PathBuf::from("/home/me/proyecto")).await);
         assert!(
             handle
@@ -1468,11 +1984,33 @@ mod tests {
         handle.shutdown().await;
     }
 
+    #[test]
+    fn unsupported_source_wins_for_navigation_alias_before_canonicalizing_to_local() {
+        let a = TempRepo::with_initial_commit();
+        let ca = canonical(&a);
+        let unsupported_alias = navigation_alias_for(&ca);
+        assert!(path_has_navigation_component(&unsupported_alias));
+        assert_eq!(normalize_path_lexically(&unsupported_alias), ca);
+
+        let result = resolve_repo_for_command(
+            unsupported_alias.clone(),
+            &[RepoEntry::local(ca.clone(), None, Vec::new())],
+            &[wsl_entry(unsupported_alias.to_string_lossy().as_ref())],
+        );
+
+        assert!(matches!(
+            result,
+            Err(RepoResolveError::UnsupportedRepoSource {
+                source: RepoSource::Wsl
+            })
+        ));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unsupported_wsl_subscription_does_not_canonicalize_into_local_repo() {
         let a = TempRepo::with_initial_commit();
         let ca = canonical(&a);
-        let unsupported_alias = ca.join(".");
+        let unsupported_alias = navigation_alias_for(&ca);
         let (handle, mut rx) = spawn_bus_degraded(vec![
             entry(&a),
             wsl_entry(unsupported_alias.to_string_lossy().as_ref()),
@@ -1481,6 +2019,13 @@ mod tests {
         wait_event(&mut rx, |e, p| is_delta_for(e, p, &ca)).await;
         while rx.try_recv().is_ok() {}
         a.write("base.txt", "changed\n");
+
+        assert!(matches!(
+            handle.resolve_repo(unsupported_alias.clone()).await,
+            Err(RepoResolveError::UnsupportedRepoSource {
+                source: RepoSource::Wsl
+            })
+        ));
 
         assert!(
             handle
@@ -1513,7 +2058,7 @@ mod tests {
     async fn unsupported_wsl_retry_does_not_canonicalize_into_local_repo() {
         let a = TempRepo::with_initial_commit();
         let ca = canonical(&a);
-        let unsupported_alias = ca.join(".");
+        let unsupported_alias = navigation_alias_for(&ca);
         let (handle, mut rx) = spawn_bus_degraded(vec![
             entry(&a),
             wsl_entry(unsupported_alias.to_string_lossy().as_ref()),
@@ -1522,6 +2067,13 @@ mod tests {
         wait_event(&mut rx, |e, p| is_delta_for(e, p, &ca)).await;
         while rx.try_recv().is_ok() {}
         a.write("retry.txt", "changed\n");
+
+        assert!(matches!(
+            handle.resolve_repo(unsupported_alias.clone()).await,
+            Err(RepoResolveError::UnsupportedRepoSource {
+                source: RepoSource::Wsl
+            })
+        ));
 
         assert!(handle.retry_repo(unsupported_alias).await);
 

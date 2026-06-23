@@ -24,7 +24,7 @@ pub(crate) mod test_fixtures;
 
 pub use git2_engine::Git2Engine;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -64,7 +64,7 @@ impl GitError {
 }
 
 /// Status del working tree de un repo (Plano 1).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepoStatus {
     /// Archivos trackeados con cambios sin stagear (bits WT_*).
     pub modified: Vec<PathBuf>,
@@ -76,7 +76,7 @@ pub struct RepoStatus {
 }
 
 /// Branch actual y divergencia con su upstream.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BranchInfo {
     /// Nombre de la branch, o `None` en detached HEAD.
     pub name: Option<String>,
@@ -91,7 +91,7 @@ pub struct BranchInfo {
 }
 
 /// Metadata de un commit.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommitInfo {
     /// Id (oid hex completo).
     pub id: String,
@@ -104,7 +104,7 @@ pub struct CommitInfo {
 }
 
 /// Tipo de línea dentro de un hunk.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DiffLineKind {
     Added,
     Removed,
@@ -112,7 +112,7 @@ pub enum DiffLineKind {
 }
 
 /// Una línea de diff con sus números de línea en ambos lados.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiffLine {
     pub kind: DiffLineKind,
     pub content: String,
@@ -123,7 +123,7 @@ pub struct DiffLine {
 }
 
 /// Un hunk de diff contiguo.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiffHunk {
     pub old_start: u32,
     pub new_start: u32,
@@ -131,7 +131,7 @@ pub struct DiffHunk {
 }
 
 /// Diff de un archivo: datos estructurados, sin render.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileDiff {
     /// Path actual del archivo, relativo al repo.
     pub path: PathBuf,

@@ -16,16 +16,20 @@ use serde::Serialize;
 use tauri::State;
 
 use super::contract::{
-    ContentEncoding, FileContent, RepoTree, SubscriptionTarget, TreeEntry, WorkbenchSnapshot,
-    FILE_CONTENT_MAX_BYTES, MEDIA_CONTENT_MAX_BYTES, REPO_TREE_MAX_ENTRIES,
+    ContentEncoding, FileContent, GitleaksInstallResult, GitleaksSetupStatus, RepoTree,
+    SubscriptionTarget, TreeEntry, WorkbenchSnapshot, FILE_CONTENT_MAX_BYTES,
+    MEDIA_CONTENT_MAX_BYTES, REPO_TREE_MAX_ENTRIES,
 };
 use super::secret_scan;
-use super::{BusHandle, RepoResolveError};
+use super::{BusHandle, RepoResolveError, ResolvedRepo};
 use crate::git::{
     CommitInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError,
 };
+use crate::workbench::RepoSource;
+use crate::wsl_agent::launcher::request_ubuntu_agent;
+use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION};
 
-const GITLEAKS_TEMPLATE: &str = r#"# .gitleaks.toml
+pub(crate) const GITLEAKS_TEMPLATE: &str = r#"# .gitleaks.toml
 title = "Tinto local scan policy"
 
 [allowlist]
@@ -33,22 +37,6 @@ paths = [
   "(?i)^(?:\.git|node_modules|dist|build|\.next)/",
 ]
 "#;
-
-#[derive(Debug, Serialize)]
-pub struct GitleaksSetupStatus {
-    pub installed: bool,
-    pub version: Option<String>,
-    pub binary_path: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GitleaksInstallResult {
-    pub installed: bool,
-    pub version: Option<String>,
-    pub binary_path: Option<String>,
-    pub method: Option<String>,
-    pub message: String,
-}
 
 #[tauri::command]
 pub fn get_gitleaks_setup_status() -> Result<GitleaksSetupStatus, CommandError> {
@@ -74,15 +62,81 @@ pub async fn install_gitleaks() -> Result<GitleaksInstallResult, CommandError> {
 }
 
 #[tauri::command]
+pub async fn get_repo_gitleaks_setup_status(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+) -> Result<GitleaksSetupStatus, CommandError> {
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => Ok(gitleaks_setup_status()),
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::GitleaksSetupStatus {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                })? {
+                    AgentResponse::GitleaksSetupStatus { status } => Ok(status),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn install_repo_gitleaks(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+) -> Result<GitleaksInstallResult, CommandError> {
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => install_gitleaks().await,
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::InstallGitleaks {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                })? {
+                    AgentResponse::GitleaksInstallResult { result } => Ok(result),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn create_repo_gitleaks_config(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
 ) -> Result<(), CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
-    blocking(move || write_repo_gitleaks_config(&repo_abs)).await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo_abs = resolved.path;
+            blocking(move || write_repo_gitleaks_config(&repo_abs)).await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::CreateGitleaksConfig {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                })? {
+                    AgentResponse::Unit => Ok(()),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
 }
 
-fn gitleaks_setup_status() -> GitleaksSetupStatus {
+pub(crate) fn gitleaks_setup_status() -> GitleaksSetupStatus {
     let Some(path) = secret_scan::gitleaks_binary_path() else {
         return GitleaksSetupStatus {
             installed: false,
@@ -112,7 +166,7 @@ fn gitleaks_setup_status() -> GitleaksSetupStatus {
     }
 }
 
-fn write_repo_gitleaks_config(repo: &Path) -> Result<(), CommandError> {
+pub(crate) fn write_repo_gitleaks_config(repo: &Path) -> Result<(), CommandError> {
     if secret_scan::has_repo_gitleaks_config(repo) {
         return Ok(());
     }
@@ -156,8 +210,8 @@ impl From<GitError> for CommandError {
 /// repos montados: `resolve_within` contiene el path *dentro* del repo, pero
 /// el repo en sí debe estar acotado al workbench (si no, un frontend
 /// comprometido podría leer cualquier ruta del disco con `repo=/`).
-pub(crate) async fn ensure_known(bus: &BusHandle, repo: &Path) -> Result<PathBuf, CommandError> {
-    bus.resolve_repo(repo.to_path_buf())
+async fn resolve_read_repo(bus: &BusHandle, repo: &Path) -> Result<ResolvedRepo, CommandError> {
+    bus.resolve_repo_identity(repo.to_path_buf())
         .await
         .map_err(map_repo_resolve_error)
 }
@@ -227,7 +281,7 @@ fn resolve_within(repo: &Path, rel: &Path) -> Result<PathBuf, CommandError> {
 
 /// Construye `FileContent` desde bytes con guardas: >1 MiB se trunca; el
 /// contenido no-UTF8 (binario) se codifica en base64.
-fn file_content_from_bytes(bytes: Vec<u8>) -> FileContent {
+pub(crate) fn file_content_from_bytes(bytes: Vec<u8>) -> FileContent {
     file_content_from_bytes_with_limit(bytes, FILE_CONTENT_MAX_BYTES)
 }
 
@@ -281,7 +335,7 @@ fn media_content_from_bytes(bytes: Vec<u8>) -> FileContent {
     }
 }
 
-fn validate_media_path(path: &Path) -> Result<(), CommandError> {
+pub(crate) fn validate_media_path(path: &Path) -> Result<(), CommandError> {
     let supported = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -355,8 +409,26 @@ pub async fn get_worktree_diff(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
 ) -> Result<Vec<FileDiff>, CommandError> {
-    let repo = ensure_known(&bus, &repo).await?;
-    blocking(move || Ok(Git2Engine::open(&repo)?.worktree_diff()?)).await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            blocking(move || Ok(Git2Engine::open(&repo)?.worktree_diff()?)).await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::WorktreeDiff {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                })? {
+                    AgentResponse::WorktreeDiff { diffs } => Ok(diffs),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -365,8 +437,27 @@ pub async fn get_commit_diff(
     repo: PathBuf,
     commit_id: String,
 ) -> Result<Vec<FileDiff>, CommandError> {
-    let repo = ensure_known(&bus, &repo).await?;
-    blocking(move || Ok(Git2Engine::open(&repo)?.commit_diff(&commit_id)?)).await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            blocking(move || Ok(Git2Engine::open(&repo)?.commit_diff(&commit_id)?)).await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::CommitDiff {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                    commit_id,
+                })? {
+                    AgentResponse::CommitDiff { diffs } => Ok(diffs),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -376,8 +467,28 @@ pub async fn get_commit_log(
     offset: usize,
     limit: usize,
 ) -> Result<Vec<CommitInfo>, CommandError> {
-    let repo = ensure_known(&bus, &repo).await?;
-    blocking(move || Ok(Git2Engine::open(&repo)?.log(offset, limit)?)).await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            blocking(move || Ok(Git2Engine::open(&repo)?.log(offset, limit)?)).await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::CommitLog {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                    offset,
+                    limit,
+                })? {
+                    AgentResponse::CommitLog { commits } => Ok(commits),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -387,12 +498,32 @@ pub async fn get_blob(
     commit_id: String,
     path: PathBuf,
 ) -> Result<FileContent, CommandError> {
-    let repo = ensure_known(&bus, &repo).await?;
-    blocking(move || {
-        let bytes = Git2Engine::open(&repo)?.blob_at(&commit_id, &path)?;
-        Ok(file_content_from_bytes(bytes))
-    })
-    .await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            blocking(move || {
+                let bytes = Git2Engine::open(&repo)?.blob_at(&commit_id, &path)?;
+                Ok(file_content_from_bytes(bytes))
+            })
+            .await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::Blob {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                    commit_id,
+                    path,
+                })? {
+                    AgentResponse::Blob { content } => Ok(content),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -401,12 +532,31 @@ pub async fn get_file_content(
     repo: PathBuf,
     path: PathBuf,
 ) -> Result<FileContent, CommandError> {
-    let repo = ensure_known(&bus, &repo).await?;
-    blocking(move || {
-        let abs = resolve_within(&repo, &path)?;
-        read_file_content_bounded(&abs)
-    })
-    .await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            blocking(move || {
+                let abs = resolve_within(&repo, &path)?;
+                read_file_content_bounded(&abs)
+            })
+            .await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::FileContent {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                    path,
+                })? {
+                    AgentResponse::FileContent { content } => Ok(content),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -415,13 +565,32 @@ pub async fn get_media_content(
     repo: PathBuf,
     path: PathBuf,
 ) -> Result<FileContent, CommandError> {
-    let repo = ensure_known(&bus, &repo).await?;
-    blocking(move || {
-        let abs = resolve_within(&repo, &path)?;
-        validate_media_path(&path)?;
-        read_media_content_bounded(&abs)
-    })
-    .await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            blocking(move || {
+                let abs = resolve_within(&repo, &path)?;
+                validate_media_path(&path)?;
+                read_media_content_bounded(&abs)
+            })
+            .await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::MediaContent {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                    path,
+                })? {
+                    AgentResponse::MediaContent { content } => Ok(content),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -429,15 +598,48 @@ pub async fn list_repo_tree(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
 ) -> Result<RepoTree, CommandError> {
-    let repo = ensure_known(&bus, &repo).await?;
-    blocking(move || list_repo_tree_capped(&repo, REPO_TREE_MAX_ENTRIES)).await
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            blocking(move || list_repo_tree_capped(&repo, REPO_TREE_MAX_ENTRIES)).await
+        }
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(AgentRequest::RepoTree {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                })? {
+                    AgentResponse::RepoTree { tree } => Ok(tree),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
+    }
+}
+
+pub(crate) fn wsl_request(request: AgentRequest) -> Result<AgentResponse, CommandError> {
+    match request_ubuntu_agent(&request).map_err(map_wsl_agent_error)? {
+        AgentResponse::Error { category, message } => Err(CommandError::new(&category, message)),
+        response => Ok(response),
+    }
+}
+
+fn map_wsl_agent_error(error: crate::wsl_agent::protocol::AgentError) -> CommandError {
+    CommandError::new(error.safe_category(), error.message)
+}
+
+fn unexpected_wsl_response(_response: AgentResponse) -> CommandError {
+    CommandError::new("malformed_response", "respuesta inesperada del agente WSL")
 }
 
 /// Lee un archivo regular con asignación acotada: rechaza no-regulares
 /// (FIFO/dispositivos/dir, que bloquearían o no tienen sentido) y lee a lo
 /// sumo `FILE_CONTENT_MAX_BYTES + 1` bytes, de modo que la memoria queda
 /// acotada sin importar el tamaño real del archivo.
-fn read_file_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
+pub(crate) fn read_file_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
     read_regular_file_bounded(
         abs,
         FILE_CONTENT_MAX_BYTES,
@@ -445,7 +647,7 @@ fn read_file_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
     )
 }
 
-fn read_media_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
+pub(crate) fn read_media_content_bounded(abs: &Path) -> Result<FileContent, CommandError> {
     read_regular_file_bounded(abs, MEDIA_CONTENT_MAX_BYTES, |bytes, _| {
         media_content_from_bytes(bytes)
     })
@@ -476,7 +678,7 @@ fn read_regular_file_bounded(
 
 /// Walk del árbol respetando `.gitignore`, excluyendo `.git`, con tope de
 /// entradas (parametrizado para test del branch de truncado).
-fn list_repo_tree_capped(repo: &Path, cap: usize) -> Result<RepoTree, CommandError> {
+pub(crate) fn list_repo_tree_capped(repo: &Path, cap: usize) -> Result<RepoTree, CommandError> {
     {
         let repo_canon = repo
             .canonicalize()

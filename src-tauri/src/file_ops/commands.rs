@@ -10,13 +10,16 @@ use std::path::{Path, PathBuf};
 use tauri::State;
 use uuid::Uuid;
 
-use crate::bus::commands::{ensure_known, CommandError};
-use crate::bus::BusHandle;
+use crate::bus::commands::{map_repo_resolve_error, wsl_request, CommandError};
+use crate::bus::{BusHandle, ResolvedRepo};
+use crate::workbench::RepoSource;
+use crate::wsl_agent::launcher::windows_path_to_wsl_mount;
+use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION};
 
 use super::{safe_join, FileConflict, FileConflictKind};
 
 /// Recursively copia un archivo o directorio a `dest`.
-fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
     if src.is_dir() {
         fs::create_dir_all(dest)?;
         for entry in fs::read_dir(src)? {
@@ -31,7 +34,7 @@ fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CopyResult {
     /// Paths relativos al repo de los archivos recién creados/actualizados.
     pub copied: Vec<String>,
@@ -45,7 +48,7 @@ pub struct DeletedEntry {
     pub path: PathBuf,
     pub is_dir: bool,
     /// Nombre interno del backup dentro del staging temporal.
-    backup_name: String,
+    pub(crate) backup_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,7 +92,11 @@ pub async fn copy_to_repo(
     sources: Vec<PathBuf>, // absolutos del OS
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
+    let resolved = resolve_file_op_repo(&bus, &repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        return wsl_copy_to_repo(resolved, dest_dir, sources, overwrite);
+    }
+    let repo_abs = resolved.path;
     let dest_abs = safe_join(&repo_abs, &dest_dir)?;
     if !dest_abs.is_dir() {
         return Err(CommandError::new(
@@ -142,7 +149,11 @@ pub async fn copy_within_repo(
     dest_dir: PathBuf,     // relativa al repo
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
+    let resolved = resolve_file_op_repo(&bus, &repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        return wsl_copy_within_repo(resolved, sources, dest_dir, overwrite);
+    }
+    let repo_abs = resolved.path;
     let dest_abs = safe_join(&repo_abs, &dest_dir)?;
     if !dest_abs.is_dir() {
         return Err(CommandError::new(
@@ -202,7 +213,11 @@ pub async fn move_within_repo(
     dest_dir: PathBuf,     // relativa al repo
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
+    let resolved = resolve_file_op_repo(&bus, &repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        return wsl_move_within_repo(resolved, sources, dest_dir, overwrite);
+    }
+    let repo_abs = resolved.path;
     let dest_abs = safe_join(&repo_abs, &dest_dir)?;
     if !dest_abs.is_dir() {
         return Err(CommandError::new(
@@ -260,7 +275,11 @@ pub async fn export_from_repo(
     sources: Vec<PathBuf>, // relativas al repo
     dest_dir: PathBuf,     // absoluto del OS
 ) -> Result<(), CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
+    let resolved = resolve_file_op_repo(&bus, &repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        return wsl_export_from_repo(resolved, sources, dest_dir);
+    }
+    let repo_abs = resolved.path;
     if !dest_dir.is_dir() {
         return Err(CommandError::new(
             "dest-not-a-dir",
@@ -311,7 +330,11 @@ pub async fn delete_from_repo(
     repo: PathBuf,
     sources: Vec<PathBuf>, // relativas al repo
 ) -> Result<DeleteResult, CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
+    let resolved = resolve_file_op_repo(&bus, &repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        return wsl_delete_from_repo(resolved, sources);
+    }
+    let repo_abs = resolved.path;
     let mut targets = Vec::with_capacity(sources.len());
 
     for src_rel in &sources {
@@ -388,7 +411,11 @@ pub async fn restore_deleted_from_repo(
     repo: PathBuf,
     token: String,
 ) -> Result<(), CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
+    let resolved = resolve_file_op_repo(&bus, &repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        return wsl_restore_deleted_from_repo(resolved, token);
+    }
+    let repo_abs = resolved.path;
     let backup_root = undo_backup_root(&token)?;
     let manifest = read_delete_manifest(&backup_root)?;
     let objects_root = backup_root.join("objects");
@@ -432,7 +459,11 @@ pub async fn redo_deleted_from_repo(
     repo: PathBuf,
     token: String,
 ) -> Result<(), CommandError> {
-    let repo_abs = ensure_known(&bus, &repo).await?;
+    let resolved = resolve_file_op_repo(&bus, &repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        return wsl_redo_deleted_from_repo(resolved, token);
+    }
+    let repo_abs = resolved.path;
     let backup_root = undo_backup_root(&token)?;
     let manifest = read_delete_manifest(&backup_root)?;
     let objects_root = backup_root.join("objects");
@@ -475,7 +506,147 @@ pub async fn redo_deleted_from_repo(
     Ok(())
 }
 
-fn run_copy_blocking(
+async fn resolve_file_op_repo(bus: &BusHandle, repo: &Path) -> Result<ResolvedRepo, CommandError> {
+    bus.resolve_repo_identity(repo.to_path_buf())
+        .await
+        .map_err(map_repo_resolve_error)
+}
+
+fn translate_host_path_for_wsl(path: PathBuf) -> Result<PathBuf, CommandError> {
+    if path.is_absolute() && path.to_string_lossy().starts_with('/') {
+        return Ok(path);
+    }
+    windows_path_to_wsl_mount(&path)
+        .map(PathBuf::from)
+        .map_err(|error| CommandError::new(error.safe_category(), error.message))
+}
+
+fn wsl_copy_to_repo(
+    resolved: ResolvedRepo,
+    dest_dir: PathBuf,
+    sources: Vec<PathBuf>,
+    overwrite: bool,
+) -> Result<CopyResult, CommandError> {
+    let sources: Vec<PathBuf> = sources
+        .into_iter()
+        .map(translate_host_path_for_wsl)
+        .collect::<Result<_, _>>()?;
+    match wsl_request(AgentRequest::CopyToRepo {
+        protocol_version: PROTOCOL_VERSION,
+        repo: resolved.path,
+        allowed_repos: resolved.wsl_repos,
+        dest_dir,
+        sources,
+        overwrite,
+    })? {
+        AgentResponse::CopyResult { result } => Ok(result),
+        response => Err(unexpected_file_ops_wsl_response(response)),
+    }
+}
+
+fn wsl_copy_within_repo(
+    resolved: ResolvedRepo,
+    sources: Vec<PathBuf>,
+    dest_dir: PathBuf,
+    overwrite: bool,
+) -> Result<CopyResult, CommandError> {
+    match wsl_request(AgentRequest::CopyWithinRepo {
+        protocol_version: PROTOCOL_VERSION,
+        repo: resolved.path,
+        allowed_repos: resolved.wsl_repos,
+        sources,
+        dest_dir,
+        overwrite,
+    })? {
+        AgentResponse::CopyResult { result } => Ok(result),
+        response => Err(unexpected_file_ops_wsl_response(response)),
+    }
+}
+
+fn wsl_move_within_repo(
+    resolved: ResolvedRepo,
+    sources: Vec<PathBuf>,
+    dest_dir: PathBuf,
+    overwrite: bool,
+) -> Result<CopyResult, CommandError> {
+    match wsl_request(AgentRequest::MoveWithinRepo {
+        protocol_version: PROTOCOL_VERSION,
+        repo: resolved.path,
+        allowed_repos: resolved.wsl_repos,
+        sources,
+        dest_dir,
+        overwrite,
+    })? {
+        AgentResponse::CopyResult { result } => Ok(result),
+        response => Err(unexpected_file_ops_wsl_response(response)),
+    }
+}
+
+fn wsl_export_from_repo(
+    resolved: ResolvedRepo,
+    sources: Vec<PathBuf>,
+    dest_dir: PathBuf,
+) -> Result<(), CommandError> {
+    let dest_dir = translate_host_path_for_wsl(dest_dir)?;
+    match wsl_request(AgentRequest::ExportFromRepo {
+        protocol_version: PROTOCOL_VERSION,
+        repo: resolved.path,
+        allowed_repos: resolved.wsl_repos,
+        sources,
+        dest_dir,
+    })? {
+        AgentResponse::Unit => Ok(()),
+        response => Err(unexpected_file_ops_wsl_response(response)),
+    }
+}
+
+fn wsl_delete_from_repo(
+    resolved: ResolvedRepo,
+    sources: Vec<PathBuf>,
+) -> Result<DeleteResult, CommandError> {
+    match wsl_request(AgentRequest::DeleteFromRepo {
+        protocol_version: PROTOCOL_VERSION,
+        repo: resolved.path,
+        allowed_repos: resolved.wsl_repos,
+        sources,
+    })? {
+        AgentResponse::DeleteResult { result } => Ok(result),
+        response => Err(unexpected_file_ops_wsl_response(response)),
+    }
+}
+
+fn wsl_restore_deleted_from_repo(
+    resolved: ResolvedRepo,
+    token: String,
+) -> Result<(), CommandError> {
+    match wsl_request(AgentRequest::RestoreDeletedFromRepo {
+        protocol_version: PROTOCOL_VERSION,
+        repo: resolved.path,
+        allowed_repos: resolved.wsl_repos,
+        token,
+    })? {
+        AgentResponse::Unit => Ok(()),
+        response => Err(unexpected_file_ops_wsl_response(response)),
+    }
+}
+
+fn wsl_redo_deleted_from_repo(resolved: ResolvedRepo, token: String) -> Result<(), CommandError> {
+    match wsl_request(AgentRequest::RedoDeletedFromRepo {
+        protocol_version: PROTOCOL_VERSION,
+        repo: resolved.path,
+        allowed_repos: resolved.wsl_repos,
+        token,
+    })? {
+        AgentResponse::Unit => Ok(()),
+        response => Err(unexpected_file_ops_wsl_response(response)),
+    }
+}
+
+fn unexpected_file_ops_wsl_response(_response: AgentResponse) -> CommandError {
+    CommandError::new("malformed_response", "respuesta inesperada del agente WSL")
+}
+
+pub(crate) fn run_copy_blocking(
     repo_abs: PathBuf,
     to_copy: Vec<(PathBuf, PathBuf)>,
 ) -> Result<Vec<String>, CommandError> {
@@ -504,7 +675,7 @@ fn run_copy_blocking(
     .map_err(|e| CommandError::new("copy-failed", format!("no se pudo copiar: {e}")))
 }
 
-fn run_move_blocking(
+pub(crate) fn run_move_blocking(
     repo_abs: PathBuf,
     to_move: Vec<(PathBuf, PathBuf)>,
 ) -> Result<Vec<String>, CommandError> {
@@ -540,7 +711,7 @@ fn run_move_blocking(
     .map_err(|e| CommandError::new("move-failed", format!("no se pudo mover: {e}")))
 }
 
-fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -555,13 +726,16 @@ fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn undo_backup_root(token: &str) -> Result<PathBuf, CommandError> {
+pub(crate) fn undo_backup_root(token: &str) -> Result<PathBuf, CommandError> {
     Uuid::parse_str(token)
         .map_err(|_| CommandError::new("invalid-undo-token", "token inválido"))?;
     Ok(std::env::temp_dir().join("tinto-delete-undo").join(token))
 }
 
-fn write_delete_manifest(root: &Path, manifest: &DeleteResult) -> Result<(), CommandError> {
+pub(crate) fn write_delete_manifest(
+    root: &Path,
+    manifest: &DeleteResult,
+) -> Result<(), CommandError> {
     fs::create_dir_all(root).map_err(|e| {
         CommandError::new(
             "undo-backup-failed",
@@ -579,7 +753,7 @@ fn write_delete_manifest(root: &Path, manifest: &DeleteResult) -> Result<(), Com
     })
 }
 
-fn read_delete_manifest(root: &Path) -> Result<DeleteResult, CommandError> {
+pub(crate) fn read_delete_manifest(root: &Path) -> Result<DeleteResult, CommandError> {
     let bytes = fs::read(root.join("manifest.json")).map_err(|e| {
         CommandError::new(
             "undo-manifest-missing",
