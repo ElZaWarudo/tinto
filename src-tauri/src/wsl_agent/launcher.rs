@@ -354,6 +354,7 @@ fn install_packaged_agent(_distro: &str, _source: &Path) -> Result<(), AgentErro
     ))
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn build_packaged_agent_install_argv(distro: &str) -> Result<Vec<String>, AgentError> {
     if distro.trim().is_empty() {
         return Err(AgentError::new(

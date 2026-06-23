@@ -126,7 +126,6 @@ enum RouterInput {
     /// según el snapshot del poller. El router los clasifica y alimenta
     /// el debounce igual que los eventos de notify.
     PollDetected {
-        repo: PathBuf,
         changes: Vec<PollChange>,
     },
 }
@@ -444,7 +443,7 @@ async fn router(
                     Some(RouterInput::ReportError { repo, error }) => {
                         let _ = public_tx.send(WatcherMessage::RepoError { repo, error });
                     }
-                    Some(RouterInput::PollDetected { repo: _, changes }) => {
+                    Some(RouterInput::PollDetected { changes }) => {
                         route_poll_changes(&changes, &mut repos, &debounce_tx);
                     }
                     // Puente cerrado (shutdown): cerrar el debounce y
@@ -646,7 +645,7 @@ async fn poll_loop(
 
         for root in roots {
             let current = scan_directory(&root);
-            let prev = snapshots.entry(root.clone()).or_insert_with(HashMap::new);
+            let prev = snapshots.entry(root.clone()).or_default();
 
             // Primer escaneo: solo capturar snapshot, no emitir eventos.
             if first_scan || prev.is_empty() {
@@ -689,10 +688,7 @@ async fn poll_loop(
             }
 
             if !changes.is_empty() {
-                let _ = router_tx.send(RouterInput::PollDetected {
-                    repo: root.clone(),
-                    changes,
-                });
+                let _ = router_tx.send(RouterInput::PollDetected { changes });
             }
 
             *prev = current;

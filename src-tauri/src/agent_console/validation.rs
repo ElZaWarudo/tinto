@@ -67,7 +67,7 @@ fn wsl_command_available(distro: &str, agent_type: &str) -> Result<bool, AgentCo
     let output = Command::new(program)
         .args(args)
         .output()
-        .map_err(|error| map_wsl_spawn_error(error))?;
+        .map_err(map_wsl_spawn_error)?;
     Ok(output.status.success() && !output.stdout.is_empty())
 }
 
@@ -79,6 +79,7 @@ fn wsl_command_available(_distro: &str, _agent_type: &str) -> Result<bool, Agent
     ))
 }
 
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn build_wsl_command_available_argv(
     distro: &str,
     agent_type: &str,

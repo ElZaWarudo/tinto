@@ -20,7 +20,6 @@ use crate::git::{DiffLineKind, FileDiff, RepoStatus};
 const GITLEAKS_TIMEOUT_SECONDS: u64 = 8;
 const FALLBACK_RULE_ID: &str = "heuristic-possible-secret";
 const GITLEAKS_FALLBACK_CANDIDATES: [&str; 2] = [".gitleaks.toml", "gitleaks.toml"];
-const GITLEAKS_GO_PACKAGE: &str = "github.com/gitleaks/gitleaks/v8@latest";
 const GITLEAKS_RELEASE_API: &str = "https://api.github.com/repos/gitleaks/gitleaks/releases/latest";
 const GITLEAKS_RELEASES_LATEST: &str = "https://github.com/gitleaks/gitleaks/releases/latest";
 const GITLEAKS_RELEASES_BASE: &str = "https://github.com/gitleaks/gitleaks/releases";
@@ -107,12 +106,9 @@ pub(crate) fn gitleaks_binary_path() -> Option<PathBuf> {
     if let Ok(path) = which::which("gitleaks") {
         return Some(path);
     }
-    for path in gitleaks_known_paths() {
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    None
+    gitleaks_known_paths()
+        .into_iter()
+        .find(|path| path.is_file())
 }
 
 pub(crate) fn install_gitleaks() -> GitleaksInstallOutcome {
@@ -260,7 +256,7 @@ fn gitleaks_install_attempts() -> Vec<InstallAttempt> {
             InstallAttempt {
                 method: "go",
                 program: "go",
-                args: &["install", GITLEAKS_GO_PACKAGE],
+                args: &["install", "github.com/gitleaks/gitleaks/v8@latest"],
             },
         ]
     }
@@ -306,7 +302,7 @@ fn gitleaks_install_attempts() -> Vec<InstallAttempt> {
             InstallAttempt {
                 method: "go",
                 program: "go",
-                args: &["install", GITLEAKS_GO_PACKAGE],
+                args: &["install", "github.com/gitleaks/gitleaks/v8@latest"],
             },
         ]
     }

@@ -1094,13 +1094,12 @@ name = "A"
 
         let repos = &store.config().workbenches[0].repos;
         assert_eq!(repos.len(), 2);
-        assert!(repos.iter().any(
-            |repo| repo.source == RepoSource::Wsl && repo.path == PathBuf::from("/tmp/shared")
-        ));
         assert!(repos
             .iter()
-            .any(|repo| repo.source == RepoSource::Local
-                && repo.path == PathBuf::from("/tmp/shared")));
+            .any(|repo| repo.source == RepoSource::Wsl && repo.path == Path::new("/tmp/shared")));
+        assert!(repos
+            .iter()
+            .any(|repo| repo.source == RepoSource::Local && repo.path == Path::new("/tmp/shared")));
 
         store
             .remove_repo("A", Path::new("/tmp/shared"))
