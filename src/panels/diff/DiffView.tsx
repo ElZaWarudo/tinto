@@ -19,6 +19,26 @@ function diffSize(diff: FileDiff): number {
 
 const SIGN: Record<DiffLine["kind"], string> = { Added: "+", Removed: "-", Context: " " };
 
+export function diffHunkOverviewMarkers(diff: FileDiff): FileOverviewMarker[] {
+  const markers: FileOverviewMarker[] = [];
+  const seen = new Set<number>();
+  for (const hunk of diff.hunks) {
+    for (const line of hunk.lines) {
+      const lineNumber = line.new_lineno ?? hunk.new_start;
+      if (seen.has(lineNumber)) continue;
+      if (line.kind === "Context") continue;
+      seen.add(lineNumber);
+      markers.push({
+        line: lineNumber,
+        severity: line.kind === "Removed" ? "warning" : "info",
+        label: line.kind === "Removed" ? "Removed line" : "Changed line",
+        source: "hunk",
+      });
+    }
+  }
+  return markers;
+}
+
 export function DiffView({
   diff,
   mode,
@@ -33,7 +53,14 @@ export function DiffView({
   const oversized = diffSize(diff) > MAX_HIGHLIGHT_BYTES;
   const lang = languageFromPath(diff.path);
   const render = useLineHighlighter(lang, !diff.is_binary && !oversized);
-  const markedLines = new Set(overviewMarkers.map((marker) => marker.line));
+  const combinedMarkers = [...diffHunkOverviewMarkers(diff), ...overviewMarkers];
+  const markedLines = new Set(
+    overviewMarkers
+      .filter((marker) => (marker.source ?? "alert") === "alert")
+      .map((marker) => marker.line),
+  );
+  const totalLines =
+    overviewTotalLines || combinedMarkers.reduce((max, marker) => Math.max(max, marker.line), 0);
 
   if (diff.is_binary) {
     return (
@@ -46,8 +73,8 @@ export function DiffView({
   return (
     <div className={`diff-view diff-view--${mode}`} data-testid="diff-view">
       <FileOverviewRuler
-        markers={overviewMarkers}
-        totalLines={overviewTotalLines}
+        markers={combinedMarkers}
+        totalLines={totalLines}
         targetAttribute="data-new-line"
       />
       {oversized && (

@@ -98,7 +98,7 @@ describe("FileView", () => {
     worktree = { value: [fileDiff(PATH, 'api_key = "secret"')] };
     render(<FileView repo={REPO} path={PATH} />);
 
-    expect(await screen.findByTestId("overview-marker-1")).toBeInTheDocument();
+    expect(await screen.findByTestId("overview-marker-1-1")).toBeInTheDocument();
     expect(screen.getByText('api_key = "secret"').closest(".diff-line")).toHaveClass(
       "diff-line--signal-critical",
     );
@@ -123,7 +123,7 @@ describe("FileView", () => {
     worktree = { value: [fileDiff(PATH, 'const tokenLabel = "public";')] };
     render(<FileView repo={REPO} path={PATH} />);
 
-    expect(await screen.findByTestId("overview-marker-1")).toBeInTheDocument();
+    expect(await screen.findByTestId("overview-marker-1-1")).toBeInTheDocument();
     expect(screen.getByText('const tokenLabel = "public";').closest(".diff-line")).toHaveClass(
       "diff-line--signal-critical",
     );

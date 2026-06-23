@@ -71,8 +71,8 @@ describe("FullFileView", () => {
     );
 
     expect(await screen.findByTestId("overview-summary")).toHaveTextContent("1");
-    expect(await screen.findByTestId("overview-marker-2")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Possible secret, línea 2" })).toBeInTheDocument();
+    expect(await screen.findByTestId("overview-marker-2-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Possible secret, line 2" })).toBeInTheDocument();
     expect(screen.getByText("two").closest(".full-file__line")).toHaveClass(
       "full-file__line--signal-critical",
     );

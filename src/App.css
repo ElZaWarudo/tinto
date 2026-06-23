@@ -582,8 +582,9 @@ select option {
 .addons-code {
   margin: 0;
   border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
   font-size: 12px;
 }
 .addons-command-row__cmd {
@@ -1518,125 +1519,134 @@ select option {
   padding-right: 42px;
 }
 .file-overview-ruler {
-  --file-overview-ruler-width: 24px;
-  --file-overview-ruler-offset: 14px;
-  --file-overview-ruler-summary-height: 18px;
-  --file-overview-ruler-track-gap: 8px;
+  position: sticky;
+  top: 6px;
+  float: right;
+  z-index: 5;
+  width: 118px;
+  height: calc(100vh - 190px);
+  min-height: 96px;
+  max-height: 720px;
+  margin: 6px 10px 6px 14px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.file-overview-ruler__track {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.045)),
+    rgba(15, 23, 42, 0.34);
+  box-shadow: inset -2px 0 0 rgba(78, 201, 176, 0.22);
+  cursor: pointer;
+}
+.file-overview-ruler__track:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.file-overview-ruler__legend {
   position: absolute;
   top: 6px;
-  right: var(--file-overview-ruler-offset);
-  bottom: 6px;
-  z-index: 5;
-  width: var(--file-overview-ruler-width);
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
-  pointer-events: none;
-}
-.file-overview-ruler--has-summary {
-  --file-overview-ruler-track-start: calc(
-    var(--file-overview-ruler-summary-height) + var(--file-overview-ruler-track-gap)
-  );
-}
-.file-overview-ruler:not(.file-overview-ruler--has-summary) {
-  --file-overview-ruler-track-start: 0px;
-}
-.file-overview-ruler__summary {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  min-width: 22px;
-  height: 18px;
-  padding: 0 4px;
-  border: 1px solid rgba(241, 76, 76, 0.65);
-  border-radius: 9px;
-  background: #3a2020;
-  color: #ffb3b3;
+  right: 6px;
+  z-index: 7;
+  min-width: 18px;
+  height: 16px;
+  padding: 1px 5px;
+  border: 1px solid rgba(241, 76, 76, 0.45);
+  border-radius: 4px;
+  background: rgba(58, 32, 32, 0.92);
+  color: #ffc7c7;
   font-family: "Segoe UI", system-ui, sans-serif;
   font-size: 10px;
   font-weight: 700;
-  line-height: 1;
-  pointer-events: auto;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28);
-}
-.file-overview-ruler__track {
-  position: absolute;
-  top: var(--file-overview-ruler-track-start);
-  right: 0;
-  bottom: 0;
-  left: 0;
+  line-height: 12px;
+  text-align: center;
   pointer-events: none;
 }
-.file-overview-ruler__summary-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--danger);
-  color: #fff;
-  font-size: 8px;
+.file-overview-ruler--empty .file-overview-ruler__legend {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.84);
+  color: var(--fg-muted);
 }
-.file-overview-ruler__summary-count {
-  font-variant-numeric: tabular-nums;
+.file-overview-ruler__mini {
+  position: absolute;
+  inset: 4px 10px 4px 6px;
+}
+.file-overview-ruler__mini-line {
+  position: absolute;
+  left: 0;
+  width: 78%;
+  height: 1px;
+  background: rgba(203, 213, 225, 0.28);
+}
+.file-overview-ruler__mini-line:nth-child(3n) {
+  width: 92%;
+}
+.file-overview-ruler__viewport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  min-height: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(148, 163, 184, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
 }
 .file-overview-ruler__mark {
   position: absolute;
-  right: 0;
+  right: 2px;
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
-  width: 18px;
-  min-width: 18px;
-  height: 14px;
-  border: 1px solid rgba(241, 76, 76, 0.72);
-  border-radius: 7px;
+  gap: 4px;
+  width: 10px;
+  min-width: 10px;
+  height: 6px;
+  border: 0;
+  border-radius: 2px;
   padding: 0;
   overflow: hidden;
   transform: translateY(-50%);
   cursor: pointer;
-  pointer-events: auto;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.32),
-    0 0 8px rgba(241, 76, 76, 0.18);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.32);
   transition:
     width var(--ease),
+    height var(--ease),
     background var(--ease),
-    border-color var(--ease),
     box-shadow var(--ease);
 }
 .file-overview-ruler__mark--critical {
-  background: #512525;
+  background: #f14c4c;
 }
 .file-overview-ruler__mark--warning {
-  border-color: rgba(204, 167, 0, 0.72);
-  background: #423814;
+  background: #cca700;
 }
 .file-overview-ruler__mark--info {
-  border-color: rgba(78, 201, 176, 0.72);
-  background: #173b35;
+  background: #4ec9b0;
+}
+.file-overview-ruler__mark--search {
+  background: #dcdcaa;
 }
 .file-overview-ruler__mark-icon {
   display: inline-grid;
   place-items: center;
   flex: none;
-  width: 14px;
-  height: 12px;
-  border-radius: 999px;
-  background: var(--danger);
-  color: #fff;
+  width: 10px;
+  height: 8px;
+  color: #111827;
   font-family: "Segoe UI", system-ui, sans-serif;
-  font-size: 9px;
+  font-size: 7px;
   font-weight: 800;
   line-height: 1;
 }
 .file-overview-ruler__mark-label {
   flex: none;
-  color: #ffd7d7;
+  color: #f8fafc;
   font-family: "Segoe UI", system-ui, sans-serif;
   font-size: 11px;
   font-weight: 600;
@@ -1647,14 +1657,20 @@ select option {
 }
 .file-overview-ruler__mark:hover,
 .file-overview-ruler__mark:focus-visible {
-  width: 128px;
-  border-color: #ff8f8f;
-  background: #572121;
+  width: 92px;
+  height: 16px;
   box-shadow:
     0 4px 18px rgba(0, 0, 0, 0.42),
-    0 0 0 1px rgba(241, 76, 76, 0.28);
-  outline: 1px solid rgba(255, 215, 215, 0.55);
+    0 0 0 1px rgba(255, 255, 255, 0.34);
+  outline: 1px solid rgba(255, 255, 255, 0.58);
   outline-offset: 1px;
+}
+.file-overview-ruler__mark--active {
+  width: 18px;
+  height: 12px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.55),
+    0 0 10px rgba(241, 76, 76, 0.36);
 }
 .file-overview-ruler__mark:hover .file-overview-ruler__mark-label,
 .file-overview-ruler__mark:focus-visible .file-overview-ruler__mark-label {
@@ -1735,6 +1751,23 @@ select option {
 .full-file--error {
   padding: 12px;
   color: var(--fg-muted);
+}
+
+.overview-demo {
+  height: 100vh;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.overview-demo__panel {
+  height: calc(100vh - 48px);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.overview-demo__body {
+  height: 100%;
 }
 
 .media-view {

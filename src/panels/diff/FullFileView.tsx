@@ -74,7 +74,11 @@ export function FullFileView({
   const raw = content.content.split("\n");
   // Drop the spurious trailing empty line from a file ending in a newline.
   const lines = raw.length > 1 && raw[raw.length - 1] === "" ? raw.slice(0, -1) : raw;
-  const markedLines = new Set(overviewMarkers.map((marker) => marker.line));
+  const markedLines = new Set(
+    overviewMarkers
+      .filter((marker) => (marker.source ?? "alert") === "alert")
+      .map((marker) => marker.line),
+  );
   return (
     <div className="full-file" data-testid="full-file">
       <FileOverviewRuler

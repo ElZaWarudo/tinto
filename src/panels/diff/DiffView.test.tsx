@@ -92,10 +92,17 @@ describe("DiffView", () => {
     );
 
     expect(screen.getByTestId("overview-summary")).toHaveTextContent("1");
-    expect(screen.getByTestId("overview-marker-13")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Possible secret, línea 13" })).toBeInTheDocument();
+    expect(screen.getByTestId("overview-marker-13-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Possible secret, line 13" })).toBeInTheDocument();
     expect(screen.getByText("new line").closest(".diff-line")).toHaveClass(
       "diff-line--signal-critical",
     );
+  });
+
+  it("derives overview hunk markers from changed lines", () => {
+    render(<DiffView diff={sample} mode="inline" />);
+
+    expect(screen.getByTestId("overview-marker-12-0")).toHaveTextContent("Change L12");
+    expect(screen.getByTestId("overview-marker-13-1")).toHaveTextContent("Change L13");
   });
 });

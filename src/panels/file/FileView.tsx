@@ -132,6 +132,15 @@ function maxNewLine(diff: FileDiff | null | undefined): number {
   return max;
 }
 
+function hunkOverviewMarkers(lines: Set<number>): FileOverviewMarker[] {
+  return [...lines].map((line) => ({
+    line,
+    severity: "info",
+    label: "Changed line",
+    source: "hunk",
+  }));
+}
+
 export function FileView({ repo, path }: { repo: string; path: string }) {
   const state = useBusState();
   const live = getDiff(state, repo, path);
@@ -184,13 +193,13 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   const computed = hasComputedDiffs(state, repo);
   const diff = computed ? live : (live ?? oneShot);
   const changed = useMemo(() => addedLines(diff), [diff]);
-  const overviewMarkers = useMemo(
-    () =>
+  const overviewMarkers = useMemo(() => {
+    const alertMarkers =
       pathSecretFindings.length > 0
         ? findingsOverviewMarkers(pathSecretFindings)
-        : secretOverviewMarkers(diff),
-    [diff, pathSecretFindings],
-  );
+        : secretOverviewMarkers(diff);
+    return [...hunkOverviewMarkers(changed), ...alertMarkers];
+  }, [changed, diff, pathSecretFindings]);
   const overviewTotalLines = useMemo(() => {
     const diffLines = maxNewLine(diff);
     const findingLines = pathSecretFindings.reduce(
