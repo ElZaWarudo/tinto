@@ -4,13 +4,22 @@
 
 ## Conventions
 
-- Repo paths: **canonical** (the backend canonicalizes; the frontend uses the path exactly as it receives it in the snapshot/deltas, as an opaque identity).
-- Public WSL repo identity is intentionally deferred beyond RDM-001. The workbench config may preserve future internal WSL entries on disk, but Linux/non-WSL runtime projections omit them from `list_workbenches`, bus snapshots, deltas, watcher mounts, repo command allowlists, and UI surfaces. Current public `repo` values remain local canonical paths only.
+- Repo paths: **canonical/opaque by source**. Local repos are canonicalized by the backend. Windows WSL repos use the configured Linux absolute path as the opaque repo identity; the Windows host must not translate it through `\\wsl$` or canonicalize it as a Windows path.
+- Windows WSL repo configuration is additive as of RDM-003 and live read/snapshot routing starts in RDM-004. On Windows, `list_workbenches` may include configured WSL repos with `source = "wsl"` and `distro = "Ubuntu"`; bus snapshots and `tinto://workbench-delta` may include those WSL Linux paths. Local repos keep the in-process local backend. WSL repo status, tree, diff, log, blob, and working-tree file reads route through `tinto-agent`. RDM-006 makes packaged Linux agent discovery/install the preferred launch model; dev-source launch is an explicit development fallback only. On Linux/non-Windows runtime, WSL configuration UI and WSL command surfaces remain absent.
 - File paths: relative to the repo root.
 - Timestamps: epoch ms (`u64`) unless otherwise noted.
 - Command errors: `{ category: string, message: string }` (safe message, no secrets) — `WorkbenchError` pattern. Git categories: see `error.class` below. Read-containment categories: `repo-not-allowed` (the repo is not in the active workbench), `path-traversal` (the path escapes the repo after canonicalizing), `path-forbidden` (`.git` is not exposed), `not-a-file` (not a regular file), `not-found`, `repository-not-found`.
-- **Read allowlist:** every read command (`get_worktree_diff`, `get_commit_diff`, `get_commit_log`, `get_blob`, `get_file_content`, `get_media_content`, `list_repo_tree`) requires `repo` to belong to the active workbench; if not, `repo-not-allowed`. Per-file containment: `get_file_content` and `get_media_content` confine the path within the repo and exclude `.git`; they read with bounds (≤ limit + binary/media→base64).
+- **Read allowlist:** every read command (`get_worktree_diff`, `get_commit_diff`, `get_commit_log`, `get_blob`, `get_file_content`, `get_media_content`, `list_repo_tree`) requires `repo` to belong to the active workbench; if not, `repo-not-allowed`. RDM-004 routes WSL read support only for `get_worktree_diff`, `get_commit_diff`, `get_commit_log`, `get_blob`, `get_file_content`, and `list_repo_tree`; `get_media_content`, Gitleaks, file mutations, and Agent Console remain local-only/deferred for WSL repos. Per-file containment: `get_file_content` and `get_media_content` confine the path within the repo and exclude `.git`; they read with bounds (≤ limit + binary/media→base64).
 - Revision: `revision: u64`, monotonic **per repo** and **durable**: if a repo is unmounted and comes back, the counter continues (it does not reset to 0). Consumer rule: apply a delta/snapshot only if its `revision` is greater than the one already known.
+
+- **File-operation allowlist:** RDM-005 routes `copy_to_repo`, `copy_within_repo`, `move_within_repo`, `export_from_repo`, `delete_from_repo`, `restore_deleted_from_repo`, and `redo_deleted_from_repo` through `tinto-agent` for WSL repos while keeping local repos on the existing local filesystem implementation. Public command names and response DTOs stay unchanged. WSL execution remains active-workbench allowlisted, contained to the Linux repo root, and blocked from `.git` mutations.
+
+- **WSL media reads:** RDM-007 routes `get_media_content` through `tinto-agent` for WSL repos. The response shape remains `FileContent`, always base64, with the existing media extension allowlist, `.git` rejection, regular-file requirement, repo containment, and 12 MiB guard.
+
+- **WSL Gitleaks:** RDM-008 keeps `get_gitleaks_setup_status` and `install_gitleaks` as host-scoped Addons commands, and adds repo-aware `get_repo_gitleaks_setup_status` / `install_repo_gitleaks` commands that route WSL repos through `tinto-agent`. `create_repo_gitleaks_config` is source-aware as of RDM-008: local repos write on the host, WSL repos write inside the Linux repo through the agent. WSL secret findings in `RepoDelta.secret_findings` are produced by the agent-side recomputation path.
+
+- **WSL agent message guard:** RDM-010 raises the line-delimited `tinto-agent` message guard to 20 MiB so bounded media responses and bounded filesystem fingerprint snapshots can use the same one-shot protocol safely.
+- **WSL packaged agent resource:** The Linux agent artifact is named `tinto-agent-linux-x86_64` and is bundled as a Tauri resource at the resource root. On Windows, packaged-agent discovery checks `TINTO_WSL_AGENT_LINUX_BIN` first, then app/resource-relative candidates; missing packaged artifacts fail closed unless `TINTO_WSL_AGENT_ALLOW_DEV_SOURCE=1` is explicitly enabled for development.
 
 ## Events (backend `emit` → frontend)
 
@@ -74,6 +83,8 @@
 }
 ```
 
+For Windows WSL repos, `repo` is the configured Linux repo path. Initial fingerprint scans prime state without emitting a batch; later WSL poll cycles emit created/modified/removed events when relative path, size, or modified timestamp changes. `.git` internals are excluded and the response is capped by the same repo-tree entry guard.
+
 ### `tinto://watching-state` — watching availability (workbench-level)
 
 ```jsonc
@@ -81,6 +92,10 @@
 ```
 
 Emitted at startup and on changes. `available: false` = degraded mode: data arrives only on demand (`invoke`); deltas do not flow.
+
+`WatchingState` describes the local watcher backend. WSL agent/distro/path failures are reported per repo in `RepoDelta.error`. RDM-004 refreshes WSL repo deltas and subscribed diffs through bounded polling via `tinto-agent`. RDM-010 adds WSL `tinto://fs-events` batches by comparing agent-side file fingerprints during that WSL polling cycle; this preserves the public event shape but is not a long-lived WSL inotify stream.
+
+RDM-005 file operations preserve the existing frontend command contract for local and WSL repos. Windows host paths used for drag/drop paste sources and export destinations are translated to `/mnt/<drive>/...` before they are sent to the WSL agent; Linux absolute paths pass through unchanged.
 
 ### `tinto://agent-session-output` - PTY output chunk for ONE agent session
 
@@ -121,20 +136,24 @@ Chunks are live only; the first ACI-002 stream bridge does not replay historical
 | `list_repo_tree` | `repo` | `{ entries: Vec<TreeEntry>, truncated: bool }` | Full working-tree tree respecting `.gitignore` (`ignore` walk), cap 20,000 entries. |
 | `get_gitleaks_setup_status` | none | `{ installed: bool, version: string | null, binary_path: string | null }` | Checks whether `gitleaks` is available either in the Tinto-managed addon location or on the host system and returns version/path when found. |
 | `install_gitleaks` | none | `{ installed: bool, version: string | null, binary_path: string | null, method: string | null, message: string }` | Attempts a Tinto-managed install first (downloads the current release into Tinto's addon directory), then falls back to host installers (winget/choco/scoop on Windows; brew/go on macOS; brew/apt/dnf/yum/pacman/zypper/apk/go on Linux). Returns updated status plus a diagnostic message. |
+| `get_repo_gitleaks_setup_status` | `repo` | `{ installed: bool, version: string | null, binary_path: string | null }` | Source-aware Gitleaks status for a repo: local repos inspect the host; WSL repos inspect the selected Ubuntu agent environment. |
+| `install_repo_gitleaks` | `repo` | `{ installed: bool, version: string | null, binary_path: string | null, method: string | null, message: string }` | Source-aware Gitleaks install for a repo: local repos reuse host install behavior; WSL repos install/check inside Ubuntu through `tinto-agent`. |
 | `set_subscriptions` | `targets: Vec<{repo, path?}>` | `()` | Set of open targets (cap 8); applies from the next recomputation. |
 | `retry_repo` | `repo` | `()` | Retries the remount of a repo in terminal error. |
-| `start_agent_session` | `repo, agent_type` | `session_id: string` | Starts an allowlisted agent (`claude`, `codex`, `opencode`) in a PTY for a repo in the active workbench. |
+| `start_agent_session` | `repo, agent_type` | `session_id: string` | Starts an allowlisted agent (`claude`, `codex`, `opencode`) in a PTY for a repo in the active workbench. Local repos run on the host; WSL repos run inside Ubuntu. WSL session start creates its reversible checkpoint through `tinto-agent` before spawning the PTY; if that checkpoint cannot be created, the session does not start. |
 | `stop_agent_session` | `session_id` | `()` | Stops the tracked PTY process/session. |
 | `list_agent_sessions` | none | `Vec<AgentSession>` | Returns known sessions after refreshing completed process statuses and applying lifetime limits. |
-| `agent_binary_available` | `agent_type` | `bool` | Checks the allowlisted agent binary through PATH lookup. Known missing binaries return `false`; unsupported agent ids return `unsupported_agent`. |
+| `agent_binary_available` | `agent_type` | `bool` | Host-scoped compatibility check for the allowlisted agent binary through PATH lookup. Known missing binaries return `false`; unsupported agent ids return `unsupported_agent`. |
+| `agent_binary_available_for_repo` | `repo, agent_type` | `bool` | Source-aware availability check. Local repos inspect the host PATH; WSL repos inspect Ubuntu with `command -v` so host misses do not block Linux agents. |
 | `write_agent_session_input` | `session_id, input_base64` | `()` | Writes decoded bytes to a running session's PTY stdin. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
 | `resize_agent_session` | `session_id, cols, rows` | `()` | Resizes a running session's PTY. `cols` and `rows` must be positive; invalid dimensions return `invalid_terminal_size`. |
-| `revert_session` | `session_id, user_consent` | `AgentSession` | Restores the repo to the session checkpoint. `user_consent=false` returns `consent_required`; running sessions return `session_still_running`; repeated revert is idempotent. |
+| `revert_session` | `session_id, user_consent` | `AgentSession` | Restores the repo to the session checkpoint. `user_consent=false` returns `consent_required`; running sessions return `session_still_running`; sessions without a checkpoint return `checkpoint_unsupported`; repeated revert is idempotent. |
 
 - `FileContent`: `{ encoding: "utf8" | "base64", content: string, truncated: bool }` — 1 MiB guard (truncated) and binary detection (→ base64). Validated relative paths: after canonicalizing they must stay within the repo (no `../`).
 - `get_media_content` returns the same `FileContent` shape but always uses `"base64"` and a 12 MiB guard, so visual previews can build `data:` URLs without ambiguity. Supported extensions: `pdf`, `avif`, `bmp`, `gif`, `ico`, `jpeg`, `jpg`, `png`, `svg`, `webp`; anything else returns `unsupported-media`.
 - `TreeEntry`: `{ path: string, is_dir: bool }` — flat list; the frontend builds the tree.
 - `set_active_workbench` (existing, RDM-005) now additionally triggers the watcher remount and the snapshot of the new workbench (asynchronous — the deltas arrive via the stream).
+- File operation commands preserve conflict reporting, backup tokens, restore, and redo DTOs across local and WSL repos.
 
 ## Agent Console Session Types (ACI-001/ACI-002)
 
@@ -170,9 +189,9 @@ The agent console backend exposes session lifecycle metadata through additive co
 - `AgentSessionError`: `{ category: string, message: string }`; messages are safe for UI display and must not include secrets.
 - `agent_type`: canonical supported agent id, currently planned as `"claude"`, `"codex"`, or `"opencode"`.
 - `repo`: canonical repo identity, using the same opaque path convention as `RepoDelta.repo`.
-- `start_agent_session` rejects repos outside the active workbench before spawning. Errors use the same `{ category, message }` command-error shape as other Tauri commands.
+- `start_agent_session` rejects repos outside the active workbench before spawning. Errors use the same `{ category, message }` command-error shape as other Tauri commands. WSL sessions are launched via `wsl.exe -d Ubuntu -- sh -lc ...`; repo path and agent id are passed as argv, not interpolated into the shell script.
 - `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live PTY output chunks.
-- `AgentSessionCheckpoint`: git checkpoints are used only when the repo is clean and HEAD is readable; dirty or non-git repos use a filesystem snapshot under `~/.tinto/checkpoints/<repo-hash>/<session-id>/` with bounded size and per-repo retention.
+- `AgentSessionCheckpoint`: local git checkpoints are used only when the repo is clean and HEAD is readable; dirty or non-git local repos use a filesystem snapshot under `~/.tinto/checkpoints/<repo-hash>/<session-id>/` with bounded size and per-repo retention. WSL Agent Console sessions create equivalent checkpoint records inside Ubuntu through `tinto-agent`; change-log scan and explicit-consent revert also run inside Ubuntu and are allowlisted to the active WSL repo. Sessions with `checkpoint: null` can still exist for legacy/fallback states and return `checkpoint_unsupported`; the UI disables Revert for those sessions.
 - `AgentSessionChangeLog`: `{ session_id, changes }`; emitted on `tinto://agent-session-change-log` and mirrored in the session record.
 - `AgentSessionLimits`: `{ max_sessions, max_sessions_per_repo, max_lifetime_ms }`; default runtime limits are 5 active sessions per workbench, 1 active session per repo, and 4 hours max lifetime. Capacity errors are `max_sessions_reached`, `max_sessions_per_repo_reached`, and `session_lifetime_exceeded`.
 - Telemetry fields are best-effort and local-only. `active_sessions` is the current active count at listing time, `age_ms` is computed from `started_at_ms`, and `output_bytes_per_second` is reserved for sampled PTY throughput.
