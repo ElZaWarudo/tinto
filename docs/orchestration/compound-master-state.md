@@ -1,9 +1,9 @@
 ---
 title: Compound Master State - Tinto
 status: active
-date: 2026-06-22
-initiative: tinto
-mode: full
+date: 2026-06-23
+initiative: windows-only-wsl-complement
+mode: artifacts
 production_posture: prototype
 state_format: compact
 last_compacted: 2026-06-16
@@ -15,20 +15,56 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: post-closeout UX/security-tooling iteration in progress. WSL2 watcher fallback, file/tree UX polish, external file operations, delete undo/redo, file overview ruler marks, and Gitleaks addon/configuration flows are implemented and locally verified.
-- Active package: none. Iterative develop-branch work, not a roadmap package.
-- Branch/base: `develop` at `233bd41`, synchronized with `origin/develop`. Working tree clean apart from local untracked `AGENTS.md`.
-- Open PR/Jira: none. Deliveries use local fast-forward merge into `develop` plus push, no PR, by standing user preference. Jira omitted because this checkout reports `jira-env-not-configured`.
-- Blockers: none known in code. Automatic host installation of Gitleaks remains environment-dependent by design; the repo-local `.gitleaks.toml` setup is now handled directly by Tinto. Open UX gap: the right-side file overview ruler currently shows alert markers, but it does not yet behave like the global file-follow/navigation rail expected from Visual Studio Code.
-- Required user decisions: none.
-- Next action: continue post-closeout UX iteration from the synced `develop` baseline, with the file overview ruler/global file-follow behavior still open.
+- Current phase/status: Windows-only WSL repo complement initiative, RDM-001 RU1/RU2/RU3 implementation and review complete; status `review-passed` for the RDM-001 package. Primary artifact: `docs/work-packages/RDM-001-windows-gated-repo-identity/2026-06-23-001-windows-gated-repo-identity-work-package.md`.
+- Active roadmap: `docs/roadmaps/2026-06-23-004-windows-wsl-agent-roadmap.md`. Roadmap review passed through approved document-review subagent fallback; findings recorded in `docs/review-findings/2026-06-23-wsl-complement-roadmap-review.md`. RDM-001 requirements, plan, and work package are reviewed and ready.
+- Paused release-ready work: RUL-001 file overview ruler VS Code parity, RU1 (foundation) browser review completed against `http://127.0.0.1:1420/demo.html`; status `review-passed`. RU2 (diff-hunk markers) and RU3 (search markers, deferred placeholder) remain queued.
+- Branch/base: `develop`; working tree remains dirty with RDM-001 code/tests/docs, prior WSL roadmap/state artifacts, and pre-existing unrelated local files. Do not revert unrelated dirty files.
+- Open PR/Jira: none. Standing user preference: local fast-forward merge into `develop` and push, no PR. Jira omitted (`jira-env-not-configured`).
+- Blockers: No blockers for RDM-001. Canonical roles remain unavailable (`document-review`, `ce-brainstorm`, `ce-plan`), so this run records approved functional fallbacks: roadmap/artifact review via document-review subagent fan-out plus lead synthesis; brainstorm/requirements via `krt-requirements-weaver`; plan via `krt-delivery-navigator`. User decision captured on 2026-06-23: this is a Windows-only complement/add-on; when Tinto runs on Linux, no WSL UI, commands, empty states, settings, degraded notices, or behavior should appear. Remaining later decisions are WSL baseline/distro support, `tinto-agent` install/update model, and whether repo-writing commands should be disabled or routed through the Linux agent for Windows WSL repos.
+- Required user decisions: none before roadmap review. Decisions listed above become blocking before the affected plans/work packages.
+- Next action: hand RDM-001 to `krt-release-marshal` for local fast-forward/no-PR delivery if the user wants to ship it.
 
 ## Source Documents
 
 - Design source: `tinto-design.md`.
-- Roadmap: `docs/roadmaps/2026-06-10-001-tinto-roadmap.md`.
+- Closed roadmaps: `docs/roadmaps/2026-06-10-001-tinto-roadmap.md`, `docs/roadmaps/2026-06-19-002-agent-console-integration.md`.
+- Active WSL roadmap: `docs/roadmaps/2026-06-23-004-windows-wsl-agent-roadmap.md`.
 - Final closeout summary: `docs/orchestration/2026-06-16-compound-master-summary.md`.
 - Full archived pre-compaction state: `docs/orchestration/archive/compound-master-state/2026-06-16-compound-master-state-full-state.md`.
+- RUL-001: roadmap/brainstorm/plan/work package were created and then reverted earlier; pending re-creation in this revision. The dev fixture and verification approach below are the source of truth for the current RU1 review.
+- Latest RU1 review findings: `docs/review-findings/2026-06-23-rul-001-ru1-demo-review.md`.
+
+## Current Compound Master Initiative - Windows-Only WSL Repo Complement
+
+- Artifact kind: roadmap.
+- Artifact path: `docs/roadmaps/2026-06-23-004-windows-wsl-agent-roadmap.md`.
+- Status: `review-passed` for package; RDM-001 RU1, RU2, and RU3 are all `review-passed`.
+- User clarification: this is a complement/add-on, Windows-only. Linux builds/runs must keep the WSL feature absent and unreachable while preserving existing local Linux repo behavior.
+- Roadmap review: passed after fixes. Findings path: `docs/review-findings/2026-06-23-wsl-complement-roadmap-review.md`.
+- RDM-001 brainstorm/requirements: `docs/brainstorms/2026-06-23-001-windows-gated-repo-identity.md`; review passed via approved fallback.
+- RDM-001 requirements review: passed after fixes. Findings path: `docs/review-findings/2026-06-23-rdm-001-requirements-review.md`.
+- RDM-001 plan: `docs/plans/2026-06-23-001-windows-gated-repo-identity-plan.md`; review passed via approved fallback.
+- RDM-001 plan review: passed after fixes. Findings path: `docs/review-findings/2026-06-23-rdm-001-plan-review.md`.
+- RDM-001 work package: `docs/work-packages/RDM-001-windows-gated-repo-identity/2026-06-23-001-windows-gated-repo-identity-work-package.md`; mechanical checker passed after final edits; document review passed after fixes. Findings path: `docs/review-findings/2026-06-23-rdm-001-work-package-review.md`.
+- RDM-001 RU1 implementation: review-passed after fixes. Changed files: `src-tauri/src/workbench/mod.rs`, `src-tauri/src/workbench/commands.rs`, `src-tauri/src/lib.rs`, `src-tauri/src/bus/mod.rs`, `src-tauri/src/watcher/mod.rs`, plus package/state/review findings docs. Implementation adds internal `RepoSource`, local constructor/helpers, runtime workbench projection, startup/list/reseed projection helpers, source-aware local mutations, and tests for WSL persistence/runtime absence. Future WSL entries are preserved on disk but hidden from runtime/UI; WSL-only workbenches are hidden; runtime `active` remaps to the first visible workbench without persisting that remap; local commands do not mutate hidden WSL entries. No WSL launch/probe, `tinto-agent`, WSL UI, public WSL bus identity, or WSL routing was added.
+- RDM-001 RU1 code review: passed after fixes. Findings path: `docs/review-findings/2026-06-23-rdm-001-ru1-code-review.md`. Fixed P2 findings for path-only local mutations, WSL-only empty runtime workbenches, duplicated reseed filtering, malformed local `distro` runtime leakage, and missing boundary tests.
+- RDM-001 RU1 Impact Scan: complete. Changed contract/helper surface: internal persisted workbench config schema and runtime projection; public bus contract unchanged. Scan pattern used: `rg "RepoEntry|RepoDelta|SubscriptionTarget|repo: PathBuf|is_known|canonicalize|Git2Engine|list_workbenches|set_active_workbench|watch_workbench|start_agent_session|copy_to_repo|get_media_content|secret_scan|gitleaks|create_repo_gitleaks_config" src src-tauri docs/contracts`. Consumers found in workbench, lib startup, bus/watcher fixtures, file_ops/agent_console command families for later RU2 guard coverage, frontend bus contract/store/workbench/repo panels, and contract docs.
+- RDM-001 RU1 verification: `cargo test --lib workbench` 30 passed; `cargo test --lib bus` 37 passed; `cargo test --lib watcher` 29 passed; `cargo test --lib agent_console` 35 passed; `cargo test --lib file_ops` 0 matched/172 filtered; `cargo test --lib bus::tests::ae8_repo_removido_estado_terminal` 1 passed after one full-suite timing failure; `cargo test --lib -- --test-threads=1` 172 passed; `cargo fmt --check` passed; `npm test -- src/bus/contract.test.ts src/bus/store.test.ts src/workbench/workbench.test.tsx src/panels/RepoCard.test.tsx src/panels/RepoPanel.test.tsx` 77 passed; `npx tsc --noEmit` passed. Note: two default/parallel full Rust suite runs hit different existing timing-sensitive bus/watcher tests; targeted tests and serialized full suite passed.
+- RDM-001 RU1 Security Watch: light pass complete. No new filesystem authority, external process launch, WSL probing, secret handling, public API/auth, or destructive operation was added. RU2 still owns explicit guard tests before local filesystem/git/secret-scan/file/session command paths.
+- RDM-001 RU2 implementation: review-passed after fixes. Changed files: `src-tauri/src/bus/mod.rs`, `src-tauri/src/bus/commands.rs`, and `src-tauri/src/agent_console/commands.rs` plus shared consumers through `ensure_known`. Implementation adds `BusHandle::resolve_repo`, `RepoResolveError`, unsupported-entry tracking in the bus, source-aware resolver use for repo read/media/diff/file/session command allowlists, and safe `unsupported_repo_source` command error mapping. Future WSL entries are retained for guard lookup but are not mounted, watched, snapshotted, subscribed, retried, or routed into local git/filesystem/session paths.
+- RDM-001 RU3 implementation: review-passed after fixes. Changed files: `src-tauri/src/lib.rs`, `src/workbench/wslAbsence.test.ts`, and `docs/contracts/bus-contract.md`. Implementation seeds the bus only from runtime-projected local repos, asserts no WSL/tinto-agent invoke commands are registered for RDM-001, scans every non-test/non-declaration frontend runtime TS/TSX source for WSL-facing UI/settings/errors, and records that public WSL repo identity is deferred beyond RDM-001. New and changed functions/test names/comments added for RDM-001 are in English; user-facing existing Spanish error strings were left unchanged.
+- RDM-001 RU2/RU3 code review: passed after fixes. Findings path: `docs/review-findings/2026-06-23-rdm-001-ru2-ru3-code-review.md`. Fixed correctness P2 for `Subscribe`/`RetryRepo` bypassing unsupported-source resolution; fixed testing P1 for missing hidden WSL retry/subscription coverage; fixed testing P2 for hand-maintained frontend absence scan. Security reviewer found no P0-P2 findings.
+- RDM-001 RU2/RU3 Impact Scan: complete. Changed contract/helper surface: internal bus resolver/command guard behavior, command error categories for unsupported sources, startup runtime repo seed, frontend absence regression surface, and a bus contract compatibility note. Scan patterns used: `rg "ResolveRepo|resolve_repo|unsupported_repo_source|UnsupportedRepoSource|RepoSource|source:|distro|is_runtime_supported|list_workbenches|invoke_handler|tinto_agent|tinto-agent|\\bwsl\\b" src src-tauri docs/contracts` and `rg "ensure_known|is_known\\(|resolve_repo\\(|CommandError::new|unsupported_repo_source" src-tauri/src src`. Consumers found in bus, bus commands, file_ops shared `ensure_known`, agent_console, lib startup/invoke registration, frontend bus/workbench/panel runtime files, and contract docs.
+- RDM-001 RU2/RU3 verification: `cargo test --lib wsl_source` 3 passed; `cargo test --lib unsupported_wsl` 2 passed; `cargo test --lib unsupported_repo_resolve_error_maps_to_safe_category` 2 passed; `cargo test --lib invoke_handler_does_not_register_wsl_commands_for_rdm_001` 1 passed; `cargo test --lib initial_runtime_repos` 2 passed; `cargo test --lib -- --test-threads=1` 179 passed; `cargo fmt --check` passed; `npm test -- src/workbench/wslAbsence.test.ts` 63 passed; `npm test -- src/bus/contract.test.ts src/bus/store.test.ts src/workbench/workbench.test.tsx src/workbench/wslAbsence.test.ts src/panels/RepoCard.test.tsx src/panels/RepoPanel.test.tsx` 140 passed; `npx tsc --noEmit` passed.
+- RDM-001 RU2/RU3 Security Watch: complete. Unsupported future WSL entries are hidden from runtime snapshots and command allowlists, fail closed before local path handling, do not leak unsupported repo paths in command errors, and cannot register WSL/tinto-agent commands in RDM-001. No new filesystem authority, external process launch, auth, tenant, public API, or secret-handling surface was added.
+- Reviewability Gate: passed. Chosen granularity is three review units: RU1 repo-source/config compatibility, RU2 guarded backend routing, RU3 Linux absence/regression coverage. Default delivery remains local fast-forward into `develop`, no PR unless explicitly requested; if PR flow is requested, keep stack target 2/max 2.
+- Ready work: RDM-001 package is ready for release handoff; all review units are implemented, verified, and review-passed.
+- Context readiness result: sufficient for roadmap generation. Product intent, current system shape, technical execution context, bus/interface contract, delivery context, and existing scope were covered by current docs and source files. Remaining WSL-specific choices are recorded as user decisions rather than invented behavior.
+- Resolved roles: `roadmap_generator` = `krt-roadmap-cartographer`. Approved fallback roles for this run: `document_review` = document-review subagent fan-out plus lead synthesis; `brainstorm` = `krt-requirements-weaver`; `plan` = `krt-delivery-navigator`. Jira optional and currently omitted because environment is not configured.
+- Production posture: `prototype`, supported by state history and local desktop project posture.
+- Branch/base strategy: continue from `develop`; release preference remains local fast-forward/no PR unless the user requests PR flow.
+- Reviewability posture: RDM-001 work package passed Reviewability Gate with RU1/RU2/RU3. Default delivery is local fast-forward into `develop`, no PR unless explicitly requested; if PR flow is requested, stack target 2/max 2.
+- Next exact invocation for release handoff: `$krt-release-marshal package:docs/work-packages/RDM-001-windows-gated-repo-identity/2026-06-23-001-windows-gated-repo-identity-work-package.md jira-policy:optional`
 
 ## Completed Delivery
 
@@ -112,6 +148,59 @@ Known constraints:
 - Managed install still needs network access to GitHub release assets.
 - Host package-manager fallbacks can fail due to missing installers, missing privileges, or unavailable distro packages.
 - The per-repo `.gitleaks.toml` creation is intentionally minimal and idempotent; deeper rule editing remains outside this slice.
+## Post-Closeout Iteration — RUL-001 File Overview Ruler Parity (RU1 re-applied with dev fixture, 2026-06-22)
+
+RU1 (foundation: always-visible track, scroll-synced caret, click-to-jump on the full track, active-marker highlight with scroll-past clear, configurable width/density, keyboard nav, a11y, and a `source` discriminator on `FileOverviewMarker` for future marker types) is re-applied on `develop` and ready for review.
+
+**Re-applied surfaces (this iteration):**
+- `src/panels/file/FileOverviewRuler.tsx` — rewrite: always renders (no `return null` when no markers), scroll-synced caret via `useOverviewScrollSync`, click-to-jump on the full track, active-marker highlight with `useEffect` scroll-past clear, `source?: "alert" | "hunk" | "search"` field on `FileOverviewMarker` (default `"alert"`), `role="slider"` + `aria-valuemin/max/now/valuetext` + keyboard nav (ArrowUp/Down/Home/End), `aria-hidden="true"` on the caret.
+- 2026-06-23 visual correction: `FileOverviewRuler` now renders a VS Code-style minimap-width overview with mini-code content, marker stripes, and a viewport overlay rather than a thin marker-only rail. The overview is sticky inside the file scroll container and sizes itself from the visible body height so it remains visible while the file content scrolls. The minimap track is adaptive: 96 px minimum, 4 px per line until it fills the visible container, and a 600-row sampled rendering cap for huge files. Marker metadata uses `data-marker-line`; scroll-sync and jump lookup ignore `.file-overview-ruler` descendants.
+- `src/panels/file/useOverviewScrollSync.ts` (new) — passive scroll listener + `ResizeObserver` + `requestAnimationFrame` coalescing. "First visible" semantic is `rect.bottom > bodyRect.top` (strict), with `visibleLineCount` returned for the minimap viewport overlay. Accepts an optional `bodyRef` and falls back to `topLine=1` when the ref is null.
+- `src/panels/diff/DiffView.tsx` and `src/panels/diff/FullFileView.tsx` — forward an optional `bodyRef`; the rail hosts the hook and passes `topLine` + `bodyRef` to the ruler. `FullFileView` derives `lines` via `useMemo` so the hook recomputes only when the content changes.
+- `src/panels/file/FileView.tsx` — owns `bodyRef` via `useRef<HTMLDivElement>(null)` on `.file-view__body`; forwards to 3 `FullFileView` calls and 1 `DiffView` call.
+- `src/App.css` — new `--has-track` class (track clickable + 2 px right-edge gradient), `--empty` class for the empty state, caret indicator style, hunk-marker style placeholder, active-marker outline + glow.
+- `src/panels/file/FileOverviewRuler.test.tsx` (new, 7 tests) and `src/panels/file/useOverviewScrollSync.test.tsx` (new, 2 tests).
+- `src/panels/diff/FullFileView.test.tsx`, `src/panels/diff/DiffView.test.tsx`, `src/panels/file/FileView.test.tsx` — test id format updated to `overview-marker-{line}-{index}` to disambiguate stacked markers.
+
+**Dev-only browser fixture (new this iteration):**
+- `demo.html` (Vite multi-page entry) + `src/demo/main.tsx` + `src/demo/demo.css` — a standalone page that mounts `FileOverviewRuler` + `useOverviewScrollSync` against a mock 80-line file with 12 secret-pattern lines. No Tauri, no bus, no real repo. Safe to keep: the Tauri app never opens `/demo.html`, so this code is dev-only and never reaches the production bundle.
+- Review URL: `http://127.0.0.1:1420/demo.html` (run `npm run dev` first).
+- Side panel shows `topLine` and `activeLine` in real time so the user can confirm the hook is firing.
+
+**What to test (the user's review checklist):**
+
+1. Open `http://127.0.0.1:1420/demo.html` in Chrome/Firefox with DevTools (F12) open.
+2. **Track always visible**: the right-side rail is rendered even with zero markers. The 2 px right-edge gradient should be visible on a dark background.
+3. **Caret follows scroll**: scroll the body with the mouse wheel or scrollbar. The white caret inside the rail moves in lockstep with the visible top line. The `topLine` value in the side panel updates on every scroll.
+4. **Click on the rail (empty region)**: clicking anywhere on the track (between markers) scrolls the body so the corresponding line is centered, and the `activeLine` value in the side panel updates.
+5. **Click on a red alert chip**: scrolls the body to that line and applies the `--active` outline to the chip. The `activeLine` value in the side panel updates.
+6. **Click on a line in the body**: activates that line and updates `activeLine` in the side panel.
+7. **Keyboard nav on the track**: Tab into the track (focus ring visible), then ArrowUp/ArrowDown move ±1 line, Home jumps to line 1, End jumps to line 80.
+8. **Active-marker scroll-past clear**: click a marker (e.g. line 7), then scroll down past it. The `--active` outline clears.
+9. **12 critical markers** should be visible at lines 7, 13, 14, 23, 24, 25, 26, 38, 39, 46, 47, 57, 58, 59, 73, 76.
+10. **No console errors** in DevTools Console (warnings from the `react-hooks/set-state-in-effect` rule are expected on the scroll-past useEffect and are documented in the file).
+
+**Verification results (this iteration):**
+- `npx tsc --noEmit` clean.
+- `npx vitest run` 241/241.
+- `npx prettier --check <changed files>` clean.
+- Vite dev server serves `demo.html` (HTTP 200) and `src/demo/main.tsx` (transformed).
+- RU1 review-fix verification (2026-06-23): `npm run test -- src/panels/file/FileOverviewRuler.test.tsx src/panels/file/useOverviewScrollSync.test.tsx` passed 11/11.
+- RU1 affected suite (2026-06-23): `npm run test -- src/panels/file/FileOverviewRuler.test.tsx src/panels/file/useOverviewScrollSync.test.tsx src/panels/file/FileView.test.tsx src/panels/diff/DiffView.test.tsx src/panels/diff/FullFileView.test.tsx` passed 33/33.
+- RU1 typecheck/format (2026-06-23): `npx tsc --noEmit` clean; `npx prettier --check <changed files>` clean.
+- RU1 minimap visual verification (2026-06-23): browser inspection of `http://127.0.0.1:1420/demo.html` confirmed a 122 px minimap surface, 80 mini-code lines, 16 expected marker lines, viewport overlay, no console errors, marker line 57 click centers code line 57, and Home returns to `topLine: 1`.
+- RU1 sticky minimap verification (2026-06-23): after scrolling the fixture body from `scrollTop=0` to `scrollTop=650`, the minimap stayed fixed at `top=153` / `bottom=882` while `topLine` updated from 1 to 37.
+- RU1 adaptive minimap verification (2026-06-23): the 80-line fixture renders a 320 px minimap track (`80 * 4px`) inside the sticky 729 px available area. Tests cover 2-line files collapsing to the 96 px minimum and 5000-line files rendering only 600 sampled minimap rows.
+- RU1 scroll-past-end verification (2026-06-23): open file and diff surfaces add bottom scroll space equal to the visible file body height minus one line. In the fixture, scrolling to the end places line 80 at the top of the file body (`offset=0`) with 723 px of scroll space below it, so users can read final lines without looking at the bottom edge.
+- RU1 viewport-indicator smoothness (2026-06-23): the minimap viewport indicator is now driven by continuous `scrollTop / maxScroll` progress instead of discrete `topLine`, and updates with `transform: translate3d(...)` plus fixed pixel height. The transition was removed so the indicator tracks scroll frames directly instead of lagging behind.
+- RU1 marker semantics (2026-06-23): the minimap now includes a compact legend badge for marker meanings, currently `posibles secretos` plus future-ready hunk/search grouping. The badge exposes accessible labels and hover/title summaries.
+- RU1 inline marker labels (2026-06-23): full-file and diff rows with overview markers now show a right-side non-overlapping label such as `Possible secret` inside the reserved gutter before the minimap. The label has a title with line context and keeps `pointer-events: none` so it does not interfere with selection/click navigation.
+- No backend changes; no `cargo` commands expected. RUL-001 is frontend-only.
+
+**Direct Compound Master browser review (inline, no subagent, 2026-06-23):** `review-passed` after fixes. Initial review of `http://127.0.0.1:1420/demo.html` found P1/P2 issues where marker buttons reused `data-line` inside the same scroll body, causing `useOverviewScrollSync` and `jumpToLine()` to select rail markers instead of file rows; the fixture side panel also missed rail-driven `activeLine` updates, and the console had a favicon 404. Fixes applied: marker buttons now use `data-marker-line`, scroll-sync and jump lookup ignore `.file-overview-ruler` descendants, the fixture subscribes to `onActiveLineChange`, and `demo.html` declares an embedded favicon. Follow-up user visual review clarified that the desired result is effectively a VS Code minimap, so the surface was widened and changed to mini-code content with a viewport overlay and marker stripes. A second follow-up clarified the minimap must remain fixed while scrolling; the surface is now sticky and body-height-sized. A third follow-up clarified that small files should not stretch and huge files need bounded rendering; the minimap now uses adaptive track height and samples huge files at 600 rendered rows. Re-review passed: initial `topLine=1`, click rail updates `activeLine`, marker line 57 centers and activates code line 57, Home/End report first visible content lines, scroll-past clears marker 7, console has no errors, the 80-line fixture renders a 320 px minimap inside a 122 px wide surface, and its top/bottom remain unchanged after deep scroll. Finding details and resolution evidence are in `docs/review-findings/2026-06-23-rul-001-ru1-demo-review.md`.
+
+**Release handoff readiness:** ready for RU1 release flow. The release plan remains: 3 semantic commits (feat + test + docs `[skip ci]`) and push to `origin/develop`, no PR, no Jira.
+
 ## Canonical Artifact Roots
 
 - Brainstorms: `docs/brainstorms/`.
