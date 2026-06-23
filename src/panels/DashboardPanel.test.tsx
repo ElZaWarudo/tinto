@@ -11,7 +11,7 @@ const clientMocks = vi.hoisted(() => ({
     return Promise.resolve("sess-1");
   }),
   listAgentSessions: vi.fn(() => Promise.resolve([])),
-  agentBinaryAvailable: vi.fn((...args: unknown[]) => {
+  agentBinaryAvailableForRepo: vi.fn((...args: unknown[]) => {
     void args;
     return Promise.resolve(true);
   }),
@@ -24,7 +24,8 @@ vi.mock("../bus/client", () => ({
   retryRepo: (...args: unknown[]) => clientMocks.retryRepo(...args),
   startAgentSession: (...args: unknown[]) => clientMocks.startAgentSession(...args),
   listAgentSessions: () => clientMocks.listAgentSessions(),
-  agentBinaryAvailable: (...args: unknown[]) => clientMocks.agentBinaryAvailable(...args),
+  agentBinaryAvailableForRepo: (...args: unknown[]) =>
+    clientMocks.agentBinaryAvailableForRepo(...args),
 }));
 
 import { DashboardPanel } from "./DashboardPanel";
@@ -70,8 +71,8 @@ describe("DashboardPanel", () => {
     clientMocks.retryRepo.mockClear();
     clientMocks.startAgentSession.mockClear();
     clientMocks.listAgentSessions.mockClear();
-    clientMocks.agentBinaryAvailable.mockReset();
-    clientMocks.agentBinaryAvailable.mockResolvedValue(true);
+    clientMocks.agentBinaryAvailableForRepo.mockReset();
+    clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(true);
   });
 
   // Covers AE12: loading skeletons before the snapshot
@@ -140,7 +141,9 @@ describe("DashboardPanel", () => {
     const openAgentTerminal = vi.fn();
     renderDash({ openAgentTerminal });
 
-    await waitFor(() => expect(clientMocks.agentBinaryAvailable).toHaveBeenCalledWith("codex"));
+    await waitFor(() =>
+      expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/a", "codex"),
+    );
     fireEvent.click(await screen.findByTestId("agent-launch"));
 
     await waitFor(() =>

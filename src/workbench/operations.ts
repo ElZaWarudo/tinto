@@ -5,6 +5,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   addRepo,
+  addWslRepo,
   autodetectReposUnder,
   createWorkbench,
   removeRepo,
@@ -42,6 +43,41 @@ export async function addRepoFlow(active: string): Promise<string | null> {
   }
   await reloadActiveWorkbench();
   return canonical;
+}
+
+export interface AddWslRepoInput {
+  distro: "Ubuntu";
+  path: string;
+  alias?: string;
+}
+
+export function normalizeWslLinuxPath(path: string): string | null {
+  const original = path.trim();
+  if (!original || original.includes("\\") || original.startsWith("//")) return null;
+  if (/^[A-Za-z]:/.test(original) || !original.startsWith("/")) return null;
+  const parts: string[] = [];
+  for (const part of original.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") return null;
+    parts.push(part);
+  }
+  return parts.length ? `/${parts.join("/")}` : "/";
+}
+
+export async function addWslRepoFlow(
+  active: string,
+  input: AddWslRepoInput,
+): Promise<string | null> {
+  const path = normalizeWslLinuxPath(input.path);
+  if (!path) return null;
+  let stored: string | null = null;
+  try {
+    stored = await addWslRepo(active, input.distro, path, input.alias?.trim() || undefined);
+  } catch (e) {
+    console.warn("tinto: add WSL repo failed", e);
+  }
+  await reloadActiveWorkbench();
+  return stored;
 }
 
 export async function autodetectFlow(active: string): Promise<void> {

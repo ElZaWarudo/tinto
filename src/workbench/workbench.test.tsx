@@ -4,9 +4,15 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 const ops = vi.hoisted(() => ({
   switchWorkbench: vi.fn(),
   addRepoFlow: vi.fn(),
+  addWslRepoFlow: vi.fn(),
   autodetectFlow: vi.fn(),
   createAndActivate: vi.fn(),
   removeRepoFlow: vi.fn(),
+  normalizeWslLinuxPath: vi.fn((path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed.startsWith("/") || trimmed.includes("\\") || trimmed.includes("..")) return null;
+    return trimmed.replace(/\/+$/, "");
+  }),
   getGitleaksSetupStatus: vi.fn(),
   installGitleaks: vi.fn(),
 }));
@@ -15,9 +21,14 @@ vi.mock("../bus/client", async () => ({
   getGitleaksSetupStatus: ops.getGitleaksSetupStatus,
   installGitleaks: ops.installGitleaks,
 }));
+vi.mock("./platform", async () => {
+  const actual = await vi.importActual<typeof import("./platform")>("./platform");
+  return actual;
+});
 
 import { MenuBar } from "./MenuBar";
 import { FirstRun } from "./firstRun";
+import { setWindowsHostOverrideForTests } from "./platform";
 import { busStore } from "../bus/store";
 import type { WorkbenchConfig } from "../bus/contract";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
@@ -34,6 +45,7 @@ const config: WorkbenchConfig = {
 describe("MenuBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setWindowsHostOverrideForTests(null);
     busStore.resetAll();
   });
 
@@ -81,6 +93,85 @@ describe("MenuBar", () => {
     fireEvent.click(screen.getByTestId("menu-repos"));
     fireEvent.click(screen.getByTestId("autodetect"));
     expect(ops.autodetectFlow).toHaveBeenCalledWith("Work");
+  });
+
+  it("hides WSL repo actions on non-Windows hosts", () => {
+    setWindowsHostOverrideForTests(false);
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    expect(screen.queryByTestId("add-wsl-repo")).not.toBeInTheDocument();
+  });
+
+  it("opens the Windows-only WSL add dialog and submits Ubuntu Linux path", async () => {
+    setWindowsHostOverrideForTests(true);
+    ops.addWslRepoFlow.mockResolvedValue("/home/me/repo");
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    fireEvent.click(screen.getByTestId("add-wsl-repo"));
+    expect(screen.getByTestId("add-wsl-dialog")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("wsl-path"), { target: { value: "/home/me/repo/" } });
+    fireEvent.change(screen.getByTestId("wsl-alias"), { target: { value: "API WSL" } });
+    fireEvent.click(screen.getByTestId("add-wsl-submit"));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(ops.addWslRepoFlow).toHaveBeenCalledWith("Work", {
+      distro: "Ubuntu",
+      path: "/home/me/repo",
+      alias: "API WSL",
+    });
+  });
+
+  it("shows configured WSL labels on Windows without listing them as projects", () => {
+    setWindowsHostOverrideForTests(true);
+    const openRepo = vi.fn();
+    const actions: WorkspaceActions = {
+      openRepo,
+      addRepo: vi.fn(),
+      removeRepo: vi.fn(),
+      openFile: vi.fn(),
+      openTimeline: vi.fn(),
+      openDashboard: vi.fn(),
+      openAgentTerminal: vi.fn(),
+    };
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              {
+                source: "wsl",
+                path: "/home/me/repo",
+                distro: "Ubuntu",
+                alias: "API WSL",
+                fs_watch: [],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    render(
+      <WorkspaceActionsContext.Provider value={actions}>
+        <MenuBar />
+      </WorkspaceActionsContext.Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    expect(screen.getByTestId("configured-wsl-/home/me/repo")).toHaveTextContent("API WSL");
+
+    fireEvent.click(screen.getByTestId("menu-projects"));
+    expect(screen.getByTestId("projects-empty")).toBeInTheDocument();
+    expect(openRepo).not.toHaveBeenCalled();
   });
 
   it("shows the degraded watch indicator", () => {

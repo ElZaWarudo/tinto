@@ -13,7 +13,9 @@ import { useWorkspaceActions } from "../workspace/actions";
 import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
 import { autodetectFlow, switchWorkbench } from "./operations";
 import { AddonsManager } from "./AddonsManager";
+import { AddWslRepoDialog } from "./AddWslRepoDialog";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
+import { isWindowsHost } from "./platform";
 
 type MenuId = "repos" | "projects" | "view" | "addons" | "help";
 
@@ -55,9 +57,15 @@ export function MenuBar() {
   const [open, setOpen] = useState<MenuId | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAddons, setShowAddons] = useState(false);
+  const [showAddWsl, setShowAddWsl] = useState(false);
 
   const active = config?.active ?? "";
   const workbenches = config?.workbenches ?? [];
+  const canUseWsl = isWindowsHost();
+  const activeConfig = workbenches.find((w) => w.name === active);
+  const configuredWslRepos = canUseWsl
+    ? (activeConfig?.repos ?? []).filter((repo) => repo.source === "wsl")
+    : [];
   // Projects to open come from the live bus snapshot (same source as the
   // Dashboard cards), not the config — so the menu always matches what is
   // actually loaded, regardless of config-load timing.
@@ -122,6 +130,27 @@ export function MenuBar() {
               close={close}
               onSelect={() => active && void autodetectFlow(active)}
             />
+            {canUseWsl && (
+              <>
+                <div className="menu__sep" role="separator" />
+                <MenuItem
+                  label="Add WSL repo…"
+                  testid="add-wsl-repo"
+                  close={close}
+                  onSelect={() => active && setShowAddWsl(true)}
+                />
+                {configuredWslRepos.map((repo) => (
+                  <div
+                    key={`${repo.distro ?? "WSL"}:${repo.path}`}
+                    className="menu__empty"
+                    data-testid={`configured-wsl-${repo.path}`}
+                    title={`${repo.distro ?? "WSL"}:${repo.path}`}
+                  >
+                    {repo.alias ?? `${repo.distro ?? "WSL"}:${repo.path}`}
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -300,6 +329,9 @@ export function MenuBar() {
 
       {showShortcuts && <KeyboardShortcuts onClose={() => setShowShortcuts(false)} />}
       {showAddons && <AddonsManager onClose={() => setShowAddons(false)} />}
+      {showAddWsl && active && (
+        <AddWslRepoDialog activeWorkbench={active} onClose={() => setShowAddWsl(false)} />
+      )}
     </div>
   );
 }

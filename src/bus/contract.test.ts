@@ -6,7 +6,9 @@ import type {
   AgentSessionStatus,
   DiffLineKind,
   FileDiff,
+  RepoEntry,
   RepoDelta,
+  WorkbenchConfig,
 } from "./contract";
 
 // D-008-5: the TS diff types must match the backend's serde output exactly.
@@ -84,6 +86,37 @@ describe("passive signal contract types", () => {
   });
 });
 
+describe("workbench source contract types", () => {
+  it("accepts legacy local entries without source and additive WSL entries", () => {
+    const wire = JSON.stringify({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        {
+          name: "Work",
+          repos: [
+            { path: "/local/repo", alias: null, fs_watch: [] },
+            {
+              source: "wsl",
+              path: "/home/me/repo",
+              distro: "Ubuntu",
+              alias: "WSL",
+              fs_watch: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    const config = JSON.parse(wire) as WorkbenchConfig;
+    const local = config.workbenches[0].repos[0] satisfies RepoEntry;
+    const wsl = config.workbenches[0].repos[1] satisfies RepoEntry;
+    expect(local.source).toBeUndefined();
+    expect(wsl.source).toBe("wsl");
+    expect(wsl.distro).toBe("Ubuntu");
+  });
+});
+
 describe("agent session contract types", () => {
   it("accepts session lifecycle metadata with snake_case status", () => {
     const wire = JSON.stringify({
@@ -157,12 +190,16 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listenMoc
 import {
   getBlob,
   agentBinaryAvailable,
+  agentBinaryAvailableForRepo,
+  addWslRepo,
   getCommitDiff,
   getGitleaksSetupStatus,
+  getRepoGitleaksSetupStatus,
   getFileContent,
   getMediaContent,
   getWorktreeDiff,
   installGitleaks,
+  installRepoGitleaks,
   createRepoGitleaksConfig,
   listAgentSessions,
   listRepoTree,
@@ -170,6 +207,7 @@ import {
   onAgentSessionChangeLog,
   resizeAgentSession,
   revertSession,
+  removeWslRepo,
   setSubscriptions,
   startAgentSession,
   stopAgentSession,
@@ -243,6 +281,23 @@ describe("RDM-008 client wrappers", () => {
     });
   });
 
+  it("WSL config wrappers use Windows-only command names", () => {
+    void addWslRepo("Work", "Ubuntu", "/home/me/repo", "WSL");
+    expect(invokeMock).toHaveBeenCalledWith("add_wsl_repo", {
+      workbench: "Work",
+      distro: "Ubuntu",
+      path: "/home/me/repo",
+      alias: "WSL",
+    });
+
+    void removeWslRepo("Work", "Ubuntu", "/home/me/repo");
+    expect(invokeMock).toHaveBeenCalledWith("remove_wsl_repo", {
+      workbench: "Work",
+      distro: "Ubuntu",
+      path: "/home/me/repo",
+    });
+  });
+
   it("agent session wrappers use registered command names", () => {
     void startAgentSession("/r/api", "codex");
     expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
@@ -266,6 +321,12 @@ describe("RDM-008 client wrappers", () => {
 
     void agentBinaryAvailable("codex");
     expect(invokeMock).toHaveBeenCalledWith("agent_binary_available", {
+      agentType: "codex",
+    });
+
+    void agentBinaryAvailableForRepo("/r/api", "codex");
+    expect(invokeMock).toHaveBeenCalledWith("agent_binary_available_for_repo", {
+      repo: "/r/api",
       agentType: "codex",
     });
   });
@@ -312,6 +373,12 @@ describe("RDM-008 client wrappers", () => {
 
     void installGitleaks();
     expect(invokeMock).toHaveBeenCalledWith("install_gitleaks");
+
+    void getRepoGitleaksSetupStatus("/r/api");
+    expect(invokeMock).toHaveBeenCalledWith("get_repo_gitleaks_setup_status", { repo: "/r/api" });
+
+    void installRepoGitleaks("/r/api");
+    expect(invokeMock).toHaveBeenCalledWith("install_repo_gitleaks", { repo: "/r/api" });
 
     void createRepoGitleaksConfig("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("create_repo_gitleaks_config", { repo: "/r/api" });

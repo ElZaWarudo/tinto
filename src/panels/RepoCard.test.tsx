@@ -5,7 +5,7 @@ import type { RepoDelta } from "../bus/contract";
 
 const NOW = 1_700_000_000_000;
 const clientMocks = vi.hoisted(() => ({
-  agentBinaryAvailable: vi.fn((...args: unknown[]) => {
+  agentBinaryAvailableForRepo: vi.fn((...args: unknown[]) => {
     void args;
     return Promise.resolve(true);
   }),
@@ -15,9 +15,9 @@ const clientMocks = vi.hoisted(() => ({
   }),
 }));
 vi.mock("../bus/client", () => ({
-  agentBinaryAvailable: (...args: unknown[]) => {
+  agentBinaryAvailableForRepo: (...args: unknown[]) => {
     void args;
-    return clientMocks.agentBinaryAvailable(...args);
+    return clientMocks.agentBinaryAvailableForRepo(...args);
   },
   createRepoGitleaksConfig: (repo: string) => clientMocks.createRepoGitleaksConfig(repo),
 }));
@@ -61,8 +61,8 @@ function renderCard(
 
 describe("RepoCard", () => {
   beforeEach(() => {
-    clientMocks.agentBinaryAvailable.mockReset();
-    clientMocks.agentBinaryAvailable.mockResolvedValue(true);
+    clientMocks.agentBinaryAvailableForRepo.mockReset();
+    clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(true);
     clientMocks.createRepoGitleaksConfig.mockReset();
     clientMocks.createRepoGitleaksConfig.mockResolvedValue(undefined);
   });
@@ -190,7 +190,7 @@ describe("RepoCard", () => {
   });
 
   it("disables launch when the selected agent binary is missing", async () => {
-    clientMocks.agentBinaryAvailable.mockResolvedValue(false);
+    clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(false);
     const { onLaunch } = renderCard();
 
     expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent("Codex not found");
@@ -214,6 +214,6 @@ describe("RepoCard", () => {
 
     fireEvent.change(screen.getByLabelText("agent type"), { target: { value: "claude" } });
 
-    expect(clientMocks.agentBinaryAvailable).toHaveBeenCalledWith("claude");
+    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/api", "claude");
   });
 });

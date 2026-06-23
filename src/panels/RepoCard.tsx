@@ -5,7 +5,7 @@
 // the project's own explorer, not here.
 
 import { memo, useEffect, useState } from "react";
-import { agentBinaryAvailable } from "../bus/client";
+import { agentBinaryAvailableForRepo } from "../bus/client";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
 import { ACTIVITY_WINDOW_MS } from "./constants";
@@ -70,7 +70,7 @@ function RepoCardImpl({
 
   useEffect(() => {
     let alive = true;
-    agentBinaryAvailable(agentType)
+    agentBinaryAvailableForRepo(delta.repo, agentType)
       .then((ok) => {
         if (!alive) return;
         setAvailable(ok);
@@ -84,7 +84,7 @@ function RepoCardImpl({
     return () => {
       alive = false;
     };
-  }, [agentType, selectedAgent.label]);
+  }, [agentType, selectedAgent.label, delta.repo]);
 
   // Bento emphasis: feature the repos that warrant attention with a wider tile.
   const feature = !!error || counts.critical > 0 || (active && changes > 0);

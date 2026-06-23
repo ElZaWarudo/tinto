@@ -247,8 +247,12 @@ export interface WorkbenchSnapshot {
 }
 
 // ---- Workbench config (from list_workbenches; source of names/aliases) ----
+export type RepoSource = "local" | "wsl";
+
 export interface RepoEntry {
+  source?: RepoSource;
   path: string;
+  distro?: string | null;
   alias: string | null;
   fs_watch: string[];
 }

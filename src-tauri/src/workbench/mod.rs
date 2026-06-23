@@ -38,6 +38,10 @@ pub enum WorkbenchError {
     UnknownRepo(PathBuf),
     #[error("no es un repositorio git válido: {0}")]
     InvalidRepo(String),
+    #[error("path WSL invalido: {0}")]
+    InvalidWslPath(String),
+    #[error("distro WSL no soportada: {0}")]
+    UnsupportedWslDistro(String),
     #[error("no se pudo resolver el directorio de configuración del SO")]
     NoConfigDir,
     #[error("el store de workbenches quedó inutilizable tras un error interno; reinicia la app")]
@@ -61,6 +65,8 @@ impl Serialize for WorkbenchError {
             WorkbenchError::DuplicateRepo(_) => "duplicate_repo",
             WorkbenchError::UnknownRepo(_) => "unknown_repo",
             WorkbenchError::InvalidRepo(_) => "invalid_repo",
+            WorkbenchError::InvalidWslPath(_) => "invalid_wsl_path",
+            WorkbenchError::UnsupportedWslDistro(_) => "unsupported_wsl_distro",
             WorkbenchError::NoConfigDir => "no_config_dir",
             WorkbenchError::StoreLocked => "store_locked",
         };
@@ -111,12 +117,26 @@ impl RepoEntry {
         }
     }
 
+    pub fn wsl(distro: String, path: PathBuf, alias: Option<String>) -> Self {
+        Self {
+            source: RepoSource::Wsl,
+            path,
+            distro: Some(distro),
+            alias,
+            fs_watch: Vec::new(),
+        }
+    }
+
     pub fn is_local(&self) -> bool {
         self.source.is_local()
     }
 
     pub fn is_runtime_supported(&self) -> bool {
-        self.source.is_local()
+        self.source.is_local() || (cfg!(target_os = "windows") && self.source == RepoSource::Wsl)
+    }
+
+    pub fn is_runtime_visible(&self) -> bool {
+        self.is_local() || (cfg!(target_os = "windows") && self.source == RepoSource::Wsl)
     }
 }
 
@@ -332,6 +352,28 @@ impl WorkbenchStore {
         Ok(path)
     }
 
+    pub fn add_wsl_repo(
+        &mut self,
+        workbench: &str,
+        distro: String,
+        path: String,
+        alias: Option<String>,
+    ) -> Result<PathBuf, WorkbenchError> {
+        let distro = normalize_wsl_distro(&distro)?;
+        let path = normalize_wsl_linux_path(&path)?;
+        let wb = self.find_mut(workbench)?;
+        if wb.repos.iter().any(|repo| {
+            repo.source == RepoSource::Wsl
+                && repo.distro.as_deref() == Some(distro.as_str())
+                && repo.path == path
+        }) {
+            return Err(WorkbenchError::DuplicateRepo(path));
+        }
+        wb.repos.push(RepoEntry::wsl(distro, path.clone(), alias));
+        self.persist()?;
+        Ok(path)
+    }
+
     pub fn remove_repo(&mut self, workbench: &str, path: &Path) -> Result<(), WorkbenchError> {
         // Stored paths are canonical (see `add_repo`). Match BOTH the canonical
         // form (for a live repo) AND the raw query (so a repo whose directory
@@ -345,6 +387,27 @@ impl WorkbenchStore {
         });
         if wb.repos.len() == before {
             return Err(WorkbenchError::UnknownRepo(path.to_path_buf()));
+        }
+        self.persist()
+    }
+
+    pub fn remove_wsl_repo(
+        &mut self,
+        workbench: &str,
+        distro: &str,
+        path: &str,
+    ) -> Result<(), WorkbenchError> {
+        let distro = normalize_wsl_distro(distro)?;
+        let path = normalize_wsl_linux_path(path)?;
+        let wb = self.find_mut(workbench)?;
+        let before = wb.repos.len();
+        wb.repos.retain(|repo| {
+            !(repo.source == RepoSource::Wsl
+                && repo.distro.as_deref() == Some(distro.as_str())
+                && repo.path == path)
+        });
+        if wb.repos.len() == before {
+            return Err(WorkbenchError::UnknownRepo(path));
         }
         self.persist()
     }
@@ -413,7 +476,7 @@ fn runtime_workbench(workbench: &Workbench) -> Option<Workbench> {
     let repos: Vec<RepoEntry> = workbench
         .repos
         .iter()
-        .filter(|repo| repo.is_runtime_supported())
+        .filter(|repo| repo.is_runtime_visible())
         .map(|repo| {
             let mut repo = repo.clone();
             if repo.is_local() {
@@ -431,6 +494,55 @@ fn runtime_workbench(workbench: &Workbench) -> Option<Workbench> {
         name: workbench.name.clone(),
         repos,
     })
+}
+
+fn normalize_wsl_distro(distro: &str) -> Result<String, WorkbenchError> {
+    let distro = distro.trim();
+    if distro == "Ubuntu" {
+        Ok(distro.to_string())
+    } else {
+        Err(WorkbenchError::UnsupportedWslDistro(distro.to_string()))
+    }
+}
+
+fn normalize_wsl_linux_path(path: &str) -> Result<PathBuf, WorkbenchError> {
+    let original = path.trim();
+    if original.is_empty() {
+        return Err(WorkbenchError::InvalidWslPath("path vacio".into()));
+    }
+    if original.contains('\\') || original.starts_with("//") {
+        return Err(WorkbenchError::InvalidWslPath(
+            "usa un path Linux absoluto, no UNC/Windows".into(),
+        ));
+    }
+    if original.len() >= 2 && original.as_bytes()[1] == b':' {
+        return Err(WorkbenchError::InvalidWslPath(
+            "usa un path Linux absoluto, no una unidad Windows".into(),
+        ));
+    }
+    if !original.starts_with('/') {
+        return Err(WorkbenchError::InvalidWslPath(
+            "el path WSL debe ser absoluto".into(),
+        ));
+    }
+
+    let mut parts = Vec::new();
+    for part in original.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                return Err(WorkbenchError::InvalidWslPath(
+                    "el path WSL no puede contener '..'".into(),
+                ))
+            }
+            segment => parts.push(segment),
+        }
+    }
+
+    if parts.is_empty() {
+        return Ok(PathBuf::from("/"));
+    }
+    Ok(PathBuf::from(format!("/{}", parts.join("/"))))
 }
 
 #[cfg(test)]
@@ -607,6 +719,86 @@ mod tests {
     }
 
     #[test]
+    fn add_wsl_repo_persiste_ubuntu_y_path_linux_normalizado() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+
+        let stored = store
+            .add_wsl_repo(
+                "A",
+                " Ubuntu ".into(),
+                " /home/me//proyecto/ ".into(),
+                Some("WSL".into()),
+            )
+            .unwrap();
+
+        assert_eq!(stored, PathBuf::from("/home/me/proyecto"));
+        let repo = &store.config().workbenches[0].repos[0];
+        assert_eq!(repo.source, RepoSource::Wsl);
+        assert_eq!(repo.distro.as_deref(), Some("Ubuntu"));
+        assert_eq!(repo.path, PathBuf::from("/home/me/proyecto"));
+        assert_eq!(repo.alias.as_deref(), Some("WSL"));
+        assert!(repo.fs_watch.is_empty());
+    }
+
+    #[test]
+    fn add_wsl_repo_rechaza_paths_no_linux_y_distro_no_soportada() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+
+        for path in [
+            "",
+            "relative/repo",
+            "C:\\repo",
+            "\\\\wsl$\\Ubuntu\\repo",
+            "/home/../repo",
+        ] {
+            let error = store
+                .add_wsl_repo("A", "Ubuntu".into(), path.into(), None)
+                .unwrap_err();
+            assert!(matches!(error, WorkbenchError::InvalidWslPath(_)));
+        }
+
+        let error = store
+            .add_wsl_repo("A", "Debian".into(), "/home/me/repo".into(), None)
+            .unwrap_err();
+        assert!(matches!(error, WorkbenchError::UnsupportedWslDistro(_)));
+    }
+
+    #[test]
+    fn wsl_duplicate_y_remove_usan_source_distro_y_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+        store
+            .add_wsl_repo("A", "Ubuntu".into(), "/tmp/shared".into(), None)
+            .unwrap();
+        store
+            .add_repo(
+                "A",
+                PathBuf::from("/tmp/shared"),
+                Some("Local".into()),
+                false,
+            )
+            .unwrap();
+
+        let duplicate = store
+            .add_wsl_repo("A", "Ubuntu".into(), "/tmp/shared/".into(), None)
+            .unwrap_err();
+        assert!(matches!(duplicate, WorkbenchError::DuplicateRepo(_)));
+        assert_eq!(store.config().workbenches[0].repos.len(), 2);
+
+        store
+            .remove_wsl_repo("A", "Ubuntu", "/tmp/shared")
+            .expect("remove wsl");
+        let remaining = &store.config().workbenches[0].repos;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].source, RepoSource::Local);
+    }
+
+    #[test]
     fn remove_repo_acepta_entrada_cuyo_directorio_fue_borrado() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = store_in(&dir);
@@ -722,7 +914,11 @@ name = "A"
             2,
             "la config persistida conserva futuras entradas WSL"
         );
-        assert_eq!(store.runtime_config().workbenches[0].repos.len(), 1);
+        let expected_visible = if cfg!(target_os = "windows") { 2 } else { 1 };
+        assert_eq!(
+            store.runtime_config().workbenches[0].repos.len(),
+            expected_visible
+        );
         assert_eq!(
             store.active_workbench_runtime().unwrap().repos[0]
                 .alias
@@ -741,7 +937,10 @@ name = "A"
         assert_eq!(wsl.path, PathBuf::from("/home/me/proyecto"));
         assert_eq!(wsl.distro.as_deref(), Some("Ubuntu"));
         assert_eq!(wsl.alias.as_deref(), Some("WSL"));
-        assert_eq!(reloaded.runtime_config().workbenches[0].repos.len(), 1);
+        assert_eq!(
+            reloaded.runtime_config().workbenches[0].repos.len(),
+            expected_visible
+        );
     }
 
     #[test]
@@ -769,7 +968,8 @@ name = "A"
         let mut store = store_in(&dir);
         let active = store.set_active("A").unwrap();
 
-        assert_eq!(active.repos.len(), 1);
+        let expected_visible = if cfg!(target_os = "windows") { 2 } else { 1 };
+        assert_eq!(active.repos.len(), expected_visible);
         assert_eq!(active.repos[0].source, RepoSource::Local);
         assert_eq!(store.config().workbenches[0].repos.len(), 2);
     }
@@ -811,9 +1011,17 @@ name = "Local"
             .map(|w| w.name.as_str())
             .collect();
 
-        assert_eq!(runtime.active.as_deref(), Some("Vacio local"));
-        assert_eq!(names, vec!["Vacio local", "Local"]);
-        assert!(store.active_workbench_runtime().unwrap().repos.is_empty());
+        if cfg!(target_os = "windows") {
+            assert_eq!(runtime.active.as_deref(), Some("Solo WSL"));
+            assert_eq!(names, vec!["Solo WSL", "Vacio local", "Local"]);
+            let repos = store.active_workbench_runtime().unwrap().repos;
+            assert_eq!(repos.len(), 1);
+            assert_eq!(repos[0].source, RepoSource::Wsl);
+        } else {
+            assert_eq!(runtime.active.as_deref(), Some("Vacio local"));
+            assert_eq!(names, vec!["Vacio local", "Local"]);
+            assert!(store.active_workbench_runtime().unwrap().repos.is_empty());
+        }
         assert_eq!(
             store.config().active.as_deref(),
             Some("Solo WSL"),
@@ -841,11 +1049,18 @@ name = "Solo WSL"
         .unwrap();
 
         let mut store = store_in(&dir);
-        assert!(matches!(
-            store.set_active("Solo WSL").unwrap_err(),
-            WorkbenchError::UnknownWorkbench(_)
-        ));
-        assert_eq!(store.config().active, None);
+        if cfg!(target_os = "windows") {
+            let active = store.set_active("Solo WSL").unwrap();
+            assert_eq!(active.repos.len(), 1);
+            assert_eq!(active.repos[0].source, RepoSource::Wsl);
+            assert_eq!(store.config().active.as_deref(), Some("Solo WSL"));
+        } else {
+            assert!(matches!(
+                store.set_active("Solo WSL").unwrap_err(),
+                WorkbenchError::UnknownWorkbench(_)
+            ));
+            assert_eq!(store.config().active, None);
+        }
     }
 
     #[test]

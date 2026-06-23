@@ -44,8 +44,14 @@ export const createWorkbench = (name: string) => invoke("create_workbench", { na
 export const addRepo = (workbench: string, path: string, alias?: string) =>
   invoke<string>("add_repo", { workbench, path, alias: alias ?? null });
 
+export const addWslRepo = (workbench: string, distro: string, path: string, alias?: string) =>
+  invoke<string>("add_wsl_repo", { workbench, distro, path, alias: alias ?? null });
+
 export const removeRepo = (workbench: string, path: string) =>
   invoke("remove_repo", { workbench, path });
+
+export const removeWslRepo = (workbench: string, distro: string, path: string) =>
+  invoke("remove_wsl_repo", { workbench, distro, path });
 
 export const updateRepo = (
   workbench: string,
@@ -81,8 +87,13 @@ export const stopAgentSession = (sessionId: string) => invoke("stop_agent_sessio
 
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
 
-export const getGitleaksSetupStatus = () => invoke<GitleaksSetupStatus>("get_gitleaks_setup_status");
+export const getGitleaksSetupStatus = () =>
+  invoke<GitleaksSetupStatus>("get_gitleaks_setup_status");
 export const installGitleaks = () => invoke<GitleaksInstallResult>("install_gitleaks");
+export const getRepoGitleaksSetupStatus = (repo: string) =>
+  invoke<GitleaksSetupStatus>("get_repo_gitleaks_setup_status", { repo });
+export const installRepoGitleaks = (repo: string) =>
+  invoke<GitleaksInstallResult>("install_repo_gitleaks", { repo });
 export const createRepoGitleaksConfig = (repo: string) =>
   invoke("create_repo_gitleaks_config", { repo });
 
@@ -91,6 +102,9 @@ export const revertSession = (sessionId: string, userConsent: boolean) =>
 
 export const agentBinaryAvailable = (agentType: string) =>
   invoke<boolean>("agent_binary_available", { agentType });
+
+export const agentBinaryAvailableForRepo = (repo: string, agentType: string) =>
+  invoke<boolean>("agent_binary_available_for_repo", { repo, agentType });
 
 export const writeAgentSessionInput = (sessionId: string, input: string | Uint8Array) =>
   invoke("write_agent_session_input", {

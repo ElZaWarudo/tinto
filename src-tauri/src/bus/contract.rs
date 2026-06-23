@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::git::{BranchInfo, CommitInfo, FileDiff, RepoStatus};
 
@@ -16,7 +16,7 @@ pub const EVENT_AGENT_SESSION_OUTPUT: &str = "tinto://agent-session-output";
 pub const EVENT_AGENT_SESSION_CHANGE_LOG: &str = "tinto://agent-session-change-log";
 
 /// Estado lifecycle de una sesion de agente gestionada por el backend.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionStatus {
     Starting,
@@ -29,20 +29,20 @@ pub enum AgentSessionStatus {
 }
 
 /// Error estructurado y seguro para comandos/lifecycle de sesiones de agente.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionError {
     pub category: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionCheckpointType {
     GitRef,
     FsSnapshot,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionCheckpoint {
     pub checkpoint_type: AgentSessionCheckpointType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,7 +50,7 @@ pub struct AgentSessionCheckpoint {
     pub snapshot_files: Vec<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentSessionChangeKind {
     Created,
@@ -58,20 +58,20 @@ pub enum AgentSessionChangeKind {
     Removed,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionChange {
     pub path: PathBuf,
     pub kind: AgentSessionChangeKind,
     pub timestamp_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionChangeLog {
     pub session_id: String,
     pub changes: Vec<AgentSessionChange>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionLimits {
     pub max_sessions: usize,
     pub max_sessions_per_repo: usize,
@@ -79,7 +79,7 @@ pub struct AgentSessionLimits {
 }
 
 /// Metadata publica de una sesion de agente. La E/S PTY se anade en ACI-002.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSession {
     pub id: String,
     pub repo: PathBuf,
@@ -105,7 +105,7 @@ pub struct AgentSession {
 
 /// Chunk binario del PTY de una sesion de agente, transportado en base64 para
 /// preservar ANSI y bytes parciales.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionOutput {
     pub session_id: String,
     pub chunk_base64: String,
@@ -121,8 +121,24 @@ pub const REPO_TREE_MAX_ENTRIES: usize = 20_000;
 /// Cap del conjunto de suscripciones.
 pub const MAX_SUBSCRIPTIONS: usize = 8;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitleaksSetupStatus {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub binary_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitleaksInstallResult {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub binary_path: Option<String>,
+    pub method: Option<String>,
+    pub message: String,
+}
+
 /// Clase del error de un repo (contrato para los estados de UI).
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RepoErrorClass {
     /// GitError de recálculo: se limpia solo en el siguiente recálculo OK.
@@ -133,7 +149,7 @@ pub enum RepoErrorClass {
 }
 
 /// Error de un repo, serializado con mensaje seguro.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoErrorState {
     pub class: RepoErrorClass,
     pub category: String,
@@ -141,7 +157,7 @@ pub struct RepoErrorState {
 }
 
 /// Severidad factual de una señal pasiva. No implica juicio de calidad.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum SignalSeverity {
     Info,
@@ -150,7 +166,7 @@ pub enum SignalSeverity {
 }
 
 /// Tipo de señal pasiva detectada por reglas determinísticas.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum PassiveSignalKind {
     SensitivePath,
@@ -161,7 +177,7 @@ pub enum PassiveSignalKind {
 }
 
 /// Señal pasiva: hecho detectado, sin valores secretos ni resumen interpretativo.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PassiveSignal {
     pub kind: PassiveSignalKind,
     pub severity: SignalSeverity,
@@ -171,7 +187,7 @@ pub struct PassiveSignal {
 }
 
 /// Métricas livianas del estado actual del repo.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepoMetrics {
     pub changed_files: usize,
     pub lines_added: usize,
@@ -179,7 +195,7 @@ pub struct RepoMetrics {
 }
 
 /// Hallazgo de secreto asociado a una línea concreta del archivo actual.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecretFinding {
     pub path: PathBuf,
     pub line: u32,
@@ -189,7 +205,7 @@ pub struct SecretFinding {
 
 /// Delta de estado de un repo (evento `tinto://workbench-delta` y entrada
 /// del snapshot).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoDelta {
     /// Identidad: path canónico del repo.
     pub repo: PathBuf,
@@ -212,7 +228,7 @@ pub struct RepoDelta {
 }
 
 /// Tipo de evento FS del Plano 2 (taxonomía del watcher).
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FsEventKind {
     Created,
@@ -221,7 +237,7 @@ pub enum FsEventKind {
 }
 
 /// Un evento del Plano 2 (archivo vigilado).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FsEvent {
     pub path: PathBuf,
     pub kind: FsEventKind,
@@ -236,14 +252,14 @@ pub struct FsEvent {
 }
 
 /// Lote de eventos FS de un repo (evento `tinto://fs-events`).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FsEventBatch {
     pub repo: PathBuf,
     pub events: Vec<FsEvent>,
 }
 
 /// Disponibilidad del watching (evento `tinto://watching-state`).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WatchingState {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -251,7 +267,7 @@ pub struct WatchingState {
 }
 
 /// Objetivo de suscripción: un repo, opcionalmente un archivo.
-#[derive(Debug, Clone, serde::Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct SubscriptionTarget {
     pub repo: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -259,28 +275,28 @@ pub struct SubscriptionTarget {
 }
 
 /// Entrada del árbol del repo (lista plana; el frontend arma el árbol).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TreeEntry {
     pub path: String,
     pub is_dir: bool,
 }
 
 /// Respuesta de `list_repo_tree`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoTree {
     pub entries: Vec<TreeEntry>,
     pub truncated: bool,
 }
 
 /// Contenido de un archivo/blob con guardas (1 MiB, binario → base64).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileContent {
     pub encoding: ContentEncoding,
     pub content: String,
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentEncoding {
     Utf8,
@@ -288,7 +304,7 @@ pub enum ContentEncoding {
 }
 
 /// Snapshot completo del workbench activo (`get_workbench_snapshot`).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkbenchSnapshot {
     pub watching: WatchingState,
     pub repos: Vec<RepoDelta>,

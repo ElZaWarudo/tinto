@@ -83,6 +83,21 @@ pub fn add_repo(
     Ok(canonical.to_string_lossy().into_owned())
 }
 
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn add_wsl_repo(
+    store: Store<'_>,
+    bus: Bus<'_>,
+    workbench: String,
+    distro: String,
+    path: String,
+    alias: Option<String>,
+) -> Result<String, WorkbenchError> {
+    let stored = locked(&store, |s| s.add_wsl_repo(&workbench, distro, path, alias))?;
+    reseed_if_active(&store, &bus, &workbench);
+    Ok(stored.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub fn remove_repo(
     store: Store<'_>,
@@ -91,6 +106,20 @@ pub fn remove_repo(
     path: PathBuf,
 ) -> Result<(), WorkbenchError> {
     locked(&store, |s| s.remove_repo(&workbench, &path))?;
+    reseed_if_active(&store, &bus, &workbench);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn remove_wsl_repo(
+    store: Store<'_>,
+    bus: Bus<'_>,
+    workbench: String,
+    distro: String,
+    path: String,
+) -> Result<(), WorkbenchError> {
+    locked(&store, |s| s.remove_wsl_repo(&workbench, &distro, &path))?;
     reseed_if_active(&store, &bus, &workbench);
     Ok(())
 }
@@ -173,7 +202,8 @@ name = "A"
 
         let visible = list_workbenches_from_store(&store);
 
-        assert_eq!(visible.workbenches[0].repos.len(), 1);
+        let expected_visible = if cfg!(target_os = "windows") { 2 } else { 1 };
+        assert_eq!(visible.workbenches[0].repos.len(), expected_visible);
         assert_eq!(visible.workbenches[0].repos[0].source, RepoSource::Local);
         assert_eq!(store.config().workbenches[0].repos.len(), 2);
     }
@@ -207,9 +237,14 @@ name = "B"
 
         let repos = active_runtime_repos_for(&store, "A").expect("active repos");
 
-        assert_eq!(repos.len(), 1);
+        let expected_visible = if cfg!(target_os = "windows") { 2 } else { 1 };
+        assert_eq!(repos.len(), expected_visible);
         assert_eq!(repos[0].path, PathBuf::from("/tmp/local"));
         assert_eq!(repos[0].fs_watch, vec![".env"]);
+        if cfg!(target_os = "windows") {
+            assert_eq!(repos[1].source, RepoSource::Wsl);
+            assert_eq!(repos[1].distro.as_deref(), Some("Ubuntu"));
+        }
         assert_eq!(active_runtime_repos_for(&store, "B"), None);
     }
 }

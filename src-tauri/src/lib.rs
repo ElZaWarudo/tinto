@@ -6,6 +6,7 @@ pub mod paths;
 pub mod ui_state;
 pub mod watcher;
 pub mod workbench;
+pub mod wsl_agent;
 
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -80,7 +81,11 @@ pub fn run() {
             workbench::commands::rename_workbench,
             workbench::commands::delete_workbench,
             workbench::commands::add_repo,
+            #[cfg(target_os = "windows")]
+            workbench::commands::add_wsl_repo,
             workbench::commands::remove_repo,
+            #[cfg(target_os = "windows")]
+            workbench::commands::remove_wsl_repo,
             workbench::commands::update_repo,
             workbench::commands::set_active_workbench,
             workbench::commands::autodetect_repos_under,
@@ -96,11 +101,14 @@ pub fn run() {
             bus::commands::retry_repo,
             bus::commands::get_gitleaks_setup_status,
             bus::commands::install_gitleaks,
+            bus::commands::get_repo_gitleaks_setup_status,
+            bus::commands::install_repo_gitleaks,
             bus::commands::create_repo_gitleaks_config,
             agent_console::commands::start_agent_session,
             agent_console::commands::stop_agent_session,
             agent_console::commands::list_agent_sessions,
             agent_console::commands::agent_binary_available,
+            agent_console::commands::agent_binary_available_for_repo,
             agent_console::commands::write_agent_session_input,
             agent_console::commands::resize_agent_session,
             agent_console::commands::revert_session,
@@ -185,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_handler_does_not_register_wsl_commands_for_rdm_001() {
+    fn invoke_handler_registers_only_windows_wsl_config_commands_for_rdm_003() {
         let source = include_str!("lib.rs");
         let handler_block = source
             .split(".invoke_handler")
@@ -194,12 +202,20 @@ mod tests {
             .expect("invoke handler block");
 
         assert!(
-            !handler_block.to_ascii_lowercase().contains("wsl"),
-            "RDM-001 must not register public WSL commands"
+            handler_block.contains(
+                "#[cfg(target_os = \"windows\")]\n            workbench::commands::add_wsl_repo"
+            ),
+            "RDM-003 may register add_wsl_repo only behind the Windows cfg"
+        );
+        assert!(
+            handler_block.contains(
+                "#[cfg(target_os = \"windows\")]\n            workbench::commands::remove_wsl_repo"
+            ),
+            "RDM-003 may register remove_wsl_repo only behind the Windows cfg"
         );
         assert!(
             !handler_block.contains("tinto_agent"),
-            "RDM-001 must not register tinto-agent launchers"
+            "RDM-003 must not register tinto-agent launchers"
         );
     }
 
@@ -256,6 +272,16 @@ name = "Solo WSL"
         .unwrap();
         let store = workbench::WorkbenchStore::open(dir.path()).expect("store");
 
-        assert!(initial_runtime_repos(&store).is_empty());
+        let repos = initial_runtime_repos(&store);
+        if cfg!(target_os = "windows") {
+            assert_eq!(repos.len(), 1);
+            assert_eq!(repos[0].source, workbench::RepoSource::Wsl);
+            assert!(
+                !repos[0].is_runtime_supported(),
+                "WSL config entries seed the bus as unsupported until RDM-004"
+            );
+        } else {
+            assert!(repos.is_empty());
+        }
     }
 }
