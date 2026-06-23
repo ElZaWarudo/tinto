@@ -1942,10 +1942,12 @@ mod tests {
         assert!(snap.repos.iter().any(|repo| repo.repo == ca));
         if !cfg!(target_os = "windows") {
             assert!(!snap.repos.iter().any(|repo| repo.repo == wsl_path));
-            assert!(
-                !handle.retry_repo(PathBuf::from("/home/me/proyecto")).await,
-                "non-Windows runtime does not mount WSL repos"
-            );
+            assert!(matches!(
+                handle.resolve_repo(wsl_path.clone()).await,
+                Err(RepoResolveError::UnsupportedRepoSource {
+                    source: RepoSource::Wsl
+                })
+            ));
             handle.shutdown().await;
             return;
         }
