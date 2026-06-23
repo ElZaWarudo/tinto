@@ -323,14 +323,15 @@ fn gitleaks_known_paths() -> Vec<PathBuf> {
             candidates.push(PathBuf::from(home).join("go").join("bin").join(binary));
         }
         if let Some(local_appdata) = env::var_os("LOCALAPPDATA") {
+            let local_appdata = PathBuf::from(local_appdata);
             candidates.push(
-                PathBuf::from(local_appdata)
+                local_appdata
                     .join("Programs")
                     .join("gitleaks")
                     .join("gitleaks.exe"),
             );
             candidates.push(
-                PathBuf::from(local_appdata)
+                local_appdata
                     .join("Programs")
                     .join("gitleaks")
                     .join("bin")
