@@ -15,14 +15,14 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 
 ## Resume Snapshot
 
-- Current phase/status: Windows-only WSL repo complement initiative, RDM-001 RU1/RU2/RU3 implementation and review complete; status `review-passed` for the RDM-001 package. Primary artifact: `docs/work-packages/RDM-001-windows-gated-repo-identity/2026-06-23-001-windows-gated-repo-identity-work-package.md`.
+- Current phase/status: Windows-only WSL repo complement initiative, RDM-001 RU1/RU2/RU3 implemented, reviewed, and delivered to `origin/develop`; status `completed` for the RDM-001 package. Primary artifact: `docs/work-packages/RDM-001-windows-gated-repo-identity/2026-06-23-001-windows-gated-repo-identity-work-package.md`.
 - Active roadmap: `docs/roadmaps/2026-06-23-004-windows-wsl-agent-roadmap.md`. Roadmap review passed through approved document-review subagent fallback; findings recorded in `docs/review-findings/2026-06-23-wsl-complement-roadmap-review.md`. RDM-001 requirements, plan, and work package are reviewed and ready.
 - Paused release-ready work: RUL-001 file overview ruler VS Code parity, RU1 (foundation) browser review completed against `http://127.0.0.1:1420/demo.html`; status `review-passed`. RU2 (diff-hunk markers) and RU3 (search markers, deferred placeholder) remain queued.
 - Branch/base: `develop`; working tree remains dirty with RDM-001 code/tests/docs, prior WSL roadmap/state artifacts, and pre-existing unrelated local files. Do not revert unrelated dirty files.
 - Open PR/Jira: none. Standing user preference: local fast-forward merge into `develop` and push, no PR. Jira omitted (`jira-env-not-configured`).
 - Blockers: No blockers for RDM-001. Canonical roles remain unavailable (`document-review`, `ce-brainstorm`, `ce-plan`), so this run records approved functional fallbacks: roadmap/artifact review via document-review subagent fan-out plus lead synthesis; brainstorm/requirements via `krt-requirements-weaver`; plan via `krt-delivery-navigator`. User decision captured on 2026-06-23: this is a Windows-only complement/add-on; when Tinto runs on Linux, no WSL UI, commands, empty states, settings, degraded notices, or behavior should appear. Remaining later decisions are WSL baseline/distro support, `tinto-agent` install/update model, and whether repo-writing commands should be disabled or routed through the Linux agent for Windows WSL repos.
 - Required user decisions: none before roadmap review. Decisions listed above become blocking before the affected plans/work packages.
-- Next action: hand RDM-001 to `krt-release-marshal` for local fast-forward/no-PR delivery if the user wants to ship it.
+- Next action: continue with the next Windows WSL roadmap package or return to the paused RUL-001 overview-ruler work.
 
 ## Source Documents
 
@@ -58,13 +58,13 @@ final_summary: docs/orchestration/2026-06-16-compound-master-summary.md
 - RDM-001 RU2/RU3 verification: `cargo test --lib wsl_source` 3 passed; `cargo test --lib unsupported_wsl` 2 passed; `cargo test --lib unsupported_repo_resolve_error_maps_to_safe_category` 2 passed; `cargo test --lib invoke_handler_does_not_register_wsl_commands_for_rdm_001` 1 passed; `cargo test --lib initial_runtime_repos` 2 passed; `cargo test --lib -- --test-threads=1` 179 passed; `cargo fmt --check` passed; `npm test -- src/workbench/wslAbsence.test.ts` 63 passed; `npm test -- src/bus/contract.test.ts src/bus/store.test.ts src/workbench/workbench.test.tsx src/workbench/wslAbsence.test.ts src/panels/RepoCard.test.tsx src/panels/RepoPanel.test.tsx` 140 passed; `npx tsc --noEmit` passed.
 - RDM-001 RU2/RU3 Security Watch: complete. Unsupported future WSL entries are hidden from runtime snapshots and command allowlists, fail closed before local path handling, do not leak unsupported repo paths in command errors, and cannot register WSL/tinto-agent commands in RDM-001. No new filesystem authority, external process launch, auth, tenant, public API, or secret-handling surface was added.
 - Reviewability Gate: passed. Chosen granularity is three review units: RU1 repo-source/config compatibility, RU2 guarded backend routing, RU3 Linux absence/regression coverage. Default delivery remains local fast-forward into `develop`, no PR unless explicitly requested; if PR flow is requested, keep stack target 2/max 2.
-- Ready work: RDM-001 package is ready for release handoff; all review units are implemented, verified, and review-passed.
+- Ready work: RDM-001 is delivered. All review units are implemented, verified, review-passed, and pushed to `origin/develop`.
 - Context readiness result: sufficient for roadmap generation. Product intent, current system shape, technical execution context, bus/interface contract, delivery context, and existing scope were covered by current docs and source files. Remaining WSL-specific choices are recorded as user decisions rather than invented behavior.
 - Resolved roles: `roadmap_generator` = `krt-roadmap-cartographer`. Approved fallback roles for this run: `document_review` = document-review subagent fan-out plus lead synthesis; `brainstorm` = `krt-requirements-weaver`; `plan` = `krt-delivery-navigator`. Jira optional and currently omitted because environment is not configured.
 - Production posture: `prototype`, supported by state history and local desktop project posture.
 - Branch/base strategy: continue from `develop`; release preference remains local fast-forward/no PR unless the user requests PR flow.
 - Reviewability posture: RDM-001 work package passed Reviewability Gate with RU1/RU2/RU3. Default delivery is local fast-forward into `develop`, no PR unless explicitly requested; if PR flow is requested, stack target 2/max 2.
-- Next exact invocation for release handoff: `$krt-release-marshal package:docs/work-packages/RDM-001-windows-gated-repo-identity/2026-06-23-001-windows-gated-repo-identity-work-package.md jira-policy:optional`
+- Next exact invocation for continued Windows WSL roadmap work: `$krt-compound-master mode:execute package:<next-reviewed-work-package.md> jira-policy:optional`
 
 ## Completed Delivery
 
@@ -226,6 +226,7 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 
 ## Release State
 
+- RDM-001 Windows-gated repo identity and backend boundary release (2026-06-23): pushed directly to `origin/develop` without PR or Jira, matching standing project preference. Commits: `b79e3b4` (`docs(orchestration): reconcile preflight state [skip ci]`), `bc3c13f` (`feat(repo): add source-aware Windows WSL repo boundary`), and `2462f04` (`docs(orchestration): add Windows WSL identity delivery artifacts [skip ci]`). Jira omitted because checkout reported `jira-env-not-configured`.
 - PR-based deliveries: PR #1, #2, #3, #4, #6, #7, #8, #9, #10, #11, and #12.
 - RDM-012 delivery: local fast-forward merge into `develop` and push to `origin/develop`, intentionally without PR by user request.
 - Post-closeout state archive: `5631c0e` (`docs(orchestration): compact compound master state`).
