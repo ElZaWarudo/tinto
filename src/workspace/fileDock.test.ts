@@ -28,31 +28,31 @@ function makeFakeApi() {
         params?: Record<string, unknown>;
         position?: { direction: "right"; referencePanel: string };
       }) => {
-      const panel = {
-        id: opts.id,
-        params: { ...(opts.params ?? {}) },
-        api: {
-          setActive: vi.fn(() => {
-            active = panel;
-            activeCbs.forEach((cb) => cb());
-          }),
-          close: vi.fn(() => {
-            const i = panels.indexOf(panel);
-            if (i >= 0) panels.splice(i, 1);
-            if (active === panel) active = panels[panels.length - 1] ?? null;
-            removeCbs.forEach((cb) => cb({ id: panel.id }));
-          }),
-          updateParameters: vi.fn((p: Record<string, unknown>) => {
-            panel.params = { ...panel.params, ...p };
-          }),
-          setTitle: vi.fn(),
-        },
-      };
-      panels.push(panel);
-      active = panel;
-      addCbs.forEach((cb) => cb(panel));
-      activeCbs.forEach((cb) => cb());
-      return panel;
+        const panel = {
+          id: opts.id,
+          params: { ...(opts.params ?? {}) },
+          api: {
+            setActive: vi.fn(() => {
+              active = panel;
+              activeCbs.forEach((cb) => cb());
+            }),
+            close: vi.fn(() => {
+              const i = panels.indexOf(panel);
+              if (i >= 0) panels.splice(i, 1);
+              if (active === panel) active = panels[panels.length - 1] ?? null;
+              removeCbs.forEach((cb) => cb({ id: panel.id }));
+            }),
+            updateParameters: vi.fn((p: Record<string, unknown>) => {
+              panel.params = { ...panel.params, ...p };
+            }),
+            setTitle: vi.fn(),
+          },
+        };
+        panels.push(panel);
+        active = panel;
+        addCbs.forEach((cb) => cb(panel));
+        activeCbs.forEach((cb) => cb());
+        return panel;
       },
     ),
     onDidAddPanel: (cb: (p: unknown) => void) => (addCbs.push(cb), { dispose() {} }),

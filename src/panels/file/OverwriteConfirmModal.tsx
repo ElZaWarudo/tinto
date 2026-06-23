@@ -11,11 +11,7 @@ interface OverwriteConfirmModalProps {
   onCancel: () => void;
 }
 
-export function OverwriteConfirmModal({
-  report,
-  onConfirm,
-  onCancel,
-}: OverwriteConfirmModalProps) {
+export function OverwriteConfirmModal({ report, onConfirm, onCancel }: OverwriteConfirmModalProps) {
   const handleKey = useCallback(
     (event: KeyboardEvent) => {
       if (event.key === "Escape") {

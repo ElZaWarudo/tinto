@@ -120,7 +120,10 @@ export function ProjectExplorer({
   const [draggingNode, setDraggingNode] = useState<TreeNode | null>(null);
   const [osDraggingOver, setOsDraggingOver] = useState(false);
   const [treeDropTarget, setTreeDropTarget] = useState<string | null>(null);
-  const [explorerWidth, setExplorerWidth] = useState(() => loadExplorerWidth(repo));
+  const [explorerWidths, setExplorerWidths] = useState<Record<string, number>>(() => ({
+    [repo]: loadExplorerWidth(repo),
+  }));
+  const explorerWidth = explorerWidths[repo] ?? loadExplorerWidth(repo);
   const [pendingOp, setPendingOp] = useState<{
     retry: () => Promise<void> | void;
     report: FileOpReport;
@@ -138,11 +141,6 @@ export function ProjectExplorer({
   // Load on mount; the store keeps it cached (stale-while-revalidate) thereafter.
   useEffect(() => {
     repoTreeStore.ensureLoaded(repo);
-  }, [repo]);
-
-  useEffect(() => {
-    const width = loadExplorerWidth(repo);
-    setExplorerWidth(width);
   }, [repo]);
 
   useEffect(() => {
@@ -176,13 +174,12 @@ export function ProjectExplorer({
     let unlisten: UnlistenFn | undefined;
     // En entornos sin runtime Tauri (tests jsdom), getCurrentWebview lanza.
     // Guardamos el accceso con try/catch para no romper el mount.
-    let webview: ReturnType<typeof getCurrentWebview> | null = null;
+    let webview: ReturnType<typeof getCurrentWebview>;
     try {
       webview = getCurrentWebview();
     } catch {
-      webview = null;
+      return;
     }
-    if (!webview) return;
     webview
       .onDragDropEvent((event) => {
         const payload = event.payload;
@@ -278,6 +275,14 @@ export function ProjectExplorer({
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
+  };
+
+  const setExplorerWidth = (value: number | ((current: number) => number)) => {
+    setExplorerWidths((current) => {
+      const currentWidth = current[repo] ?? loadExplorerWidth(repo);
+      const nextWidth = typeof value === "function" ? value(currentWidth) : value;
+      return { ...current, [repo]: nextWidth };
+    });
   };
 
   /** Refresca el árbol para reflejar los cambios recién escritos. */

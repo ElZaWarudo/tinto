@@ -10,11 +10,7 @@ import {
   revertSession,
   writeAgentSessionInput,
 } from "../../bus/client";
-import {
-  agentSessionStore,
-  useAgentSession,
-  useAgentSessionState,
-} from "../../agent/sessionStore";
+import { agentSessionStore, useAgentSession, useAgentSessionState } from "../../agent/sessionStore";
 import type { AgentSession } from "../../bus/contract";
 
 export interface TerminalPanelParams {
@@ -193,9 +189,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               ? "Session already reverted"
               : session && !session.checkpoint
                 ? "This session has no reversible checkpoint"
-              : canRevert
-                ? "Revert this agent session"
-                : "Stop the session before reverting"
+                : canRevert
+                  ? "Revert this agent session"
+                  : "Stop the session before reverting"
           }
         >
           {reverting ? "Reverting" : "Revert"}

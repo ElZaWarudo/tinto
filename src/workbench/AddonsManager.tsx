@@ -66,7 +66,22 @@ export function AddonsManager({ onClose }: { onClose: () => void }) {
   };
 
   useEffect(() => {
-    void refresh();
+    let active = true;
+    void getGitleaksSetupStatus()
+      .then((nextStatus) => {
+        if (!active) return;
+        setStatus(nextStatus);
+        setError(false);
+      })
+      .catch(() => {
+        if (active) setError(true);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {

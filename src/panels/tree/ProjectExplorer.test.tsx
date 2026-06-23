@@ -3,11 +3,15 @@ import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 
 let tree: unknown = { entries: [], truncated: false };
 const listRepoTreeMock = vi.fn(() => Promise.resolve(tree));
-const deleteFromRepoMock = vi.fn((_repo: string, _sources: string[]) =>
+const deleteFromRepoMock = vi.fn<(_repo: string, _sources: string[]) => Promise<unknown>>(() =>
   Promise.resolve({ token: "11111111-1111-4111-8111-111111111111", entries: [] }),
 );
-const restoreDeletedFromRepoMock = vi.fn((_repo: string, _token: string) => Promise.resolve());
-const redoDeletedFromRepoMock = vi.fn((_repo: string, _token: string) => Promise.resolve());
+const restoreDeletedFromRepoMock = vi.fn<(_repo: string, _token: string) => Promise<void>>(() =>
+  Promise.resolve(),
+);
+const redoDeletedFromRepoMock = vi.fn<(_repo: string, _token: string) => Promise<void>>(() =>
+  Promise.resolve(),
+);
 vi.mock("../../bus/client", () => ({
   listRepoTree: () => listRepoTreeMock(),
   copyToRepo: vi.fn(),

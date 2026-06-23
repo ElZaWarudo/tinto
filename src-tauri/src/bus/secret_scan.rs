@@ -413,10 +413,10 @@ fn fetch_latest_gitleaks_release() -> Result<GithubRelease, String> {
 }
 
 fn resolve_latest_gitleaks_release() -> Result<GithubRelease, String> {
-    fetch_latest_gitleaks_release_html()
-        .or_else(|html_error| fetch_latest_gitleaks_release().map_err(|api_error| {
-            format!("{html_error} | api: {api_error}")
-        }))
+    fetch_latest_gitleaks_release_html().or_else(|html_error| {
+        fetch_latest_gitleaks_release()
+            .map_err(|api_error| format!("{html_error} | api: {api_error}"))
+    })
 }
 
 fn fetch_latest_gitleaks_release_html() -> Result<GithubRelease, String> {
@@ -462,8 +462,7 @@ fn extract_release_assets_from_html(html: &str) -> Vec<GithubReleaseAsset> {
         let candidate = &remaining[start..];
         let end = candidate
             .find(|character: char| {
-                character.is_whitespace()
-                    || matches!(character, '"' | '\'' | '<' | '>' | ')' | '(')
+                character.is_whitespace() || matches!(character, '"' | '\'' | '<' | '>' | ')' | '(')
             })
             .unwrap_or(candidate.len());
         let name = &candidate[..end];

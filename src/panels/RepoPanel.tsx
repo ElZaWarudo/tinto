@@ -74,9 +74,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
         {/* The nested dock stays mounted (api stays registered) even when empty;
             hidden behind the overview until a file is opened. */}
         <div
-          className={
-            empty ? "repo-panel__files repo-panel__files--empty" : "repo-panel__files"
-          }
+          className={empty ? "repo-panel__files repo-panel__files--empty" : "repo-panel__files"}
           aria-hidden={empty}
         >
           <DockviewReact
@@ -180,9 +178,7 @@ function RepoOverview({ repo }: { repo: string }) {
         </div>
       )}
 
-      {delta.gitleaks_configured === false && (
-        <GitleaksConfigNotice repo={repo} />
-      )}
+      {delta.gitleaks_configured === false && <GitleaksConfigNotice repo={repo} />}
 
       <section className="repo-panel__signals" data-testid="repo-signals">
         <h3>Passive signals</h3>
