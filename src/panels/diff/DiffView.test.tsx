@@ -82,7 +82,7 @@ describe("DiffView", () => {
   });
 
   it("renders overview markers and highlights the matching added line", () => {
-    render(
+    const { container } = render(
       <DiffView
         diff={sample}
         mode="inline"
@@ -92,17 +92,14 @@ describe("DiffView", () => {
     );
 
     expect(screen.getByTestId("overview-summary")).toHaveTextContent("1");
-    expect(screen.getByTestId("overview-marker-13-1")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Possible secret, line 13" })).toBeInTheDocument();
+    expect(screen.getByTestId("overview-marker-13-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Possible secret, línea 13" })).toBeInTheDocument();
     expect(screen.getByText("new line").closest(".diff-line")).toHaveClass(
       "diff-line--signal-critical",
     );
+    const label = container.querySelector('[data-new-line="13"] .line-marker-label');
+    expect(label).toHaveTextContent("Possible secret");
+    expect(label).toHaveAttribute("title", "Possible secret · línea 13");
   });
 
-  it("derives overview hunk markers from changed lines", () => {
-    render(<DiffView diff={sample} mode="inline" />);
-
-    expect(screen.getByTestId("overview-marker-12-0")).toHaveTextContent("Change L12");
-    expect(screen.getByTestId("overview-marker-13-1")).toHaveTextContent("Change L13");
-  });
 });

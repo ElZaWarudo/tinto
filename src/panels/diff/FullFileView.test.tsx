@@ -27,12 +27,10 @@ describe("FullFileView", () => {
     );
 
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
-    const rows = screen.getAllByText(/^(one|two)$/);
+    const rows = Array.from(container.querySelectorAll(".full-file__line .diff-content"));
     expect(rows).toHaveLength(2);
     expect(container.querySelectorAll(".full-file__line")).toHaveLength(2);
-    expect(screen.getByText("two").closest(".full-file__line")).toHaveClass(
-      "full-file__line--changed",
-    );
+    expect(container.querySelector('[data-line="2"]')).toHaveClass("full-file__line--changed");
   });
 
   it("degrades binary/base64 content to a guarded placeholder", async () => {
@@ -47,9 +45,12 @@ describe("FullFileView", () => {
 
   it("shows the truncated notice with the content returned by the backend", async () => {
     content = { encoding: "utf8", content: "visible", truncated: true };
-    render(<FullFileView repo="/r/a" path="large.txt" changedLines={new Set()} />);
+    const { container } = render(
+      <FullFileView repo="/r/a" path="large.txt" changedLines={new Set()} />,
+    );
 
-    expect(await screen.findByText("visible")).toBeInTheDocument();
+    expect(await screen.findByTestId("full-file")).toBeInTheDocument();
+    expect(container.querySelector(".full-file__line .diff-content")).toHaveTextContent("visible");
     expect(screen.getByTestId("full-truncated")).toHaveTextContent("File truncated");
   });
 
@@ -72,10 +73,13 @@ describe("FullFileView", () => {
 
     expect(await screen.findByTestId("overview-summary")).toHaveTextContent("1");
     expect(await screen.findByTestId("overview-marker-2-0")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Possible secret, line 2" })).toBeInTheDocument();
-    expect(screen.getByText("two").closest(".full-file__line")).toHaveClass(
+    expect(screen.getByRole("button", { name: "Possible secret, línea 2" })).toBeInTheDocument();
+    expect(container.querySelector('[data-line="2"]')).toHaveClass(
       "full-file__line--signal-critical",
     );
+    const label = container.querySelector('[data-line="2"] .line-marker-label');
+    expect(label).toHaveTextContent("Possible secret");
+    expect(label).toHaveAttribute("title", "Possible secret · línea 2");
     expect(container.querySelector('[data-line="2"]')).toBeInTheDocument();
   });
 });
