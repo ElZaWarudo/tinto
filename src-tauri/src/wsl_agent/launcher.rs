@@ -402,7 +402,7 @@ fn build_packaged_agent_install_argv(distro: &str) -> Result<Vec<String>, AgentE
         "sh".to_string(),
         "-lc".to_string(),
         format!(
-            "set -eu; install_dir=\"$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; mkdir -p \"$install_dir\"; cat > \"$install_dir/tinto-agent\"; chmod 700 \"$install_dir/tinto-agent\""
+            "set -eu; install_dir=\"\\$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; mkdir -p \"\\$install_dir\"; cat > \"\\$install_dir/tinto-agent\"; chmod 700 \"\\$install_dir/tinto-agent\""
         ),
     ])
 }
@@ -630,9 +630,9 @@ mod tests {
 
         assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--", "sh"]);
         assert_eq!(argv[5], "-lc");
-        assert!(argv[6].contains("mkdir -p \"$install_dir\""));
-        assert!(argv[6].contains("cat > \"$install_dir/tinto-agent\""));
-        assert!(argv[6].contains("chmod 700 \"$install_dir/tinto-agent\""));
+        assert!(argv[6].contains("mkdir -p \"\\$install_dir\""));
+        assert!(argv[6].contains("cat > \"\\$install_dir/tinto-agent\""));
+        assert!(argv[6].contains("chmod 700 \"\\$install_dir/tinto-agent\""));
         assert!(argv[6].contains("$HOME/.local/share/tinto/agents/"));
     }
 
