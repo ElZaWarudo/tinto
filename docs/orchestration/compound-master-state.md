@@ -303,6 +303,25 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
 
 ## Release State
 
+- WSL repo browser and dev-agent follow-up (2026-06-24): direct-to-`develop` maintenance
+  scope prepared without PR or Jira, matching standing project preference. This follow-up polishes
+  the `Agregar repo WSL` dialog so distro/alias/path controls are grouped, the Linux path textbox
+  has calmer contrast and focus styling, and the browser buttons/list are less visually fatiguing.
+  It also fixes WSL dev/runtime launch reliability after manual dev smoke exposed
+  `terminal: el agente termino sin respuesta valida`: background WSL availability checks, WSL Agent
+  Console PTY launch, packaged-agent install/managed launch, and dev-source launch now use
+  `wsl.exe --exec`; shell scripts run through `bash -lc`; and shell variables/argv (`$1`, `$@`,
+  `$HOME`, `$install_dir`) are no longer escaped when they must expand inside WSL. Dev-source
+  `tinto-agent` now launches through `bash -lc 'exec cargo run --manifest-path "$1" --bin
+  tinto-agent'` so a WSL login-style PATH can resolve `cargo`. Local verification before push:
+  `cargo fmt --check`; `cargo test --lib agent_console -- --test-threads=1` 41/41;
+  `cargo test --lib wsl_agent -- --test-threads=1` 26/26; `cargo test --lib
+  workbench::commands -- --test-threads=1` 3/3; `npm test -- src/workbench/workbench.test.tsx`
+  15/15; `git diff --check`; WSL command smoke on `Ubuntu-24.04` confirmed `codex` resolves at
+  `/home/teb/.local/bin/codex`, Agent Console launch arguments expand to the selected repo path,
+  and direct dev-source `tinto-agent` handshake returned
+  `{"type":"handshake","protocol_version":1,"agent_version":"0.1.0","status":"ok"}` after the
+  first WSL debug build completed. CI status for the pushed tip is pending after push.
 - CI-gate fix for overview ruler delivery (2026-06-24): pushed directly to `origin/develop`
   without PR or Jira, matching standing project preference. Commit: `9fe58fa`
   (`fix(file): satisfy overview ruler CI gates`). It fixed the deterministic

@@ -204,10 +204,10 @@ pub(crate) fn build_wsl_agent_command(
     let mut command = CommandBuilder::new("wsl.exe");
     command.arg("-d");
     command.arg(distro);
-    command.arg("--");
-    command.arg("sh");
+    command.arg("--exec");
+    command.arg("bash");
     command.arg("-lc");
-    command.arg("cd \"\\$1\" || exit 127; shift; exec \"\\$@\"");
+    command.arg("cd \"$1\" || exit 127; shift; exec \"$@\"");
     command.arg("tinto-agent-console");
     command.arg(working_dir.as_os_str());
     command.arg(agent_type);
@@ -381,10 +381,10 @@ mod tests {
                 OsString::from("wsl.exe"),
                 OsString::from("-d"),
                 OsString::from("Ubuntu"),
-                OsString::from("--"),
-                OsString::from("sh"),
+                OsString::from("--exec"),
+                OsString::from("bash"),
                 OsString::from("-lc"),
-                OsString::from("cd \"\\$1\" || exit 127; shift; exec \"\\$@\""),
+                OsString::from("cd \"$1\" || exit 127; shift; exec \"$@\""),
                 OsString::from("tinto-agent-console"),
                 OsString::from("/home/me/repo"),
                 OsString::from("codex"),

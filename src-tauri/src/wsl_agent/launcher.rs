@@ -60,20 +60,19 @@ impl AgentCommand {
     pub fn dev_source(repo_root_linux_path: impl AsRef<str>) -> Self {
         let root = repo_root_linux_path.as_ref().trim_end_matches('/');
         Self::new(
-            "cargo",
+            "bash",
             [
-                "run".to_string(),
-                "--manifest-path".to_string(),
+                "-lc".to_string(),
+                "exec cargo run --manifest-path \"$1\" --bin tinto-agent".to_string(),
+                "tinto-agent-dev-source".to_string(),
                 format!("{root}/src-tauri/Cargo.toml"),
-                "--bin".to_string(),
-                "tinto-agent".to_string(),
             ],
         )
     }
 
     pub fn managed_wsl_agent() -> Self {
         Self::new(
-            "sh",
+            "bash",
             [
                 "-lc".to_string(),
                 format!("exec \"$HOME/.local/share/tinto/agents/{AGENT_VERSION}/tinto-agent\""),
@@ -128,7 +127,7 @@ pub fn build_wsl_argv(config: &WslLaunchConfig) -> Result<Vec<String>, AgentErro
         "wsl.exe".to_string(),
         "-d".to_string(),
         config.distro.clone(),
-        "--".to_string(),
+        "--exec".to_string(),
         config.agent_command.program.clone(),
     ];
     argv.extend(config.agent_command.args.iter().cloned());
@@ -408,11 +407,11 @@ fn build_packaged_agent_install_argv(
         "wsl.exe".to_string(),
         "-d".to_string(),
         distro.to_string(),
-        "--".to_string(),
-        "sh".to_string(),
+        "--exec".to_string(),
+        "bash".to_string(),
         "-lc".to_string(),
         format!(
-            "set -eu; install_dir=\"\\$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; mkdir -p \"\\$install_dir\"; cp -- \"\\$1\" \"\\$install_dir/tinto-agent\"; chmod 700 \"\\$install_dir/tinto-agent\""
+            "set -eu; install_dir=\"$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; mkdir -p \"$install_dir\"; cp -- \"$1\" \"$install_dir/tinto-agent\"; chmod 700 \"$install_dir/tinto-agent\""
         ),
         "tinto-agent-install".to_string(),
         source,
@@ -605,7 +604,7 @@ mod tests {
                 "wsl.exe",
                 "-d",
                 "Ubuntu",
-                "--",
+                "--exec",
                 "cargo",
                 "run",
                 "--bin",
@@ -621,10 +620,11 @@ mod tests {
         let config = WslLaunchConfig::ubuntu_dev_source("/home/mayor/tinto/");
         let argv = build_wsl_argv(&config).expect("argv");
 
-        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--", "cargo"]);
-        assert!(argv.contains(&"--manifest-path".to_string()));
-        assert!(argv.contains(&"/home/mayor/tinto/src-tauri/Cargo.toml".to_string()));
-        assert!(argv.contains(&"tinto-agent".to_string()));
+        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
+        assert_eq!(argv[5], "-lc");
+        assert!(argv[6].contains("cargo run"));
+        assert_eq!(argv[7], "tinto-agent-dev-source");
+        assert_eq!(argv[8], "/home/mayor/tinto/src-tauri/Cargo.toml");
     }
 
     #[test]
@@ -632,7 +632,7 @@ mod tests {
         let config = WslLaunchConfig::ubuntu_managed_agent();
         let argv = build_wsl_argv(&config).expect("argv");
 
-        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--", "sh"]);
+        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
         assert_eq!(argv[5], "-lc");
         assert!(argv[6].contains("$HOME/.local/share/tinto/agents/"));
         assert!(argv[6].contains("/tinto-agent"));
@@ -647,11 +647,11 @@ mod tests {
         )
         .expect("argv");
 
-        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--", "sh"]);
+        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
         assert_eq!(argv[5], "-lc");
-        assert!(argv[6].contains("mkdir -p \"\\$install_dir\""));
-        assert!(argv[6].contains("cp -- \"\\$1\" \"\\$install_dir/tinto-agent\""));
-        assert!(argv[6].contains("chmod 700 \"\\$install_dir/tinto-agent\""));
+        assert!(argv[6].contains("mkdir -p \"$install_dir\""));
+        assert!(argv[6].contains("cp -- \"$1\" \"$install_dir/tinto-agent\""));
+        assert!(argv[6].contains("chmod 700 \"$install_dir/tinto-agent\""));
         assert!(argv[6].contains("$HOME/.local/share/tinto/agents/"));
         assert_eq!(argv[7], "tinto-agent-install");
         assert_eq!(

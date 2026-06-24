@@ -144,54 +144,72 @@ export function AddWslRepoDialog({
         </header>
 
         <div className="addons-modal__body">
-          <section className="addons-card">
-            <label className="addons-card__text" htmlFor="wsl-distro">
-              Distro
-            </label>
-            <select
-              id="wsl-distro"
-              data-testid="wsl-distro"
-              value={distro}
-              onChange={(event) => {
-                setDistro(event.target.value);
-                setPath("");
-                setListing(null);
-                setIsBrowsing(true);
-              }}
-            >
-              {distros.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
+          <section className="addons-card addons-card--wsl">
+            <div className="wsl-form-grid">
+              <label className="wsl-field" htmlFor="wsl-distro">
+                <span className="wsl-field__label">Distro</span>
+                <select
+                  id="wsl-distro"
+                  className="wsl-select"
+                  data-testid="wsl-distro"
+                  value={distro}
+                  onChange={(event) => {
+                    setDistro(event.target.value);
+                    setPath("");
+                    setListing(null);
+                    setIsBrowsing(true);
+                  }}
+                >
+                  {distros.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="wsl-field" htmlFor="wsl-alias">
+                <span className="wsl-field__label">Alias</span>
+                <input
+                  id="wsl-alias"
+                  className="wsl-input"
+                  data-testid="wsl-alias"
+                  value={alias}
+                  onChange={(event) => setAlias(event.target.value)}
+                  placeholder="Nombre visible"
+                />
+              </label>
+            </div>
             {isLoadingDistros && <p className="addons-card__text">Detectando distros...</p>}
 
-            <label className="addons-card__text" htmlFor="wsl-path">
-              Path Linux
+            <label className="wsl-field" htmlFor="wsl-path">
+              <span className="wsl-field__label">Path Linux</span>
+              <div className="wsl-path-row">
+                <input
+                  id="wsl-path"
+                  className="wsl-input wsl-input--path"
+                  data-testid="wsl-path"
+                  value={path}
+                  onChange={(event) => setPath(event.target.value)}
+                  placeholder="/home/usuario/proyecto"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="wsl-browser__primary"
+                  data-testid="wsl-browse-path"
+                  disabled={isBrowsing}
+                  onClick={() => void browseTypedPath()}
+                >
+                  {isBrowsing ? "Leyendo..." : "Ir"}
+                </button>
+              </div>
             </label>
-            <input
-              id="wsl-path"
-              data-testid="wsl-path"
-              value={path}
-              onChange={(event) => setPath(event.target.value)}
-              placeholder="/home/usuario/proyecto"
-              autoFocus
-            />
 
             <div className="wsl-browser__toolbar">
               <button
                 type="button"
-                className="addons-refresh"
-                data-testid="wsl-browse-path"
-                disabled={isBrowsing}
-                onClick={() => void browseTypedPath()}
-              >
-                {isBrowsing ? "Leyendo..." : "Ir"}
-              </button>
-              <button
-                type="button"
-                className="addons-refresh"
+                className="wsl-browser__nav"
                 data-testid="wsl-home"
                 disabled={isBrowsing}
                 onClick={() => void browseTo(null)}
@@ -200,7 +218,7 @@ export function AddWslRepoDialog({
               </button>
               <button
                 type="button"
-                className="addons-refresh"
+                className="wsl-browser__nav"
                 data-testid="wsl-up"
                 disabled={isBrowsing || !parentPath(path)}
                 onClick={() => void browseTo(parentPath(path))}
@@ -225,6 +243,7 @@ export function AddWslRepoDialog({
                         type="button"
                         className="wsl-browser__item"
                         data-testid={`wsl-dir-${entry.path}`}
+                        title={entry.path}
                         disabled={isBrowsing}
                         onClick={() => void browseTo(entry.path)}
                       >
@@ -235,17 +254,6 @@ export function AddWslRepoDialog({
                 </div>
               </div>
             )}
-
-            <label className="addons-card__text" htmlFor="wsl-alias">
-              Alias
-            </label>
-            <input
-              id="wsl-alias"
-              data-testid="wsl-alias"
-              value={alias}
-              onChange={(event) => setAlias(event.target.value)}
-              placeholder="Nombre visible"
-            />
 
             {error && (
               <p className="addons-card__error" data-testid="add-wsl-error">

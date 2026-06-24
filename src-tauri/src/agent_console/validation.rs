@@ -98,10 +98,10 @@ pub(crate) fn build_wsl_command_available_argv(
         "wsl.exe".into(),
         "-d".into(),
         distro.to_string(),
-        "--".into(),
-        "sh".into(),
+        "--exec".into(),
+        "bash".into(),
         "-lc".into(),
-        "command -v -- \"\\$1\"".into(),
+        "command -v -- \"$1\"".into(),
         "tinto-agent-console-check".into(),
         agent_type.to_string(),
     ])
@@ -165,8 +165,8 @@ mod tests {
     fn builds_wsl_command_available_check_without_interpolation() {
         let argv = build_wsl_command_available_argv("Ubuntu", "codex").unwrap();
 
-        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--", "sh"]);
-        assert_eq!(argv[6], "command -v -- \"\\$1\"");
+        assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
+        assert_eq!(argv[6], "command -v -- \"$1\"");
         assert_eq!(argv[8], "codex");
     }
 

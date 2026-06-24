@@ -630,35 +630,129 @@ select option {
   align-items: center;
   flex-wrap: wrap;
 }
+.addons-card--wsl {
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 82px),
+    color-mix(in srgb, var(--bg), var(--bg-elev) 18%);
+}
+.addons-card--wsl .addons-card__footer {
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+.wsl-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 10px;
+}
+.wsl-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.wsl-field__label {
+  color: color-mix(in srgb, var(--fg-muted), var(--fg) 24%);
+  font-size: 12px;
+  font-weight: 600;
+}
+.wsl-input,
+.wsl-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--border), var(--fg-muted) 16%);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--bg), var(--bg-elev) 36%);
+  color: var(--fg);
+  font: inherit;
+  transition:
+    background-color var(--ease),
+    border-color var(--ease),
+    box-shadow var(--ease);
+}
+.wsl-input {
+  padding: 7px 10px;
+}
+.wsl-input--path {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  font-size: 12px;
+}
+.wsl-input::placeholder {
+  color: color-mix(in srgb, var(--fg-muted), transparent 20%);
+}
+.wsl-input:hover,
+.wsl-select:hover {
+  border-color: color-mix(in srgb, var(--accent-fg), var(--border) 35%);
+  background-color: color-mix(in srgb, var(--bg), var(--bg-elev) 58%);
+}
+.wsl-input:focus,
+.wsl-select:focus {
+  outline: none;
+}
+.wsl-input:focus-visible,
+.wsl-select:focus-visible {
+  border-color: var(--accent-fg);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.wsl-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
+}
 .wsl-browser__toolbar {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 .wsl-browser {
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border), var(--fg-muted) 12%);
   border-radius: 6px;
   overflow: hidden;
+  background: color-mix(in srgb, var(--bg), var(--bg-elev) 22%);
 }
 .wsl-browser__status {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 7px 9px;
-  background: var(--hover);
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-elev), var(--bg) 30%);
   color: var(--fg-muted);
   font-size: 12px;
+  border-bottom: 1px solid var(--border);
 }
 .wsl-browser__status span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+}
+.wsl-browser__status strong {
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--added), transparent 58%);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--added);
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--added), transparent 90%);
 }
 .wsl-browser__list {
   display: grid;
-  max-height: 180px;
+  max-height: 190px;
   overflow: auto;
+}
+.wsl-browser__list > .addons-card__text {
+  padding: 14px 10px;
 }
 .wsl-browser__item {
   border: 0;
@@ -666,12 +760,77 @@ select option {
   background: transparent;
   color: var(--fg);
   cursor: pointer;
-  padding: 7px 9px;
+  padding: 8px 10px;
   text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 13px;
+  transition:
+    background-color var(--ease),
+    color var(--ease);
 }
 .wsl-browser__item:hover:not(:disabled),
 .wsl-browser__item:focus-visible {
   background: var(--hover);
+  outline: none;
+}
+.wsl-browser__item:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.wsl-browser__primary,
+.wsl-browser__nav {
+  border: 1px solid color-mix(in srgb, var(--border), var(--fg-muted) 12%);
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  transition:
+    background-color var(--ease),
+    border-color var(--ease),
+    color var(--ease);
+}
+.wsl-browser__primary {
+  min-width: 76px;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--accent), var(--bg) 10%);
+  color: #fff;
+}
+.wsl-browser__nav {
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--bg), var(--bg-elev) 34%);
+  color: var(--fg-muted);
+}
+.wsl-browser__primary:hover:not(:disabled),
+.wsl-browser__primary:focus-visible {
+  background: color-mix(in srgb, var(--accent-fg), var(--accent) 66%);
+  border-color: color-mix(in srgb, var(--accent-fg), transparent 22%);
+}
+.wsl-browser__nav:hover:not(:disabled),
+.wsl-browser__nav:focus-visible {
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--accent-fg), var(--border) 35%);
+  background: var(--hover);
+}
+.wsl-browser__primary:focus-visible,
+.wsl-browser__nav:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.wsl-browser__primary:disabled,
+.wsl-browser__nav:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+@media (max-width: 560px) {
+  .wsl-form-grid,
+  .wsl-path-row {
+    grid-template-columns: 1fr;
+  }
+  .wsl-browser__primary {
+    min-height: 34px;
+  }
 }
 .addons-code {
   border: 1px solid var(--border);
