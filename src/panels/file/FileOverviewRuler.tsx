@@ -41,10 +41,14 @@ export function FileOverviewRuler({
 
   useEffect(() => {
     if (activeLine == null) return;
-    if (topLine > activeLine) {
+    if (topLine <= activeLine) return;
+
+    const clearTimer = window.setTimeout(() => {
       setActiveLine(null);
       onActiveLineChange?.(null);
-    }
+    }, 0);
+
+    return () => window.clearTimeout(clearTimer);
   }, [topLine, activeLine, onActiveLineChange]);
 
   useEffect(() => {

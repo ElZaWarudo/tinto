@@ -134,7 +134,10 @@ function DemoFileView() {
 
   useEffect(() => {
     if (activeLine == null) return;
-    if (topLine > activeLine) setActiveLine(null);
+    if (topLine <= activeLine) return;
+
+    const clearTimer = window.setTimeout(() => setActiveLine(null), 0);
+    return () => window.clearTimeout(clearTimer);
   }, [topLine, activeLine]);
 
   return (

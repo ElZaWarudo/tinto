@@ -101,5 +101,4 @@ describe("DiffView", () => {
     expect(label).toHaveTextContent("Possible secret");
     expect(label).toHaveAttribute("title", "Possible secret · línea 13");
   });
-
 });
