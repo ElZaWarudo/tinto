@@ -225,9 +225,46 @@ Final packaged artifact/backend smoke passed on 2026-06-24 against CI run `28091
   `agent_checkpoint_revert` removed `agent-created.txt` and restored `changed.txt` to the
   checkpoint state (`M changed.txt`, `?? untracked.txt`).
 
+Console-window regression closeout:
+
+- User reported that opening Tinto created many visible Windows Terminal `wsl.exe` windows/tabs.
+  Commit `54f2ee4` fixed the Windows host launch boundary by applying `CREATE_NO_WINDOW` to
+  background `wsl.exe` validation, packaged-agent install/status, handshake, and `taskkill`
+  commands while leaving the embedded Agent Console PTY path unchanged.
+- GitHub Actions CI run `28092740721` passed for commit
+  `54f2ee43a6070cdcfff074b434916be581c2d681`: Frontend, Rust, Linux Tauri bundle, and Windows
+  Tauri bundle.
+- Downloaded post-fix artifacts:
+  - `.ci-artifacts/28092740721/tinto-windows-bundle/nsis/Tinto_0.1.0_x64-setup.exe`
+    sha256 `8c437809554637694b6f5e8891fca3673e2bd3b250241f9fd756ad4ccfce952e`.
+  - `.ci-artifacts/28092740721/tinto-windows-bundle/msi/Tinto_0.1.0_x64_en-US.msi`
+    sha256 `ce52a2193b7713b23b465da244a7a528c4c05488840be933be8729e467ba9047`.
+  - `.ci-artifacts/28092740721/tinto-agent-linux-x86_64/tinto-agent-linux-x86_64`
+    sha256 `0c8724c1cec28da194c97ff94b1fd78c0d905bf2995c99bc9eca173782cbb300`.
+- MSI administrative extraction to
+  `C:\Users\User\AppData\Local\Temp\tinto-msi-extract-28092740721` succeeded. Extracted image
+  contained `PFiles/Tinto/tinto.exe`, `PFiles/Tinto/tinto-agent.exe`, and
+  `PFiles/Tinto/tinto-agent-linux-x86_64`; the extracted Linux agent matched the downloaded
+  artifact byte-for-byte.
+- Packaged-agent backend smoke passed on `/tmp/tinto-packaged-smoke-28092740721` after installing
+  the extracted Linux agent to `$HOME/.local/share/tinto/agents/0.1.0/tinto-agent`, confirmed
+  executable sha256 `0c8724c1cec28da194c97ff94b1fd78c0d905bf2995c99bc9eca173782cbb300`.
+  Verified compatible handshake, repo snapshot, repo tree, file content, worktree diff, commit log,
+  delete/restore/redo/restore, checkpoint create, checkpoint scan, and checkpoint revert. Final repo
+  status was `M changed.txt` and `?? untracked.txt`, with `agent-created.txt` removed by revert.
+- Packaged native UI no-console smoke passed with
+  `C:\Users\User\AppData\Local\Temp\tinto-msi-extract-28092740721\PFiles\Tinto\tinto.exe` and a
+  WSL repo at `/tmp/tinto-ui-no-console-smoke-28092740721`. The app loaded the WSL repo card
+  (`1M 0S 0U`) and the window enumerator reported `before_terminal_count=2`,
+  `after_terminal_count=2`, and `new_terminal_count=0`; no new visible terminal/window matching
+  `wsl.exe`, `C:\WINDOWS\system32\wsl.exe`, Windows Terminal, OpenConsole, or ConsoleWindowClass was
+  created. Screenshot evidence:
+  `C:\Users\User\AppData\Local\Temp\tinto-ui-no-console-smoke-28092740721-wsl-repo.png`.
+- The user workbench config was backed up before the UI smoke and restored afterward.
+
 Remaining UI-only gap:
 
-- Agent Console start/stop/change-log/revert was still not completed interactively through the
-  packaged native UI after the user reported that previous desktop automation was opening too many
-  visible consoles. The packaged Linux agent and backend checkpoint/change-log/revert path are
-  verified above; the only remaining evidence gap is native UI operation of the same path.
+- Agent Console start/stop/change-log/revert remains not re-run interactively through the packaged
+  native UI in this closeout. The packaged Linux agent and backend checkpoint/change-log/revert path
+  are verified above, and the user-reported visible-console regression is closed by the native UI
+  no-console smoke.

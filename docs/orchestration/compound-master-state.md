@@ -324,6 +324,30 @@ Post-closeout UX iteration requested on 2026-06-19: add visual previews for PDFs
   tree/content/snapshot/fingerprint, copy/delete/restore/redo, and checkpoint scan/revert smoke
   checks passed. Extracted Windows executable started and remained running for 5 seconds before the
   smoke harness stopped it. Remaining gap: interactive packaged Tinto UI smoke.
+- WSL no-console regression closeout (2026-06-24): user reported that opening Tinto spawned many
+  visible Windows Terminal `wsl.exe` windows/tabs. Commit `54f2ee4` (`fix(wsl): hide background
+  console windows`) was pushed to `origin/develop` and applies `CREATE_NO_WINDOW` to background
+  Windows WSL/status/install/handshake/kill commands while leaving the embedded Agent Console PTY
+  path unchanged. GitHub Actions run `28092740721` passed for commit
+  `54f2ee43a6070cdcfff074b434916be581c2d681` across Frontend, Rust, Linux Tauri bundle, and
+  Windows Tauri bundle. Downloaded artifacts: NSIS
+  `8c437809554637694b6f5e8891fca3673e2bd3b250241f9fd756ad4ccfce952e`, MSI
+  `ce52a2193b7713b23b465da244a7a528c4c05488840be933be8729e467ba9047`, Linux agent
+  `0c8724c1cec28da194c97ff94b1fd78c0d905bf2995c99bc9eca173782cbb300`. MSI extraction under
+  `C:\Users\User\AppData\Local\Temp\tinto-msi-extract-28092740721` contained `tinto.exe`,
+  `tinto-agent.exe`, and `tinto-agent-linux-x86_64`; the extracted Linux agent matched the CI
+  artifact byte-for-byte. Packaged-agent backend smoke passed on
+  `/tmp/tinto-packaged-smoke-28092740721` for handshake, repo snapshot/tree/content/diff/log,
+  delete/restore/redo/restore, checkpoint create/scan/revert, with final status `M changed.txt` and
+  `?? untracked.txt`. Packaged native UI no-console smoke launched
+  `C:\Users\User\AppData\Local\Temp\tinto-msi-extract-28092740721\PFiles\Tinto\tinto.exe` against
+  WSL repo `/tmp/tinto-ui-no-console-smoke-28092740721`; the dashboard loaded the repo card
+  (`1M 0S 0U`) and visible-window enumeration stayed at `before_terminal_count=2`,
+  `after_terminal_count=2`, `new_terminal_count=0`, with screenshot evidence at
+  `C:\Users\User\AppData\Local\Temp\tinto-ui-no-console-smoke-28092740721-wsl-repo.png`. The
+  temporary user workbench config was restored after the smoke. Remaining narrow gap:
+  Agent Console start/stop/change-log/revert was not re-run interactively through packaged UI, but
+  the backend checkpoint path and the user-reported visible-console regression are verified.
 - Final Windows-only WSL complement batch (2026-06-24): pushed directly to `origin/develop` without PR or Jira, matching the approved release plan. Delivered commits: `a054101` (`feat(files): add file overview minimap`), `35b4771` (`feat(workbench): add Windows WSL repo tracking`), `f9d7611` (`feat(wsl): route repo reads and file operations through agent`), `f672e49` (`feat(agent-console): run and revert sessions in WSL`), `e8ee2e1` (`ci(wsl): bundle packaged Linux agent resource`), `236a5e3` (`docs(orchestration): document WSL complement delivery [skip ci]`), `cc216a0` (`docs(orchestration): record WSL complement release`), `02aeaf4` (`ci: fix release formatting gates`), `53d61f2` (`ci: satisfy rust clippy gates`), `9466415` (`test: align runtime expectations with WSL support`), and `62f9ce5` (`test: stabilize WSL runtime CI expectations`). Jira omitted because checkout readiness reported `env-loaded-without-project-secret-file`. Final GitHub Actions validation passed on run `28062526450`; Windows installer artifacts are available from the `tinto-windows-bundle` workflow artifact and were also downloaded locally under `.ci-artifacts/` for handoff inspection (`Tinto_0.1.0_x64-setup.exe`, `Tinto_0.1.0_x64_en-US.msi`).
 - RDM-001 Windows-gated repo identity and backend boundary release (2026-06-23): pushed directly to `origin/develop` without PR or Jira, matching standing project preference. Commits: `b79e3b4` (`docs(orchestration): reconcile preflight state [skip ci]`), `bc3c13f` (`feat(repo): add source-aware Windows WSL repo boundary`), and `2462f04` (`docs(orchestration): add Windows WSL identity delivery artifacts [skip ci]`). Jira omitted because checkout reported `jira-env-not-configured`.
 - PR-based deliveries: PR #1, #2, #3, #4, #6, #7, #8, #9, #10, #11, and #12.
