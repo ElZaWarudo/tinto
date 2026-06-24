@@ -98,7 +98,7 @@ pub(crate) fn build_wsl_command_available_argv(
         "--".into(),
         "sh".into(),
         "-lc".into(),
-        "command -v -- \"$1\"".into(),
+        "command -v -- \"\\$1\"".into(),
         "tinto-agent-console-check".into(),
         agent_type.to_string(),
     ])
@@ -163,7 +163,7 @@ mod tests {
         let argv = build_wsl_command_available_argv("Ubuntu", "codex").unwrap();
 
         assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--", "sh"]);
-        assert_eq!(argv[6], "command -v -- \"$1\"");
+        assert_eq!(argv[6], "command -v -- \"\\$1\"");
         assert_eq!(argv[8], "codex");
     }
 

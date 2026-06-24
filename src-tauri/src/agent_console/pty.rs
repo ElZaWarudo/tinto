@@ -204,7 +204,7 @@ pub(crate) fn build_wsl_agent_command(
     command.arg("--");
     command.arg("sh");
     command.arg("-lc");
-    command.arg("cd \"$1\" || exit 127; shift; exec \"$@\"");
+    command.arg("cd \"\\$1\" || exit 127; shift; exec \"\\$@\"");
     command.arg("tinto-agent-console");
     command.arg(working_dir.as_os_str());
     command.arg(agent_type);
@@ -381,7 +381,7 @@ mod tests {
                 OsString::from("--"),
                 OsString::from("sh"),
                 OsString::from("-lc"),
-                OsString::from("cd \"$1\" || exit 127; shift; exec \"$@\""),
+                OsString::from("cd \"\\$1\" || exit 127; shift; exec \"\\$@\""),
                 OsString::from("tinto-agent-console"),
                 OsString::from("/home/me/repo"),
                 OsString::from("codex"),
