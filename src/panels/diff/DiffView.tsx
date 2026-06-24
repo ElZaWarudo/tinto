@@ -1,11 +1,7 @@
-// Diff renderer (RDM-008, D-008-1): renders a structured FileDiff as either an
-// inline (stacked removed→added) or side-by-side (old left / new right) view,
-// from one data source. Syntax highlighting (Shiki) layers on after the
-// structure paints and is bounded by a size cap; binary and oversized files
-// fall back to a placeholder / plain monospace.
-
+import type { CSSProperties } from "react";
 import type { DiffHunk, DiffLine, FileDiff } from "../../bus/contract";
 import { FileOverviewRuler, type FileOverviewMarker } from "../file/FileOverviewRuler";
+import { useOverviewScrollSync } from "../file/useOverviewScrollSync";
 import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
 import { useLineHighlighter, type RenderLine } from "./lineHighlighter";
 
@@ -19,67 +15,68 @@ function diffSize(diff: FileDiff): number {
 
 const SIGN: Record<DiffLine["kind"], string> = { Added: "+", Removed: "-", Context: " " };
 
-export function diffHunkOverviewMarkers(diff: FileDiff): FileOverviewMarker[] {
-  const markers: FileOverviewMarker[] = [];
-  const seen = new Set<number>();
-  for (const hunk of diff.hunks) {
-    for (const line of hunk.lines) {
-      const lineNumber = line.new_lineno ?? hunk.new_start;
-      if (seen.has(lineNumber)) continue;
-      if (line.kind === "Context") continue;
-      seen.add(lineNumber);
-      markers.push({
-        line: lineNumber,
-        severity: line.kind === "Removed" ? "warning" : "info",
-        label: line.kind === "Removed" ? "Removed line" : "Changed line",
-        source: "hunk",
-      });
-    }
-  }
-  return markers;
-}
-
 export function DiffView({
   diff,
   mode,
   overviewMarkers = [],
   overviewTotalLines = 0,
+  bodyRef,
 }: {
   diff: FileDiff;
   mode: DiffMode;
   overviewMarkers?: FileOverviewMarker[];
   overviewTotalLines?: number;
+  bodyRef?: React.RefObject<HTMLElement | null>;
 }) {
   const oversized = diffSize(diff) > MAX_HIGHLIGHT_BYTES;
   const lang = languageFromPath(diff.path);
   const render = useLineHighlighter(lang, !diff.is_binary && !oversized);
-  const combinedMarkers = [...diffHunkOverviewMarkers(diff), ...overviewMarkers];
-  const markedLines = new Set(
-    overviewMarkers
-      .filter((marker) => (marker.source ?? "alert") === "alert")
-      .map((marker) => marker.line),
+  const markerByLine = new Map<number, FileOverviewMarker>();
+  for (const marker of overviewMarkers) {
+    if (!markerByLine.has(marker.line)) markerByLine.set(marker.line, marker);
+  }
+  const markedLines = new Set(markerByLine.keys());
+  const { topLine, visibleLineCount, viewportHeight, scrollProgress } = useOverviewScrollSync(
+    bodyRef,
+    overviewTotalLines,
   );
-  const totalLines =
-    overviewTotalLines || combinedMarkers.reduce((max, marker) => Math.max(max, marker.line), 0);
+  const overviewLines = diff.hunks.flatMap((hunk) =>
+    hunk.lines.map((line) => `${SIGN[line.kind]}${line.content}`),
+  );
+  const scrollPastEndStyle =
+    viewportHeight > 0
+      ? ({
+          "--file-scroll-past-end": `${Math.max(0, viewportHeight - 18)}px`,
+        } as CSSProperties)
+      : undefined;
 
   if (diff.is_binary) {
     return (
       <div className="diff-view diff-view--binary" data-testid="diff-binary">
-        Binary file — no text diff.
+        Binary file - no text diff.
       </div>
     );
   }
 
   return (
-    <div className={`diff-view diff-view--${mode}`} data-testid="diff-view">
+    <div
+      className={`diff-view diff-view--${mode}`}
+      data-testid="diff-view"
+      style={scrollPastEndStyle}
+    >
       <FileOverviewRuler
-        markers={combinedMarkers}
-        totalLines={totalLines}
+        markers={overviewMarkers}
+        totalLines={overviewTotalLines}
+        topLine={topLine}
+        visibleLineCount={visibleLineCount}
+        scrollProgress={scrollProgress}
+        overviewLines={overviewLines}
+        bodyRef={bodyRef}
         targetAttribute="data-new-line"
       />
       {oversized && (
         <div className="diff-view__notice" data-testid="diff-large">
-          Large file — syntax highlighting disabled.
+          Large file - syntax highlighting disabled.
         </div>
       )}
       {diff.hunks.length === 0 ? (
@@ -88,11 +85,23 @@ export function DiffView({
         </div>
       ) : mode === "inline" ? (
         diff.hunks.map((h, i) => (
-          <InlineHunk key={i} hunk={h} render={render} markedLines={markedLines} />
+          <InlineHunk
+            key={i}
+            hunk={h}
+            render={render}
+            markedLines={markedLines}
+            markerByLine={markerByLine}
+          />
         ))
       ) : (
         diff.hunks.map((h, i) => (
-          <SplitHunk key={i} hunk={h} render={render} markedLines={markedLines} />
+          <SplitHunk
+            key={i}
+            hunk={h}
+            render={render}
+            markedLines={markedLines}
+            markerByLine={markerByLine}
+          />
         ))
       )}
     </div>
@@ -119,10 +128,12 @@ function InlineHunk({
   hunk,
   render,
   markedLines,
+  markerByLine,
 }: {
   hunk: DiffHunk;
   render: RenderLine;
   markedLines: Set<number>;
+  markerByLine: Map<number, FileOverviewMarker>;
 }) {
   return (
     <div className="diff-hunk">
@@ -137,6 +148,9 @@ function InlineHunk({
           <span className="diff-gutter">{l.new_lineno ?? ""}</span>
           <span className="diff-sign">{SIGN[l.kind]}</span>
           <code className="diff-content">{render(l.content)}</code>
+          {l.new_lineno != null && markerByLine.has(l.new_lineno) && (
+            <LineMarkerLabel marker={markerByLine.get(l.new_lineno)!} />
+          )}
         </div>
       ))}
     </div>
@@ -147,12 +161,13 @@ function SplitHunk({
   hunk,
   render,
   markedLines,
+  markerByLine,
 }: {
   hunk: DiffHunk;
   render: RenderLine;
   markedLines: Set<number>;
+  markerByLine: Map<number, FileOverviewMarker>;
 }) {
-  // Left = old file slice (context + removed); right = new (context + added).
   const left = hunk.lines.filter((l) => l.kind !== "Added");
   const right = hunk.lines.filter((l) => l.kind !== "Removed");
   return (
@@ -180,10 +195,25 @@ function SplitHunk({
             >
               <span className="diff-gutter">{l.new_lineno ?? ""}</span>
               <code className="diff-content">{render(l.content)}</code>
+              {l.new_lineno != null && markerByLine.has(l.new_lineno) && (
+                <LineMarkerLabel marker={markerByLine.get(l.new_lineno)!} />
+              )}
             </div>
           ))}
         </div>
       </div>
     </div>
+  );
+}
+
+function LineMarkerLabel({ marker }: { marker: FileOverviewMarker }) {
+  const source = marker.source ?? "alert";
+  return (
+    <span
+      className={`line-marker-label line-marker-label--${source} line-marker-label--${marker.severity}`}
+      title={`${marker.label} · línea ${marker.line}`}
+    >
+      {marker.label}
+    </span>
   );
 }

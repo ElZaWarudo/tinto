@@ -6,7 +6,7 @@
 // Owns the diff subscription lifecycle (reconciler add/remove + one-shot load +
 // dropDiff on unmount), lifted verbatim from the former standalone DiffPanel.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getWorktreeDiff } from "../../bus/client";
 import type { FileDiff, RepoDelta, SecretFinding } from "../../bus/contract";
 import {
@@ -142,6 +142,7 @@ function hunkOverviewMarkers(lines: Set<number>): FileOverviewMarker[] {
 }
 
 export function FileView({ repo, path }: { repo: string; path: string }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
   const state = useBusState();
   const live = getDiff(state, repo, path);
   const repoDelta = state.repos[repo];
@@ -295,7 +296,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
         </div>
       )}
 
-      <div className="file-view__body">
+      <div className="file-view__body" ref={bodyRef}>
         {media ? (
           <MediaView repo={repo} path={path} kind={media} />
         ) : markdown ? (
@@ -307,6 +308,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
               path={path}
               changedLines={changed}
               overviewMarkers={overviewMarkers}
+              bodyRef={bodyRef}
             />
           )
         ) : viewKind === "full" ? (
@@ -315,6 +317,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
             path={path}
             changedLines={changed}
             overviewMarkers={overviewMarkers}
+            bodyRef={bodyRef}
           />
         ) : loadError ? (
           <div className="file-view__error" data-testid="diff-error">
@@ -331,6 +334,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
             mode={mode}
             overviewMarkers={overviewMarkers}
             overviewTotalLines={overviewTotalLines}
+            bodyRef={bodyRef}
           />
         ) : renamedTo ? (
           <div className="file-view__empty" data-testid="diff-renamed">
@@ -358,6 +362,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
             path={path}
             changedLines={changed}
             overviewMarkers={overviewMarkers}
+            bodyRef={bodyRef}
           />
         )}
       </div>

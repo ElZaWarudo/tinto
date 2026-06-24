@@ -1,5 +1,8 @@
-import { useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { useOverviewScrollSync } from "./useOverviewScrollSync";
+import { type CSSProperties, useEffect, useState } from "react";
+
+const MINIMAP_MIN_HEIGHT_PX = 96;
+const MINIMAP_LINE_HEIGHT_PX = 4;
+const MINIMAP_MAX_RENDERED_LINES = 600;
 
 export interface FileOverviewMarker {
   line: number;
@@ -8,23 +11,235 @@ export interface FileOverviewMarker {
   source?: "alert" | "hunk" | "search";
 }
 
-const MAX_MINI_ROWS = 600;
+export function FileOverviewRuler({
+  markers,
+  totalLines,
+  topLine = 1,
+  visibleLineCount = 1,
+  scrollProgress = 0,
+  overviewLines = [],
+  bodyRef,
+  targetAttribute = "data-line",
+  onActiveLineChange,
+}: {
+  markers: FileOverviewMarker[];
+  totalLines: number;
+  topLine?: number;
+  visibleLineCount?: number;
+  scrollProgress?: number;
+  overviewLines?: string[];
+  bodyRef?: React.RefObject<HTMLElement | null>;
+  targetAttribute?: "data-line" | "data-new-line";
+  onActiveLineChange?: (line: number | null) => void;
+}) {
+  const hasLines = totalLines > 0;
+  const sorted = [...markers].sort((a, b) => a.line - b.line);
+  const markerGroups = buildMarkerGroups(sorted);
 
-function sourceLabel(source: FileOverviewMarker["source"]): string {
-  switch (source ?? "alert") {
-    case "hunk":
-      return "Change";
-    case "search":
-      return "Search";
-    case "alert":
-      return "Alert";
-  }
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  const [rulerHeight, setRulerHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (activeLine == null) return;
+    if (topLine > activeLine) {
+      setActiveLine(null);
+      onActiveLineChange?.(null);
+    }
+  }, [topLine, activeLine, onActiveLineChange]);
+
+  useEffect(() => {
+    const body = bodyRef?.current;
+    if (!body) return;
+
+    const updateHeight = () => {
+      setRulerHeight(Math.max(96, body.clientHeight - 12));
+    };
+
+    updateHeight();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateHeight);
+    ro?.observe(body);
+    window.addEventListener("resize", updateHeight);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", updateHeight);
+    };
+  }, [bodyRef]);
+
+  const jumpToLine = (line: number) => {
+    const root = bodyRef?.current ?? document;
+    const lineEl = findLineTarget(root, targetAttribute, line);
+    lineEl?.scrollIntoView({ block: "center", inline: "nearest" });
+    setActiveLine(line);
+    onActiveLineChange?.(line);
+  };
+
+  const onTrackClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!bodyRef?.current || !hasLines) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    const ratio = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+    const line = Math.max(1, Math.min(totalLines, Math.round(ratio * (totalLines - 1)) + 1));
+    jumpToLine(line);
+  };
+
+  const onTrackKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!hasLines) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      jumpToLine(Math.min(totalLines, (activeLine ?? topLine) + 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      jumpToLine(Math.max(1, (activeLine ?? topLine) - 1));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      jumpToLine(1);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      jumpToLine(totalLines);
+    }
+  };
+
+  const viewportHeightPercent = hasLines
+    ? Math.min(100, Math.max(8, (visibleLineCount / totalLines) * 100))
+    : 0;
+  const viewportTopPercent = hasLines
+    ? Math.min(
+        100 - viewportHeightPercent,
+        Math.max(0, scrollProgress * (100 - viewportHeightPercent)),
+      )
+    : 0;
+  const minimapLines = hasLines ? buildMinimapLines(overviewLines, totalLines) : [];
+  const trackHeight =
+    rulerHeight == null
+      ? null
+      : Math.min(
+          Math.max(MINIMAP_MIN_HEIGHT_PX, totalLines * MINIMAP_LINE_HEIGHT_PX),
+          Math.max(MINIMAP_MIN_HEIGHT_PX, rulerHeight - (markerGroups.length > 0 ? 20 : 0)),
+        );
+  const viewportTopPx = trackHeight == null ? 0 : (trackHeight * viewportTopPercent) / 100;
+  const viewportHeightPx = trackHeight == null ? 18 : (trackHeight * viewportHeightPercent) / 100;
+  const rulerStyle =
+    rulerHeight == null
+      ? undefined
+      : ({
+          "--file-overview-ruler-height": `${rulerHeight}px`,
+          "--file-overview-ruler-track-height": `${trackHeight}px`,
+        } as CSSProperties);
+
+  return (
+    <div
+      className={`file-overview-ruler${
+        markerGroups.length > 0 ? " file-overview-ruler--has-summary" : ""
+      }${hasLines ? " file-overview-ruler--has-track" : " file-overview-ruler--empty"}`}
+      aria-label="Marcas del archivo"
+      data-testid="file-overview-ruler"
+      style={rulerStyle}
+    >
+      {markerGroups.length > 0 && (
+        <div
+          className="file-overview-ruler__summary"
+          title={markerGroups.map((group) => group.summary).join(" · ")}
+          data-testid="overview-summary"
+        >
+          {markerGroups.map((group) => (
+            <span
+              key={group.key}
+              className={`file-overview-ruler__summary-item file-overview-ruler__summary-item--${group.source}`}
+              aria-label={group.summary}
+            >
+              <span className="file-overview-ruler__summary-icon" aria-hidden="true">
+                {group.icon}
+              </span>
+              <span className="file-overview-ruler__summary-count">{group.count}</span>
+            </span>
+          ))}
+          <span className="sr-only">{markerGroups.map((group) => group.summary).join(", ")}</span>
+        </div>
+      )}
+      <div
+        className="file-overview-ruler__track"
+        role="slider"
+        tabIndex={hasLines ? 0 : -1}
+        aria-label="Posición de desplazamiento"
+        aria-valuemin={1}
+        aria-valuemax={hasLines ? totalLines : 1}
+        aria-valuenow={hasLines ? topLine : 1}
+        aria-valuetext={hasLines ? `Línea ${topLine} de ${totalLines}` : undefined}
+        onClick={onTrackClick}
+        onKeyDown={onTrackKeyDown}
+        data-testid="file-overview-ruler-track"
+      >
+        {hasLines && (
+          <>
+            <div
+              className="file-overview-ruler__minimap"
+              aria-hidden="true"
+              data-testid="file-overview-ruler-minimap"
+              style={{ "--overview-mini-lines": minimapLines.length } as CSSProperties}
+            >
+              {minimapLines.map((line, index) => (
+                <div
+                  key={index}
+                  className={`file-overview-ruler__mini-line ${miniLineClass(line ?? "")}`}
+                >
+                  {line ?? ""}
+                </div>
+              ))}
+            </div>
+            <div
+              className="file-overview-ruler__caret"
+              aria-hidden="true"
+              style={
+                {
+                  height: `${viewportHeightPx}px`,
+                  transform: `translate3d(0, ${viewportTopPx}px, 0)`,
+                } as CSSProperties
+              }
+              data-testid="file-overview-ruler-caret"
+            />
+          </>
+        )}
+        {sorted.map((marker, index) => {
+          const top = hasLines
+            ? Math.min(100, Math.max(0, ((marker.line - 1) / Math.max(totalLines - 1, 1)) * 100))
+            : 0;
+          const source = marker.source ?? "alert";
+          const markerText = `${marker.label} · L${marker.line}`;
+          const isActive = activeLine === marker.line;
+          return (
+            <button
+              key={`${source}:${marker.severity}:${marker.line}:${index}`}
+              type="button"
+              className={`file-overview-ruler__mark file-overview-ruler__mark--${marker.severity} file-overview-ruler__mark--${source}${
+                isActive ? " file-overview-ruler__mark--active" : ""
+              }`}
+              style={{ top: `${top}%` }}
+              title={`${marker.label} · línea ${marker.line}`}
+              aria-label={`${marker.label}, línea ${marker.line}`}
+              data-testid={`overview-marker-${marker.line}-${index}`}
+              data-marker-line={marker.line}
+              data-source={source}
+              onClick={(event) => {
+                event.stopPropagation();
+                jumpToLine(marker.line);
+              }}
+            >
+              <span className="file-overview-ruler__mark-icon" aria-hidden="true">
+                {sourceIcon(source)}
+              </span>
+              <span className="file-overview-ruler__mark-label">{markerText}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
-function markerGlyph(source: FileOverviewMarker["source"]): string {
+function sourceIcon(source: FileOverviewMarker["source"]): string {
   switch (source ?? "alert") {
     case "hunk":
-      return "+";
+      return "~";
     case "search":
       return "?";
     case "alert":
@@ -32,170 +247,84 @@ function markerGlyph(source: FileOverviewMarker["source"]): string {
   }
 }
 
-function lineToPercent(line: number, totalLines: number): number {
-  if (totalLines <= 1) return 0;
-  return ((Math.max(1, Math.min(line, totalLines)) - 1) / (totalLines - 1)) * 100;
+function buildMarkerGroups(markers: FileOverviewMarker[]): Array<{
+  key: string;
+  source: "alert" | "hunk" | "search";
+  count: number;
+  icon: string;
+  summary: string;
+}> {
+  const counts = new Map<"alert" | "hunk" | "search", number>();
+  for (const marker of markers) {
+    const source = marker.source ?? "alert";
+    counts.set(source, (counts.get(source) ?? 0) + 1);
+  }
+  return (["alert", "hunk", "search"] as const)
+    .map((source) => {
+      const count = counts.get(source) ?? 0;
+      if (count === 0) return null;
+      const label =
+        source === "alert"
+          ? count === 1
+            ? "1 posible secreto"
+            : `${count} posibles secretos`
+          : source === "hunk"
+            ? count === 1
+              ? "1 hunk"
+              : `${count} hunks`
+            : count === 1
+              ? "1 resultado de busqueda"
+              : `${count} resultados de busqueda`;
+      return {
+        key: source,
+        source,
+        count,
+        icon: sourceIcon(source),
+        summary: label,
+      };
+    })
+    .filter((group): group is NonNullable<typeof group> => group != null);
 }
 
-function lineFromClientY(clientY: number, rect: DOMRect, totalLines: number): number {
-  if (totalLines <= 1 || rect.height <= 0) return 1;
-  const progress = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-  return Math.max(1, Math.min(totalLines, Math.round(progress * (totalLines - 1)) + 1));
+function buildMinimapLines(overviewLines: string[], totalLines: number): string[] {
+  if (totalLines <= 0) return [];
+  const renderedLineCount = Math.min(totalLines, MINIMAP_MAX_RENDERED_LINES);
+  if (renderedLineCount === totalLines) {
+    return Array.from({ length: totalLines }, (_, index) => overviewLines[index] ?? "");
+  }
+  return Array.from({ length: renderedLineCount }, (_, index) => {
+    const sourceIndex =
+      renderedLineCount === 1
+        ? 0
+        : Math.round((index / (renderedLineCount - 1)) * (totalLines - 1));
+    return overviewLines[sourceIndex] ?? "";
+  });
 }
 
-function findLineElement(
-  root: ParentNode,
+function miniLineClass(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
+    return "file-overview-ruler__mini-line--comment";
+  }
+  if (
+    /\b(import|export|const|let|var|function|async|return|if|else|await|class|type|interface)\b/.test(
+      trimmed,
+    )
+  ) {
+    return "file-overview-ruler__mini-line--keyword";
+  }
+  if (/['"`]/.test(trimmed)) return "file-overview-ruler__mini-line--string";
+  if (/^[}\]);,]+$/.test(trimmed)) return "file-overview-ruler__mini-line--punctuation";
+  return "file-overview-ruler__mini-line--plain";
+}
+
+function findLineTarget(
+  root: HTMLElement | Document,
   targetAttribute: "data-line" | "data-new-line",
   line: number,
 ): HTMLElement | null {
   const candidates = root.querySelectorAll<HTMLElement>(`[${targetAttribute}="${line}"]`);
-  return [...candidates].find((candidate) => !candidate.closest(".file-overview-ruler")) ?? null;
-}
-
-export function FileOverviewRuler({
-  markers,
-  totalLines,
-  targetAttribute,
-}: {
-  markers: FileOverviewMarker[];
-  totalLines: number;
-  targetAttribute: "data-line" | "data-new-line";
-}) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [activeLine, setActiveLine] = useState<number | null>(null);
-  const { topLine, viewportPercent, viewportSizePercent } = useOverviewScrollSync(
-    rootRef,
-    totalLines,
-    targetAttribute,
-  );
-
-  const sorted = useMemo(
-    () =>
-      [...markers]
-        .filter((marker) => marker.line > 0)
-        .sort(
-          (a, b) => a.line - b.line || sourceLabel(a.source).localeCompare(sourceLabel(b.source)),
-        ),
-    [markers],
-  );
-  const alertCount = sorted.filter((marker) => (marker.source ?? "alert") === "alert").length;
-  const sampledRows = useMemo(() => {
-    if (totalLines <= 0) return [];
-    const count = Math.min(totalLines, MAX_MINI_ROWS);
-    return Array.from({ length: count }, (_, index) =>
-      Math.max(1, Math.round((index / Math.max(1, count - 1)) * (totalLines - 1)) + 1),
-    );
-  }, [totalLines]);
-
-  if (totalLines <= 0) return null;
-
-  const jumpToLine = (line: number) => {
-    const root = rootRef.current?.closest(".file-view__body") ?? document;
-    const lineEl = findLineElement(root, targetAttribute, line);
-    lineEl?.scrollIntoView({ block: "center", inline: "nearest" });
-    setActiveLine(line);
-  };
-
-  const handleTrackClick = (event: MouseEvent<HTMLDivElement>) => {
-    const line = lineFromClientY(
-      event.clientY,
-      event.currentTarget.getBoundingClientRect(),
-      totalLines,
-    );
-    jumpToLine(line);
-  };
-
-  const handleTrackKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    let nextLine: number | null = null;
-    if (event.key === "ArrowDown") nextLine = Math.min(totalLines, topLine + 1);
-    if (event.key === "ArrowUp") nextLine = Math.max(1, topLine - 1);
-    if (event.key === "Home") nextLine = 1;
-    if (event.key === "End") nextLine = totalLines;
-    if (nextLine == null) return;
-    event.preventDefault();
-    jumpToLine(nextLine);
-  };
-
   return (
-    <div
-      ref={rootRef}
-      className={`file-overview-ruler${sorted.length === 0 ? " file-overview-ruler--empty" : ""}`}
-      aria-label="File overview"
-      data-testid="file-overview-ruler"
-    >
-      <div className="file-overview-ruler__legend" data-testid="overview-summary">
-        {alertCount > 0 ? `${alertCount}` : "0"}
-        <span className="sr-only">
-          {alertCount === 1 ? "1 file alert" : `${alertCount} file alerts`}
-        </span>
-      </div>
-      <div
-        tabIndex={0}
-        className="file-overview-ruler__track"
-        aria-label={`File overview, top line ${topLine} of ${totalLines}`}
-        aria-valuemin={1}
-        aria-valuemax={totalLines}
-        aria-valuenow={topLine}
-        aria-valuetext={`Line ${topLine} of ${totalLines}`}
-        role="slider"
-        onClick={handleTrackClick}
-        onKeyDown={handleTrackKeyDown}
-      >
-        <span className="file-overview-ruler__mini" aria-hidden="true">
-          {sampledRows.map((line, index) => (
-            <span
-              key={`${line}:${index}`}
-              className="file-overview-ruler__mini-line"
-              style={{ top: `${lineToPercent(line, totalLines)}%` }}
-            />
-          ))}
-        </span>
-        <span
-          className="file-overview-ruler__viewport"
-          style={{
-            height: `${viewportSizePercent}%`,
-            transform: `translate3d(0, ${viewportPercent}%, 0)`,
-          }}
-          aria-hidden="true"
-        />
-        {sorted.map((marker, index) => {
-          const source = marker.source ?? "alert";
-          const top = lineToPercent(marker.line, totalLines);
-          const active = activeLine === marker.line;
-          return (
-            <span
-              key={`${source}:${marker.severity}:${marker.line}:${index}`}
-              role="button"
-              tabIndex={0}
-              className={`file-overview-ruler__mark file-overview-ruler__mark--${marker.severity} file-overview-ruler__mark--${source}${
-                active ? " file-overview-ruler__mark--active" : ""
-              }`}
-              style={{ top: `${top}%` }}
-              title={`${marker.label} - line ${marker.line}`}
-              aria-label={`${marker.label}, line ${marker.line}`}
-              data-marker-line={marker.line}
-              data-testid={`overview-marker-${marker.line}-${index}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                jumpToLine(marker.line);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                event.stopPropagation();
-                jumpToLine(marker.line);
-              }}
-            >
-              <span className="file-overview-ruler__mark-icon" aria-hidden="true">
-                {markerGlyph(source)}
-              </span>
-              <span className="file-overview-ruler__mark-label">
-                {sourceLabel(source)} L{marker.line}
-              </span>
-            </span>
-          );
-        })}
-      </div>
-    </div>
+    Array.from(candidates).find((candidate) => !candidate.closest(".file-overview-ruler")) ?? null
   );
 }

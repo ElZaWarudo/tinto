@@ -1,13 +1,8 @@
-// Full-file view (RDM-008, R4): the file's CURRENT working-tree content with
-// changed lines highlighted in context. Degrades per R4: base64/binary → guard
-// placeholder; truncated → content up to the 1 MiB cut + a notice (no highlight
-// past the cut). Best-effort under mid-edit content/diff skew (no correctness
-// guarantee on the exact highlighted line during an active write).
-
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { getFileContent } from "../../bus/client";
 import type { FileContent } from "../../bus/contract";
 import { FileOverviewRuler, type FileOverviewMarker } from "../file/FileOverviewRuler";
+import { useOverviewScrollSync } from "../file/useOverviewScrollSync";
 import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
 import { useLineHighlighter } from "./lineHighlighter";
 
@@ -16,24 +11,22 @@ export function FullFileView({
   path,
   changedLines,
   overviewMarkers = [],
+  bodyRef,
 }: {
   repo: string;
   path: string;
   changedLines: Set<number>;
   overviewMarkers?: FileOverviewMarker[];
+  bodyRef?: React.RefObject<HTMLElement | null>;
 }) {
   const [content, setContent] = useState<FileContent | undefined>(undefined);
   const [error, setError] = useState(false);
 
-  // Highlighting layers on after the text paints; disabled for binary content,
-  // oversized files, and unknown languages (the hook falls back to plain).
   const lang = languageFromPath(path);
   const highlightable =
     content?.encoding === "utf8" && content.content.length <= MAX_HIGHLIGHT_BYTES;
   const renderLine = useLineHighlighter(lang, !!highlightable);
 
-  // A diff panel is one (repo, path) target, so this fetches once on mount; the
-  // initial `undefined` state IS the loading state (no synchronous reset needed).
   useEffect(() => {
     let active = true;
     getFileContent(repo, path)
@@ -48,6 +41,28 @@ export function FullFileView({
       active = false;
     };
   }, [repo, path]);
+
+  const lines = useMemo(() => {
+    if (!content || content.encoding !== "utf8") return [];
+    const raw = content.content.split("\n");
+    return raw.length > 1 && raw[raw.length - 1] === "" ? raw.slice(0, -1) : raw;
+  }, [content]);
+
+  const { topLine, visibleLineCount, viewportHeight, scrollProgress } = useOverviewScrollSync(
+    bodyRef,
+    lines.length,
+  );
+  const markerByLine = new Map<number, FileOverviewMarker>();
+  for (const marker of overviewMarkers) {
+    if (!markerByLine.has(marker.line)) markerByLine.set(marker.line, marker);
+  }
+  const markedLines = new Set(markerByLine.keys());
+  const scrollPastEndStyle =
+    viewportHeight > 0
+      ? ({
+          "--file-scroll-past-end": `${Math.max(0, viewportHeight - 18)}px`,
+        } as CSSProperties)
+      : undefined;
 
   if (error) {
     return (
@@ -71,26 +86,24 @@ export function FullFileView({
     );
   }
 
-  const raw = content.content.split("\n");
-  // Drop the spurious trailing empty line from a file ending in a newline.
-  const lines = raw.length > 1 && raw[raw.length - 1] === "" ? raw.slice(0, -1) : raw;
-  const markedLines = new Set(
-    overviewMarkers
-      .filter((marker) => (marker.source ?? "alert") === "alert")
-      .map((marker) => marker.line),
-  );
   return (
     <div className="full-file" data-testid="full-file">
       <FileOverviewRuler
         markers={overviewMarkers}
         totalLines={lines.length}
+        topLine={topLine}
+        visibleLineCount={visibleLineCount}
+        scrollProgress={scrollProgress}
+        overviewLines={lines}
+        bodyRef={bodyRef}
         targetAttribute="data-line"
       />
-      <pre className="full-file__code">
+      <pre className="full-file__code" style={scrollPastEndStyle}>
         {lines.map((line, i) => {
           const lineno = i + 1;
           const changed = changedLines.has(lineno);
           const marked = markedLines.has(lineno);
+          const marker = markerByLine.get(lineno);
           const classes = ["full-file__line"];
           if (changed) classes.push("full-file__line--changed");
           if (marked) classes.push("full-file__line--signal-critical");
@@ -98,6 +111,7 @@ export function FullFileView({
             <div key={i} className={classes.join(" ")} data-line={lineno}>
               <span className="diff-gutter">{lineno}</span>
               <code className="diff-content">{renderLine(line)}</code>
+              {marker && <LineMarkerLabel marker={marker} />}
             </div>
           );
         })}
@@ -108,5 +122,17 @@ export function FullFileView({
         </div>
       )}
     </div>
+  );
+}
+
+function LineMarkerLabel({ marker }: { marker: FileOverviewMarker }) {
+  const source = marker.source ?? "alert";
+  return (
+    <span
+      className={`line-marker-label line-marker-label--${source} line-marker-label--${marker.severity}`}
+      title={`${marker.label} · línea ${marker.line}`}
+    >
+      {marker.label}
+    </span>
   );
 }

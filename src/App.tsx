@@ -49,6 +49,7 @@ export default function App() {
   const { config, loaded, repos } = useBusState();
   const { glanceMode } = useQualityState();
   const apiRef = useRef<DockviewApi | null>(null);
+//const token = "iksdfjflksdf";
 
   // Apply the persisted zoom and bind Ctrl/Cmd +/-/0 (browser-style text size).
   useEffect(() => {

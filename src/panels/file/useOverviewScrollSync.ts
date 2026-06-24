@@ -1,77 +1,82 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useState } from "react";
 
-interface OverviewScrollState {
+export interface OverviewScrollSyncResult {
   topLine: number;
-  viewportPercent: number;
-  viewportSizePercent: number;
-}
-
-function findRows(
-  body: HTMLElement,
-  targetAttribute: "data-line" | "data-new-line",
-): HTMLElement[] {
-  return [...body.querySelectorAll<HTMLElement>(`[${targetAttribute}]`)].filter(
-    (row) => !row.closest(".file-overview-ruler"),
-  );
+  visibleLineCount: number;
+  viewportHeight: number;
+  scrollProgress: number;
 }
 
 export function useOverviewScrollSync(
-  overviewRef: RefObject<HTMLElement | null>,
+  bodyRef: React.RefObject<HTMLElement | null> | null | undefined,
   totalLines: number,
-  targetAttribute: "data-line" | "data-new-line",
-): OverviewScrollState {
-  const [state, setState] = useState<OverviewScrollState>({
-    topLine: 1,
-    viewportPercent: 0,
-    viewportSizePercent: 100,
-  });
+): OverviewScrollSyncResult {
+  const [topLine, setTopLine] = useState(1);
+  const [visibleLineCount, setVisibleLineCount] = useState(1);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [scrollProgress, setScrollProgress] = useState(0);
 
   useEffect(() => {
-    const body = overviewRef.current?.closest(".file-view__body") as HTMLElement | null;
+    const body = bodyRef?.current ?? null;
     if (!body || totalLines <= 0) {
-      setState({ topLine: 1, viewportPercent: 0, viewportSizePercent: 100 });
+      setTopLine(1);
+      setVisibleLineCount(1);
+      setViewportHeight(0);
+      setScrollProgress(0);
       return;
     }
 
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      const maxScroll = Math.max(1, body.scrollHeight - body.clientHeight);
-      const viewportPercent = (body.scrollTop / maxScroll) * 100;
-      const viewportSizePercent = Math.max(
-        4,
-        Math.min(100, (body.clientHeight / body.scrollHeight) * 100),
-      );
+    let rafId: number | null = null;
+
+    const compute = () => {
+      rafId = null;
+      const lineEls = Array.from(
+        body.querySelectorAll<HTMLElement>("[data-line], [data-new-line]"),
+      ).filter((el) => !el.closest(".file-overview-ruler"));
+      if (lineEls.length === 0) {
+        setTopLine(1);
+        setVisibleLineCount(1);
+        return;
+      }
       const bodyRect = body.getBoundingClientRect();
-      const firstVisible = findRows(body, targetAttribute).find((row) => {
-        const rect = row.getBoundingClientRect();
-        return rect.bottom > bodyRect.top;
-      });
-      const topLine = firstVisible?.getAttribute(targetAttribute);
-      setState({
-        topLine: Math.max(1, Math.min(totalLines, Number(topLine) || 1)),
-        viewportPercent,
-        viewportSizePercent,
-      });
+      setViewportHeight(body.clientHeight || bodyRect.height);
+      const maxScroll = Math.max(0, body.scrollHeight - body.clientHeight);
+      setScrollProgress(maxScroll > 0 ? Math.min(1, Math.max(0, body.scrollTop / maxScroll)) : 0);
+      let firstVisible = 1;
+      let lastVisible = 1;
+      let foundVisible = false;
+      for (const el of lineEls) {
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom > bodyRect.top && rect.top < bodyRect.bottom) {
+          const raw = el.getAttribute("data-line") ?? el.getAttribute("data-new-line");
+          const line = raw == null ? NaN : Number(raw);
+          if (!Number.isNaN(line) && line > 0) {
+            if (!foundVisible) firstVisible = line;
+            lastVisible = line;
+            foundVisible = true;
+          }
+        }
+      }
+      setTopLine(firstVisible);
+      setVisibleLineCount(Math.max(1, lastVisible - firstVisible + 1));
     };
 
     const schedule = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(update);
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(compute);
     };
 
-    update();
     body.addEventListener("scroll", schedule, { passive: true });
-    const resizeObserver =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
-    resizeObserver?.observe(body);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    ro?.observe(body);
+    schedule();
 
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       body.removeEventListener("scroll", schedule);
-      resizeObserver?.disconnect();
-      if (frame) cancelAnimationFrame(frame);
+      ro?.disconnect();
     };
-  }, [overviewRef, targetAttribute, totalLines]);
+  }, [bodyRef, totalLines]);
 
-  return state;
+  return { topLine, visibleLineCount, viewportHeight, scrollProgress };
 }
