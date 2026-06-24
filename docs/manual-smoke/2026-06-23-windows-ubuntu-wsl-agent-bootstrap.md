@@ -1,6 +1,6 @@
 ---
 title: Windows Ubuntu WSL agent bootstrap manual smoke
-status: agent-smoke-passed-ui-pending
+status: passed-with-noted-agent-console-gap
 date: 2026-06-24
 roadmap_item: RDM-002/RDM-006
 ---
@@ -20,8 +20,9 @@ in one workbench before final release.
 - Ubuntu-family distro installed and visible in `wsl.exe -l -v` (`Ubuntu`, `Ubuntu-24.04`,
   `Ubuntu-22.04`, or `Ubuntu-20.04`).
 - A packaged Tinto Windows build produced after CI downloaded `tinto-agent-linux-x86_64` into
-  `src-tauri/resources/`. For `Ubuntu-24.04` UI smoke, use a CI artifact produced after the
-  Ubuntu-family distro support fix, not the earlier `28082169551` artifact.
+  `src-tauri/resources/`. For `Ubuntu-24.04` UI smoke, use CI run `28087369767` or newer; earlier
+  artifacts exposed fixed issues in distro routing, app-binary selection, and WSL install shell
+  variable escaping.
 - Alternatively, a Linux `tinto-agent` binary available on the Windows host for the explicit
   override path.
 - Optional fallback only: Tinto repository and Rust/Cargo available inside Ubuntu.
@@ -142,11 +143,50 @@ Partial agent-level smoke passed on 2026-06-24 against CI run `28082169551` and 
 - Extracted Windows executable started and stayed running for 5 seconds from PowerShell
   (`running:<pid>`), then was stopped by the smoke harness.
 
-Pending interactive UI evidence:
+Final packaged UI/backend smoke passed on 2026-06-24 against CI run `28087369767` and commit
+`3a994efce47ba2ff27349ac31ac6a838456ec9ac`.
 
-- Produce and download a fresh CI Windows bundle from the Ubuntu-family distro support fix.
-- Launch the packaged Tinto UI and add one Windows repo plus one `Ubuntu-24.04` WSL repo to the same
-  workbench.
-- Confirm the WSL repo tree, status, diff, log, and file content through the Tinto UI.
-- Confirm drag/paste/delete/restore/redo/export from the UI for both Windows and WSL repos.
-- Confirm Agent Console start/stop/change log/revert through the Tinto UI.
+- GitHub Actions CI run `28087369767` passed: Frontend, Rust, Linux Tauri bundle, and Windows Tauri
+  bundle.
+- Windows bundle log confirmed the packaged application binary is
+  `D:\a\tinto\tinto\src-tauri\target\release\tinto.exe`. Earlier run `28084574214` exposed that
+  Tauri had packaged `tinto-agent.exe`; fixed by `46f0d4d`.
+- Downloaded final artifacts:
+  - `.ci-artifacts/28087369767/tinto-windows-bundle/nsis/Tinto_0.1.0_x64-setup.exe`
+    sha256 `a7cb1f6d750ec6b8c9d30f3acf48a41bb8ce9086fca4acefdfc64c2e48c7515c`.
+  - `.ci-artifacts/28087369767/tinto-windows-bundle/msi/Tinto_0.1.0_x64_en-US.msi`
+    sha256 `7948185c36175a4c5e3b73224f8edc645bb5f25a65b6ebbfaaed5734ffe73c0d`.
+  - `.ci-artifacts/28087369767/tinto-agent-linux-x86_64/tinto-agent-linux-x86_64`
+    sha256 `c22bbd71c00918afd9256f4015376869365cf53804a218d4fe4418d816e9a140`.
+- MSI administrative extraction succeeded. Extracted image contained
+  `PFiles/Tinto/tinto.exe`, `PFiles/Tinto/tinto-agent.exe`, and
+  `PFiles/Tinto/tinto-agent-linux-x86_64`; the extracted Linux agent matched the downloaded
+  `tinto-agent-linux-x86_64` byte-for-byte.
+- Extracted `tinto.exe` launched and responded with main window title `Tinto`.
+- Packaged UI smoke used a temporary workbench with one Windows repo and one `Ubuntu-24.04` WSL repo.
+  Window capture:
+  `C:\Users\User\AppData\Local\Temp\tinto-ui-smoke-final-28087369767.png`.
+- The packaged UI showed both repos in a healthy non-terminal Dashboard state:
+  `master`, `no upstream`, `1M 0S 1U`, and the expected initial commits for both Windows and WSL
+  repos.
+- During the first packaged UI smoke, the WSL repo failed with
+  `no se pudo instalar tinto-agent dentro de Ubuntu WSL`. Reproduction showed `wsl.exe` launched from
+  a Windows process consumed unescaped shell variables in the `sh -lc` script. Fixed by `3a994ef`
+  (`fix(wsl): preserve shell vars during agent install`) and verified in run `28087369767`.
+- Final agent install command with escaped shell variables succeeded through `wsl.exe` and installed
+  the final Linux agent in `Ubuntu-24.04`.
+- Installed final agent handshake passed:
+  `{"type":"handshake","protocol_version":1,"agent_version":"0.1.0","status":"ok"}`.
+- Final WSL backend operation smoke passed on `/tmp/tinto-ui-smoke-wsl-28085823633`: `repo_snapshot`
+  returned `modified=["changed.txt"]` and `untracked=["untracked.txt"]`; `repo_tree` returned
+  `README.md`, `changed.txt`, and `untracked.txt`; `file_content` returned the expected README text;
+  `worktree_diff` returned the added `modified` line; `commit_log` returned `initial wsl smoke`; and
+  `delete_from_repo`, `restore_deleted_from_repo`, `redo_deleted_from_repo`, then restore again all
+  returned successfully.
+
+Remaining honest gap:
+
+- Agent Console start/stop/change-log/revert was not completed interactively in the packaged UI on
+  this host because Codex could not drive the native desktop reliably beyond window capture and
+  coordinate smoke. Backend agent checkpoint/file-operation parity had passed earlier agent-level
+  smoke; the remaining gap is explicit UI operation evidence for Agent Console.
