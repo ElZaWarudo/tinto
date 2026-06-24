@@ -1162,17 +1162,26 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join(".gitignore"), "").unwrap();
         watcher.watch_workbench(std::slice::from_ref(&entry));
-        tokio::time::sleep(Duration::from_secs(1)).await;
 
-        fs::write(root.join("src/revivido.rs"), "r").unwrap();
+        let revived = timeout(Duration::from_secs(10), async {
+            let mut n = 0;
+            loop {
+                fs::write(root.join("src/revivido.rs"), format!("r{n}")).unwrap();
+                n += 1;
+                let window = tokio::time::Instant::now() + Duration::from_millis(500);
+                while tokio::time::Instant::now() < window {
+                    if let Ok(Some(msg)) = timeout(Duration::from_millis(100), rx.recv()).await {
+                        if batch_has(&msg, Classification::Plane1, "src/revivido.rs") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
         assert!(
-            wait_for(&mut rx, |m| batch_has(
-                m,
-                Classification::Plane1,
-                "src/revivido.rs"
-            ))
-            .await
-            .is_some(),
+            revived,
             "tras recrear el root, watch_workbench debe remontarlo de verdad"
         );
 
