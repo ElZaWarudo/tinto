@@ -1,7 +1,7 @@
 ---
 title: Windows Ubuntu WSL agent bootstrap manual smoke
-status: pending
-date: 2026-06-23
+status: agent-smoke-passed-ui-pending
+date: 2026-06-24
 roadmap_item: RDM-002/RDM-006
 ---
 
@@ -98,4 +98,44 @@ Validate the Windows host to Ubuntu WSL `tinto-agent` bootstrap on a real Window
 
 ## Evidence
 
-Pending. Record command output or note the exact blocker before final release.
+Partial agent-level smoke passed on 2026-06-24 against CI run `28082169551` and commit
+`9fe58fa8959261b93f8bfec3820361bdc54d8cc6`.
+
+- GitHub Actions CI run `28082169551` passed: Frontend, Rust, Linux Tauri bundle, and Windows
+  Tauri bundle.
+- Downloaded artifacts:
+  - `.ci-artifacts/28082169551/tinto-windows-bundle/nsis/Tinto_0.1.0_x64-setup.exe`
+    sha256 `689e1a3d87a8058eeffbafd588cb50214da41e45a1365a9f11588ab39b056f85`.
+  - `.ci-artifacts/28082169551/tinto-windows-bundle/msi/Tinto_0.1.0_x64_en-US.msi`
+    sha256 `da95854ec5b7ec0a5dd07423cccbd55ffdfa86d6ebe07ee6941a04415c8466aa`.
+  - `.ci-artifacts/28082169551/tinto-agent-linux-x86_64/tinto-agent-linux-x86_64`
+    sha256 `60e596fc0ab3b0bcb944bf388772dd69080fc37c1655cd39559863b00fce0bcc`.
+- Host WSL evidence: `wsl.exe -l -v` reported `Ubuntu-24.04` running on WSL version `2`.
+  The checklist name `Ubuntu` was adapted to the actual distro name for this host.
+- MSI administrative extraction succeeded. Extracted image contained
+  `PFiles/Tinto/tinto-agent-linux-x86_64` and `PFiles/Tinto/tinto-agent.exe`; the extracted
+  Linux agent matched the downloaded `tinto-agent-linux-x86_64` byte-for-byte.
+- Compatible handshake passed:
+  `{"type":"handshake","protocol_version":1,"agent_version":"0.1.0","status":"ok"}`.
+- Incompatible protocol failed safely with `protocol_mismatch: version de protocolo incompatible`.
+- Installed-path check passed after placing the packaged agent at
+  `$HOME/.local/share/tinto/agents/0.1.0/tinto-agent`: `test -x ... && echo ok`, followed by a
+  successful compatible handshake.
+- Agent repo operations passed on temporary Linux repo `/tmp/tinto-agent-smoke-28082169551`:
+  `repo_tree`, `file_content`, and `repo_snapshot_with_fs_events` returned expected tree/content,
+  clean repo status, and file fingerprints.
+- Agent file operations passed on the same repo: `copy_within_repo`, `delete_from_repo`,
+  `restore_deleted_from_repo`, and `redo_deleted_from_repo`.
+- Agent checkpoint smoke passed: `agent_checkpoint_create` produced a `git_ref` checkpoint,
+  `agent_checkpoint_scan` reported `README.md` modified and `new-file.txt` created, and
+  `agent_checkpoint_revert` restored `README.md` and removed `new-file.txt`.
+- Extracted Windows executable started and stayed running for 5 seconds from PowerShell
+  (`running:<pid>`), then was stopped by the smoke harness.
+
+Pending interactive UI evidence:
+
+- Launch the packaged Tinto UI and add one Windows repo plus one `Ubuntu-24.04` WSL repo to the
+  same workbench.
+- Confirm the WSL repo tree, status, diff, log, and file content through the Tinto UI.
+- Confirm drag/paste/delete/restore/redo/export from the UI for both Windows and WSL repos.
+- Confirm Agent Console start/stop/change log/revert through the Tinto UI.
