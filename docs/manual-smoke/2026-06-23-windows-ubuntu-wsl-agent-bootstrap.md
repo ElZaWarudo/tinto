@@ -1,6 +1,6 @@
 ---
 title: Windows Ubuntu WSL agent bootstrap manual smoke
-status: passed-with-noted-agent-console-gap
+status: passed-with-ui-agent-console-gap
 date: 2026-06-24
 roadmap_item: RDM-002/RDM-006
 ---
@@ -143,7 +143,7 @@ Partial agent-level smoke passed on 2026-06-24 against CI run `28082169551` and 
 - Extracted Windows executable started and stayed running for 5 seconds from PowerShell
   (`running:<pid>`), then was stopped by the smoke harness.
 
-Final packaged UI/backend smoke passed on 2026-06-24 against CI run `28087369767` and commit
+Packaged UI/backend smoke passed on 2026-06-24 against CI run `28087369767` and commit
 `3a994efce47ba2ff27349ac31ac6a838456ec9ac`.
 
 - GitHub Actions CI run `28087369767` passed: Frontend, Rust, Linux Tauri bundle, and Windows Tauri
@@ -184,9 +184,50 @@ Final packaged UI/backend smoke passed on 2026-06-24 against CI run `28087369767
   `delete_from_repo`, `restore_deleted_from_repo`, `redo_deleted_from_repo`, then restore again all
   returned successfully.
 
-Remaining honest gap:
+Final packaged artifact/backend smoke passed on 2026-06-24 against CI run `28091013393` and commit
+`2a87cfcfb20256b8858c94956c25f9e803fa80a8`.
 
-- Agent Console start/stop/change-log/revert was not completed interactively in the packaged UI on
-  this host because Codex could not drive the native desktop reliably beyond window capture and
-  coordinate smoke. Backend agent checkpoint/file-operation parity had passed earlier agent-level
-  smoke; the remaining gap is explicit UI operation evidence for Agent Console.
+- GitHub Actions CI run `28091013393` passed: Frontend, Rust, Linux Tauri bundle, and Windows Tauri
+  bundle.
+- The previous run `28090389480` failed in the Rust job on
+  `watcher::tests::remount_tras_repo_removed_revive_el_repo`. The failure was unrelated to the WSL
+  install change and matched an existing timing-sensitive watcher test signature: the same CI step
+  showed 213/214 tests passing, and local `cargo test --lib -- --test-threads=1`, five focused
+  reruns, and CI-equivalent `cargo test` all passed after stabilizing the test to wait for the
+  remount event instead of relying on one fixed sleep.
+- Downloaded final artifacts:
+  - `.ci-artifacts/28091013393/tinto-windows-bundle/nsis/Tinto_0.1.0_x64-setup.exe`
+    sha256 `a57b506948127b67b3e3e0fa7d0a978ba0d29ab430b14b94444e8fcea24b5a33`.
+  - `.ci-artifacts/28091013393/tinto-windows-bundle/msi/Tinto_0.1.0_x64_en-US.msi`
+    sha256 `b2a5d5bf3c56d4741b646ecfb5ee125f3d191a5b7cfce084720bedff0fa8a904`.
+  - `.ci-artifacts/28091013393/tinto-agent-linux-x86_64/tinto-agent-linux-x86_64`
+    sha256 `03946ae095eeea30d91b75d4e662f1a18192646e238f15a6aedd57efcacd5881`.
+- MSI administrative extraction succeeded without opening UI. Extracted image contained
+  `PFiles/Tinto/tinto.exe`, `PFiles/Tinto/tinto-agent.exe`, and
+  `PFiles/Tinto/tinto-agent-linux-x86_64`; the extracted Linux agent matched the downloaded
+  `tinto-agent-linux-x86_64` byte-for-byte.
+- The WSL packaged-agent installer path was changed by `05a4095` to copy the host-visible
+  `/mnt/c/.../tinto-agent-linux-x86_64` into Ubuntu instead of streaming it through `cat` on stdin.
+  The final smoke installed the extracted MSI agent into
+  `$HOME/.local/share/tinto/agents/0.1.0/tinto-agent`, confirmed executable sha256
+  `03946ae095eeea30d91b75d4e662f1a18192646e238f15a6aedd57efcacd5881`, and confirmed no
+  `cat > .../tinto-agent` process remained.
+- Installed-agent handshake passed:
+  `{"type":"handshake","protocol_version":1,"agent_version":"0.1.0","status":"ok"}`.
+- Final packaged-agent backend smoke passed on `/tmp/tinto-packaged-smoke-28091013393`:
+  `repo_snapshot` returned `modified=["changed.txt"]` and `untracked=["untracked.txt"]`;
+  `repo_tree` returned the expected files; `file_content` returned README content; `worktree_diff`
+  returned the expected `modified` line; `commit_log` returned `initial packaged smoke`; and
+  `delete_from_repo`, `restore_deleted_from_repo`, `redo_deleted_from_repo`, then restore again all
+  returned successfully.
+- Final packaged-agent checkpoint smoke passed: `agent_checkpoint_create` produced a checkpoint,
+  `agent_checkpoint_scan` reported `agent-created.txt` and `changed.txt`, and
+  `agent_checkpoint_revert` removed `agent-created.txt` and restored `changed.txt` to the
+  checkpoint state (`M changed.txt`, `?? untracked.txt`).
+
+Remaining UI-only gap:
+
+- Agent Console start/stop/change-log/revert was still not completed interactively through the
+  packaged native UI after the user reported that previous desktop automation was opening too many
+  visible consoles. The packaged Linux agent and backend checkpoint/change-log/revert path are
+  verified above; the only remaining evidence gap is native UI operation of the same path.
