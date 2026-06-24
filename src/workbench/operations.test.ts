@@ -5,6 +5,8 @@ const client = vi.hoisted(() => ({
   addWslRepo: vi.fn(),
   autodetectReposUnder: vi.fn(),
   createWorkbench: vi.fn(),
+  listWslDirectory: vi.fn(),
+  listWslDistros: vi.fn(),
   removeRepo: vi.fn(),
   setActiveWorkbench: vi.fn(),
 }));
@@ -22,6 +24,8 @@ import {
   addRepoFlow,
   addWslRepoFlow,
   autodetectFlow,
+  listWslDirectoryFlow,
+  listWslDistrosFlow,
   normalizeWslLinuxPath,
   removeRepoFlow,
 } from "./operations";
@@ -32,6 +36,12 @@ describe("workbench operations", () => {
     vi.clearAllMocks();
     client.addRepo.mockResolvedValue(undefined);
     client.addWslRepo.mockResolvedValue("/home/me/repo");
+    client.listWslDistros.mockResolvedValue(["Ubuntu-24.04"]);
+    client.listWslDirectory.mockResolvedValue({
+      path: "/home/me",
+      is_git_repo: false,
+      entries: [{ name: "repo", path: "/home/me/repo" }],
+    });
     client.setActiveWorkbench.mockResolvedValue(undefined);
     client.createWorkbench.mockResolvedValue(undefined);
     client.removeRepo.mockResolvedValue(undefined);
@@ -112,6 +122,17 @@ describe("workbench operations", () => {
 
     expect(client.addWslRepo).not.toHaveBeenCalled();
     expect(reloadMock).not.toHaveBeenCalled();
+  });
+
+  it("lists WSL distros and directories through backend wrappers", async () => {
+    await expect(listWslDistrosFlow()).resolves.toEqual(["Ubuntu-24.04"]);
+    await expect(listWslDirectoryFlow("Ubuntu-24.04", "/home/me")).resolves.toEqual({
+      path: "/home/me",
+      is_git_repo: false,
+      entries: [{ name: "repo", path: "/home/me/repo" }],
+    });
+    expect(client.listWslDistros).toHaveBeenCalledOnce();
+    expect(client.listWslDirectory).toHaveBeenCalledWith("Ubuntu-24.04", "/home/me");
   });
 
   it("autodetectFlow adds every detected repo", async () => {

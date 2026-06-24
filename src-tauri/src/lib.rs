@@ -88,6 +88,10 @@ pub fn run() {
             workbench::commands::remove_repo,
             #[cfg(target_os = "windows")]
             workbench::commands::remove_wsl_repo,
+            #[cfg(target_os = "windows")]
+            workbench::commands::list_wsl_distros,
+            #[cfg(target_os = "windows")]
+            workbench::commands::list_wsl_directory,
             workbench::commands::update_repo,
             workbench::commands::set_active_workbench,
             workbench::commands::autodetect_repos_under,

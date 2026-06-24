@@ -6,6 +6,8 @@ const ops = vi.hoisted(() => ({
   addRepoFlow: vi.fn(),
   addWslRepoFlow: vi.fn(),
   autodetectFlow: vi.fn(),
+  listWslDirectoryFlow: vi.fn(),
+  listWslDistrosFlow: vi.fn(),
   createAndActivate: vi.fn(),
   removeRepoFlow: vi.fn(),
   normalizeWslLinuxPath: vi.fn((path: string) => {
@@ -47,6 +49,12 @@ describe("MenuBar", () => {
     vi.clearAllMocks();
     setWindowsHostOverrideForTests(null);
     busStore.resetAll();
+    ops.listWslDistrosFlow.mockResolvedValue(["Ubuntu-24.04", "Debian"]);
+    ops.listWslDirectoryFlow.mockResolvedValue({
+      path: "/home/me",
+      is_git_repo: false,
+      entries: [{ name: "repo", path: "/home/me/repo" }],
+    });
   });
 
   it("renders the Tinto brand asset", () => {
@@ -113,6 +121,10 @@ describe("MenuBar", () => {
     fireEvent.click(screen.getByTestId("add-wsl-repo"));
     expect(screen.getByTestId("add-wsl-dialog")).toBeInTheDocument();
 
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     fireEvent.change(screen.getByTestId("wsl-distro"), {
       target: { value: "Ubuntu-24.04" },
     });
@@ -129,6 +141,40 @@ describe("MenuBar", () => {
       path: "/home/me/repo",
       alias: "API WSL",
     });
+  });
+
+  it("lets Windows users browse detected WSL distro directories", async () => {
+    setWindowsHostOverrideForTests(true);
+    ops.listWslDistrosFlow.mockResolvedValue(["Ubuntu-24.04"]);
+    ops.listWslDirectoryFlow
+      .mockResolvedValueOnce({
+        path: "/home/me",
+        is_git_repo: false,
+        entries: [{ name: "repo", path: "/home/me/repo" }],
+      })
+      .mockResolvedValueOnce({
+        path: "/home/me/repo",
+        is_git_repo: true,
+        entries: [],
+      });
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    fireEvent.click(screen.getByTestId("add-wsl-repo"));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("wsl-distro")).toHaveValue("Ubuntu-24.04");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("wsl-dir-/home/me/repo"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("wsl-path")).toHaveValue("/home/me/repo");
+    expect(screen.getByText("Git repo")).toBeInTheDocument();
   });
 
   it("shows configured WSL labels on Windows without listing them as projects", () => {

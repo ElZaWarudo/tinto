@@ -8,9 +8,12 @@ import {
   addWslRepo,
   autodetectReposUnder,
   createWorkbench,
+  listWslDirectory,
+  listWslDistros,
   removeRepo,
   setActiveWorkbench,
   updateRepo,
+  type WslDirectoryListing,
 } from "../bus/client";
 import { reloadActiveWorkbench } from "../bus/connection";
 import { busStore } from "../bus/store";
@@ -78,6 +81,27 @@ export async function addWslRepoFlow(
   }
   await reloadActiveWorkbench();
   return stored;
+}
+
+export async function listWslDistrosFlow(): Promise<string[]> {
+  try {
+    return await listWslDistros();
+  } catch (e) {
+    console.warn("tinto: list WSL distros failed", e);
+    return [];
+  }
+}
+
+export async function listWslDirectoryFlow(
+  distro: string,
+  path?: string | null,
+): Promise<WslDirectoryListing | null> {
+  try {
+    return await listWslDirectory(distro, path ?? null);
+  } catch (e) {
+    console.warn("tinto: list WSL directory failed", e);
+    return null;
+  }
 }
 
 export async function autodetectFlow(active: string): Promise<void> {

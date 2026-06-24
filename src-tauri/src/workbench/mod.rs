@@ -42,6 +42,8 @@ pub enum WorkbenchError {
     InvalidWslPath(String),
     #[error("distro WSL no soportada: {0}")]
     UnsupportedWslDistro(String),
+    #[error("no se pudo consultar WSL: {0}")]
+    WslCommandFailed(String),
     #[error("no se pudo resolver el directorio de configuración del SO")]
     NoConfigDir,
     #[error("el store de workbenches quedó inutilizable tras un error interno; reinicia la app")]
@@ -67,6 +69,7 @@ impl Serialize for WorkbenchError {
             WorkbenchError::InvalidRepo(_) => "invalid_repo",
             WorkbenchError::InvalidWslPath(_) => "invalid_wsl_path",
             WorkbenchError::UnsupportedWslDistro(_) => "unsupported_wsl_distro",
+            WorkbenchError::WslCommandFailed(_) => "wsl_command_failed",
             WorkbenchError::NoConfigDir => "no_config_dir",
             WorkbenchError::StoreLocked => "store_locked",
         };
@@ -498,26 +501,20 @@ fn runtime_workbench(workbench: &Workbench) -> Option<Workbench> {
 
 fn normalize_wsl_distro(distro: &str) -> Result<String, WorkbenchError> {
     let distro = distro.trim();
-    let supported_ubuntu = distro == "Ubuntu"
+    if distro.is_empty()
         || distro
-            .strip_prefix("Ubuntu-")
-            .map(|version| {
-                let mut parts = version.split('.');
-                matches!(
-                    (parts.next(), parts.next(), parts.next()),
-                    (Some(major), Some(minor), None)
-                        if major.len() == 2
-                            && minor.len() == 2
-                            && major.chars().all(|ch| ch.is_ascii_digit())
-                            && minor.chars().all(|ch| ch.is_ascii_digit())
-                )
-            })
-            .unwrap_or(false);
-    if supported_ubuntu {
-        Ok(distro.to_string())
-    } else {
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\'))
+    {
         Err(WorkbenchError::UnsupportedWslDistro(distro.to_string()))
+    } else {
+        Ok(distro.to_string())
     }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn normalize_wsl_distro_for_commands(distro: &str) -> Result<String, WorkbenchError> {
+    normalize_wsl_distro(distro)
 }
 
 fn normalize_wsl_linux_path(path: &str) -> Result<PathBuf, WorkbenchError> {
@@ -558,6 +555,11 @@ fn normalize_wsl_linux_path(path: &str) -> Result<PathBuf, WorkbenchError> {
         return Ok(PathBuf::from("/"));
     }
     Ok(PathBuf::from(format!("/{}", parts.join("/"))))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn normalize_wsl_linux_path_for_commands(path: &str) -> Result<PathBuf, WorkbenchError> {
+    normalize_wsl_linux_path(path)
 }
 
 #[cfg(test)]
@@ -758,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn add_wsl_repo_rechaza_paths_no_linux_y_distro_no_soportada() {
+    fn add_wsl_repo_rechaza_paths_no_linux_y_distro_invalida() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = store_in(&dir);
         store.create_workbench("A").unwrap();
@@ -776,10 +778,16 @@ mod tests {
             assert!(matches!(error, WorkbenchError::InvalidWslPath(_)));
         }
 
-        let error = store
+        assert!(store
             .add_wsl_repo("A", "Debian".into(), "/home/me/repo".into(), None)
-            .unwrap_err();
-        assert!(matches!(error, WorkbenchError::UnsupportedWslDistro(_)));
+            .is_ok());
+
+        for distro in ["", "bad/name", "bad\\name"] {
+            let error = store
+                .add_wsl_repo("A", distro.into(), "/home/me/other".into(), None)
+                .unwrap_err();
+            assert!(matches!(error, WorkbenchError::UnsupportedWslDistro(_)));
+        }
     }
 
     #[test]

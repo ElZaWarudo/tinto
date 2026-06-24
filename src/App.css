@@ -630,6 +630,49 @@ select option {
   align-items: center;
   flex-wrap: wrap;
 }
+.wsl-browser__toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wsl-browser {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.wsl-browser__status {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  background: var(--hover);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.wsl-browser__status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wsl-browser__list {
+  display: grid;
+  max-height: 180px;
+  overflow: auto;
+}
+.wsl-browser__item {
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 7px 9px;
+  text-align: left;
+}
+.wsl-browser__item:hover:not(:disabled),
+.wsl-browser__item:focus-visible {
+  background: var(--hover);
+}
 .addons-code {
   border: 1px solid var(--border);
   background: var(--bg);

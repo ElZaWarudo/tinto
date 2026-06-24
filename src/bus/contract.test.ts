@@ -203,6 +203,8 @@ import {
   createRepoGitleaksConfig,
   listAgentSessions,
   listRepoTree,
+  listWslDirectory,
+  listWslDistros,
   onAgentSessionOutput,
   onAgentSessionChangeLog,
   resizeAgentSession,
@@ -295,6 +297,15 @@ describe("RDM-008 client wrappers", () => {
       workbench: "Work",
       distro: "Ubuntu",
       path: "/home/me/repo",
+    });
+
+    void listWslDistros();
+    expect(invokeMock).toHaveBeenCalledWith("list_wsl_distros");
+
+    void listWslDirectory("Ubuntu", "/home/me");
+    expect(invokeMock).toHaveBeenCalledWith("list_wsl_directory", {
+      distro: "Ubuntu",
+      path: "/home/me",
     });
   });
 

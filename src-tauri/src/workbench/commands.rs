@@ -3,11 +3,18 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use serde::Serialize;
 use tauri::State;
 
 use super::{
     autodetect_repos, RepoEntry, Workbench, WorkbenchConfig, WorkbenchError, WorkbenchStore,
 };
+
+#[cfg(target_os = "windows")]
+use crate::windows_process::hide_console;
+
+#[cfg(target_os = "windows")]
+use std::process::Command;
 
 type Store<'a> = State<'a, Mutex<WorkbenchStore>>;
 
@@ -124,6 +131,98 @@ pub fn remove_wsl_repo(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct WslDirectoryEntry {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WslDirectoryListing {
+    pub path: String,
+    pub is_git_repo: bool,
+    pub entries: Vec<WslDirectoryEntry>,
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn list_wsl_distros() -> Result<Vec<String>, WorkbenchError> {
+    let mut command = Command::new("wsl.exe");
+    let output = hide_console(command.args(["--list", "--quiet"]))
+        .output()
+        .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?;
+    if !output.status.success() {
+        return Err(WorkbenchError::WslCommandFailed(
+            decode_wsl_output(&output.stderr).trim().to_string(),
+        ));
+    }
+    let mut distros = decode_wsl_output(&output.stdout)
+        .lines()
+        .map(|line| line.trim().trim_end_matches('\0').to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    distros.sort();
+    distros.dedup();
+    Ok(distros)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn list_wsl_directory(
+    distro: String,
+    path: Option<String>,
+) -> Result<WslDirectoryListing, WorkbenchError> {
+    let distro = super::normalize_wsl_distro_for_commands(&distro)?;
+    let path = match path {
+        Some(path) if !path.trim().is_empty() => {
+            Some(super::normalize_wsl_linux_path_for_commands(&path)?)
+        }
+        _ => None,
+    };
+    let path_arg = path
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let script = r#"set -eu
+path_arg="${1:-}"
+if [ -z "$path_arg" ]; then
+  root="$HOME"
+else
+  root="$path_arg"
+fi
+if [ ! -d "$root" ]; then
+  printf 'not a directory: %s\n' "$root" >&2
+  exit 2
+fi
+root="$(cd "$root" && pwd -P)"
+repo=0
+if [ -d "$root/.git" ]; then
+  repo=1
+fi
+printf 'ROOT\t%s\t%s\n' "$root" "$repo"
+find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%f\t%p\n' | sort -f
+"#;
+    let mut command = Command::new("wsl.exe");
+    let output = hide_console(command.args([
+        "-d",
+        distro.as_str(),
+        "--",
+        "sh",
+        "-lc",
+        script,
+        "tinto-wsl-browse",
+        path_arg.as_str(),
+    ]))
+    .output()
+    .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?;
+    if !output.status.success() {
+        return Err(WorkbenchError::WslCommandFailed(
+            decode_wsl_output(&output.stderr).trim().to_string(),
+        ));
+    }
+    parse_wsl_directory_listing(&decode_wsl_output(&output.stdout))
+}
+
 /// `alias: Some(x)` lo cambia; `clear_alias: true` lo borra (JSON no puede
 /// expresar un doble-Option: `null` deserializa a ausencia, no a Some(None)).
 #[tauri::command]
@@ -164,6 +263,49 @@ pub fn set_active_workbench(
 #[tauri::command]
 pub fn autodetect_repos_under(root: PathBuf) -> Vec<PathBuf> {
     autodetect_repos(root)
+}
+
+#[cfg(target_os = "windows")]
+fn decode_wsl_output(bytes: &[u8]) -> String {
+    if bytes.len() >= 2 && bytes[1] == 0 {
+        let words = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&words).replace('\0', "")
+    } else {
+        String::from_utf8_lossy(bytes).replace('\0', "")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn parse_wsl_directory_listing(output: &str) -> Result<WslDirectoryListing, WorkbenchError> {
+    let mut lines = output.lines();
+    let root = lines
+        .next()
+        .ok_or_else(|| WorkbenchError::WslCommandFailed("respuesta WSL vacia".into()))?;
+    let mut root_parts = root.splitn(3, '\t');
+    if root_parts.next() != Some("ROOT") {
+        return Err(WorkbenchError::WslCommandFailed(
+            "respuesta WSL sin raiz".into(),
+        ));
+    }
+    let path = root_parts.next().unwrap_or_default().to_string();
+    let is_git_repo = root_parts.next() == Some("1");
+    let entries = lines
+        .filter_map(|line| {
+            let (name, path) = line.split_once('\t')?;
+            Some(WslDirectoryEntry {
+                name: name.to_string(),
+                path: path.to_string(),
+            })
+        })
+        .collect();
+    Ok(WslDirectoryListing {
+        path,
+        is_git_repo,
+        entries,
+    })
 }
 
 #[cfg(test)]

@@ -53,6 +53,22 @@ export const removeRepo = (workbench: string, path: string) =>
 export const removeWslRepo = (workbench: string, distro: string, path: string) =>
   invoke("remove_wsl_repo", { workbench, distro, path });
 
+export interface WslDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface WslDirectoryListing {
+  path: string;
+  is_git_repo: boolean;
+  entries: WslDirectoryEntry[];
+}
+
+export const listWslDistros = () => invoke<string[]>("list_wsl_distros");
+
+export const listWslDirectory = (distro: string, path?: string | null) =>
+  invoke<WslDirectoryListing>("list_wsl_directory", { distro, path: path ?? null });
+
 export const updateRepo = (
   workbench: string,
   path: string,
