@@ -347,23 +347,23 @@ fn dev_source_fallback_value_enabled(value: Option<&str>) -> bool {
 
 #[cfg(target_os = "windows")]
 fn install_packaged_agent(distro: &str, source: &Path) -> Result<(), AgentError> {
-    let argv = build_packaged_agent_install_argv(distro)?;
+    let argv = build_packaged_agent_install_argv(distro, source)?;
     let Some((program, args)) = argv.split_first() else {
         return Err(AgentError::new(
             AgentErrorCategory::SpawnFailed,
             "comando de instalacion WSL vacio",
         ));
     };
-    let agent_file = std::fs::File::open(source).map_err(|_| {
-        AgentError::new(
+    if !source.is_file() {
+        return Err(AgentError::new(
             AgentErrorCategory::MissingAgent,
             "no se pudo abrir el binario Linux empaquetado de tinto-agent",
-        )
-    })?;
+        ));
+    }
 
     let status = Command::new(program)
         .args(args)
-        .stdin(Stdio::from(agent_file))
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -387,13 +387,17 @@ fn install_packaged_agent(_distro: &str, _source: &Path) -> Result<(), AgentErro
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn build_packaged_agent_install_argv(distro: &str) -> Result<Vec<String>, AgentError> {
+fn build_packaged_agent_install_argv(
+    distro: &str,
+    source: &Path,
+) -> Result<Vec<String>, AgentError> {
     if distro.trim().is_empty() {
         return Err(AgentError::new(
             AgentErrorCategory::MissingDistro,
             "no se configuro la distro WSL",
         ));
     }
+    let source = windows_path_to_wsl_mount(source)?;
     Ok(vec![
         "wsl.exe".to_string(),
         "-d".to_string(),
@@ -402,8 +406,10 @@ fn build_packaged_agent_install_argv(distro: &str) -> Result<Vec<String>, AgentE
         "sh".to_string(),
         "-lc".to_string(),
         format!(
-            "set -eu; install_dir=\"\\$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; mkdir -p \"\\$install_dir\"; cat > \"\\$install_dir/tinto-agent\"; chmod 700 \"\\$install_dir/tinto-agent\""
+            "set -eu; install_dir=\"\\$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; mkdir -p \"\\$install_dir\"; cp -- \"\\$1\" \"\\$install_dir/tinto-agent\"; chmod 700 \"\\$install_dir/tinto-agent\""
         ),
+        "tinto-agent-install".to_string(),
+        source,
     ])
 }
 
@@ -625,15 +631,24 @@ mod tests {
     }
 
     #[test]
-    fn packaged_agent_install_command_uses_stdin_and_versioned_home_path() {
-        let argv = build_packaged_agent_install_argv("Ubuntu").expect("argv");
+    fn packaged_agent_install_command_copies_host_agent_from_wsl_mount() {
+        let argv = build_packaged_agent_install_argv(
+            "Ubuntu",
+            Path::new("C:\\Program Files\\Tinto\\tinto-agent-linux-x86_64"),
+        )
+        .expect("argv");
 
         assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--", "sh"]);
         assert_eq!(argv[5], "-lc");
         assert!(argv[6].contains("mkdir -p \"\\$install_dir\""));
-        assert!(argv[6].contains("cat > \"\\$install_dir/tinto-agent\""));
+        assert!(argv[6].contains("cp -- \"\\$1\" \"\\$install_dir/tinto-agent\""));
         assert!(argv[6].contains("chmod 700 \"\\$install_dir/tinto-agent\""));
         assert!(argv[6].contains("$HOME/.local/share/tinto/agents/"));
+        assert_eq!(argv[7], "tinto-agent-install");
+        assert_eq!(
+            argv[8],
+            "/mnt/c/Program Files/Tinto/tinto-agent-linux-x86_64"
+        );
     }
 
     #[test]
