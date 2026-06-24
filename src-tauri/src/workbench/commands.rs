@@ -203,16 +203,11 @@ printf 'ROOT\t%s\t%s\n' "$root" "$repo"
 find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%f\t%p\n' | sort -f
 "#;
     let mut command = Command::new("wsl.exe");
-    let output = hide_console(command.args([
-        "-d",
+    let output = hide_console(command.args(wsl_directory_listing_argv(
         distro.as_str(),
-        "--",
-        "sh",
-        "-lc",
         script,
-        "tinto-wsl-browse",
         path_arg.as_str(),
-    ]))
+    )))
     .output()
     .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?;
     if !output.status.success() {
@@ -308,6 +303,24 @@ fn parse_wsl_directory_listing(output: &str) -> Result<WslDirectoryListing, Work
     })
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn wsl_directory_listing_argv<'a>(
+    distro: &'a str,
+    script: &'a str,
+    path_arg: &'a str,
+) -> [&'a str; 8] {
+    [
+        "-d",
+        distro,
+        "--exec",
+        "sh",
+        "-lc",
+        script,
+        "tinto-wsl-browse",
+        path_arg,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -388,5 +401,24 @@ name = "B"
             assert_eq!(repos[1].distro.as_deref(), Some("Ubuntu"));
         }
         assert_eq!(active_runtime_repos_for(&store, "B"), None);
+    }
+
+    #[test]
+    fn wsl_directory_browser_uses_exec_to_preserve_shell_args() {
+        let argv = wsl_directory_listing_argv("Ubuntu-24.04", "printf '%s' \"$1\"", "/home/me");
+
+        assert_eq!(
+            &argv[..],
+            [
+                "-d",
+                "Ubuntu-24.04",
+                "--exec",
+                "sh",
+                "-lc",
+                "printf '%s' \"$1\"",
+                "tinto-wsl-browse",
+                "/home/me",
+            ]
+        );
     }
 }
