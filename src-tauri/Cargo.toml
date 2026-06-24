@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Monitoreo read-only de repos git editados por agentes de codigo"
 authors = ["Mayor"]
 edition = "2021"
+default-run = "tinto"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +14,14 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "tinto_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "tinto"
+path = "src/main.rs"
+
+[[bin]]
+name = "tinto-agent"
+path = "src/bin/tinto-agent.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
