@@ -2,6 +2,9 @@ use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use std::process::Command;
 
+#[cfg(target_os = "windows")]
+use crate::windows_process::hide_console;
+
 use super::AgentConsoleError;
 
 pub const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "opencode"];
@@ -64,8 +67,8 @@ fn wsl_command_available(distro: &str, agent_type: &str) -> Result<bool, AgentCo
             "comando WSL vacio",
         ));
     };
-    let output = Command::new(program)
-        .args(args)
+    let mut command = Command::new(program);
+    let output = hide_console(command.args(args))
         .output()
         .map_err(map_wsl_spawn_error)?;
     Ok(output.status.success() && !output.stdout.is_empty())

@@ -9,13 +9,16 @@ use std::time::Duration;
 #[cfg(target_os = "windows")]
 use std::time::Instant;
 
+#[cfg(target_os = "windows")]
+use crate::windows_process::hide_console;
+
 use super::protocol::{
     encode_agent_request, encode_request, parse_agent_response_line, parse_response_line,
     AgentError, AgentErrorCategory, AgentRequest, AgentResponse, HandshakeRequest,
     HandshakeResponse, AGENT_VERSION,
 };
 
-pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
+pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_SMOKE_DISTRO: &str = "Ubuntu";
 pub const PACKAGED_AGENT_ENV: &str = "TINTO_WSL_AGENT_LINUX_BIN";
 pub const DEV_SOURCE_FALLBACK_ENV: &str = "TINTO_WSL_AGENT_ALLOW_DEV_SOURCE";
@@ -361,13 +364,16 @@ fn install_packaged_agent(distro: &str, source: &Path) -> Result<(), AgentError>
         ));
     }
 
-    let status = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|error| map_spawn_error(program, error))?;
+    let mut command = Command::new(program);
+    let status = hide_console(
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .status()
+    .map_err(|error| map_spawn_error(program, error))?;
     if status.success() {
         Ok(())
     } else {
@@ -455,13 +461,16 @@ impl HandshakeTransport for StdCommandTransport {
             ));
         };
 
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| map_spawn_error(program, error))?;
+        let mut command = Command::new(program);
+        let mut child = hide_console(
+            command
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .spawn()
+        .map_err(|error| map_spawn_error(program, error))?;
 
         {
             let mut stdin = child.stdin.take().ok_or_else(|| {

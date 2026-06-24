@@ -9,6 +9,9 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 
 use super::AgentConsoleError;
 
+#[cfg(windows)]
+use crate::windows_process::hide_console;
+
 pub trait AgentProcess: Send {
     fn pid(&self) -> Option<u32>;
     fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError>;
@@ -279,8 +282,8 @@ fn spawn_error(message: String) -> AgentConsoleError {
 
 #[cfg(windows)]
 fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
-    let output = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
+    let mut command = Command::new("taskkill");
+    let output = hide_console(command.args(["/F", "/T", "/PID", &pid.to_string()]))
         .output()
         .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
     if output.status.success() {

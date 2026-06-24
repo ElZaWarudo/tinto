@@ -5,6 +5,8 @@ pub mod git;
 pub mod paths;
 pub mod ui_state;
 pub mod watcher;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_process;
 pub mod workbench;
 pub mod wsl_agent;
 
