@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { addWslRepoFlow, normalizeWslLinuxPath } from "./operations";
 
+const WSL_DISTROS = ["Ubuntu", "Ubuntu-24.04", "Ubuntu-22.04", "Ubuntu-20.04"] as const;
+
 export function AddWslRepoDialog({
   activeWorkbench,
   onClose,
@@ -11,6 +13,7 @@ export function AddWslRepoDialog({
 }) {
   const [path, setPath] = useState("");
   const [alias, setAlias] = useState("");
+  const [distro, setDistro] = useState<(typeof WSL_DISTROS)[number]>("Ubuntu");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -32,7 +35,7 @@ export function AddWslRepoDialog({
     setError("");
     setIsSaving(true);
     const stored = await addWslRepoFlow(activeWorkbench, {
-      distro: "Ubuntu",
+      distro,
       path: normalized,
       alias,
     });
@@ -70,8 +73,17 @@ export function AddWslRepoDialog({
             <label className="addons-card__text" htmlFor="wsl-distro">
               Distro
             </label>
-            <select id="wsl-distro" data-testid="wsl-distro" value="Ubuntu" disabled>
-              <option value="Ubuntu">Ubuntu</option>
+            <select
+              id="wsl-distro"
+              data-testid="wsl-distro"
+              value={distro}
+              onChange={(event) => setDistro(event.target.value as (typeof WSL_DISTROS)[number])}
+            >
+              {WSL_DISTROS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
             </select>
 
             <label className="addons-card__text" htmlFor="wsl-path">

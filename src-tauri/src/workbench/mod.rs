@@ -498,7 +498,22 @@ fn runtime_workbench(workbench: &Workbench) -> Option<Workbench> {
 
 fn normalize_wsl_distro(distro: &str) -> Result<String, WorkbenchError> {
     let distro = distro.trim();
-    if distro == "Ubuntu" {
+    let supported_ubuntu = distro == "Ubuntu"
+        || distro
+            .strip_prefix("Ubuntu-")
+            .map(|version| {
+                let mut parts = version.split('.');
+                matches!(
+                    (parts.next(), parts.next(), parts.next()),
+                    (Some(major), Some(minor), None)
+                        if major.len() == 2
+                            && minor.len() == 2
+                            && major.chars().all(|ch| ch.is_ascii_digit())
+                            && minor.chars().all(|ch| ch.is_ascii_digit())
+                )
+            })
+            .unwrap_or(false);
+    if supported_ubuntu {
         Ok(distro.to_string())
     } else {
         Err(WorkbenchError::UnsupportedWslDistro(distro.to_string()))
@@ -719,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn add_wsl_repo_persiste_ubuntu_y_path_linux_normalizado() {
+    fn add_wsl_repo_persiste_distro_ubuntu_y_path_linux_normalizado() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = store_in(&dir);
         store.create_workbench("A").unwrap();
@@ -727,7 +742,7 @@ mod tests {
         let stored = store
             .add_wsl_repo(
                 "A",
-                " Ubuntu ".into(),
+                " Ubuntu-24.04 ".into(),
                 " /home/me//proyecto/ ".into(),
                 Some("WSL".into()),
             )
@@ -736,7 +751,7 @@ mod tests {
         assert_eq!(stored, PathBuf::from("/home/me/proyecto"));
         let repo = &store.config().workbenches[0].repos[0];
         assert_eq!(repo.source, RepoSource::Wsl);
-        assert_eq!(repo.distro.as_deref(), Some("Ubuntu"));
+        assert_eq!(repo.distro.as_deref(), Some("Ubuntu-24.04"));
         assert_eq!(repo.path, PathBuf::from("/home/me/proyecto"));
         assert_eq!(repo.alias.as_deref(), Some("WSL"));
         assert!(repo.fs_watch.is_empty());

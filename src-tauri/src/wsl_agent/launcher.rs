@@ -163,21 +163,43 @@ pub fn request_ubuntu_agent(request: &AgentRequest) -> Result<AgentResponse, Age
     request_ubuntu_agent_with_timeout(request, DEFAULT_STARTUP_TIMEOUT)
 }
 
+pub fn request_wsl_agent(
+    distro: &str,
+    request: &AgentRequest,
+) -> Result<AgentResponse, AgentError> {
+    request_wsl_agent_with_timeout(distro, request, DEFAULT_STARTUP_TIMEOUT)
+}
+
+pub fn request_wsl_agent_with_timeout(
+    distro: &str,
+    request: &AgentRequest,
+    timeout: Duration,
+) -> Result<AgentResponse, AgentError> {
+    let distro = distro.trim();
+    if distro.is_empty() {
+        return Err(AgentError::new(
+            AgentErrorCategory::MissingDistro,
+            "no se configuro la distro WSL",
+        ));
+    }
+    match packaged_agent_host_path() {
+        Ok(agent_path) => {
+            install_packaged_agent(distro, &agent_path)?;
+            let config = WslLaunchConfig::new(distro, AgentCommand::managed_wsl_agent());
+            request_ubuntu_agent_config(&config, request, timeout)
+        }
+        Err(_error) if dev_source_fallback_enabled() => {
+            request_wsl_dev_source_with_timeout(distro, request, timeout)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub fn request_ubuntu_agent_with_timeout(
     request: &AgentRequest,
     timeout: Duration,
 ) -> Result<AgentResponse, AgentError> {
-    match packaged_agent_host_path() {
-        Ok(agent_path) => {
-            install_packaged_agent(DEFAULT_SMOKE_DISTRO, &agent_path)?;
-            let config = WslLaunchConfig::ubuntu_managed_agent();
-            request_ubuntu_agent_config(&config, request, timeout)
-        }
-        Err(_error) if dev_source_fallback_enabled() => {
-            request_ubuntu_dev_source_with_timeout(request, timeout)
-        }
-        Err(error) => Err(error),
-    }
+    request_wsl_agent_with_timeout(DEFAULT_SMOKE_DISTRO, request, timeout)
 }
 
 pub fn request_ubuntu_dev_source_with_timeout(
@@ -185,6 +207,16 @@ pub fn request_ubuntu_dev_source_with_timeout(
     timeout: Duration,
 ) -> Result<AgentResponse, AgentError> {
     let config = ubuntu_dev_source_from_host()?;
+    request_ubuntu_dev_source_config(&config, request, timeout)
+}
+
+fn request_wsl_dev_source_with_timeout(
+    distro: &str,
+    request: &AgentRequest,
+    timeout: Duration,
+) -> Result<AgentResponse, AgentError> {
+    let mut config = ubuntu_dev_source_from_host()?;
+    config.distro = distro.to_string();
     request_ubuntu_dev_source_config(&config, request, timeout)
 }
 

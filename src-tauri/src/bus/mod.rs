@@ -26,7 +26,7 @@ use crate::git::{DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError};
 use crate::paths::Classification;
 use crate::watcher::{ClassifiedEvent, EventType, FsWatcher, WatcherError, WatcherMessage};
 use crate::workbench::{RepoEntry, RepoSource};
-use crate::wsl_agent::launcher::request_ubuntu_agent;
+use crate::wsl_agent::launcher::request_wsl_agent;
 use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, FileFingerprint, PROTOCOL_VERSION};
 use contract::{
     FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
@@ -1175,6 +1175,16 @@ fn trigger_wsl_recalc(
     pending: &mut HashMap<PathBuf, RecalcScope>,
 ) {
     let repo = entry.path.clone();
+    let Some(distro) = entry.distro.clone() else {
+        let _ = results_tx.send(RecalcResult {
+            repo,
+            payload: RecalcPayload::WslPoll {
+                delta: empty_wsl_error_delta(&entry.path, "missing_distro", "repo WSL sin distro"),
+                fingerprints: None,
+            },
+        });
+        return;
+    };
     if inflight.contains(&repo) {
         pending.insert(repo, RecalcScope::Everything);
         return;
@@ -1196,7 +1206,7 @@ fn trigger_wsl_recalc(
                 repos: vec![repo_for_request.clone()],
                 subscriptions: subs,
             };
-            match request_ubuntu_agent(&request) {
+            match request_wsl_agent(&distro, &request) {
                 Ok(AgentResponse::RepoSnapshotWithFsEvents {
                     repos,
                     fingerprints,

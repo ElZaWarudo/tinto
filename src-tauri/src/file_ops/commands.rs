@@ -531,14 +531,17 @@ fn wsl_copy_to_repo(
         .into_iter()
         .map(translate_host_path_for_wsl)
         .collect::<Result<_, _>>()?;
-    match wsl_request(AgentRequest::CopyToRepo {
-        protocol_version: PROTOCOL_VERSION,
-        repo: resolved.path,
-        allowed_repos: resolved.wsl_repos,
-        dest_dir,
-        sources,
-        overwrite,
-    })? {
+    match wsl_request(
+        resolved.distro,
+        AgentRequest::CopyToRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: resolved.path,
+            allowed_repos: resolved.wsl_repos,
+            dest_dir,
+            sources,
+            overwrite,
+        },
+    )? {
         AgentResponse::CopyResult { result } => Ok(result),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
@@ -550,14 +553,17 @@ fn wsl_copy_within_repo(
     dest_dir: PathBuf,
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
-    match wsl_request(AgentRequest::CopyWithinRepo {
-        protocol_version: PROTOCOL_VERSION,
-        repo: resolved.path,
-        allowed_repos: resolved.wsl_repos,
-        sources,
-        dest_dir,
-        overwrite,
-    })? {
+    match wsl_request(
+        resolved.distro,
+        AgentRequest::CopyWithinRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: resolved.path,
+            allowed_repos: resolved.wsl_repos,
+            sources,
+            dest_dir,
+            overwrite,
+        },
+    )? {
         AgentResponse::CopyResult { result } => Ok(result),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
@@ -569,14 +575,17 @@ fn wsl_move_within_repo(
     dest_dir: PathBuf,
     overwrite: bool,
 ) -> Result<CopyResult, CommandError> {
-    match wsl_request(AgentRequest::MoveWithinRepo {
-        protocol_version: PROTOCOL_VERSION,
-        repo: resolved.path,
-        allowed_repos: resolved.wsl_repos,
-        sources,
-        dest_dir,
-        overwrite,
-    })? {
+    match wsl_request(
+        resolved.distro,
+        AgentRequest::MoveWithinRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: resolved.path,
+            allowed_repos: resolved.wsl_repos,
+            sources,
+            dest_dir,
+            overwrite,
+        },
+    )? {
         AgentResponse::CopyResult { result } => Ok(result),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
@@ -588,13 +597,16 @@ fn wsl_export_from_repo(
     dest_dir: PathBuf,
 ) -> Result<(), CommandError> {
     let dest_dir = translate_host_path_for_wsl(dest_dir)?;
-    match wsl_request(AgentRequest::ExportFromRepo {
-        protocol_version: PROTOCOL_VERSION,
-        repo: resolved.path,
-        allowed_repos: resolved.wsl_repos,
-        sources,
-        dest_dir,
-    })? {
+    match wsl_request(
+        resolved.distro,
+        AgentRequest::ExportFromRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: resolved.path,
+            allowed_repos: resolved.wsl_repos,
+            sources,
+            dest_dir,
+        },
+    )? {
         AgentResponse::Unit => Ok(()),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
@@ -604,12 +616,15 @@ fn wsl_delete_from_repo(
     resolved: ResolvedRepo,
     sources: Vec<PathBuf>,
 ) -> Result<DeleteResult, CommandError> {
-    match wsl_request(AgentRequest::DeleteFromRepo {
-        protocol_version: PROTOCOL_VERSION,
-        repo: resolved.path,
-        allowed_repos: resolved.wsl_repos,
-        sources,
-    })? {
+    match wsl_request(
+        resolved.distro,
+        AgentRequest::DeleteFromRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: resolved.path,
+            allowed_repos: resolved.wsl_repos,
+            sources,
+        },
+    )? {
         AgentResponse::DeleteResult { result } => Ok(result),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
@@ -619,24 +634,30 @@ fn wsl_restore_deleted_from_repo(
     resolved: ResolvedRepo,
     token: String,
 ) -> Result<(), CommandError> {
-    match wsl_request(AgentRequest::RestoreDeletedFromRepo {
-        protocol_version: PROTOCOL_VERSION,
-        repo: resolved.path,
-        allowed_repos: resolved.wsl_repos,
-        token,
-    })? {
+    match wsl_request(
+        resolved.distro,
+        AgentRequest::RestoreDeletedFromRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: resolved.path,
+            allowed_repos: resolved.wsl_repos,
+            token,
+        },
+    )? {
         AgentResponse::Unit => Ok(()),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
 }
 
 fn wsl_redo_deleted_from_repo(resolved: ResolvedRepo, token: String) -> Result<(), CommandError> {
-    match wsl_request(AgentRequest::RedoDeletedFromRepo {
-        protocol_version: PROTOCOL_VERSION,
-        repo: resolved.path,
-        allowed_repos: resolved.wsl_repos,
-        token,
-    })? {
+    match wsl_request(
+        resolved.distro,
+        AgentRequest::RedoDeletedFromRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: resolved.path,
+            allowed_repos: resolved.wsl_repos,
+            token,
+        },
+    )? {
         AgentResponse::Unit => Ok(()),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }

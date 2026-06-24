@@ -103,7 +103,7 @@ describe("MenuBar", () => {
     expect(screen.queryByTestId("add-wsl-repo")).not.toBeInTheDocument();
   });
 
-  it("opens the Windows-only WSL add dialog and submits Ubuntu Linux path", async () => {
+  it("opens the Windows-only WSL add dialog and submits a selected Ubuntu Linux path", async () => {
     setWindowsHostOverrideForTests(true);
     ops.addWslRepoFlow.mockResolvedValue("/home/me/repo");
     act(() => busStore.setConfig(config));
@@ -113,6 +113,9 @@ describe("MenuBar", () => {
     fireEvent.click(screen.getByTestId("add-wsl-repo"));
     expect(screen.getByTestId("add-wsl-dialog")).toBeInTheDocument();
 
+    fireEvent.change(screen.getByTestId("wsl-distro"), {
+      target: { value: "Ubuntu-24.04" },
+    });
     fireEvent.change(screen.getByTestId("wsl-path"), { target: { value: "/home/me/repo/" } });
     fireEvent.change(screen.getByTestId("wsl-alias"), { target: { value: "API WSL" } });
     fireEvent.click(screen.getByTestId("add-wsl-submit"));
@@ -122,7 +125,7 @@ describe("MenuBar", () => {
     });
 
     expect(ops.addWslRepoFlow).toHaveBeenCalledWith("Work", {
-      distro: "Ubuntu",
+      distro: "Ubuntu-24.04",
       path: "/home/me/repo",
       alias: "API WSL",
     });

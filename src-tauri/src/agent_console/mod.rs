@@ -18,7 +18,7 @@ use std::{
 
 use crate::bus::contract::{AgentSession, AgentSessionError, AgentSessionLimits};
 use crate::wsl_agent::{
-    launcher::request_ubuntu_agent,
+    launcher::request_wsl_agent,
     protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
 use checkpoint::{create_checkpoint, CheckpointConfig, CheckpointRecord};
@@ -201,7 +201,7 @@ impl AgentSessionRegistry {
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
         let checkpoint = if create_remote_checkpoint {
-            Some(create_wsl_checkpoint(&repo, &id, started_at_ms)?)
+            Some(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)?)
         } else {
             None
         };
@@ -217,6 +217,7 @@ impl AgentSessionRegistry {
             checkpoint,
             CheckpointBackend::Wsl,
         );
+        session.set_wsl_distro(distro);
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession { id, output_reader })
@@ -404,16 +405,20 @@ fn validate_wsl_repo(repo: &Path) -> Result<(), AgentConsoleError> {
 
 fn create_wsl_checkpoint(
     repo: &Path,
+    distro: &str,
     session_id: &str,
     created_at_ms: u64,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
-    let response = request_ubuntu_agent(&AgentRequest::AgentCheckpointCreate {
-        protocol_version: PROTOCOL_VERSION,
-        repo: repo.to_path_buf(),
-        allowed_repos: vec![repo.to_path_buf()],
-        session_id: session_id.into(),
-        created_at_ms,
-    })
+    let response = request_wsl_agent(
+        distro,
+        &AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.to_path_buf(),
+            allowed_repos: vec![repo.to_path_buf()],
+            session_id: session_id.into(),
+            created_at_ms,
+        },
+    )
     .map_err(map_wsl_agent_error)?;
 
     match response {

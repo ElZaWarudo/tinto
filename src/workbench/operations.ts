@@ -46,7 +46,7 @@ export async function addRepoFlow(active: string): Promise<string | null> {
 }
 
 export interface AddWslRepoInput {
-  distro: "Ubuntu";
+  distro: string;
   path: string;
   alias?: string;
 }

@@ -95,13 +95,13 @@ describe("workbench operations", () => {
   it("addWslRepoFlow invokes the isolated WSL wrapper and reloads", async () => {
     await expect(
       addWslRepoFlow("Work", {
-        distro: "Ubuntu",
+        distro: "Ubuntu-24.04",
         path: " /home/me//repo/ ",
         alias: " API ",
       }),
     ).resolves.toBe("/home/me/repo");
 
-    expect(client.addWslRepo).toHaveBeenCalledWith("Work", "Ubuntu", "/home/me/repo", "API");
+    expect(client.addWslRepo).toHaveBeenCalledWith("Work", "Ubuntu-24.04", "/home/me/repo", "API");
     expect(reloadMock).toHaveBeenCalled();
   });
 

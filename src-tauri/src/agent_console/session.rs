@@ -4,7 +4,7 @@ use crate::bus::contract::{
     AgentSession, AgentSessionChange, AgentSessionError, AgentSessionStatus,
 };
 use crate::wsl_agent::{
-    launcher::request_ubuntu_agent,
+    launcher::request_wsl_agent,
     protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
 
@@ -27,6 +27,7 @@ pub struct AgentSessionRecord {
     process: Option<Box<dyn AgentProcess>>,
     checkpoint: Option<CheckpointRecord>,
     checkpoint_backend: CheckpointBackend,
+    wsl_distro: Option<String>,
     change_log: Vec<AgentSessionChange>,
     reverted_at_ms: Option<u64>,
 }
@@ -59,9 +60,14 @@ impl AgentSessionRecord {
             process: None,
             checkpoint,
             checkpoint_backend,
+            wsl_distro: None,
             change_log: Vec::new(),
             reverted_at_ms: None,
         }
+    }
+
+    pub fn set_wsl_distro(&mut self, distro: String) {
+        self.wsl_distro = Some(distro);
     }
 
     pub fn start(&mut self, process: Box<dyn AgentProcess>) -> Result<(), AgentConsoleError> {
@@ -185,7 +191,9 @@ impl AgentSessionRecord {
         })?;
         match self.checkpoint_backend {
             CheckpointBackend::Local => revert_checkpoint(checkpoint)?,
-            CheckpointBackend::Wsl => revert_wsl_checkpoint(checkpoint)?,
+            CheckpointBackend::Wsl => {
+                revert_wsl_checkpoint(self.wsl_distro.as_deref(), checkpoint)?
+            }
         }
         self.reverted_at_ms = Some(now_ms());
         self.status = AgentSessionStatus::Reverted;
@@ -196,7 +204,9 @@ impl AgentSessionRecord {
     fn refresh_change_log(&mut self) -> Result<(), AgentConsoleError> {
         self.change_log = match (self.checkpoint.as_ref(), self.checkpoint_backend) {
             (Some(checkpoint), CheckpointBackend::Local) => scan_change_log(checkpoint, now_ms())?,
-            (Some(checkpoint), CheckpointBackend::Wsl) => scan_wsl_change_log(checkpoint)?,
+            (Some(checkpoint), CheckpointBackend::Wsl) => {
+                scan_wsl_change_log(self.wsl_distro.as_deref(), checkpoint)?
+            }
             (None, _) => Vec::new(),
         };
         Ok(())
@@ -254,14 +264,20 @@ impl AgentSessionRecord {
 }
 
 fn scan_wsl_change_log(
+    distro: Option<&str>,
     checkpoint: &CheckpointRecord,
 ) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
-    let response = request_ubuntu_agent(&AgentRequest::AgentCheckpointScan {
-        protocol_version: PROTOCOL_VERSION,
-        allowed_repos: vec![checkpoint.repo.clone()],
-        checkpoint: checkpoint.clone(),
-        timestamp_ms: now_ms(),
-    })
+    let distro =
+        distro.ok_or_else(|| AgentConsoleError::new("missing_distro", "repo WSL sin distro"))?;
+    let response = request_wsl_agent(
+        distro,
+        &AgentRequest::AgentCheckpointScan {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint: checkpoint.clone(),
+            timestamp_ms: now_ms(),
+        },
+    )
     .map_err(map_wsl_agent_error)?;
 
     match response {
@@ -273,12 +289,20 @@ fn scan_wsl_change_log(
     }
 }
 
-fn revert_wsl_checkpoint(checkpoint: &CheckpointRecord) -> Result<(), AgentConsoleError> {
-    let response = request_ubuntu_agent(&AgentRequest::AgentCheckpointRevert {
-        protocol_version: PROTOCOL_VERSION,
-        allowed_repos: vec![checkpoint.repo.clone()],
-        checkpoint: checkpoint.clone(),
-    })
+fn revert_wsl_checkpoint(
+    distro: Option<&str>,
+    checkpoint: &CheckpointRecord,
+) -> Result<(), AgentConsoleError> {
+    let distro =
+        distro.ok_or_else(|| AgentConsoleError::new("missing_distro", "repo WSL sin distro"))?;
+    let response = request_wsl_agent(
+        distro,
+        &AgentRequest::AgentCheckpointRevert {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint: checkpoint.clone(),
+        },
+    )
     .map_err(map_wsl_agent_error)?;
 
     match response {

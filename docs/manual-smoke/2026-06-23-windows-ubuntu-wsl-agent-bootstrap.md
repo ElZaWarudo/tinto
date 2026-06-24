@@ -9,18 +9,26 @@ roadmap_item: RDM-002/RDM-006
 
 ## Scope
 
-Validate the Windows host to Ubuntu WSL `tinto-agent` bootstrap on a real Windows host. RDM-006 makes packaged Linux agent discovery/install the primary path and keeps the RDM-002 dev-source command as an explicit fallback. This smoke also confirms local and WSL repos can coexist in one workbench before final release.
+Validate the Windows host to Ubuntu-family WSL `tinto-agent` bootstrap on a real Windows host.
+RDM-006 makes packaged Linux agent discovery/install the primary path and keeps the RDM-002
+dev-source command as an explicit fallback. This smoke also confirms local and WSL repos can coexist
+in one workbench before final release.
 
 ## Preconditions
 
 - Windows host with WSL 2 enabled.
-- Ubuntu distro installed and visible in `wsl.exe -l -v`.
-- A packaged Tinto Windows build produced after CI downloaded `tinto-agent-linux-x86_64` into `src-tauri/resources/`, or a Linux `tinto-agent` binary available on the Windows host for the explicit override path.
+- Ubuntu-family distro installed and visible in `wsl.exe -l -v` (`Ubuntu`, `Ubuntu-24.04`,
+  `Ubuntu-22.04`, or `Ubuntu-20.04`).
+- A packaged Tinto Windows build produced after CI downloaded `tinto-agent-linux-x86_64` into
+  `src-tauri/resources/`. For `Ubuntu-24.04` UI smoke, use a CI artifact produced after the
+  Ubuntu-family distro support fix, not the earlier `28082169551` artifact.
+- Alternatively, a Linux `tinto-agent` binary available on the Windows host for the explicit
+  override path.
 - Optional fallback only: Tinto repository and Rust/Cargo available inside Ubuntu.
 
 ## Steps
 
-1. From Windows PowerShell, confirm Ubuntu is WSL 2:
+1. From Windows PowerShell, confirm the target Ubuntu-family distro is WSL 2:
 
    ```powershell
    wsl.exe -l -v
@@ -40,7 +48,9 @@ Validate the Windows host to Ubuntu WSL `tinto-agent` bootstrap on a real Window
    Remove-Item Env:\TINTO_WSL_AGENT_ALLOW_DEV_SOURCE -ErrorAction SilentlyContinue
    ```
 
-3. Launch Tinto and add one Windows repo plus one Ubuntu WSL repo (`/home/...`) to the same workbench.
+3. Launch Tinto and add one Windows repo plus one Ubuntu-family WSL repo (`/home/...`) to the same
+   workbench. Select the actual distro name reported by `wsl.exe -l -v`; on the current smoke host
+   this is `Ubuntu-24.04`.
 
 4. Confirm the WSL repo reaches a non-terminal state: tree, status, diff, log, and file content load without requiring the source checkout inside Ubuntu.
 
@@ -51,21 +61,21 @@ Validate the Windows host to Ubuntu WSL `tinto-agent` bootstrap on a real Window
 7. Confirm the agent was installed in Ubuntu:
 
    ```powershell
-   wsl.exe -d Ubuntu -- sh -lc 'test -x "$HOME/.local/share/tinto/agents/0.1.0/tinto-agent" && echo ok'
+   wsl.exe -d Ubuntu-24.04 -- sh -lc 'test -x "$HOME/.local/share/tinto/agents/0.1.0/tinto-agent" && echo ok'
    ```
 
 8. Confirm compatible handshake with the installed agent:
 
    ```powershell
    '{"type":"handshake","protocol_version":1,"client_version":"manual-smoke"}' |
-     wsl.exe -d Ubuntu -- sh -lc 'exec "$HOME/.local/share/tinto/agents/0.1.0/tinto-agent"'
+     wsl.exe -d Ubuntu-24.04 -- sh -lc 'exec "$HOME/.local/share/tinto/agents/0.1.0/tinto-agent"'
    ```
 
 9. Confirm incompatible protocol fails safely:
 
    ```powershell
    '{"type":"handshake","protocol_version":999,"client_version":"manual-smoke"}' |
-     wsl.exe -d Ubuntu -- sh -lc 'exec "$HOME/.local/share/tinto/agents/0.1.0/tinto-agent"'
+     wsl.exe -d Ubuntu-24.04 -- sh -lc 'exec "$HOME/.local/share/tinto/agents/0.1.0/tinto-agent"'
    ```
 
 10. Optional development fallback: unset the packaged binary and explicitly enable fallback:
@@ -74,7 +84,7 @@ Validate the Windows host to Ubuntu WSL `tinto-agent` bootstrap on a real Window
    Remove-Item Env:\TINTO_WSL_AGENT_LINUX_BIN -ErrorAction SilentlyContinue
    $env:TINTO_WSL_AGENT_ALLOW_DEV_SOURCE="1"
    '{"type":"handshake","protocol_version":1,"client_version":"manual-smoke"}' |
-     wsl.exe -d Ubuntu -- cargo run --manifest-path /path/to/tinto/src-tauri/Cargo.toml --bin tinto-agent
+     wsl.exe -d Ubuntu-24.04 -- cargo run --manifest-path /path/to/tinto/src-tauri/Cargo.toml --bin tinto-agent
    ```
 
 11. Confirm stdout is one line of JSON with:
@@ -91,7 +101,7 @@ Validate the Windows host to Ubuntu WSL `tinto-agent` bootstrap on a real Window
 - Incompatible handshake fails with a safe category.
 - Packaged Linux agent path works without the Ubuntu source checkout.
 - Dev-source launch works only when explicitly enabled for development.
-- Local Windows and Ubuntu WSL repos can be tracked together.
+- Local Windows and selected Ubuntu-family WSL repos can be tracked together.
 - WSL file operations preserve copy/delete/restore/redo/export behavior.
 - WSL Agent Console sessions launch inside Ubuntu, expose a real checkpoint, and revert through the Linux agent after explicit consent.
 - No Linux desktop WSL UI or frontend surface is introduced by this smoke.
@@ -134,8 +144,9 @@ Partial agent-level smoke passed on 2026-06-24 against CI run `28082169551` and 
 
 Pending interactive UI evidence:
 
-- Launch the packaged Tinto UI and add one Windows repo plus one `Ubuntu-24.04` WSL repo to the
-  same workbench.
+- Produce and download a fresh CI Windows bundle from the Ubuntu-family distro support fix.
+- Launch the packaged Tinto UI and add one Windows repo plus one `Ubuntu-24.04` WSL repo to the same
+  workbench.
 - Confirm the WSL repo tree, status, diff, log, and file content through the Tinto UI.
 - Confirm drag/paste/delete/restore/redo/export from the UI for both Windows and WSL repos.
 - Confirm Agent Console start/stop/change log/revert through the Tinto UI.

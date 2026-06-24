@@ -26,7 +26,7 @@ use crate::git::{
     CommitInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError,
 };
 use crate::workbench::RepoSource;
-use crate::wsl_agent::launcher::request_ubuntu_agent;
+use crate::wsl_agent::launcher::request_wsl_agent;
 use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION};
 
 pub(crate) const GITLEAKS_TEMPLATE: &str = r#"# .gitleaks.toml
@@ -71,11 +71,14 @@ pub async fn get_repo_gitleaks_setup_status(
         RepoSource::Local => Ok(gitleaks_setup_status()),
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::GitleaksSetupStatus {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::GitleaksSetupStatus {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                    },
+                )? {
                     AgentResponse::GitleaksSetupStatus { status } => Ok(status),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -95,11 +98,14 @@ pub async fn install_repo_gitleaks(
         RepoSource::Local => install_gitleaks().await,
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::InstallGitleaks {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::InstallGitleaks {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                    },
+                )? {
                     AgentResponse::GitleaksInstallResult { result } => Ok(result),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -122,11 +128,14 @@ pub async fn create_repo_gitleaks_config(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::CreateGitleaksConfig {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::CreateGitleaksConfig {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                    },
+                )? {
                     AgentResponse::Unit => Ok(()),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -417,11 +426,14 @@ pub async fn get_worktree_diff(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::WorktreeDiff {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::WorktreeDiff {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                    },
+                )? {
                     AgentResponse::WorktreeDiff { diffs } => Ok(diffs),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -445,12 +457,15 @@ pub async fn get_commit_diff(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::CommitDiff {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                    commit_id,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::CommitDiff {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                        commit_id,
+                    },
+                )? {
                     AgentResponse::CommitDiff { diffs } => Ok(diffs),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -475,13 +490,16 @@ pub async fn get_commit_log(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::CommitLog {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                    offset,
-                    limit,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::CommitLog {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                        offset,
+                        limit,
+                    },
+                )? {
                     AgentResponse::CommitLog { commits } => Ok(commits),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -510,13 +528,16 @@ pub async fn get_blob(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::Blob {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                    commit_id,
-                    path,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::Blob {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                        commit_id,
+                        path,
+                    },
+                )? {
                     AgentResponse::Blob { content } => Ok(content),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -544,12 +565,15 @@ pub async fn get_file_content(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::FileContent {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                    path,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::FileContent {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                        path,
+                    },
+                )? {
                     AgentResponse::FileContent { content } => Ok(content),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -578,12 +602,15 @@ pub async fn get_media_content(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::MediaContent {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                    path,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::MediaContent {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                        path,
+                    },
+                )? {
                     AgentResponse::MediaContent { content } => Ok(content),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -606,11 +633,14 @@ pub async fn list_repo_tree(
         }
         RepoSource::Wsl => {
             blocking(move || {
-                match wsl_request(AgentRequest::RepoTree {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                })? {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::RepoTree {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                    },
+                )? {
                     AgentResponse::RepoTree { tree } => Ok(tree),
                     response => Err(unexpected_wsl_response(response)),
                 }
@@ -620,8 +650,13 @@ pub async fn list_repo_tree(
     }
 }
 
-pub(crate) fn wsl_request(request: AgentRequest) -> Result<AgentResponse, CommandError> {
-    match request_ubuntu_agent(&request).map_err(map_wsl_agent_error)? {
+pub(crate) fn wsl_request(
+    distro: Option<String>,
+    request: AgentRequest,
+) -> Result<AgentResponse, CommandError> {
+    let distro =
+        distro.ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
+    match request_wsl_agent(&distro, &request).map_err(map_wsl_agent_error)? {
         AgentResponse::Error { category, message } => Err(CommandError::new(&category, message)),
         response => Ok(response),
     }
