@@ -8,6 +8,7 @@ import {
   listAgentSessions,
   resizeAgentSession,
   revertSession,
+  stopAgentSession,
   writeAgentSessionInput,
 } from "../../bus/client";
 import { agentSessionStore, useAgentSession, useAgentSessionState } from "../../agent/sessionStore";
@@ -20,27 +21,65 @@ export interface TerminalPanelParams {
 }
 
 type TerminalPanelProps = IDockviewPanelProps<TerminalPanelParams>;
+const panelCloseStopTimers = new Map<string, number>();
+const PANEL_CLOSE_STOP_DELAY_MS = 250;
+const TERMINAL_FOCUS_DELAY_MS = 0;
 
-export function TerminalPanel({ params }: TerminalPanelProps) {
+export function TerminalPanel({ params, api }: TerminalPanelProps) {
   const sessionId = params?.sessionId ?? "";
   const repo = params?.repo;
   const agentType = params?.agentType ?? "agent";
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const session = useAgentSession(sessionId);
-  const output = useAgentSessionState().output[sessionId] ?? [];
+  const { output, outputTotal } = useAgentSessionState();
+  const sessionOutput = output[sessionId] ?? [];
+  const sessionOutputTotal = outputTotal[sessionId] ?? 0;
   const [error, setError] = useState<string | null>(null);
   const [reverting, setReverting] = useState(false);
   const terminalInstanceRef = useRef<Terminal | null>(null);
   const writtenOutputRef = useRef(0);
+  const panelActiveRef = useRef(false);
 
   const shortSession = useMemo(
     () => (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId),
     [sessionId],
   );
 
+  const focusTerminal = () => {
+    const terminal = terminalInstanceRef.current;
+    const container = terminalRef.current;
+    if (!terminal) return;
+    const textarea = terminal.textarea;
+    if (textarea) stabilizeTerminalTextarea(textarea);
+    if (textarea && document.activeElement === textarea && api.isActive) return;
+    if (!api.isActive) {
+      api.setActive();
+    }
+    container?.focus({ preventScroll: true });
+    terminal.focus();
+    textarea?.focus({ preventScroll: true });
+    if (textarea) {
+      window.requestAnimationFrame(() => stabilizeTerminalTextarea(textarea));
+    }
+  };
+
+  useEffect(() => {
+    panelActiveRef.current = api.isActive;
+    const disposable = api.onDidActiveChange(({ isActive }) => {
+      panelActiveRef.current = isActive;
+      if (isActive) {
+        window.requestAnimationFrame(focusTerminal);
+      }
+    });
+    return () => {
+      disposable.dispose();
+    };
+  }, [api]);
+
   useEffect(() => {
     const container = terminalRef.current;
     if (!container || !sessionId) return;
+    cancelPanelCloseStop(sessionId);
 
     let active = true;
     let resizeTimer: number | undefined;
@@ -61,6 +100,32 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     terminalInstanceRef.current = terminal;
+    const textarea = terminal.textarea;
+    if (textarea) {
+      textarea.spellcheck = false;
+      textarea.setAttribute("autocapitalize", "off");
+      textarea.setAttribute("autocomplete", "off");
+      textarea.setAttribute("autocorrect", "off");
+      stabilizeTerminalTextarea(textarea);
+    }
+    const focusLater = () => {
+      window.setTimeout(focusTerminal, TERMINAL_FOCUS_DELAY_MS);
+      window.requestAnimationFrame(focusTerminal);
+    };
+    const recoverTerminalFocus = () => {
+      window.requestAnimationFrame(() => {
+        if (!active || !panelActiveRef.current) return;
+        const focused = document.activeElement;
+        if (textarea && focused === textarea) {
+          stabilizeTerminalTextarea(textarea);
+          return;
+        }
+        if (shouldPreserveFocusedElement(focused, container)) return;
+        focusTerminal();
+      });
+    };
+    focusTerminal();
+    const focusFrame = window.requestAnimationFrame(focusTerminal);
     writtenOutputRef.current = 0;
 
     const publishSize = () => {
@@ -88,6 +153,115 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         if (active) setError(commandMessage(e));
       });
     });
+    const cursorSubscription = terminal.onCursorMove(() => {
+      if (textarea) stabilizeTerminalTextarea(textarea);
+    });
+    const relayInput = (input: string) => {
+      if (!input) return;
+      focusTerminal();
+      terminal.input(input, true);
+    };
+    const pasteText = (text: string) => {
+      if (!text) return;
+      focusTerminal();
+      terminal.paste(text);
+    };
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (
+        !active ||
+        event.type !== "keydown" ||
+        event.isComposing ||
+        event.key === "Process" ||
+        event.keyCode === 229
+      ) {
+        return true;
+      }
+      if (isPasteShortcut(event) && navigator.clipboard?.readText) {
+        event.preventDefault();
+        event.stopPropagation();
+        void navigator.clipboard
+          .readText()
+          .then((text) => {
+            if (active) pasteText(text);
+          })
+          .catch(() => {
+            if (active) focusLater();
+          });
+        return false;
+      }
+      return true;
+    });
+    const handlePointerDown = () => {
+      focusLater();
+    };
+    const handleClick = () => {
+      focusLater();
+    };
+    const handleFocusIn = () => {
+      focusLater();
+    };
+    const handleTextareaFocus = () => {
+      if (textarea) stabilizeTerminalTextarea(textarea);
+    };
+    const handleTextareaBlur = () => {
+      recoverTerminalFocus();
+    };
+    const handleTextareaPaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (!text) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pasteText(text);
+    };
+    const handleWindowPaste = (event: ClipboardEvent) => {
+      if (
+        !active ||
+        !isTerminalPanelActive(panelActiveRef.current, container, textarea, event.target)
+      ) {
+        return;
+      }
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (!text) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pasteText(text);
+    };
+    const handleWindowKeyDown = (event: KeyboardEvent) => {
+      if (
+        !active ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        !isTerminalPanelActive(panelActiveRef.current, container, textarea, event.target)
+      ) {
+        return;
+      }
+      if (isPasteShortcut(event) && navigator.clipboard?.readText) {
+        event.preventDefault();
+        event.stopPropagation();
+        void navigator.clipboard
+          .readText()
+          .then((text) => {
+            if (active) pasteText(text);
+          })
+          .catch(() => {
+            if (active) focusLater();
+          });
+        return;
+      }
+      const input = keyboardEventToTerminalInput(event);
+      if (input === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      relayInput(input);
+    };
+    container.addEventListener("pointerdown", handlePointerDown);
+    container.addEventListener("click", handleClick);
+    container.addEventListener("focusin", handleFocusIn);
+    textarea?.addEventListener("focus", handleTextareaFocus);
+    textarea?.addEventListener("blur", handleTextareaBlur);
+    textarea?.addEventListener("paste", handleTextareaPaste);
+    window.addEventListener("paste", handleWindowPaste, true);
+    window.addEventListener("keydown", handleWindowKeyDown, true);
     publishSize();
     const frame = window.requestAnimationFrame(scheduleFit);
     const observer =
@@ -100,24 +274,48 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
     return () => {
       active = false;
+      window.cancelAnimationFrame(focusFrame);
       window.cancelAnimationFrame(frame);
       window.clearTimeout(resizeTimer);
       observer?.disconnect();
+      container.removeEventListener("pointerdown", handlePointerDown);
+      container.removeEventListener("click", handleClick);
+      container.removeEventListener("focusin", handleFocusIn);
+      textarea?.removeEventListener("focus", handleTextareaFocus);
+      textarea?.removeEventListener("blur", handleTextareaBlur);
+      textarea?.removeEventListener("paste", handleTextareaPaste);
+      window.removeEventListener("paste", handleWindowPaste, true);
+      window.removeEventListener("keydown", handleWindowKeyDown, true);
       dataSubscription.dispose();
+      cursorSubscription.dispose();
       fitAddon.dispose();
       terminal.dispose();
       terminalInstanceRef.current = null;
+      schedulePanelCloseStop(sessionId);
     };
   }, [sessionId]);
 
   useEffect(() => {
     const terminal = terminalInstanceRef.current;
     if (!terminal) return;
-    for (let index = writtenOutputRef.current; index < output.length; index += 1) {
-      terminal.write(decodeBase64(output[index].chunk_base64));
+    const totalAppended = sessionOutputTotal;
+    const alreadyWritten = writtenOutputRef.current;
+    const newChunkCount = totalAppended - alreadyWritten;
+    if (newChunkCount > 0) {
+      const startIdx = Math.max(0, sessionOutput.length - newChunkCount);
+      for (let index = startIdx; index < sessionOutput.length; index += 1) {
+        terminal.write(decodeBase64(sessionOutput[index].chunk_base64));
+      }
+      writtenOutputRef.current = totalAppended;
     }
-    writtenOutputRef.current = output.length;
-  }, [output]);
+    if (
+      panelActiveRef.current &&
+      terminal.textarea &&
+      document.activeElement !== terminal.textarea
+    ) {
+      window.requestAnimationFrame(focusTerminal);
+    }
+  }, [sessionOutput, sessionOutputTotal]);
 
   useEffect(() => {
     let active = true;
@@ -202,7 +400,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           </span>
         )}
       </header>
-      <div className="terminal-panel__surface" ref={terminalRef} data-testid="terminal-surface" />
+      <div
+        className="terminal-panel__surface"
+        ref={terminalRef}
+        data-testid="terminal-surface"
+        tabIndex={0}
+      />
     </div>
   );
 }
@@ -239,4 +442,165 @@ function commandMessage(error: unknown): string {
     return String((error as { message?: unknown }).message ?? "Terminal command failed.");
   }
   return String(error || "Terminal command failed.");
+}
+
+function isPasteShortcut(event: KeyboardEvent): boolean {
+  const key = event.key.toLowerCase();
+  return ((event.ctrlKey || event.metaKey) && key === "v") || (event.shiftKey && key === "insert");
+}
+
+function isTerminalPanelActive(
+  panelActive: boolean,
+  container: HTMLElement,
+  textarea: HTMLTextAreaElement | undefined,
+  target: EventTarget | null,
+): boolean {
+  if (!panelActive) return false;
+  if (!target) return true;
+  if (textarea && target === textarea) return false;
+  if (target instanceof HTMLElement) {
+    if (container.contains(target)) {
+      return !isEditableElement(target);
+    }
+    if (target === document.body || target === document.documentElement) {
+      return true;
+    }
+    return false;
+  }
+  return true;
+}
+
+function isEditableElement(target: HTMLElement): boolean {
+  const tag = target.tagName;
+  return target.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function isFocusableElement(target: HTMLElement): boolean {
+  return (
+    target.matches(
+      "a[href], button, input, select, textarea, [contenteditable='true'], [tabindex]:not([tabindex='-1'])",
+    ) || target.tabIndex >= 0
+  );
+}
+
+function shouldPreserveFocusedElement(target: Element | null, container: HTMLElement): boolean {
+  if (!target || target === document.body || target === document.documentElement) {
+    return false;
+  }
+  if (!(target instanceof HTMLElement)) {
+    return true;
+  }
+  if (container.contains(target)) {
+    return isEditableElement(target);
+  }
+  return isFocusableElement(target);
+}
+
+function stabilizeTerminalTextarea(textarea: HTMLTextAreaElement) {
+  textarea.style.minWidth = "1px";
+  textarea.style.minHeight = "1px";
+  textarea.style.zIndex = "1";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  textarea.style.background = "transparent";
+  textarea.style.color = "transparent";
+  textarea.style.caretColor = "transparent";
+}
+
+function keyboardEventToTerminalInput(event: KeyboardEvent): string | null {
+  if (event.metaKey && !event.ctrlKey) return null;
+  switch (event.key) {
+    case "Enter":
+      return "\r";
+    case "Tab":
+      return event.shiftKey ? "\u001b[Z" : "\t";
+    case "Backspace":
+      return "\u007f";
+    case "Escape":
+      return "\u001b";
+    case "ArrowUp":
+      return "\u001b[A";
+    case "ArrowDown":
+      return "\u001b[B";
+    case "ArrowRight":
+      return "\u001b[C";
+    case "ArrowLeft":
+      return "\u001b[D";
+    case "Home":
+      return "\u001b[H";
+    case "End":
+      return "\u001b[F";
+    case "Insert":
+      return event.shiftKey ? null : "\u001b[2~";
+    case "Delete":
+      return "\u001b[3~";
+    case "PageUp":
+      return "\u001b[5~";
+    case "PageDown":
+      return "\u001b[6~";
+    default:
+      break;
+  }
+
+  if (event.ctrlKey && !event.altKey && !event.metaKey) {
+    return controlCharacter(event.key);
+  }
+  if (event.key.length !== 1) return null;
+  if (event.altKey && !event.ctrlKey && !event.metaKey) {
+    return `\u001b${event.key}`;
+  }
+  if (event.ctrlKey || event.metaKey) return null;
+  return event.key;
+}
+
+function controlCharacter(key: string): string | null {
+  const lower = key.toLowerCase();
+  if (lower >= "a" && lower <= "z") {
+    return String.fromCharCode(lower.charCodeAt(0) - 96);
+  }
+  switch (key) {
+    case " ":
+    case "@":
+    case "2":
+      return "\u0000";
+    case "[":
+    case "3":
+      return "\u001b";
+    case "\\":
+    case "4":
+      return "\u001c";
+    case "]":
+    case "5":
+      return "\u001d";
+    case "^":
+    case "6":
+      return "\u001e";
+    case "_":
+    case "/":
+    case "7":
+      return "\u001f";
+    case "8":
+      return "\u007f";
+    default:
+      return null;
+  }
+}
+
+function cancelPanelCloseStop(sessionId: string) {
+  const timer = panelCloseStopTimers.get(sessionId);
+  if (timer === undefined) return;
+  window.clearTimeout(timer);
+  panelCloseStopTimers.delete(sessionId);
+}
+
+function schedulePanelCloseStop(sessionId: string) {
+  cancelPanelCloseStop(sessionId);
+  const timer = window.setTimeout(() => {
+    panelCloseStopTimers.delete(sessionId);
+    void stopAgentSession(sessionId)
+      .then(() => listAgentSessions())
+      .then((sessions) => agentSessionStore.setSessions(sessions))
+      .catch(() => {});
+  }, PANEL_CLOSE_STOP_DELAY_MS);
+  panelCloseStopTimers.set(sessionId, timer);
 }

@@ -4,14 +4,16 @@ import type { AgentSession, AgentSessionChange, AgentSessionOutput } from "../bu
 export interface AgentSessionState {
   sessions: Record<string, AgentSession>;
   output: Record<string, AgentSessionOutput[]>;
+  outputTotal: Record<string, number>;
 }
 
 const EMPTY: AgentSessionState = {
   sessions: {},
   output: {},
+  outputTotal: {},
 };
 
-const MAX_OUTPUT_CHUNKS_PER_SESSION = 400;
+const MAX_OUTPUT_CHUNKS_PER_SESSION = 20000;
 
 export class AgentSessionStore {
   private state: AgentSessionState = EMPTY;
@@ -53,11 +55,17 @@ export class AgentSessionStore {
 
   appendOutput(output: AgentSessionOutput) {
     const current = this.state.output[output.session_id] ?? [];
+    const currentTotal = this.state.outputTotal[output.session_id] ?? 0;
+    const nextTotal = currentTotal + 1;
     this.set({
       ...this.state,
       output: {
         ...this.state.output,
         [output.session_id]: [...current, output].slice(-MAX_OUTPUT_CHUNKS_PER_SESSION),
+      },
+      outputTotal: {
+        ...this.state.outputTotal,
+        [output.session_id]: nextTotal,
       },
     });
   }
