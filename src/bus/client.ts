@@ -96,6 +96,10 @@ export const getBlob = (repo: string, commitId: string, path: string) =>
 
 export const retryRepo = (repo: string) => invoke("retry_repo", { repo });
 
+/** Drop a repo from the live bus state when it is no longer in the active
+ *  workbench config (orphan panel / stale snapshot). */
+export const forgetRepo = (repo: string) => invoke("forget_repo", { repo });
+
 export const startAgentSession = (repo: string, agentType: string) =>
   invoke<string>("start_agent_session", { repo, agentType });
 

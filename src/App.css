@@ -910,6 +910,7 @@ select option {
 .repo-panel__overview-wrap {
   position: absolute;
   inset: 0;
+  z-index: 1;
   overflow: auto;
   background: var(--bg);
 }
@@ -1355,6 +1356,31 @@ select option {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.repo-card__remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #888;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    color 0.15s;
+}
+.repo-card:hover .repo-card__remove,
+.repo-card:focus-within .repo-card__remove {
+  opacity: 1;
+}
+.repo-card__remove:hover {
+  background: rgba(244, 63, 94, 0.15);
+  color: #f43f5e;
+}
 .activity-dot {
   width: 8px;
   height: 8px;
@@ -1709,6 +1735,7 @@ select option {
   min-height: 0;
   padding: 6px 8px;
   overflow: hidden;
+  position: relative;
 }
 .terminal-panel__surface .xterm {
   height: 100%;

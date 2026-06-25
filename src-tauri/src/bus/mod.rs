@@ -613,6 +613,9 @@ pub enum BusCommand {
     /// ¿El path canónico pertenece al workbench activo? Allowlist que acota
     /// las lecturas bajo demanda al conjunto de repos montado.
     IsKnownRepo(PathBuf, oneshot::Sender<bool>),
+    /// Descarta un repo del bus cuando ya no pertenece al workbench activo
+    /// (referencia huérfana que el frontend necesita olvidar).
+    ForgetRepo(PathBuf, oneshot::Sender<()>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -702,6 +705,14 @@ impl BusHandle {
             return false;
         }
         rx.await.unwrap_or(false)
+    }
+
+    pub async fn forget_repo(&self, repo: PathBuf) -> bool {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(BusCommand::ForgetRepo(repo, reply)).is_err() {
+            return false;
+        }
+        rx.await.is_ok()
     }
 
     pub async fn shutdown(&self) {
@@ -922,6 +933,22 @@ async fn run_bus_inner(
                         )
                         .is_ok();
                         let _ = reply.send(known);
+                    }
+                    Some(BusCommand::ForgetRepo(repo, reply)) => {
+                        // El repo ya no pertenece al workbench activo: descartarlo
+                        // del bus para que deje de aparecer en snapshots/deltas.
+                        if let Some(state) = states.remove(&repo) {
+                            revisions.insert(repo.clone(), state.revision);
+                        }
+                        current_entries.retain(|entry| entry.path != repo);
+                        unsupported_entries.retain(|entry| entry.path != repo);
+                        inflight.remove(&repo);
+                        pending.remove(&repo);
+                        if let Some(w) = watcher.as_mut() {
+                            let local_entries = local_runtime_entries(&current_entries);
+                            w.watch_workbench(&local_entries);
+                        }
+                        let _ = reply.send(());
                     }
                     Some(BusCommand::Shutdown(ack)) => {
                         if let Some(w) = watcher.take() {
@@ -2355,6 +2382,47 @@ mod tests {
             p["error"].is_null() || p.get("error").is_none(),
             "el error terminal se limpia al revivir"
         );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forget_repo_descarta_repo_huerfano_del_snapshot() {
+        let a = TempRepo::with_initial_commit();
+        let b = TempRepo::with_initial_commit();
+        let (handle, mut rx) = spawn_bus(vec![entry(&a), entry(&b)]);
+        let (ca, cb) = (canonical(&a), canonical(&b));
+
+        // Drenar snapshots iniciales.
+        wait_event(&mut rx, |e, p| is_delta_for(e, p, &ca)).await;
+        wait_event(&mut rx, |e, p| is_delta_for(e, p, &cb)).await;
+        while rx.try_recv().is_ok() {}
+
+        assert!(handle.forget_repo(cb.clone()).await);
+        let snap = handle.snapshot().await.expect("snapshot after forget");
+        assert!(
+            snap.repos.iter().any(|repo| repo.repo == ca),
+            "A sigue en el snapshot"
+        );
+        assert!(
+            !snap.repos.iter().any(|repo| repo.repo == cb),
+            "B fue olvidado del snapshot"
+        );
+
+        // Tocar B ya no produce delta zombi.
+        b.write("zombi.txt", "x");
+        let leaked = timeout(Duration::from_secs(2), async {
+            loop {
+                let (e, p) = rx.recv().await?;
+                if is_delta_for(&e, &p, &cb) {
+                    return Some(());
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        assert!(leaked.is_none(), "B olvidado: sin deltas zombi");
+
         handle.shutdown().await;
     }
 }

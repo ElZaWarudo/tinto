@@ -1,19 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act } from "@testing-library/react";
 
 const client = vi.hoisted(() => ({
   addRepo: vi.fn(),
   addWslRepo: vi.fn(),
   autodetectReposUnder: vi.fn(),
   createWorkbench: vi.fn(),
+  forgetRepo: vi.fn(),
   listWslDirectory: vi.fn(),
   listWslDistros: vi.fn(),
   removeRepo: vi.fn(),
+  removeWslRepo: vi.fn(),
   setActiveWorkbench: vi.fn(),
 }));
 vi.mock("../bus/client", () => client);
 
-const openMock = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock }));
+const dialogMock = vi.hoisted(() => ({ open: vi.fn(), confirm: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => dialogMock);
 
 const reloadMock = vi.hoisted(() => vi.fn());
 vi.mock("../bus/connection", () => ({ reloadActiveWorkbench: reloadMock }));
@@ -30,6 +33,7 @@ import {
   removeRepoFlow,
 } from "./operations";
 import { busStore } from "../bus/store";
+import type { WorkbenchConfig } from "../bus/contract";
 
 describe("workbench operations", () => {
   beforeEach(() => {
@@ -44,8 +48,11 @@ describe("workbench operations", () => {
     });
     client.setActiveWorkbench.mockResolvedValue(undefined);
     client.createWorkbench.mockResolvedValue(undefined);
+    client.forgetRepo.mockResolvedValue(undefined);
     client.removeRepo.mockResolvedValue(undefined);
+    client.removeWslRepo.mockResolvedValue(undefined);
     client.autodetectReposUnder.mockResolvedValue([]);
+    dialogMock.confirm.mockResolvedValue(true);
     reloadMock.mockResolvedValue(undefined);
   });
 
@@ -74,21 +81,21 @@ describe("workbench operations", () => {
   });
 
   it("addRepoFlow adds the picked folder and returns its canonical path; cancel is a no-op", async () => {
-    openMock.mockResolvedValueOnce("/picked/repo");
+    dialogMock.open.mockResolvedValueOnce("/picked/repo");
     client.addRepo.mockResolvedValueOnce("/canon/picked/repo");
     await expect(addRepoFlow("Work")).resolves.toBe("/canon/picked/repo");
     expect(client.addRepo).toHaveBeenCalledWith("Work", "/picked/repo");
     expect(reloadMock).toHaveBeenCalled();
 
     vi.clearAllMocks();
-    openMock.mockResolvedValueOnce(null); // cancelled
+    dialogMock.open.mockResolvedValueOnce(null); // cancelled
     await addRepoFlow("Work");
     expect(client.addRepo).not.toHaveBeenCalled();
     expect(reloadMock).not.toHaveBeenCalled();
   });
 
   it("addRepoFlow swallows a failed add (resolves null) but still reloads", async () => {
-    openMock.mockResolvedValueOnce("/dup");
+    dialogMock.open.mockResolvedValueOnce("/dup");
     client.addRepo.mockRejectedValueOnce(new Error("duplicate"));
     await expect(addRepoFlow("Work")).resolves.toBeNull();
     expect(reloadMock).toHaveBeenCalled();
@@ -136,7 +143,7 @@ describe("workbench operations", () => {
   });
 
   it("autodetectFlow adds every detected repo", async () => {
-    openMock.mockResolvedValueOnce("/root");
+    dialogMock.open.mockResolvedValueOnce("/root");
     client.autodetectReposUnder.mockResolvedValueOnce(["/root/a", "/root/b"]);
     await autodetectFlow("Work");
     expect(client.addRepo).toHaveBeenCalledWith("Work", "/root/a");
@@ -145,13 +152,99 @@ describe("workbench operations", () => {
   });
 
   it("removeRepoFlow confirms then removes; declines are a no-op", async () => {
-    const ok = await removeRepoFlow("Work", "/r/a", () => true);
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+      }),
+    );
+    dialogMock.confirm.mockResolvedValueOnce(true);
+    const ok = await removeRepoFlow("Work", "/r/a");
     expect(ok).toBe(true);
     expect(client.removeRepo).toHaveBeenCalledWith("Work", "/r/a");
 
     vi.clearAllMocks();
-    const no = await removeRepoFlow("Work", "/r/a", () => false);
+    dialogMock.confirm.mockResolvedValueOnce(false);
+    const no = await removeRepoFlow("Work", "/r/a");
     expect(no).toBe(false);
+    expect(client.removeRepo).not.toHaveBeenCalled();
+  });
+
+  it("removeRepoFlow forgets an orphan repo from the bus when it is not in the workbench", async () => {
+    // The "no longer accessible" panel view is rendered when the repo is absent
+    // from the active workbench's config; clicking Remove must still close the
+    // panel and drop the repo from the live bus snapshot.
+    act(() => busStore.resetAll());
+    dialogMock.confirm.mockResolvedValueOnce(true);
+    const ok = await removeRepoFlow("Work", "/r/orphan");
+    expect(ok).toBe(true);
+    expect(client.forgetRepo).toHaveBeenCalledWith("/r/orphan");
+    expect(client.removeRepo).not.toHaveBeenCalled();
+    expect(client.removeWslRepo).not.toHaveBeenCalled();
+    expect(reloadMock).toHaveBeenCalledOnce();
+  });
+
+  it("removeRepoFlow does not throw when the config is missing workbenches", async () => {
+    // The "no longer accessible" panel view can be visible while the active
+    // workbench's config arrives with `workbenches` missing (partial snapshot
+    // during first-run recovery). MenuBar already tolerates this; findRepoEntry
+    // must do the same so the Remove click does not surface an unhandled
+    // TypeError into the console.
+    act(() => {
+      busStore.setConfig({ version: 1, active: "Work" } as WorkbenchConfig);
+    });
+    dialogMock.confirm.mockResolvedValueOnce(true);
+    const ok = await removeRepoFlow("Work", "/r/orphan");
+    expect(ok).toBe(true);
+    expect(client.forgetRepo).toHaveBeenCalledWith("/r/orphan");
+    expect(client.removeRepo).not.toHaveBeenCalled();
+    expect(client.removeWslRepo).not.toHaveBeenCalled();
+    expect(reloadMock).toHaveBeenCalledOnce();
+  });
+
+  it("removeRepoFlow falls back to window.confirm when the Tauri dialog fails", async () => {
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+      }),
+    );
+    dialogMock.confirm.mockRejectedValueOnce(new Error("permission denied"));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const ok = await removeRepoFlow("Work", "/r/a");
+    expect(ok).toBe(true);
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(client.removeRepo).toHaveBeenCalledWith("Work", "/r/a");
+    confirmSpy.mockRestore();
+  });
+
+  it("removeRepoFlow routes WSL repos through removeWslRepo", async () => {
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              {
+                path: "/home/me/repo",
+                alias: null,
+                fs_watch: [],
+                source: "wsl",
+                distro: "Ubuntu-24.04",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    dialogMock.confirm.mockResolvedValueOnce(true);
+    const ok = await removeRepoFlow("Work", "/home/me/repo");
+    expect(ok).toBe(true);
+    expect(client.removeWslRepo).toHaveBeenCalledWith("Work", "Ubuntu-24.04", "/home/me/repo");
     expect(client.removeRepo).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,7 @@ export interface RepoCardProps {
   nowMs: number;
   onOpen: () => void;
   onRetry: () => void;
+  onRemove: () => void;
   onLaunch: (agentType: string) => Promise<void> | void;
 }
 
@@ -51,6 +52,7 @@ function RepoCardImpl({
   nowMs,
   onOpen,
   onRetry,
+  onRemove,
   onLaunch,
 }: RepoCardProps) {
   const { status, branch, head, error } = delta;
@@ -133,6 +135,19 @@ function RepoCardImpl({
             {error.class}
           </span>
         )}
+        <button
+          className="repo-card__remove"
+          data-testid="repo-card-remove"
+          title="Remove from workbench"
+          aria-label={`Remove ${name} from workbench`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          ✕
+        </button>
       </header>
 
       <div className="repo-card__branch" data-testid="branch">

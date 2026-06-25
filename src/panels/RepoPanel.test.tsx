@@ -223,7 +223,30 @@ describe("RepoPanel", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() => busStore.loadSnapshot([], { available: true }));
     render(<RepoPanel {...panelProps("/r/gone")} />);
-    expect(screen.getByText(/no longer in the active workbench/i)).toBeInTheDocument();
+    expect(screen.getByText(/no longer accessible/i)).toBeInTheDocument();
+    expect(screen.getByTestId("repo-panel-remove")).toBeInTheDocument();
+  });
+
+  it("routes the missing-repo Remove button through the workspace action", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => busStore.loadSnapshot([], { available: true }));
+    const removeRepo = vi.fn();
+    const value: WorkspaceActions = {
+      openRepo: vi.fn(),
+      addRepo: vi.fn(),
+      removeRepo,
+      openFile: vi.fn(),
+      openTimeline: vi.fn(),
+      openDashboard: vi.fn(),
+      openAgentTerminal: vi.fn(),
+    };
+    render(
+      <WorkspaceActionsContext.Provider value={value}>
+        <RepoPanel {...panelProps("/r/gone")} />
+      </WorkspaceActionsContext.Provider>,
+    );
+    fireEvent.click(screen.getByTestId("repo-panel-remove"));
+    expect(removeRepo).toHaveBeenCalledWith("/r/gone");
   });
 
   // Covers AE9: a status-list file pins (opens) its tab on double-click.

@@ -83,14 +83,22 @@ export default function App() {
       removeRepo: (path) => {
         const active = busStore.getState().config?.active;
         if (!active) return;
-        void removeRepoFlow(active, path).then((removed) => {
-          if (!removed) return;
-          fileDock.drop(path);
-          repoTreeStore.drop(path);
-          const api = apiRef.current;
-          if (!api) return;
-          closePanelsForRemovedRepo(api, path);
-        });
+        void removeRepoFlow(active, path)
+          .then((removed) => {
+            if (!removed) return;
+            fileDock.drop(path);
+            repoTreeStore.drop(path);
+            // If the backend already removed the repo (or never had it) but the
+            // bus snapshot is stale, drop it from the frontend store so the
+            // dashboard stops showing the orphan card immediately.
+            busStore.dropRepo(path);
+            const api = apiRef.current;
+            if (!api) return;
+            closePanelsForRemovedRepo(api, path);
+          })
+          .catch((e) => {
+            console.warn("tinto: remove repo action failed", e);
+          });
       },
       openFile: (path, filePath, pin = false) => {
         // Ensure the repo's project tab exists, then open the file in its nested

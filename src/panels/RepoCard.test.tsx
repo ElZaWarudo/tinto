@@ -43,6 +43,7 @@ function renderCard(
 ) {
   const onOpen = vi.fn();
   const onRetry = vi.fn();
+  const onRemove = vi.fn();
   const onLaunch = vi.fn(() => Promise.resolve());
   render(
     <RepoCard
@@ -52,11 +53,12 @@ function renderCard(
       nowMs={NOW}
       onOpen={onOpen}
       onRetry={onRetry}
+      onRemove={onRemove}
       onLaunch={onLaunch}
       {...props}
     />,
   );
-  return { onOpen, onRetry, onLaunch };
+  return { onOpen, onRetry, onRemove, onLaunch };
 }
 
 describe("RepoCard", () => {
@@ -147,6 +149,7 @@ describe("RepoCard", () => {
         nowMs={NOW}
         onOpen={() => {}}
         onRetry={() => {}}
+        onRemove={() => {}}
         onLaunch={() => {}}
       />,
     );
@@ -159,6 +162,7 @@ describe("RepoCard", () => {
         nowMs={NOW + ACTIVITY_WINDOW_MS + 1}
         onOpen={() => {}}
         onRetry={() => {}}
+        onRemove={() => {}}
         onLaunch={() => {}}
       />,
     );

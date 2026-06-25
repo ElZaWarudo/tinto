@@ -192,6 +192,7 @@ import {
   agentBinaryAvailable,
   agentBinaryAvailableForRepo,
   addWslRepo,
+  forgetRepo,
   getCommitDiff,
   getGitleaksSetupStatus,
   getRepoGitleaksSetupStatus,
@@ -253,6 +254,11 @@ describe("RDM-008 client wrappers", () => {
     const targets = [{ repo: "/r/api", path: "src/a.ts" }];
     void setSubscriptions(targets);
     expect(invokeMock).toHaveBeenCalledWith("set_subscriptions", { targets });
+  });
+
+  it("forgetRepo drops a repo from the live bus snapshot", () => {
+    void forgetRepo("/r/api");
+    expect(invokeMock).toHaveBeenCalledWith("forget_repo", { repo: "/r/api" });
   });
 
   it("get_commit_diff passes repo + commitId using Tauri camelCase arg keys", () => {
