@@ -268,3 +268,37 @@ Remaining UI-only gap:
   native UI in this closeout. The packaged Linux agent and backend checkpoint/change-log/revert path
   are verified above, and the user-reported visible-console regression is closed by the native UI
   no-console smoke.
+
+Latest resume smoke on 2026-06-25:
+
+- GitHub Actions CI run `28099310956` passed for commit
+  `8bf3fd3d67a373fe4c7bee8d90e1457a2db800de` (`fix(wsl): stabilize dev agent launch`).
+- Downloaded artifacts:
+  - `.ci-artifacts/28099310956/tinto-windows-bundle/nsis/Tinto_0.1.0_x64-setup.exe`
+    sha256 `2b5463c275addbd802f9794576597fe5ac0c8a22bf93705602c3285641b7e474`.
+  - `.ci-artifacts/28099310956/tinto-windows-bundle/msi/Tinto_0.1.0_x64_en-US.msi`
+    sha256 `b7be6aa01da04a9eb76de532bad05015dc31f217a50ef6316d1faf67b9c3c0fe`.
+  - `.ci-artifacts/28099310956/tinto-agent-linux-x86_64/tinto-agent-linux-x86_64`
+    sha256 `db3f083fbefa5db36c8f34adaacfe7b285c4b275c7ecfd6d705f4e86873bb4ba`.
+- MSI administrative extraction to
+  `C:\Users\User\AppData\Local\Temp\tinto-msi-extract-28099310956` succeeded. Extracted image
+  contained `PFiles/Tinto/tinto.exe`, `PFiles/Tinto/tinto-agent.exe`, and
+  `PFiles/Tinto/tinto-agent-linux-x86_64`.
+- Packaged-agent backend checkpoint smoke passed after installing the extracted Linux agent to
+  `$HOME/.local/share/tinto/agents/0.1.0/tinto-agent`: compatible handshake returned
+  `{"type":"handshake","protocol_version":1,"agent_version":"0.1.0","status":"ok"}`;
+  checkpoint scan reported `README.md` modified and `agent-created.txt` created; checkpoint revert
+  removed `agent-created.txt`, restored `README.md`, and left the temporary repo clean.
+- Packaged native UI Agent Console start/stop/change-log/revert was not clicked in this resume
+  because an isolated-profile launch attempt surfaced a real user workbench instead of the intended
+  smoke workbench. The launched `tinto.exe` process was stopped, and the UI-only gap remains manual.
+
+Post-release terminal-input regression note on 2026-06-25:
+
+- Subsequent local investigation moved from "remaining UI-only gap" into an active frontend
+  regression: the embedded Agent Console can stop accepting typed text and paste after Codex
+  startup completes, even while the backend process remains alive.
+- The regression is being tracked in
+  `docs/orchestration/2026-06-25-terminal-input-regression-handoff.md`.
+- Until that input path is fixed, packaged native UI Agent Console start/stop/change-log/revert
+  cannot be treated as a clean manual-smoke closeout on the current local head.
