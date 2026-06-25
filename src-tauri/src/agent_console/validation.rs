@@ -101,7 +101,7 @@ pub(crate) fn build_wsl_command_available_argv(
         "--exec".into(),
         "bash".into(),
         "-lc".into(),
-        "command -v -- \"$1\"".into(),
+        "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH\"; command -v -- \"$1\"".into(),
         "tinto-agent-console-check".into(),
         agent_type.to_string(),
     ])
@@ -166,7 +166,10 @@ mod tests {
         let argv = build_wsl_command_available_argv("Ubuntu", "codex").unwrap();
 
         assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
-        assert_eq!(argv[6], "command -v -- \"$1\"");
+        assert_eq!(
+            argv[6],
+            "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH\"; command -v -- \"$1\""
+        );
         assert_eq!(argv[8], "codex");
     }
 
