@@ -1,14 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { openAgentTerminalPanel, terminalLayoutPosition } from "./openAgentTerminal";
+import { consoleDock } from "./consoleDock";
+import { openAgentConsolesPanel, openAgentTerminalPanel } from "./openAgentTerminal";
 import {
+  PANEL_AGENT_CONSOLES,
   PANEL_AGENT_TERMINAL,
   agentTerminalPanelId,
   sessionIdFromAgentTerminalPanelId,
 } from "./panels";
 
 function fakeApi() {
-  const panels: Record<string, { id: string; api: { setActive: ReturnType<typeof vi.fn> } }> = {};
-  const panelList: Array<{ id: string; api: { setActive: ReturnType<typeof vi.fn> } }> = [];
+  const panels: Record<
+    string,
+    { id: string; api: { setActive: ReturnType<typeof vi.fn> }; params?: unknown }
+  > = {};
+  const panelList: Array<{
+    id: string;
+    api: { setActive: ReturnType<typeof vi.fn> };
+    params?: unknown;
+  }> = [];
   return {
     get panels() {
       return panelList;
@@ -16,11 +25,13 @@ function fakeApi() {
     get activePanel() {
       return panelList[panelList.length - 1];
     },
-    addPanel: vi.fn((opts: { id: string }) => {
-      panels[opts.id] = { id: opts.id, api: { setActive: vi.fn() } };
-      panelList.push(panels[opts.id]);
-      return panels[opts.id];
-    }),
+    addPanel: vi.fn(
+      (opts: { id: string; component?: string; title?: string; params?: unknown }) => {
+        panels[opts.id] = { id: opts.id, api: { setActive: vi.fn() }, params: opts.params };
+        panelList.push(panels[opts.id]);
+        return panels[opts.id];
+      },
+    ),
     getPanel: vi.fn((id: string) => panels[id]),
     _panels: panels,
   };
@@ -33,15 +44,47 @@ describe("agent terminal panel helpers", () => {
     expect(sessionIdFromAgentTerminalPanelId("repo:/r/api")).toBeNull();
   });
 
-  it("adds one terminal panel and focuses it on later opens", () => {
+  it("opens the level-1 Consoles panel and delegates the session to the console dock", () => {
     const api = fakeApi();
+    const openSpy = vi.spyOn(consoleDock, "openTerminal").mockImplementation(() => {});
+
     openAgentTerminalPanel(api as never, {
       sessionId: "sess-123456789",
       repo: "/r/api",
       agentType: "codex",
     });
+
     expect(api.addPanel).toHaveBeenCalledWith({
-      id: "agent-terminal:sess-123456789",
+      id: PANEL_AGENT_CONSOLES,
+      component: PANEL_AGENT_CONSOLES,
+      title: "Consoles",
+    });
+    expect(api._panels[PANEL_AGENT_CONSOLES].api.setActive).toHaveBeenCalledOnce();
+    expect(openSpy).toHaveBeenCalledWith({
+      sessionId: "sess-123456789",
+      repo: "/r/api",
+      agentType: "codex",
+    });
+
+    openSpy.mockRestore();
+  });
+
+  it("focuses the existing Consoles panel on later opens", () => {
+    const api = fakeApi();
+    openAgentConsolesPanel(api as never);
+    const created = api._panels[PANEL_AGENT_CONSOLES];
+    created.api.setActive.mockClear();
+
+    openAgentConsolesPanel(api as never);
+
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(created.api.setActive).toHaveBeenCalledOnce();
+  });
+
+  it("keeps terminal panel ids available for the nested console dock", () => {
+    const api = fakeApi();
+    api.addPanel({
+      id: agentTerminalPanelId("sess-123456789"),
       component: PANEL_AGENT_TERMINAL,
       title: "codex sess-123",
       params: {
@@ -49,38 +92,12 @@ describe("agent terminal panel helpers", () => {
         repo: "/r/api",
         agentType: "codex",
       },
-      position: undefined,
     });
-    const created = api._panels["agent-terminal:sess-123456789"];
 
-    openAgentTerminalPanel(api as never, {
+    expect(api._panels[agentTerminalPanelId("sess-123456789")].params).toEqual({
       sessionId: "sess-123456789",
       repo: "/r/api",
       agentType: "codex",
-    });
-
-    expect(api.addPanel).toHaveBeenCalledTimes(1);
-    expect(created.api.setActive).toHaveBeenCalledOnce();
-  });
-
-  it("places the first terminal right of the active panel, then below/right for more", () => {
-    const api = fakeApi();
-    api.addPanel({ id: "dashboard" });
-    expect(terminalLayoutPosition(api as never)).toEqual({
-      direction: "right",
-      referencePanel: "dashboard",
-    });
-
-    api.addPanel({ id: agentTerminalPanelId("sess-1") });
-    expect(terminalLayoutPosition(api as never)).toEqual({
-      direction: "below",
-      referencePanel: agentTerminalPanelId("sess-1"),
-    });
-
-    api.addPanel({ id: agentTerminalPanelId("sess-2") });
-    expect(terminalLayoutPosition(api as never)).toEqual({
-      direction: "right",
-      referencePanel: agentTerminalPanelId("sess-2"),
     });
   });
 });

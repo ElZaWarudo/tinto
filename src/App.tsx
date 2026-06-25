@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import type { DockviewApi } from "dockview-react";
 import { DockWorkspace, type PanelComponents, type TabComponents } from "./workspace/DockWorkspace";
 import {
+  PANEL_AGENT_CONSOLES,
   PANEL_AGENT_TERMINAL,
   PANEL_DASHBOARD,
   PANEL_REPO,
@@ -20,6 +21,7 @@ import { DashboardPanel } from "./panels/DashboardPanel";
 import { RepoPanel } from "./panels/RepoPanel";
 import { RepoTab } from "./panels/RepoTab";
 import { TimelinePanel } from "./panels/timeline/TimelinePanel";
+import { ConsoleDockPanel } from "./panels/terminal/ConsoleDockPanel";
 import { TerminalPanel } from "./panels/terminal/TerminalPanel";
 import { MenuBar } from "./workbench/MenuBar";
 import { FirstRun } from "./workbench/firstRun";
@@ -37,6 +39,7 @@ const components: PanelComponents = {
   [PANEL_DASHBOARD]: DashboardPanel,
   [PANEL_REPO]: RepoPanel,
   [PANEL_TIMELINE]: TimelinePanel,
+  [PANEL_AGENT_CONSOLES]: ConsoleDockPanel,
   [PANEL_AGENT_TERMINAL]: TerminalPanel,
 };
 

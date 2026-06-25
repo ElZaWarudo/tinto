@@ -27,6 +27,7 @@ import App from "./App";
 import { busStore } from "./bus/store";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
 import {
+  PANEL_AGENT_CONSOLES,
   PANEL_AGENT_TERMINAL,
   PANEL_DASHBOARD,
   PANEL_REPO,
@@ -68,7 +69,13 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
     expect(Object.keys(captured.components ?? {})).toEqual(
-      expect.arrayContaining([PANEL_DASHBOARD, PANEL_REPO, PANEL_TIMELINE, PANEL_AGENT_TERMINAL]),
+      expect.arrayContaining([
+        PANEL_DASHBOARD,
+        PANEL_REPO,
+        PANEL_TIMELINE,
+        PANEL_AGENT_CONSOLES,
+        PANEL_AGENT_TERMINAL,
+      ]),
     );
   });
 

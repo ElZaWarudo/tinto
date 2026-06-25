@@ -1666,6 +1666,19 @@ select option {
 }
 
 /* ---- ACI-002: agent terminal attachment ---- */
+.console-dock-panel {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  background: #0b1020;
+}
+
+.console-dock-panel > .dockview-theme-vs {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .terminal-panel {
   height: 100%;
   min-height: 0;

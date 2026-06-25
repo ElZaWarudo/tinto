@@ -8,6 +8,7 @@ export const PANEL_DASHBOARD = "dashboard";
 export const PANEL_TREE = "tree";
 export const PANEL_REPO = "repo";
 export const PANEL_TIMELINE = "timeline";
+export const PANEL_AGENT_CONSOLES = "agent-consoles";
 export const PANEL_AGENT_TERMINAL = "agent-terminal";
 
 /** Custom dockview tab for project panels (shows a change indicator). */
