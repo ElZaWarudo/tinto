@@ -193,6 +193,16 @@ export class BusStore {
     this.set({ ...EMPTY });
   }
 
+  /** Drop a repo from the live state (e.g. after it was removed from the
+   *  workbench or detected as an orphan still present in the bus snapshot). */
+  dropRepo(repo: string) {
+    const { [repo]: _repo, ...repos } = this.state.repos;
+    const { [repo]: _activity, ...activity } = this.state.activity;
+    const { [repo]: _diffs, ...diffs } = this.state.diffs;
+    const { [repo]: _events, ...fsEventsByRepo } = this.state.fsEventsByRepo;
+    this.set({ ...this.state, repos, activity, diffs, fsEventsByRepo });
+  }
+
   /** Display name for a repo path: alias from config, else the basename. */
   displayName(path: string): string {
     const wb = (this.state.config?.workbenches ?? []).find((w) =>

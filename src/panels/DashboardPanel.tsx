@@ -27,7 +27,7 @@ export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
-  const { openRepo, addRepo, openAgentTerminal } = useWorkspaceActions();
+  const { openRepo, addRepo, openAgentTerminal, removeRepo } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
   if (!loaded) {
@@ -76,6 +76,7 @@ export function DashboardPanel() {
               nowMs={nowMs}
               onOpen={() => openRepo(p)}
               onRetry={() => void retryRepo(p)}
+              onRemove={() => removeRepo(p)}
               onLaunch={async (agentType) => {
                 const sessionId = await startAgentSession(p, agentType);
                 const sessions = await listAgentSessions();

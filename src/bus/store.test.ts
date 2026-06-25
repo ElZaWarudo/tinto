@@ -252,6 +252,22 @@ describe("BusStore", () => {
     expect(notified).toBeGreaterThan(0);
   });
 
+  it("dropRepo removes a single repo and its activity/events/diffs", () => {
+    store.applyDelta(delta("/r/a", 1, { subscribed_diffs: [fileDiff("a.ts")] }));
+    store.applyDelta(delta("/r/b", 1));
+    store.applyFsEvents({
+      repo: "/r/a",
+      events: [{ path: ".env", kind: "modified", timestamp_ms: 5000, size: 10, size_delta: 1 }],
+    });
+    store.dropRepo("/r/a");
+    const s = store.getState();
+    expect(s.repos["/r/a"]).toBeUndefined();
+    expect(s.activity["/r/a"]).toBeUndefined();
+    expect(s.diffs["/r/a"]).toBeUndefined();
+    expect(s.fsEventsByRepo["/r/a"]).toBeUndefined();
+    expect(s.repos["/r/b"]).toBeDefined();
+  });
+
   it("basename handles posix and windows separators", () => {
     expect(basename("/a/b/c")).toBe("c");
     expect(basename("C:\\x\\y")).toBe("y");

@@ -129,7 +129,20 @@ function RepoOverview({ repo }: { repo: string }) {
   if (!delta) {
     return (
       <div className="repo-overview repo-overview--missing" data-testid="repo-overview-missing">
-        This repo is no longer in the active workbench.
+        <header className="repo-panel__head">
+          <h2>{busStore.displayName(repo)}</h2>
+          <span className="repo-panel__path">{repo}</span>
+          <button
+            type="button"
+            className="repo-panel__remove"
+            data-testid="repo-panel-remove"
+            title="Remove from workbench"
+            onClick={() => removeRepo(repo)}
+          >
+            Remove
+          </button>
+        </header>
+        <p>This repo is no longer accessible or is not in the active workbench.</p>
       </div>
     );
   }
@@ -156,6 +169,7 @@ function RepoOverview({ repo }: { repo: string }) {
         <h2>{busStore.displayName(repo)}</h2>
         <span className="repo-panel__path">{repo}</span>
         <button
+          type="button"
           className="repo-panel__remove"
           data-testid="repo-panel-remove"
           title="Remove from workbench"

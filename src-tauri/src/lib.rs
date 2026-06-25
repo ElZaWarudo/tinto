@@ -105,6 +105,7 @@ pub fn run() {
             bus::commands::list_repo_tree,
             bus::commands::set_subscriptions,
             bus::commands::retry_repo,
+            bus::commands::forget_repo,
             bus::commands::get_gitleaks_setup_status,
             bus::commands::install_gitleaks,
             bus::commands::get_repo_gitleaks_setup_status,

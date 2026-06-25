@@ -411,7 +411,7 @@ fn build_packaged_agent_install_argv(
         "bash".to_string(),
         "-lc".to_string(),
         format!(
-            "set -eu; install_dir=\"$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; mkdir -p \"$install_dir\"; cp -- \"$1\" \"$install_dir/tinto-agent\"; chmod 700 \"$install_dir/tinto-agent\""
+            "set -eu; install_dir=\"$HOME/.local/share/tinto/agents/{AGENT_VERSION}\"; dest=\"$install_dir/tinto-agent\"; mkdir -p \"$install_dir\"; if [ -f \"$dest\" ] && cmp -s -- \"$1\" \"$dest\"; then chmod 700 \"$dest\"; else tmp=\"$install_dir/.tinto-agent.$$.$RANDOM.tmp\"; trap 'rm -f \"$tmp\"' EXIT; cp -- \"$1\" \"$tmp\"; chmod 700 \"$tmp\"; mv -f -- \"$tmp\" \"$dest\"; trap - EXIT; fi"
         ),
         "tinto-agent-install".to_string(),
         source,
@@ -650,8 +650,13 @@ mod tests {
         assert_eq!(&argv[..5], ["wsl.exe", "-d", "Ubuntu", "--exec", "bash"]);
         assert_eq!(argv[5], "-lc");
         assert!(argv[6].contains("mkdir -p \"$install_dir\""));
-        assert!(argv[6].contains("cp -- \"$1\" \"$install_dir/tinto-agent\""));
-        assert!(argv[6].contains("chmod 700 \"$install_dir/tinto-agent\""));
+        assert!(argv[6].contains("dest=\"$install_dir/tinto-agent\""));
+        assert!(argv[6].contains("cmp -s -- \"$1\" \"$dest\""));
+        assert!(argv[6].contains("tmp=\"$install_dir/.tinto-agent.$$.$RANDOM.tmp\""));
+        assert!(argv[6].contains("cp -- \"$1\" \"$tmp\""));
+        assert!(argv[6].contains("mv -f -- \"$tmp\" \"$dest\""));
+        assert!(argv[6].contains("chmod 700 \"$dest\""));
+        assert!(!argv[6].contains("exit 0"));
         assert!(argv[6].contains("$HOME/.local/share/tinto/agents/"));
         assert_eq!(argv[7], "tinto-agent-install");
         assert_eq!(

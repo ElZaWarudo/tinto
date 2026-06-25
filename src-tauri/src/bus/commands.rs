@@ -798,6 +798,18 @@ pub async fn retry_repo(bus: State<'_, BusHandle>, repo: PathBuf) -> Result<(), 
     }
 }
 
+#[tauri::command]
+pub async fn forget_repo(bus: State<'_, BusHandle>, repo: PathBuf) -> Result<(), CommandError> {
+    if bus.forget_repo(repo).await {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "bus-unavailable",
+            "el bus no está disponible",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,15 +2,17 @@
 // autodetect), remove. All target the ACTIVE workbench by name (no implicit
 // active workbench in the backend mutations) and reload the snapshot after.
 
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
   addRepo,
   addWslRepo,
   autodetectReposUnder,
   createWorkbench,
+  forgetRepo,
   listWslDirectory,
   listWslDistros,
   removeRepo,
+  removeWslRepo,
   setActiveWorkbench,
   updateRepo,
   type WslDirectoryListing,
@@ -118,20 +120,82 @@ export async function autodetectFlow(active: string): Promise<void> {
   await reloadActiveWorkbench();
 }
 
-export async function removeRepoFlow(
-  active: string,
-  path: string,
-  confirmFn: (msg: string) => boolean = window.confirm.bind(window),
-): Promise<boolean> {
-  if (!confirmFn(`Remove ${path} from this workbench? Files are not deleted.`)) return false;
+export async function removeRepoFlow(active: string, path: string): Promise<boolean> {
+  const message = `Remove ${path} from this workbench?\nFiles are not deleted.`;
+  let ok: boolean;
   try {
-    await removeRepo(active, path);
+    ok = await confirm(message, {
+      title: "Remove repo",
+      kind: "warning",
+      okLabel: "Remove",
+      cancelLabel: "Cancel",
+    });
+  } catch {
+    // If the Tauri dialog is unavailable (e.g. permission/capability mismatch),
+    // fall back to the browser confirm so the user can still remove the repo.
+    ok = window.confirm(message);
+  }
+  if (!ok) return false;
+  const entry = findRepoEntry(active, path);
+  // Repo missing from the active workbench's config (e.g. it was already removed
+  // from the Dashboard, or the directory was deleted and the panel is still
+  // mounted as the "no longer accessible" view). The bus snapshot may still
+  // hold it, so explicitly tell the backend to drop it.
+  if (!entry) {
+    try {
+      await forgetRepo(path);
+    } catch (e) {
+      console.warn("tinto: forget repo failed", e);
+    }
+    try {
+      await reloadActiveWorkbench();
+    } catch (e) {
+      console.warn("tinto: reload after forget failed", e);
+    }
+    return true;
+  }
+  // Use the path stored in the config, not the bus key. When the repo directory
+  // was deleted, the backend matches the stored canonical path (canonicalize now
+  // fails), so the exact stored string is the one that will actually remove the
+  // stale entry.
+  const storedPath = entry.path;
+  try {
+    if (entry.source === "wsl" && entry.distro) {
+      await removeWslRepo(active, entry.distro, storedPath);
+    } else {
+      await removeRepo(active, storedPath);
+    }
   } catch (e) {
     console.warn("tinto: remove repo failed", e); // e.g. workbench changed mid-flight
     return false;
   }
   await reloadActiveWorkbench();
   return true;
+}
+
+function findRepoEntry(
+  active: string,
+  path: string,
+): { source?: string; distro?: string | null } | null {
+  const config = busStore.getState().config;
+  if (!config) return null;
+  // The config can arrive with `workbenches` missing in some edge paths (e.g. a
+  // partial snapshot from the backend during first-run recovery — see the
+  // "does not crash when config is missing workbenches" guard in MenuBar).
+  // Treat a missing/empty list the same as a config without the entry.
+  const wb = (config.workbenches ?? []).find((w) => w.name === active);
+  if (!wb) return null;
+  const normalized = normalizeRepoPath(path);
+  return (
+    wb.repos.find((r) => normalizeRepoPath(r.path) === normalized) ?? null
+  );
+}
+
+/** Normalize a repo path for comparison across the bus key and workbench config.
+ *  This only does string normalization; true filesystem canonicalization lives
+ *  on the Rust side. */
+function normalizeRepoPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/$/, "");
 }
 
 export async function updateRepoFsWatch(
