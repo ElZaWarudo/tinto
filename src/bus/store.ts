@@ -196,10 +196,14 @@ export class BusStore {
   /** Drop a repo from the live state (e.g. after it was removed from the
    *  workbench or detected as an orphan still present in the bus snapshot). */
   dropRepo(repo: string) {
-    const { [repo]: _repo, ...repos } = this.state.repos;
-    const { [repo]: _activity, ...activity } = this.state.activity;
-    const { [repo]: _diffs, ...diffs } = this.state.diffs;
-    const { [repo]: _events, ...fsEventsByRepo } = this.state.fsEventsByRepo;
+    const repos = { ...this.state.repos };
+    const activity = { ...this.state.activity };
+    const diffs = { ...this.state.diffs };
+    const fsEventsByRepo = { ...this.state.fsEventsByRepo };
+    delete repos[repo];
+    delete activity[repo];
+    delete diffs[repo];
+    delete fsEventsByRepo[repo];
     this.set({ ...this.state, repos, activity, diffs, fsEventsByRepo });
   }
 

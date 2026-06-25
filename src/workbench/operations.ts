@@ -176,7 +176,7 @@ export async function removeRepoFlow(active: string, path: string): Promise<bool
 function findRepoEntry(
   active: string,
   path: string,
-): { source?: string; distro?: string | null } | null {
+): { path: string; source?: string; distro?: string | null } | null {
   const config = busStore.getState().config;
   if (!config) return null;
   // The config can arrive with `workbenches` missing in some edge paths (e.g. a
@@ -186,9 +186,7 @@ function findRepoEntry(
   const wb = (config.workbenches ?? []).find((w) => w.name === active);
   if (!wb) return null;
   const normalized = normalizeRepoPath(path);
-  return (
-    wb.repos.find((r) => normalizeRepoPath(r.path) === normalized) ?? null
-  );
+  return wb.repos.find((r) => normalizeRepoPath(r.path) === normalized) ?? null;
 }
 
 /** Normalize a repo path for comparison across the bus key and workbench config.
