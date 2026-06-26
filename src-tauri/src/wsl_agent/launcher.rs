@@ -546,6 +546,7 @@ fn request_with_persistent_agent(
     ))
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn request_is_retry_safe(request: &AgentRequest) -> bool {
     matches!(
         request,
