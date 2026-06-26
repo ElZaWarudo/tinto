@@ -26,6 +26,9 @@
   /* Open-file text scale (Ctrl +/-/0); only file-content rules consume it. */
   --file-zoom: 1;
 
+  /* Indent guides + neon-tree-style tree polish. */
+  --tree-guide: rgba(255, 255, 255, 0.06);
+
   color: var(--fg);
   background-color: var(--bg);
 
@@ -988,6 +991,11 @@ select option {
   display: flex;
   align-items: center;
   gap: 6px;
+  background: linear-gradient(
+    180deg,
+    var(--bg-elev),
+    color-mix(in srgb, var(--bg-elev), var(--bg) 60%)
+  );
 }
 .project-explorer__title {
   flex: 1;
@@ -2730,6 +2738,26 @@ a:focus-visible {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+  position: relative;
+}
+.tree-dir__row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--indent, 0px);
+  pointer-events: none;
+  z-index: -1;
+  background-image: linear-gradient(
+    to right,
+    var(--tree-guide) 0,
+    var(--tree-guide) 1px,
+    transparent 1px
+  );
+  background-size: 12px 100%;
+  background-position: 12px 0;
+  background-repeat: repeat-y;
 }
 .tree-dir__row:hover {
   background: var(--hover);
@@ -2737,8 +2765,28 @@ a:focus-visible {
 }
 .tree-dir__caret {
   flex: none;
-  width: 12px;
-  text-align: center;
+  width: 14px;
+  height: 14px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--fg-muted);
+  transition: color var(--ease);
+}
+.tree-dir__caret::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transform-origin: 25% 50%;
+  transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tree-dir__caret--open::before {
+  transform: rotate(90deg);
+}
+.tree-dir__row:hover .tree-dir__caret {
+  color: var(--fg);
 }
 .tree-icon {
   position: relative;
@@ -3141,6 +3189,26 @@ a:focus-visible {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+  position: relative;
+}
+.tree-file::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--indent, 0px) - 2px);
+  pointer-events: none;
+  z-index: -1;
+  background-image: linear-gradient(
+    to right,
+    var(--tree-guide) 0,
+    var(--tree-guide) 1px,
+    transparent 1px
+  );
+  background-size: 12px 100%;
+  background-position: 10px 0;
+  background-repeat: repeat-y;
 }
 .tree-file:hover {
   background: var(--hover-strong);
@@ -3260,6 +3328,7 @@ a:focus-visible {
 .tree-file--active {
   background: var(--accent-soft);
   color: var(--fg);
+  border-left-color: var(--accent-fg);
 }
 .tree-file--active:hover {
   background: var(--accent-soft);

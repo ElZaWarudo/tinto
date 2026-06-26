@@ -3,7 +3,7 @@
 // pin=false), a double click PINS (pin=true); Enter pins, Space previews. The
 // active file row is highlighted. Shared by the in-project explorer.
 
-import { useState, type MouseEvent } from "react";
+import { useState, type CSSProperties, type MouseEvent } from "react";
 import type { RepoDelta } from "../../bus/contract";
 import { getPathSignals } from "../../bus/store";
 import { SignalBadges } from "../SignalBadges";
@@ -441,7 +441,11 @@ export function FileTreeNode({
 }) {
   const [localOpen, setLocalOpen] = useState(false); // fallback for standalone use
   const open = expandedDirs ? expandedDirs.has(node.path) : localOpen;
-  const pad = { paddingLeft: `${depth * 12 + 8}px` };
+  const indent = depth * 12 + 8;
+  const indentStyle = {
+    paddingLeft: `${indent}px`,
+    "--indent": `${indent}px`,
+  } as CSSProperties;
   const toggleDir = () => {
     if (onToggleDir) onToggleDir(node.path);
     else setLocalOpen((o) => !o);
@@ -458,7 +462,7 @@ export function FileTreeNode({
         <button
           className={dirClass}
           type="button"
-          style={pad}
+          style={indentStyle}
           draggable={!!onTreeDragStart}
           onDragStart={() => onTreeDragStart?.(node)}
           onDragEnd={() => onTreeDragEnd?.()}
@@ -491,7 +495,10 @@ export function FileTreeNode({
             }
           }}
         >
-          <span className="tree-dir__caret">{open ? "▾" : "▸"}</span>
+          <span
+            className={`tree-dir__caret${open ? " tree-dir__caret--open" : ""}`}
+            aria-hidden="true"
+          />
           <TreeIcon kind="folder" open={open} />
           <span className="tree-dir__name" title={node.name}>
             {node.name}
@@ -538,7 +545,7 @@ export function FileTreeNode({
   return (
     <div
       className={classes.join(" ")}
-      style={pad}
+      style={indentStyle}
       role="button"
       tabIndex={0}
       data-testid={`tree-file-${node.path}`}
