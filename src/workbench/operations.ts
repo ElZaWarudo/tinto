@@ -10,6 +10,7 @@ import {
   createWorkbench,
   deleteWorkbench,
   forgetRepo,
+  listWorkbenches,
   listWslDirectory,
   listWslDistros,
   removeRepo,
@@ -109,12 +110,7 @@ export async function addWslRepoFlow(
 ): Promise<string | null> {
   const path = normalizeWslLinuxPath(input.path);
   if (!path) return null;
-  let stored: string | null = null;
-  try {
-    stored = await addWslRepo(active, input.distro, path, input.alias?.trim() || undefined);
-  } catch (e) {
-    console.warn("tinto: add WSL repo failed", e);
-  }
+  const stored = await addWslRepo(active, input.distro, path, input.alias?.trim() || undefined);
   await reloadActiveWorkbench();
   return stored;
 }
@@ -170,7 +166,7 @@ export async function removeRepoFlow(active: string, path: string): Promise<bool
     ok = window.confirm(message);
   }
   if (!ok) return false;
-  const entry = findRepoEntry(active, path);
+  const entry = findRepoEntry(active, path) ?? (await refreshAndFindRepoEntry(active, path));
   // Repo missing from the active workbench's config (e.g. it was already removed
   // from the Dashboard, or the directory was deleted and the panel is still
   // mounted as the "no longer accessible" view). The bus snapshot may still
@@ -213,6 +209,28 @@ function findRepoEntry(
 ): { path: string; source?: string; distro?: string | null } | null {
   const config = busStore.getState().config;
   if (!config) return null;
+  return findRepoEntryInConfig(config, active, path);
+}
+
+async function refreshAndFindRepoEntry(
+  active: string,
+  path: string,
+): Promise<{ path: string; source?: string; distro?: string | null } | null> {
+  try {
+    const config = await listWorkbenches();
+    busStore.setConfig(config);
+    return findRepoEntryInConfig(config, active, path);
+  } catch (e) {
+    console.warn("tinto: refresh config before remove failed", e);
+    return null;
+  }
+}
+
+function findRepoEntryInConfig(
+  config: WorkbenchConfig,
+  active: string,
+  path: string,
+): { path: string; source?: string; distro?: string | null } | null {
   // The config can arrive with `workbenches` missing in some edge paths (e.g. a
   // partial snapshot from the backend during first-run recovery — see the
   // "does not crash when config is missing workbenches" guard in MenuBar).

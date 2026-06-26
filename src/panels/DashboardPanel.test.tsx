@@ -110,6 +110,41 @@ describe("DashboardPanel", () => {
     expect(screen.getByTestId("card-/r/b")).toBeInTheDocument();
   });
 
+  it("keeps configured WSL repos visible while their live snapshot is pending", async () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              {
+                path: "/home/me/chat-n-food",
+                alias: null,
+                source: "wsl",
+                distro: "Ubuntu",
+                fs_watch: [],
+              },
+            ],
+          },
+        ],
+      });
+      busStore.loadSnapshot([], { available: true });
+    });
+
+    renderDash();
+
+    expect(screen.getByTestId("card-/home/me/chat-n-food")).toBeInTheDocument();
+    expect(screen.getByTestId("error-detail")).toHaveTextContent("Waiting for repo snapshot");
+    await waitFor(() =>
+      expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith(
+        "/home/me/chat-n-food",
+        "codex",
+      ),
+    );
+  });
+
   // Covers AE2: a status change updates that card live
   it("updates a card's counts when a newer delta arrives", () => {
     act(() => busStore.loadSnapshot([delta("/r/a", 1)], { available: true }));

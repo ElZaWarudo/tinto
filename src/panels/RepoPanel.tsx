@@ -106,7 +106,7 @@ function RepoOverview({ repo }: { repo: string }) {
   const [logError, setLogError] = useState(false);
 
   // Refetch the log when the repo changes or HEAD changes. Status-only deltas
-  // are frequent, especially for WSL polling, and should not reload history.
+  // are frequent in polled repos and should not reload history.
   const commitLogKey = delta?.head?.id ?? "no-head";
   useEffect(() => {
     let active = true;

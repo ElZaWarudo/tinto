@@ -518,20 +518,52 @@ fn request_with_persistent_agent(
     let argv = build_wsl_argv(config)?;
     let key = pooled_agent_key(&argv);
     let request_line = encode_agent_request(request)?;
-    let agent = pooled_agent(&key, &argv)?;
-    match agent.exchange(&request_line, timeout) {
-        Ok(line) => match parse_agent_response_line(&line) {
-            Ok(response) => Ok(response),
+    for attempt in 0..2 {
+        let agent = pooled_agent(&key, &argv)?;
+        match agent.exchange(&request_line, timeout) {
+            Ok(line) => match parse_agent_response_line(&line) {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    drop_pooled_agent(&key, Some(&agent));
+                    return Err(error);
+                }
+            },
             Err(error) => {
+                let retry = error.category == AgentErrorCategory::ChildExit
+                    && attempt == 0
+                    && request_is_retry_safe(request);
                 drop_pooled_agent(&key, Some(&agent));
-                Err(error)
+                if retry {
+                    continue;
+                }
+                return Err(error);
             }
-        },
-        Err(error) => {
-            drop_pooled_agent(&key, Some(&agent));
-            Err(error)
         }
     }
+    Err(AgentError::new(
+        AgentErrorCategory::ChildExit,
+        "el agente WSL cerro stdout",
+    ))
+}
+
+fn request_is_retry_safe(request: &AgentRequest) -> bool {
+    matches!(
+        request,
+        AgentRequest::Handshake { .. }
+            | AgentRequest::RepoSnapshot { .. }
+            | AgentRequest::RepoSnapshotWithFsEvents { .. }
+            | AgentRequest::ListDirectory { .. }
+            | AgentRequest::WorktreeDiff { .. }
+            | AgentRequest::CommitDiff { .. }
+            | AgentRequest::CommitLog { .. }
+            | AgentRequest::Blob { .. }
+            | AgentRequest::FileContent { .. }
+            | AgentRequest::MediaContent { .. }
+            | AgentRequest::RepoTree { .. }
+            | AgentRequest::GitleaksSetupStatus { .. }
+            | AgentRequest::AgentBinaryAvailable { .. }
+            | AgentRequest::AgentCheckpointScan { .. }
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -1060,6 +1092,38 @@ mod tests {
                 .expect("response");
 
         assert!(matches!(response, AgentResponse::WorktreeDiff { .. }));
+    }
+
+    #[test]
+    fn child_exit_retry_is_limited_to_read_only_requests() {
+        let read_only = AgentRequest::RepoSnapshotWithFsEvents {
+            protocol_version: PROTOCOL_VERSION,
+            repos: vec!["/home/me/repo".into()],
+            subscriptions: Vec::new(),
+            fs_watch: Vec::new(),
+        };
+        let availability = AgentRequest::AgentBinaryAvailable {
+            protocol_version: PROTOCOL_VERSION,
+            agent_type: "codex".into(),
+        };
+        let mutating_delete = AgentRequest::DeleteFromRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: "/home/me/repo".into(),
+            allowed_repos: vec!["/home/me/repo".into()],
+            sources: vec!["old.txt".into()],
+        };
+        let mutating_checkpoint = AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION,
+            repo: "/home/me/repo".into(),
+            allowed_repos: vec!["/home/me/repo".into()],
+            session_id: "sess".into(),
+            created_at_ms: 1,
+        };
+
+        assert!(request_is_retry_safe(&read_only));
+        assert!(request_is_retry_safe(&availability));
+        assert!(!request_is_retry_safe(&mutating_delete));
+        assert!(!request_is_retry_safe(&mutating_checkpoint));
     }
 
     #[test]

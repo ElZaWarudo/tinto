@@ -208,21 +208,24 @@ mod tests {
             .and_then(|tail| tail.split(".setup").next())
             .expect("invoke handler block");
 
-        assert!(
-            handler_block.contains(
-                "#[cfg(target_os = \"windows\")]\n            workbench::commands::add_wsl_repo"
-            ),
-            "RDM-003 may register add_wsl_repo only behind the Windows cfg"
-        );
-        assert!(
-            handler_block.contains(
-                "#[cfg(target_os = \"windows\")]\n            workbench::commands::remove_wsl_repo"
-            ),
-            "RDM-003 may register remove_wsl_repo only behind the Windows cfg"
-        );
+        assert_windows_cfg_precedes_command(handler_block, "workbench::commands::add_wsl_repo");
+        assert_windows_cfg_precedes_command(handler_block, "workbench::commands::remove_wsl_repo");
         assert!(
             !handler_block.contains("tinto_agent"),
             "RDM-003 must not register tinto-agent launchers"
+        );
+    }
+
+    fn assert_windows_cfg_precedes_command(handler_block: &str, command: &str) {
+        let command_index = handler_block
+            .find(command)
+            .unwrap_or_else(|| panic!("{command} must be registered"));
+        let preceding = &handler_block[..command_index];
+        assert!(
+            preceding
+                .trim_end()
+                .ends_with("#[cfg(target_os = \"windows\")]"),
+            "{command} may register only behind the Windows cfg"
         );
     }
 

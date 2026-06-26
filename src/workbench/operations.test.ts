@@ -8,6 +8,7 @@ const client = vi.hoisted(() => ({
   createWorkbench: vi.fn(),
   deleteWorkbench: vi.fn(),
   forgetRepo: vi.fn(),
+  listWorkbenches: vi.fn(),
   listWslDirectory: vi.fn(),
   listWslDistros: vi.fn(),
   removeRepo: vi.fn(),
@@ -57,6 +58,7 @@ describe("workbench operations", () => {
     client.createWorkbench.mockResolvedValue(undefined);
     client.deleteWorkbench.mockResolvedValue(undefined);
     client.forgetRepo.mockResolvedValue(undefined);
+    client.listWorkbenches.mockResolvedValue({ version: 1, active: null, workbenches: [] });
     client.removeRepo.mockResolvedValue(undefined);
     client.removeWslRepo.mockResolvedValue(undefined);
     client.renameWorkbench.mockResolvedValue(undefined);
@@ -152,6 +154,19 @@ describe("workbench operations", () => {
 
     expect(client.addWslRepo).toHaveBeenCalledWith("Work", "Ubuntu-24.04", "/home/me/repo", "API");
     expect(reloadMock).toHaveBeenCalled();
+  });
+
+  it("addWslRepoFlow surfaces backend failures so the UI can explain them", async () => {
+    client.addWslRepo.mockRejectedValueOnce(new Error("unsupported_wsl_distro"));
+
+    await expect(
+      addWslRepoFlow("Work", {
+        distro: "Ubuntu",
+        path: "/home/me/repo",
+      }),
+    ).rejects.toThrow("unsupported_wsl_distro");
+
+    expect(reloadMock).not.toHaveBeenCalled();
   });
 
   it("addWslRepoFlow rejects invalid input before invoking backend", async () => {
@@ -278,6 +293,36 @@ describe("workbench operations", () => {
     expect(ok).toBe(true);
     expect(client.removeWslRepo).toHaveBeenCalledWith("Work", "Ubuntu-24.04", "/home/me/repo");
     expect(client.removeRepo).not.toHaveBeenCalled();
+  });
+
+  it("removeRepoFlow refreshes config before treating a WSL repo as an orphan", async () => {
+    act(() => busStore.resetAll());
+    client.listWorkbenches.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        {
+          name: "Work",
+          repos: [
+            {
+              path: "/home/teb",
+              alias: null,
+              fs_watch: [],
+              source: "wsl",
+              distro: "Ubuntu",
+            },
+          ],
+        },
+      ],
+    });
+    dialogMock.confirm.mockResolvedValueOnce(true);
+
+    const ok = await removeRepoFlow("Work", "/home/teb");
+
+    expect(ok).toBe(true);
+    expect(client.listWorkbenches).toHaveBeenCalledOnce();
+    expect(client.removeWslRepo).toHaveBeenCalledWith("Work", "Ubuntu", "/home/teb");
+    expect(client.forgetRepo).not.toHaveBeenCalled();
   });
 
   it("renameWorkbenchFlow trims, calls the backend, reloads, updates MRU", async () => {

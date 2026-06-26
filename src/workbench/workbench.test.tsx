@@ -151,6 +151,22 @@ describe("MenuBar", () => {
     });
   });
 
+  it("shows backend errors when adding a WSL repo fails", async () => {
+    ops.addWslRepoFlow.mockRejectedValue(new Error("distro WSL no soportada: Ubuntu-24.04"));
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByTestId("wsl-path"), { target: { value: "/home/me/repo" } });
+    fireEvent.click(screen.getByTestId("add-repo-submit"));
+
+    expect(await screen.findByTestId("add-repo-error")).toHaveTextContent(
+      "distro WSL no soportada: Ubuntu-24.04",
+    );
+  });
+
   it("can render the add repo dialog as one source-neutral flow", async () => {
     const addLocal = vi.fn();
     render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} onAddLocal={addLocal} />);

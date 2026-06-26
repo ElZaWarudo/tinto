@@ -1023,10 +1023,14 @@ mod tests {
         )
         .expect("parse");
 
-        assert!(matches!(
-            response,
-            AgentResponse::AgentBinaryAvailable { .. }
-        ));
+        if cfg!(windows) {
+            assert!(matches!(response, AgentResponse::Error { .. }));
+        } else {
+            assert!(matches!(
+                response,
+                AgentResponse::AgentBinaryAvailable { .. }
+            ));
+        }
     }
 
     #[test]

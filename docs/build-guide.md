@@ -335,7 +335,26 @@ On Windows + WSL setups where WebKit compositing is unstable:
 
 ```bash
 npm run tauri:dev:wsl
-# (sets WEBKIT_DISABLE_COMPOSITING_MODE=1 and runs `tauri dev`)
+```
+
+On Windows, `npm run tauri:dev:wsl` also looks for a downloaded
+`tinto-agent-linux-x86_64` under `.ci-artifacts/` or `src-tauri/resources/`
+and passes it to the app through `TINTO_WSL_AGENT_LINUX_BIN`. This avoids
+compiling the Linux agent from source inside WSL during `tauri dev`.
+
+If no agent artifact is present, the script falls back to source mode
+(`TINTO_WSL_AGENT_ALLOW_DEV_SOURCE=1`). That fallback requires the Linux
+Tauri/GTK build dependencies inside the WSL distro; without them, WSL repo
+loading can fail with missing `gdk-3.0` or `cairo` pkg-config errors. For a
+quick Windows dev smoke, download the CI-built agent first:
+
+```powershell
+gh run download <run-id> `
+  --repo ElZaWarudo/tinto `
+  --name tinto-agent-linux-x86_64 `
+  --dir .ci-artifacts\<run-id>
+
+npm run tauri:dev:wsl
 ```
 
 To run the Vite dev server without the Tauri shell (browser-only preview):

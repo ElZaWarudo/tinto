@@ -1,6 +1,6 @@
 ---
 title: Workbench selection and management completion
-status: implemented-verified-amend-ready
+status: ci-prevention-ready
 roadmap_item: RDM-014
 origin_roadmap: docs/roadmaps/2026-06-26-005-workbench-management-completion-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-26-014-workbench-management-completion.md
@@ -106,7 +106,7 @@ Grouping rationale:
 - Consumers found: `MenuBar`, `ManageWorkbenchesDialog`, `operations`, backend workbench commands, workbench tests, WSL absence gate.
 - Contract-drift tests searched: frontend workbench tests, operations tests, WSL absence tests, backend command registration references.
 - Required consumer tests: focused Vitest for workbench/menu/modal/operations/absence plus TypeScript build.
-- Consumer tests run/skipped: work-package checker passed; focused Vitest 130/130 passed; focused Prettier check passed; `npx tsc --noEmit` passed; `npm run build` passed with existing large-chunk warning.
+- Consumer tests run/skipped: work-package checker passed; focused Vitest 130/130 passed; focused Prettier check passed; `npx tsc --noEmit` passed; `npm run build` passed with existing large-chunk warning. CI follow-up after GitHub Actions run `28237903708` passed locally with `npm test -- src/workbench/wslAbsence.test.ts --run` (73/73), full `npm test` (399/399), targeted Prettier check for touched files, `npm run lint` with existing warnings only, `npm run build`, and `git diff --check`. WSL dev-smoke follow-up proved the current CI `tinto-agent-linux-x86_64` artifact handles handshake, directory listing, and repo snapshot for `/home/teb/air-institute/digital-product-passport`; `npm run tauri:dev:wsl -- --dry-run` now resolves that artifact and avoids WSL source builds. WSL remove/recovery follow-up fixed stale frontend config causing WSL entries such as `/home/teb` to be forgotten from the live bus but not removed from persisted TOML, added one-shot retry for pooled WSL agent `ChildExit` / closed stdout limited to read-only/availability requests, and made Prettier `endOfLine: "auto"` so `npm run format:check` passes on this Windows checkout without formatting unrelated files.
 
 ## Verification Gate
 
@@ -115,6 +115,9 @@ Grouping rationale:
 - `npx prettier --check src/workbench/recentWorkbenches.ts src/workbench/recentWorkbenches.test.ts src/workbench/MenuBar.tsx src/workbench/workbench.test.tsx src/workbench/ManageWorkbenchesDialog.tsx src/workbench/ManageWorkbenchesDialog.test.tsx src/workbench/operations.ts src/workbench/operations.test.ts src/bus/client.ts src/App.css`
 - `npx tsc --noEmit`
 - Surface-aware evidence: MRU/helper behavior covered by `recentWorkbenches.test.ts`; menu/modal behavior covered by `workbench.test.tsx` and `ManageWorkbenchesDialog.test.tsx`; operation wrapper behavior covered by `operations.test.ts`; WSL absence guard covered by `wslAbsence.test.ts`; TypeScript/build gates passed.
+- Latest CI follow-up evidence: run `28237903708` failed in `Frontend / Test` because the strict WSL absence guard saw WSL text in a RepoPanel comment and in the intentional `src/panels/agentAvailability.ts` environment-key helper. The local fix keeps WSL text out of `RepoPanel.tsx` and allowlists the helper because it is required for shared `host` / `wsl:<distro>` agent availability caching.
+- Latest WSL dev evidence: `tauri dev` source fallback can fail when Ubuntu lacks GTK/Cairo pkg-config packages, so `scripts/tauri-dev-wsl.mjs` resolves a downloaded Linux agent artifact and exports `TINTO_WSL_AGENT_LINUX_BIN` before launching Tauri. Manual smoke is running through `npm run tauri:dev:wsl`; the persisted config now keeps only valid WSL repo `/home/teb/chat-n-food`, direct agent snapshot for that repo is green (`main`, `initial commit`), and `/home/teb` was removed from `workbenches.toml`.
+- Latest WSL remove/stdout verification: `npm run format:check` passed; `npm run lint` passed with existing warnings only; `npm test -- --run` passed 403/403; focused Vitest for WSL remove/add/Dashboard paths passed 52/52; `npm run build` passed with existing chunk warning only; `cargo fmt --check` passed; `cargo clippy --all-targets -- -D warnings` passed; `cargo test` passed 225/225; focused `cargo test wsl_agent::launcher -- --test-threads=1` passed 13/13; `cargo build --target-dir target/codex-build-check` passed; `node --check scripts/tauri-dev-wsl.mjs` passed; `npm run tauri:dev:wsl -- --dry-run` resolved `.ci-artifacts\28237903708\tinto-agent-linux-x86_64`; direct WSL agent handshake plus `repo_snapshot_with_fs_events` for `/home/teb/chat-n-food` returned `main`, `5feb2b38`, `initial commit`, and no repo error; native Tauri window capture showed `chat-n-food` loaded on Dashboard/Repo tree with branch `main` while `/home/teb` no longer appeared; `git diff --check` passed with CRLF warnings only.
 - Production posture evidence: prototype; no deployment, migration, auth, network, or public API surface touched.
 
 ## Review Gate
@@ -135,7 +138,7 @@ Grouping rationale:
 ## CI Break-Prevention And Escalation
 
 - CI risk surfaces: frontend typecheck, Vitest, Prettier formatting, app build.
-- Preventive evidence: pending local verification; CI-only gap remains full cross-platform Tauri packaging.
+- Preventive evidence: local frontend CI-equivalent steps pass (`npm run format:check`, `npm run lint`, `npm test -- --run` 403/403, focused affected Vitest 52/52, `npm run build`); local Rust CI-equivalent steps pass (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` 225/225, focused launcher test 13/13, `cargo build --target-dir target/codex-build-check`); dev WSL launcher dry-run resolves a current Linux agent artifact, direct Ubuntu agent smoke proves `/home/teb/chat-n-food` snapshots through the CI artifact, and native Tauri window capture proves the repo is visible in-app. CI-only gap remains full cross-platform Tauri packaging and replacement GitHub Actions proof after push.
 - If CI breaks: invoke `krt-ci-questor` with run/check context; do not poll checks in Compound Master.
 - Escalation rule: record a release-follow-up blocker until the CI incident has cause, owner, and next action.
 

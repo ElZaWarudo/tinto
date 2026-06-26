@@ -111,14 +111,19 @@ export function AddRepoDialog({
     }
     setError("");
     setIsSaving(true);
-    const stored = await addWslRepoFlow(activeWorkbench, {
-      distro,
-      path: normalized,
-      alias,
-    });
-    setIsSaving(false);
-    if (stored) onClose();
-    else setError("No se pudo agregar el repo.");
+    try {
+      const stored = await addWslRepoFlow(activeWorkbench, {
+        distro,
+        path: normalized,
+        alias,
+      });
+      if (stored) onClose();
+      else setError("No se pudo agregar el repo.");
+    } catch (e) {
+      setError(extractErrorMessage(e, "No se pudo agregar el repo."));
+    } finally {
+      setIsSaving(false);
+    }
   };
   const isUnified = Boolean(onAddLocal);
 
@@ -306,4 +311,19 @@ export function AddRepoDialog({
       </form>
     </div>
   );
+}
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.trim()
+  ) {
+    return error.message;
+  }
+  return fallback;
 }

@@ -12,6 +12,7 @@ import { useWorkspaceActions } from "../workspace/actions";
 import { agentAvailabilityKey } from "./agentAvailability";
 import { RepoCard } from "./RepoCard";
 import { DashboardFilters } from "./DashboardFilters";
+import type { RepoDelta } from "../bus/contract";
 
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -23,6 +24,34 @@ function useNow(intervalMs: number): number {
 }
 
 const SKELETON_COUNT = 3;
+
+function pendingRepoDelta(repo: string): RepoDelta {
+  return {
+    repo,
+    revision: 0,
+    status: { modified: [], staged: [], untracked: [] },
+    branch: null,
+    head: null,
+    last_activity_ms: 0,
+    error: {
+      class: "transient",
+      category: "loading",
+      message: "Waiting for repo snapshot...",
+    },
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    signals: [],
+    secret_findings: [],
+    subscribed_diffs: null,
+  };
+}
+
+function mergeActiveConfigPaths(livePaths: string[], configuredPaths: string[]): string[] {
+  const paths = new Set(livePaths);
+  for (const path of configuredPaths) paths.add(path);
+  return Array.from(paths).sort((a, b) =>
+    busStore.displayName(a).localeCompare(busStore.displayName(b)),
+  );
+}
 
 export function DashboardPanel() {
   const state = useBusState();
@@ -43,12 +72,22 @@ export function DashboardPanel() {
     );
   }
 
-  const allPaths = sortedRepoPaths(busStore, state);
-  const paths = filterRepoPaths(state, allPaths, filters, (repo) => busStore.displayName(repo));
   const activeConfig = (state.config?.workbenches ?? []).find(
     (w) => w.name === state.config?.active,
   );
   const repoEntries = new Map((activeConfig?.repos ?? []).map((repo) => [repo.path, repo]));
+  const allPaths = mergeActiveConfigPaths(
+    sortedRepoPaths(busStore, state),
+    (activeConfig?.repos ?? []).map((repo) => repo.path),
+  );
+  const effectiveRepos: Record<string, RepoDelta> = { ...repos };
+  for (const path of allPaths) {
+    effectiveRepos[path] ??= pendingRepoDelta(path);
+  }
+  const effectiveState = { ...state, repos: effectiveRepos };
+  const paths = filterRepoPaths(effectiveState, allPaths, filters, (repo) =>
+    busStore.displayName(repo),
+  );
 
   return (
     <div className="dashboard">
@@ -84,7 +123,7 @@ export function DashboardPanel() {
             return (
               <RepoCard
                 key={p}
-                delta={repos[p]}
+                delta={effectiveRepos[p]}
                 name={busStore.displayName(p)}
                 activityMs={activity[p] ?? 0}
                 nowMs={nowMs}
