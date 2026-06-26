@@ -33,13 +33,19 @@ function repoSubtitle(repo: Workbench["repos"][number]): string {
 }
 
 export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDialogProps) {
+  // The live config can arrive without a `workbenches` array in a few edge
+  // paths (partial snapshot recovery, first-run races). Default to empty
+  // lists so the modal never crashes on a stale render — same defensive
+  // shape MenuBar uses for the workbenches switcher.
+  const workbenches = config.workbenches ?? [];
+  const active = config.active ?? null;
   const ordered = useMemo(() => {
-    const names = config.workbenches.map((w) => w.name);
+    const names = workbenches.map((w) => w.name);
     return sortByRecency(names);
-  }, [config.workbenches]);
+  }, [workbenches]);
 
   // Default expansion: active is open, the rest are collapsed.
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([config.active ?? ""]));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([active ?? ""]));
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [newName, setNewName] = useState("");
@@ -106,7 +112,7 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
     setBusy(name);
     setError(null);
     try {
-      await switchWorkbench(name, config.active);
+      await switchWorkbench(name, active);
     } catch (e) {
       setError(extractErrorMessage(e, "No se pudo activar la workbench."));
     } finally {
@@ -190,9 +196,9 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
 
           <ul className="manage-workbenches-modal__list" data-testid="manage-workbenches-list">
             {ordered.map((name) => {
-              const wb = config.workbenches.find((w) => w.name === name);
+              const wb = workbenches.find((w) => w.name === name);
               if (!wb) return null;
-              const isActive = name === config.active;
+              const isActive = name === active;
               const isOpen = expanded.has(name);
               const isRenaming = renaming === name;
               const isBusy = busy === name;

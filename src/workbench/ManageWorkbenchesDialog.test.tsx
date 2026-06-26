@@ -188,4 +188,13 @@ describe("ManageWorkbenchesDialog", () => {
     fireEvent.click(screen.getByTestId("manage-workbenches-modal"));
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  // Regression: the live config can arrive without a `workbenches` array
+  // (partial snapshot recovery, first-run races). The modal must not crash
+  // and must render the create form so the user can recover.
+  it("does not crash when the config is missing workbenches", () => {
+    const partial = { version: 1, active: null } as unknown as WorkbenchConfig;
+    expect(() => render(<ManageWorkbenchesDialog config={partial} onClose={vi.fn()} />)).not.toThrow();
+    expect(screen.getByTestId("manage-workbench-new-input")).toBeInTheDocument();
+  });
 });
