@@ -11,17 +11,11 @@ import { qualityStore, useQualityState } from "../qol/state";
 import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
 import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
-import {
-  autodetectFlow,
-  createAndActivate,
-  switchWorkbench,
-} from "./operations";
-import { sortByRecency } from "./recentWorkbenches";
+import { autodetectFlow, switchWorkbench } from "./operations";
+import { visibleWorkbenchNames } from "./recentWorkbenches";
 import { AddonsManager } from "./AddonsManager";
-import { AddWslRepoDialog } from "./AddWslRepoDialog";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { ManageWorkbenchesDialog } from "./ManageWorkbenchesDialog";
-import { isWindowsHost } from "./platform";
 
 type MenuId = "workbench" | "repos" | "projects" | "view" | "addons" | "help";
 
@@ -63,16 +57,14 @@ export function MenuBar() {
   const [open, setOpen] = useState<MenuId | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAddons, setShowAddons] = useState(false);
-  const [showAddWsl, setShowAddWsl] = useState(false);
   const [showManage, setShowManage] = useState(false);
 
   const active = config?.active ?? "";
   const workbenches = config?.workbenches ?? [];
-  const canUseWsl = isWindowsHost();
-  const activeConfig = workbenches.find((w) => w.name === active);
-  const configuredWslRepos = canUseWsl
-    ? (activeConfig?.repos ?? []).filter((repo) => repo.source === "wsl")
-    : [];
+  const visibleWorkbenches = visibleWorkbenchNames(
+    workbenches.map((w) => w.name),
+    active,
+  );
   // Projects to open come from the live bus snapshot (same source as the
   // Dashboard cards), not the config — so the menu always matches what is
   // actually loaded, regardless of config-load timing.
@@ -91,10 +83,10 @@ export function MenuBar() {
             event.currentTarget.style.display = "none";
           }}
         />
-      <span className="menu-bar__brand-fallback" aria-hidden="true">
-        Tinto
+        <span className="menu-bar__brand-fallback" aria-hidden="true">
+          Tinto
+        </span>
       </span>
-    </span>
 
       <div className="menu">
         <button
@@ -109,12 +101,12 @@ export function MenuBar() {
         </button>
         {open === "workbench" && (
           <div className="menu__list" role="menu">
-            {workbenches.length === 0 ? (
+            {visibleWorkbenches.length === 0 ? (
               <div className="menu__empty" data-testid="workbench-empty">
                 Sin workbenches.
               </div>
             ) : (
-              sortByRecency(workbenches.map((w) => w.name)).map((name) => (
+              visibleWorkbenches.map((name) => (
                 <MenuItem
                   key={name}
                   label={name}
@@ -126,15 +118,6 @@ export function MenuBar() {
               ))
             )}
             <div className="menu__sep" role="separator" />
-            <MenuItem
-              label="Crear nueva workbench…"
-              testid="workbench-create"
-              close={close}
-              onSelect={() => {
-                const name = window.prompt("Nombre de la nueva workbench:");
-                if (name && name.trim()) void createAndActivate(name);
-              }}
-            />
             <MenuItem
               label="Gestionar workbenches…"
               testid="workbench-manage"
@@ -170,27 +153,6 @@ export function MenuBar() {
               close={close}
               onSelect={() => active && void autodetectFlow(active)}
             />
-            {canUseWsl && (
-              <>
-                <div className="menu__sep" role="separator" />
-                <MenuItem
-                  label="Add WSL repo…"
-                  testid="add-wsl-repo"
-                  close={close}
-                  onSelect={() => active && setShowAddWsl(true)}
-                />
-                {configuredWslRepos.map((repo) => (
-                  <div
-                    key={`${repo.distro ?? "WSL"}:${repo.path}`}
-                    className="menu__empty"
-                    data-testid={`configured-wsl-${repo.path}`}
-                    title={`${repo.distro ?? "WSL"}:${repo.path}`}
-                  >
-                    {repo.alias ?? `${repo.distro ?? "WSL"}:${repo.path}`}
-                  </div>
-                ))}
-              </>
-            )}
           </div>
         )}
       </div>
@@ -369,13 +331,14 @@ export function MenuBar() {
 
       {showShortcuts && <KeyboardShortcuts onClose={() => setShowShortcuts(false)} />}
       {showAddons && <AddonsManager onClose={() => setShowAddons(false)} />}
-      {showAddWsl && active && (
-        <AddWslRepoDialog activeWorkbench={active} onClose={() => setShowAddWsl(false)} />
-      )}
       {showManage && config && (
         <ManageWorkbenchesDialog
           config={config}
           onClose={() => setShowManage(false)}
+          onCreated={() => {
+            setShowManage(false);
+            openDashboard({ closeAll: true });
+          }}
         />
       )}
     </div>

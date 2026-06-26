@@ -16,3 +16,11 @@ export function openDashboardPanel(api: DockviewApi): void {
     api.getPanel(PANEL_DASHBOARD)?.api.setActive();
   }
 }
+
+export function resetToDashboardPanel(api: DockviewApi): void {
+  openDashboardPanel(api);
+  for (const panel of [...api.panels]) {
+    if (panel.id !== PANEL_DASHBOARD) panel.api.close();
+  }
+  api.getPanel(PANEL_DASHBOARD)?.api.setActive();
+}

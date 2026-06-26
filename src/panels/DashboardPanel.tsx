@@ -9,6 +9,7 @@ import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
 import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
 import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
+import { agentAvailabilityKey } from "./agentAvailability";
 import { RepoCard } from "./RepoCard";
 import { DashboardFilters } from "./DashboardFilters";
 
@@ -44,10 +45,19 @@ export function DashboardPanel() {
 
   const allPaths = sortedRepoPaths(busStore, state);
   const paths = filterRepoPaths(state, allPaths, filters, (repo) => busStore.displayName(repo));
+  const activeConfig = (state.config?.workbenches ?? []).find(
+    (w) => w.name === state.config?.active,
+  );
+  const repoEntries = new Map((activeConfig?.repos ?? []).map((repo) => [repo.path, repo]));
 
   return (
     <div className="dashboard">
       <DashboardFilters />
+      <div className="dashboard__actions" aria-label="repo actions">
+        <button type="button" onClick={addRepo} data-testid="dashboard-add-repo">
+          Add repo
+        </button>
+      </div>
 
       {!watching.available && (
         <div className="banner banner--warn" data-testid="degraded-banner">
@@ -59,7 +69,9 @@ export function DashboardPanel() {
       {allPaths.length === 0 ? (
         <div className="empty-state" data-testid="zero-repos">
           <p>No repos in this workbench.</p>
-          <button onClick={addRepo}>Add repo</button>
+          <div className="empty-state__actions">
+            <button onClick={addRepo}>Add repo</button>
+          </div>
         </div>
       ) : paths.length === 0 && hasActiveFilters(filters) ? (
         <div className="empty-state" data-testid="dashboard-no-matches">
@@ -67,24 +79,28 @@ export function DashboardPanel() {
         </div>
       ) : (
         <div className="card-grid">
-          {paths.map((p) => (
-            <RepoCard
-              key={p}
-              delta={repos[p]}
-              name={busStore.displayName(p)}
-              activityMs={activity[p] ?? 0}
-              nowMs={nowMs}
-              onOpen={() => openRepo(p)}
-              onRetry={() => void retryRepo(p)}
-              onRemove={() => removeRepo(p)}
-              onLaunch={async (agentType) => {
-                const sessionId = await startAgentSession(p, agentType);
-                const sessions = await listAgentSessions();
-                agentSessionStore.setSessions(sessions);
-                openAgentTerminal({ sessionId, repo: p, agentType });
-              }}
-            />
-          ))}
+          {paths.map((p) => {
+            const entry = repoEntries.get(p);
+            return (
+              <RepoCard
+                key={p}
+                delta={repos[p]}
+                name={busStore.displayName(p)}
+                activityMs={activity[p] ?? 0}
+                nowMs={nowMs}
+                availabilityKey={agentAvailabilityKey(entry?.source, entry?.distro)}
+                onOpen={() => openRepo(p)}
+                onRetry={() => void retryRepo(p)}
+                onRemove={() => removeRepo(p)}
+                onLaunch={async (agentType) => {
+                  const sessionId = await startAgentSession(p, agentType);
+                  const sessions = await listAgentSessions();
+                  agentSessionStore.setSessions(sessions);
+                  openAgentTerminal({ sessionId, repo: p, agentType });
+                }}
+              />
+            );
+          })}
         </div>
       )}
     </div>

@@ -43,6 +43,8 @@ import type { WorkbenchConfig } from "../bus/contract";
 describe("workbench operations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    busStore.resetAll();
     client.addRepo.mockResolvedValue(undefined);
     client.addWslRepo.mockResolvedValue("/home/me/repo");
     client.listWslDistros.mockResolvedValue(["Ubuntu-24.04"]);
@@ -77,10 +79,33 @@ describe("workbench operations", () => {
   });
 
   it("createAndActivate trims, creates, activates, reloads; ignores blank", async () => {
+    const resetSpy = vi.spyOn(busStore, "reset");
+    busStore.setConfig({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        { name: "Work", repos: [] },
+        { name: "Client", repos: [] },
+      ],
+    });
     await createAndActivate("  Side  ");
     expect(client.createWorkbench).toHaveBeenCalledWith("Side");
     expect(client.setActiveWorkbench).toHaveBeenCalledWith("Side");
+    expect(resetSpy).toHaveBeenCalled();
     expect(reloadMock).toHaveBeenCalled();
+    expect(busStore.getState().config).toEqual({
+      version: 1,
+      active: "Side",
+      workbenches: [
+        { name: "Work", repos: [] },
+        { name: "Client", repos: [] },
+        { name: "Side", repos: [] },
+      ],
+    });
+    expect(JSON.parse(localStorage.getItem("tinto:recent-workbenches:v1") ?? "[]")).toEqual([
+      "Side",
+      "Work",
+    ]);
 
     vi.clearAllMocks();
     await createAndActivate("   ");

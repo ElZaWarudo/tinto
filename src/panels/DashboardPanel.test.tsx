@@ -29,6 +29,7 @@ vi.mock("../bus/client", () => ({
 }));
 
 import { DashboardPanel } from "./DashboardPanel";
+import { resetAgentAvailabilityCacheForTests } from "./agentAvailability";
 import { busStore } from "../bus/store";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
 import type { RepoDelta } from "../bus/contract";
@@ -73,6 +74,7 @@ describe("DashboardPanel", () => {
     clientMocks.listAgentSessions.mockClear();
     clientMocks.agentBinaryAvailableForRepo.mockReset();
     clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(true);
+    resetAgentAvailabilityCacheForTests();
   });
 
   // Covers AE12: loading skeletons before the snapshot
@@ -86,8 +88,19 @@ describe("DashboardPanel", () => {
     act(() => busStore.loadSnapshot([], { available: true }));
     const { addRepo } = renderDash();
     expect(screen.getByTestId("zero-repos")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Add repo"));
+    fireEvent.click(screen.getByTestId("dashboard-add-repo"));
     expect(addRepo).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the dashboard add action source-neutral", () => {
+    act(() => busStore.loadSnapshot([delta("/r/a", 1)], { available: true }));
+    const addRepo = vi.fn();
+    renderDash({ addRepo });
+
+    fireEvent.click(screen.getByTestId("dashboard-add-repo"));
+
+    expect(addRepo).toHaveBeenCalledOnce();
+    expect(screen.getAllByRole("button", { name: /add repo/i })).toHaveLength(1);
   });
 
   it("renders a card per repo", () => {
@@ -156,5 +169,43 @@ describe("DashboardPanel", () => {
         agentType: "codex",
       }),
     );
+  });
+
+  it("deduplicates agent availability checks by WSL environment", async () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              {
+                path: "/home/me/api",
+                alias: null,
+                source: "wsl",
+                distro: "Ubuntu-24.04",
+                fs_watch: [],
+              },
+              {
+                path: "/home/me/web",
+                alias: null,
+                source: "wsl",
+                distro: "Ubuntu-24.04",
+                fs_watch: [],
+              },
+            ],
+          },
+        ],
+      });
+      busStore.loadSnapshot([delta("/home/me/api", 1), delta("/home/me/web", 1)], {
+        available: true,
+      });
+    });
+
+    renderDash();
+
+    await waitFor(() => expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledTimes(1));
+    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/home/me/api", "codex");
   });
 });

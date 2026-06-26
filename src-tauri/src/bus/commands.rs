@@ -229,7 +229,7 @@ pub(crate) fn map_repo_resolve_error(error: RepoResolveError) -> CommandError {
     match error {
         RepoResolveError::UnsupportedRepoSource { .. } => CommandError::new(
             "unsupported_repo_source",
-            "la fuente del repo no está soportada por este backend local",
+            "la fuente del repo no está disponible en este entorno",
         ),
         RepoResolveError::RepositoryNotFound => {
             CommandError::new("repository-not-found", "el repo no existe")
@@ -867,6 +867,11 @@ mod tests {
         });
 
         assert_eq!(err.category, "unsupported_repo_source");
+        assert_eq!(
+            err.message,
+            "la fuente del repo no está disponible en este entorno"
+        );
+        assert!(!err.message.contains("backend local"));
         assert!(!err.message.contains("/home/me/proyecto"));
     }
 

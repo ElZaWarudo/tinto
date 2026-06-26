@@ -13,33 +13,55 @@ import {
   renameWorkbenchFlow,
   switchWorkbench,
 } from "./operations";
-import { sortByRecency } from "./recentWorkbenches";
+import { visibleWorkbenchNames } from "./recentWorkbenches";
 
 interface ManageWorkbenchesDialogProps {
   config: WorkbenchConfig;
   onClose: () => void;
+  onCreated?: (name: string) => void;
 }
 
 function repoLabel(repo: Workbench["repos"][number]): string {
   if (repo.alias && repo.alias.trim()) return repo.alias;
-  if (repo.source === "wsl") return `${repo.distro ?? "WSL"}:${repo.path}`;
   return basename(repo.path) || repo.path;
 }
 
 function repoSubtitle(repo: Workbench["repos"][number]): string {
   if (repo.alias && repo.alias.trim()) return repo.path;
-  if (repo.source === "wsl") return repo.path;
+  if (repo.source === "wsl") return [repo.distro, repo.path].filter(Boolean).join(" · ");
   return "";
 }
 
-export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDialogProps) {
+function repoIdentity(repo: Workbench["repos"][number]): string {
+  return repo.source === "wsl" ? `wsl:${repo.distro ?? "WSL"}:${repo.path}` : `local:${repo.path}`;
+}
+
+function repoCountLabel(count: number): string {
+  return count === 1 ? "1 repo" : `${count} repos`;
+}
+
+export function ManageWorkbenchesDialog({
+  config,
+  onClose,
+  onCreated,
+}: ManageWorkbenchesDialogProps) {
+  // The live config can arrive without a `workbenches` array in a few edge
+  // paths (partial snapshot recovery, first-run races). Default to empty
+  // lists so the modal never crashes on a stale render — same defensive
+  // shape MenuBar uses for the workbenches switcher.
+  const workbenches = config.workbenches ?? [];
+  const active = config.active ?? null;
   const ordered = useMemo(() => {
-    const names = config.workbenches.map((w) => w.name);
-    return sortByRecency(names);
-  }, [config.workbenches]);
+    const names = workbenches.map((w) => w.name);
+    return visibleWorkbenchNames(names, active);
+  }, [active, workbenches]);
+  const activeWorkbench = active ? workbenches.find((w) => w.name === active) : null;
+  const activeName = activeWorkbench?.name ?? active;
+  const activeRepoCount = activeWorkbench?.repos.length ?? 0;
+  const totalRepoCount = workbenches.reduce((total, wb) => total + wb.repos.length, 0);
 
   // Default expansion: active is open, the rest are collapsed.
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([config.active ?? ""]));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([active ?? ""]));
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [newName, setNewName] = useState("");
@@ -106,7 +128,7 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
     setBusy(name);
     setError(null);
     try {
-      await switchWorkbench(name, config.active);
+      await switchWorkbench(name, active);
     } catch (e) {
       setError(extractErrorMessage(e, "No se pudo activar la workbench."));
     } finally {
@@ -117,7 +139,12 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
   const handleDelete = async (name: string) => {
     const ok = await safeConfirm(
       `¿Eliminar la workbench "${name}"?\nLos repos en disco no se tocan. Las workbenches que comparten repos con esta no se ven afectadas.`,
-      { title: "Eliminar workbench", kind: "warning", okLabel: "Eliminar", cancelLabel: "Cancelar" },
+      {
+        title: "Eliminar workbench",
+        kind: "warning",
+        okLabel: "Eliminar",
+        cancelLabel: "Cancelar",
+      },
     );
     if (!ok) return;
     setBusy(name);
@@ -141,6 +168,7 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
       await createAndActivate(trimmed);
       setNewName("");
       setExpanded((cur) => new Set(cur).add(trimmed));
+      onCreated?.(trimmed);
     } catch (e) {
       setError(extractErrorMessage(e, "No se pudo crear la workbench."));
     } finally {
@@ -178,9 +206,39 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
 
         <div className="addons-modal__body manage-workbenches-modal__body">
           <p className="addons-modal__intro">
-            Activá, renombrá o eliminá workbenches. Los repos compartidos entre varias no se
-            tocan al eliminar una.
+            Activá, renombrá o eliminá workbenches. Los repos compartidos entre varias no se tocan
+            al eliminar una.
           </p>
+
+          <section
+            className="manage-workbenches-modal__summary"
+            aria-label="Workbench activa"
+            data-testid="manage-workbenches-active-summary"
+          >
+            <div className="manage-workbenches-modal__summary-main">
+              <span className="manage-workbenches-modal__summary-label">Activa</span>
+              <strong className="manage-workbenches-modal__summary-name">
+                {activeName ?? "Sin workbench activa"}
+              </strong>
+              <span className="manage-workbenches-modal__summary-detail">
+                {activeWorkbench
+                  ? repoCountLabel(activeRepoCount)
+                  : active
+                    ? "Esperando lista de repos"
+                    : "Crea una para empezar"}
+              </span>
+            </div>
+            <div className="manage-workbenches-modal__summary-meta">
+              <span>
+                {workbenches.length === 1 ? "1 workbench" : `${workbenches.length} workbenches`}
+              </span>
+              <span>
+                {totalRepoCount === 1
+                  ? "1 repo configurado"
+                  : `${totalRepoCount} repos configurados`}
+              </span>
+            </div>
+          </section>
 
           {error && (
             <p className="addons-card__error" data-testid="manage-workbenches-error">
@@ -188,34 +246,34 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
             </p>
           )}
 
+          <div className="manage-workbenches-modal__section-head">
+            <h3>Workbenches guardadas</h3>
+            <span>{ordered.length}</span>
+          </div>
+
           <ul className="manage-workbenches-modal__list" data-testid="manage-workbenches-list">
             {ordered.map((name) => {
-              const wb = config.workbenches.find((w) => w.name === name);
-              if (!wb) return null;
-              const isActive = name === config.active;
+              const wb = workbenches.find((w) => w.name === name);
+              const repos = wb?.repos ?? [];
+              const isActive = name === active;
               const isOpen = expanded.has(name);
               const isRenaming = renaming === name;
               const isBusy = busy === name;
               return (
                 <li
                   key={name}
-                  className={
-                    "manage-workbench" + (isActive ? " manage-workbench--active" : "")
-                  }
+                  className={"manage-workbench" + (isActive ? " manage-workbench--active" : "")}
                   data-testid={`manage-workbench-row-${name}`}
                 >
                   <div className="manage-workbench__head">
-                    <button
-                      type="button"
-                      className="manage-workbench__toggle"
-                      aria-expanded={isOpen}
-                      data-testid={`manage-workbench-toggle-${name}`}
-                      onClick={() => toggle(name)}
-                    >
-                      <span className="manage-workbench__caret" aria-hidden="true">
-                        {isOpen ? "▾" : "▸"}
-                      </span>
-                      {isRenaming ? (
+                    {isRenaming ? (
+                      <div
+                        className="manage-workbench__toggle"
+                        data-testid={`manage-workbench-toggle-${name}`}
+                      >
+                        <span className="manage-workbench__caret" aria-hidden="true">
+                          {isOpen ? "▾" : "▸"}
+                        </span>
                         <input
                           ref={renameInputRef}
                           type="text"
@@ -236,25 +294,45 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
                             }
                           }}
                         />
-                      ) : (
+                        {isActive && (
+                          <span
+                            className="manage-workbench__badge"
+                            data-testid={`manage-workbench-active-badge-${name}`}
+                          >
+                            activa
+                          </span>
+                        )}
+                        <span className="manage-workbench__count">
+                          {wb ? repoCountLabel(repos.length) : "repos pendientes"}
+                        </span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="manage-workbench__toggle"
+                        aria-expanded={isOpen}
+                        data-testid={`manage-workbench-toggle-${name}`}
+                        onClick={() => toggle(name)}
+                      >
+                        <span className="manage-workbench__caret" aria-hidden="true">
+                          {isOpen ? "▾" : "▸"}
+                        </span>
                         <span className="manage-workbench__name" title={name}>
                           {name}
                         </span>
-                      )}
-                      {isActive && (
-                        <span
-                          className="manage-workbench__badge"
-                          data-testid={`manage-workbench-active-badge-${name}`}
-                        >
-                          activa
+                        {isActive && (
+                          <span
+                            className="manage-workbench__badge"
+                            data-testid={`manage-workbench-active-badge-${name}`}
+                          >
+                            activa
+                          </span>
+                        )}
+                        <span className="manage-workbench__count">
+                          {wb ? repoCountLabel(repos.length) : "repos pendientes"}
                         </span>
-                      )}
-                      <span className="manage-workbench__count">
-                        {wb.repos.length === 1
-                          ? "1 repo"
-                          : `${wb.repos.length} repos`}
-                      </span>
-                    </button>
+                      </button>
+                    )}
                     <div className="manage-workbench__actions">
                       <button
                         type="button"
@@ -301,15 +379,17 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
                       className="manage-workbench__repos"
                       data-testid={`manage-workbench-repos-${name}`}
                     >
-                      {wb.repos.length === 0 ? (
+                      {!wb ? (
+                        <p className="manage-workbench__empty">Esperando lista de repos.</p>
+                      ) : repos.length === 0 ? (
                         <p className="manage-workbench__empty">Sin repos.</p>
                       ) : (
                         <ul className="manage-workbench__repo-list">
-                          {wb.repos.map((repo) => (
+                          {repos.map((repo) => (
                             <li
-                              key={`${repo.source ?? "local"}:${repo.path}`}
+                              key={repoIdentity(repo)}
                               className="manage-workbench__repo"
-                              data-testid={`manage-workbench-repo-${name}-${repo.path}`}
+                              data-testid={`manage-workbench-repo-${name}-${repoIdentity(repo)}`}
                             >
                               <span className="manage-workbench__repo-label">
                                 {repoLabel(repo)}
@@ -333,13 +413,13 @@ export function ManageWorkbenchesDialog({ config, onClose }: ManageWorkbenchesDi
             })}
           </ul>
 
-          <form
-            className="manage-workbenches-modal__new"
-            onSubmit={(e) => void handleCreate(e)}
-          >
-            <label className="manage-workbenches-modal__new-label" htmlFor="new-workbench-name">
-              Nueva workbench
-            </label>
+          <form className="manage-workbenches-modal__new" onSubmit={(e) => void handleCreate(e)}>
+            <div className="manage-workbenches-modal__new-head">
+              <label className="manage-workbenches-modal__new-label" htmlFor="new-workbench-name">
+                Nueva workbench
+              </label>
+              <span>Se activará al crearla</span>
+            </div>
             <div className="manage-workbenches-modal__new-row">
               <input
                 id="new-workbench-name"

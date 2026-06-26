@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
   listWb: vi.fn(),
   listSessions: vi.fn(),
+  ensureTreeLoaded: vi.fn(),
   refreshTree: vi.fn(),
 }));
 
@@ -47,6 +48,7 @@ vi.mock("./client", () => ({
 
 vi.mock("../workspace/repoTreeStore", () => ({
   repoTreeStore: {
+    ensureLoaded: h.ensureTreeLoaded,
     refresh: h.refreshTree,
   },
 }));
@@ -99,7 +101,19 @@ describe("useBusConnection", () => {
     await waitFor(() => expect(h.deltaCb).toBeTypeOf("function"));
     act(() => h.deltaCb!(makeDelta("/r/a")));
     expect(busStore.getState().repos["/r/a"]).toBeDefined();
-    expect(h.refreshTree).toHaveBeenCalledWith("/r/a");
+    expect(h.ensureTreeLoaded).toHaveBeenCalledWith("/r/a");
+    expect(h.refreshTree).not.toHaveBeenCalled();
+  });
+
+  it("does not reload the tree for stale deltas", async () => {
+    render(createElement(Probe));
+    await waitFor(() => expect(h.deltaCb).toBeTypeOf("function"));
+    act(() => busStore.loadSnapshot([makeDelta("/r/a", 3)], { available: true }));
+
+    act(() => h.deltaCb!(makeDelta("/r/a", 2)));
+
+    expect(h.ensureTreeLoaded).not.toHaveBeenCalled();
+    expect(h.refreshTree).not.toHaveBeenCalled();
   });
 
   it("refreshes the tree for filesystem-only event batches", async () => {

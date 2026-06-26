@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DockviewApi } from "dockview-react";
 import { DockWorkspace, type PanelComponents, type TabComponents } from "./workspace/DockWorkspace";
 import {
@@ -12,7 +12,7 @@ import {
 import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/actions";
 import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
-import { openDashboardPanel } from "./workspace/openDashboard";
+import { openDashboardPanel, resetToDashboardPanel } from "./workspace/openDashboard";
 import { openAgentTerminalPanel } from "./workspace/openAgentTerminal";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
 import { fileDock } from "./workspace/fileDock";
@@ -24,8 +24,10 @@ import { TimelinePanel } from "./panels/timeline/TimelinePanel";
 import { ConsoleDockPanel } from "./panels/terminal/ConsoleDockPanel";
 import { TerminalPanel } from "./panels/terminal/TerminalPanel";
 import { MenuBar } from "./workbench/MenuBar";
+import { AddRepoDialog } from "./workbench/AddRepoDialog";
 import { FirstRun } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
+import { isWindowsHost } from "./workbench/platform";
 import { useBusConnection } from "./bus/connection";
 import { busStore, useBusState } from "./bus/store";
 import { GlanceMode } from "./qol/GlanceMode";
@@ -52,6 +54,19 @@ export default function App() {
   const { config, loaded, repos } = useBusState();
   const { glanceMode } = useQualityState();
   const apiRef = useRef<DockviewApi | null>(null);
+  const [showAddRepo, setShowAddRepo] = useState(false);
+
+  const addLocalRepoFromPicker = () => {
+    const active = busStore.getState().config?.active;
+    if (!active) return;
+    void addRepoFlow(active).then((path) => {
+      if (!path) return;
+      setShowAddRepo(false);
+      if (apiRef.current) {
+        openRepoPanel(apiRef.current, path, busStore.displayName(path));
+      }
+    });
+  };
 
   // Apply the persisted zoom and bind Ctrl/Cmd +/-/0 (browser-style text size).
   useEffect(() => {
@@ -76,12 +91,8 @@ export default function App() {
       addRepo: () => {
         const active = busStore.getState().config?.active;
         if (!active) return;
-        void addRepoFlow(active).then((path) => {
-          // Open the newly added repo's project tab (bound to the canonical key).
-          if (path && apiRef.current) {
-            openRepoPanel(apiRef.current, path, busStore.displayName(path));
-          }
-        });
+        if (isWindowsHost()) setShowAddRepo(true);
+        else addLocalRepoFromPicker();
       },
       removeRepo: (path) => {
         const active = busStore.getState().config?.active;
@@ -116,9 +127,13 @@ export default function App() {
           openTimelinePanel(apiRef.current);
         }
       },
-      openDashboard: () => {
+      openDashboard: (options) => {
         if (apiRef.current) {
-          openDashboardPanel(apiRef.current);
+          if (options?.closeAll) {
+            resetToDashboardPanel(apiRef.current);
+          } else {
+            openDashboardPanel(apiRef.current);
+          }
         }
       },
       openAgentTerminal: (params) => {
@@ -153,6 +168,13 @@ export default function App() {
       <div className="app-shell">
         <NotificationWatcher />
         <MenuBar />
+        {showAddRepo && config?.active && (
+          <AddRepoDialog
+            activeWorkbench={config.active}
+            onClose={() => setShowAddRepo(false)}
+            onAddLocal={addLocalRepoFromPicker}
+          />
+        )}
         <div className="app-shell__body">
           {glanceMode ? (
             <GlanceMode />

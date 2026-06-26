@@ -130,9 +130,9 @@ export class BusStore {
    * array is authoritative for the repo's subscribed targets ⇒ replace-set the
    * repo's diff map (a reverted file omitted from the array clears, an empty
    * array sets `{}` which still marks "computed"). */
-  applyDelta(delta: RepoDelta) {
+  applyDelta(delta: RepoDelta): boolean {
     const existing = this.state.repos[delta.repo];
-    if (existing && existing.revision >= delta.revision) return; // stale
+    if (existing && existing.revision >= delta.revision) return false; // stale
     const prevActivity = this.state.activity[delta.repo] ?? 0;
     const sliced = sliceFromDelta(delta);
     const diffs =
@@ -148,6 +148,7 @@ export class BusStore {
       },
       diffs,
     });
+    return true;
   }
 
   /** Drop a single target's diff (on diff-panel close). */
@@ -209,11 +210,16 @@ export class BusStore {
 
   /** Display name for a repo path: alias from config, else the basename. */
   displayName(path: string): string {
-    const wb = (this.state.config?.workbenches ?? []).find((w) =>
-      w.repos.some((r) => r.path === path),
-    );
-    const entry = wb?.repos.find((r) => r.path === path);
-    return entry?.alias ?? basename(path);
+    const workbenches = this.state.config?.workbenches ?? [];
+    const active = this.state.config?.active ?? null;
+    const activeEntry = workbenches
+      .find((w) => w.name === active)
+      ?.repos.find((r) => r.path === path);
+    const entry = activeEntry ?? workbenches.flatMap((w) => w.repos).find((r) => r.path === path);
+    if (!entry) return basename(path);
+    if (entry.alias?.trim()) return entry.alias;
+    if (entry.source === "wsl") return `${entry.distro ?? "WSL"}:${basename(entry.path)}`;
+    return basename(entry.path);
   }
 }
 

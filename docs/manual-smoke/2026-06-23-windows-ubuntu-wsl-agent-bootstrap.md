@@ -225,6 +225,33 @@ Final packaged artifact/backend smoke passed on 2026-06-24 against CI run `28091
   `agent_checkpoint_revert` removed `agent-created.txt` and restored `changed.txt` to the
   checkpoint state (`M changed.txt`, `?? untracked.txt`).
 
+Development persistent-agent smoke passed on 2026-06-26 against local commit `872d5b7` on
+`Ubuntu-24.04`.
+
+- Host bridge check passed: `wsl.exe --list --quiet` reported `Ubuntu-24.04` and
+  `docker-desktop`.
+- Local Linux line-mode agent smoke passed by piping two newline-delimited requests into
+  `src-tauri/target/debug/tinto-agent` in one process:
+  - `handshake` returned `{"type":"handshake","protocol_version":1,"agent_version":"0.1.0","status":"ok"}`.
+  - `list_directory` for `/mnt/c/Users/User/Documents/personal/tinto` returned `is_git_repo=true`
+    and included project directories such as `src` and `src-tauri`.
+- Windows-to-WSL bridge smoke passed through the same line-mode contract:
+
+  ```bash
+  printf '%s\n' \
+    '{"type":"handshake","protocol_version":1,"client_version":"wsl-smoke"}' \
+    '{"type":"list_directory","protocol_version":1,"path":"/mnt/c/Users/User/Documents/personal/tinto"}' |
+    wsl.exe -d Ubuntu-24.04 --exec /mnt/c/Users/User/Documents/personal/tinto/src-tauri/target/debug/tinto-agent
+  ```
+
+  The single `tinto-agent` process returned both JSON responses successfully.
+- Real repo operation smoke passed through `wsl.exe -d Ubuntu-24.04 --exec .../tinto-agent` using
+  the same process for both requests:
+  - `repo_snapshot_with_fs_events` on `/mnt/c/Users/User/Documents/personal/tinto` returned
+    `error=null`, `modified=0`, `staged=0`, `untracked=0`, and `fingerprints=0` for watch pattern
+    `.env`.
+  - `repo_tree` returned `entries=418`, `truncated=false`, and included `src`.
+
 Console-window regression closeout:
 
 - User reported that opening Tinto created many visible Windows Terminal `wsl.exe` windows/tabs.

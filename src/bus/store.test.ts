@@ -44,17 +44,25 @@ describe("BusStore", () => {
   });
 
   it("applies a newer-revision delta and ignores stale/equal ones", () => {
-    store.applyDelta(delta("/r/a", 5, { status: { modified: ["x"], staged: [], untracked: [] } }));
+    expect(
+      store.applyDelta(
+        delta("/r/a", 5, { status: { modified: ["x"], staged: [], untracked: [] } }),
+      ),
+    ).toBe(true);
     expect(store.getState().repos["/r/a"].revision).toBe(5);
 
-    store.applyDelta(delta("/r/a", 4)); // stale
+    expect(store.applyDelta(delta("/r/a", 4))).toBe(false); // stale
     expect(store.getState().repos["/r/a"].revision).toBe(5);
     expect(store.getState().repos["/r/a"].status.modified).toEqual(["x"]);
 
-    store.applyDelta(delta("/r/a", 5)); // equal — also ignored
+    expect(store.applyDelta(delta("/r/a", 5))).toBe(false); // equal — also ignored
     expect(store.getState().repos["/r/a"].status.modified).toEqual(["x"]);
 
-    store.applyDelta(delta("/r/a", 6, { status: { modified: ["y"], staged: [], untracked: [] } }));
+    expect(
+      store.applyDelta(
+        delta("/r/a", 6, { status: { modified: ["y"], staged: [], untracked: [] } }),
+      ),
+    ).toBe(true);
     expect(store.getState().repos["/r/a"].status.modified).toEqual(["y"]);
   });
 
@@ -241,6 +249,48 @@ describe("BusStore", () => {
     expect(store.displayName("/home/me/code/api")).toBe("API");
     expect(store.displayName("/home/me/code/web")).toBe("web");
     expect(store.displayName("/unknown/path/repo")).toBe("repo");
+  });
+
+  it("displayName prefers the active workbench alias for shared repo paths", () => {
+    const config: WorkbenchConfig = {
+      version: 1,
+      active: "Client",
+      workbenches: [
+        {
+          name: "Work",
+          repos: [{ path: "/home/me/code/api", alias: "Work API", fs_watch: [] }],
+        },
+        {
+          name: "Client",
+          repos: [{ path: "/home/me/code/api", alias: "Client API", fs_watch: [] }],
+        },
+      ],
+    };
+    store.setConfig(config);
+    expect(store.displayName("/home/me/code/api")).toBe("Client API");
+  });
+
+  it("displayName includes the distro for WSL repos without an alias", () => {
+    const config: WorkbenchConfig = {
+      version: 1,
+      active: "Work",
+      workbenches: [
+        {
+          name: "Work",
+          repos: [
+            {
+              path: "/home/me/code/api",
+              alias: null,
+              source: "wsl",
+              distro: "Ubuntu-24.04",
+              fs_watch: [],
+            },
+          ],
+        },
+      ],
+    };
+    store.setConfig(config);
+    expect(store.displayName("/home/me/code/api")).toBe("Ubuntu-24.04:api");
   });
 
   it("reset clears live repos but notifies subscribers", () => {

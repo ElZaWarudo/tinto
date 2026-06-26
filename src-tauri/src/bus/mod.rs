@@ -27,7 +27,9 @@ use crate::paths::Classification;
 use crate::watcher::{ClassifiedEvent, EventType, FsWatcher, WatcherError, WatcherMessage};
 use crate::workbench::{RepoEntry, RepoSource};
 use crate::wsl_agent::launcher::request_wsl_agent;
-use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, FileFingerprint, PROTOCOL_VERSION};
+use crate::wsl_agent::protocol::{
+    AgentRequest, AgentResponse, FileFingerprint, RepoFsWatchConfig, PROTOCOL_VERSION,
+};
 use contract::{
     FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
     RepoErrorClass, RepoErrorState, RepoMetrics, SecretFinding, SignalSeverity, SubscriptionTarget,
@@ -104,6 +106,7 @@ pub(crate) struct RepoLiveState {
     /// Último tamaño conocido por path vigilado (delta de tamaño, Plano 2).
     last_known_sizes: HashMap<PathBuf, u64>,
     wsl_fingerprints: HashMap<PathBuf, FileFingerprint>,
+    wsl_fingerprint_patterns: Vec<String>,
 }
 
 impl RepoLiveState {
@@ -215,10 +218,20 @@ impl RepoLiveState {
             .collect()
     }
 
-    pub(crate) fn wsl_fs_events(&mut self, fingerprints: Vec<FileFingerprint>) -> Vec<FsEvent> {
+    pub(crate) fn wsl_fs_events(
+        &mut self,
+        fingerprints: Vec<FileFingerprint>,
+        fs_watch: Vec<String>,
+    ) -> Vec<FsEvent> {
         let mut current = HashMap::new();
         for fingerprint in fingerprints {
             current.insert(fingerprint.path.clone(), fingerprint);
+        }
+
+        if self.wsl_fingerprint_patterns != fs_watch {
+            self.wsl_fingerprint_patterns = fs_watch;
+            self.wsl_fingerprints = current;
+            return Vec::new();
         }
 
         if self.wsl_fingerprints.is_empty() {
@@ -734,6 +747,7 @@ enum RecalcPayload {
     WslPoll {
         delta: RepoDelta,
         fingerprints: Option<Vec<FileFingerprint>>,
+        fs_watch: Vec<String>,
     },
 }
 
@@ -1013,10 +1027,14 @@ async fn run_bus_inner(
                     .filter(|entry| entry.source == RepoSource::Wsl)
                     .cloned()
                     .collect();
-                for entry in wsl_entries {
-                    trigger_entry_recalc(entry, &current_entries, RecalcScope::Everything, &subscriptions,
-                        &semaphore, &results_tx, &mut inflight, &mut pending);
-                }
+                trigger_wsl_recalc_batch(
+                    wsl_entries,
+                    RecalcScope::Everything,
+                    &subscriptions,
+                    &results_tx,
+                    &mut inflight,
+                    &mut pending,
+                );
             }
             Some(result) = results_rx.recv() => {
                 inflight.remove(&result.repo);
@@ -1041,9 +1059,10 @@ async fn run_bus_inner(
                     RecalcPayload::WslPoll {
                         delta: external,
                         fingerprints,
+                        fs_watch,
                     } => {
                         if let Some(fingerprints) = fingerprints {
-                            let fs_events = state.wsl_fs_events(fingerprints);
+                            let fs_events = state.wsl_fs_events(fingerprints, fs_watch);
                             if !fs_events.is_empty() {
                                 state.last_activity_ms = now_ms();
                                 emit(
@@ -1122,6 +1141,7 @@ fn set_workbench(
     }
     states.retain(|repo, _| keep.contains(repo));
     pending.retain(|repo, _| keep.contains(repo));
+    let mut wsl_entries = Vec::new();
     for entry in &runtime_entries {
         // Repo re-añadido: continuar su contador desde la última revisión
         // conocida en vez de reiniciar a 0.
@@ -1131,18 +1151,204 @@ fn set_workbench(
                 revision: revisions.get(&entry.path).copied().unwrap_or(0),
                 ..Default::default()
             });
-        trigger_entry_recalc(
-            entry.clone(),
-            &runtime_entries,
-            RecalcScope::Everything,
-            subscriptions,
-            semaphore,
-            results_tx,
-            inflight,
-            pending,
-        );
+        match entry.source {
+            RepoSource::Local => trigger_recalc(
+                entry.path.clone(),
+                RecalcScope::Everything,
+                subscriptions,
+                semaphore,
+                results_tx,
+                inflight,
+                pending,
+            ),
+            RepoSource::Wsl => wsl_entries.push(entry.clone()),
+        }
     }
+    trigger_wsl_recalc_batch(
+        wsl_entries,
+        RecalcScope::Everything,
+        subscriptions,
+        results_tx,
+        inflight,
+        pending,
+    );
     *current_entries = runtime_entries;
+}
+
+fn trigger_wsl_recalc_batch(
+    entries: Vec<RepoEntry>,
+    scope: RecalcScope,
+    subscriptions: &[SubscriptionTarget],
+    results_tx: &mpsc::UnboundedSender<RecalcResult>,
+    inflight: &mut HashSet<PathBuf>,
+    pending: &mut HashMap<PathBuf, RecalcScope>,
+) {
+    let mut by_distro: HashMap<String, Vec<RepoEntry>> = HashMap::new();
+    for entry in entries {
+        let repo = entry.path.clone();
+        let Some(distro) = entry.distro.clone() else {
+            let _ = results_tx.send(RecalcResult {
+                repo,
+                payload: RecalcPayload::WslPoll {
+                    delta: empty_wsl_error_delta(
+                        &entry.path,
+                        "missing_distro",
+                        "repo WSL sin distro",
+                    ),
+                    fingerprints: None,
+                    fs_watch: entry.fs_watch,
+                },
+            });
+            continue;
+        };
+        if inflight.contains(&repo) {
+            pending.insert(repo, scope);
+            continue;
+        }
+        inflight.insert(repo);
+        by_distro.entry(distro).or_default().push(entry);
+    }
+
+    for (distro, entries) in by_distro {
+        let repo_set: HashSet<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
+        let subs: Vec<SubscriptionTarget> = subscriptions
+            .iter()
+            .filter(|target| repo_set.contains(&target.repo))
+            .cloned()
+            .collect();
+        let fs_watch: Vec<RepoFsWatchConfig> = entries
+            .iter()
+            .map(|entry| RepoFsWatchConfig {
+                repo: entry.path.clone(),
+                patterns: entry.fs_watch.clone(),
+            })
+            .collect();
+        let tx = results_tx.clone();
+
+        tokio::spawn(async move {
+            let requested = entries;
+            let requested_for_panic = requested.clone();
+            let repos_for_request: Vec<PathBuf> =
+                requested.iter().map(|entry| entry.path.clone()).collect();
+            let payloads = tokio::task::spawn_blocking(move || {
+                let request = AgentRequest::RepoSnapshotWithFsEvents {
+                    protocol_version: PROTOCOL_VERSION,
+                    repos: repos_for_request.clone(),
+                    subscriptions: subs,
+                    fs_watch,
+                };
+                match request_wsl_agent(&distro, &request) {
+                    Ok(AgentResponse::RepoSnapshotWithFsEvents {
+                        repos,
+                        fingerprints,
+                    }) => requested
+                        .into_iter()
+                        .map(|entry| {
+                            let repo = entry.path.clone();
+                            let delta = repos
+                                .iter()
+                                .find(|delta| delta.repo == repo)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    empty_wsl_error_delta(
+                                        &repo,
+                                        "empty-response",
+                                        "el agente WSL no devolvio el repo",
+                                    )
+                                });
+                            let fingerprints = fingerprints
+                                .iter()
+                                .find(|snapshot| snapshot.repo == repo)
+                                .map(|snapshot| snapshot.files.clone());
+                            (
+                                repo,
+                                RecalcPayload::WslPoll {
+                                    delta,
+                                    fingerprints,
+                                    fs_watch: entry.fs_watch,
+                                },
+                            )
+                        })
+                        .collect::<Vec<(PathBuf, RecalcPayload)>>(),
+                    Ok(AgentResponse::Error { category, message }) => requested
+                        .into_iter()
+                        .map(|entry| {
+                            let repo = entry.path.clone();
+                            (
+                                repo.clone(),
+                                RecalcPayload::WslPoll {
+                                    delta: empty_wsl_error_delta(&repo, &category, &message),
+                                    fingerprints: None,
+                                    fs_watch: entry.fs_watch,
+                                },
+                            )
+                        })
+                        .collect::<Vec<(PathBuf, RecalcPayload)>>(),
+                    Ok(_) => requested
+                        .into_iter()
+                        .map(|entry| {
+                            let repo = entry.path.clone();
+                            (
+                                repo.clone(),
+                                RecalcPayload::WslPoll {
+                                    delta: empty_wsl_error_delta(
+                                        &repo,
+                                        "malformed_response",
+                                        "respuesta inesperada del agente WSL",
+                                    ),
+                                    fingerprints: None,
+                                    fs_watch: entry.fs_watch,
+                                },
+                            )
+                        })
+                        .collect::<Vec<(PathBuf, RecalcPayload)>>(),
+                    Err(error) => requested
+                        .into_iter()
+                        .map(|entry| {
+                            let repo = entry.path.clone();
+                            (
+                                repo.clone(),
+                                RecalcPayload::WslPoll {
+                                    delta: empty_wsl_error_delta(
+                                        &repo,
+                                        error.safe_category(),
+                                        &error.message,
+                                    ),
+                                    fingerprints: None,
+                                    fs_watch: entry.fs_watch,
+                                },
+                            )
+                        })
+                        .collect::<Vec<(PathBuf, RecalcPayload)>>(),
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                requested_for_panic
+                    .into_iter()
+                    .map(|entry| {
+                        let repo = entry.path.clone();
+                        (
+                            repo.clone(),
+                            RecalcPayload::WslPoll {
+                                delta: empty_wsl_error_delta(
+                                    &repo,
+                                    "internal",
+                                    "la tarea WSL fallo",
+                                ),
+                                fingerprints: None,
+                                fs_watch: entry.fs_watch,
+                            },
+                        )
+                    })
+                    .collect()
+            });
+
+            for (repo, payload) in payloads {
+                let _ = tx.send(RecalcResult { repo, payload });
+            }
+        });
+    }
 }
 
 fn local_runtime_entries(entries: &[RepoEntry]) -> Vec<RepoEntry> {
@@ -1164,7 +1370,7 @@ fn wsl_repo_paths(entries: &[RepoEntry]) -> Vec<PathBuf> {
 #[allow(clippy::too_many_arguments)]
 fn trigger_entry_recalc(
     entry: RepoEntry,
-    current_entries: &[RepoEntry],
+    _current_entries: &[RepoEntry],
     scope: RecalcScope,
     subscriptions: &[SubscriptionTarget],
     semaphore: &Arc<Semaphore>,
@@ -1182,108 +1388,15 @@ fn trigger_entry_recalc(
             inflight,
             pending,
         ),
-        RepoSource::Wsl => trigger_wsl_recalc(
-            entry,
-            wsl_repo_paths(current_entries),
+        RepoSource::Wsl => trigger_wsl_recalc_batch(
+            vec![entry],
+            scope,
             subscriptions,
             results_tx,
             inflight,
             pending,
         ),
     }
-}
-
-fn trigger_wsl_recalc(
-    entry: RepoEntry,
-    _wsl_repos: Vec<PathBuf>,
-    subscriptions: &[SubscriptionTarget],
-    results_tx: &mpsc::UnboundedSender<RecalcResult>,
-    inflight: &mut HashSet<PathBuf>,
-    pending: &mut HashMap<PathBuf, RecalcScope>,
-) {
-    let repo = entry.path.clone();
-    let Some(distro) = entry.distro.clone() else {
-        let _ = results_tx.send(RecalcResult {
-            repo,
-            payload: RecalcPayload::WslPoll {
-                delta: empty_wsl_error_delta(&entry.path, "missing_distro", "repo WSL sin distro"),
-                fingerprints: None,
-            },
-        });
-        return;
-    };
-    if inflight.contains(&repo) {
-        pending.insert(repo, RecalcScope::Everything);
-        return;
-    }
-    inflight.insert(repo.clone());
-
-    let subs: Vec<SubscriptionTarget> = subscriptions
-        .iter()
-        .filter(|target| target.repo == repo)
-        .cloned()
-        .collect();
-    let tx = results_tx.clone();
-
-    tokio::spawn(async move {
-        let repo_for_request = repo.clone();
-        let payload = tokio::task::spawn_blocking(move || {
-            let request = AgentRequest::RepoSnapshotWithFsEvents {
-                protocol_version: PROTOCOL_VERSION,
-                repos: vec![repo_for_request.clone()],
-                subscriptions: subs,
-            };
-            match request_wsl_agent(&distro, &request) {
-                Ok(AgentResponse::RepoSnapshotWithFsEvents {
-                    repos,
-                    fingerprints,
-                }) => {
-                    let delta = repos.into_iter().next().unwrap_or_else(|| {
-                        empty_wsl_error_delta(
-                            &repo_for_request,
-                            "empty-response",
-                            "el agente WSL no devolvio el repo",
-                        )
-                    });
-                    let fingerprints = fingerprints
-                        .into_iter()
-                        .find(|snapshot| snapshot.repo == repo_for_request)
-                        .map(|snapshot| snapshot.files);
-                    RecalcPayload::WslPoll {
-                        delta,
-                        fingerprints,
-                    }
-                }
-                Ok(AgentResponse::Error { category, message }) => RecalcPayload::WslPoll {
-                    delta: empty_wsl_error_delta(&repo_for_request, &category, &message),
-                    fingerprints: None,
-                },
-                Ok(_) => RecalcPayload::WslPoll {
-                    delta: empty_wsl_error_delta(
-                        &repo_for_request,
-                        "malformed_response",
-                        "respuesta inesperada del agente WSL",
-                    ),
-                    fingerprints: None,
-                },
-                Err(error) => RecalcPayload::WslPoll {
-                    delta: empty_wsl_error_delta(
-                        &repo_for_request,
-                        error.safe_category(),
-                        &error.message,
-                    ),
-                    fingerprints: None,
-                },
-            }
-        })
-        .await
-        .unwrap_or_else(|_| RecalcPayload::WslPoll {
-            delta: empty_wsl_error_delta(&repo, "internal", "la tarea WSL fallo"),
-            fingerprints: None,
-        });
-
-        let _ = tx.send(RecalcResult { repo, payload });
-    });
 }
 
 fn empty_wsl_error_delta(repo: &Path, category: &str, message: &str) -> RepoDelta {
@@ -1694,32 +1807,38 @@ mod tests {
     fn wsl_fs_events_prime_and_diff_fingerprints() {
         let mut state = RepoLiveState::default();
 
-        let initial = state.wsl_fs_events(vec![
-            FileFingerprint {
-                path: "base.txt".into(),
-                size: 5,
-                modified_ms: 10,
-            },
-            FileFingerprint {
-                path: ".env".into(),
-                size: 4,
-                modified_ms: 10,
-            },
-        ]);
+        let initial = state.wsl_fs_events(
+            vec![
+                FileFingerprint {
+                    path: "base.txt".into(),
+                    size: 5,
+                    modified_ms: 10,
+                },
+                FileFingerprint {
+                    path: ".env".into(),
+                    size: 4,
+                    modified_ms: 10,
+                },
+            ],
+            vec!["*.txt".into(), ".env".into()],
+        );
         assert!(initial.is_empty(), "first WSL scan only primes state");
 
-        let events = state.wsl_fs_events(vec![
-            FileFingerprint {
-                path: "base.txt".into(),
-                size: 7,
-                modified_ms: 20,
-            },
-            FileFingerprint {
-                path: "new.txt".into(),
-                size: 3,
-                modified_ms: 20,
-            },
-        ]);
+        let events = state.wsl_fs_events(
+            vec![
+                FileFingerprint {
+                    path: "base.txt".into(),
+                    size: 7,
+                    modified_ms: 20,
+                },
+                FileFingerprint {
+                    path: "new.txt".into(),
+                    size: 3,
+                    modified_ms: 20,
+                },
+            ],
+            vec!["*.txt".into(), ".env".into()],
+        );
 
         assert_eq!(events.len(), 3);
         assert!(events.iter().any(|event| {
@@ -1747,6 +1866,35 @@ mod tests {
                 .iter()
                 .any(|signal| signal.kind == PassiveSignalKind::SensitivePath),
             "WSL fs-events should reuse Plane 2 signals"
+        );
+    }
+
+    #[test]
+    fn wsl_fs_events_reprime_when_watchlist_changes() {
+        let mut state = RepoLiveState::default();
+        assert!(state
+            .wsl_fs_events(
+                vec![FileFingerprint {
+                    path: ".env".into(),
+                    size: 4,
+                    modified_ms: 10,
+                }],
+                vec![".env".into()],
+            )
+            .is_empty());
+
+        let events = state.wsl_fs_events(
+            vec![FileFingerprint {
+                path: "cache.log".into(),
+                size: 9,
+                modified_ms: 20,
+            }],
+            vec!["*.log".into()],
+        );
+
+        assert!(
+            events.is_empty(),
+            "changing WSL fs_watch should establish a new baseline, not emit false removals"
         );
     }
 

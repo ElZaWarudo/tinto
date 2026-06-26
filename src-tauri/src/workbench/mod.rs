@@ -346,7 +346,7 @@ impl WorkbenchStore {
             Git2Engine::open(&path)?;
         }
         let wb = self.find_mut(workbench)?;
-        if wb.repos.iter().any(|r| r.is_local() && r.path == path) {
+        if wb.repos.iter().any(|r| r.path == path) {
             return Err(WorkbenchError::DuplicateRepo(path));
         }
         wb.repos
@@ -365,11 +365,7 @@ impl WorkbenchStore {
         let distro = normalize_wsl_distro(&distro)?;
         let path = normalize_wsl_linux_path(&path)?;
         let wb = self.find_mut(workbench)?;
-        if wb.repos.iter().any(|repo| {
-            repo.source == RepoSource::Wsl
-                && repo.distro.as_deref() == Some(distro.as_str())
-                && repo.path == path
-        }) {
+        if wb.repos.iter().any(|repo| repo.path == path) {
             return Err(WorkbenchError::DuplicateRepo(path));
         }
         wb.repos.push(RepoEntry::wsl(distro, path.clone(), alias));
@@ -427,7 +423,7 @@ impl WorkbenchStore {
         let repo = wb
             .repos
             .iter_mut()
-            .find(|r| r.is_local() && r.path == path)
+            .find(|r| r.path == path)
             .ok_or_else(|| WorkbenchError::UnknownRepo(path.to_path_buf()))?;
         if let Some(alias) = alias {
             repo.alias = alias;
@@ -791,34 +787,40 @@ mod tests {
     }
 
     #[test]
-    fn wsl_duplicate_y_remove_usan_source_distro_y_path() {
+    fn wsl_duplicate_y_remove_usan_source_y_path_sin_colisionar_runtime_key() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = store_in(&dir);
         store.create_workbench("A").unwrap();
         store
             .add_wsl_repo("A", "Ubuntu".into(), "/tmp/shared".into(), None)
             .unwrap();
-        store
+        let duplicate_local = store
             .add_repo(
                 "A",
                 PathBuf::from("/tmp/shared"),
                 Some("Local".into()),
                 false,
             )
-            .unwrap();
+            .unwrap_err();
+        assert!(matches!(duplicate_local, WorkbenchError::DuplicateRepo(_)));
 
         let duplicate = store
             .add_wsl_repo("A", "Ubuntu".into(), "/tmp/shared/".into(), None)
             .unwrap_err();
         assert!(matches!(duplicate, WorkbenchError::DuplicateRepo(_)));
-        assert_eq!(store.config().workbenches[0].repos.len(), 2);
+        let duplicate_other_distro = store
+            .add_wsl_repo("A", "Debian".into(), "/tmp/shared/".into(), None)
+            .unwrap_err();
+        assert!(matches!(
+            duplicate_other_distro,
+            WorkbenchError::DuplicateRepo(_)
+        ));
+        assert_eq!(store.config().workbenches[0].repos.len(), 1);
 
         store
             .remove_wsl_repo("A", "Ubuntu", "/tmp/shared")
             .expect("remove wsl");
-        let remaining = &store.config().workbenches[0].repos;
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].source, RepoSource::Local);
+        assert!(store.config().workbenches[0].repos.is_empty());
     }
 
     #[test]
@@ -1087,7 +1089,7 @@ name = "Solo WSL"
     }
 
     #[test]
-    fn comandos_locales_no_colisionan_con_fuentes_wsl_ocultas() {
+    fn comandos_locales_rechazan_fuentes_wsl_con_mismo_runtime_key() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join(CONFIG_FILE),
@@ -1106,30 +1108,41 @@ name = "A"
         .unwrap();
 
         let mut store = store_in(&dir);
-        store
+        let err = store
             .add_repo(
                 "A",
                 PathBuf::from("/tmp/shared"),
                 Some("Local".into()),
                 false,
             )
+            .unwrap_err();
+        assert!(matches!(err, WorkbenchError::DuplicateRepo(_)));
+        let repos = &store.config().workbenches[0].repos;
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].source, RepoSource::Wsl);
+    }
+
+    #[test]
+    fn update_repo_permite_fs_watch_en_repos_wsl() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+        store
+            .add_wsl_repo("A", "Ubuntu".into(), "/home/me/proyecto".into(), None)
             .unwrap();
 
-        let repos = &store.config().workbenches[0].repos;
-        assert_eq!(repos.len(), 2);
-        assert!(repos
-            .iter()
-            .any(|repo| repo.source == RepoSource::Wsl && repo.path == Path::new("/tmp/shared")));
-        assert!(repos
-            .iter()
-            .any(|repo| repo.source == RepoSource::Local && repo.path == Path::new("/tmp/shared")));
-
         store
-            .remove_repo("A", Path::new("/tmp/shared"))
-            .expect("remove local");
-        let remaining = &store.config().workbenches[0].repos;
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].source, RepoSource::Wsl);
+            .update_repo(
+                "A",
+                Path::new("/home/me/proyecto"),
+                None,
+                Some(vec![".env".into(), "secrets/*.json".into()]),
+            )
+            .unwrap();
+
+        let repo = &store.config().workbenches[0].repos[0];
+        assert_eq!(repo.source, RepoSource::Wsl);
+        assert_eq!(repo.fs_watch, vec![".env", "secrets/*.json"]);
     }
 
     #[test]

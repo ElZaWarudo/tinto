@@ -10,12 +10,14 @@ import type { WslDirectoryListing } from "../bus/client";
 
 const FALLBACK_DISTROS = ["Ubuntu", "Ubuntu-24.04", "Ubuntu-22.04", "Ubuntu-20.04"];
 
-export function AddWslRepoDialog({
+export function AddRepoDialog({
   activeWorkbench,
   onClose,
+  onAddLocal,
 }: {
   activeWorkbench: string;
   onClose: () => void;
+  onAddLocal?: () => void;
 }) {
   const [path, setPath] = useState("");
   const [alias, setAlias] = useState("");
@@ -116,27 +118,28 @@ export function AddWslRepoDialog({
     });
     setIsSaving(false);
     if (stored) onClose();
-    else setError("No se pudo agregar el repo WSL.");
+    else setError("No se pudo agregar el repo.");
   };
+  const isUnified = Boolean(onAddLocal);
 
   return (
-    <div className="addons-backdrop" data-testid="add-wsl-backdrop" onClick={onClose}>
+    <div className="addons-backdrop" data-testid="add-repo-backdrop" onClick={onClose}>
       <form
         className="addons-modal"
         role="dialog"
-        aria-label="Agregar repo WSL"
+        aria-label="Agregar repo"
         aria-modal="true"
-        data-testid="add-wsl-dialog"
+        data-testid="add-repo-dialog"
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => void submit(event)}
       >
         <header className="addons-modal__head">
-          <h2 className="addons-modal__title">Agregar repo WSL</h2>
+          <h2 className="addons-modal__title">Agregar repo</h2>
           <button
             type="button"
             className="addons-modal__close"
             aria-label="Cerrar"
-            data-testid="add-wsl-close"
+            data-testid="add-repo-close"
             onClick={onClose}
           >
             ×
@@ -144,7 +147,31 @@ export function AddWslRepoDialog({
         </header>
 
         <div className="addons-modal__body">
+          {onAddLocal && (
+            <section className="addons-card addons-card--repo-source">
+              <div className="addons-card__main">
+                <h3 className="addons-card__title">Carpeta local</h3>
+                <p className="addons-card__text">Abrí un repositorio disponible en este sistema.</p>
+              </div>
+              <button
+                type="button"
+                className="addons-refresh"
+                data-testid="add-local-repo"
+                onClick={onAddLocal}
+              >
+                Elegir carpeta
+              </button>
+            </section>
+          )}
           <section className="addons-card addons-card--wsl">
+            {isUnified && (
+              <div className="addons-card__main">
+                <h3 className="addons-card__title">Linux en WSL</h3>
+                <p className="addons-card__text">
+                  Navegá la distro y agregá el repositorio con el mismo dashboard.
+                </p>
+              </div>
+            )}
             <div className="wsl-form-grid">
               <label className="wsl-field" htmlFor="wsl-distro">
                 <span className="wsl-field__label">Distro</span>
@@ -256,7 +283,7 @@ export function AddWslRepoDialog({
             )}
 
             {error && (
-              <p className="addons-card__error" data-testid="add-wsl-error">
+              <p className="addons-card__error" data-testid="add-repo-error">
                 {error}
               </p>
             )}
@@ -268,7 +295,7 @@ export function AddWslRepoDialog({
               <button
                 type="submit"
                 className="addons-refresh"
-                data-testid="add-wsl-submit"
+                data-testid="add-repo-submit"
                 disabled={isSaving}
               >
                 {isSaving ? "Agregando..." : "Agregar"}

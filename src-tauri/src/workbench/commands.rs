@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use serde::Serialize;
 use tauri::State;
 
 use super::{
@@ -12,6 +11,11 @@ use super::{
 
 #[cfg(target_os = "windows")]
 use crate::windows_process::hide_console;
+#[cfg(target_os = "windows")]
+use crate::wsl_agent::{
+    launcher::request_wsl_agent,
+    protocol::{AgentRequest, AgentResponse, WslDirectoryListing, PROTOCOL_VERSION},
+};
 
 #[cfg(target_os = "windows")]
 use std::process::Command;
@@ -131,19 +135,6 @@ pub fn remove_wsl_repo(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct WslDirectoryEntry {
-    pub name: String,
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct WslDirectoryListing {
-    pub path: String,
-    pub is_git_repo: bool,
-    pub entries: Vec<WslDirectoryEntry>,
-}
-
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn list_wsl_distros() -> Result<Vec<String>, WorkbenchError> {
@@ -179,43 +170,18 @@ pub fn list_wsl_directory(
         }
         _ => None,
     };
-    let path_arg = path
-        .as_ref()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let script = r#"set -eu
-path_arg="${1:-}"
-if [ -z "$path_arg" ]; then
-  root="$HOME"
-else
-  root="$path_arg"
-fi
-if [ ! -d "$root" ]; then
-  printf 'not a directory: %s\n' "$root" >&2
-  exit 2
-fi
-root="$(cd "$root" && pwd -P)"
-repo=0
-if [ -d "$root/.git" ]; then
-  repo=1
-fi
-printf 'ROOT\t%s\t%s\n' "$root" "$repo"
-find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%f\t%p\n' | sort -f
-"#;
-    let mut command = Command::new("wsl.exe");
-    let output = hide_console(command.args(wsl_directory_listing_argv(
-        distro.as_str(),
-        script,
-        path_arg.as_str(),
-    )))
-    .output()
-    .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?;
-    if !output.status.success() {
-        return Err(WorkbenchError::WslCommandFailed(
-            decode_wsl_output(&output.stderr).trim().to_string(),
-        ));
+    let request = AgentRequest::ListDirectory {
+        protocol_version: PROTOCOL_VERSION,
+        path,
+    };
+    match request_wsl_agent(&distro, &request) {
+        Ok(AgentResponse::DirectoryListing { listing }) => Ok(listing),
+        Ok(AgentResponse::Error { message, .. }) => Err(WorkbenchError::WslCommandFailed(message)),
+        Ok(_) => Err(WorkbenchError::WslCommandFailed(
+            "respuesta inesperada del agente WSL".into(),
+        )),
+        Err(error) => Err(WorkbenchError::WslCommandFailed(error.message)),
     }
-    parse_wsl_directory_listing(&decode_wsl_output(&output.stdout))
 }
 
 /// `alias: Some(x)` lo cambia; `clear_alias: true` lo borra (JSON no puede
@@ -271,54 +237,6 @@ fn decode_wsl_output(bytes: &[u8]) -> String {
     } else {
         String::from_utf8_lossy(bytes).replace('\0', "")
     }
-}
-
-#[cfg(target_os = "windows")]
-fn parse_wsl_directory_listing(output: &str) -> Result<WslDirectoryListing, WorkbenchError> {
-    let mut lines = output.lines();
-    let root = lines
-        .next()
-        .ok_or_else(|| WorkbenchError::WslCommandFailed("respuesta WSL vacia".into()))?;
-    let mut root_parts = root.splitn(3, '\t');
-    if root_parts.next() != Some("ROOT") {
-        return Err(WorkbenchError::WslCommandFailed(
-            "respuesta WSL sin raiz".into(),
-        ));
-    }
-    let path = root_parts.next().unwrap_or_default().to_string();
-    let is_git_repo = root_parts.next() == Some("1");
-    let entries = lines
-        .filter_map(|line| {
-            let (name, path) = line.split_once('\t')?;
-            Some(WslDirectoryEntry {
-                name: name.to_string(),
-                path: path.to_string(),
-            })
-        })
-        .collect();
-    Ok(WslDirectoryListing {
-        path,
-        is_git_repo,
-        entries,
-    })
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn wsl_directory_listing_argv<'a>(
-    distro: &'a str,
-    script: &'a str,
-    path_arg: &'a str,
-) -> [&'a str; 8] {
-    [
-        "-d",
-        distro,
-        "--exec",
-        "sh",
-        "-lc",
-        script,
-        "tinto-wsl-browse",
-        path_arg,
-    ]
 }
 
 #[cfg(test)]
@@ -401,24 +319,5 @@ name = "B"
             assert_eq!(repos[1].distro.as_deref(), Some("Ubuntu"));
         }
         assert_eq!(active_runtime_repos_for(&store, "B"), None);
-    }
-
-    #[test]
-    fn wsl_directory_browser_uses_exec_to_preserve_shell_args() {
-        let argv = wsl_directory_listing_argv("Ubuntu-24.04", "printf '%s' \"$1\"", "/home/me");
-
-        assert_eq!(
-            &argv[..],
-            [
-                "-d",
-                "Ubuntu-24.04",
-                "--exec",
-                "sh",
-                "-lc",
-                "printf '%s' \"$1\"",
-                "tinto-wsl-browse",
-                "/home/me",
-            ]
-        );
     }
 }

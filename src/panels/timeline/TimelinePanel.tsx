@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { getCommitDiff, getCommitLog } from "../../bus/client";
 import type { CommitInfo, FileDiff } from "../../bus/contract";
@@ -24,6 +24,11 @@ interface CommitEntry {
   commit: CommitInfo;
 }
 
+interface CommitLogTarget {
+  repo: string;
+  head: string;
+}
+
 function asCmdError(e: unknown): CmdError {
   if (e && typeof e === "object" && "message" in e) {
     const o = e as Record<string, unknown>;
@@ -41,6 +46,19 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
+function encodeCommitLogTargets(targets: CommitLogTarget[]): string {
+  return JSON.stringify(targets);
+}
+
+function decodeCommitLogTargets(key: string): CommitLogTarget[] {
+  try {
+    const parsed = JSON.parse(key) as CommitLogTarget[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export function TimelinePanel(props: IDockviewPanelProps) {
   void props;
   const state = useBusState();
@@ -51,11 +69,17 @@ export function TimelinePanel(props: IDockviewPanelProps) {
     () => filterRepoPaths(state, allRepoPaths, filters, (repo) => busStore.displayName(repo)),
     [allRepoPaths, filters, state],
   );
-  const repoKey = repoPaths.join("\0");
   const repoSet = useMemo(() => new Set(repoPaths), [repoPaths]);
+  const commitLogKey = encodeCommitLogTargets(
+    repoPaths.map((repo) => ({
+      repo,
+      head: state.repos[repo]?.head?.id ?? "no-head",
+    })),
+  );
 
   const [commits, setCommits] = useState<Record<string, CommitInfo[]>>({});
   const [logError, setLogError] = useState<string | null>(null);
+  const loadedCommitKeys = useRef(new Map<string, string>());
   const [selected, setSelected] = useState<CommitEntry | null>(null);
   const [diffs, setDiffs] = useState<FileDiff[] | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -64,14 +88,47 @@ export function TimelinePanel(props: IDockviewPanelProps) {
 
   useEffect(() => {
     let active = true;
+    const targets = decodeCommitLogTargets(commitLogKey);
+    const targetRepos = new Set(targets.map((target) => target.repo));
+    for (const repo of Array.from(loadedCommitKeys.current.keys())) {
+      if (!targetRepos.has(repo)) loadedCommitKeys.current.delete(repo);
+    }
+    const targetByRepo = new Map(targets.map((target) => [target.repo, target.head]));
+    const staleTargets = targets.filter(
+      (target) => loadedCommitKeys.current.get(target.repo) !== target.head,
+    );
+    if (staleTargets.length === 0) {
+      setCommits((current) => {
+        const next = Object.fromEntries(
+          Object.entries(current).filter(([repo]) => targetRepos.has(repo)),
+        );
+        return Object.keys(next).length === Object.keys(current).length ? current : next;
+      });
+      setLogError(null);
+      return () => {
+        active = false;
+      };
+    }
+
     void Promise.all(
-      repoPaths.map((repo) =>
-        getCommitLog(repo, 0, TIMELINE_COMMIT_LIMIT).then((items) => [repo, items] as const),
+      staleTargets.map((target) =>
+        getCommitLog(target.repo, 0, TIMELINE_COMMIT_LIMIT).then(
+          (items) => [target.repo, items] as const,
+        ),
       ),
     )
       .then((pairs) => {
         if (!active) return;
-        setCommits(Object.fromEntries(pairs));
+        setCommits((current) => {
+          const next = Object.fromEntries(
+            Object.entries(current).filter(([repo]) => targetRepos.has(repo)),
+          );
+          for (const [repo, items] of pairs) {
+            next[repo] = items;
+            loadedCommitKeys.current.set(repo, targetByRepo.get(repo) ?? "no-head");
+          }
+          return next;
+        });
         setLogError(null);
       })
       .catch((e) => {
@@ -80,7 +137,7 @@ export function TimelinePanel(props: IDockviewPanelProps) {
     return () => {
       active = false;
     };
-  }, [repoKey, repoPaths]);
+  }, [commitLogKey]);
 
   const activityEntries = useMemo(
     () =>

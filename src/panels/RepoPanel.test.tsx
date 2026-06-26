@@ -89,6 +89,47 @@ describe("RepoPanel", () => {
     expect(getCommitLogMock).toHaveBeenCalledWith("/r/api", 0, 30);
   });
 
+  it("reloads commits on HEAD changes, not status-only revision changes", async () => {
+    getCommitLogMock.mockResolvedValue([
+      { id: "abc123", summary: "fix parser", author: "me", timestamp: 1_699_999_000 },
+    ]);
+    act(() =>
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            revision: 1,
+            head: { id: "abc123", summary: "fix parser", author: "me", timestamp: 1_699_999_000 },
+          }),
+        ],
+        { available: true },
+      ),
+    );
+    render(<RepoPanel {...panelProps("/r/api")} />);
+    await waitFor(() => expect(getCommitLogMock).toHaveBeenCalledTimes(1));
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/api", {
+          revision: 2,
+          status: { modified: ["src/a.rs", "src/b.rs"], staged: [], untracked: [] },
+          head: { id: "abc123", summary: "fix parser", author: "me", timestamp: 1_699_999_000 },
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId("status-lists")).toHaveTextContent("src/b.rs"));
+    expect(getCommitLogMock).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/api", {
+          revision: 3,
+          head: { id: "def456", summary: "add cache", author: "me", timestamp: 1_700_000_000 },
+        }),
+      ),
+    );
+    await waitFor(() => expect(getCommitLogMock).toHaveBeenCalledTimes(2));
+  });
+
   it("keeps the nested file dock mounted and measurable behind the overview", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
@@ -317,6 +358,9 @@ describe("openRepoPanel (dedup)", () => {
     const panels: Record<string, { id: string; api: { setActive: ReturnType<typeof vi.fn> } }> = {};
     let activePanel: { id: string; api: { setActive: ReturnType<typeof vi.fn> } } | null = null;
     return {
+      get panels() {
+        return Object.values(panels);
+      },
       get activePanel() {
         return activePanel;
       },
@@ -353,6 +397,24 @@ describe("openRepoPanel (dedup)", () => {
     const api = fakeApi();
 
     openRepoPanel(api as never, "/r/api", "api");
+    openRepoPanel(api as never, "/r/web", "web");
+
+    expect(api.addPanel).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: "repo:/r/web",
+        position: {
+          direction: "right",
+          referencePanel: "repo:/r/api",
+        },
+      }),
+    );
+  });
+
+  it("opens a new repo as a split of an existing project even when dashboard is active", () => {
+    const api = fakeApi();
+
+    openRepoPanel(api as never, "/r/api", "api");
+    api.addPanel({ id: "dashboard" });
     openRepoPanel(api as never, "/r/web", "web");
 
     expect(api.addPanel).toHaveBeenLastCalledWith(

@@ -23,6 +23,7 @@ vi.mock("../bus/client", () => ({
 }));
 
 import { RepoCard } from "./RepoCard";
+import { resetAgentAvailabilityCacheForTests } from "./agentAvailability";
 
 function makeDelta(over: Partial<RepoDelta> = {}): RepoDelta {
   return {
@@ -67,6 +68,7 @@ describe("RepoCard", () => {
     clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(true);
     clientMocks.createRepoGitleaksConfig.mockReset();
     clientMocks.createRepoGitleaksConfig.mockResolvedValue(undefined);
+    resetAgentAvailabilityCacheForTests();
   });
 
   it("shows name, counts, branch, upstream and the latest commit at a glance", () => {
@@ -219,5 +221,15 @@ describe("RepoCard", () => {
     fireEvent.change(screen.getByLabelText("agent type"), { target: { value: "claude" } });
 
     expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/api", "claude");
+  });
+
+  it("shares an availability check for cards in the same environment", async () => {
+    renderCard({}, { availabilityKey: "wsl:Ubuntu-24.04" });
+    renderCard({ repo: "/r/web" }, { availabilityKey: "wsl:Ubuntu-24.04", name: "web" });
+
+    await screen.findAllByTestId("agent-launch");
+
+    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledTimes(1);
+    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/api", "codex");
   });
 });

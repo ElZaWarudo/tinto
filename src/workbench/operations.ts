@@ -21,10 +21,8 @@ import {
 } from "../bus/client";
 import { reloadActiveWorkbench } from "../bus/connection";
 import { busStore } from "../bus/store";
-import {
-  forgetRecentWorkbench,
-  markRecentWorkbench,
-} from "./recentWorkbenches";
+import type { WorkbenchConfig } from "../bus/contract";
+import { forgetRecentWorkbench, markRecentWorkbench } from "./recentWorkbenches";
 
 export async function switchWorkbench(name: string, current: string | null): Promise<void> {
   if (!name || name === current) return;
@@ -37,10 +35,38 @@ export async function switchWorkbench(name: string, current: string | null): Pro
 export async function createAndActivate(name: string): Promise<void> {
   const n = name.trim();
   if (!n) return;
+  const previousConfig = busStore.getState().config;
+  const previous = previousConfig?.active;
+  if (previous) markRecentWorkbench(previous);
   await createWorkbench(n);
   await setActiveWorkbench(n);
+  busStore.reset(); // clear stale repos before the empty/new workbench snapshot lands
   await reloadActiveWorkbench();
+  ensureCreatedWorkbenchVisible(previousConfig, n);
   markRecentWorkbench(n);
+}
+
+function ensureCreatedWorkbenchVisible(
+  previousConfig: WorkbenchConfig | null | undefined,
+  createdName: string,
+): void {
+  const current = busStore.getState().config;
+  const currentNames = new Set((current?.workbenches ?? []).map((w) => w.name));
+  const previousNames = (previousConfig?.workbenches ?? []).map((w) => w.name);
+  const hasCreated = currentNames.has(createdName);
+  const hasPrevious = previousNames.every((name) => currentNames.has(name));
+  if (current?.active === createdName && hasCreated && hasPrevious) return;
+
+  const byName = new Map<string, WorkbenchConfig["workbenches"][number]>();
+  for (const wb of previousConfig?.workbenches ?? []) byName.set(wb.name, wb);
+  for (const wb of current?.workbenches ?? []) byName.set(wb.name, wb);
+  if (!byName.has(createdName)) byName.set(createdName, { name: createdName, repos: [] });
+
+  busStore.setConfig({
+    version: current?.version ?? previousConfig?.version ?? 1,
+    active: createdName,
+    workbenches: Array.from(byName.values()),
+  });
 }
 
 /** Pick a folder and add it as a repo. Resolves to the stored canonical path so

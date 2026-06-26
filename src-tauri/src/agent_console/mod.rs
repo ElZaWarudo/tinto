@@ -19,12 +19,12 @@ use std::{
 use crate::bus::contract::{AgentSession, AgentSessionError, AgentSessionLimits};
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
-    protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
+    protocol::{AgentError, AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
 use checkpoint::{create_checkpoint, CheckpointConfig, CheckpointRecord};
 use pty::{AgentProcessFactory, PortablePtyFactory};
 use session::{AgentSessionRecord, CheckpointBackend};
-use validation::{ensure_wsl_agent_binary, resolve_agent_binary, validate_agent_type};
+use validation::{resolve_agent_binary, validate_agent_type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConsoleError {
@@ -194,7 +194,7 @@ impl AgentSessionRegistry {
         validate_wsl_repo(&repo)?;
         validate_agent_type(&agent_type)?;
         if check_binary {
-            ensure_wsl_agent_binary(&distro, &agent_type)?;
+            ensure_wsl_agent_binary_via_agent(&distro, &agent_type)?;
         }
         self.refresh_session_statuses()?;
         self.ensure_capacity(&repo)?;
@@ -386,6 +386,49 @@ fn canonical_repo(repo: &Path) -> Result<PathBuf, AgentConsoleError> {
         Ok(repo)
     } else {
         Err(AgentConsoleError::repo_not_found())
+    }
+}
+
+fn ensure_wsl_agent_binary_via_agent(
+    distro: &str,
+    agent_type: &str,
+) -> Result<(), AgentConsoleError> {
+    ensure_wsl_agent_binary_with(distro, agent_type, |distro, request| {
+        request_wsl_agent(distro, request)
+    })
+}
+
+fn ensure_wsl_agent_binary_with<F>(
+    distro: &str,
+    agent_type: &str,
+    requester: F,
+) -> Result<(), AgentConsoleError>
+where
+    F: FnOnce(&str, &AgentRequest) -> Result<AgentResponse, AgentError>,
+{
+    validate_agent_type(agent_type)?;
+    match requester(
+        distro,
+        &AgentRequest::AgentBinaryAvailable {
+            protocol_version: PROTOCOL_VERSION,
+            agent_type: agent_type.to_string(),
+        },
+    ) {
+        Ok(AgentResponse::AgentBinaryAvailable { available: true }) => Ok(()),
+        Ok(AgentResponse::AgentBinaryAvailable { available: false }) => {
+            Err(AgentConsoleError::new(
+                "binary_not_found",
+                format!("no se encontro el binario '{agent_type}' en PATH"),
+            ))
+        }
+        Ok(AgentResponse::Error { category, message }) => {
+            Err(AgentConsoleError::new(category, message))
+        }
+        Ok(_) => Err(AgentConsoleError::new(
+            "malformed_response",
+            "respuesta inesperada del agente WSL",
+        )),
+        Err(error) => Err(AgentConsoleError::new(error.safe_category(), error.message)),
     }
 }
 
@@ -828,6 +871,33 @@ mod tests {
             factory.spawned.lock().unwrap().as_slice(),
             &[PathBuf::from("Ubuntu:codex:/home/me/repo")]
         );
+    }
+
+    #[test]
+    fn wsl_session_binary_check_uses_agent_protocol() {
+        ensure_wsl_agent_binary_with("Ubuntu", "codex", |distro, request| {
+            assert_eq!(distro, "Ubuntu");
+            assert_eq!(
+                request,
+                &AgentRequest::AgentBinaryAvailable {
+                    protocol_version: PROTOCOL_VERSION,
+                    agent_type: "codex".into(),
+                }
+            );
+            Ok(AgentResponse::AgentBinaryAvailable { available: true })
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn wsl_session_binary_check_maps_missing_binary() {
+        let error = ensure_wsl_agent_binary_with("Ubuntu", "codex", |_, _| {
+            Ok(AgentResponse::AgentBinaryAvailable { available: false })
+        })
+        .unwrap_err();
+
+        assert_eq!(error.category, "binary_not_found");
+        assert!(error.message.contains("codex"));
     }
 
     #[test]

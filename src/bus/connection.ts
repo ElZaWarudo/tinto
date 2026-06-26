@@ -46,8 +46,9 @@ export function useBusConnection(): void {
     let active = true;
     const applyDelta = (delta: RepoDelta) => {
       if (!active) return;
-      busStore.applyDelta(delta);
-      repoTreeStore.refresh(delta.repo);
+      if (busStore.applyDelta(delta)) {
+        repoTreeStore.ensureLoaded(delta.repo);
+      }
     };
     const applyFsEvents = (batch: FsEventBatch) => {
       if (!active) return;

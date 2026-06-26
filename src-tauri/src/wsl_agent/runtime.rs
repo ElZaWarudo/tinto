@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{fs, io};
 
 use ignore::WalkBuilder;
@@ -6,6 +7,7 @@ use ignore::WalkBuilder;
 use crate::agent_console::checkpoint::{
     create_checkpoint, revert_checkpoint, scan_change_log, CheckpointConfig,
 };
+use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
     file_content_from_bytes, gitleaks_setup_status, list_repo_tree_capped,
     read_file_content_bounded, read_media_content_bounded, validate_media_path,
@@ -23,17 +25,48 @@ use crate::file_ops::commands::{
 };
 use crate::file_ops::{safe_join, FileConflict, FileConflictKind};
 use crate::git::{Git2Engine, GitEngine};
+use crate::paths::{Classification, PathClassifier};
 use uuid::Uuid;
 
 use super::protocol::{
     encode_agent_response, parse_agent_request_line, AgentError, AgentErrorCategory, AgentRequest,
-    AgentResponse, FileFingerprint, RepoFileFingerprintSnapshot,
+    AgentResponse, FileFingerprint, RepoFileFingerprintSnapshot, RepoFsWatchConfig,
+    WslDirectoryEntry, WslDirectoryListing,
 };
 
 pub fn respond_to_request_line(line: &str) -> Result<String, AgentError> {
     let request = parse_agent_request_line(line)?;
     let response = handle_request(request);
     encode_agent_response(&response)
+}
+
+pub fn serve_request_lines<R: io::BufRead, W: io::Write>(
+    mut reader: R,
+    mut writer: W,
+) -> Result<(), AgentError> {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado"))?;
+        if read == 0 {
+            return Ok(());
+        }
+        let response = match respond_to_request_line(&line) {
+            Ok(response) => response,
+            Err(error) => encode_agent_response(&AgentResponse::Error {
+                category: error.safe_category().to_string(),
+                message: error.message,
+            })?,
+        };
+        writer
+            .write_all(response.as_bytes())
+            .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdout cerrado"))?;
+        writer
+            .flush()
+            .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdout cerrado"))?;
+    }
 }
 
 fn handle_request(request: AgentRequest) -> AgentResponse {
@@ -52,6 +85,7 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
         AgentRequest::RepoSnapshotWithFsEvents {
             repos,
             subscriptions,
+            fs_watch,
             ..
         } => {
             let deltas = repos
@@ -66,7 +100,7 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
                             repos: Vec::new(),
                             fingerprints: vec![RepoFileFingerprintSnapshot {
                                 repo: repo.clone(),
-                                files: file_fingerprints(repo)?,
+                                files: file_fingerprints(repo, fs_watch_patterns(repo, &fs_watch))?,
                             }],
                         })
                     })
@@ -83,6 +117,10 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
                 fingerprints,
             }
         }
+        AgentRequest::ListDirectory { path, .. } => match list_directory(path.as_deref()) {
+            Ok(listing) => AgentResponse::DirectoryListing { listing },
+            Err(error) => AgentResponse::error(error.category, error.message),
+        },
         AgentRequest::WorktreeDiff {
             repo,
             allowed_repos,
@@ -187,6 +225,12 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             write_repo_gitleaks_config(&repo)?;
             Ok(AgentResponse::Unit)
         }),
+        AgentRequest::AgentBinaryAvailable { agent_type, .. } => {
+            match agent_binary_available(&agent_type) {
+                Ok(available) => AgentResponse::AgentBinaryAvailable { available },
+                Err(error) => AgentResponse::error(error.category, error.message),
+            }
+        }
         AgentRequest::AgentCheckpointCreate {
             repo,
             allowed_repos,
@@ -356,14 +400,88 @@ fn repo_delta(repo: &Path, subscriptions: &[SubscriptionTarget]) -> RepoDelta {
     }
 }
 
-fn file_fingerprints(repo: &Path) -> Result<Vec<FileFingerprint>, AgentRuntimeError> {
+fn fs_watch_patterns(repo: &Path, configs: &[RepoFsWatchConfig]) -> Vec<String> {
+    configs
+        .iter()
+        .find(|config| same_linux_path(&config.repo, repo))
+        .map(|config| config.patterns.clone())
+        .unwrap_or_default()
+}
+
+fn list_directory(path: Option<&Path>) -> Result<WslDirectoryListing, AgentRuntimeError> {
+    let root = match path {
+        Some(path) => path.to_path_buf(),
+        None => std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| AgentRuntimeError::new("missing-home", "HOME no esta definido"))?,
+    };
+    if !root.is_dir() {
+        return Err(AgentRuntimeError::new(
+            "not-a-directory",
+            format!("not a directory: {}", root.display()),
+        ));
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|error| AgentRuntimeError::new("io", error.to_string()))?;
+    let mut entries = Vec::new();
+    for entry in
+        fs::read_dir(&root).map_err(|error| AgentRuntimeError::new("io", error.to_string()))?
+    {
+        let entry = entry.map_err(|error| AgentRuntimeError::new("io", error.to_string()))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| AgentRuntimeError::new("io", error.to_string()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        entries.push(WslDirectoryEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path: entry.path().to_string_lossy().into_owned(),
+        });
+    }
+    entries.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(WslDirectoryListing {
+        is_git_repo: root.join(".git").is_dir(),
+        path: root.to_string_lossy().into_owned(),
+        entries,
+    })
+}
+
+fn agent_binary_available(agent_type: &str) -> Result<bool, AgentRuntimeError> {
+    let binary = validate_agent_type(agent_type)
+        .map_err(|error| AgentRuntimeError::new(error.category, error.message))?;
+    let output = Command::new("sh")
+        .arg("-lc")
+        .arg("command -v -- \"$1\"")
+        .arg("tinto-agent-binary-check")
+        .arg(binary)
+        .output()?;
+    Ok(output.status.success() && !output.stdout.is_empty())
+}
+
+fn file_fingerprints(
+    repo: &Path,
+    fs_watch: Vec<String>,
+) -> Result<Vec<FileFingerprint>, AgentRuntimeError> {
     let repo = repo
         .canonicalize()
         .map_err(|_| AgentRuntimeError::new("repository-not-found", "el repo no existe"))?;
+    let classifier = PathClassifier::new(&repo, &fs_watch)
+        .map_err(|error| AgentRuntimeError::new("watchlist", error.to_string()))?;
     let mut files = Vec::new();
     let walker = WalkBuilder::new(&repo)
         .follow_links(false)
         .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
         .build();
 
     for entry in walker {
@@ -379,6 +497,9 @@ fn file_fingerprints(repo: &Path) -> Result<Vec<FileFingerprint>, AgentRuntimeEr
             .file_type()
             .is_some_and(|file_type| file_type.is_file())
         {
+            continue;
+        }
+        if classifier.classify(rel, false) != Classification::Plane2 {
             continue;
         }
         let metadata = entry
@@ -826,7 +947,8 @@ mod tests {
     use crate::bus::contract::ContentEncoding;
     use crate::git::test_fixtures::TempRepo;
     use crate::wsl_agent::protocol::{
-        encode_agent_request, parse_agent_response_line, AgentRequest, PROTOCOL_VERSION,
+        encode_agent_request, parse_agent_response_line, AgentRequest, RepoFsWatchConfig,
+        PROTOCOL_VERSION,
     };
 
     #[test]
@@ -845,6 +967,85 @@ mod tests {
             AgentResponse::Error {
                 category: "repo-not-allowed".into(),
                 message: "el repo no pertenece al workbench activo".into()
+            }
+        );
+    }
+
+    #[test]
+    fn serve_request_lines_handles_multiple_requests_in_one_agent_process() {
+        let request = encode_agent_request(&AgentRequest::handshake("test")).expect("encode");
+        let input = format!("{request}{request}");
+        let mut output = Vec::new();
+
+        serve_request_lines(std::io::Cursor::new(input), &mut output).expect("serve");
+
+        let text = String::from_utf8(output).expect("utf8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        for line in lines {
+            assert!(matches!(
+                parse_agent_response_line(line).expect("parse"),
+                AgentResponse::Handshake { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn serve_request_lines_returns_error_response_and_keeps_running() {
+        let good = encode_agent_request(&AgentRequest::handshake("test")).expect("encode");
+        let input = format!("{{not json}}\n{good}");
+        let mut output = Vec::new();
+
+        serve_request_lines(std::io::Cursor::new(input), &mut output).expect("serve");
+
+        let text = String::from_utf8(output).expect("utf8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(matches!(
+            parse_agent_response_line(lines[0]).expect("parse"),
+            AgentResponse::Error { .. }
+        ));
+        assert!(matches!(
+            parse_agent_response_line(lines[1]).expect("parse"),
+            AgentResponse::Handshake { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_binary_available_is_checked_inside_agent_runtime() {
+        let request = AgentRequest::AgentBinaryAvailable {
+            protocol_version: PROTOCOL_VERSION,
+            agent_type: "codex".into(),
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&request).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+
+        assert!(matches!(
+            response,
+            AgentResponse::AgentBinaryAvailable { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_binary_available_rejects_unsupported_agent_inside_agent_runtime() {
+        let request = AgentRequest::AgentBinaryAvailable {
+            protocol_version: PROTOCOL_VERSION,
+            agent_type: "powershell".into(),
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&request).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+
+        assert_eq!(
+            response,
+            AgentResponse::Error {
+                category: "unsupported_agent".into(),
+                message: "agente no soportado: 'powershell'".into(),
             }
         );
     }
@@ -874,15 +1075,55 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_with_fs_events_returns_fingerprints_without_dot_git() {
+    fn list_directory_returns_dirs_sorted_and_git_repo_marker() {
         let repo = TempRepo::with_initial_commit();
-        repo.write("changed.txt", "hello\n");
+        std::fs::create_dir_all(repo.path().join("zeta")).unwrap();
+        std::fs::create_dir_all(repo.path().join("Alpha")).unwrap();
+        std::fs::write(repo.path().join("file.txt"), "not a dir").unwrap();
+
+        let request = AgentRequest::ListDirectory {
+            protocol_version: PROTOCOL_VERSION,
+            path: Some(repo.path().to_path_buf()),
+        };
+        let line = encode_agent_request(&request).expect("encode");
+        let response_line = respond_to_request_line(&line).expect("respond");
+        let response = parse_agent_response_line(&response_line).expect("parse");
+
+        let AgentResponse::DirectoryListing { listing } = response else {
+            panic!("expected directory listing");
+        };
+        assert_eq!(
+            listing.path,
+            repo.path().canonicalize().unwrap().display().to_string()
+        );
+        assert!(listing.is_git_repo);
+        assert_eq!(
+            listing
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![".git", "Alpha", "zeta"]
+        );
+    }
+
+    #[test]
+    fn snapshot_with_fs_events_returns_watchlisted_plane2_fingerprints_without_dot_git() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write(".gitignore", ".env\n*.log\n");
+        repo.write(".env", "SECRET=1\n");
+        repo.write("debug.log", "ignored but not watched\n");
+        repo.write("changed.txt", "tracked plane1\n");
         std::fs::write(repo.path().join(".git").join("hidden.txt"), "hidden").unwrap();
 
         let request = AgentRequest::RepoSnapshotWithFsEvents {
             protocol_version: PROTOCOL_VERSION,
             repos: vec![repo.path().to_path_buf()],
             subscriptions: Vec::new(),
+            fs_watch: vec![RepoFsWatchConfig {
+                repo: repo.path().to_path_buf(),
+                patterns: vec![".env".into()],
+            }],
         };
         let line = encode_agent_request(&request).expect("encode");
         let response_line = respond_to_request_line(&line).expect("respond");
@@ -898,6 +1139,14 @@ mod tests {
         assert_eq!(repos.len(), 1);
         assert_eq!(fingerprints.len(), 1);
         assert!(fingerprints[0]
+            .files
+            .iter()
+            .any(|file| file.path == Path::new(".env")));
+        assert!(!fingerprints[0]
+            .files
+            .iter()
+            .any(|file| file.path == Path::new("debug.log")));
+        assert!(!fingerprints[0]
             .files
             .iter()
             .any(|file| file.path == Path::new("changed.txt")));

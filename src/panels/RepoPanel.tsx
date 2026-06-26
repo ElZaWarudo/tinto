@@ -105,11 +105,12 @@ function RepoOverview({ repo }: { repo: string }) {
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [logError, setLogError] = useState(false);
 
-  // Refetch the log when the repo changes or its revision advances (new commit).
-  const revision = delta?.revision ?? -1;
+  // Refetch the log when the repo changes or HEAD changes. Status-only deltas
+  // are frequent, especially for WSL polling, and should not reload history.
+  const commitLogKey = delta?.head?.id ?? "no-head";
   useEffect(() => {
     let active = true;
-    // Refetch on repo/revision change; keep the prior list visible until the
+    // Refetch on repo/HEAD change; keep the prior list visible until the
     // new one arrives (avoids a synchronous setState in the effect body).
     getCommitLog(repo, 0, COMMIT_LOG_LIMIT)
       .then((c) => {
@@ -124,7 +125,7 @@ function RepoOverview({ repo }: { repo: string }) {
     return () => {
       active = false;
     };
-  }, [repo, revision]);
+  }, [repo, commitLogKey]);
 
   if (!delta) {
     return (

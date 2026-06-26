@@ -30,6 +30,7 @@ vi.mock("./platform", async () => {
 
 import { MenuBar } from "./MenuBar";
 import { FirstRun } from "./firstRun";
+import { AddRepoDialog } from "./AddRepoDialog";
 import { setWindowsHostOverrideForTests } from "./platform";
 import { busStore } from "../bus/store";
 import type { WorkbenchConfig } from "../bus/contract";
@@ -66,10 +67,7 @@ describe("MenuBar", () => {
   // Covers AE5 (switch trigger) + R7
   it("lists recent workbenches, marks the active one, and switches on click", () => {
     // Seed an MRU order so we can verify the menu respects it.
-    localStorage.setItem(
-      "tinto:recent-workbenches:v1",
-      JSON.stringify(["Side", "Work"]),
-    );
+    localStorage.setItem("tinto:recent-workbenches:v1", JSON.stringify(["Side", "Work"]));
     act(() => {
       busStore.setConfig(config);
       busStore.setWatching({ available: true });
@@ -117,23 +115,19 @@ describe("MenuBar", () => {
     expect(ops.autodetectFlow).toHaveBeenCalledWith("Work");
   });
 
-  it("hides WSL repo actions on non-Windows hosts", () => {
-    setWindowsHostOverrideForTests(false);
+  it("does not expose WSL as a separate Repos menu action", () => {
+    setWindowsHostOverrideForTests(true);
     act(() => busStore.setConfig(config));
     render(<MenuBar />);
     fireEvent.click(screen.getByTestId("menu-repos"));
-    expect(screen.queryByTestId("add-wsl-repo")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /add wsl repo/i })).not.toBeInTheDocument();
   });
 
-  it("opens the Windows-only WSL add dialog and submits a selected Ubuntu Linux path", async () => {
-    setWindowsHostOverrideForTests(true);
+  it("submits a selected Ubuntu Linux path from the WSL add dialog", async () => {
     ops.addWslRepoFlow.mockResolvedValue("/home/me/repo");
-    act(() => busStore.setConfig(config));
-    render(<MenuBar />);
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByTestId("menu-repos"));
-    fireEvent.click(screen.getByTestId("add-wsl-repo"));
-    expect(screen.getByTestId("add-wsl-dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("add-repo-dialog")).toBeInTheDocument();
 
     await act(async () => {
       await Promise.resolve();
@@ -144,7 +138,7 @@ describe("MenuBar", () => {
     });
     fireEvent.change(screen.getByTestId("wsl-path"), { target: { value: "/home/me/repo/" } });
     fireEvent.change(screen.getByTestId("wsl-alias"), { target: { value: "API WSL" } });
-    fireEvent.click(screen.getByTestId("add-wsl-submit"));
+    fireEvent.click(screen.getByTestId("add-repo-submit"));
 
     await act(async () => {
       await Promise.resolve();
@@ -157,8 +151,22 @@ describe("MenuBar", () => {
     });
   });
 
+  it("can render the add repo dialog as one source-neutral flow", async () => {
+    const addLocal = vi.fn();
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} onAddLocal={addLocal} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("dialog", { name: "Agregar repo" })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("add-local-repo"));
+    expect(addLocal).toHaveBeenCalledOnce();
+    expect(screen.getByText("Linux en WSL")).toBeInTheDocument();
+    expect(screen.getByTestId("wsl-path")).toBeInTheDocument();
+  });
+
   it("lets Windows users browse detected WSL distro directories", async () => {
-    setWindowsHostOverrideForTests(true);
     ops.listWslDistrosFlow.mockResolvedValue(["Ubuntu-24.04"]);
     ops.listWslDirectoryFlow
       .mockResolvedValueOnce({
@@ -171,11 +179,7 @@ describe("MenuBar", () => {
         is_git_repo: true,
         entries: [],
       });
-    act(() => busStore.setConfig(config));
-    render(<MenuBar />);
-
-    fireEvent.click(screen.getByTestId("menu-repos"));
-    fireEvent.click(screen.getByTestId("add-wsl-repo"));
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} />);
 
     await act(async () => {
       await Promise.resolve();
@@ -191,7 +195,7 @@ describe("MenuBar", () => {
     expect(screen.getByText("Git repo")).toBeInTheDocument();
   });
 
-  it("shows configured WSL labels on Windows without listing them as projects", () => {
+  it("lists loaded WSL repos as regular projects instead of a separate configured list", () => {
     setWindowsHostOverrideForTests(true);
     const openRepo = vi.fn();
     const actions: WorkspaceActions = {
@@ -203,7 +207,7 @@ describe("MenuBar", () => {
       openDashboard: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
-    act(() =>
+    act(() => {
       busStore.setConfig({
         version: 1,
         active: "Work",
@@ -221,8 +225,26 @@ describe("MenuBar", () => {
             ],
           },
         ],
-      }),
-    );
+      });
+      busStore.loadSnapshot(
+        [
+          {
+            repo: "/home/me/repo",
+            revision: 1,
+            status: { modified: [], staged: [], untracked: [] },
+            branch: null,
+            head: null,
+            last_activity_ms: 1,
+            error: null,
+            metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+            gitleaks_configured: false,
+            signals: [],
+            secret_findings: [],
+          },
+        ],
+        { available: true },
+      );
+    });
     render(
       <WorkspaceActionsContext.Provider value={actions}>
         <MenuBar />
@@ -230,11 +252,11 @@ describe("MenuBar", () => {
     );
 
     fireEvent.click(screen.getByTestId("menu-repos"));
-    expect(screen.getByTestId("configured-wsl-/home/me/repo")).toHaveTextContent("API WSL");
+    expect(screen.queryByTestId("configured-wsl-Ubuntu-/home/me/repo")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("menu-projects"));
-    expect(screen.getByTestId("projects-empty")).toBeInTheDocument();
-    expect(openRepo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("open-project-/home/me/repo"));
+    expect(openRepo).toHaveBeenCalledWith("/home/me/repo");
   });
 
   it("shows the degraded watch indicator", () => {
@@ -247,6 +269,7 @@ describe("MenuBar", () => {
   });
 
   it("does not crash when config is missing workbenches", () => {
+    localStorage.setItem("tinto:recent-workbenches:v1", JSON.stringify(["Side", "Work"]));
     act(() => {
       busStore.setConfig({ version: 1, active: "Work" } as WorkbenchConfig);
       busStore.setWatching({ available: true });
@@ -255,9 +278,10 @@ describe("MenuBar", () => {
     render(<MenuBar />);
 
     expect(screen.getByAltText("Tinto")).toBeInTheDocument();
-    // No workbench switcher: the new Workbench menu still renders but
-    // shows the empty state.
-    expect(screen.getByTestId("menu-workbench")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    expect(screen.queryByTestId("workbench-empty")).not.toBeInTheDocument();
+    expect(screen.getByTestId("workbench-recent-Work")).toBeInTheDocument();
+    expect(screen.getByTestId("workbench-recent-Side")).toBeInTheDocument();
   });
 
   it("opens the dashboard and timeline from the Ver menu", () => {
@@ -413,8 +437,57 @@ describe("MenuBar", () => {
 
     expect(screen.queryByTestId("manage-workbenches-modal")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("menu-workbench"));
+    expect(screen.queryByTestId("workbench-create")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("workbench-manage"));
     expect(screen.getByTestId("manage-workbenches-modal")).toBeInTheDocument();
+  });
+
+  it("creates from the manage modal, closes it, opens dashboard, and keeps prior workbenches switchable", async () => {
+    const openDashboard = vi.fn();
+    const actions: WorkspaceActions = {
+      openRepo: vi.fn(),
+      addRepo: vi.fn(),
+      removeRepo: vi.fn(),
+      openFile: vi.fn(),
+      openTimeline: vi.fn(),
+      openDashboard,
+      openAgentTerminal: vi.fn(),
+    };
+    ops.createAndActivate.mockResolvedValue(undefined);
+    act(() => busStore.setConfig(config));
+    render(
+      <WorkspaceActionsContext.Provider value={actions}>
+        <MenuBar />
+      </WorkspaceActionsContext.Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    fireEvent.click(screen.getByTestId("workbench-manage"));
+    fireEvent.change(screen.getByTestId("manage-workbench-new-input"), {
+      target: { value: "  Sandbox  " },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manage-workbench-new-submit"));
+      await Promise.resolve();
+    });
+
+    expect(ops.createAndActivate).toHaveBeenCalledWith("Sandbox");
+    expect(openDashboard).toHaveBeenCalledWith({ closeAll: true });
+    expect(screen.queryByTestId("manage-workbenches-modal")).not.toBeInTheDocument();
+
+    act(() =>
+      busStore.setConfig({
+        ...config,
+        active: "Sandbox",
+        workbenches: [...config.workbenches, { name: "Sandbox", repos: [] }],
+      }),
+    );
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+
+    expect(screen.getByTestId("workbench-recent-Work")).toBeInTheDocument();
+    expect(screen.getByTestId("workbench-recent-Side")).toBeInTheDocument();
+    expect(screen.getByTestId("workbench-recent-Sandbox")).toBeInTheDocument();
   });
 });
 

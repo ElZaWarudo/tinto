@@ -46,6 +46,25 @@ pub struct RepoFileFingerprintSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RepoFsWatchConfig {
+    pub repo: PathBuf,
+    pub patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WslDirectoryEntry {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WslDirectoryListing {
+    pub path: String,
+    pub is_git_repo: bool,
+    pub entries: Vec<WslDirectoryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentRequest {
     Handshake {
@@ -61,6 +80,11 @@ pub enum AgentRequest {
         protocol_version: u16,
         repos: Vec<PathBuf>,
         subscriptions: Vec<SubscriptionTarget>,
+        fs_watch: Vec<RepoFsWatchConfig>,
+    },
+    ListDirectory {
+        protocol_version: u16,
+        path: Option<PathBuf>,
     },
     WorktreeDiff {
         protocol_version: u16,
@@ -118,6 +142,10 @@ pub enum AgentRequest {
         protocol_version: u16,
         repo: PathBuf,
         allowed_repos: Vec<PathBuf>,
+    },
+    AgentBinaryAvailable {
+        protocol_version: u16,
+        agent_type: String,
     },
     AgentCheckpointCreate {
         protocol_version: u16,
@@ -203,6 +231,9 @@ pub enum AgentResponse {
         repos: Vec<RepoDelta>,
         fingerprints: Vec<RepoFileFingerprintSnapshot>,
     },
+    DirectoryListing {
+        listing: WslDirectoryListing,
+    },
     WorktreeDiff {
         diffs: Vec<FileDiff>,
     },
@@ -229,6 +260,9 @@ pub enum AgentResponse {
     },
     GitleaksInstallResult {
         result: GitleaksInstallResult,
+    },
+    AgentBinaryAvailable {
+        available: bool,
     },
     AgentCheckpoint {
         checkpoint: CheckpointRecord,
@@ -420,6 +454,9 @@ impl AgentRequest {
             | Self::RepoSnapshotWithFsEvents {
                 protocol_version, ..
             }
+            | Self::ListDirectory {
+                protocol_version, ..
+            }
             | Self::WorktreeDiff {
                 protocol_version, ..
             }
@@ -448,6 +485,9 @@ impl AgentRequest {
                 protocol_version, ..
             }
             | Self::CreateGitleaksConfig {
+                protocol_version, ..
+            }
+            | Self::AgentBinaryAvailable {
                 protocol_version, ..
             }
             | Self::AgentCheckpointCreate {

@@ -18,7 +18,8 @@ const FRONTEND_RUNTIME_SURFACES = Object.entries(rawSources)
 const WSL_ALLOWED_RUNTIME_FILES = new Set([
   "src/bus/client.ts",
   "src/bus/contract.ts",
-  "src/workbench/AddWslRepoDialog.tsx",
+  "src/bus/store.ts",
+  "src/workbench/AddRepoDialog.tsx",
   "src/workbench/ManageWorkbenchesDialog.tsx",
   "src/workbench/MenuBar.tsx",
   "src/workbench/operations.ts",

@@ -17,7 +17,7 @@ export interface WorkspaceActions {
   /** Open the cross-repo Timeline / history panel (RDM-010). */
   openTimeline: () => void;
   /** Open (or focus) the always-available Dashboard tab. */
-  openDashboard: () => void;
+  openDashboard: (options?: { closeAll?: boolean }) => void;
   /** Open (or focus) an attached terminal for an agent session. */
   openAgentTerminal: (params: AgentTerminalOpenParams) => void;
 }

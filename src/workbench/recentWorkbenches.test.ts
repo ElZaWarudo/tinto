@@ -4,6 +4,7 @@ import {
   getRecentWorkbenches,
   markRecentWorkbench,
   sortByRecency,
+  visibleWorkbenchNames,
 } from "./recentWorkbenches";
 
 describe("recentWorkbenches", () => {
@@ -49,6 +50,18 @@ describe("recentWorkbenches", () => {
 
     const sorted = sortByRecency(["Unknown A", "Work", "Unknown B", "Side", "Client X"]);
     expect(sorted).toEqual(["Client X", "Side", "Work", "Unknown A", "Unknown B"]);
+  });
+
+  it("merges configured, active, and recent names for partial config renders", () => {
+    markRecentWorkbench("Side");
+    markRecentWorkbench("Client X");
+
+    expect(visibleWorkbenchNames(["Work"], "Current")).toEqual([
+      "Client X",
+      "Side",
+      "Work",
+      "Current",
+    ]);
   });
 
   it("is robust against malformed localStorage payloads", () => {

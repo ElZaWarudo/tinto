@@ -5,6 +5,11 @@
 import type { DockviewApi } from "dockview-react";
 import { PANEL_REPO, TAB_REPO, repoPanelId } from "./panels";
 
+function splitReferencePanelId(api: DockviewApi): string | undefined {
+  if (api.activePanel?.id.startsWith("repo:")) return api.activePanel.id;
+  return api.panels.find((panel) => panel.id.startsWith("repo:"))?.id;
+}
+
 export function openRepoPanel(api: DockviewApi, repo: string, title: string): void {
   const id = repoPanelId(repo);
   const existing = api.getPanel(id);
@@ -12,9 +17,8 @@ export function openRepoPanel(api: DockviewApi, repo: string, title: string): vo
     existing.api.setActive();
     return;
   }
-  const position = api.activePanel?.id.startsWith("repo:")
-    ? { direction: "right" as const, referencePanel: api.activePanel.id }
-    : undefined;
+  const referencePanel = splitReferencePanelId(api);
+  const position = referencePanel ? { direction: "right" as const, referencePanel } : undefined;
   try {
     api.addPanel({
       id,

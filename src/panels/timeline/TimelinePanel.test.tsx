@@ -48,6 +48,7 @@ const panelProps = {} as IDockviewPanelProps;
 describe("TimelinePanel", () => {
   beforeEach(() => {
     busStore.resetAll();
+    qualityStore.reset();
     getCommitLogMock.mockReset();
     getCommitDiffMock.mockReset();
   });
@@ -100,6 +101,72 @@ describe("TimelinePanel", () => {
     expect(await screen.findByTestId("timeline-diff-error")).toHaveTextContent("missing commit");
     fireEvent.click(screen.getByText("Retry"));
     expect(await screen.findByTestId("timeline-files")).toHaveTextContent("src/a.ts");
+  });
+
+  it("does not reload all commit logs for status-only updates", async () => {
+    getCommitLogMock.mockImplementation((repo: string) =>
+      Promise.resolve([
+        {
+          id: repo === "/r/api" ? "api-head" : "web-head",
+          summary: repo === "/r/api" ? "api commit" : "web commit",
+          author: "me",
+          timestamp: 1_700_000_100,
+        },
+      ]),
+    );
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              { path: "/r/api", alias: "API", fs_watch: [] },
+              { path: "/r/web", alias: "WEB", fs_watch: [] },
+            ],
+          },
+        ],
+      });
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            head: { id: "api-head", summary: "api commit", author: "me", timestamp: 1_700_000_100 },
+          }),
+          delta("/r/web", {
+            head: { id: "web-head", summary: "web commit", author: "me", timestamp: 1_700_000_100 },
+          }),
+        ],
+        { available: true },
+      );
+    });
+
+    render(<TimelinePanel {...panelProps} />);
+    await waitFor(() => expect(getCommitLogMock).toHaveBeenCalledTimes(2));
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/api", {
+          revision: 2,
+          status: { modified: ["src/a.ts", "src/b.ts"], staged: [], untracked: [] },
+          head: { id: "api-head", summary: "api commit", author: "me", timestamp: 1_700_000_100 },
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId("timeline-feed")).toHaveTextContent("2M 0S 0U"));
+    expect(getCommitLogMock).toHaveBeenCalledTimes(2);
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/api", {
+          revision: 3,
+          head: { id: "api-next", summary: "api next", author: "me", timestamp: 1_700_000_200 },
+        }),
+      ),
+    );
+
+    await waitFor(() => expect(getCommitLogMock).toHaveBeenCalledTimes(3));
+    expect(getCommitLogMock).toHaveBeenLastCalledWith("/r/api", 0, 8);
   });
 
   it("applies the time filter to commit entries", async () => {

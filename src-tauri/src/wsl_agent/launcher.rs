@@ -1,10 +1,18 @@
 #[cfg(target_os = "windows")]
+use std::collections::HashMap;
+#[cfg(any(target_os = "windows", test))]
+use std::collections::HashSet;
+#[cfg(target_os = "windows")]
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::sync::mpsc;
+#[cfg(target_os = "windows")]
+use std::sync::Arc;
+#[cfg(any(target_os = "windows", test))]
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 #[cfg(target_os = "windows")]
 use std::time::Instant;
@@ -186,7 +194,7 @@ pub fn request_wsl_agent_with_timeout(
     }
     match packaged_agent_host_path() {
         Ok(agent_path) => {
-            install_packaged_agent(distro, &agent_path)?;
+            ensure_packaged_agent_installed(distro, &agent_path)?;
             let config = WslLaunchConfig::new(distro, AgentCommand::managed_wsl_agent());
             request_ubuntu_agent_config(&config, request, timeout)
         }
@@ -228,8 +236,7 @@ fn request_ubuntu_dev_source_config(
     request: &AgentRequest,
     timeout: Duration,
 ) -> Result<AgentResponse, AgentError> {
-    let transport = StdCommandTransport;
-    request_with_transport(config, request, timeout, &transport)
+    request_with_persistent_agent(config, request, timeout)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -250,8 +257,7 @@ fn request_ubuntu_agent_config(
     request: &AgentRequest,
     timeout: Duration,
 ) -> Result<AgentResponse, AgentError> {
-    let transport = StdCommandTransport;
-    request_with_transport(config, request, timeout, &transport)
+    request_with_persistent_agent(config, request, timeout)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -345,6 +351,45 @@ fn dev_source_fallback_value_enabled(value: Option<&str>) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn packaged_agent_install_cache() -> &'static Mutex<HashSet<String>> {
+    static CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn packaged_agent_install_cache_key(distro: &str, source: &Path) -> String {
+    format!(
+        "{}\n{}\n{}",
+        AGENT_VERSION,
+        distro.trim(),
+        source.to_string_lossy()
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_packaged_agent_installed(distro: &str, source: &Path) -> Result<(), AgentError> {
+    let key = packaged_agent_install_cache_key(distro, source);
+    if packaged_agent_install_cache()
+        .lock()
+        .map(|cache| cache.contains(&key))
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    install_packaged_agent(distro, source)?;
+    if let Ok(mut cache) = packaged_agent_install_cache().lock() {
+        cache.insert(key);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_packaged_agent_installed(distro: &str, source: &Path) -> Result<(), AgentError> {
+    install_packaged_agent(distro, source)
 }
 
 #[cfg(target_os = "windows")]
@@ -443,6 +488,220 @@ pub(crate) fn windows_path_to_wsl_mount(path: &std::path::Path) -> Result<String
         ));
     };
     Ok(format!("/mnt/{}/{}", letter.to_ascii_lowercase(), rest))
+}
+
+#[cfg(target_os = "windows")]
+struct PooledAgent {
+    child: Mutex<Child>,
+    io: Mutex<()>,
+    stdin: Mutex<ChildStdin>,
+    stdout: Mutex<mpsc::Receiver<Result<String, AgentError>>>,
+}
+
+#[cfg(target_os = "windows")]
+fn pooled_agents() -> &'static Mutex<HashMap<String, Arc<PooledAgent>>> {
+    static POOL: OnceLock<Mutex<HashMap<String, Arc<PooledAgent>>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+fn pooled_agent_key(argv: &[String]) -> String {
+    argv.join("\0")
+}
+
+#[cfg(target_os = "windows")]
+fn request_with_persistent_agent(
+    config: &WslLaunchConfig,
+    request: &AgentRequest,
+    timeout: Duration,
+) -> Result<AgentResponse, AgentError> {
+    let argv = build_wsl_argv(config)?;
+    let key = pooled_agent_key(&argv);
+    let request_line = encode_agent_request(request)?;
+    let agent = pooled_agent(&key, &argv)?;
+    match agent.exchange(&request_line, timeout) {
+        Ok(line) => match parse_agent_response_line(&line) {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                drop_pooled_agent(&key, Some(&agent));
+                Err(error)
+            }
+        },
+        Err(error) => {
+            drop_pooled_agent(&key, Some(&agent));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn pooled_agent(key: &str, argv: &[String]) -> Result<Arc<PooledAgent>, AgentError> {
+    if let Ok(pool) = pooled_agents().lock() {
+        if let Some(agent) = pool.get(key) {
+            return Ok(Arc::clone(agent));
+        }
+    }
+
+    let agent = Arc::new(start_pooled_agent(argv)?);
+    let mut pool = pooled_agents()
+        .lock()
+        .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "pool WSL bloqueado"))?;
+    if let Some(existing) = pool.get(key) {
+        agent.kill();
+        return Ok(Arc::clone(existing));
+    }
+    pool.insert(key.to_string(), Arc::clone(&agent));
+    Ok(agent)
+}
+
+#[cfg(target_os = "windows")]
+fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
+    let Some((program, args)) = argv.split_first() else {
+        return Err(AgentError::new(
+            AgentErrorCategory::SpawnFailed,
+            "comando WSL vacio",
+        ));
+    };
+
+    let mut command = Command::new(program);
+    let mut child = hide_console(
+        command
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .spawn()
+    .map_err(|error| map_spawn_error(program, error))?;
+
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AgentError::new(
+                AgentErrorCategory::SpawnFailed,
+                "stdin no disponible",
+            ));
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AgentError::new(
+                AgentErrorCategory::SpawnFailed,
+                "stdout no disponible",
+            ));
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    let _ = tx.send(Err(AgentError::new(
+                        AgentErrorCategory::ChildExit,
+                        "el agente WSL cerro stdout",
+                    )));
+                    return;
+                }
+                Ok(_) => {
+                    if tx.send(Ok(line)).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => {
+                    let _ = tx.send(Err(AgentError::new(
+                        AgentErrorCategory::ChildExit,
+                        "stdout cerrado",
+                    )));
+                    return;
+                }
+            }
+        }
+    });
+
+    Ok(PooledAgent {
+        child: Mutex::new(child),
+        io: Mutex::new(()),
+        stdin: Mutex::new(stdin),
+        stdout: Mutex::new(rx),
+    })
+}
+
+#[cfg(target_os = "windows")]
+impl PooledAgent {
+    fn exchange(&self, request_line: &str, timeout: Duration) -> Result<String, AgentError> {
+        let _io = self
+            .io
+            .lock()
+            .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "agente bloqueado"))?;
+        {
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "agente bloqueado"))?;
+            if let Some(status) = child.try_wait().map_err(|_| {
+                AgentError::new(
+                    AgentErrorCategory::ChildExit,
+                    "no se pudo observar el agente",
+                )
+            })? {
+                return Err(AgentError::new(
+                    AgentErrorCategory::ChildExit,
+                    format!("el agente WSL termino con {status}"),
+                ));
+            }
+        }
+
+        {
+            let mut stdin = self
+                .stdin
+                .lock()
+                .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin bloqueado"))?;
+            stdin
+                .write_all(request_line.as_bytes())
+                .and_then(|_| stdin.flush())
+                .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado"))?;
+        }
+
+        let stdout = self
+            .stdout
+            .lock()
+            .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdout bloqueado"))?;
+        match stdout.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(AgentError::new(
+                AgentErrorCategory::Timeout,
+                "timeout esperando respuesta del agente WSL",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(AgentError::new(
+                AgentErrorCategory::ChildExit,
+                "el agente WSL cerro la conexion",
+            )),
+        }
+    }
+
+    fn kill(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn drop_pooled_agent(key: &str, agent: Option<&Arc<PooledAgent>>) {
+    if let Ok(mut pool) = pooled_agents().lock() {
+        pool.remove(key);
+    }
+    if let Some(agent) = agent {
+        agent.kill();
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -663,6 +922,29 @@ mod tests {
             argv[8],
             "/mnt/c/Program Files/Tinto/tinto-agent-linux-x86_64"
         );
+    }
+
+    #[test]
+    fn packaged_agent_install_cache_keys_by_version_distro_and_source() {
+        let source = Path::new("C:\\Program Files\\Tinto\\tinto-agent-linux-x86_64");
+        let key = packaged_agent_install_cache_key("Ubuntu", source);
+        let same = packaged_agent_install_cache_key(" Ubuntu ", source);
+        let other_distro = packaged_agent_install_cache_key("Debian", source);
+        let other_source = packaged_agent_install_cache_key(
+            "Ubuntu",
+            Path::new("C:\\Program Files\\Tinto\\other-agent"),
+        );
+
+        assert_eq!(key, same);
+        assert_ne!(key, other_distro);
+        assert_ne!(key, other_source);
+
+        let cache = packaged_agent_install_cache();
+        let mut cache = cache.lock().expect("cache lock");
+        cache.clear();
+        assert!(cache.insert(key.clone()));
+        assert!(cache.contains(&same));
+        cache.clear();
     }
 
     #[test]

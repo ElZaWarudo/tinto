@@ -64,3 +64,21 @@ export function sortByRecency(names: readonly string[]): string[] {
   known.sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
   return [...known, ...unknown];
 }
+
+/** Workbench config is authoritative when complete, but the app can briefly
+ * render with a partial config while active/recent names are already known.
+ * Keep those names visible so switching is still possible during that gap. */
+export function visibleWorkbenchNames(
+  configuredNames: readonly string[],
+  activeName?: string | null,
+): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const name of [...configuredNames, ...(activeName ? [activeName] : []), ...safeRead()]) {
+    const trimmed = name.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    merged.push(trimmed);
+  }
+  return sortByRecency(merged);
+}

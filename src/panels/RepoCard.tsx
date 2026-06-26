@@ -5,9 +5,9 @@
 // the project's own explorer, not here.
 
 import { memo, useEffect, useState } from "react";
-import { agentBinaryAvailableForRepo } from "../bus/client";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
+import { checkAgentAvailabilityForRepo } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
 import { MetricsPill, SignalBadges } from "./SignalBadges";
@@ -21,6 +21,7 @@ export interface RepoCardProps {
   onRetry: () => void;
   onRemove: () => void;
   onLaunch: (agentType: string) => Promise<void> | void;
+  availabilityKey?: string;
 }
 
 const AGENT_OPTIONS = [
@@ -54,6 +55,7 @@ function RepoCardImpl({
   onRetry,
   onRemove,
   onLaunch,
+  availabilityKey = `repo:${delta.repo}`,
 }: RepoCardProps) {
   const { status, branch, head, error } = delta;
   const [agentType, setAgentType] = useState("codex");
@@ -72,7 +74,7 @@ function RepoCardImpl({
 
   useEffect(() => {
     let alive = true;
-    agentBinaryAvailableForRepo(delta.repo, agentType)
+    checkAgentAvailabilityForRepo(delta.repo, availabilityKey, agentType)
       .then((ok) => {
         if (!alive) return;
         setAvailable(ok);
@@ -86,7 +88,7 @@ function RepoCardImpl({
     return () => {
       alive = false;
     };
-  }, [agentType, selectedAgent.label, delta.repo]);
+  }, [agentType, selectedAgent.label, delta.repo, availabilityKey]);
 
   // Bento emphasis: feature the repos that warrant attention with a wider tile.
   const feature = !!error || counts.critical > 0 || (active && changes > 0);
