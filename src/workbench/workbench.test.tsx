@@ -64,15 +64,29 @@ describe("MenuBar", () => {
   });
 
   // Covers AE5 (switch trigger) + R7
-  it("lists workbenches, marks the active one, and switches on change", () => {
+  it("lists recent workbenches, marks the active one, and switches on click", () => {
+    // Seed an MRU order so we can verify the menu respects it.
+    localStorage.setItem(
+      "tinto:recent-workbenches:v1",
+      JSON.stringify(["Side", "Work"]),
+    );
     act(() => {
       busStore.setConfig(config);
       busStore.setWatching({ available: true });
     });
     render(<MenuBar />);
-    const switcher = screen.getByTestId("wb-switcher") as HTMLSelectElement;
-    expect(switcher.value).toBe("Work");
-    fireEvent.change(switcher, { target: { value: "Side" } });
+
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    // Side is the most recent and is listed first.
+    const recentList = screen.getByTestId("workbench-recent-Side");
+    expect(recentList).toBeInTheDocument();
+    // The active workbench is marked via the menu__check ✓ (no testid, but
+    // the active one is in the same menu and renders the checkmark).
+    const activeItem = screen.getByTestId("workbench-recent-Work");
+    expect(activeItem).toBeInTheDocument();
+    expect(activeItem.querySelector(".menu__check")?.textContent).toBe("✓");
+
+    fireEvent.click(screen.getByTestId("workbench-recent-Side"));
     expect(ops.switchWorkbench).toHaveBeenCalledWith("Side", "Work");
   });
 
@@ -241,8 +255,9 @@ describe("MenuBar", () => {
     render(<MenuBar />);
 
     expect(screen.getByAltText("Tinto")).toBeInTheDocument();
-    // Switcher is hidden when there's only one or no workbench
-    expect(screen.queryByTestId("wb-switcher")).not.toBeInTheDocument();
+    // No workbench switcher: the new Workbench menu still renders but
+    // shows the empty state.
+    expect(screen.getByTestId("menu-workbench")).toBeInTheDocument();
   });
 
   it("opens the dashboard and timeline from the Ver menu", () => {
@@ -390,6 +405,16 @@ describe("MenuBar", () => {
 
     expect(ops.installGitleaks).toHaveBeenCalled();
     expect(screen.getByText("Gitleaks instalado con éxito")).toBeInTheDocument();
+  });
+
+  it("opens the manage-workbenches modal from the Workbench menu", () => {
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    expect(screen.queryByTestId("manage-workbenches-modal")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    fireEvent.click(screen.getByTestId("workbench-manage"));
+    expect(screen.getByTestId("manage-workbenches-modal")).toBeInTheDocument();
   });
 });
 

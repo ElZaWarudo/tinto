@@ -11,13 +11,19 @@ import { qualityStore, useQualityState } from "../qol/state";
 import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
 import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
-import { autodetectFlow, switchWorkbench } from "./operations";
+import {
+  autodetectFlow,
+  createAndActivate,
+  switchWorkbench,
+} from "./operations";
+import { sortByRecency } from "./recentWorkbenches";
 import { AddonsManager } from "./AddonsManager";
 import { AddWslRepoDialog } from "./AddWslRepoDialog";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
+import { ManageWorkbenchesDialog } from "./ManageWorkbenchesDialog";
 import { isWindowsHost } from "./platform";
 
-type MenuId = "repos" | "projects" | "view" | "addons" | "help";
+type MenuId = "workbench" | "repos" | "projects" | "view" | "addons" | "help";
 
 function MenuItem({
   label,
@@ -58,6 +64,7 @@ export function MenuBar() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAddons, setShowAddons] = useState(false);
   const [showAddWsl, setShowAddWsl] = useState(false);
+  const [showManage, setShowManage] = useState(false);
 
   const active = config?.active ?? "";
   const workbenches = config?.workbenches ?? [];
@@ -84,26 +91,59 @@ export function MenuBar() {
             event.currentTarget.style.display = "none";
           }}
         />
-        <span className="menu-bar__brand-fallback" aria-hidden="true">
-          Tinto
-        </span>
+      <span className="menu-bar__brand-fallback" aria-hidden="true">
+        Tinto
       </span>
+    </span>
 
-      {workbenches.length > 1 && (
-        <select
-          className="menu-bar__switcher"
-          data-testid="wb-switcher"
-          value={active}
-          onChange={(e) => void switchWorkbench(e.target.value, active || null)}
-          title="Cambiar espacio de trabajo"
+      <div className="menu">
+        <button
+          type="button"
+          className={open === "workbench" ? "menu__trigger menu__trigger--open" : "menu__trigger"}
+          data-testid="menu-workbench"
+          aria-haspopup="menu"
+          aria-expanded={open === "workbench"}
+          onClick={() => toggle("workbench")}
         >
-          {workbenches.map((w) => (
-            <option key={w.name} value={w.name}>
-              {w.name}
-            </option>
-          ))}
-        </select>
-      )}
+          Workbench
+        </button>
+        {open === "workbench" && (
+          <div className="menu__list" role="menu">
+            {workbenches.length === 0 ? (
+              <div className="menu__empty" data-testid="workbench-empty">
+                Sin workbenches.
+              </div>
+            ) : (
+              sortByRecency(workbenches.map((w) => w.name)).map((name) => (
+                <MenuItem
+                  key={name}
+                  label={name}
+                  testid={`workbench-recent-${name}`}
+                  checked={name === active}
+                  close={close}
+                  onSelect={() => void switchWorkbench(name, active || null)}
+                />
+              ))
+            )}
+            <div className="menu__sep" role="separator" />
+            <MenuItem
+              label="Crear nueva workbench…"
+              testid="workbench-create"
+              close={close}
+              onSelect={() => {
+                const name = window.prompt("Nombre de la nueva workbench:");
+                if (name && name.trim()) void createAndActivate(name);
+              }}
+            />
+            <MenuItem
+              label="Gestionar workbenches…"
+              testid="workbench-manage"
+              close={close}
+              onSelect={() => setShowManage(true)}
+            />
+          </div>
+        )}
+      </div>
 
       <div className="menu">
         <button
@@ -331,6 +371,12 @@ export function MenuBar() {
       {showAddons && <AddonsManager onClose={() => setShowAddons(false)} />}
       {showAddWsl && active && (
         <AddWslRepoDialog activeWorkbench={active} onClose={() => setShowAddWsl(false)} />
+      )}
+      {showManage && config && (
+        <ManageWorkbenchesDialog
+          config={config}
+          onClose={() => setShowManage(false)}
+        />
       )}
     </div>
   );
