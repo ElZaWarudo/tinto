@@ -6,11 +6,13 @@ const client = vi.hoisted(() => ({
   addWslRepo: vi.fn(),
   autodetectReposUnder: vi.fn(),
   createWorkbench: vi.fn(),
+  deleteWorkbench: vi.fn(),
   forgetRepo: vi.fn(),
   listWslDirectory: vi.fn(),
   listWslDistros: vi.fn(),
   removeRepo: vi.fn(),
   removeWslRepo: vi.fn(),
+  renameWorkbench: vi.fn(),
   setActiveWorkbench: vi.fn(),
 }));
 vi.mock("../bus/client", () => client);
@@ -30,7 +32,10 @@ import {
   listWslDirectoryFlow,
   listWslDistrosFlow,
   normalizeWslLinuxPath,
+  pickNextActiveAfterRemove,
   removeRepoFlow,
+  renameWorkbenchFlow,
+  deleteWorkbenchFlow,
 } from "./operations";
 import { busStore } from "../bus/store";
 import type { WorkbenchConfig } from "../bus/contract";
@@ -48,9 +53,11 @@ describe("workbench operations", () => {
     });
     client.setActiveWorkbench.mockResolvedValue(undefined);
     client.createWorkbench.mockResolvedValue(undefined);
+    client.deleteWorkbench.mockResolvedValue(undefined);
     client.forgetRepo.mockResolvedValue(undefined);
     client.removeRepo.mockResolvedValue(undefined);
     client.removeWslRepo.mockResolvedValue(undefined);
+    client.renameWorkbench.mockResolvedValue(undefined);
     client.autodetectReposUnder.mockResolvedValue([]);
     dialogMock.confirm.mockResolvedValue(true);
     reloadMock.mockResolvedValue(undefined);
@@ -246,5 +253,97 @@ describe("workbench operations", () => {
     expect(ok).toBe(true);
     expect(client.removeWslRepo).toHaveBeenCalledWith("Work", "Ubuntu-24.04", "/home/me/repo");
     expect(client.removeRepo).not.toHaveBeenCalled();
+  });
+
+  it("renameWorkbenchFlow trims, calls the backend, reloads, updates MRU", async () => {
+    localStorage.setItem(
+      "tinto:recent-workbenches:v1",
+      JSON.stringify(["Work", "Side", "Client X"]),
+    );
+    await renameWorkbenchFlow("Work", "  Job  ");
+    expect(client.renameWorkbench).toHaveBeenCalledWith("Work", "Job");
+    expect(reloadMock).toHaveBeenCalled();
+
+    const mru = JSON.parse(localStorage.getItem("tinto:recent-workbenches:v1") ?? "[]");
+    expect(mru).toContain("Job");
+    expect(mru).not.toContain("Work");
+  });
+
+  it("renameWorkbenchFlow no-ops on empty input or unchanged name", async () => {
+    await renameWorkbenchFlow("Work", "   ");
+    await renameWorkbenchFlow("Work", "Work");
+    expect(client.renameWorkbench).not.toHaveBeenCalled();
+    expect(reloadMock).not.toHaveBeenCalled();
+  });
+
+  it("pickNextActiveAfterRemove prefers the first remaining when the removed was active", () => {
+    expect(pickNextActiveAfterRemove("Work", "Work", ["Side", "Client X"])).toBe("Side");
+    expect(pickNextActiveAfterRemove("Work", "Work", [])).toBeNull();
+  });
+
+  it("pickNextActiveAfterRemove keeps the current active when a different one is removed", () => {
+    expect(pickNextActiveAfterRemove("Work", "Side", ["Work", "Client X"])).toBe("Work");
+  });
+
+  it("deleteWorkbenchFlow removes the workbench, switches to the first remaining, reloads", async () => {
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Side",
+        workbenches: [
+          { name: "Work", repos: [] },
+          { name: "Side", repos: [] },
+          { name: "Client X", repos: [] },
+        ],
+      }),
+    );
+    localStorage.setItem(
+      "tinto:recent-workbenches:v1",
+      JSON.stringify(["Work", "Side", "Client X"]),
+    );
+    const resetSpy = vi.spyOn(busStore, "reset");
+
+    await deleteWorkbenchFlow("Side");
+
+    expect(client.deleteWorkbench).toHaveBeenCalledWith("Side");
+    expect(client.setActiveWorkbench).toHaveBeenCalledWith("Work"); // first remaining
+    expect(resetSpy).toHaveBeenCalled();
+    expect(reloadMock).toHaveBeenCalled();
+
+    const mru = JSON.parse(localStorage.getItem("tinto:recent-workbenches:v1") ?? "[]");
+    expect(mru).not.toContain("Side");
+  });
+
+  it("deleteWorkbenchFlow of a non-active workbench does not change the active", async () => {
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          { name: "Work", repos: [] },
+          { name: "Side", repos: [] },
+        ],
+      }),
+    );
+
+    await deleteWorkbenchFlow("Side");
+
+    expect(client.deleteWorkbench).toHaveBeenCalledWith("Side");
+    expect(client.setActiveWorkbench).not.toHaveBeenCalled();
+  });
+
+  it("deleteWorkbenchFlow of the only remaining workbench does not promote anyone", async () => {
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      }),
+    );
+
+    await deleteWorkbenchFlow("Work");
+
+    expect(client.deleteWorkbench).toHaveBeenCalledWith("Work");
+    expect(client.setActiveWorkbench).not.toHaveBeenCalled();
   });
 });

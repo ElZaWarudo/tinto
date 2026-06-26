@@ -8,23 +8,30 @@ import {
   addWslRepo,
   autodetectReposUnder,
   createWorkbench,
+  deleteWorkbench,
   forgetRepo,
   listWslDirectory,
   listWslDistros,
   removeRepo,
   removeWslRepo,
+  renameWorkbench,
   setActiveWorkbench,
   updateRepo,
   type WslDirectoryListing,
 } from "../bus/client";
 import { reloadActiveWorkbench } from "../bus/connection";
 import { busStore } from "../bus/store";
+import {
+  forgetRecentWorkbench,
+  markRecentWorkbench,
+} from "./recentWorkbenches";
 
 export async function switchWorkbench(name: string, current: string | null): Promise<void> {
   if (!name || name === current) return;
   await setActiveWorkbench(name);
   busStore.reset(); // clear stale repos before the new snapshot lands
   await reloadActiveWorkbench();
+  markRecentWorkbench(name);
 }
 
 export async function createAndActivate(name: string): Promise<void> {
@@ -33,6 +40,7 @@ export async function createAndActivate(name: string): Promise<void> {
   await createWorkbench(n);
   await setActiveWorkbench(n);
   await reloadActiveWorkbench();
+  markRecentWorkbench(n);
 }
 
 /** Pick a folder and add it as a repo. Resolves to the stored canonical path so
@@ -203,4 +211,54 @@ export async function updateRepoFsWatch(
 ): Promise<void> {
   await updateRepo(active, path, { fsWatch: patterns });
   await reloadActiveWorkbench();
+}
+
+/** Rename a workbench. `from` is the current name (must match the active
+ *  config); `to` is the desired new name. No-op on empty/identical inputs. */
+export async function renameWorkbenchFlow(from: string, to: string): Promise<void> {
+  const next = to.trim();
+  if (!next || next === from) return;
+  await renameWorkbench(from, next);
+  await reloadActiveWorkbench();
+  // The MRU entry moves under the new name; drop the old one.
+  forgetRecentWorkbench(from);
+  markRecentWorkbench(next);
+}
+
+/** Pick the next active workbench after `name` is removed. If `name` was not
+ *  active, returns the current active. Otherwise prefers the first remaining
+ *  workbench, or null when none remain. Pure — does not mutate anything. */
+export function pickNextActiveAfterRemove(
+  current: string | null,
+  removed: string,
+  remaining: readonly string[],
+): string | null {
+  if (current !== removed) return current;
+  return remaining[0] ?? null;
+}
+
+/** Delete a workbench. If it was the active one, switches to the first
+ *  remaining workbench (or stays without an active one when nothing is left).
+ *  Repos in the deleted workbench are dropped from the config; repos that
+ *  also live in other workbenches are NOT touched. The deleted name is
+ *  removed from the MRU list. */
+export async function deleteWorkbenchFlow(name: string): Promise<void> {
+  const config = busStore.getState().config;
+  const currentActive = config?.active ?? null;
+  const remaining = (config?.workbenches ?? [])
+    .map((w) => w.name)
+    .filter((existing) => existing !== name);
+  const nextActive = pickNextActiveAfterRemove(currentActive, name, remaining);
+
+  await deleteWorkbench(name);
+  // The Rust config mutation does not auto-promote another workbench to
+  // active, so we do it explicitly — but only when the active actually
+  // changes. Re-asserting the same active is a wasted IPC round-trip and a
+  // trigger for the bus reseed path on some platforms.
+  if (nextActive !== null && nextActive !== currentActive) {
+    await setActiveWorkbench(nextActive);
+  }
+  busStore.reset();
+  await reloadActiveWorkbench();
+  forgetRecentWorkbench(name);
 }

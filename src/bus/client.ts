@@ -39,6 +39,11 @@ export const setActiveWorkbench = (name: string) => invoke("set_active_workbench
 
 export const createWorkbench = (name: string) => invoke("create_workbench", { name });
 
+export const renameWorkbench = (from: string, to: string) =>
+  invoke("rename_workbench", { from, to });
+
+export const deleteWorkbench = (name: string) => invoke("delete_workbench", { name });
+
 /** Adds a repo and resolves to the stored canonical path (the key the bus
  * reports it under), so the caller can open its project tab. */
 export const addRepo = (workbench: string, path: string, alias?: string) =>
