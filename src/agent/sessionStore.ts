@@ -79,6 +79,8 @@ function normalizeSession(session: AgentSession): AgentSession {
   return {
     ...session,
     change_log: session.change_log ?? [],
+    turn_status: session.turn_status ?? "waiting",
+    turn_checkpoints: session.turn_checkpoints ?? [],
   };
 }
 

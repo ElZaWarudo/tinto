@@ -33,6 +33,28 @@ const revertSessionMock = vi.fn((...args: unknown[]) => {
     output_bytes_per_second: null,
   });
 });
+const revertSessionTurnFileMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve({
+    id: "sess-1",
+    repo: "/r/a",
+    agent_type: "codex",
+    status: "completed",
+    pid: null,
+    started_at_ms: 1,
+    ended_at_ms: 2,
+    exit_code: 0,
+    error: null,
+    checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
+    change_log: [],
+    turn_status: "waiting",
+    turn_checkpoints: [],
+    reverted_at_ms: null,
+    active_sessions: 0,
+    age_ms: 2,
+    output_bytes_per_second: null,
+  });
+});
 const stopAgentSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
@@ -46,6 +68,7 @@ const confirmMock = vi.fn((...args: unknown[]) => {
 vi.mock("../../bus/client", () => ({
   listAgentSessions: () => listAgentSessionsMock(),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
+  revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
   stopAgentSession: (...a: unknown[]) => stopAgentSessionMock(...a),
   writeAgentSessionInput: (...a: unknown[]) => writeAgentSessionInputMock(...a),
   resizeAgentSession: (...a: unknown[]) => resizeAgentSessionMock(...a),
@@ -201,6 +224,7 @@ describe("TerminalPanel", () => {
     resizeAgentSessionMock.mockClear();
     listAgentSessionsMock.mockClear();
     revertSessionMock.mockClear();
+    revertSessionTurnFileMock.mockClear();
     stopAgentSessionMock.mockClear();
     confirmMock.mockClear();
     clipboardReadTextMock.mockClear();
@@ -450,6 +474,55 @@ describe("TerminalPanel", () => {
 
     expect(confirmMock).toHaveBeenCalled();
     expect(revertSessionMock).toHaveBeenCalledWith("sess-1", true);
+  });
+
+  it("reverts a single file from a turn checkpoint", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        repo: "/r/a",
+        agent_type: "codex",
+        status: "completed",
+        pid: null,
+        started_at_ms: 1,
+        ended_at_ms: 2,
+        exit_code: 0,
+        error: null,
+        checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
+        change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
+        turn_status: "waiting",
+        turn_checkpoints: [
+          {
+            id: "sess-1:turn-1",
+            index: 1,
+            started_at_ms: 1,
+            ended_at_ms: 2,
+            checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
+            changes: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
+          },
+        ],
+        reverted_at_ms: null,
+        active_sessions: 1,
+        age_ms: 1,
+        output_bytes_per_second: null,
+      },
+    ]);
+
+    const panel = props({ sessionId: "sess-1", agentType: "codex" });
+    render(<TerminalPanel {...panel.props} />);
+
+    const fileButton = await screen.findByTitle("Revert src/a.ts from turn 1");
+    await user.click(fileButton);
+
+    expect(confirmMock).toHaveBeenCalled();
+    expect(revertSessionTurnFileMock).toHaveBeenCalledWith(
+      "sess-1",
+      "sess-1:turn-1",
+      "src/a.ts",
+      true,
+    );
+    expect(revertSessionMock).not.toHaveBeenCalled();
   });
 
   it("disables revert when a completed session has no checkpoint", async () => {

@@ -135,6 +135,21 @@ describe("agent session contract types", () => {
         snapshot_files: [],
       },
       change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 1760000000001 }],
+      turn_status: "settling",
+      turn_checkpoints: [
+        {
+          id: "sess-1:turn-1",
+          index: 1,
+          started_at_ms: 1760000000000,
+          ended_at_ms: 1760000000100,
+          checkpoint: {
+            checkpoint_type: "git_ref",
+            git_hash: "abc123",
+            snapshot_files: [],
+          },
+          changes: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 1760000000100 }],
+        },
+      ],
       reverted_at_ms: null,
       active_sessions: 1,
       age_ms: 100,
@@ -147,6 +162,8 @@ describe("agent session contract types", () => {
     expect(session.error?.category).toBe("spawn_failed");
     expect(session.checkpoint?.checkpoint_type).toBe("git_ref");
     expect(session.change_log?.[0].kind).toBe("modified");
+    expect(session.turn_status).toBe("settling");
+    expect(session.turn_checkpoints?.[0].changes[0].path).toBe("src/a.ts");
     expect(session.active_sessions).toBe(1);
     expect(session.age_ms).toBe(100);
   });
@@ -210,6 +227,7 @@ import {
   onAgentSessionChangeLog,
   resizeAgentSession,
   revertSession,
+  revertSessionTurnFile,
   removeWslRepo,
   setSubscriptions,
   startAgentSession,
@@ -333,6 +351,14 @@ describe("RDM-008 client wrappers", () => {
     void revertSession("sess-1", true);
     expect(invokeMock).toHaveBeenCalledWith("revert_session", {
       sessionId: "sess-1",
+      userConsent: true,
+    });
+
+    void revertSessionTurnFile("sess-1", "sess-1:turn-1", "src/a.ts", true);
+    expect(invokeMock).toHaveBeenCalledWith("revert_session_turn_file", {
+      sessionId: "sess-1",
+      turnCheckpointId: "sess-1:turn-1",
+      path: "src/a.ts",
       userConsent: true,
     });
 

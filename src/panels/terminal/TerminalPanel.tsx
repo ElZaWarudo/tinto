@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
@@ -8,6 +8,7 @@ import {
   listAgentSessions,
   resizeAgentSession,
   revertSession,
+  revertSessionTurnFile,
   stopAgentSession,
   writeAgentSessionInput,
 } from "../../bus/client";
@@ -24,6 +25,7 @@ type TerminalPanelProps = IDockviewPanelProps<TerminalPanelParams>;
 const panelCloseStopTimers = new Map<string, number>();
 const PANEL_CLOSE_STOP_DELAY_MS = 250;
 const TERMINAL_FOCUS_DELAY_MS = 0;
+const SESSION_REFRESH_INTERVAL_MS = 1500;
 
 export function TerminalPanel({ params, api }: TerminalPanelProps) {
   const sessionId = params?.sessionId ?? "";
@@ -32,10 +34,11 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const session = useAgentSession(sessionId);
   const { output, outputTotal } = useAgentSessionState();
-  const sessionOutput = output[sessionId] ?? [];
+  const sessionOutput = useMemo(() => output[sessionId] ?? [], [output, sessionId]);
   const sessionOutputTotal = outputTotal[sessionId] ?? 0;
   const [error, setError] = useState<string | null>(null);
   const [reverting, setReverting] = useState(false);
+  const [revertingFile, setRevertingFile] = useState<string | null>(null);
   const terminalInstanceRef = useRef<Terminal | null>(null);
   const writtenOutputRef = useRef(0);
   const panelActiveRef = useRef(false);
@@ -45,7 +48,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     [sessionId],
   );
 
-  const focusTerminal = () => {
+  const focusTerminal = useCallback(() => {
     const terminal = terminalInstanceRef.current;
     const container = terminalRef.current;
     if (!terminal) return;
@@ -61,7 +64,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     if (textarea) {
       window.requestAnimationFrame(() => stabilizeTerminalTextarea(textarea));
     }
-  };
+  }, [api]);
 
   useEffect(() => {
     panelActiveRef.current = api.isActive;
@@ -74,7 +77,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     return () => {
       disposable.dispose();
     };
-  }, [api]);
+  }, [api, focusTerminal]);
 
   useEffect(() => {
     const container = terminalRef.current;
@@ -293,7 +296,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       terminalInstanceRef.current = null;
       schedulePanelCloseStop(sessionId);
     };
-  }, [sessionId]);
+  }, [focusTerminal, sessionId]);
 
   useEffect(() => {
     const terminal = terminalInstanceRef.current;
@@ -315,7 +318,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     ) {
       window.requestAnimationFrame(focusTerminal);
     }
-  }, [sessionOutput, sessionOutputTotal]);
+  }, [focusTerminal, sessionOutput, sessionOutputTotal]);
 
   useEffect(() => {
     let active = true;
@@ -330,6 +333,23 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let active = true;
+    const refresh = () => {
+      void listAgentSessions()
+        .then((sessions) => {
+          if (active) agentSessionStore.setSessions(sessions);
+        })
+        .catch(() => {});
+    };
+    const timer = window.setInterval(refresh, SESSION_REFRESH_INTERVAL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [sessionId]);
 
   const canRevert =
     !!session &&
@@ -356,6 +376,33 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       setError(commandMessage(e));
     } finally {
       setReverting(false);
+    }
+  };
+
+  const canRevertTurnFile =
+    !!session &&
+    session.status !== "running" &&
+    session.status !== "starting" &&
+    session.status !== "reverted";
+
+  const onRevertTurnFile = async (turnCheckpointId: string, path: string) => {
+    if (!sessionId || !canRevertTurnFile || revertingFile) return;
+    const ok = await confirm(`Revert ${path} from this turn checkpoint?`, {
+      title: "Revert file from turn",
+      kind: "warning",
+      okLabel: "Revert file",
+      cancelLabel: "Cancel",
+    });
+    if (!ok) return;
+    setRevertingFile(`${turnCheckpointId}:${path}`);
+    setError(null);
+    try {
+      const updated = await revertSessionTurnFile(sessionId, turnCheckpointId, path, true);
+      agentSessionStore.upsertSession(updated);
+    } catch (e) {
+      setError(commandMessage(e));
+    } finally {
+      setRevertingFile(null);
     }
   };
 
@@ -400,6 +447,14 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
           </span>
         )}
       </header>
+      {session && (
+        <AgentLens
+          session={session}
+          canRevertTurnFile={canRevertTurnFile}
+          revertingFile={revertingFile}
+          onRevertTurnFile={onRevertTurnFile}
+        />
+      )}
       <div
         className="terminal-panel__surface"
         ref={terminalRef}
@@ -408,6 +463,75 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       />
     </div>
   );
+}
+
+function AgentLens({
+  session,
+  canRevertTurnFile,
+  revertingFile,
+  onRevertTurnFile,
+}: {
+  session: AgentSession;
+  canRevertTurnFile: boolean;
+  revertingFile: string | null;
+  onRevertTurnFile: (turnCheckpointId: string, path: string) => void;
+}) {
+  const turns = session.turn_checkpoints ?? [];
+  const visibleTurns = turns.slice(-3);
+  return (
+    <section className="terminal-panel__lens" aria-label="Agent Lens">
+      <div className="terminal-panel__lens-summary">
+        <span className="terminal-panel__lens-title">Agent Lens</span>
+        <span>{turnStatusLabel(session.turn_status ?? "waiting")}</span>
+        <span>{turns.length} checkpoints</span>
+        <span>{session.change_log?.length ?? 0} session changes</span>
+      </div>
+      {visibleTurns.length > 0 && (
+        <div className="terminal-panel__turns">
+          {visibleTurns.map((turn) => (
+            <div className="terminal-panel__turn" key={turn.id}>
+              <div className="terminal-panel__turn-head">
+                <span>Turn {turn.index}</span>
+                <span>{turn.changes.length} changes during turn</span>
+              </div>
+              <div className="terminal-panel__turn-files">
+                {turn.changes.map((change) => {
+                  const key = `${turn.id}:${change.path}`;
+                  return (
+                    <button
+                      className="terminal-panel__turn-file"
+                      key={`${change.kind}:${change.path}`}
+                      disabled={!canRevertTurnFile || revertingFile === key}
+                      onClick={() => onRevertTurnFile(turn.id, change.path)}
+                      title={
+                        canRevertTurnFile
+                          ? `Revert ${change.path} from turn ${turn.index}`
+                          : "Stop the session before reverting files"
+                      }
+                    >
+                      <span>{change.kind}</span>
+                      <span>{change.path}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function turnStatusLabel(status: string): string {
+  switch (status) {
+    case "working":
+      return "Working";
+    case "settling":
+      return "Settling";
+    default:
+      return "Waiting";
+  }
 }
 
 function checkpointLabel(type: string): string {

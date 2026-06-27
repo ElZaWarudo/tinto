@@ -49,6 +49,17 @@ export interface AgentSessionChangeLog {
   changes: AgentSessionChange[];
 }
 
+export type AgentSessionTurnStatus = "waiting" | "working" | "settling";
+
+export interface AgentSessionTurnCheckpoint {
+  id: string;
+  index: number;
+  started_at_ms: number;
+  ended_at_ms: number;
+  checkpoint: AgentSessionCheckpoint;
+  changes: AgentSessionChange[];
+}
+
 export interface AgentSessionLimits {
   max_sessions: number;
   max_sessions_per_repo: number;
@@ -67,6 +78,8 @@ export interface AgentSession {
   error: AgentSessionError | null;
   checkpoint?: AgentSessionCheckpoint | null;
   change_log?: AgentSessionChange[];
+  turn_status?: AgentSessionTurnStatus;
+  turn_checkpoints?: AgentSessionTurnCheckpoint[];
   reverted_at_ms?: number | null;
   active_sessions: number;
   age_ms: number;

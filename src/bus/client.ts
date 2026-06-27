@@ -125,6 +125,19 @@ export const createRepoGitleaksConfig = (repo: string) =>
 export const revertSession = (sessionId: string, userConsent: boolean) =>
   invoke<AgentSession>("revert_session", { sessionId, userConsent });
 
+export const revertSessionTurnFile = (
+  sessionId: string,
+  turnCheckpointId: string,
+  path: string,
+  userConsent: boolean,
+) =>
+  invoke<AgentSession>("revert_session_turn_file", {
+    sessionId,
+    turnCheckpointId,
+    path,
+    userConsent,
+  });
+
 export const agentBinaryAvailable = (agentType: string) =>
   invoke<boolean>("agent_binary_available", { agentType });
 
