@@ -148,6 +148,7 @@ Chunks are live only; the first ACI-002 stream bridge does not replay historical
 | `write_agent_session_input` | `session_id, input_base64` | `()` | Writes decoded bytes to a running session's PTY stdin. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
 | `resize_agent_session` | `session_id, cols, rows` | `()` | Resizes a running session's PTY. `cols` and `rows` must be positive; invalid dimensions return `invalid_terminal_size`. |
 | `revert_session` | `session_id, user_consent` | `AgentSession` | Restores the repo to the session checkpoint. `user_consent=false` returns `consent_required`; running sessions return `session_still_running`; sessions without a checkpoint return `checkpoint_unsupported`; repeated revert is idempotent. |
+| `revert_session_turn_file` | `session_id, turn_checkpoint_id, path, user_consent` | `AgentSession` | Restores one file from the selected turn checkpoint. `user_consent=false` returns `consent_required`; running sessions return `session_still_running`; unknown turn checkpoints return `turn_checkpoint_not_found`; containment rejects path traversal and `.git`. |
 
 - `FileContent`: `{ encoding: "utf8" | "base64", content: string, truncated: bool }` — 1 MiB guard (truncated) and binary detection (→ base64). Validated relative paths: after canonicalizing they must stay within the repo (no `../`).
 - `get_media_content` returns the same `FileContent` shape but always uses `"base64"` and a 12 MiB guard, so visual previews can build `data:` URLs without ambiguity. Supported extensions: `pdf`, `avif`, `bmp`, `gif`, `ico`, `jpeg`, `jpg`, `png`, `svg`, `webp`; anything else returns `unsupported-media`.
@@ -164,7 +165,7 @@ The agent console backend exposes session lifecycle metadata through additive co
   "id": "sess-1",
   "repo": "/canonical/path/to/repo",
   "agent_type": "codex",
-  "status": "running",              // "starting" | "running" | "exited" | "error"
+  "status": "running",              // "starting" | "running" | "completed" | "failed" | ...
   "pid": 12345,                      // null before spawn or when unavailable
   "started_at_ms": 1760000000000,
   "ended_at_ms": null,
@@ -177,6 +178,23 @@ The agent console backend exposes session lifecycle metadata through additive co
   },
   "change_log": [
     { "path": "src/a.ts", "kind": "modified", "timestamp_ms": 1760000000000 }
+  ],
+  "turn_status": "settling",        // "waiting" | "working" | "settling"
+  "turn_checkpoints": [
+    {
+      "id": "sess-1:turn-1",
+      "index": 1,
+      "started_at_ms": 1760000000000,
+      "ended_at_ms": 1760000005000,
+      "checkpoint": {
+        "checkpoint_type": "fs_snapshot",
+        "git_hash": null,
+        "snapshot_files": ["src/a.ts"]
+      },
+      "changes": [
+        { "path": "src/a.ts", "kind": "modified", "timestamp_ms": 1760000005000 }
+      ]
+    }
   ],
   "reverted_at_ms": null,
   "active_sessions": 1,
@@ -193,6 +211,8 @@ The agent console backend exposes session lifecycle metadata through additive co
 - `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live PTY output chunks.
 - `AgentSessionCheckpoint`: local git checkpoints are used only when the repo is clean and HEAD is readable; dirty or non-git local repos use a filesystem snapshot under `~/.tinto/checkpoints/<repo-hash>/<session-id>/` with bounded size and per-repo retention. WSL Agent Console sessions create equivalent checkpoint records inside Ubuntu through `tinto-agent`; change-log scan and explicit-consent revert also run inside Ubuntu and are allowlisted to the active WSL repo. Sessions with `checkpoint: null` can still exist for legacy/fallback states and return `checkpoint_unsupported`; the UI disables Revert for those sessions.
 - `AgentSessionChangeLog`: `{ session_id, changes }`; emitted on `tinto://agent-session-change-log` and mirrored in the session record.
+- `AgentSessionTurnStatus`: `"waiting" | "working" | "settling"`. Tinto derives this from fallback signals: PTY output activity and stable filesystem/checkpoint scans. No agent-emitted semantic lifecycle event is required.
+- `AgentSessionTurnCheckpoint`: `{ id, index, started_at_ms, ended_at_ms, checkpoint, changes }`. The checkpoint is the pre-turn boundary for the listed "changes during turn"; empty turns are not recorded. Per-file revert uses this checkpoint and never reverts the whole turn as one operation.
 - `AgentSessionLimits`: `{ max_sessions, max_sessions_per_repo, max_lifetime_ms }`; default runtime limits are 5 active sessions per workbench, 1 active session per repo, and 4 hours max lifetime. Capacity errors are `max_sessions_reached`, `max_sessions_per_repo_reached`, and `session_lifetime_exceeded`.
 - Telemetry fields are best-effort and local-only. `active_sessions` is the current active count at listing time, `age_ms` is computed from `started_at_ms`, and `output_bytes_per_second` is reserved for sampled PTY throughput.
 
