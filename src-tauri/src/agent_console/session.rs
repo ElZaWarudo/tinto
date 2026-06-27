@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::bus::contract::{
     AgentSession, AgentSessionChange, AgentSessionError, AgentSessionStatus,
+    AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -9,10 +10,16 @@ use crate::wsl_agent::{
 };
 
 use super::{
-    checkpoint::{revert_checkpoint, scan_change_log, CheckpointRecord},
+    checkpoint::{
+        create_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
+        CheckpointConfig, CheckpointRecord,
+    },
     pty::AgentProcess,
     AgentConsoleError,
 };
+
+const OUTPUT_QUIET_MS: u64 = 2_000;
+const FILESYSTEM_QUIET_MS: u64 = 1_500;
 
 pub struct AgentSessionRecord {
     id: String,
@@ -26,9 +33,18 @@ pub struct AgentSessionRecord {
     error: Option<AgentConsoleError>,
     process: Option<Box<dyn AgentProcess>>,
     checkpoint: Option<CheckpointRecord>,
+    checkpoint_config: CheckpointConfig,
     checkpoint_backend: CheckpointBackend,
     wsl_distro: Option<String>,
     change_log: Vec<AgentSessionChange>,
+    turn_status: AgentSessionTurnStatus,
+    turn_checkpoints: Vec<AgentTurnCheckpointRecord>,
+    turn_baseline: Option<CheckpointRecord>,
+    turn_started_at_ms: Option<u64>,
+    last_output_at_ms: Option<u64>,
+    pending_turn_signature: Option<Vec<(PathBuf, String)>>,
+    pending_turn_seen_at_ms: Option<u64>,
+    next_turn_index: u32,
     reverted_at_ms: Option<u64>,
 }
 
@@ -45,6 +61,7 @@ impl AgentSessionRecord {
         agent_type: String,
         started_at_ms: u64,
         checkpoint: Option<CheckpointRecord>,
+        checkpoint_config: CheckpointConfig,
         checkpoint_backend: CheckpointBackend,
     ) -> Self {
         Self {
@@ -58,10 +75,19 @@ impl AgentSessionRecord {
             exit_code: None,
             error: None,
             process: None,
+            turn_baseline: checkpoint.clone(),
             checkpoint,
+            checkpoint_config,
             checkpoint_backend,
             wsl_distro: None,
             change_log: Vec::new(),
+            turn_status: AgentSessionTurnStatus::Waiting,
+            turn_checkpoints: Vec::new(),
+            turn_started_at_ms: None,
+            last_output_at_ms: None,
+            pending_turn_signature: None,
+            pending_turn_seen_at_ms: None,
+            next_turn_index: 1,
             reverted_at_ms: None,
         }
     }
@@ -117,11 +143,13 @@ impl AgentSessionRecord {
         self.status = status_from_exit_code(self.exit_code);
         self.process = None;
         self.error = None;
+        self.refresh_turn_checkpoints(now_ms(), true)?;
         self.refresh_change_log()?;
         Ok(())
     }
 
     pub fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
+        self.note_turn_activity(now_ms());
         let process = self.running_process_mut()?;
         process.write_input(input)
     }
@@ -142,6 +170,7 @@ impl AgentSessionRecord {
                 self.ended_at_ms = Some(now_ms());
                 self.status = status_from_exit_code(self.exit_code);
                 self.process = None;
+                self.refresh_turn_checkpoints(now_ms(), true)?;
                 self.refresh_change_log()?;
             }
         }
@@ -201,14 +230,118 @@ impl AgentSessionRecord {
         Ok(())
     }
 
-    fn refresh_change_log(&mut self) -> Result<(), AgentConsoleError> {
-        self.change_log = match (self.checkpoint.as_ref(), self.checkpoint_backend) {
-            (Some(checkpoint), CheckpointBackend::Local) => scan_change_log(checkpoint, now_ms())?,
-            (Some(checkpoint), CheckpointBackend::Wsl) => {
-                scan_wsl_change_log(self.wsl_distro.as_deref(), checkpoint)?
+    pub fn revert_turn_file(
+        &mut self,
+        turn_checkpoint_id: &str,
+        path: &std::path::Path,
+    ) -> Result<(), AgentConsoleError> {
+        self.refresh_status()?;
+        if self.status == AgentSessionStatus::Running || self.status == AgentSessionStatus::Starting
+        {
+            return Err(AgentConsoleError::new(
+                "session_still_running",
+                "stop the session before reverting files from a turn checkpoint",
+            ));
+        }
+        let checkpoint = self
+            .turn_checkpoints
+            .iter()
+            .find(|turn| turn.id == turn_checkpoint_id)
+            .map(|turn| turn.checkpoint.clone())
+            .ok_or_else(|| {
+                AgentConsoleError::new(
+                    "turn_checkpoint_not_found",
+                    "no existe el checkpoint del turno",
+                )
+            })?;
+        match self.checkpoint_backend {
+            CheckpointBackend::Local => revert_checkpoint_file(&checkpoint, path)?,
+            CheckpointBackend::Wsl => {
+                revert_wsl_checkpoint_file(self.wsl_distro.as_deref(), &checkpoint, path)?
             }
-            (None, _) => Vec::new(),
+        }
+        self.refresh_change_log()?;
+        Ok(())
+    }
+
+    pub fn record_output_activity(&mut self, timestamp_ms: u64) {
+        self.last_output_at_ms = Some(timestamp_ms);
+        self.note_turn_activity(timestamp_ms);
+    }
+
+    fn refresh_change_log(&mut self) -> Result<(), AgentConsoleError> {
+        self.change_log = self.scan_changes(self.checkpoint.as_ref(), now_ms())?;
+        Ok(())
+    }
+
+    pub fn refresh_turn_checkpoints(
+        &mut self,
+        now_ms: u64,
+        force_close: bool,
+    ) -> Result<(), AgentConsoleError> {
+        if self.turn_baseline.is_none() {
+            self.turn_status = AgentSessionTurnStatus::Waiting;
+            return Ok(());
+        }
+        if !force_close
+            && self
+                .last_output_at_ms
+                .is_some_and(|last| now_ms.saturating_sub(last) < OUTPUT_QUIET_MS)
+        {
+            self.turn_status = AgentSessionTurnStatus::Working;
+            return Ok(());
+        }
+
+        let changes = self.scan_changes(self.turn_baseline.as_ref(), now_ms)?;
+        if changes.is_empty() {
+            self.pending_turn_signature = None;
+            self.pending_turn_seen_at_ms = None;
+            if self
+                .last_output_at_ms
+                .is_none_or(|last| now_ms.saturating_sub(last) >= OUTPUT_QUIET_MS)
+            {
+                self.turn_started_at_ms = None;
+                self.turn_status = AgentSessionTurnStatus::Waiting;
+            }
+            return Ok(());
+        }
+
+        let signature = change_signature(&changes);
+        if self.pending_turn_signature.as_ref() != Some(&signature) {
+            self.pending_turn_signature = Some(signature);
+            self.pending_turn_seen_at_ms = Some(now_ms);
+            self.note_turn_activity(now_ms);
+            self.turn_status = AgentSessionTurnStatus::Settling;
+            return Ok(());
+        }
+
+        if !force_close
+            && self
+                .pending_turn_seen_at_ms
+                .is_some_and(|seen| now_ms.saturating_sub(seen) < FILESYSTEM_QUIET_MS)
+        {
+            self.turn_status = AgentSessionTurnStatus::Settling;
+            return Ok(());
+        }
+
+        let Some(checkpoint) = self.turn_baseline.clone() else {
+            return Ok(());
         };
+        let index = self.next_turn_index;
+        self.turn_checkpoints.push(AgentTurnCheckpointRecord {
+            id: format!("{}:turn-{index}", self.id),
+            index,
+            started_at_ms: self.turn_started_at_ms.unwrap_or(now_ms),
+            ended_at_ms: now_ms,
+            checkpoint,
+            changes,
+        });
+        self.next_turn_index = self.next_turn_index.saturating_add(1);
+        self.turn_baseline = Some(self.create_followup_checkpoint(index, now_ms)?);
+        self.pending_turn_signature = None;
+        self.pending_turn_seen_at_ms = None;
+        self.turn_started_at_ms = None;
+        self.turn_status = AgentSessionTurnStatus::Waiting;
         Ok(())
     }
 
@@ -255,10 +388,81 @@ impl AgentSessionRecord {
                 .as_ref()
                 .map(|checkpoint| checkpoint.contract.clone()),
             change_log: self.change_log.clone(),
+            turn_status: self.turn_status,
+            turn_checkpoints: self
+                .turn_checkpoints
+                .iter()
+                .map(AgentTurnCheckpointRecord::to_contract)
+                .collect(),
             reverted_at_ms: self.reverted_at_ms,
             active_sessions,
             age_ms: now_ms.saturating_sub(self.started_at_ms),
             output_bytes_per_second: None,
+        }
+    }
+
+    fn note_turn_activity(&mut self, timestamp_ms: u64) {
+        if self.turn_started_at_ms.is_none() {
+            self.turn_started_at_ms = Some(timestamp_ms);
+        }
+        self.turn_status = AgentSessionTurnStatus::Working;
+    }
+
+    fn scan_changes(
+        &self,
+        checkpoint: Option<&CheckpointRecord>,
+        timestamp_ms: u64,
+    ) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+        match (checkpoint, self.checkpoint_backend) {
+            (Some(checkpoint), CheckpointBackend::Local) => {
+                scan_change_log(checkpoint, timestamp_ms)
+            }
+            (Some(checkpoint), CheckpointBackend::Wsl) => {
+                scan_wsl_change_log(self.wsl_distro.as_deref(), checkpoint)
+            }
+            (None, _) => Ok(Vec::new()),
+        }
+    }
+
+    fn create_followup_checkpoint(
+        &self,
+        index: u32,
+        now_ms: u64,
+    ) -> Result<CheckpointRecord, AgentConsoleError> {
+        let checkpoint_id = format!("{}-turn-{index}-after", self.id);
+        match self.checkpoint_backend {
+            CheckpointBackend::Local => {
+                create_checkpoint(&self.repo, &checkpoint_id, now_ms, &self.checkpoint_config)
+            }
+            CheckpointBackend::Wsl => create_wsl_checkpoint(
+                self.wsl_distro.as_deref(),
+                &self.repo,
+                &checkpoint_id,
+                now_ms,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AgentTurnCheckpointRecord {
+    id: String,
+    index: u32,
+    started_at_ms: u64,
+    ended_at_ms: u64,
+    checkpoint: CheckpointRecord,
+    changes: Vec<AgentSessionChange>,
+}
+
+impl AgentTurnCheckpointRecord {
+    fn to_contract(&self) -> AgentSessionTurnCheckpoint {
+        AgentSessionTurnCheckpoint {
+            id: self.id.clone(),
+            index: self.index,
+            started_at_ms: self.started_at_ms,
+            ended_at_ms: self.ended_at_ms,
+            checkpoint: self.checkpoint.contract.clone(),
+            changes: self.changes.clone(),
         }
     }
 }
@@ -314,6 +518,62 @@ fn revert_wsl_checkpoint(
     }
 }
 
+fn revert_wsl_checkpoint_file(
+    distro: Option<&str>,
+    checkpoint: &CheckpointRecord,
+    path: &std::path::Path,
+) -> Result<(), AgentConsoleError> {
+    let distro =
+        distro.ok_or_else(|| AgentConsoleError::new("missing_distro", "repo WSL sin distro"))?;
+    let response = request_wsl_agent(
+        distro,
+        &AgentRequest::AgentCheckpointRevertFile {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint: checkpoint.clone(),
+            path: path.to_path_buf(),
+        },
+    )
+    .map_err(map_wsl_agent_error)?;
+
+    match response {
+        AgentResponse::Unit => Ok(()),
+        AgentResponse::Error { category, message } => {
+            Err(AgentConsoleError::new(category, message))
+        }
+        _ => Err(unexpected_wsl_response()),
+    }
+}
+
+fn create_wsl_checkpoint(
+    distro: Option<&str>,
+    repo: &std::path::Path,
+    session_id: &str,
+    created_at_ms: u64,
+) -> Result<CheckpointRecord, AgentConsoleError> {
+    let distro =
+        distro.ok_or_else(|| AgentConsoleError::new("missing_distro", "repo WSL sin distro"))?;
+    let response = request_wsl_agent(
+        distro,
+        &AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.to_path_buf(),
+            allowed_repos: vec![repo.to_path_buf()],
+            session_id: session_id.into(),
+            created_at_ms,
+        },
+    )
+    .map_err(map_wsl_agent_error)?;
+
+    match response {
+        AgentResponse::AgentCheckpoint { checkpoint } => Ok(checkpoint),
+        AgentResponse::Error { category, message } => {
+            Err(AgentConsoleError::new(category, message))
+        }
+        _ => Err(unexpected_wsl_response()),
+    }
+}
+
 fn map_wsl_agent_error(error: crate::wsl_agent::protocol::AgentError) -> AgentConsoleError {
     AgentConsoleError::new(error.safe_category(), error.message)
 }
@@ -336,10 +596,28 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn change_signature(changes: &[AgentSessionChange]) -> Vec<(PathBuf, String)> {
+    changes
+        .iter()
+        .map(|change| {
+            (
+                change.path.clone(),
+                match change.kind {
+                    crate::bus::contract::AgentSessionChangeKind::Created => "created",
+                    crate::bus::contract::AgentSessionChangeKind::Modified => "modified",
+                    crate::bus::contract::AgentSessionChangeKind::Removed => "removed",
+                }
+                .to_string(),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bus::contract::{AgentSessionCheckpoint, AgentSessionCheckpointType};
+    use crate::git::test_fixtures::TempRepo;
     use std::io::Read;
 
     #[derive(Debug)]
@@ -399,6 +677,7 @@ mod tests {
             "codex".into(),
             1,
             Some(checkpoint),
+            CheckpointConfig::default(),
             CheckpointBackend::Local,
         );
         (repo, checkpoint_dir, record)
@@ -486,5 +765,93 @@ mod tests {
         assert_eq!(error.category, "process_status_failed");
         assert_eq!(contract.status, AgentSessionStatus::Error);
         assert_eq!(contract.error.unwrap().category, "process_status_failed");
+    }
+
+    #[test]
+    fn changed_turn_closes_after_output_and_filesystem_quiet() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "before\n");
+        repo.write("other.txt", "other before\n");
+        let checkpoint =
+            create_checkpoint(repo.path(), "turn-session", 1, &CheckpointConfig::default())
+                .unwrap();
+        let mut session = AgentSessionRecord::new(
+            "turn-session".into(),
+            repo.path().to_path_buf(),
+            "codex".into(),
+            1,
+            Some(checkpoint),
+            CheckpointConfig::default(),
+            CheckpointBackend::Local,
+        );
+        session.status = AgentSessionStatus::Running;
+        session.record_output_activity(10);
+
+        repo.write("base.txt", "after\n");
+        repo.write("other.txt", "other after\n");
+        session
+            .refresh_turn_checkpoints(10 + OUTPUT_QUIET_MS + 1, false)
+            .unwrap();
+        assert!(session.to_contract().turn_checkpoints.is_empty());
+        assert_eq!(
+            session.to_contract().turn_status,
+            AgentSessionTurnStatus::Settling
+        );
+
+        session
+            .refresh_turn_checkpoints(10 + OUTPUT_QUIET_MS + FILESYSTEM_QUIET_MS + 2, false)
+            .unwrap();
+
+        let contract = session.to_contract();
+        assert_eq!(contract.turn_checkpoints.len(), 1);
+        assert_eq!(contract.turn_checkpoints[0].index, 1);
+        assert!(contract.turn_checkpoints[0]
+            .changes
+            .iter()
+            .any(|change| change.path == std::path::Path::new("base.txt")));
+
+        session.status = AgentSessionStatus::Completed;
+        let turn_id = contract.turn_checkpoints[0].id.clone();
+        session
+            .revert_turn_file(&turn_id, std::path::Path::new("base.txt"))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "before\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("other.txt")).unwrap(),
+            "other after\n"
+        );
+    }
+
+    #[test]
+    fn output_only_turn_does_not_create_empty_checkpoint() {
+        let repo = TempRepo::with_initial_commit();
+        let checkpoint = create_checkpoint(
+            repo.path(),
+            "empty-turn-session",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+        let mut session = AgentSessionRecord::new(
+            "empty-turn-session".into(),
+            repo.path().to_path_buf(),
+            "codex".into(),
+            1,
+            Some(checkpoint),
+            CheckpointConfig::default(),
+            CheckpointBackend::Local,
+        );
+        session.record_output_activity(10);
+
+        session
+            .refresh_turn_checkpoints(10 + OUTPUT_QUIET_MS + FILESYSTEM_QUIET_MS + 1, false)
+            .unwrap();
+
+        let contract = session.to_contract();
+        assert!(contract.turn_checkpoints.is_empty());
+        assert_eq!(contract.turn_status, AgentSessionTurnStatus::Waiting);
     }
 }

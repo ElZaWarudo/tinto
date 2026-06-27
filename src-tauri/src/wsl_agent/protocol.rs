@@ -165,6 +165,12 @@ pub enum AgentRequest {
         allowed_repos: Vec<PathBuf>,
         checkpoint: CheckpointRecord,
     },
+    AgentCheckpointRevertFile {
+        protocol_version: u16,
+        allowed_repos: Vec<PathBuf>,
+        checkpoint: CheckpointRecord,
+        path: PathBuf,
+    },
     CopyToRepo {
         protocol_version: u16,
         repo: PathBuf,
@@ -497,6 +503,9 @@ impl AgentRequest {
                 protocol_version, ..
             }
             | Self::AgentCheckpointRevert {
+                protocol_version, ..
+            }
+            | Self::AgentCheckpointRevertFile {
                 protocol_version, ..
             }
             | Self::CopyToRepo {

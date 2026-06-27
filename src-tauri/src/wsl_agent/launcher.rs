@@ -1120,11 +1120,28 @@ mod tests {
             session_id: "sess".into(),
             created_at_ms: 1,
         };
+        let mutating_checkpoint_file = AgentRequest::AgentCheckpointRevertFile {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec!["/home/me/repo".into()],
+            checkpoint: crate::agent_console::checkpoint::CheckpointRecord {
+                contract: crate::bus::contract::AgentSessionCheckpoint {
+                    checkpoint_type: crate::bus::contract::AgentSessionCheckpointType::FsSnapshot,
+                    git_hash: None,
+                    snapshot_files: Vec::new(),
+                },
+                repo: "/home/me/repo".into(),
+                session_id: "sess".into(),
+                checkpoint_dir: "/tmp/tinto-checkpoint".into(),
+                created_at_ms: 1,
+            },
+            path: "src/a.rs".into(),
+        };
 
         assert!(request_is_retry_safe(&read_only));
         assert!(request_is_retry_safe(&availability));
         assert!(!request_is_retry_safe(&mutating_delete));
         assert!(!request_is_retry_safe(&mutating_checkpoint));
+        assert!(!request_is_retry_safe(&mutating_checkpoint_file));
     }
 
     #[test]

@@ -71,6 +71,24 @@ pub struct AgentSessionChangeLog {
     pub changes: Vec<AgentSessionChange>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionTurnStatus {
+    Waiting,
+    Working,
+    Settling,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionTurnCheckpoint {
+    pub id: String,
+    pub index: u32,
+    pub started_at_ms: u64,
+    pub ended_at_ms: u64,
+    pub checkpoint: AgentSessionCheckpoint,
+    pub changes: Vec<AgentSessionChange>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionLimits {
     pub max_sessions: usize,
@@ -95,6 +113,9 @@ pub struct AgentSession {
     pub checkpoint: Option<AgentSessionCheckpoint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub change_log: Vec<AgentSessionChange>,
+    pub turn_status: AgentSessionTurnStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn_checkpoints: Vec<AgentSessionTurnCheckpoint>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
     pub active_sessions: usize,
@@ -420,6 +441,23 @@ mod tests {
                 kind: AgentSessionChangeKind::Modified,
                 timestamp_ms: 1760000000001,
             }],
+            turn_status: AgentSessionTurnStatus::Working,
+            turn_checkpoints: vec![AgentSessionTurnCheckpoint {
+                id: "sess-1:turn-1".into(),
+                index: 1,
+                started_at_ms: 1760000000000,
+                ended_at_ms: 1760000000100,
+                checkpoint: AgentSessionCheckpoint {
+                    checkpoint_type: AgentSessionCheckpointType::GitRef,
+                    git_hash: Some("abc123".into()),
+                    snapshot_files: Vec::new(),
+                },
+                changes: vec![AgentSessionChange {
+                    path: "src/a.rs".into(),
+                    kind: AgentSessionChangeKind::Modified,
+                    timestamp_ms: 1760000000100,
+                }],
+            }],
             reverted_at_ms: None,
             active_sessions: 1,
             age_ms: 42,
@@ -437,6 +475,12 @@ mod tests {
         assert_eq!(json["error"]["category"], "spawn_failed");
         assert_eq!(json["checkpoint"]["checkpoint_type"], "git_ref");
         assert_eq!(json["change_log"][0]["kind"], "modified");
+        assert_eq!(json["turn_status"], "working");
+        assert_eq!(json["turn_checkpoints"][0]["id"], "sess-1:turn-1");
+        assert_eq!(
+            json["turn_checkpoints"][0]["changes"][0]["kind"],
+            "modified"
+        );
         assert_eq!(json["active_sessions"], 1);
         assert_eq!(json["age_ms"], 42);
     }

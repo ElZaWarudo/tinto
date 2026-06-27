@@ -157,6 +157,7 @@ impl AgentSessionRegistry {
             agent_type,
             started_at_ms,
             Some(checkpoint),
+            self.checkpoint_config.clone(),
             CheckpointBackend::Local,
         );
         session.start(process)?;
@@ -215,6 +216,7 @@ impl AgentSessionRegistry {
             agent_type,
             started_at_ms,
             checkpoint,
+            self.checkpoint_config.clone(),
             CheckpointBackend::Wsl,
         );
         session.set_wsl_distro(distro);
@@ -235,6 +237,7 @@ impl AgentSessionRegistry {
         let now = now_ms();
         for session in self.sessions.values_mut() {
             session.refresh_status()?;
+            session.refresh_turn_checkpoints(now, false)?;
             session.enforce_lifetime(now, self.limits.max_lifetime_ms)?;
         }
         Ok(())
@@ -288,6 +291,40 @@ impl AgentSessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         session.revert()?;
+        Ok(session.to_contract())
+    }
+
+    pub fn record_session_output(
+        &mut self,
+        session_id: &str,
+        timestamp_ms: u64,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.record_output_activity(timestamp_ms);
+        Ok(())
+    }
+
+    pub fn revert_turn_file(
+        &mut self,
+        session_id: &str,
+        turn_checkpoint_id: &str,
+        path: &Path,
+        user_consent: bool,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        if !user_consent {
+            return Err(AgentConsoleError::new(
+                "consent_required",
+                "revert requires explicit user consent",
+            ));
+        }
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.revert_turn_file(turn_checkpoint_id, path)?;
         Ok(session.to_contract())
     }
 

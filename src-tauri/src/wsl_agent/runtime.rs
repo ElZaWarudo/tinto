@@ -5,7 +5,7 @@ use std::{fs, io};
 use ignore::WalkBuilder;
 
 use crate::agent_console::checkpoint::{
-    create_checkpoint, revert_checkpoint, scan_change_log, CheckpointConfig,
+    create_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log, CheckpointConfig,
 };
 use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
@@ -263,6 +263,15 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             ..
         } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
             revert_checkpoint(&checkpoint)?;
+            Ok(AgentResponse::Unit)
+        }),
+        AgentRequest::AgentCheckpointRevertFile {
+            allowed_repos,
+            checkpoint,
+            path,
+            ..
+        } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
+            revert_checkpoint_file(&checkpoint, &path)?;
             Ok(AgentResponse::Unit)
         }),
         AgentRequest::CopyToRepo {
@@ -1292,6 +1301,25 @@ mod tests {
             .iter()
             .any(|change| change.path == Path::new("created.txt")));
 
+        let revert_file = AgentRequest::AgentCheckpointRevertFile {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint: checkpoint.clone(),
+            path: "base.txt".into(),
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&revert_file).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+        assert_eq!(response, AgentResponse::Unit);
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "before\n"
+        );
+        assert!(repo.path().join("created.txt").exists());
+
+        repo.write("base.txt", "after again\n");
         let revert = AgentRequest::AgentCheckpointRevert {
             protocol_version: PROTOCOL_VERSION,
             allowed_repos: vec![checkpoint.repo.clone()],

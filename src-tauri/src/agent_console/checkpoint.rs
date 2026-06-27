@@ -17,7 +17,7 @@ use crate::bus::contract::{
 
 use super::AgentConsoleError;
 
-const DEFAULT_RETENTION_PER_REPO: usize = 5;
+const DEFAULT_RETENTION_PER_REPO: usize = 50;
 const DEFAULT_MAX_CHECKPOINT_BYTES: u64 = 100 * 1024 * 1024;
 const DEFAULT_MAX_REPO_BYTES: u64 = 500 * 1024 * 1024;
 
@@ -104,6 +104,17 @@ pub fn revert_checkpoint(record: &CheckpointRecord) -> Result<(), AgentConsoleEr
     match record.contract.checkpoint_type {
         AgentSessionCheckpointType::GitRef => revert_git(record),
         AgentSessionCheckpointType::FsSnapshot => revert_fs(record),
+    }
+}
+
+pub fn revert_checkpoint_file(
+    record: &CheckpointRecord,
+    path: &Path,
+) -> Result<(), AgentConsoleError> {
+    validate_checkpoint_relative_path(path)?;
+    match record.contract.checkpoint_type {
+        AgentSessionCheckpointType::GitRef => revert_git_file(record, path),
+        AgentSessionCheckpointType::FsSnapshot => revert_fs_file(record, path),
     }
 }
 
@@ -194,12 +205,33 @@ fn revert_git(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
     Ok(())
 }
 
+fn revert_git_file(record: &CheckpointRecord, rel: &Path) -> Result<(), AgentConsoleError> {
+    let Some(hash) = &record.contract.git_hash else {
+        return Err(AgentConsoleError::new(
+            "checkpoint_invalid",
+            "git checkpoint has no hash",
+        ));
+    };
+    if git_file_exists_at(&record.repo, hash, rel)? {
+        let rel_text = rel.to_string_lossy().into_owned();
+        run_git(&record.repo, &["checkout", hash, "--", &rel_text])?;
+    } else {
+        validate_current_path_ancestors(&record.repo, rel)?;
+        let path = record.repo.join(rel);
+        if path.exists() {
+            fs::remove_file(path).map_err(io_error)?;
+        }
+    }
+    Ok(())
+}
+
 fn revert_fs(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
     let snapshot_root = record.checkpoint_dir.join("files");
     let snapshot_files: HashSet<PathBuf> = record.contract.snapshot_files.iter().cloned().collect();
     let current_files: HashSet<PathBuf> = collect_repo_files(&record.repo)?.into_iter().collect();
 
     for rel in current_files.difference(&snapshot_files) {
+        validate_current_path_ancestors(&record.repo, rel)?;
         let path = record.repo.join(rel);
         if path.exists() {
             fs::remove_file(path).map_err(io_error)?;
@@ -208,13 +240,37 @@ fn revert_fs(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
 
     for rel in &record.contract.snapshot_files {
         let source = snapshot_root.join(rel);
-        let target = record.repo.join(rel);
+        let target = prepare_restore_target(&record.repo, rel)?;
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(io_error)?;
         }
         fs::copy(&source, &target).map_err(io_error)?;
     }
 
+    Ok(())
+}
+
+fn revert_fs_file(record: &CheckpointRecord, rel: &Path) -> Result<(), AgentConsoleError> {
+    let snapshot_root = record.checkpoint_dir.join("files");
+    if record
+        .contract
+        .snapshot_files
+        .iter()
+        .any(|snapshot_path| snapshot_path == rel)
+    {
+        let source = snapshot_root.join(rel);
+        let target = prepare_restore_target(&record.repo, rel)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(io_error)?;
+        }
+        fs::copy(source, target).map_err(io_error)?;
+    } else {
+        validate_current_path_ancestors(&record.repo, rel)?;
+        let target = record.repo.join(rel);
+        if target.exists() {
+            fs::remove_file(target).map_err(io_error)?;
+        }
+    }
     Ok(())
 }
 
@@ -312,6 +368,18 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<(), AgentConsoleError> {
     }
 }
 
+fn git_file_exists_at(repo: &Path, hash: &str, rel: &Path) -> Result<bool, AgentConsoleError> {
+    let rel_text = rel.to_string_lossy();
+    let spec = format!("{hash}:{rel_text}");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "-e", &spec])
+        .output()
+        .map_err(|e| AgentConsoleError::new("revert_failed", e.to_string()))?;
+    Ok(output.status.success())
+}
+
 fn collect_repo_files(repo: &Path) -> Result<Vec<PathBuf>, AgentConsoleError> {
     let mut files = Vec::new();
     let walker = WalkBuilder::new(repo)
@@ -341,6 +409,68 @@ fn collect_repo_files(repo: &Path) -> Result<Vec<PathBuf>, AgentConsoleError> {
 fn has_git_component(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == std::ffi::OsStr::new(".git"))
+}
+
+fn validate_checkpoint_relative_path(path: &Path) -> Result<(), AgentConsoleError> {
+    if path.is_absolute() || has_navigation_component(path) {
+        return Err(AgentConsoleError::new(
+            "path-traversal",
+            "el path se sale del repositorio",
+        ));
+    }
+    if path.as_os_str().is_empty() || has_git_component(path) {
+        return Err(AgentConsoleError::new(
+            "path-forbidden",
+            "el directorio .git no se expone",
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_restore_target(repo: &Path, rel: &Path) -> Result<PathBuf, AgentConsoleError> {
+    validate_current_path_ancestors(repo, rel)?;
+    let target = repo.join(rel);
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            fs::remove_file(&target).map_err(io_error)?;
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error(error)),
+    }
+    Ok(target)
+}
+
+fn validate_current_path_ancestors(repo: &Path, rel: &Path) -> Result<(), AgentConsoleError> {
+    let mut current = repo.to_path_buf();
+    let mut components = rel.components().peekable();
+    while let Some(component) = components.next() {
+        if components.peek().is_none() {
+            break;
+        }
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AgentConsoleError::new(
+                    "path-forbidden",
+                    "checkpoint revert refuses symlink ancestors",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+    Ok(())
+}
+
+fn has_navigation_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    })
 }
 
 fn write_metadata(
@@ -575,6 +705,82 @@ mod tests {
             fs::read_to_string(repo.path().join("base.txt")).unwrap(),
             "dirty before\n"
         );
+    }
+
+    #[test]
+    fn filesystem_file_revert_restores_only_selected_file() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "dirty before\n");
+        repo.write("other.txt", "other before\n");
+        let record = create_checkpoint(
+            repo.path(),
+            "sess-file-revert",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+
+        repo.write("base.txt", "after\n");
+        repo.write("other.txt", "other after\n");
+        repo.write("created.txt", "new\n");
+
+        revert_checkpoint_file(&record, Path::new("base.txt")).unwrap();
+        revert_checkpoint_file(&record, Path::new("created.txt")).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "dirty before\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join("other.txt")).unwrap(),
+            "other after\n"
+        );
+        assert!(!repo.path().join("created.txt").exists());
+    }
+
+    #[test]
+    fn file_revert_rejects_paths_outside_repo_or_dot_git() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "dirty before\n");
+        let record = create_checkpoint(
+            repo.path(),
+            "sess-file-reject",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+
+        for path in [Path::new("../base.txt"), Path::new(".git/config")] {
+            let error = revert_checkpoint_file(&record, path).unwrap_err();
+            assert!(matches!(
+                error.category.as_str(),
+                "path-traversal" | "path-forbidden"
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_revert_rejects_symlink_ancestor_escape() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("dir/base.txt", "before\n");
+        let outside = tempfile::tempdir().unwrap();
+        let outside_target = outside.path().join("base.txt");
+        fs::write(&outside_target, "outside\n").unwrap();
+        let record = create_checkpoint(
+            repo.path(),
+            "sess-symlink-escape",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+        fs::remove_dir_all(repo.path().join("dir")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), repo.path().join("dir")).unwrap();
+
+        let error = revert_checkpoint_file(&record, Path::new("dir/base.txt")).unwrap_err();
+
+        assert_eq!(error.category, "path-forbidden");
+        assert_eq!(fs::read_to_string(outside_target).unwrap(), "outside\n");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::bus::{
     contract::{
@@ -161,6 +161,23 @@ pub fn revert_session(
     Ok(session)
 }
 
+#[tauri::command]
+pub fn revert_session_turn_file(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    turn_checkpoint_id: String,
+    path: PathBuf,
+    user_consent: bool,
+) -> Result<AgentSession, CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    let session = registry
+        .revert_turn_file(&session_id, &turn_checkpoint_id, &path, user_consent)
+        .map_err(CommandError::from)?;
+    emit_change_logs(&app, std::slice::from_ref(&session));
+    Ok(session)
+}
+
 async fn ensure_known_agent_repo(
     bus: &BusHandle,
     repo: &Path,
@@ -244,10 +261,16 @@ fn spawn_output_reader(
             match output_reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
+                    let timestamp_ms = now_ms();
+                    if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
+                        if let Ok(mut registry) = registry.lock() {
+                            let _ = registry.record_session_output(&session_id, timestamp_ms);
+                        }
+                    }
                     let payload = AgentSessionOutput {
                         session_id: session_id.clone(),
                         chunk_base64: STANDARD.encode(&buffer[..read]),
-                        timestamp_ms: now_ms(),
+                        timestamp_ms,
                     };
                     let _ = app.emit(EVENT_AGENT_SESSION_OUTPUT, payload);
                 }
