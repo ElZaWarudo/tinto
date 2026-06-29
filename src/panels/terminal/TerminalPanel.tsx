@@ -14,6 +14,7 @@ import {
 } from "../../bus/client";
 import { agentSessionStore, useAgentSession, useAgentSessionState } from "../../agent/sessionStore";
 import type { AgentSession } from "../../bus/contract";
+import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
 
 export interface TerminalPanelParams {
   sessionId: string;
@@ -21,9 +22,14 @@ export interface TerminalPanelParams {
   agentType?: string;
 }
 
+interface FocusTerminalOptions {
+  activatePanel?: boolean;
+}
+
 type TerminalPanelProps = IDockviewPanelProps<TerminalPanelParams>;
 const panelCloseStopTimers = new Map<string, number>();
 const PANEL_CLOSE_STOP_DELAY_MS = 250;
+const DETACHED_TRANSFER_STOP_DELAY_MS = 5000;
 const TERMINAL_FOCUS_DELAY_MS = 0;
 const SESSION_REFRESH_INTERVAL_MS = 1500;
 
@@ -48,7 +54,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     [sessionId],
   );
 
-  const focusTerminal = useCallback(() => {
+  const focusTerminal = useCallback((options: FocusTerminalOptions = {}) => {
     const terminal = terminalInstanceRef.current;
     const container = terminalRef.current;
     if (!terminal) return;
@@ -56,6 +62,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     if (textarea) stabilizeTerminalTextarea(textarea);
     if (textarea && document.activeElement === textarea && api.isActive) return;
     if (!api.isActive) {
+      if (!options.activatePanel) return;
       api.setActive();
     }
     container?.focus({ preventScroll: true });
@@ -67,26 +74,16 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
   }, [api]);
 
   useEffect(() => {
-    panelActiveRef.current = api.isActive;
-    const disposable = api.onDidActiveChange(({ isActive }) => {
-      panelActiveRef.current = isActive;
-      if (isActive) {
-        window.requestAnimationFrame(focusTerminal);
-      }
-    });
-    return () => {
-      disposable.dispose();
-    };
-  }, [api, focusTerminal]);
-
-  useEffect(() => {
     const container = terminalRef.current;
     if (!container || !sessionId) return;
     cancelPanelCloseStop(sessionId);
 
     let active = true;
     let resizeTimer: number | undefined;
+    const settleTimers: number[] = [];
+    const settleFrames: number[] = [];
     let lastSize: { cols: number; rows: number } | null = null;
+    panelActiveRef.current = api.isActive;
     const terminal = new Terminal({
       convertEol: true,
       cursorBlink: true,
@@ -111,9 +108,9 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       textarea.setAttribute("autocorrect", "off");
       stabilizeTerminalTextarea(textarea);
     }
-    const focusLater = () => {
-      window.setTimeout(focusTerminal, TERMINAL_FOCUS_DELAY_MS);
-      window.requestAnimationFrame(focusTerminal);
+    const focusLater = (activatePanel = false) => {
+      window.setTimeout(() => focusTerminal({ activatePanel }), TERMINAL_FOCUS_DELAY_MS);
+      window.requestAnimationFrame(() => focusTerminal({ activatePanel }));
     };
     const recoverTerminalFocus = () => {
       window.requestAnimationFrame(() => {
@@ -128,7 +125,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       });
     };
     focusTerminal();
-    const focusFrame = window.requestAnimationFrame(focusTerminal);
+    const focusFrame = window.requestAnimationFrame(() => focusTerminal());
     writtenOutputRef.current = 0;
 
     const publishSize = () => {
@@ -146,10 +143,35 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       }
     };
 
+    const clearSettledFitTimers = () => {
+      while (settleFrames.length > 0) {
+        const frame = settleFrames.pop();
+        if (frame !== undefined) window.cancelAnimationFrame(frame);
+      }
+      while (settleTimers.length > 0) {
+        const timer = settleTimers.pop();
+        if (timer !== undefined) window.clearTimeout(timer);
+      }
+    };
     const scheduleFit = () => {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(publishSize, 80);
     };
+    const scheduleSettledFit = () => {
+      clearSettledFitTimers();
+      publishSize();
+      scheduleFit();
+      settleFrames.push(window.requestAnimationFrame(scheduleFit));
+      settleTimers.push(window.setTimeout(scheduleFit, 160));
+      settleTimers.push(window.setTimeout(scheduleFit, 360));
+    };
+
+    const activeSubscription = api.onDidActiveChange(({ isActive }) => {
+      panelActiveRef.current = isActive;
+      if (!isActive) return;
+      scheduleSettledFit();
+      window.requestAnimationFrame(() => focusTerminal());
+    });
 
     const dataSubscription = terminal.onData((data) => {
       void writeAgentSessionInput(sessionId, data).catch((e) => {
@@ -161,11 +183,13 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     });
     const relayInput = (input: string) => {
       if (!input) return;
+      scheduleSettledFit();
       focusTerminal();
       terminal.input(input, true);
     };
     const pasteText = (text: string) => {
       if (!text) return;
+      scheduleSettledFit();
       focusTerminal();
       terminal.paste(text);
     };
@@ -195,13 +219,16 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       return true;
     });
     const handlePointerDown = () => {
-      focusLater();
+      scheduleSettledFit();
+      focusLater(true);
     };
     const handleClick = () => {
-      focusLater();
+      scheduleSettledFit();
+      focusLater(true);
     };
     const handleFocusIn = () => {
-      focusLater();
+      scheduleSettledFit();
+      focusLater(true);
     };
     const handleTextareaFocus = () => {
       if (textarea) stabilizeTerminalTextarea(textarea);
@@ -265,8 +292,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     textarea?.addEventListener("paste", handleTextareaPaste);
     window.addEventListener("paste", handleWindowPaste, true);
     window.addEventListener("keydown", handleWindowKeyDown, true);
-    publishSize();
-    const frame = window.requestAnimationFrame(scheduleFit);
+    scheduleSettledFit();
     const observer =
       typeof ResizeObserver === "undefined"
         ? null
@@ -278,7 +304,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     return () => {
       active = false;
       window.cancelAnimationFrame(focusFrame);
-      window.cancelAnimationFrame(frame);
+      clearSettledFitTimers();
       window.clearTimeout(resizeTimer);
       observer?.disconnect();
       container.removeEventListener("pointerdown", handlePointerDown);
@@ -289,12 +315,18 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       textarea?.removeEventListener("paste", handleTextareaPaste);
       window.removeEventListener("paste", handleWindowPaste, true);
       window.removeEventListener("keydown", handleWindowKeyDown, true);
+      activeSubscription.dispose();
       dataSubscription.dispose();
       cursorSubscription.dispose();
       fitAddon.dispose();
       terminal.dispose();
       terminalInstanceRef.current = null;
-      schedulePanelCloseStop(sessionId);
+      schedulePanelCloseStop(
+        sessionId,
+        consumeTerminalDetachedMarker(sessionId)
+          ? DETACHED_TRANSFER_STOP_DELAY_MS
+          : PANEL_CLOSE_STOP_DELAY_MS,
+      );
     };
   }, [focusTerminal, sessionId]);
 
@@ -316,7 +348,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       terminal.textarea &&
       document.activeElement !== terminal.textarea
     ) {
-      window.requestAnimationFrame(focusTerminal);
+      window.requestAnimationFrame(() => focusTerminal());
     }
   }, [focusTerminal, sessionOutput, sessionOutputTotal]);
 
@@ -717,7 +749,7 @@ function cancelPanelCloseStop(sessionId: string) {
   panelCloseStopTimers.delete(sessionId);
 }
 
-function schedulePanelCloseStop(sessionId: string) {
+function schedulePanelCloseStop(sessionId: string, delayMs = PANEL_CLOSE_STOP_DELAY_MS) {
   cancelPanelCloseStop(sessionId);
   const timer = window.setTimeout(() => {
     panelCloseStopTimers.delete(sessionId);
@@ -725,6 +757,6 @@ function schedulePanelCloseStop(sessionId: string) {
       .then(() => listAgentSessions())
       .then((sessions) => agentSessionStore.setSessions(sessions))
       .catch(() => {});
-  }, PANEL_CLOSE_STOP_DELAY_MS);
+  }, delayMs);
   panelCloseStopTimers.set(sessionId, timer);
 }
