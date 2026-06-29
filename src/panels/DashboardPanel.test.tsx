@@ -55,6 +55,7 @@ function renderDash(actions: Partial<WorkspaceActions> = {}) {
     openFile: vi.fn(),
     openTimeline: vi.fn(),
     openDashboard: vi.fn(),
+    openAgents: vi.fn(),
     openAgentTerminal: vi.fn(),
     ...actions,
   };
@@ -101,6 +102,16 @@ describe("DashboardPanel", () => {
 
     expect(addRepo).toHaveBeenCalledOnce();
     expect(screen.getAllByRole("button", { name: /add repo/i })).toHaveLength(1);
+  });
+
+  it("opens the agents panel from the dashboard action bar", () => {
+    act(() => busStore.loadSnapshot([delta("/r/a", 1)], { available: true }));
+    const openAgents = vi.fn();
+    renderDash({ openAgents });
+
+    fireEvent.click(screen.getByTestId("dashboard-open-agents"));
+
+    expect(openAgents).toHaveBeenCalledOnce();
   });
 
   it("renders a card per repo", () => {
