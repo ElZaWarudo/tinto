@@ -9,6 +9,10 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use super::{
+    validation::{resolve_agent_binary, validate_agent_type},
+    AgentConsoleError, AgentSessionRegistry,
+};
 use crate::bus::{
     contract::{
         AgentSession, AgentSessionChangeLog, AgentSessionOutput, EVENT_AGENT_SESSION_CHANGE_LOG,
@@ -17,12 +21,6 @@ use crate::bus::{
     BusHandle, RepoResolveError,
 };
 use crate::workbench::RepoSource;
-use crate::wsl_agent::{
-    launcher::request_wsl_agent,
-    protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
-};
-
-use super::{validation::resolve_agent_binary, AgentConsoleError, AgentSessionRegistry};
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -114,7 +112,7 @@ pub async fn agent_binary_available_for_repo(
     let resolved = ensure_known_agent_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => agent_binary_available(agent_type),
-        RepoSource::Wsl => wsl_agent_binary_available_via_agent(resolved.distro, agent_type),
+        RepoSource::Wsl => wsl_agent_binary_available(agent_type),
     }
 }
 
@@ -206,40 +204,10 @@ fn map_repo_resolve_error(error: RepoResolveError) -> CommandError {
     }
 }
 
-fn wsl_agent_binary_available_via_agent(
-    distro: Option<String>,
-    agent_type: String,
-) -> Result<bool, CommandError> {
-    wsl_agent_binary_available_with(distro, agent_type, |distro, request| {
-        request_wsl_agent(distro, request)
-    })
-}
-
-fn wsl_agent_binary_available_with<F>(
-    distro: Option<String>,
-    agent_type: String,
-    requester: F,
-) -> Result<bool, CommandError>
-where
-    F: FnOnce(&str, &AgentRequest) -> Result<AgentResponse, crate::wsl_agent::protocol::AgentError>,
-{
-    let distro =
-        distro.ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
-    match requester(
-        &distro,
-        &AgentRequest::AgentBinaryAvailable {
-            protocol_version: PROTOCOL_VERSION,
-            agent_type,
-        },
-    ) {
-        Ok(AgentResponse::AgentBinaryAvailable { available }) => Ok(available),
-        Ok(AgentResponse::Error { category, message }) => Err(CommandError::new(category, message)),
-        Ok(_) => Err(CommandError::new(
-            "malformed_response",
-            "respuesta inesperada del agente WSL",
-        )),
-        Err(error) => Err(CommandError::new(error.safe_category(), error.message)),
-    }
+fn wsl_agent_binary_available(agent_type: String) -> Result<bool, CommandError> {
+    validate_agent_type(&agent_type)
+        .map(|_| true)
+        .map_err(CommandError::from)
 }
 
 fn lock_registry(
@@ -358,39 +326,16 @@ mod tests {
     }
 
     #[test]
-    fn wsl_agent_binary_available_uses_protocol_request() {
-        let result = wsl_agent_binary_available_with(
-            Some("Ubuntu".into()),
-            "codex".into(),
-            |distro, req| {
-                assert_eq!(distro, "Ubuntu");
-                assert_eq!(
-                    req,
-                    &AgentRequest::AgentBinaryAvailable {
-                        protocol_version: PROTOCOL_VERSION,
-                        agent_type: "codex".into(),
-                    }
-                );
-                Ok(AgentResponse::AgentBinaryAvailable { available: true })
-            },
-        )
-        .unwrap();
+    fn wsl_agent_binary_available_validates_agent_type_without_probe() {
+        let result = wsl_agent_binary_available("codex".into()).unwrap();
 
         assert!(result);
     }
 
     #[test]
-    fn wsl_agent_binary_available_maps_agent_error_response() {
-        let error =
-            wsl_agent_binary_available_with(Some("Ubuntu".into()), "powershell".into(), |_, _| {
-                Ok(AgentResponse::Error {
-                    category: "unsupported_agent".into(),
-                    message: "nope".into(),
-                })
-            })
-            .unwrap_err();
+    fn wsl_agent_binary_available_rejects_unsupported_agent() {
+        let error = wsl_agent_binary_available("powershell".into()).unwrap_err();
 
         assert_eq!(error.category, "unsupported_agent");
-        assert_eq!(error.message, "nope");
     }
 }

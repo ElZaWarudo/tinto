@@ -3,6 +3,8 @@ import { consoleDock } from "./consoleDock";
 import { PANEL_AGENT_TERMINAL, agentTerminalPanelId } from "./panels";
 
 function fakeApi() {
+  const removePanelCallbacks: Array<(panel: (typeof panels)[string]) => void> = [];
+  const layoutCallbacks: Array<() => void> = [];
   const panels: Record<
     string,
     {
@@ -35,7 +37,21 @@ function fakeApi() {
       },
     ),
     getPanel: vi.fn((id: string) => panels[id]),
-    onDidLayoutChange: vi.fn(() => ({ dispose: vi.fn() })),
+    removePanel: vi.fn((panel: (typeof panels)[string]) => {
+      delete panels[panel.id];
+      const index = panelList.findIndex((candidate) => candidate.id === panel.id);
+      if (index >= 0) panelList.splice(index, 1);
+      removePanelCallbacks.forEach((callback) => callback(panel));
+      layoutCallbacks.forEach((callback) => callback());
+    }),
+    onDidLayoutChange: vi.fn((callback: () => void) => {
+      layoutCallbacks.push(callback);
+      return { dispose: vi.fn() };
+    }),
+    onDidRemovePanel: vi.fn((callback: (panel: (typeof panels)[string]) => void) => {
+      removePanelCallbacks.push(callback);
+      return { dispose: vi.fn() };
+    }),
     fromJSON: vi.fn(),
     toJSON: vi.fn(() => ({
       panels: Object.fromEntries(panelList.map((panel) => [panel.id, { params: panel.params }])),
@@ -95,12 +111,130 @@ describe("consoleDock", () => {
     expect(api.addPanel).toHaveBeenCalledTimes(1);
   });
 
-  it("restores a saved console layout when the nested dock registers", () => {
+  it("does not steal focus from existing terminal tabs while remounting", () => {
+    const api = fakeApi();
+    api.addPanel({
+      id: agentTerminalPanelId("sess-1"),
+      component: PANEL_AGENT_TERMINAL,
+      title: "codex sess-1",
+      params: { sessionId: "sess-1", repo: "/r/a", agentType: "codex" },
+    });
+    const panel = api._panels[agentTerminalPanelId("sess-1")];
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    panel.api.setActive.mockClear();
+
+    consoleDock.register(api as never);
+
+    expect(panel.api.setActive).not.toHaveBeenCalled();
+  });
+
+  it("notifies listeners when terminal state changes", () => {
+    const api = fakeApi();
+    const listener = vi.fn();
+    const unsubscribe = consoleDock.subscribe(listener);
+
+    consoleDock.register(api as never);
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    consoleDock.unregister(api as never);
+    unsubscribe();
+    consoleDock.register(fakeApi() as never);
+
+    expect(listener).toHaveBeenCalledTimes(4);
+  });
+
+  it("queues new terminal opens after the consoles dock is closed", () => {
+    const firstApi = fakeApi();
+    consoleDock.register(firstApi as never);
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    consoleDock.unregister(firstApi as never);
+
+    consoleDock.openTerminal({ sessionId: "sess-2", repo: "/r/b", agentType: "codex" });
+    expect(firstApi.addPanel).toHaveBeenCalledTimes(1);
+
+    const secondApi = fakeApi();
+    consoleDock.register(secondApi as never);
+
+    expect(secondApi.addPanel).toHaveBeenCalledWith({
+      id: agentTerminalPanelId("sess-2"),
+      component: PANEL_AGENT_TERMINAL,
+      title: "codex sess-2",
+      params: {
+        sessionId: "sess-2",
+        repo: "/r/b",
+        agentType: "codex",
+      },
+    });
+  });
+
+  it("restores tracked terminal tabs when the nested dock remounts", () => {
+    const firstApi = fakeApi();
+    consoleDock.register(firstApi as never);
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    consoleDock.unregister(firstApi as never);
+
+    const secondApi = fakeApi();
+    consoleDock.register(secondApi as never);
+
+    expect(secondApi.addPanel).toHaveBeenCalledWith({
+      id: agentTerminalPanelId("sess-1"),
+      component: PANEL_AGENT_TERMINAL,
+      title: "codex sess-1",
+      params: {
+        sessionId: "sess-1",
+        repo: "/r/a",
+        agentType: "codex",
+      },
+    });
+  });
+
+  it("does not restore a terminal tab after it is closed", () => {
+    vi.useFakeTimers();
+    const firstApi = fakeApi();
+    consoleDock.register(firstApi as never);
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    firstApi.removePanel(firstApi._panels[agentTerminalPanelId("sess-1")]);
+    vi.advanceTimersByTime(250);
+    consoleDock.unregister(firstApi as never);
+
+    const secondApi = fakeApi();
+    consoleDock.register(secondApi as never);
+
+    expect(secondApi.addPanel).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("does not restore stale console layouts from previous app runs", () => {
     localStorage.setItem("tinto:console-dock", JSON.stringify({ panels: { a: {} } }));
     const api = fakeApi();
 
     consoleDock.register(api as never);
 
-    expect(api.fromJSON).toHaveBeenCalledWith({ panels: { a: {} } });
+    expect(api.fromJSON).not.toHaveBeenCalled();
+    expect(localStorage.getItem("tinto:console-dock")).toBeNull();
+  });
+
+  it("restores a one-shot transfer layout for detached console windows", () => {
+    const sourceApi = fakeApi();
+    consoleDock.register(sourceApi as never);
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    consoleDock.prepareDetachedTransfer();
+    consoleDock.unregister(sourceApi as never);
+
+    const detachedApi = fakeApi();
+    consoleDock.register(detachedApi as never, { restoreTransferLayout: true });
+
+    expect(detachedApi.fromJSON).toHaveBeenCalledWith({
+      panels: {
+        [agentTerminalPanelId("sess-1")]: {
+          params: {
+            sessionId: "sess-1",
+            repo: "/r/a",
+            agentType: "codex",
+          },
+        },
+      },
+    });
+    expect(localStorage.getItem("tinto:console-dock-transfer")).toBeNull();
   });
 });

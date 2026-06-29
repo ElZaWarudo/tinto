@@ -17,11 +17,15 @@ vi.mock("remark-gfm", () => ({ default: {} }));
 
 let worktree: { value: unknown; reject?: unknown } = { value: [] };
 let fileContent: unknown = { encoding: "utf8", content: "a\nb\nc", truncated: false };
+let fileContentRejects: unknown[] = [];
 let mediaContent: unknown = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
 const invokeMock = vi.fn((cmd: string) => {
   if (cmd === "get_worktree_diff")
     return worktree.reject ? Promise.reject(worktree.reject) : Promise.resolve(worktree.value);
-  if (cmd === "get_file_content") return Promise.resolve(fileContent);
+  if (cmd === "get_file_content") {
+    const nextReject = fileContentRejects.shift();
+    return nextReject ? Promise.reject(nextReject) : Promise.resolve(fileContent);
+  }
   if (cmd === "get_media_content") return Promise.resolve(mediaContent);
   return Promise.resolve(undefined);
 });
@@ -51,6 +55,24 @@ const fileDiff = (path: string, content = "hello"): FileDiff => ({
   ],
 });
 
+const fileDiffWithAddedLines = (path: string, lines: number[]): FileDiff => ({
+  path,
+  old_path: null,
+  is_binary: false,
+  hunks: [
+    {
+      old_start: 1,
+      new_start: 1,
+      lines: lines.map((line) => ({
+        kind: "Added",
+        content: `line-${line}`,
+        old_lineno: null,
+        new_lineno: line,
+      })),
+    },
+  ],
+});
+
 function delta(over: Partial<RepoDelta> = {}): RepoDelta {
   return {
     repo: REPO,
@@ -67,11 +89,13 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
 describe("FileView", () => {
   beforeEach(() => {
     busStore.resetAll();
+    act(() => busStore.loadSnapshot([delta({ revision: 0 })], { available: true }));
     reconciler.reset();
     invokeMock.mockClear();
     Element.prototype.scrollIntoView = vi.fn();
     worktree = { value: [] };
     fileContent = { encoding: "utf8", content: "a\nb\nc", truncated: false };
+    fileContentRejects = [];
     mediaContent = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
   });
 
@@ -81,9 +105,37 @@ describe("FileView", () => {
     // No change → defaults to "full"; FullFileView paints the content directly.
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
     expect(screen.queryByTestId("diff-empty")).not.toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("get_worktree_diff", { repo: REPO });
+  });
+
+  it("does not keep the prior file content visible while a new path loads", async () => {
+    fileContent = { encoding: "utf8", content: "first-file", truncated: false };
+    const { rerender } = render(<FileView repo={REPO} path="src/first.ts" />);
+    expect(await screen.findAllByText("first-file")).not.toHaveLength(0);
+
+    fileContent = { encoding: "utf8", content: "second-file", truncated: false };
+    rerender(<FileView repo={REPO} path="src/second.ts" />);
+
+    expect(screen.queryAllByText("first-file")).toHaveLength(0);
+    expect(await screen.findAllByText("second-file")).not.toHaveLength(0);
+  });
+
+  it("waits for the restored repo snapshot before loading file content", async () => {
+    busStore.resetAll();
+    render(<FileView repo={REPO} path={PATH} />);
+
+    expect(screen.getByTestId("file-repo-loading")).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("get_file_content", { repo: REPO, path: PATH });
+
+    act(() => busStore.loadSnapshot([delta({ revision: 0 })], { available: true }));
+
+    expect(await screen.findByTestId("full-file")).toBeInTheDocument();
   });
 
   it("a changed file defaults to the diff and can toggle to full file", async () => {
+    act(() =>
+      busStore.applyDelta(delta({ status: { modified: [PATH], staged: [], untracked: [] } })),
+    );
     worktree = { value: [fileDiff(PATH, "code")] };
     render(<FileView repo={REPO} path={PATH} />);
     expect(await screen.findByText("code")).toBeInTheDocument();
@@ -95,6 +147,9 @@ describe("FileView", () => {
   });
 
   it("shows overview markers for added possible secret lines", async () => {
+    act(() =>
+      busStore.applyDelta(delta({ status: { modified: [PATH], staged: [], untracked: [] } })),
+    );
     worktree = { value: [fileDiff(PATH, 'api_key = "secret"')] };
     render(<FileView repo={REPO} path={PATH} />);
 
@@ -104,11 +159,33 @@ describe("FileView", () => {
     );
   });
 
+  it("keeps changed-line markers but collapses the inline labels per consecutive group", async () => {
+    act(() =>
+      busStore.applyDelta(delta({ status: { modified: [PATH], staged: [], untracked: [] } })),
+    );
+    worktree = { value: [fileDiffWithAddedLines(PATH, [1, 2, 3, 7, 8])] };
+    const { container } = render(<FileView repo={REPO} path={PATH} />);
+
+    expect(await screen.findByTestId("overview-marker-1-0")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-marker-2-1")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-marker-3-2")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-marker-7-3")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-marker-8-4")).toBeInTheDocument();
+    expect(screen.getByText("line-2").closest(".diff-line")).toHaveClass(
+      "diff-line--signal-critical",
+    );
+
+    const labels = Array.from(container.querySelectorAll(".line-marker-label--hunk"));
+    expect(labels).toHaveLength(2);
+    expect(labels.map((label) => label.textContent)).toEqual(["Changed lines", "Changed lines"]);
+  });
+
   it("prefers backend secret findings for overview markers when present", async () => {
     act(() =>
       busStore.applyDelta(
         delta({
           revision: 2,
+          status: { modified: [PATH], staged: [], untracked: [] },
           secret_findings: [
             {
               path: PATH,
@@ -162,6 +239,29 @@ describe("FileView", () => {
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
   });
 
+  it("shows the backend file-content error for Markdown files", async () => {
+    fileContentRejects = [
+      { category: "child_exit", message: "el agente WSL cerro stdout" },
+      { category: "child_exit", message: "el agente WSL cerro stdout" },
+      { category: "child_exit", message: "el agente WSL cerro stdout" },
+    ];
+    render(<FileView repo={REPO} path="README.md" />);
+
+    expect(await screen.findByTestId("md-error")).toHaveTextContent(
+      "Could not load file: child_exit: el agente WSL cerro stdout",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("markdown-view")).toBeInTheDocument();
+  });
+
+  it("automatically retries a transient Markdown file-content failure", async () => {
+    fileContentRejects = [{ category: "child_exit", message: "el agente WSL cerro stdout" }];
+    render(<FileView repo={REPO} path="README.md" />);
+
+    expect(await screen.findByTestId("markdown-view")).toBeInTheDocument();
+    expect(screen.queryByTestId("md-error")).not.toBeInTheDocument();
+  });
+
   it("renders visual media with the media preview surface", async () => {
     render(<FileView repo={REPO} path="brand/logo.png" />);
     expect(await screen.findByTestId("image-view")).toBeInTheDocument();
@@ -182,15 +282,37 @@ describe("FileView", () => {
     expect(screen.getByTestId("media-mode")).toHaveTextContent("PDF preview");
   });
 
-  it("a live delta supersedes the one-shot diff", async () => {
+  it("a changed file loads the initial one-shot diff", async () => {
+    act(() =>
+      busStore.applyDelta(delta({ status: { modified: [PATH], staged: [], untracked: [] } })),
+    );
     worktree = { value: [fileDiff(PATH, "from one-shot")] };
     render(<FileView repo={REPO} path={PATH} />);
     expect(await screen.findByText("from one-shot")).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("get_worktree_diff", { repo: REPO });
+  });
+
+  it("uses the live subscribed diff before falling back to the full repo diff", async () => {
     act(() =>
-      busStore.applyDelta(delta({ revision: 2, subscribed_diffs: [fileDiff(PATH, "live!")] })),
+      busStore.applyDelta(delta({ status: { modified: [PATH], staged: [], untracked: [] } })),
     );
-    expect(await screen.findByText("live!")).toBeInTheDocument();
-    expect(screen.queryByText("from one-shot")).not.toBeInTheDocument();
+    render(<FileView repo={REPO} path={PATH} />);
+
+    expect(await screen.findByTestId("diff-loading")).toBeInTheDocument();
+
+    act(() =>
+      busStore.applyDelta(
+        delta({
+          revision: 2,
+          status: { modified: [PATH], staged: [], untracked: [] },
+          subscribed_diffs: [fileDiff(PATH, "from live")],
+        }),
+      ),
+    );
+
+    expect(await screen.findByText("from live")).toBeInTheDocument();
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
+    expect(invokeMock).not.toHaveBeenCalledWith("get_worktree_diff", { repo: REPO });
   });
 
   it("shows an error state with retry when the one-shot fails (changed file)", async () => {

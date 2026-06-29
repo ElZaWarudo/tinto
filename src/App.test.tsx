@@ -5,6 +5,22 @@ import { render, screen, act } from "@testing-library/react";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+
+const detachedWindowMocks = vi.hoisted(() => ({
+  markTerminalDetached: vi.fn(),
+  onDetachedConsolesReattach: vi.fn(() => Promise.resolve(() => {})),
+  openDetachedConsolesWindow: vi.fn<() => Promise<boolean>>(() => Promise.resolve(true)),
+  openDetachedTerminalWindow: vi.fn<() => Promise<boolean>>(() => Promise.resolve(true)),
+}));
+
+vi.mock("./panels/terminal/detachTerminalWindow", () => ({
+  consumeTerminalDetachedMarker: vi.fn(() => false),
+  markTerminalDetached: detachedWindowMocks.markTerminalDetached,
+  onDetachedConsolesReattach: detachedWindowMocks.onDetachedConsolesReattach,
+  openDetachedConsolesWindow: detachedWindowMocks.openDetachedConsolesWindow,
+  openDetachedTerminalWindow: detachedWindowMocks.openDetachedTerminalWindow,
+}));
+
 vi.mock("./bus/connection", () => ({
   useBusConnection: () => {},
   reloadActiveWorkbench: vi.fn(),
@@ -23,9 +39,10 @@ vi.mock("./workspace/DockWorkspace", () => ({
   },
 }));
 
-import App from "./App";
+import App, { detachConsolesPanel, detachConsolesPanelFromWorkspaceDrop } from "./App";
 import { busStore } from "./bus/store";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
+import { consoleDock } from "./workspace/consoleDock";
 import {
   PANEL_AGENT_CONSOLES,
   PANEL_AGENT_TERMINAL,
@@ -40,6 +57,11 @@ describe("App", () => {
   beforeEach(() => {
     busStore.resetAll();
     captured.components = undefined;
+    detachedWindowMocks.markTerminalDetached.mockClear();
+    detachedWindowMocks.onDetachedConsolesReattach.mockClear();
+    detachedWindowMocks.onDetachedConsolesReattach.mockResolvedValue(() => {});
+    detachedWindowMocks.openDetachedConsolesWindow.mockClear();
+    detachedWindowMocks.openDetachedConsolesWindow.mockResolvedValue(true);
   });
 
   it("shows the workspace shell before the snapshot loads", () => {
@@ -91,5 +113,69 @@ describe("App", () => {
     closePanelsForRemovedRepo(api as never, "/r/a");
 
     expect(closed).toEqual([repoPanelId("/r/a")]);
+  });
+
+  it("detaches the top-level Agents panel when its tab is dropped on the workspace edge", async () => {
+    const panel = { id: PANEL_AGENT_CONSOLES };
+    const api = {
+      getPanel: vi.fn((id: string) => (id === PANEL_AGENT_CONSOLES ? panel : undefined)),
+      removePanel: vi.fn(),
+    };
+    const event = {
+      kind: "edge",
+      getData: vi.fn(() => ({ panelId: PANEL_AGENT_CONSOLES })),
+      preventDefault: vi.fn(),
+    };
+    const saveNow = vi.spyOn(consoleDock, "saveNow").mockImplementation(() => {});
+    const sessionIds = vi
+      .spyOn(consoleDock, "openTerminalSessionIds")
+      .mockReturnValue(["sess-1", "sess-2"]);
+    const terminalParams = vi.spyOn(consoleDock, "openTerminalParams").mockReturnValue([
+      { sessionId: "sess-1", repo: "/r/a", agentType: "codex" },
+      { sessionId: "sess-2", repo: "/r/b", agentType: "codex" },
+    ]);
+
+    const detached = await detachConsolesPanelFromWorkspaceDrop(event as never, api as never);
+
+    expect(detached).toBe(true);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(saveNow).toHaveBeenCalledOnce();
+    expect(detachedWindowMocks.openDetachedConsolesWindow).toHaveBeenCalledWith([
+      { sessionId: "sess-1", repo: "/r/a", agentType: "codex" },
+      { sessionId: "sess-2", repo: "/r/b", agentType: "codex" },
+    ]);
+    expect(detachedWindowMocks.markTerminalDetached).toHaveBeenCalledWith("sess-1");
+    expect(detachedWindowMocks.markTerminalDetached).toHaveBeenCalledWith("sess-2");
+    expect(api.removePanel).toHaveBeenCalledWith(panel);
+
+    saveNow.mockRestore();
+    sessionIds.mockRestore();
+    terminalParams.mockRestore();
+  });
+
+  it("detaches the top-level Agents panel after Dockview moves it to floating", async () => {
+    const panel = { id: PANEL_AGENT_CONSOLES };
+    const api = {
+      getPanel: vi.fn((id: string) => (id === PANEL_AGENT_CONSOLES ? panel : undefined)),
+      removePanel: vi.fn(),
+    };
+    const saveNow = vi.spyOn(consoleDock, "saveNow").mockImplementation(() => {});
+    const sessionIds = vi.spyOn(consoleDock, "openTerminalSessionIds").mockReturnValue(["sess-1"]);
+    const terminalParams = vi
+      .spyOn(consoleDock, "openTerminalParams")
+      .mockReturnValue([{ sessionId: "sess-1", repo: "/r/a", agentType: "codex" }]);
+
+    const detached = await detachConsolesPanel(api as never, panel as never);
+
+    expect(detached).toBe(true);
+    expect(detachedWindowMocks.openDetachedConsolesWindow).toHaveBeenCalledWith([
+      { sessionId: "sess-1", repo: "/r/a", agentType: "codex" },
+    ]);
+    expect(detachedWindowMocks.markTerminalDetached).toHaveBeenCalledWith("sess-1");
+    expect(api.removePanel).toHaveBeenCalledWith(panel);
+
+    saveNow.mockRestore();
+    sessionIds.mockRestore();
+    terminalParams.mockRestore();
   });
 });

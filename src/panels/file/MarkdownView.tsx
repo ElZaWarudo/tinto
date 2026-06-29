@@ -7,32 +7,45 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getFileContent } from "../../bus/client";
 import type { FileContent } from "../../bus/contract";
+import { fileLoadErrorMessage, loadFileContentWithRetry } from "./fileContentLoader";
+
+interface LoadedFileContent {
+  key: string;
+  content: FileContent;
+}
 
 export function MarkdownView({ repo, path }: { repo: string; path: string }) {
-  const [content, setContent] = useState<FileContent | undefined>(undefined);
-  const [error, setError] = useState(false);
+  const [loaded, setLoaded] = useState<LoadedFileContent | null>(null);
+  const [error, setError] = useState<{ key: string; message: string } | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const requestKey = `${repo}\0${path}\0${reloadToken}`;
+  const content = loaded?.key === requestKey ? loaded.content : undefined;
+  const errorMessage = error?.key === requestKey ? error.message : null;
 
   useEffect(() => {
     let active = true;
-    getFileContent(repo, path)
+    const key = requestKey;
+    loadFileContentWithRetry(repo, path)
       .then((c) => {
         if (active) {
-          setContent(c);
-          setError(false);
+          setLoaded({ key, content: c });
+          setError(null);
         }
       })
-      .catch(() => active && setError(true));
+      .catch((cause) => active && setError({ key, message: fileLoadErrorMessage(cause) }));
     return () => {
       active = false;
     };
-  }, [repo, path]);
+  }, [repo, path, reloadToken, requestKey]);
 
-  if (error) {
+  if (errorMessage) {
     return (
       <div className="markdown-view markdown-view--error" data-testid="md-error">
-        Could not load file.
+        <span>Could not load file: {errorMessage}</span>
+        <button type="button" onClick={() => setReloadToken((token) => token + 1)}>
+          Retry
+        </button>
       </div>
     );
   }

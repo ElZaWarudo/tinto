@@ -170,6 +170,7 @@ vi.mock("@xterm/addon-fit", () => ({
 
 import { TerminalPanel, type TerminalPanelParams } from "./TerminalPanel";
 import { agentSessionStore } from "../../agent/sessionStore";
+import { markTerminalDetached } from "./detachTerminalWindow";
 
 interface PanelApiMock {
   id: string;
@@ -181,9 +182,9 @@ interface PanelApiMock {
   __setActive: (isActive: boolean) => void;
 }
 
-function createPanelApi(id: string): PanelApiMock {
+function createPanelApi(id: string, initialActive = true): PanelApiMock {
   const listeners = new Set<(event: { isActive: boolean }) => void>();
-  let active = true;
+  let active = initialActive;
   return {
     id,
     get isActive() {
@@ -204,8 +205,8 @@ function createPanelApi(id: string): PanelApiMock {
   };
 }
 
-function props(params: TerminalPanelParams) {
-  const panelApi = createPanelApi(`agent-terminal:${params.sessionId}`);
+function props(params: TerminalPanelParams, initialActive = true) {
+  const panelApi = createPanelApi(`agent-terminal:${params.sessionId}`, initialActive);
   return {
     panelApi,
     props: {
@@ -243,6 +244,28 @@ describe("TerminalPanel", () => {
     expect(xtermMocks.terminalInstances[0].focus).toHaveBeenCalled();
     expect(xtermMocks.fitInstances[0].fit).toHaveBeenCalled();
     expect(resizeAgentSessionMock).toHaveBeenCalledWith("sess-1", 120, 36);
+  });
+
+  it("does not activate or focus an inactive terminal during automatic mount", async () => {
+    const panel = props({ sessionId: "sess-1", agentType: "codex" }, false);
+    render(<TerminalPanel {...panel.props} />);
+
+    expect(await screen.findByTestId("terminal-surface")).toBeInTheDocument();
+    await act(async () => {});
+
+    expect(panel.panelApi.setActive).not.toHaveBeenCalled();
+    expect(xtermMocks.terminalInstances[0].focus).not.toHaveBeenCalled();
+  });
+
+  it("refits the terminal when an inactive tab becomes active again", async () => {
+    const panel = props({ sessionId: "sess-1", agentType: "codex" }, false);
+    render(<TerminalPanel {...panel.props} />);
+    await screen.findByTestId("terminal-surface");
+    xtermMocks.fitInstances[0].fit.mockClear();
+
+    panel.panelApi.__setActive(true);
+
+    expect(xtermMocks.fitInstances[0].fit).toHaveBeenCalled();
   });
 
   it("stabilizes the xterm textarea for embedded-webview input", async () => {
@@ -405,6 +428,25 @@ describe("TerminalPanel", () => {
     ]);
   });
 
+  it("continues writing matching session output while the terminal tab is inactive", async () => {
+    const panel = props({ sessionId: "sess-1" }, false);
+    render(<TerminalPanel {...panel.props} />);
+
+    await act(async () => {
+      agentSessionStore.appendOutput({
+        session_id: "sess-1",
+        chunk_base64: "YmFja2dyb3VuZA0=",
+        timestamp_ms: 1,
+      });
+    });
+
+    expect(panel.panelApi.setActive).not.toHaveBeenCalled();
+    expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1);
+    expect(Array.from(xtermMocks.terminalInstances[0].writes[0] as Uint8Array)).toEqual([
+      98, 97, 99, 107, 103, 114, 111, 117, 110, 100, 13,
+    ]);
+  });
+
   it("replays output buffered before the terminal panel opens", async () => {
     agentSessionStore.appendOutput({
       session_id: "sess-1",
@@ -442,6 +484,28 @@ describe("TerminalPanel", () => {
     });
 
     expect(stopAgentSessionMock).toHaveBeenCalledWith("sess-1");
+  });
+
+  it("gives detached terminal transfers a grace window before stopping the backend session", async () => {
+    vi.useFakeTimers();
+    try {
+      markTerminalDetached("sess-1");
+      const panel = props({ sessionId: "sess-1" });
+      const { unmount } = render(<TerminalPanel {...panel.props} />);
+
+      unmount();
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(stopAgentSessionMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(stopAgentSessionMock).toHaveBeenCalledWith("sess-1");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("confirms and reverts completed sessions", async () => {

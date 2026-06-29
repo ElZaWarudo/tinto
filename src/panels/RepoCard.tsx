@@ -1,8 +1,7 @@
 // A single repo "bento" tile: at-a-glance health, always visible (no expand).
 // Identity + activity, branch/upstream, change counts, passive metrics/signals,
-// and the latest commit. Important repos (errors, critical signals, active work)
-// get a wider tile. A single click opens the project; files are drilled into via
-// the project's own explorer, not here.
+// and the latest commit. A single click opens the project; files are drilled
+// into via the project's own explorer, not here.
 
 import { memo, useEffect, useState } from "react";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
@@ -10,7 +9,7 @@ import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus
 import { checkAgentAvailabilityForRepo } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
-import { MetricsPill, SignalBadges } from "./SignalBadges";
+import { SignalBadges } from "./SignalBadges";
 
 export interface RepoCardProps {
   delta: RepoDelta;
@@ -68,7 +67,6 @@ function RepoCardImpl({
   const metrics = getRepoMetrics(delta);
   const signals = getRepoSignals(delta);
   const counts = signalCounts(signals);
-  const changes = status.modified.length + status.staged.length + status.untracked.length;
   const selectedAgent = AGENT_OPTIONS.find((a) => a.id === agentType) ?? AGENT_OPTIONS[0];
   const missingGitleaksConfig = delta.gitleaks_configured === false;
 
@@ -82,7 +80,7 @@ function RepoCardImpl({
       })
       .catch((e) => {
         if (!alive) return;
-        setAvailable(false);
+        setAvailable(null);
         setAvailabilityMessage(commandMessage(e));
       });
     return () => {
@@ -90,18 +88,12 @@ function RepoCardImpl({
     };
   }, [agentType, selectedAgent.label, delta.repo, availabilityKey]);
 
-  // Bento emphasis: feature the repos that warrant attention with a wider tile.
-  const feature = !!error || counts.critical > 0 || (active && changes > 0);
-  const cls = [
-    "repo-card",
-    feature ? "repo-card--feature" : "",
-    error ? "repo-card--error" : active ? "repo-card--active" : "",
-  ]
+  const cls = ["repo-card", error ? "repo-card--error" : active ? "repo-card--active" : ""]
     .filter(Boolean)
     .join(" ");
 
   const launch = () => {
-    if (!available || launching) return;
+    if (available === false || launching) return;
     setLaunching(true);
     setLaunchMessage(null);
     Promise.resolve(onLaunch(agentType))
@@ -124,14 +116,16 @@ function RepoCardImpl({
       }}
     >
       <header className="repo-card__head">
-        <span
-          className={active ? "activity-dot activity-dot--active" : "activity-dot"}
-          data-testid="activity"
-          aria-label={active ? "active now" : "idle"}
-        />
-        <span className="repo-card__name" title={delta.repo}>
-          {name}
-        </span>
+        <div className="repo-card__identity">
+          <span
+            className={active ? "activity-dot activity-dot--active" : "activity-dot"}
+            data-testid="activity"
+            aria-label={active ? "active now" : "idle"}
+          />
+          <span className="repo-card__name" title={delta.repo}>
+            {name}
+          </span>
+        </div>
         {error && (
           <span className="error-badge" data-testid="error-badge">
             {error.class}
@@ -158,9 +152,18 @@ function RepoCardImpl({
       </div>
 
       <div className="repo-card__counts" data-testid="counts">
-        <span className="count count--modified">{status.modified.length}M</span>
-        <span className="count count--staged">{status.staged.length}S</span>
-        <span className="count count--untracked">{status.untracked.length}U</span>
+        <span className="count count--modified">
+          <strong>{status.modified.length}</strong>
+          <span>M</span>
+        </span>
+        <span className="count count--staged">
+          <strong>{status.staged.length}</strong>
+          <span>S</span>
+        </span>
+        <span className="count count--untracked">
+          <strong>{status.untracked.length}</strong>
+          <span>U</span>
+        </span>
         {signals.length > 0 && (
           <span className="repo-card__signal-count" data-testid="signal-count">
             {counts.critical > 0 ? counts.critical : signals.length} signal
@@ -169,9 +172,23 @@ function RepoCardImpl({
         )}
       </div>
 
-      <div className="repo-card__metrics">
-        <MetricsPill metrics={metrics} />
-        {signals.length > 0 && <SignalBadges signals={signals} limit={feature ? 4 : 2} />}
+      <div className="repo-card__metrics" data-testid="repo-metrics">
+        <span>
+          <strong>{metrics.changed_files}</strong>
+          <small>files</small>
+        </span>
+        <span>
+          <strong>+{metrics.lines_added}</strong>
+          <small>added</small>
+        </span>
+        <span>
+          <strong>-{metrics.lines_removed}</strong>
+          <small>removed</small>
+        </span>
+      </div>
+
+      <div className="repo-card__signals">
+        {signals.length > 0 && <SignalBadges signals={signals} limit={2} />}
       </div>
 
       {missingGitleaksConfig && (
@@ -190,6 +207,7 @@ function RepoCardImpl({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
+        <span className="repo-card__launcher-label">Agent</span>
         <select
           className="repo-card__agent-select"
           aria-label="agent type"
@@ -209,16 +227,18 @@ function RepoCardImpl({
         <button
           className="repo-card__launch"
           data-testid="agent-launch"
-          disabled={available !== true || launching}
+          disabled={launching || (available == null && !availabilityMessage) || available === false}
           onClick={launch}
         >
           {launching ? "Starting" : "Launch"}
         </button>
-        {(availabilityMessage || launchMessage) && (
-          <span className="repo-card__launch-msg" data-testid="agent-launch-message">
-            {launchMessage ?? availabilityMessage}
-          </span>
-        )}
+        <span
+          className="repo-card__launch-msg"
+          data-testid="agent-launch-message"
+          aria-live="polite"
+        >
+          {launchMessage ?? availabilityMessage ?? "\u00a0"}
+        </span>
       </div>
 
       <footer className="repo-card__foot">

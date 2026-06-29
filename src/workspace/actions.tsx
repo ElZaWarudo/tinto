@@ -18,6 +18,8 @@ export interface WorkspaceActions {
   openTimeline: () => void;
   /** Open (or focus) the always-available Dashboard tab. */
   openDashboard: (options?: { closeAll?: boolean }) => void;
+  /** Open (or focus) the agent quick-launch / terminal dock. */
+  openAgents: () => void;
   /** Open (or focus) an attached terminal for an agent session. */
   openAgentTerminal: (params: AgentTerminalOpenParams) => void;
 }
@@ -29,6 +31,7 @@ const noop: WorkspaceActions = {
   openFile: () => {},
   openTimeline: () => {},
   openDashboard: () => {},
+  openAgents: () => {},
   openAgentTerminal: () => {},
 };
 

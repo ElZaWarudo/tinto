@@ -8,8 +8,11 @@ import { DockviewReact } from "dockview-react";
 import type {
   DockviewApi,
   DockviewReadyEvent,
+  DockviewWillDropEvent,
   IDockviewPanelProps,
   IDockviewPanelHeaderProps,
+  MovePanelEvent,
+  TabDragEvent,
 } from "dockview-react";
 import { themeVisualStudio } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
@@ -26,10 +29,16 @@ export function DockWorkspace({
   components,
   tabComponents,
   onApi,
+  onWillDrop,
+  onDidMovePanel,
+  onWillDragPanel,
 }: {
   components: PanelComponents;
   tabComponents?: TabComponents;
   onApi?: (api: DockviewApi) => void;
+  onWillDrop?: (event: DockviewWillDropEvent, api: DockviewApi) => void;
+  onDidMovePanel?: (event: MovePanelEvent, api: DockviewApi) => void;
+  onWillDragPanel?: (event: TabDragEvent, api: DockviewApi) => void;
 }) {
   const apiRef = useRef<DockviewApi | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -39,6 +48,8 @@ export function DockWorkspace({
     const api = event.api;
     apiRef.current = api;
     onApi?.(api);
+    const dragDisposable = api.onWillDragPanel((event) => onWillDragPanel?.(event, api));
+    cleanups.current.push(() => dragDisposable.dispose());
 
     const flush = () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -55,6 +66,7 @@ export function DockWorkspace({
       // Attach listeners AFTER the restore so the transient initial state never
       // overwrites the persisted layout before it is applied.
       const d1 = api.onDidLayoutChange(scheduleSave);
+      const d0 = api.onDidMovePanel((event) => onDidMovePanel?.(event, api));
       const d2 = api.onDidRemovePanel(() => {
         if (api.panels.length === 0) {
           // Guard: never strand the user with an empty workspace.
@@ -66,6 +78,7 @@ export function DockWorkspace({
         }
       });
       cleanups.current.push(
+        () => d0.dispose(),
         () => d1.dispose(),
         () => d2.dispose(),
       );
@@ -93,6 +106,9 @@ export function DockWorkspace({
       dndStrategy="pointer"
       theme={themeVisualStudio}
       onReady={onReady}
+      onWillDrop={(event) => {
+        if (apiRef.current) onWillDrop?.(event, apiRef.current);
+      }}
     />
   );
 }

@@ -21,7 +21,7 @@ use crate::wsl_agent::{
     launcher::request_wsl_agent,
     protocol::{AgentError, AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
-use checkpoint::{create_checkpoint, CheckpointConfig, CheckpointRecord};
+use checkpoint::{CheckpointConfig, CheckpointRecord};
 use pty::{AgentProcessFactory, PortablePtyFactory};
 use session::{AgentSessionRecord, CheckpointBackend};
 use validation::{resolve_agent_binary, validate_agent_type};
@@ -148,7 +148,6 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let checkpoint = create_checkpoint(&repo, &id, started_at_ms, &self.checkpoint_config)?;
         let mut process = self.process_factory.spawn_agent(&binary_path, &repo)?;
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
@@ -156,7 +155,7 @@ impl AgentSessionRegistry {
             repo,
             agent_type,
             started_at_ms,
-            Some(checkpoint),
+            None,
             self.checkpoint_config.clone(),
             CheckpointBackend::Local,
         );
@@ -171,7 +170,7 @@ impl AgentSessionRegistry {
         distro: String,
         agent_type: String,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
-        self.start_wsl_session_with_output_inner(repo, distro, agent_type, true, true)
+        self.start_wsl_session_with_output_inner(repo, distro, agent_type, false, false)
     }
 
     #[cfg(test)]
@@ -863,6 +862,22 @@ mod tests {
     }
 
     #[test]
+    fn registry_local_start_does_not_create_initial_checkpoint() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+
+        let started = registry
+            .start_session_with_binary_and_output(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+
+        let session = registry.get_session(&started.id).unwrap();
+        assert_eq!(session.checkpoint, None);
+    }
+
+    #[test]
     fn registry_reports_missing_session() {
         let mut registry =
             AgentSessionRegistry::with_process_factory(Arc::new(FakeProcessFactory::default()));
@@ -895,6 +910,28 @@ mod tests {
 
         let started = registry
             .start_wsl_session_with_output_for_test(
+                PathBuf::from("/home/me/repo"),
+                "Ubuntu".into(),
+                "codex".into(),
+            )
+            .unwrap();
+
+        let session = registry.get_session(&started.id).unwrap();
+        assert_eq!(session.repo, PathBuf::from("/home/me/repo"));
+        assert_eq!(session.checkpoint, None);
+        assert_eq!(
+            factory.spawned.lock().unwrap().as_slice(),
+            &[PathBuf::from("Ubuntu:codex:/home/me/repo")]
+        );
+    }
+
+    #[test]
+    fn registry_public_wsl_start_does_not_require_remote_preflight() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory.clone());
+
+        let started = registry
+            .start_wsl_session_with_output(
                 PathBuf::from("/home/me/repo"),
                 "Ubuntu".into(),
                 "codex".into(),

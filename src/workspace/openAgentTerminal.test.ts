@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const detachedWindowMocks = vi.hoisted(() => ({
+  sendTerminalToDetachedConsoles: vi.fn(() => Promise.resolve(false)),
+}));
+
+vi.mock("../panels/terminal/detachTerminalWindow", () => ({
+  sendTerminalToDetachedConsoles: detachedWindowMocks.sendTerminalToDetachedConsoles,
+}));
+
 import { consoleDock } from "./consoleDock";
 import { openAgentConsolesPanel, openAgentTerminalPanel } from "./openAgentTerminal";
 import {
@@ -38,13 +47,18 @@ function fakeApi() {
 }
 
 describe("agent terminal panel helpers", () => {
+  beforeEach(() => {
+    detachedWindowMocks.sendTerminalToDetachedConsoles.mockReset();
+    detachedWindowMocks.sendTerminalToDetachedConsoles.mockResolvedValue(false);
+  });
+
   it("derives stable ids from session ids", () => {
     expect(agentTerminalPanelId("sess-1")).toBe("agent-terminal:sess-1");
     expect(sessionIdFromAgentTerminalPanelId("agent-terminal:sess-1")).toBe("sess-1");
     expect(sessionIdFromAgentTerminalPanelId("repo:/r/api")).toBeNull();
   });
 
-  it("opens the level-1 Consoles panel and delegates the session to the console dock", () => {
+  it("opens the level-1 Agents panel and delegates the session to the console dock", async () => {
     const api = fakeApi();
     const openSpy = vi.spyOn(consoleDock, "openTerminal").mockImplementation(() => {});
 
@@ -54,10 +68,12 @@ describe("agent terminal panel helpers", () => {
       agentType: "codex",
     });
 
-    expect(api.addPanel).toHaveBeenCalledWith({
-      id: PANEL_AGENT_CONSOLES,
-      component: PANEL_AGENT_CONSOLES,
-      title: "Consoles",
+    await vi.waitFor(() => {
+      expect(api.addPanel).toHaveBeenCalledWith({
+        id: PANEL_AGENT_CONSOLES,
+        component: PANEL_AGENT_CONSOLES,
+        title: "Agents",
+      });
     });
     expect(api._panels[PANEL_AGENT_CONSOLES].api.setActive).toHaveBeenCalledOnce();
     expect(openSpy).toHaveBeenCalledWith({
@@ -69,7 +85,28 @@ describe("agent terminal panel helpers", () => {
     openSpy.mockRestore();
   });
 
-  it("focuses the existing Consoles panel on later opens", () => {
+  it("routes new terminal sessions to a detached consoles window when present", async () => {
+    detachedWindowMocks.sendTerminalToDetachedConsoles.mockResolvedValue(true);
+    const api = fakeApi();
+    const openSpy = vi.spyOn(consoleDock, "openTerminal").mockImplementation(() => {});
+    const params = {
+      sessionId: "sess-123456789",
+      repo: "/r/api",
+      agentType: "codex",
+    };
+
+    openAgentTerminalPanel(api as never, params);
+
+    await vi.waitFor(() =>
+      expect(detachedWindowMocks.sendTerminalToDetachedConsoles).toHaveBeenCalledWith(params),
+    );
+    expect(api.addPanel).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
+
+    openSpy.mockRestore();
+  });
+
+  it("focuses the existing Agents panel on later opens", () => {
     const api = fakeApi();
     openAgentConsolesPanel(api as never);
     const created = api._panels[PANEL_AGENT_CONSOLES];

@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 #[cfg(any(target_os = "windows", test))]
 use std::collections::HashSet;
+use std::io::Read;
 #[cfg(target_os = "windows")]
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -296,26 +297,55 @@ pub fn packaged_agent_host_path() -> Result<PathBuf, AgentError> {
         return Err(missing_packaged_agent_error());
     };
 
+    let mut invalid_candidate = None;
     for candidate in packaged_agent_candidates(&exe_dir) {
         if candidate.is_file() {
-            return Ok(candidate);
+            if is_linux_agent_artifact(&candidate) {
+                return Ok(candidate);
+            }
+            invalid_candidate.get_or_insert(candidate);
         }
+    }
+    if let Some(candidate) = invalid_candidate {
+        return Err(non_linux_packaged_agent_error(&candidate));
     }
     Err(missing_packaged_agent_error())
 }
 
 fn validate_packaged_agent_path(path: PathBuf) -> Result<PathBuf, AgentError> {
-    if path.is_file() {
-        Ok(path)
-    } else {
-        Err(AgentError::new(
+    if !path.is_file() {
+        return Err(AgentError::new(
             AgentErrorCategory::MissingAgent,
             format!(
                 "no se encontro el binario Linux de tinto-agent en {}",
                 path.display()
             ),
-        ))
+        ));
     }
+
+    if is_linux_agent_artifact(&path) {
+        Ok(path)
+    } else {
+        Err(non_linux_packaged_agent_error(&path))
+    }
+}
+
+fn is_linux_agent_artifact(path: &Path) -> bool {
+    let mut magic = [0_u8; 4];
+    match std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut magic)) {
+        Ok(()) => magic == *b"\x7FELF",
+        Err(_) => false,
+    }
+}
+
+fn non_linux_packaged_agent_error(path: &Path) -> AgentError {
+    AgentError::new(
+        AgentErrorCategory::MissingAgent,
+        format!(
+            "el binario configurado para tinto-agent WSL no es un ejecutable Linux ELF: {}",
+            path.display()
+        ),
+    )
 }
 
 fn packaged_agent_candidates(exe_dir: &Path) -> Vec<PathBuf> {
@@ -995,6 +1025,29 @@ mod tests {
     }
 
     #[test]
+    fn packaged_agent_path_accepts_linux_elf_artifact() {
+        let path = temp_agent_path("elf");
+        std::fs::write(&path, b"\x7FELFplaceholder").expect("write artifact");
+
+        let validated = validate_packaged_agent_path(path.clone()).expect("valid artifact");
+
+        assert_eq!(validated, path);
+        let _ = std::fs::remove_file(validated);
+    }
+
+    #[test]
+    fn packaged_agent_path_rejects_non_linux_binary() {
+        let path = temp_agent_path("pe");
+        std::fs::write(&path, b"MZplaceholder").expect("write artifact");
+
+        let error = validate_packaged_agent_path(path.clone()).expect_err("invalid artifact");
+
+        assert_eq!(error.category, AgentErrorCategory::MissingAgent);
+        assert!(error.message.contains("Linux ELF"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn dev_source_fallback_requires_explicit_truthy_value() {
         assert!(dev_source_fallback_value_enabled(Some("1")));
         assert!(dev_source_fallback_value_enabled(Some("true")));
@@ -1150,5 +1203,17 @@ mod tests {
             .expect("translate");
 
         assert_eq!(translated, "/mnt/c/Users/Mayor/tinto");
+    }
+
+    fn temp_agent_path(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "tinto-agent-test-{}-{}-{label}",
+            std::process::id(),
+            nanos
+        ))
     }
 }

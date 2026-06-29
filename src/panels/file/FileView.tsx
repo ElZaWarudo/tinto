@@ -31,6 +31,8 @@ interface CmdError {
   message: string;
 }
 
+const LIVE_DIFF_FALLBACK_DELAY_MS = 250;
+
 function asCmdError(e: unknown): CmdError {
   if (e && typeof e === "object" && "message" in e) {
     const o = e as Record<string, unknown>;
@@ -133,12 +135,21 @@ function maxNewLine(diff: FileDiff | null | undefined): number {
 }
 
 function hunkOverviewMarkers(lines: Set<number>): FileOverviewMarker[] {
-  return [...lines].map((line) => ({
-    line,
-    severity: "info",
-    label: "Changed line",
-    source: "hunk",
-  }));
+  const sorted = [...lines].sort((a, b) => a - b);
+  return sorted.map((line, index) => {
+    const startsGroup = index === 0 || sorted[index - 1] !== line - 1;
+    let groupLength = 1;
+    if (startsGroup) {
+      while (sorted[index + groupLength] === line + groupLength) groupLength += 1;
+    }
+    return {
+      line,
+      severity: "info",
+      label: groupLength > 1 ? "Changed lines" : "Changed line",
+      source: "hunk",
+      showLabel: startsGroup,
+    };
+  });
 }
 
 export function FileView({ repo, path }: { repo: string; path: string }) {
@@ -146,6 +157,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   const state = useBusState();
   const live = getDiff(state, repo, path);
   const repoDelta = state.repos[repo];
+  const repoReady = !!repoDelta;
   const pathSignals = getPathSignals(state.repos[repo], path);
   const pathSecretFindings = getPathSecretFindings(repoDelta, path);
   const isLive = useIsLive(repo, path);
@@ -159,6 +171,7 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   const [manualKind, setManualKind] = useState<"hunks" | "full" | null>(null);
   // Markdown sub-view: rendered (formatted) by default, or raw source.
   const [mdView, setMdView] = useState<"rendered" | "source">("rendered");
+  const inStatus = fileInStatus(repoDelta, path);
 
   const loadOneShot = useCallback(() => {
     let active = true;
@@ -178,15 +191,39 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   // Subscribe for live updates + run the one-shot initial load. On unmount drop
   // both the subscription and the cached diff (the single reconciled set — R6).
   useEffect(() => {
-    if (media) return;
+    if (media || !repoReady) return;
     reconciler.add(repo, path);
-    const cancel = loadOneShot();
     return () => {
-      cancel();
       reconciler.remove(repo, path);
       busStore.dropDiff(repo, path);
     };
-  }, [repo, path, loadOneShot, media]);
+  }, [repo, path, media, repoReady]);
+
+  useEffect(() => {
+    if (media || !repoReady) return;
+    if (!inStatus) {
+      setOneShot(null);
+      setLoadError(null);
+      return;
+    }
+
+    if (reconciler.isLive(repo, path)) {
+      setOneShot(undefined);
+      setLoadError(null);
+      let cleanup: (() => void) | undefined;
+      const timer = window.setTimeout(() => {
+        const latest = busStore.getState();
+        if (getDiff(latest, repo, path) || hasComputedDiffs(latest, repo)) return;
+        cleanup = loadOneShot();
+      }, LIVE_DIFF_FALLBACK_DELAY_MS);
+      return () => {
+        window.clearTimeout(timer);
+        cleanup?.();
+      };
+    }
+
+    return loadOneShot();
+  }, [media, repoReady, inStatus, loadOneShot, repo, path]);
 
   // Once a diff computation has occurred for the repo, the live slice is
   // authoritative (KTD2/R7): the one-shot must NOT resurface a diff the slice
@@ -210,6 +247,40 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
     return Math.max(diffLines, findingLines);
   }, [diff, pathSecretFindings]);
 
+  if (!repoDelta && !state.loaded) {
+    return (
+      <div className="file-view" data-testid={`file-view-${repo}::${path}`}>
+        <div className="file-view__toolbar">
+          <span className="file-view__path" title={`${repo} - ${path}`}>
+            {path}
+          </span>
+        </div>
+        <div className="file-view__body">
+          <div className="file-view__loading" data-testid="file-repo-loading">
+            Loading...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!repoDelta) {
+    return (
+      <div className="file-view" data-testid={`file-view-${repo}::${path}`}>
+        <div className="file-view__toolbar">
+          <span className="file-view__path" title={`${repo} - ${path}`}>
+            {path}
+          </span>
+        </div>
+        <div className="file-view__body">
+          <div className="file-view__error" data-testid="file-repo-missing">
+            This repo is no longer available in the active workbench.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Rename detection (R11/AE10): a repo diff whose old_path is our path means
   // the file was renamed away — a distinct state from clean/reverted.
   const renamedTo = state.diffs[repo]
@@ -218,7 +289,6 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
 
   // Auto rule: a file with a known change shows the diff; an unchanged file
   // shows the normal full-file view. The user can override with the toggle.
-  const inStatus = fileInStatus(state.repos[repo], path);
   const hasChange = !!diff || inStatus;
   const viewKind = manualKind ?? (hasChange ? "hunks" : "full");
   // The initial one-shot load hasn't settled yet (undefined = not loaded). Used

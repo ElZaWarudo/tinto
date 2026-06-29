@@ -10,7 +10,7 @@ vi.mock("./highlight", () => ({
   highlightLine: () => null,
 }));
 
-import { DiffView } from "./DiffView";
+import { DiffView, MAX_RENDERED_DIFF_LINE_CHARS, MAX_RENDERED_DIFF_LINES } from "./DiffView";
 import type { FileDiff } from "../../bus/contract";
 
 const sample: FileDiff = {
@@ -77,8 +77,55 @@ describe("DiffView", () => {
       ],
     };
     render(<DiffView diff={big} mode="inline" />);
-    expect(screen.getByTestId("diff-large")).toBeInTheDocument();
+    expect(screen.getByTestId("diff-large")).toHaveTextContent("Large diff");
     expect(screen.getByText("x".repeat(100))).toBeInTheDocument(); // still rendered, plain
+  });
+
+  it("shortens very long diff lines without hiding the rest of the hunk", () => {
+    const longContent = `prefix-${"x".repeat(MAX_RENDERED_DIFF_LINE_CHARS + 10)}`;
+    const diff: FileDiff = {
+      ...sample,
+      path: "skills-lock.json",
+      hunks: [
+        {
+          old_start: 1,
+          new_start: 1,
+          lines: [
+            { kind: "Added", content: longContent, old_lineno: null, new_lineno: 1 },
+            { kind: "Added", content: "after-long-line", old_lineno: null, new_lineno: 2 },
+          ],
+        },
+      ],
+    };
+
+    render(<DiffView diff={diff} mode="inline" />);
+
+    expect(screen.getByTestId("diff-long-lines")).toHaveTextContent("1 long diff line");
+    expect(screen.getByTestId("diff-line-truncated")).toHaveTextContent("chars hidden");
+    expect(screen.getByText("after-long-line")).toBeInTheDocument();
+  });
+
+  it("caps rendered rows for very large hunks to keep the view responsive", () => {
+    const lines = Array.from({ length: MAX_RENDERED_DIFF_LINES + 5 }, (_, index) => ({
+      kind: "Added" as const,
+      content: `line-${index}`,
+      old_lineno: null,
+      new_lineno: index + 1,
+    }));
+    const big: FileDiff = {
+      ...sample,
+      path: "skills-lock.json",
+      hunks: [{ old_start: 1, new_start: 1, lines }],
+    };
+
+    const { container } = render(<DiffView diff={big} mode="inline" />);
+
+    expect(screen.getByTestId("diff-render-capped")).toHaveTextContent(
+      `first ${MAX_RENDERED_DIFF_LINES.toLocaleString()}`,
+    );
+    expect(screen.getByText(`line-${MAX_RENDERED_DIFF_LINES - 1}`)).toBeInTheDocument();
+    expect(screen.queryByText(`line-${MAX_RENDERED_DIFF_LINES + 4}`)).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".diff-line")).toHaveLength(MAX_RENDERED_DIFF_LINES);
   });
 
   it("renders overview markers and highlights the matching added line", () => {

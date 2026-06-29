@@ -242,9 +242,12 @@ class FileDock {
     // Preview (single click): reuse the one preview slot.
     const prev = api.getPanel(FILE_PREVIEW_ID);
     if (prev) {
-      prev.api.updateParameters({ repo, path });
-      prev.api.setTitle(basename(path));
-      prev.api.setActive();
+      if (e.preview === path) {
+        prev.api.setActive();
+      } else {
+        prev.api.close();
+        this.add(api, FILE_PREVIEW_ID, repo, path);
+      }
     } else {
       this.add(api, FILE_PREVIEW_ID, repo, path);
     }

@@ -53,6 +53,8 @@ const fileTabComponents = { fileTab: FileTab };
 
 export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
+  const busState = useBusState();
+  const repoReady = !!busState.repos[repo];
   const dock = useRepoDock(repo);
   const empty = dock.open.length === 0;
   const [explorerCollapsed, toggleExplorer] = useExplorerCollapsed(repo);
@@ -61,6 +63,36 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   useEffect(() => () => fileDock.unregister(repo), [repo]);
 
   const onReady = (event: DockviewReadyEvent) => fileDock.register(repo, event.api);
+
+  if (!repoReady && !busState.loaded) {
+    return (
+      <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
+        <div className="repo-panel__main">
+          <div className="repo-panel__overview-wrap" data-testid={`repo-loading-${repo}`}>
+            <div className="repo-overview repo-overview--missing">
+              <header className="repo-panel__head">
+                <h2>{busStore.displayName(repo)}</h2>
+                <span className="repo-panel__path">{repo}</span>
+              </header>
+              <p>Loading...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!repoReady) {
+    return (
+      <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
+        <div className="repo-panel__main">
+          <div className="repo-panel__overview-wrap" data-testid={`repo-missing-${repo}`}>
+            <RepoOverview repo={repo} />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="repo-panel" data-testid={`repo-panel-${repo}`}>

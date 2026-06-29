@@ -9,6 +9,7 @@ export interface FileOverviewMarker {
   severity: "critical" | "warning" | "info";
   label: string;
   source?: "alert" | "hunk" | "search";
+  showLabel?: boolean;
 }
 
 export function FileOverviewRuler({

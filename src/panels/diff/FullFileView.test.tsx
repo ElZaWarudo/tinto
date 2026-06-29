@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { FileContent } from "../../bus/contract";
 
 let content: FileContent = { encoding: "utf8", content: "one\ntwo\n", truncated: false };
-let reject = false;
+let rejects: unknown[] = [];
 
 vi.mock("../../bus/client", () => ({
   getFileContent: vi.fn(() => {
-    if (reject) return Promise.reject(new Error("boom"));
+    const nextReject = rejects.shift();
+    if (nextReject) return Promise.reject(nextReject);
     return Promise.resolve(content);
   }),
 }));
@@ -17,7 +18,7 @@ import { FullFileView } from "./FullFileView";
 describe("FullFileView", () => {
   beforeEach(() => {
     content = { encoding: "utf8", content: "one\ntwo\n", truncated: false };
-    reject = false;
+    rejects = [];
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -55,10 +56,26 @@ describe("FullFileView", () => {
   });
 
   it("shows an error state when file content cannot be loaded", async () => {
-    reject = true;
+    rejects = [
+      { category: "child_exit", message: "el agente WSL cerro stdout" },
+      { category: "child_exit", message: "el agente WSL cerro stdout" },
+      { category: "child_exit", message: "el agente WSL cerro stdout" },
+    ];
     render(<FullFileView repo="/r/a" path="missing.ts" changedLines={new Set()} />);
 
-    expect(await screen.findByTestId("full-error")).toHaveTextContent("Could not load file.");
+    expect(await screen.findByTestId("full-error")).toHaveTextContent(
+      "Could not load file: child_exit: el agente WSL cerro stdout",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("full-file")).toBeInTheDocument();
+  });
+
+  it("automatically retries a transient file-content failure", async () => {
+    rejects = [{ category: "child_exit", message: "el agente WSL cerro stdout" }];
+    render(<FullFileView repo="/r/a" path="src/a.ts" changedLines={new Set()} />);
+
+    expect(await screen.findByTestId("full-file")).toBeInTheDocument();
+    expect(screen.queryByTestId("full-error")).not.toBeInTheDocument();
   });
 
   it("renders overview markers and highlights the matching full-file line", async () => {
@@ -81,5 +98,53 @@ describe("FullFileView", () => {
     expect(label).toHaveTextContent("Possible secret");
     expect(label).toHaveAttribute("title", "Possible secret · línea 2");
     expect(container.querySelector('[data-line="2"]')).toBeInTheDocument();
+  });
+
+  it("keeps full-file line highlights while showing one compact changed-line label", async () => {
+    content = { encoding: "utf8", content: "one\ntwo\nthree\n", truncated: false };
+    const { container } = render(
+      <FullFileView
+        repo="/r/a"
+        path="src/a.ts"
+        changedLines={new Set([1, 2, 3])}
+        overviewMarkers={[
+          {
+            line: 1,
+            severity: "info",
+            label: "Changed lines",
+            source: "hunk",
+            showLabel: true,
+          },
+          {
+            line: 2,
+            severity: "info",
+            label: "Changed line",
+            source: "hunk",
+            showLabel: false,
+          },
+          {
+            line: 3,
+            severity: "info",
+            label: "Changed line",
+            source: "hunk",
+            showLabel: false,
+          },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByTestId("full-file")).toBeInTheDocument();
+    expect(container.querySelector('[data-line="1"]')).toHaveClass(
+      "full-file__line--signal-critical",
+    );
+    expect(container.querySelector('[data-line="2"]')).toHaveClass(
+      "full-file__line--signal-critical",
+    );
+    expect(container.querySelector('[data-line="3"]')).toHaveClass(
+      "full-file__line--signal-critical",
+    );
+    const labels = Array.from(container.querySelectorAll(".line-marker-label--hunk"));
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toHaveTextContent("~Changed lines");
   });
 });

@@ -279,6 +279,7 @@ describe("RepoPanel", () => {
       openFile: vi.fn(),
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
+      openAgents: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     render(
@@ -302,6 +303,7 @@ describe("RepoPanel", () => {
       openFile,
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
+      openAgents: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     render(
@@ -428,3 +430,4 @@ describe("openRepoPanel (dedup)", () => {
     );
   });
 });
+

@@ -1,11 +1,18 @@
 use std::path::PathBuf;
 
+#[cfg(windows)]
+use std::fs;
+
 use super::AgentConsoleError;
 
 pub const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "opencode"];
 
 pub fn resolve_agent_binary(agent_type: &str) -> Result<PathBuf, AgentConsoleError> {
-    resolve_agent_binary_with(agent_type, |binary| which::which(binary))
+    resolve_agent_binary_with_candidates(
+        agent_type,
+        |binary| which::which(binary),
+        fallback_agent_candidates,
+    )
 }
 
 pub fn resolve_agent_binary_with<F>(
@@ -15,13 +22,30 @@ pub fn resolve_agent_binary_with<F>(
 where
     F: FnOnce(&str) -> Result<PathBuf, which::Error>,
 {
+    resolve_agent_binary_with_candidates(agent_type, finder, |_| Vec::new())
+}
+
+fn resolve_agent_binary_with_candidates<F, C>(
+    agent_type: &str,
+    finder: F,
+    candidates: C,
+) -> Result<PathBuf, AgentConsoleError>
+where
+    F: FnOnce(&str) -> Result<PathBuf, which::Error>,
+    C: FnOnce(&str) -> Vec<PathBuf>,
+{
     validate_agent_type(agent_type)?;
-    let binary_path =
-        finder(agent_type).map_err(|_| binary_not_found_error(agent_type.to_string()))?;
-    if !binary_path.is_file() {
-        return Err(binary_not_found_error(agent_type.to_string()));
+    if let Ok(binary_path) = finder(agent_type) {
+        if is_usable_binary(agent_type, &binary_path) {
+            return Ok(binary_path);
+        }
     }
-    Ok(binary_path)
+    for candidate in candidates(agent_type) {
+        if is_usable_binary(agent_type, &candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(binary_not_found_error(agent_type.to_string()))
 }
 
 pub fn validate_agent_type(agent_type: &str) -> Result<&'static str, AgentConsoleError> {
@@ -42,6 +66,58 @@ fn binary_not_found_error(agent_type: String) -> AgentConsoleError {
         "binary_not_found",
         format!("no se encontro el binario '{agent_type}' en PATH"),
     )
+}
+
+fn is_usable_binary(agent_type: &str, path: &PathBuf) -> bool {
+    path.is_file() && !is_windowsapps_codex_alias(agent_type, path)
+}
+
+fn is_windowsapps_codex_alias(agent_type: &str, path: &PathBuf) -> bool {
+    if !agent_type.eq_ignore_ascii_case("codex") {
+        return false;
+    }
+    let mut previous_was_windowsapps = false;
+    path.components().any(|component| {
+        let component = component.as_os_str().to_string_lossy().to_ascii_lowercase();
+        let matches = previous_was_windowsapps && component.starts_with("openai.codex_");
+        previous_was_windowsapps = component == "windowsapps";
+        matches
+    })
+}
+
+#[cfg(windows)]
+fn fallback_agent_candidates(agent_type: &str) -> Vec<PathBuf> {
+    if !agent_type.eq_ignore_ascii_case("codex") {
+        return Vec::new();
+    }
+    let Some(local_appdata) = std::env::var_os("LOCALAPPDATA") else {
+        return Vec::new();
+    };
+    let base = PathBuf::from(local_appdata)
+        .join("OpenAI")
+        .join("Codex")
+        .join("bin");
+    let Ok(entries) = fs::read_dir(base) else {
+        return Vec::new();
+    };
+
+    let mut candidates = entries
+        .flatten()
+        .map(|entry| entry.path().join("codex.exe"))
+        .filter_map(|path| {
+            let modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok()?;
+            Some((modified, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(modified, _)| *modified);
+    candidates.into_iter().rev().map(|(_, path)| path).collect()
+}
+
+#[cfg(not(windows))]
+fn fallback_agent_candidates(_agent_type: &str) -> Vec<PathBuf> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -79,6 +155,50 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let error =
             resolve_agent_binary_with("codex", |_| Ok(temp.path().to_path_buf())).unwrap_err();
+
+        assert_eq!(error.category, "binary_not_found");
+    }
+
+    #[test]
+    fn falls_back_when_path_resolves_to_windowsapps_codex_alias() {
+        let temp = tempfile::tempdir().unwrap();
+        let protected = temp
+            .path()
+            .join("WindowsApps")
+            .join("OpenAI.Codex_1.0.0_x64__abc")
+            .join("app")
+            .join("resources")
+            .join("codex.exe");
+        std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+        std::fs::write(&protected, "protected").unwrap();
+        let binary = temp.path().join("codex.exe");
+        std::fs::write(&binary, "fake").unwrap();
+
+        let resolved = resolve_agent_binary_with_candidates(
+            "codex",
+            |_| Ok(protected),
+            |_| vec![binary.clone()],
+        )
+        .unwrap();
+
+        assert_eq!(resolved, binary);
+    }
+
+    #[test]
+    fn rejects_windowsapps_codex_alias_without_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let protected = temp
+            .path()
+            .join("WindowsApps")
+            .join("OpenAI.Codex_1.0.0_x64__abc")
+            .join("app")
+            .join("resources")
+            .join("codex.exe");
+        std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+        std::fs::write(&protected, "protected").unwrap();
+        let error =
+            resolve_agent_binary_with_candidates("codex", |_| Ok(protected), |_| Vec::new())
+                .unwrap_err();
 
         assert_eq!(error.category, "binary_not_found");
     }

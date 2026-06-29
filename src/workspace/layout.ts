@@ -6,7 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { DockviewApi, SerializedDockview } from "dockview-react";
-import { PANEL_DASHBOARD, PANEL_TREE } from "./panels";
+import { PANEL_AGENT_CONSOLES, PANEL_AGENT_TERMINAL, PANEL_DASHBOARD, PANEL_TREE } from "./panels";
 
 /** True if a persisted layout still references the legacy in-dock repo tree,
  * which is now a fixed left sidebar. Such layouts must be discarded: dockview
@@ -16,6 +16,19 @@ export function layoutReferencesTree(layout: SerializedDockview | null): boolean
   const panels = (layout as { panels?: Record<string, { contentComponent?: string }> }).panels;
   if (!panels) return false;
   return Object.values(panels).some((p) => p?.contentComponent === PANEL_TREE);
+}
+
+export function layoutReferencesEphemeralConsoles(layout: SerializedDockview | null): boolean {
+  if (!layout) return false;
+  const panels = (layout as { panels?: Record<string, { contentComponent?: string }> }).panels;
+  if (!panels) return false;
+  return Object.entries(panels).some(
+    ([id, panel]) =>
+      id === PANEL_AGENT_CONSOLES ||
+      id.startsWith(`${PANEL_AGENT_TERMINAL}:`) ||
+      panel?.contentComponent === PANEL_AGENT_CONSOLES ||
+      panel?.contentComponent === PANEL_AGENT_TERMINAL,
+  );
 }
 
 /** Parse a persisted layout string; returns null on null/empty/corrupt input. */
@@ -65,7 +78,12 @@ export function buildDefaultLayout(api: DockviewApi): void {
 /** Restore a persisted layout, falling back to the default if unusable or if it
  * still references the legacy in-dock repo tree (now a fixed sidebar). */
 export function applyLayout(api: DockviewApi, layout: SerializedDockview | null): void {
-  if (layout && isUsableLayout(layout) && !layoutReferencesTree(layout)) {
+  if (
+    layout &&
+    isUsableLayout(layout) &&
+    !layoutReferencesTree(layout) &&
+    !layoutReferencesEphemeralConsoles(layout)
+  ) {
     try {
       api.fromJSON(layout);
       return;

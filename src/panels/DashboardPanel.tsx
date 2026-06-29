@@ -57,7 +57,7 @@ export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
-  const { openRepo, addRepo, openAgentTerminal, removeRepo } = useWorkspaceActions();
+  const { openRepo, addRepo, openAgents, openAgentTerminal, removeRepo } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
   if (!loaded) {
@@ -95,6 +95,9 @@ export function DashboardPanel() {
       <div className="dashboard__actions" aria-label="repo actions">
         <button type="button" onClick={addRepo} data-testid="dashboard-add-repo">
           Add repo
+        </button>
+        <button type="button" onClick={openAgents} data-testid="dashboard-open-agents">
+          Agents
         </button>
       </div>
 
