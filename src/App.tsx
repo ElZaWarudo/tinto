@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DockviewApi } from "dockview-react";
+import type {
+  DockviewApi,
+  DockviewWillDropEvent,
+  IDockviewPanel,
+  TabDragEvent,
+} from "dockview-react";
 import { DockWorkspace, type PanelComponents, type TabComponents } from "./workspace/DockWorkspace";
 import {
   PANEL_AGENT_CONSOLES,
@@ -13,8 +18,9 @@ import { WorkspaceActionsContext, type WorkspaceActions } from "./workspace/acti
 import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
 import { openDashboardPanel, resetToDashboardPanel } from "./workspace/openDashboard";
-import { openAgentTerminalPanel } from "./workspace/openAgentTerminal";
+import { openAgentConsolesPanel, openAgentTerminalPanel } from "./workspace/openAgentTerminal";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
+import { consoleDock } from "./workspace/consoleDock";
 import { fileDock } from "./workspace/fileDock";
 import { repoTreeStore } from "./workspace/repoTreeStore";
 import { DashboardPanel } from "./panels/DashboardPanel";
@@ -23,6 +29,12 @@ import { RepoTab } from "./panels/RepoTab";
 import { TimelinePanel } from "./panels/timeline/TimelinePanel";
 import { ConsoleDockPanel } from "./panels/terminal/ConsoleDockPanel";
 import { TerminalPanel } from "./panels/terminal/TerminalPanel";
+import {
+  markTerminalDetached,
+  onDetachedConsolesReattach,
+  openDetachedConsolesWindow,
+} from "./panels/terminal/detachTerminalWindow";
+import { armExternalTabDetach } from "./workspace/externalTabDetach";
 import { MenuBar } from "./workbench/MenuBar";
 import { AddRepoDialog } from "./workbench/AddRepoDialog";
 import { FirstRun } from "./workbench/firstRun";
@@ -48,6 +60,54 @@ const components: PanelComponents = {
 const tabComponents: TabComponents = {
   [TAB_REPO]: RepoTab,
 };
+
+const detachingConsolesPanels = new Set<string>();
+
+export async function detachConsolesPanelFromWorkspaceDrop(
+  event: DockviewWillDropEvent,
+  api: DockviewApi,
+): Promise<boolean> {
+  if (event.kind !== "edge" || event.getData()?.panelId !== PANEL_AGENT_CONSOLES) {
+    return false;
+  }
+  const panel = api.getPanel(PANEL_AGENT_CONSOLES);
+  if (!panel) return false;
+
+  event.preventDefault();
+  return detachConsolesPanel(api, panel);
+}
+
+export async function detachConsolesPanel(
+  api: DockviewApi,
+  panel: IDockviewPanel | undefined = api.getPanel(PANEL_AGENT_CONSOLES),
+): Promise<boolean> {
+  if (!panel || detachingConsolesPanels.has(panel.id)) return false;
+
+  detachingConsolesPanels.add(panel.id);
+  const terminalParams = consoleDock.openTerminalParams();
+  consoleDock.prepareDetachedTransfer();
+  try {
+    const opened = await openDetachedConsolesWindow(terminalParams);
+    if (!opened) return false;
+
+    for (const sessionId of consoleDock.openTerminalSessionIds()) {
+      markTerminalDetached(sessionId);
+    }
+    const current = api.getPanel(panel.id);
+    if (current) {
+      api.removePanel(current);
+    }
+    return true;
+  } finally {
+    detachingConsolesPanels.delete(panel.id);
+  }
+}
+
+export function armConsolesExternalDetach(event: TabDragEvent, api: DockviewApi): boolean {
+  if (event.panel.id !== PANEL_AGENT_CONSOLES) return false;
+  armExternalTabDetach(event.nativeEvent, () => detachConsolesPanel(api, event.panel));
+  return true;
+}
 
 export default function App() {
   useBusConnection();
@@ -136,6 +196,11 @@ export default function App() {
           }
         }
       },
+      openAgents: () => {
+        if (apiRef.current) {
+          openAgentConsolesPanel(apiRef.current);
+        }
+      },
       openAgentTerminal: (params) => {
         if (apiRef.current) {
           openAgentTerminalPanel(apiRef.current, params);
@@ -153,6 +218,31 @@ export default function App() {
       addRepo: () => actions.addRepo(),
     });
   }, [actions]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void onDetachedConsolesReattach((terminals) => {
+      const api = apiRef.current;
+      if (!api) return;
+      openAgentConsolesPanel(api);
+      terminals.forEach((params) => consoleDock.openTerminal(params));
+    })
+      .then((dispose) => {
+        if (!active) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for detached console reattach events", error);
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   // First-run: once loaded, no active workbench → the create flow.
   if (loaded && !config?.active) {
@@ -182,6 +272,21 @@ export default function App() {
             <DockWorkspace
               components={components}
               tabComponents={tabComponents}
+              onWillDrop={(event, api) => {
+                void detachConsolesPanelFromWorkspaceDrop(event, api);
+              }}
+              onDidMovePanel={(event, api) => {
+                if (
+                  event.panel.id !== PANEL_AGENT_CONSOLES ||
+                  event.panel.api.location.type === "grid"
+                ) {
+                  return;
+                }
+                void detachConsolesPanel(api, event.panel);
+              }}
+              onWillDragPanel={(event, api) => {
+                armConsolesExternalDetach(event, api);
+              }}
               onApi={(api) => {
                 apiRef.current = api;
               }}
