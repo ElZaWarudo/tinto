@@ -1,10 +1,15 @@
 import { type CSSProperties, useEffect, useMemo, useState } from "react";
-import { getFileContent } from "../../bus/client";
 import type { FileContent } from "../../bus/contract";
+import { fileLoadErrorMessage, loadFileContentWithRetry } from "../file/fileContentLoader";
 import { FileOverviewRuler, type FileOverviewMarker } from "../file/FileOverviewRuler";
 import { useOverviewScrollSync } from "../file/useOverviewScrollSync";
 import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
 import { useLineHighlighter } from "./lineHighlighter";
+
+interface LoadedFileContent {
+  key: string;
+  content: FileContent;
+}
 
 export function FullFileView({
   repo,
@@ -19,8 +24,12 @@ export function FullFileView({
   overviewMarkers?: FileOverviewMarker[];
   bodyRef?: React.RefObject<HTMLElement | null>;
 }) {
-  const [content, setContent] = useState<FileContent | undefined>(undefined);
-  const [error, setError] = useState(false);
+  const [loaded, setLoaded] = useState<LoadedFileContent | null>(null);
+  const [error, setError] = useState<{ key: string; message: string } | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const requestKey = `${repo}\0${path}\0${reloadToken}`;
+  const content = loaded?.key === requestKey ? loaded.content : undefined;
+  const errorMessage = error?.key === requestKey ? error.message : null;
 
   const lang = languageFromPath(path);
   const highlightable =
@@ -29,18 +38,19 @@ export function FullFileView({
 
   useEffect(() => {
     let active = true;
-    getFileContent(repo, path)
+    const key = requestKey;
+    loadFileContentWithRetry(repo, path)
       .then((c) => {
         if (active) {
-          setContent(c);
-          setError(false);
+          setLoaded({ key, content: c });
+          setError(null);
         }
       })
-      .catch(() => active && setError(true));
+      .catch((cause) => active && setError({ key, message: fileLoadErrorMessage(cause) }));
     return () => {
       active = false;
     };
-  }, [repo, path]);
+  }, [repo, path, reloadToken, requestKey]);
 
   const lines = useMemo(() => {
     if (!content || content.encoding !== "utf8") return [];
@@ -64,10 +74,13 @@ export function FullFileView({
         } as CSSProperties)
       : undefined;
 
-  if (error) {
+  if (errorMessage) {
     return (
       <div className="full-file full-file--error" data-testid="full-error">
-        Could not load file.
+        <span>Could not load file: {errorMessage}</span>
+        <button type="button" onClick={() => setReloadToken((token) => token + 1)}>
+          Retry
+        </button>
       </div>
     );
   }
@@ -111,7 +124,7 @@ export function FullFileView({
             <div key={i} className={classes.join(" ")} data-line={lineno}>
               <span className="diff-gutter">{lineno}</span>
               <code className="diff-content">{renderLine(line)}</code>
-              {marker && <LineMarkerLabel marker={marker} />}
+              {shouldShowMarkerLabel(marker) && <LineMarkerLabel marker={marker!} />}
             </div>
           );
         })}
@@ -132,7 +145,14 @@ function LineMarkerLabel({ marker }: { marker: FileOverviewMarker }) {
       className={`line-marker-label line-marker-label--${source} line-marker-label--${marker.severity}`}
       title={`${marker.label} · línea ${marker.line}`}
     >
-      {marker.label}
+      <span className="line-marker-label__compact" aria-hidden="true">
+        {source === "hunk" ? "~" : source === "search" ? "?" : "!"}
+      </span>
+      <span className="line-marker-label__text">{marker.label}</span>
     </span>
   );
+}
+
+function shouldShowMarkerLabel(marker: FileOverviewMarker | undefined): boolean {
+  return !!marker && marker.showLabel !== false;
 }

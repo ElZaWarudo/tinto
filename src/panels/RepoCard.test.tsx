@@ -95,7 +95,7 @@ describe("RepoCard", () => {
         },
       ],
     });
-    expect(screen.getByTestId("repo-metrics")).toHaveTextContent("2 files · +10 -5");
+    expect(screen.getByTestId("repo-metrics")).toHaveTextContent("2files+10added-5removed");
     expect(screen.getByTestId("signal-count")).toHaveTextContent("1 signal");
     expect(screen.getByText(/Possible secret/)).toBeInTheDocument();
   });
@@ -203,6 +203,22 @@ describe("RepoCard", () => {
     expect(screen.getByTestId("agent-launch")).toBeDisabled();
     fireEvent.click(screen.getByTestId("agent-launch"));
     expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it("allows launch when the availability probe fails", async () => {
+    clientMocks.agentBinaryAvailableForRepo.mockRejectedValue(
+      new Error("el agente WSL cerro stdout"),
+    );
+    const { onLaunch } = renderCard();
+
+    expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent(
+      "el agente WSL cerro stdout",
+    );
+    const button = screen.getByTestId("agent-launch");
+    expect(button).not.toBeDisabled();
+    fireEvent.click(button);
+
+    expect(onLaunch).toHaveBeenCalledWith("codex");
   });
 
   it("launches the selected agent without opening the card", async () => {

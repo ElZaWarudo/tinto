@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   safeParseLayout,
   isUsableLayout,
+  layoutReferencesEphemeralConsoles,
   layoutReferencesTree,
   loadUiState,
   saveUiState,
@@ -48,6 +49,23 @@ describe("layout persistence helpers", () => {
     expect(layoutReferencesTree(asLayout({ panels: { tree: { contentComponent: "tree" } } }))).toBe(
       true,
     );
+  });
+
+  it("layoutReferencesEphemeralConsoles detects saved agent console panels", () => {
+    expect(layoutReferencesEphemeralConsoles(null)).toBe(false);
+    expect(
+      layoutReferencesEphemeralConsoles(asLayout({ panels: { dashboard: {} } })),
+    ).toBe(false);
+    expect(
+      layoutReferencesEphemeralConsoles(
+        asLayout({ panels: { "agent-consoles": { contentComponent: "agent-consoles" } } }),
+      ),
+    ).toBe(true);
+    expect(
+      layoutReferencesEphemeralConsoles(
+        asLayout({ panels: { "agent-terminal:sess-1": { contentComponent: "agent-terminal" } } }),
+      ),
+    ).toBe(true);
   });
 
   it("loadUiState parses the backend string, tolerating errors", async () => {
