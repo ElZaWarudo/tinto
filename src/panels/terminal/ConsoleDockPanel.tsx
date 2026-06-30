@@ -6,9 +6,19 @@ import type {
   IDockviewPanel,
   IDockviewPanelProps,
 } from "dockview-react";
-import { listAgentSessions, startAgentSession } from "../../bus/client";
-import { agentSessionStore } from "../../agent/sessionStore";
+import {
+  getAgentJournalSession,
+  listAgentJournalSessions,
+  listAgentSessions,
+  startAgentSession,
+} from "../../bus/client";
+import { agentSessionStore, useAgentSessionState } from "../../agent/sessionStore";
 import { busStore, useBusState } from "../../bus/store";
+import type {
+  AgentJournalSessionSummary,
+  AgentSession,
+  AgentSessionTimelineItem,
+} from "../../bus/contract";
 import codexLogo from "../../assets/agents/codex.svg";
 import claudeLogo from "../../assets/agents/claude.svg";
 import opencodeLogo from "../../assets/agents/opencode.svg";
@@ -96,18 +106,23 @@ type ConsoleDockPanelProps = Partial<IDockviewPanelProps> & {
 
 export function ConsoleDockPanel({ restoreTransferLayout = false }: ConsoleDockPanelProps) {
   const { repos } = useBusState();
+  const agentState = useAgentSessionState();
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
   const movePanelDisposeRef = useRef<(() => void) | null>(null);
   const [terminalCount, setTerminalCount] = useState(0);
+  const [openTerminals, setOpenTerminals] = useState<TerminalPanelParams[]>([]);
   const [recentLaunches, setRecentLaunches] = useState<RecentAgentLaunch[]>(() =>
     readRecentAgentLaunches(),
   );
+  const [journalSessions, setJournalSessions] = useState<AgentJournalSessionSummary[]>([]);
   const [launchingKey, setLaunchingKey] = useState<string | null>(null);
+  const [openingJournalId, setOpeningJournalId] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
 
   useEffect(() => {
     const updateTerminalState = () => {
       setTerminalCount(consoleDock.openTerminalSessionIds().length);
+      setOpenTerminals(consoleDock.openTerminalParams());
       setRecentLaunches(readRecentAgentLaunches());
     };
     const unsubscribe = consoleDock.subscribe(updateTerminalState);
@@ -123,12 +138,27 @@ export function ConsoleDockPanel({ restoreTransferLayout = false }: ConsoleDockP
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void listAgentJournalSessions(18)
+      .then((sessions) => {
+        if (active) setJournalSessions(sessions);
+      })
+      .catch(() => {
+        if (active) setJournalSessions([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [terminalCount]);
+
   const onReady = (event: DockviewReadyEvent) => {
     movePanelDisposeRef.current?.();
     apiRef.current = event.api;
     consoleDock.register(event.api, { restoreTransferLayout });
     const updateTerminalCount = () => {
       setTerminalCount(consoleDock.openTerminalSessionIds().length);
+      setOpenTerminals(consoleDock.openTerminalParams());
     };
     updateTerminalCount();
     const layoutDisposable = event.api.onDidLayoutChange(updateTerminalCount);
@@ -167,6 +197,7 @@ export function ConsoleDockPanel({ restoreTransferLayout = false }: ConsoleDockP
     const existing = api.getPanel(id);
     if (existing) {
       existing.api.setActive();
+      setOpenTerminals(consoleDock.openTerminalParams());
       return;
     }
     try {
@@ -177,8 +208,10 @@ export function ConsoleDockPanel({ restoreTransferLayout = false }: ConsoleDockP
         params,
       });
       panel.api.setActive();
+      setOpenTerminals(consoleDock.openTerminalParams());
     } catch {
       api.getPanel(id)?.api.setActive();
+      setOpenTerminals(consoleDock.openTerminalParams());
     }
   };
 
@@ -217,8 +250,47 @@ export function ConsoleDockPanel({ restoreTransferLayout = false }: ConsoleDockP
     setLaunchError(null);
   };
 
+  const openJournalTranscript = (summary: AgentJournalSessionSummary) => {
+    if (openingJournalId) return;
+    setOpeningJournalId(summary.id);
+    setLaunchError(null);
+    void getAgentJournalSession(summary.id)
+      .then((session) => {
+        if (!session) {
+          setLaunchError("Session transcript was not found.");
+          return;
+        }
+        agentSessionStore.upsertSession(session);
+        const params: TerminalPanelParams = {
+          sessionId: session.id,
+          repo: session.repo,
+          agentType: session.agent_type,
+          mode: "journal",
+        };
+        consoleDock.openTerminal(params);
+        ensureTerminalPanelVisible(params);
+      })
+      .catch((error) => {
+        setLaunchError(commandMessage(error));
+      })
+      .finally(() => {
+        setOpeningJournalId(null);
+      });
+  };
+
   return (
     <div className="console-dock-panel" data-testid="console-dock-panel">
+      {terminalCount > 0 && (
+        <AgentNavigator
+          openTerminals={openTerminals}
+          sessions={agentState.sessions}
+          timeline={agentState.timeline}
+          journalSessions={journalSessions}
+          openingJournalId={openingJournalId}
+          onFocus={ensureTerminalPanelVisible}
+          onOpenJournal={openJournalTranscript}
+        />
+      )}
       <DockviewReact
         components={consoleComponents}
         dndStrategy="pointer"
@@ -309,13 +381,239 @@ export function ConsoleDockPanel({ restoreTransferLayout = false }: ConsoleDockP
                   {launchError}
                 </div>
               )}
+              {journalSessions.length > 0 && (
+                <AgentJournalBrowser
+                  sessions={journalSessions}
+                  openingJournalId={openingJournalId}
+                  onOpen={openJournalTranscript}
+                />
+              )}
             </>
           ) : (
-            <div className="console-dock-panel__empty-subtitle">Launch an agent to open one.</div>
+            <>
+              <div className="console-dock-panel__empty-subtitle">Launch an agent to open one.</div>
+              {journalSessions.length > 0 && (
+                <AgentJournalBrowser
+                  sessions={journalSessions}
+                  openingJournalId={openingJournalId}
+                  onOpen={openJournalTranscript}
+                />
+              )}
+              {launchError && (
+                <div className="console-dock-panel__quick-error" role="status">
+                  {launchError}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+function AgentNavigator({
+  openTerminals,
+  sessions,
+  timeline,
+  journalSessions,
+  openingJournalId,
+  onFocus,
+  onOpenJournal,
+}: {
+  openTerminals: TerminalPanelParams[];
+  sessions: Record<string, AgentSession>;
+  timeline: Record<string, AgentSessionTimelineItem[]>;
+  journalSessions: AgentJournalSessionSummary[];
+  openingJournalId: string | null;
+  onFocus: (params: TerminalPanelParams) => void;
+  onOpenJournal: (session: AgentJournalSessionSummary) => void;
+}) {
+  return (
+    <aside className="console-dock-panel__navigator" aria-label="Agent sessions">
+      <div className="console-dock-panel__navigator-section">
+        <div className="console-dock-panel__navigator-head">
+          <span>Active</span>
+          <small>{openTerminals.length}</small>
+        </div>
+        <div className="console-dock-panel__navigator-list">
+          {openTerminals.map((terminal) => {
+            const agentType = terminal.agentType ?? "agent";
+            const logo = agentLogoSrc(agentType);
+            const session = sessions[terminal.sessionId];
+            const preview = activeSessionPreview(session, timeline[terminal.sessionId]);
+            const tone = sessionStatusTone(session);
+            return (
+              <button
+                className={`console-dock-panel__navigator-item console-dock-panel__navigator-item--${tone}`}
+                type="button"
+                key={terminal.sessionId}
+                aria-label={`Focus ${busStore.displayName(
+                  terminal.repo ?? terminal.sessionId,
+                )} ${agentLabel(agentType)}`}
+                onClick={() => onFocus(terminal)}
+              >
+                <span
+                  className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                    agentType,
+                  )}`}
+                  aria-hidden="true"
+                >
+                  {logo ? <img src={logo} alt="" /> : <span>{agentLogoText(agentType)}</span>}
+                </span>
+                <span className="console-dock-panel__navigator-main">
+                  <span>{terminal.repo ? busStore.displayName(terminal.repo) : "Session"}</span>
+                  <small>
+                    <i aria-hidden="true" />
+                    {agentLabel(agentType)} / {sessionStatusLabel(session)}
+                  </small>
+                  {preview && <em>{preview}</em>}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {journalSessions.length > 0 && (
+        <div className="console-dock-panel__navigator-section">
+          <div className="console-dock-panel__navigator-head">
+            <span>Saved</span>
+            <small>{journalSessions.length}</small>
+          </div>
+          <div className="console-dock-panel__navigator-list">
+            {journalSessions.slice(0, 8).map((session) => {
+              const logo = agentLogoSrc(session.agent_type);
+              return (
+                <button
+                  className="console-dock-panel__navigator-item"
+                  type="button"
+                  key={session.id}
+                  aria-label={`Open ${busStore.displayName(session.repo)} ${agentLabel(
+                    session.agent_type,
+                  )} transcript`}
+                  onClick={() => onOpenJournal(session)}
+                >
+                  <span
+                    className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                      session.agent_type,
+                    )}`}
+                    aria-hidden="true"
+                  >
+                    {logo ? (
+                      <img src={logo} alt="" />
+                    ) : (
+                      <span>{agentLogoText(session.agent_type)}</span>
+                    )}
+                  </span>
+                  <span className="console-dock-panel__navigator-main">
+                    <span>{busStore.displayName(session.repo)}</span>
+                    <small>
+                      {openingJournalId === session.id
+                        ? "Opening"
+                        : `${agentLabel(session.agent_type)} transcript`}
+                    </small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function activeSessionPreview(
+  session: AgentSession | undefined,
+  timeline: AgentSessionTimelineItem[] | undefined,
+): string | null {
+  const lastMessage = [...(timeline ?? [])]
+    .reverse()
+    .find((item) => item.kind !== "lifecycle" && item.text.trim().length > 0);
+  if (lastMessage) return lastMessage.text;
+  if (!session) return null;
+  if (session.turn_status === "working") return "Working on the current turn";
+  if (session.turn_status === "settling") return "Collecting changed files";
+  return null;
+}
+
+function sessionStatusLabel(session: AgentSession | undefined): string {
+  if (!session) return "opening";
+  if (session.status === "running" && session.turn_status === "working") return "working";
+  if (session.status === "running" && session.turn_status === "settling") return "settling";
+  if (session.status === "running") return "ready";
+  return session.status.replace(/_/g, " ");
+}
+
+function sessionStatusTone(session: AgentSession | undefined): "live" | "settling" | "done" {
+  if (!session) return "live";
+  if (session.status === "running" && session.turn_status === "settling") return "settling";
+  if (session.status === "running") return "live";
+  return "done";
+}
+
+function AgentJournalBrowser({
+  sessions,
+  openingJournalId,
+  onOpen,
+}: {
+  sessions: AgentJournalSessionSummary[];
+  openingJournalId: string | null;
+  onOpen: (session: AgentJournalSessionSummary) => void;
+}) {
+  return (
+    <section className="console-dock-panel__journal" aria-label="Recent agent sessions">
+      <div className="console-dock-panel__journal-head">
+        <span>Recent sessions</span>
+        <small>Saved locally</small>
+      </div>
+      <div className="console-dock-panel__journal-list">
+        {sessions.map((session) => {
+          const logo = agentLogoSrc(session.agent_type);
+          return (
+            <button
+              className="console-dock-panel__journal-card"
+              type="button"
+              key={session.id}
+              aria-label={`Open ${busStore.displayName(session.repo)} ${agentLabel(
+                session.agent_type,
+              )} transcript`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onOpen(session);
+              }}
+            >
+              <span
+                className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                  session.agent_type,
+                )}`}
+                aria-hidden="true"
+              >
+                {logo ? (
+                  <img src={logo} alt="" />
+                ) : (
+                  <span>{agentLogoText(session.agent_type)}</span>
+                )}
+              </span>
+              <span className="console-dock-panel__journal-main">
+                <span>{busStore.displayName(session.repo)}</span>
+                <small>
+                  {agentLabel(session.agent_type)} / {sessionLabel(session)}
+                </small>
+                {session.last_event_text && <em>{session.last_event_text}</em>}
+              </span>
+              <span className="console-dock-panel__journal-action">
+                {openingJournalId === session.id ? "Opening" : "Open"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -349,6 +647,12 @@ function groupRecentLaunches(launches: RecentAgentLaunch[]): RecentAgentLaunchGr
 
 function recentLaunchKey(launch: RecentAgentLaunch): string {
   return `${launch.repo}\u0000${launch.agentType}`;
+}
+
+function sessionLabel(session: AgentJournalSessionSummary): string {
+  const status = session.status === "exited" ? "archived" : session.status.replace(/_/g, " ");
+  const count = session.event_count === 1 ? "1 event" : `${session.event_count} events`;
+  return `${status} / ${count}`;
 }
 
 function agentLabel(agentType: string): string {
