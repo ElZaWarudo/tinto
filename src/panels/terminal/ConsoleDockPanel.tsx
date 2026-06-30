@@ -94,9 +94,7 @@ type ConsoleDockPanelProps = Partial<IDockviewPanelProps> & {
   restoreTransferLayout?: boolean;
 };
 
-export function ConsoleDockPanel({
-  restoreTransferLayout = false,
-}: ConsoleDockPanelProps) {
+export function ConsoleDockPanel({ restoreTransferLayout = false }: ConsoleDockPanelProps) {
   const { repos } = useBusState();
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
   const movePanelDisposeRef = useRef<(() => void) | null>(null);

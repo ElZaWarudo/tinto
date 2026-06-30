@@ -430,4 +430,3 @@ describe("openRepoPanel (dedup)", () => {
     );
   });
 });
-

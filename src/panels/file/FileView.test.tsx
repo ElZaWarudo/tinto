@@ -177,7 +177,7 @@ describe("FileView", () => {
 
     const labels = Array.from(container.querySelectorAll(".line-marker-label--hunk"));
     expect(labels).toHaveLength(2);
-    expect(labels.map((label) => label.textContent)).toEqual(["Changed lines", "Changed lines"]);
+    expect(labels.map((label) => label.textContent)).toEqual(["~Changed lines", "~Changed lines"]);
   });
 
   it("prefers backend secret findings for overview markers when present", async () => {

@@ -53,9 +53,7 @@ describe("layout persistence helpers", () => {
 
   it("layoutReferencesEphemeralConsoles detects saved agent console panels", () => {
     expect(layoutReferencesEphemeralConsoles(null)).toBe(false);
-    expect(
-      layoutReferencesEphemeralConsoles(asLayout({ panels: { dashboard: {} } })),
-    ).toBe(false);
+    expect(layoutReferencesEphemeralConsoles(asLayout({ panels: { dashboard: {} } }))).toBe(false);
     expect(
       layoutReferencesEphemeralConsoles(
         asLayout({ panels: { "agent-consoles": { contentComponent: "agent-consoles" } } }),

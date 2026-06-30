@@ -164,29 +164,38 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   const markdown = isMarkdown(path);
   const media = mediaKind(path);
 
-  const [oneShot, setOneShot] = useState<FileDiff | null | undefined>(undefined);
-  const [loadError, setLoadError] = useState<CmdError | null>(null);
+  const diffKey = `${repo}\0${path}`;
+  const [oneShotResult, setOneShotResult] = useState<
+    { key: string; diff: FileDiff | null } | undefined
+  >(undefined);
+  const [loadErrorResult, setLoadErrorResult] = useState<{
+    key: string;
+    error: CmdError;
+  } | null>(null);
   const [mode, setMode] = useState<DiffMode>("inline");
   // null = follow the auto rule (changed→hunks, clean→full); set by the toggle.
   const [manualKind, setManualKind] = useState<"hunks" | "full" | null>(null);
   // Markdown sub-view: rendered (formatted) by default, or raw source.
   const [mdView, setMdView] = useState<"rendered" | "source">("rendered");
   const inStatus = fileInStatus(repoDelta, path);
+  const oneShot =
+    inStatus && oneShotResult?.key === diffKey ? oneShotResult.diff : inStatus ? undefined : null;
+  const loadError = inStatus && loadErrorResult?.key === diffKey ? loadErrorResult.error : null;
 
   const loadOneShot = useCallback(() => {
     let active = true;
     getWorktreeDiff(repo)
       .then((diffs) => {
         if (active) {
-          setOneShot(diffs.find((d) => d.path === path) ?? null);
-          setLoadError(null);
+          setOneShotResult({ key: diffKey, diff: diffs.find((d) => d.path === path) ?? null });
+          setLoadErrorResult(null);
         }
       })
-      .catch((e) => active && setLoadError(asCmdError(e)));
+      .catch((e) => active && setLoadErrorResult({ key: diffKey, error: asCmdError(e) }));
     return () => {
       active = false;
     };
-  }, [repo, path]);
+  }, [repo, path, diffKey]);
 
   // Subscribe for live updates + run the one-shot initial load. On unmount drop
   // both the subscription and the cached diff (the single reconciled set — R6).
@@ -202,14 +211,10 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   useEffect(() => {
     if (media || !repoReady) return;
     if (!inStatus) {
-      setOneShot(null);
-      setLoadError(null);
       return;
     }
 
     if (reconciler.isLive(repo, path)) {
-      setOneShot(undefined);
-      setLoadError(null);
       let cleanup: (() => void) | undefined;
       const timer = window.setTimeout(() => {
         const latest = busStore.getState();

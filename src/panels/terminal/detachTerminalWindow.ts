@@ -49,9 +49,7 @@ export function readDetachedConsolesFlag(search = window.location.search): boole
   return new URLSearchParams(search).get(DETACHED_CONSOLES_PARAM) === "1";
 }
 
-export function readDetachedConsolesParams(
-  search = window.location.search,
-): TerminalPanelParams[] {
+export function readDetachedConsolesParams(search = window.location.search): TerminalPanelParams[] {
   const query = new URLSearchParams(search);
   if (query.get(DETACHED_CONSOLES_PARAM) !== "1") return [];
   const raw = query.get(DETACHED_CONSOLES_SESSIONS_PARAM);
@@ -72,11 +70,7 @@ export function readDetachedConsolesParams(
   }
 }
 
-function terminalParams(
-  sessionId: string,
-  repo: unknown,
-  agentType: unknown,
-): TerminalPanelParams {
+function terminalParams(sessionId: string, repo: unknown, agentType: unknown): TerminalPanelParams {
   const params: TerminalPanelParams = { sessionId };
   if (typeof repo === "string") params.repo = repo;
   if (typeof agentType === "string") params.agentType = agentType;
@@ -204,9 +198,7 @@ export async function onDetachedConsolesOpenTerminal(
   });
 }
 
-export async function reattachDetachedConsoles(
-  params: TerminalPanelParams[],
-): Promise<boolean> {
+export async function reattachDetachedConsoles(params: TerminalPanelParams[]): Promise<boolean> {
   try {
     const { emit } = await import("@tauri-apps/api/event");
     await emit(DETACHED_CONSOLES_REATTACH_EVENT, params);

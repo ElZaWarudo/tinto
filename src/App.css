@@ -1845,9 +1845,7 @@ select option {
   gap: 10px;
   pointer-events: auto;
   color: var(--fg-muted);
-  background:
-    linear-gradient(180deg, rgba(30, 30, 30, 0.96), rgba(24, 24, 24, 0.98)),
-    #1e1e1e;
+  background: linear-gradient(180deg, rgba(30, 30, 30, 0.96), rgba(24, 24, 24, 0.98)), #1e1e1e;
   padding: 24px;
 }
 

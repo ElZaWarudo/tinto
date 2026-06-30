@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 use std::fs;
@@ -68,11 +68,11 @@ fn binary_not_found_error(agent_type: String) -> AgentConsoleError {
     )
 }
 
-fn is_usable_binary(agent_type: &str, path: &PathBuf) -> bool {
+fn is_usable_binary(agent_type: &str, path: &Path) -> bool {
     path.is_file() && !is_windowsapps_codex_alias(agent_type, path)
 }
 
-fn is_windowsapps_codex_alias(agent_type: &str, path: &PathBuf) -> bool {
+fn is_windowsapps_codex_alias(agent_type: &str, path: &Path) -> bool {
     if !agent_type.eq_ignore_ascii_case("codex") {
         return false;
     }

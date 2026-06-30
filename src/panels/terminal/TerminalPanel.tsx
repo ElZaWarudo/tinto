@@ -54,24 +54,27 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     [sessionId],
   );
 
-  const focusTerminal = useCallback((options: FocusTerminalOptions = {}) => {
-    const terminal = terminalInstanceRef.current;
-    const container = terminalRef.current;
-    if (!terminal) return;
-    const textarea = terminal.textarea;
-    if (textarea) stabilizeTerminalTextarea(textarea);
-    if (textarea && document.activeElement === textarea && api.isActive) return;
-    if (!api.isActive) {
-      if (!options.activatePanel) return;
-      api.setActive();
-    }
-    container?.focus({ preventScroll: true });
-    terminal.focus();
-    textarea?.focus({ preventScroll: true });
-    if (textarea) {
-      window.requestAnimationFrame(() => stabilizeTerminalTextarea(textarea));
-    }
-  }, [api]);
+  const focusTerminal = useCallback(
+    (options: FocusTerminalOptions = {}) => {
+      const terminal = terminalInstanceRef.current;
+      const container = terminalRef.current;
+      if (!terminal) return;
+      const textarea = terminal.textarea;
+      if (textarea) stabilizeTerminalTextarea(textarea);
+      if (textarea && document.activeElement === textarea && api.isActive) return;
+      if (!api.isActive) {
+        if (!options.activatePanel) return;
+        api.setActive();
+      }
+      container?.focus({ preventScroll: true });
+      terminal.focus();
+      textarea?.focus({ preventScroll: true });
+      if (textarea) {
+        window.requestAnimationFrame(() => stabilizeTerminalTextarea(textarea));
+      }
+    },
+    [api],
+  );
 
   useEffect(() => {
     const container = terminalRef.current;

@@ -34,7 +34,9 @@ export function markRecentAgentLaunch(params: AgentLaunchParams): void {
   const now = Date.now();
   const existing = readRecentAgentLaunches();
   const key = launchKey(params.repo, params.agentType);
-  const next = new Map(existing.map((launch) => [launchKey(launch.repo, launch.agentType), launch]));
+  const next = new Map(
+    existing.map((launch) => [launchKey(launch.repo, launch.agentType), launch]),
+  );
   const current = next.get(key);
   next.set(key, {
     repo: params.repo,
@@ -49,9 +51,7 @@ export function forgetRecentAgentLaunch(params: AgentLaunchParams): void {
   if (!params.repo || !params.agentType) return;
   const key = launchKey(params.repo, params.agentType);
   writeRecentAgentLaunches(
-    readRecentAgentLaunches().filter(
-      (launch) => launchKey(launch.repo, launch.agentType) !== key,
-    ),
+    readRecentAgentLaunches().filter((launch) => launchKey(launch.repo, launch.agentType) !== key),
   );
 }
 
@@ -65,10 +65,7 @@ export function clearRecentAgentLaunchesForTests(): void {
 
 function writeRecentAgentLaunches(launches: RecentAgentLaunch[]): void {
   try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(launches.slice(0, MAX_RECENT_AGENT_LAUNCHES)),
-    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(launches.slice(0, MAX_RECENT_AGENT_LAUNCHES)));
   } catch {
     /* storage unavailable / quota - quick launches are optional */
   }

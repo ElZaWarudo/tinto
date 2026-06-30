@@ -29,7 +29,9 @@ interface FakeApi {
   fromJSON: ReturnType<typeof vi.fn>;
   toJSON: ReturnType<typeof vi.fn>;
   onDidLayoutChange: ReturnType<typeof vi.fn>;
+  onDidMovePanel: ReturnType<typeof vi.fn>;
   onDidRemovePanel: ReturnType<typeof vi.fn>;
+  onWillDragPanel: ReturnType<typeof vi.fn>;
   fireLayoutChange: () => void;
   fireRemovePanel: () => void;
 }
@@ -51,10 +53,12 @@ function makeFakeApi(): FakeApi {
       layoutCbs.push(cb);
       return { dispose() {} };
     }),
+    onDidMovePanel: vi.fn(() => ({ dispose() {} })),
     onDidRemovePanel: vi.fn((cb: () => void) => {
       removeCbs.push(cb);
       return { dispose() {} };
     }),
+    onWillDragPanel: vi.fn(() => ({ dispose() {} })),
     fireLayoutChange: () => layoutCbs.forEach((cb) => cb()),
     fireRemovePanel: () => removeCbs.forEach((cb) => cb()),
   };
