@@ -30,6 +30,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 # Utilidades async sobre el runtime tokio que Tauri ya trae (tauri::async_runtime).
 # El watcher usa: time (debounce/throttle), sync (canal mpsc), macros (select!), rt (spawn).
 tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }

@@ -45,6 +45,24 @@ Implement a Codex app-server-backed agent runtime for Tinto sessions. The runtim
   - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` passed
   - `git diff --check` passed with existing CRLF warnings only
 
+## IADE Continuation Handoff
+- User-facing goal to continue: build the Tinto Agents experience as a native IADE surface, not as boring terminal tabs and not as a literal Codex clone. Take creative liberties as long as the UI feels like Tinto and keeps runtime pieces replaceable for OpenCode/Claude later.
+- Current worktree status: dirty, intentionally uncommitted. Do not revert unrelated existing changes. Do not commit, push, merge, or create PRs unless explicitly requested.
+- Current implemented IADE direction:
+  - `TerminalPanel` renders a product agent interface with header, agent logo, session status, conversation turns, Markdown messages, technical command blocks, transcript search/copy, quick actions, focused-turn rail, Agent Lens, and composer.
+  - Agent Lens includes Files/Commands/Timeline tabs, touched-file filtering, read-only session change-log fallback, per-file checkpoint revert where available, and timeline/command summaries.
+  - The side rail includes a `Focused turn` card; selecting a turn from the map highlights the matching conversation card, `Jump` scrolls to it, `Copy focus` copies the turn transcript, and the action pad drafts contextual `Continue`, `Review`, `Test`, or `Handoff` prompts into the composer.
+  - `ConsoleDockPanel` has quick launch/recent/journal navigation so agent sessions can be reopened as UI sessions instead of only active terminal tabs.
+  - Backend/session plumbing includes Codex app-server events, timeline items, turn checkpoints, session change logs, and SQLite journal support.
+- Latest local verification after the focused-turn action-pad slice:
+  - `npm test -- src\panels\terminal\TerminalPanel.test.tsx --run` passed 25/25.
+  - `npx tsc --noEmit` passed.
+  - `npm test -- src\panels\terminal\ConsoleDockPanel.test.tsx src\panels\terminal\TerminalPanel.test.tsx src\bus\contract.test.ts --run` passed 58/58.
+  - `npm run build` passed with the existing Vite chunk-size warning.
+  - `git diff --check` passed with existing CRLF warnings only.
+- Exact next recommended slice: inspect the dirty worktree first, then add an artifacts/files inspector that shows relevant files and commands for the selected turn. Keep it replaceable: UI should depend on `AgentSession`/timeline/turn abstractions, not Codex-specific assumptions beyond labels/logos.
+- Verification expected for the next slice: targeted Vitest for the changed agent UI behavior, `npx tsc --noEmit`, the short terminal/contract suite, `npm run build`, and `git diff --check`.
+
 ## Non-goals
 - Removing the existing PTY runtime.
 - Implementing OpenCode or Claude native adapters.

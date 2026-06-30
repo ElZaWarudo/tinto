@@ -67,6 +67,8 @@ pub fn run() {
     let (bus_handle, bus_rx) = bus::BusHandle::new_pair();
     let mut bus_rx = Some(bus_rx);
     let mut initial_repos = Some(initial_repos);
+    let agent_journal = agent_console::journal::AgentJournal::open_default()
+        .expect("no se pudo abrir el diario SQLite de agentes");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -75,6 +77,7 @@ pub fn run() {
         .manage(std::sync::Mutex::new(
             agent_console::AgentSessionRegistry::new(),
         ))
+        .manage(std::sync::Mutex::new(agent_journal))
         .manage(bus_handle)
         .invoke_handler(tauri::generate_handler![
             ping,
@@ -115,6 +118,8 @@ pub fn run() {
             agent_console::commands::start_agent_session,
             agent_console::commands::stop_agent_session,
             agent_console::commands::list_agent_sessions,
+            agent_console::commands::list_agent_journal_sessions,
+            agent_console::commands::get_agent_journal_session,
             agent_console::commands::agent_binary_available,
             agent_console::commands::agent_binary_available_for_repo,
             agent_console::commands::write_agent_session_input,

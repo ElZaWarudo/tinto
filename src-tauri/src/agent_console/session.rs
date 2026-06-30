@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::bus::contract::{
     AgentSession, AgentSessionChange, AgentSessionError, AgentSessionStatus,
-    AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
+    AgentSessionTimelineItem, AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -21,6 +21,7 @@ use super::{
 const OUTPUT_QUIET_MS: u64 = 2_000;
 const FILESYSTEM_QUIET_MS: u64 = 1_500;
 const WSL_TURN_SCAN_INTERVAL_MS: u64 = 5_000;
+const MAX_TIMELINE_ITEMS_PER_SESSION: usize = 2_000;
 
 pub struct AgentSessionRecord {
     id: String,
@@ -47,6 +48,7 @@ pub struct AgentSessionRecord {
     pending_turn_seen_at_ms: Option<u64>,
     last_turn_scan_at_ms: Option<u64>,
     next_turn_index: u32,
+    timeline: Vec<AgentSessionTimelineItem>,
     reverted_at_ms: Option<u64>,
 }
 
@@ -91,6 +93,7 @@ impl AgentSessionRecord {
             pending_turn_seen_at_ms: None,
             last_turn_scan_at_ms: None,
             next_turn_index: 1,
+            timeline: Vec::new(),
             reverted_at_ms: None,
         }
     }
@@ -289,6 +292,17 @@ impl AgentSessionRecord {
         self.note_turn_activity(timestamp_ms);
     }
 
+    pub fn record_timeline_item(&mut self, item: AgentSessionTimelineItem) {
+        if self.timeline.iter().any(|existing| existing.id == item.id) {
+            return;
+        }
+        self.timeline.push(item);
+        if self.timeline.len() > MAX_TIMELINE_ITEMS_PER_SESSION {
+            let overflow = self.timeline.len() - MAX_TIMELINE_ITEMS_PER_SESSION;
+            self.timeline.drain(0..overflow);
+        }
+    }
+
     pub fn record_turn_done(&mut self, timestamp_ms: u64) -> Result<(), AgentConsoleError> {
         self.refresh_turn_checkpoints(timestamp_ms, true)
     }
@@ -414,6 +428,7 @@ impl AgentSessionRecord {
             id: self.id.clone(),
             repo: self.repo.clone(),
             agent_type: self.agent_type.clone(),
+            wsl_distro: self.wsl_distro.clone(),
             status: self.status,
             pid: self.pid,
             started_at_ms: self.started_at_ms,
@@ -431,6 +446,7 @@ impl AgentSessionRecord {
                 .iter()
                 .map(AgentTurnCheckpointRecord::to_contract)
                 .collect(),
+            timeline: self.timeline.clone(),
             reverted_at_ms: self.reverted_at_ms,
             active_sessions,
             age_ms: now_ms.saturating_sub(self.started_at_ms),

@@ -210,6 +210,7 @@ import {
   agentBinaryAvailableForRepo,
   addWslRepo,
   forgetRepo,
+  getAgentJournalSession,
   getCommitDiff,
   getGitleaksSetupStatus,
   getRepoGitleaksSetupStatus,
@@ -220,6 +221,7 @@ import {
   installRepoGitleaks,
   createRepoAgentsMdConfig,
   createRepoGitleaksConfig,
+  listAgentJournalSessions,
   listAgentSessions,
   listRepoTree,
   listWslDirectory,
@@ -348,6 +350,16 @@ describe("RDM-008 client wrappers", () => {
 
     void listAgentSessions();
     expect(invokeMock).toHaveBeenCalledWith("list_agent_sessions");
+
+    void listAgentJournalSessions(12);
+    expect(invokeMock).toHaveBeenCalledWith("list_agent_journal_sessions", {
+      limit: 12,
+    });
+
+    void getAgentJournalSession("sess-1");
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_journal_session", {
+      sessionId: "sess-1",
+    });
 
     void revertSession("sess-1", true);
     expect(invokeMock).toHaveBeenCalledWith("revert_session", {

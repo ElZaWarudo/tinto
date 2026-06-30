@@ -9,12 +9,14 @@ const h = vi.hoisted(() => ({
   sessionsCb: null as ((sessions: unknown) => void) | null,
   changeLogCb: null as ((log: unknown) => void) | null,
   outputCb: null as ((output: unknown) => void) | null,
+  timelineCb: null as ((item: unknown) => void) | null,
   unlistenDelta: vi.fn(),
   unlistenFs: vi.fn(),
   unlistenWatch: vi.fn(),
   unlistenSessions: vi.fn(),
   unlistenChangeLog: vi.fn(),
   unlistenOutput: vi.fn(),
+  unlistenTimeline: vi.fn(),
   getSnapshot: vi.fn(),
   listWb: vi.fn(),
   listSessions: vi.fn(),
@@ -46,6 +48,10 @@ vi.mock("./client", () => ({
   onAgentSessionOutput: vi.fn((cb) => {
     h.outputCb = cb;
     return Promise.resolve(h.unlistenOutput);
+  }),
+  onAgentSessionTimeline: vi.fn((cb) => {
+    h.timelineCb = cb;
+    return Promise.resolve(h.unlistenTimeline);
   }),
   getWorkbenchSnapshot: () => h.getSnapshot(),
   listWorkbenches: () => h.listWb(),
@@ -100,6 +106,7 @@ describe("useBusConnection", () => {
     expect(h.sessionsCb).toBeTypeOf("function");
     expect(h.changeLogCb).toBeTypeOf("function");
     expect(h.outputCb).toBeTypeOf("function");
+    expect(h.timelineCb).toBeTypeOf("function");
     expect(busStore.getState().config?.active).toBe("Work");
   });
 
@@ -146,6 +153,7 @@ describe("useBusConnection", () => {
     expect(h.unlistenSessions).toHaveBeenCalled();
     expect(h.unlistenChangeLog).toHaveBeenCalled();
     expect(h.unlistenOutput).toHaveBeenCalled();
+    expect(h.unlistenTimeline).toHaveBeenCalled();
 
     // A late event after unmount must be ignored (the `active` guard).
     const before = Object.keys(busStore.getState().repos).length;
@@ -168,6 +176,23 @@ describe("useBusConnection", () => {
     expect(agentSessionStore.getState().output["sess-1"]).toHaveLength(1);
   });
 
+  it("buffers native agent timeline received before a panel mounts", async () => {
+    render(createElement(Probe));
+    await waitFor(() => expect(h.timelineCb).toBeTypeOf("function"));
+
+    act(() =>
+      h.timelineCb!({
+        session_id: "sess-1",
+        id: "sess-1:1",
+        kind: "agent_message",
+        text: "Listo",
+        timestamp_ms: 2,
+      }),
+    );
+
+    expect(agentSessionStore.getState().timeline["sess-1"]).toHaveLength(1);
+  });
+
   it("applies pushed agent session snapshots", async () => {
     render(createElement(Probe));
     await waitFor(() => expect(h.sessionsCb).toBeTypeOf("function"));
@@ -187,6 +212,15 @@ describe("useBusConnection", () => {
           change_log: [],
           turn_status: "working",
           turn_checkpoints: [],
+          timeline: [
+            {
+              session_id: "sess-1",
+              id: "sess-1:timeline:1",
+              kind: "agent_message",
+              text: "Snapshot restored",
+              timestamp_ms: 11,
+            },
+          ],
           active_sessions: 1,
           age_ms: 10,
         },
@@ -194,6 +228,7 @@ describe("useBusConnection", () => {
     );
 
     expect(agentSessionStore.getState().sessions["sess-1"]?.status).toBe("running");
+    expect(agentSessionStore.getState().timeline["sess-1"]?.[0]?.text).toBe("Snapshot restored");
   });
 
   it("swallows a failed config load without throwing", async () => {

@@ -15,6 +15,7 @@ pub const EVENT_WATCHING_STATE: &str = "tinto://watching-state";
 pub const EVENT_AGENT_SESSIONS_CHANGED: &str = "tinto://agent-sessions-changed";
 pub const EVENT_AGENT_SESSION_OUTPUT: &str = "tinto://agent-session-output";
 pub const EVENT_AGENT_SESSION_CHANGE_LOG: &str = "tinto://agent-session-change-log";
+pub const EVENT_AGENT_SESSION_TIMELINE: &str = "tinto://agent-session-timeline";
 
 /// Estado lifecycle de una sesion de agente gestionada por el backend.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,6 +104,8 @@ pub struct AgentSession {
     pub id: String,
     pub repo: PathBuf,
     pub agent_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
     pub status: AgentSessionStatus,
     pub pid: Option<u32>,
     pub started_at_ms: u64,
@@ -117,6 +120,8 @@ pub struct AgentSession {
     pub turn_status: AgentSessionTurnStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub turn_checkpoints: Vec<AgentSessionTurnCheckpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline: Vec<AgentSessionTimelineItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
     pub active_sessions: usize,
@@ -134,7 +139,46 @@ pub struct AgentSessionOutput {
     pub timestamp_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionTimelineKind {
+    UserMessage,
+    AgentMessage,
+    CommandOutput,
+    Lifecycle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionTimelineItem {
+    pub session_id: String,
+    pub id: String,
+    pub kind: AgentSessionTimelineKind,
+    pub text: String,
+    pub timestamp_ms: u64,
+}
+
 /// Guarda de tamaño para contenido de archivos/blobs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentJournalSessionSummary {
+    pub id: String,
+    pub repo: PathBuf,
+    pub agent_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
+    pub status: AgentSessionStatus,
+    pub started_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+    pub updated_at_ms: u64,
+    pub event_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_kind: Option<AgentSessionTimelineKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_at_ms: Option<u64>,
+}
+
 pub const FILE_CONTENT_MAX_BYTES: usize = 1024 * 1024;
 /// Guarda de tamaño para vistas multimedia embebidas (PDF/imágenes).
 pub const MEDIA_CONTENT_MAX_BYTES: usize = 12 * 1024 * 1024;
@@ -427,6 +471,7 @@ mod tests {
             id: "sess-1".into(),
             repo: "/r/api".into(),
             agent_type: "codex".into(),
+            wsl_distro: None,
             status: AgentSessionStatus::Running,
             pid: Some(42),
             started_at_ms: 1760000000000,
@@ -463,6 +508,13 @@ mod tests {
                     timestamp_ms: 1760000000100,
                 }],
             }],
+            timeline: vec![AgentSessionTimelineItem {
+                session_id: "sess-1".into(),
+                id: "evt-1".into(),
+                kind: AgentSessionTimelineKind::AgentMessage,
+                text: "Listo".into(),
+                timestamp_ms: 1760000000101,
+            }],
             reverted_at_ms: None,
             active_sessions: 1,
             age_ms: 42,
@@ -486,6 +538,8 @@ mod tests {
             json["turn_checkpoints"][0]["changes"][0]["kind"],
             "modified"
         );
+        assert_eq!(json["timeline"][0]["kind"], "agent_message");
+        assert_eq!(json["timeline"][0]["text"], "Listo");
         assert_eq!(json["active_sessions"], 1);
         assert_eq!(json["age_ms"], 42);
     }
@@ -502,5 +556,21 @@ mod tests {
         assert_eq!(json["session_id"], "sess-1");
         assert_eq!(json["chunk_base64"], "SG9sYQ0K");
         assert_eq!(json["timestamp_ms"], 1760000000001u64);
+    }
+
+    #[test]
+    fn agent_session_timeline_serializa_evento_nativo() {
+        let item = AgentSessionTimelineItem {
+            session_id: "sess-1".into(),
+            id: "sess-1:1".into(),
+            kind: AgentSessionTimelineKind::AgentMessage,
+            text: "Hecho".into(),
+            timestamp_ms: 1760000000001,
+        };
+
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["session_id"], "sess-1");
+        assert_eq!(json["kind"], "agent_message");
+        assert_eq!(json["text"], "Hecho");
     }
 }
