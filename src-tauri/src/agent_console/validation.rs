@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
-use std::fs;
+use std::{env, fs, time::SystemTime};
 
 use super::AgentConsoleError;
 
@@ -90,28 +90,57 @@ fn fallback_agent_candidates(agent_type: &str) -> Vec<PathBuf> {
     if !agent_type.eq_ignore_ascii_case("codex") {
         return Vec::new();
     }
-    let Some(local_appdata) = std::env::var_os("LOCALAPPDATA") else {
-        return Vec::new();
-    };
-    let base = PathBuf::from(local_appdata)
-        .join("OpenAI")
-        .join("Codex")
-        .join("bin");
-    let Ok(entries) = fs::read_dir(base) else {
-        return Vec::new();
-    };
 
-    let mut candidates = entries
-        .flatten()
-        .map(|entry| entry.path().join("codex.exe"))
+    let mut paths = Vec::new();
+    if let Some(local_appdata) = env::var_os("LOCALAPPDATA") {
+        append_codex_install_candidates(&PathBuf::from(local_appdata), &mut paths);
+    }
+    if let Some(path) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&path).map(|entry| entry.join("codex.exe")));
+    }
+
+    sorted_existing_candidates(paths)
+}
+
+#[cfg(windows)]
+fn append_codex_install_candidates(local_appdata: &Path, paths: &mut Vec<PathBuf>) {
+    let versioned_bin = local_appdata.join("OpenAI").join("Codex").join("bin");
+    if let Ok(entries) = fs::read_dir(versioned_bin) {
+        paths.extend(
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("codex.exe")),
+        );
+    }
+
+    paths.push(
+        local_appdata
+            .join("Packages")
+            .join("OpenAI.Codex_2p2nqsd0c76g0")
+            .join("LocalCache")
+            .join("Local")
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("codex.exe"),
+    );
+}
+
+#[cfg(windows)]
+fn sorted_existing_candidates(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut candidates = paths
+        .into_iter()
         .filter_map(|path| {
-            let modified = fs::metadata(&path)
-                .and_then(|metadata| metadata.modified())
-                .ok()?;
+            let metadata = fs::metadata(&path).ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
             Some((modified, path))
         })
         .collect::<Vec<_>>();
     candidates.sort_by_key(|(modified, _)| *modified);
+    candidates.dedup_by(|(_, left), (_, right)| left == right);
     candidates.into_iter().rev().map(|(_, path)| path).collect()
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
@@ -12,7 +12,7 @@ import {
   stopAgentSession,
   writeAgentSessionInput,
 } from "../../bus/client";
-import { agentSessionStore, useAgentSession, useAgentSessionState } from "../../agent/sessionStore";
+import { agentSessionStore, useAgentSession, useAgentSessionOutput } from "../../agent/sessionStore";
 import type { AgentSession } from "../../bus/contract";
 import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
 
@@ -31,7 +31,6 @@ const panelCloseStopTimers = new Map<string, number>();
 const PANEL_CLOSE_STOP_DELAY_MS = 250;
 const DETACHED_TRANSFER_STOP_DELAY_MS = 5000;
 const TERMINAL_FOCUS_DELAY_MS = 0;
-const SESSION_REFRESH_INTERVAL_MS = 1500;
 
 export function TerminalPanel({ params, api }: TerminalPanelProps) {
   const sessionId = params?.sessionId ?? "";
@@ -39,14 +38,14 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
   const agentType = params?.agentType ?? "agent";
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const session = useAgentSession(sessionId);
-  const { output, outputTotal } = useAgentSessionState();
-  const sessionOutput = useMemo(() => output[sessionId] ?? [], [output, sessionId]);
-  const sessionOutputTotal = outputTotal[sessionId] ?? 0;
+  const { chunks: sessionOutput, total: sessionOutputTotal } = useAgentSessionOutput(sessionId);
   const [error, setError] = useState<string | null>(null);
   const [reverting, setReverting] = useState(false);
   const [revertingFile, setRevertingFile] = useState<string | null>(null);
   const terminalInstanceRef = useRef<Terminal | null>(null);
   const writtenOutputRef = useRef(0);
+  const pendingOutputChunksRef = useRef<Uint8Array[]>([]);
+  const outputFlushFrameRef = useRef<number | null>(null);
   const panelActiveRef = useRef(false);
 
   const shortSession = useMemo(
@@ -89,7 +88,7 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     panelActiveRef.current = api.isActive;
     const terminal = new Terminal({
       convertEol: true,
-      cursorBlink: true,
+      cursorBlink: false,
       fontFamily: "Consolas, 'Cascadia Mono', 'SFMono-Regular', monospace",
       fontSize: 13,
       theme: {
@@ -103,6 +102,8 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     terminalInstanceRef.current = terminal;
+    pendingOutputChunksRef.current = [];
+    outputFlushFrameRef.current = null;
     const textarea = terminal.textarea;
     if (textarea) {
       textarea.spellcheck = false;
@@ -321,6 +322,11 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       activeSubscription.dispose();
       dataSubscription.dispose();
       cursorSubscription.dispose();
+      if (outputFlushFrameRef.current !== null) {
+        window.cancelAnimationFrame(outputFlushFrameRef.current);
+        outputFlushFrameRef.current = null;
+      }
+      pendingOutputChunksRef.current = [];
       fitAddon.dispose();
       terminal.dispose();
       terminalInstanceRef.current = null;
@@ -342,18 +348,12 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
     if (newChunkCount > 0) {
       const startIdx = Math.max(0, sessionOutput.length - newChunkCount);
       for (let index = startIdx; index < sessionOutput.length; index += 1) {
-        terminal.write(decodeBase64(sessionOutput[index].chunk_base64));
+        pendingOutputChunksRef.current.push(decodeBase64(sessionOutput[index].chunk_base64));
       }
       writtenOutputRef.current = totalAppended;
+      scheduleOutputFlush(terminal, pendingOutputChunksRef, outputFlushFrameRef);
     }
-    if (
-      panelActiveRef.current &&
-      terminal.textarea &&
-      document.activeElement !== terminal.textarea
-    ) {
-      window.requestAnimationFrame(() => focusTerminal());
-    }
-  }, [focusTerminal, sessionOutput, sessionOutputTotal]);
+  }, [sessionOutput, sessionOutputTotal]);
 
   useEffect(() => {
     let active = true;
@@ -368,23 +368,6 @@ export function TerminalPanel({ params, api }: TerminalPanelProps) {
       active = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    let active = true;
-    const refresh = () => {
-      void listAgentSessions()
-        .then((sessions) => {
-          if (active) agentSessionStore.setSessions(sessions);
-        })
-        .catch(() => {});
-    };
-    const timer = window.setInterval(refresh, SESSION_REFRESH_INTERVAL_MS);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [sessionId]);
 
   const canRevert =
     !!session &&
@@ -594,6 +577,33 @@ function decodeBase64(chunk: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function scheduleOutputFlush(
+  terminal: Terminal,
+  pendingOutputChunksRef: MutableRefObject<Uint8Array[]>,
+  outputFlushFrameRef: MutableRefObject<number | null>,
+) {
+  if (outputFlushFrameRef.current !== null) return;
+  outputFlushFrameRef.current = window.requestAnimationFrame(() => {
+    outputFlushFrameRef.current = null;
+    const chunks = pendingOutputChunksRef.current;
+    if (chunks.length === 0) return;
+    pendingOutputChunksRef.current = [];
+    terminal.write(mergeChunks(chunks));
+  });
+}
+
+function mergeChunks(chunks: Uint8Array[]): Uint8Array {
+  if (chunks.length === 1) return chunks[0];
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
 }
 
 function commandMessage(error: unknown): string {

@@ -392,11 +392,26 @@ fn packaged_agent_install_cache() -> &'static Mutex<HashSet<String>> {
 #[cfg(any(target_os = "windows", test))]
 fn packaged_agent_install_cache_key(distro: &str, source: &Path) -> String {
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         AGENT_VERSION,
         distro.trim(),
-        source.to_string_lossy()
+        source.to_string_lossy(),
+        packaged_agent_source_fingerprint(source)
     )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn packaged_agent_source_fingerprint(source: &Path) -> String {
+    let Ok(metadata) = std::fs::metadata(source) else {
+        return "missing".to_string();
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| format!("{}.{}", duration.as_secs(), duration.subsec_nanos()))
+        .unwrap_or_else(|| "unknown".to_string());
+    format!("{}:{modified}", metadata.len())
 }
 
 #[cfg(target_os = "windows")]
@@ -552,7 +567,16 @@ fn request_with_persistent_agent(
         let agent = pooled_agent(&key, &argv)?;
         match agent.exchange(&request_line, timeout) {
             Ok(line) => match parse_agent_response_line(&line) {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    let retry = attempt == 0
+                        && request_is_retry_safe(request)
+                        && response_indicates_stale_agent(&response);
+                    if retry {
+                        drop_pooled_agent(&key, Some(&agent));
+                        continue;
+                    }
+                    return Ok(response);
+                }
                 Err(error) => {
                     drop_pooled_agent(&key, Some(&agent));
                     return Err(error);
@@ -592,8 +616,19 @@ fn request_is_retry_safe(request: &AgentRequest) -> bool {
             | AgentRequest::MediaContent { .. }
             | AgentRequest::RepoTree { .. }
             | AgentRequest::GitleaksSetupStatus { .. }
+            | AgentRequest::CreateGitleaksConfig { .. }
+            | AgentRequest::CreateAgentsMdConfig { .. }
             | AgentRequest::AgentBinaryAvailable { .. }
             | AgentRequest::AgentCheckpointScan { .. }
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn response_indicates_stale_agent(response: &AgentResponse) -> bool {
+    matches!(
+        response,
+        AgentResponse::Error { category, message }
+            if category == "malformed_response" && message == "mensaje invalido"
     )
 }
 
@@ -1166,6 +1201,11 @@ mod tests {
             allowed_repos: vec!["/home/me/repo".into()],
             sources: vec!["old.txt".into()],
         };
+        let idempotent_agents_md = AgentRequest::CreateAgentsMdConfig {
+            protocol_version: PROTOCOL_VERSION,
+            repo: "/home/me/repo".into(),
+            allowed_repos: vec!["/home/me/repo".into()],
+        };
         let mutating_checkpoint = AgentRequest::AgentCheckpointCreate {
             protocol_version: PROTOCOL_VERSION,
             repo: "/home/me/repo".into(),
@@ -1192,9 +1232,22 @@ mod tests {
 
         assert!(request_is_retry_safe(&read_only));
         assert!(request_is_retry_safe(&availability));
+        assert!(request_is_retry_safe(&idempotent_agents_md));
         assert!(!request_is_retry_safe(&mutating_delete));
         assert!(!request_is_retry_safe(&mutating_checkpoint));
         assert!(!request_is_retry_safe(&mutating_checkpoint_file));
+    }
+
+    #[test]
+    fn stale_agent_error_is_detected_for_pool_restart() {
+        assert!(response_indicates_stale_agent(&AgentResponse::Error {
+            category: "malformed_response".into(),
+            message: "mensaje invalido".into(),
+        }));
+        assert!(!response_indicates_stale_agent(&AgentResponse::Error {
+            category: "repo-not-allowed".into(),
+            message: "el repo no pertenece al workbench activo".into(),
+        }));
     }
 
     #[test]

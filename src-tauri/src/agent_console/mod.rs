@@ -2,6 +2,7 @@
 //! conectan en el siguiente review unit; este modulo mantiene el lifecycle
 //! testeable sin exponer todavia nueva superficie IPC.
 
+pub mod app_server;
 pub mod checkpoint;
 pub mod commands;
 pub mod pty;
@@ -21,7 +22,7 @@ use crate::wsl_agent::{
     launcher::request_wsl_agent,
     protocol::{AgentError, AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
-use checkpoint::{CheckpointConfig, CheckpointRecord};
+use checkpoint::{create_checkpoint, CheckpointConfig, CheckpointRecord};
 use pty::{AgentProcessFactory, PortablePtyFactory};
 use session::{AgentSessionRecord, CheckpointBackend};
 use validation::{resolve_agent_binary, validate_agent_type};
@@ -148,6 +149,12 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
+        let checkpoint = Some(create_checkpoint(
+            &repo,
+            &id,
+            started_at_ms,
+            &self.checkpoint_config,
+        )?);
         let mut process = self.process_factory.spawn_agent(&binary_path, &repo)?;
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
@@ -155,7 +162,7 @@ impl AgentSessionRegistry {
             repo,
             agent_type,
             started_at_ms,
-            None,
+            checkpoint,
             self.checkpoint_config.clone(),
             CheckpointBackend::Local,
         );
@@ -170,7 +177,7 @@ impl AgentSessionRegistry {
         distro: String,
         agent_type: String,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
-        self.start_wsl_session_with_output_inner(repo, distro, agent_type, false, false)
+        self.start_wsl_session_with_output_inner(repo, distro, agent_type, true, true)
     }
 
     #[cfg(test)]
@@ -304,6 +311,18 @@ impl AgentSessionRegistry {
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         session.record_output_activity(timestamp_ms);
         Ok(())
+    }
+
+    pub fn record_session_turn_done(
+        &mut self,
+        session_id: &str,
+        timestamp_ms: u64,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.record_turn_done(timestamp_ms)
     }
 
     pub fn revert_turn_file(
@@ -454,7 +473,9 @@ where
         Ok(AgentResponse::AgentBinaryAvailable { available: false }) => {
             Err(AgentConsoleError::new(
                 "binary_not_found",
-                format!("no se encontro el binario '{agent_type}' en PATH"),
+                format!(
+                    "no se encontro el binario '{agent_type}' en PATH dentro de WSL ({distro}); instala el agente en esa distro o crea un enlace en ~/.local/bin"
+                ),
             ))
         }
         Ok(AgentResponse::Error { category, message }) => {
@@ -862,10 +883,11 @@ mod tests {
     }
 
     #[test]
-    fn registry_local_start_does_not_create_initial_checkpoint() {
+    fn registry_local_start_creates_initial_checkpoint() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry = AgentSessionRegistry::with_process_factory(factory);
         let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("base.txt"), "before\n").unwrap();
         let binary = repo.path().join("codex-bin");
         std::fs::write(&binary, "fake").unwrap();
 
@@ -874,7 +896,33 @@ mod tests {
             .unwrap();
 
         let session = registry.get_session(&started.id).unwrap();
-        assert_eq!(session.checkpoint, None);
+        assert!(session.checkpoint.is_some());
+    }
+
+    #[test]
+    fn registry_local_revert_restores_initial_checkpoint() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("base.txt"), "before\n").unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+        std::fs::write(repo.path().join("base.txt"), "after\n").unwrap();
+        std::fs::write(repo.path().join("created.txt"), "new\n").unwrap();
+        registry.stop_session(&id).unwrap();
+
+        let reverted = registry.revert_session(&id, true).unwrap();
+
+        assert_eq!(reverted.status, AgentSessionStatus::Reverted);
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "before\n"
+        );
+        assert!(!repo.path().join("created.txt").exists());
     }
 
     #[test]
@@ -910,28 +958,6 @@ mod tests {
 
         let started = registry
             .start_wsl_session_with_output_for_test(
-                PathBuf::from("/home/me/repo"),
-                "Ubuntu".into(),
-                "codex".into(),
-            )
-            .unwrap();
-
-        let session = registry.get_session(&started.id).unwrap();
-        assert_eq!(session.repo, PathBuf::from("/home/me/repo"));
-        assert_eq!(session.checkpoint, None);
-        assert_eq!(
-            factory.spawned.lock().unwrap().as_slice(),
-            &[PathBuf::from("Ubuntu:codex:/home/me/repo")]
-        );
-    }
-
-    #[test]
-    fn registry_public_wsl_start_does_not_require_remote_preflight() {
-        let factory = Arc::new(FakeProcessFactory::default());
-        let mut registry = AgentSessionRegistry::with_process_factory(factory.clone());
-
-        let started = registry
-            .start_wsl_session_with_output(
                 PathBuf::from("/home/me/repo"),
                 "Ubuntu".into(),
                 "codex".into(),
