@@ -76,6 +76,11 @@ export function DashboardPanel() {
     (w) => w.name === state.config?.active,
   );
   const repoEntries = new Map((activeConfig?.repos ?? []).map((repo) => [repo.path, repo]));
+  const configuredRepoEntries = new Map(
+    (state.config?.workbenches ?? []).flatMap((workbench) =>
+      workbench.repos.map((repo) => [repo.path, repo] as const),
+    ),
+  );
   const allPaths = mergeActiveConfigPaths(
     sortedRepoPaths(busStore, state),
     (activeConfig?.repos ?? []).map((repo) => repo.path),
@@ -122,12 +127,14 @@ export function DashboardPanel() {
       ) : (
         <div className="card-grid">
           {paths.map((p) => {
-            const entry = repoEntries.get(p);
+            const entry = repoEntries.get(p) ?? configuredRepoEntries.get(p);
             return (
               <RepoCard
                 key={p}
                 delta={effectiveRepos[p]}
                 name={busStore.displayName(p)}
+                source={entry?.source}
+                distro={entry?.distro ?? null}
                 activityMs={activity[p] ?? 0}
                 nowMs={nowMs}
                 availabilityKey={agentAvailabilityKey(entry?.source, entry?.distro)}

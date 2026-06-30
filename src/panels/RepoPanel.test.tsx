@@ -7,11 +7,13 @@ const getCommitLogMock = vi.fn();
 const retryRepoMock = vi.fn();
 const updateRepoFsWatchMock = vi.fn();
 const createRepoGitleaksConfigMock = vi.fn();
+const createRepoAgentsMdConfigMock = vi.fn();
 let nestedDockviewProps: Record<string, unknown> | null = null;
 vi.mock("../bus/client", () => ({
   getCommitLog: (...a: unknown[]) => getCommitLogMock(...a),
   retryRepo: (...a: unknown[]) => retryRepoMock(...a),
   createRepoGitleaksConfig: (...a: unknown[]) => createRepoGitleaksConfigMock(...a),
+  createRepoAgentsMdConfig: (...a: unknown[]) => createRepoAgentsMdConfigMock(...a),
   // FileView (imported by RepoPanel) pulls in the subscription reconciler, which
   // binds setSubscriptions at module load. The overview tests never render it,
   // but the export must exist.
@@ -70,8 +72,10 @@ describe("RepoPanel", () => {
     retryRepoMock.mockReset();
     updateRepoFsWatchMock.mockReset();
     createRepoGitleaksConfigMock.mockReset();
+    createRepoAgentsMdConfigMock.mockReset();
     updateRepoFsWatchMock.mockResolvedValue(undefined);
     createRepoGitleaksConfigMock.mockResolvedValue(undefined);
+    createRepoAgentsMdConfigMock.mockResolvedValue(undefined);
     nestedDockviewProps = null;
   });
 
@@ -87,6 +91,37 @@ describe("RepoPanel", () => {
     expect(screen.getByTestId("status-lists")).toHaveTextContent("new.txt");
     await waitFor(() => expect(screen.getByTestId("commit-log")).toHaveTextContent("fix parser"));
     expect(getCommitLogMock).toHaveBeenCalledWith("/r/api", 0, 30);
+  });
+
+  it("marks WSL repos in the repo summary header", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              {
+                path: "/home/me/api",
+                alias: "API",
+                source: "wsl",
+                distro: "Ubuntu-24.04",
+                fs_watch: [],
+              },
+            ],
+          },
+        ],
+      });
+      busStore.loadSnapshot([delta("/home/me/api")], { available: true });
+    });
+
+    render(<RepoPanel {...panelProps("/home/me/api")} />);
+
+    const badge = screen.getByTestId("repo-source-badge");
+    expect(badge).toHaveTextContent("WSL");
+    expect(badge).toHaveAttribute("title", "WSL · Ubuntu-24.04");
   });
 
   it("reloads commits on HEAD changes, not status-only revision changes", async () => {
@@ -229,17 +264,44 @@ describe("RepoPanel", () => {
     expect(screen.getByTestId("status-file-src/a.rs")).toHaveTextContent("Config");
   });
 
-  it("configures the repo Gitleaks file from the overview notice", async () => {
+  it("configures repo-specific files from the overview configuration section", async () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() =>
-      busStore.loadSnapshot([delta("/r/api", { gitleaks_configured: false })], { available: true }),
+      busStore.loadSnapshot(
+        [delta("/r/api", { gitleaks_configured: false, agents_md_configured: false })],
+        { available: true },
+      ),
     );
     render(<RepoPanel {...panelProps("/r/api")} />);
 
-    fireEvent.click(screen.getByText("Configurar"));
+    const section = screen.getByTestId("repo-config-section");
+    const buttons = within(section).getAllByRole("button", { name: "Configurar" });
+    fireEvent.click(buttons[0]);
 
     expect(createRepoGitleaksConfigMock).toHaveBeenCalledWith("/r/api");
-    expect(await screen.findByText("Configurado")).toBeInTheDocument();
+    await waitFor(() => expect(within(section).getAllByText("Configurado")).toHaveLength(1));
+
+    fireEvent.click(within(section).getByRole("button", { name: "Configurar" }));
+    expect(createRepoAgentsMdConfigMock).toHaveBeenCalledWith("/r/api");
+    await waitFor(() => expect(within(section).getAllByText("Configurado")).toHaveLength(2));
+  });
+
+  it("renders configured repo settings as compact status rows", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() =>
+      busStore.loadSnapshot(
+        [delta("/r/api", { gitleaks_configured: true, agents_md_configured: true })],
+        { available: true },
+      ),
+    );
+
+    render(<RepoPanel {...panelProps("/r/api")} />);
+
+    const section = screen.getByTestId("repo-config-section");
+    expect(within(section).getAllByText("Configurado")).toHaveLength(2);
+    expect(within(section).queryByText(/falsos positivos/i)).toBeNull();
+    expect(within(section).queryByText(/notifiquen a Tinto/i)).toBeNull();
+    expect(within(section).queryByRole("button", { name: "Configurar" })).toBeNull();
   });
 
   it("shows a terminal error with a working retry", async () => {

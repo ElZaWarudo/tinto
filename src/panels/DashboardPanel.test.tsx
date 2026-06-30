@@ -147,6 +147,8 @@ describe("DashboardPanel", () => {
     renderDash();
 
     expect(screen.getByTestId("card-/home/me/chat-n-food")).toBeInTheDocument();
+    expect(screen.getByTestId("repo-source-badge")).toHaveTextContent("WSL");
+    expect(screen.getByTestId("repo-source-badge")).toHaveAttribute("title", "WSL · Ubuntu");
     expect(screen.getByTestId("error-detail")).toHaveTextContent("Waiting for repo snapshot");
     await waitFor(() =>
       expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith(

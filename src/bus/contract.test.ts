@@ -218,6 +218,7 @@ import {
   getWorktreeDiff,
   installGitleaks,
   installRepoGitleaks,
+  createRepoAgentsMdConfig,
   createRepoGitleaksConfig,
   listAgentSessions,
   listRepoTree,
@@ -425,5 +426,8 @@ describe("RDM-008 client wrappers", () => {
 
     void createRepoGitleaksConfig("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("create_repo_gitleaks_config", { repo: "/r/api" });
+
+    void createRepoAgentsMdConfig("/r/api");
+    expect(invokeMock).toHaveBeenCalledWith("create_repo_agents_md_config", { repo: "/r/api" });
   });
 });

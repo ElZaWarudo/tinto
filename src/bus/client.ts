@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  EVENT_AGENT_SESSIONS_CHANGED,
   EVENT_AGENT_SESSION_OUTPUT,
   EVENT_AGENT_SESSION_CHANGE_LOG,
   EVENT_FS_EVENTS,
@@ -121,6 +122,8 @@ export const installRepoGitleaks = (repo: string) =>
   invoke<GitleaksInstallResult>("install_repo_gitleaks", { repo });
 export const createRepoGitleaksConfig = (repo: string) =>
   invoke("create_repo_gitleaks_config", { repo });
+export const createRepoAgentsMdConfig = (repo: string) =>
+  invoke("create_repo_agents_md_config", { repo });
 
 export const revertSession = (sessionId: string, userConsent: boolean) =>
   invoke<AgentSession>("revert_session", { sessionId, userConsent });
@@ -225,6 +228,11 @@ export const onFsEvents = (cb: (b: FsEventBatch) => void): Promise<UnlistenFn> =
 
 export const onWatchingState = (cb: (w: WatchingState) => void): Promise<UnlistenFn> =>
   listen<WatchingState>(EVENT_WATCHING_STATE, (e) => cb(e.payload));
+
+export const onAgentSessionsChanged = (
+  cb: (sessions: AgentSession[]) => void,
+): Promise<UnlistenFn> =>
+  listen<AgentSession[]>(EVENT_AGENT_SESSIONS_CHANGED, (e) => cb(e.payload));
 
 export const onAgentSessionOutput = (
   cb: (output: AgentSessionOutput) => void,

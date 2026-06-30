@@ -12,6 +12,7 @@ use crate::git::{BranchInfo, CommitInfo, FileDiff, RepoStatus};
 pub const EVENT_WORKBENCH_DELTA: &str = "tinto://workbench-delta";
 pub const EVENT_FS_EVENTS: &str = "tinto://fs-events";
 pub const EVENT_WATCHING_STATE: &str = "tinto://watching-state";
+pub const EVENT_AGENT_SESSIONS_CHANGED: &str = "tinto://agent-sessions-changed";
 pub const EVENT_AGENT_SESSION_OUTPUT: &str = "tinto://agent-session-output";
 pub const EVENT_AGENT_SESSION_CHANGE_LOG: &str = "tinto://agent-session-change-log";
 
@@ -239,6 +240,8 @@ pub struct RepoDelta {
     pub error: Option<RepoErrorState>,
     pub metrics: RepoMetrics,
     pub gitleaks_configured: bool,
+    #[serde(default)]
+    pub agents_md_configured: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signals: Vec<PassiveSignal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -356,6 +359,7 @@ mod tests {
                 lines_removed: 3,
             },
             gitleaks_configured: false,
+            agents_md_configured: false,
             signals: vec![PassiveSignal {
                 kind: PassiveSignalKind::SensitivePath,
                 severity: SignalSeverity::Warning,
@@ -376,6 +380,7 @@ mod tests {
         assert_eq!(json["error"]["class"], "terminal");
         assert_eq!(json["metrics"]["changed_files"], 1);
         assert_eq!(json["gitleaks_configured"], false);
+        assert_eq!(json["agents_md_configured"], false);
         assert_eq!(json["signals"][0]["kind"], "sensitive_path");
         assert_eq!(json["signals"][0]["severity"], "warning");
         assert_eq!(json["secret_findings"][0]["line"], 12);

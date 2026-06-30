@@ -100,6 +100,26 @@ describe("RepoCard", () => {
     expect(screen.getByText(/Possible secret/)).toBeInTheDocument();
   });
 
+  it("marks WSL repos with their distro", () => {
+    renderCard({}, { source: "wsl", distro: "Ubuntu-24.04" });
+
+    const badge = screen.getByTestId("repo-source-badge");
+    expect(badge).toHaveTextContent("WSL");
+    expect(badge).toHaveAttribute("title", "WSL · Ubuntu-24.04");
+  });
+
+  it("keeps the WSL badge when source metadata arrives late but the repo path is Linux", () => {
+    renderCard({ repo: "/home/me/api" });
+
+    expect(screen.getByTestId("repo-source-badge")).toHaveTextContent("WSL");
+  });
+
+  it("does not show a source badge for local repos", () => {
+    renderCard({}, { source: "local" });
+
+    expect(screen.queryByTestId("repo-source-badge")).toBeNull();
+  });
+
   it("shows a per-repo Gitleaks config notice when the repo has no local config", () => {
     renderCard({ gitleaks_configured: false });
     expect(screen.getByTestId("gitleaks-config-notice-compact")).toHaveTextContent(

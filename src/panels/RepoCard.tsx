@@ -9,11 +9,14 @@ import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus
 import { checkAgentAvailabilityForRepo } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
+import { RepoSourceBadge } from "./RepoSourceBadge";
 import { SignalBadges } from "./SignalBadges";
 
 export interface RepoCardProps {
   delta: RepoDelta;
   name: string;
+  source?: "local" | "wsl";
+  distro?: string | null;
   activityMs: number;
   nowMs: number;
   onOpen: () => void;
@@ -48,6 +51,8 @@ function upstreamLabel(branch: BranchInfo | null): string | null {
 function RepoCardImpl({
   delta,
   name,
+  source,
+  distro,
   activityMs,
   nowMs,
   onOpen,
@@ -121,6 +126,12 @@ function RepoCardImpl({
             className={active ? "activity-dot activity-dot--active" : "activity-dot"}
             data-testid="activity"
             aria-label={active ? "active now" : "idle"}
+          />
+          <RepoSourceBadge
+            repo={delta.repo}
+            source={source}
+            distro={distro}
+            className="repo-card__source-badge"
           />
           <span className="repo-card__name" title={delta.repo}>
             {name}

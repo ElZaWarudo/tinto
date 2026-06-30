@@ -20,6 +20,8 @@ const WSL_ALLOWED_RUNTIME_FILES = new Set([
   "src/bus/contract.ts",
   "src/bus/store.ts",
   "src/panels/agentAvailability.ts",
+  "src/panels/RepoCard.tsx",
+  "src/panels/RepoSourceBadge.tsx",
   "src/workbench/AddRepoDialog.tsx",
   "src/workbench/ManageWorkbenchesDialog.tsx",
   "src/workbench/MenuBar.tsx",

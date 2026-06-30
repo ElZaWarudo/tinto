@@ -14,6 +14,16 @@ const EMPTY: AgentSessionState = {
 };
 
 const MAX_OUTPUT_CHUNKS_PER_SESSION = 20000;
+const EMPTY_OUTPUT: AgentSessionOutput[] = [];
+const outputSnapshotCache = new Map<
+  string,
+  { chunks: AgentSessionOutput[]; total: number; snapshot: AgentSessionOutputSnapshot }
+>();
+
+export interface AgentSessionOutputSnapshot {
+  chunks: AgentSessionOutput[];
+  total: number;
+}
 
 export class AgentSessionStore {
   private state: AgentSessionState = EMPTY;
@@ -71,6 +81,7 @@ export class AgentSessionStore {
   }
 
   reset() {
+    outputSnapshotCache.clear();
     this.set(EMPTY);
   }
 }
@@ -91,5 +102,31 @@ export function useAgentSessionState(): AgentSessionState {
 }
 
 export function useAgentSession(sessionId: string): AgentSession | undefined {
-  return useAgentSessionState().sessions[sessionId];
+  return useSyncExternalStore(
+    agentSessionStore.subscribe,
+    () => agentSessionStore.getState().sessions[sessionId],
+    () => undefined,
+  );
+}
+
+export function useAgentSessionOutput(sessionId: string): {
+  chunks: AgentSessionOutput[];
+  total: number;
+} {
+  return useSyncExternalStore(
+    agentSessionStore.subscribe,
+    () => outputSnapshot(sessionId),
+    () => ({ chunks: EMPTY_OUTPUT, total: 0 }),
+  );
+}
+
+function outputSnapshot(sessionId: string): AgentSessionOutputSnapshot {
+  const state = agentSessionStore.getState();
+  const chunks = state.output[sessionId] ?? EMPTY_OUTPUT;
+  const total = state.outputTotal[sessionId] ?? 0;
+  const cached = outputSnapshotCache.get(sessionId);
+  if (cached?.chunks === chunks && cached.total === total) return cached.snapshot;
+  const snapshot = { chunks, total };
+  outputSnapshotCache.set(sessionId, { chunks, total, snapshot });
+  return snapshot;
 }

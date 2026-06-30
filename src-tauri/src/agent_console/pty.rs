@@ -1,5 +1,4 @@
 use std::{
-    ffi::OsStr,
     io::{Read, Write},
     path::Path,
     process::Command,
@@ -7,7 +6,9 @@ use std::{
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
-use super::AgentConsoleError;
+use super::{app_server::CodexAppServerHandle, AgentConsoleError};
+
+pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
 
 #[cfg(windows)]
 use crate::windows_process::hide_console;
@@ -19,6 +20,15 @@ pub trait AgentProcess: Send {
     fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError>;
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
+    fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
+        Vec::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentProcessEvent {
+    FileActivity { timestamp_ms: u64 },
+    TurnCompleted { timestamp_ms: u64 },
 }
 
 pub trait AgentProcessFactory: Send + Sync {
@@ -51,6 +61,15 @@ impl AgentProcessFactory for PortablePtyFactory {
         binary_path: &Path,
         working_dir: &Path,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if is_codex_binary(binary_path) {
+            match CodexAppServerHandle::spawn(binary_path, working_dir) {
+                Ok(handle) => return Ok(Box::new(handle)),
+                Err(_error) => {
+                    // App-server is the preferred Codex runtime, but it is experimental.
+                    // Preserve the terminal path when the local Codex build cannot host it.
+                }
+            }
+        }
         Ok(Box::new(PtyHandle::spawn(binary_path, working_dir)?))
     }
 
@@ -186,7 +205,7 @@ pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> Com
     for arg in default_agent_args(binary_path) {
         command.arg(arg);
     }
-    apply_sanitized_env(&mut command);
+    apply_terminal_env(&mut command);
     command
 }
 
@@ -207,29 +226,94 @@ pub(crate) fn build_wsl_agent_command(
     command.arg("--exec");
     command.arg("bash");
     command.arg("-lc");
-    command.arg(
-        "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH\"; cd \"$1\" || exit 127; shift; exec \"$@\"",
-    );
+    command.arg(WSL_AGENT_CONSOLE_SCRIPT);
     command.arg("tinto-agent-console");
     command.arg(working_dir.as_os_str());
     command.arg(agent_type);
     for arg in default_agent_args_for_name(agent_type) {
         command.arg(arg);
     }
-    apply_sanitized_env(&mut command);
+    apply_terminal_env(&mut command);
     Ok(command)
 }
 
+const WSL_AGENT_CONSOLE_SCRIPT: &str = r#"set +u
+for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc"; do
+  if [ -r "$profile" ]; then
+    . "$profile" >/dev/null 2>&1 || true
+  fi
+done
+candidate_path="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+export TINTO_IADE=1
+export TINTO_IADE_NAME='Integrated Agentic Development Environment'
+export TINTO_TURN_DONE_MARKER='::tinto-turn-done::'
+native_path=
+old_ifs=$IFS
+IFS=':'
+for path_entry in $candidate_path; do
+  case "$path_entry" in
+    /mnt/[A-Za-z]/*) continue ;;
+  esac
+  if [ -n "$path_entry" ]; then
+    native_path="${native_path:+$native_path:}$path_entry"
+  fi
+done
+IFS=$old_ifs
+export PATH="$native_path"
+resolve_agent_binary() {
+  agent_name=$1
+  resolved=$(command -v -- "$agent_name" 2>/dev/null || true)
+  if [ -n "$resolved" ]; then
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+  if [ "$agent_name" = "codex" ]; then
+    link="$HOME/.local/bin/codex"
+    if [ -L "$link" ]; then
+      target=$(readlink "$link" || true)
+      root=${target%/*/*}
+      if [ -n "$root" ] && [ -d "$root" ]; then
+        candidate=$(find "$root" -mindepth 2 -maxdepth 2 -type f -name codex -perm -111 -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1s/^[^ ]* //p')
+        if [ -n "$candidate" ]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      fi
+    fi
+  fi
+  return 1
+}
+cd "$1" || exit 127
+shift
+agent_name=$1
+shift
+attempts=20
+while [ "$attempts" -gt 0 ]; do
+  if resolved_agent=$(resolve_agent_binary "$agent_name"); then
+    exec "$resolved_agent" "$@"
+  fi
+  attempts=$((attempts - 1))
+  sleep 0.25
+done
+if ! resolved_agent=$(resolve_agent_binary "$agent_name"); then
+  printf 'Tinto: no se encontro %s en PATH dentro de WSL. Instala el agente en esta distro o crea un enlace en ~/.local/bin.\n' "$agent_name" >&2
+  exit 127
+fi
+exec "$resolved_agent" "$@""#;
+
 fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
-    if binary_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .is_some_and(|stem| stem.eq_ignore_ascii_case("codex"))
-    {
+    if is_codex_binary(binary_path) {
         default_agent_args_for_name("codex")
     } else {
         &[]
     }
+}
+
+fn is_codex_binary(binary_path: &Path) -> bool {
+    binary_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("codex"))
 }
 
 fn default_agent_args_for_name(agent_type: &str) -> &'static [&'static str] {
@@ -240,43 +324,16 @@ fn default_agent_args_for_name(agent_type: &str) -> &'static [&'static str] {
     }
 }
 
-fn apply_sanitized_env(command: &mut CommandBuilder) {
-    command.env_clear();
-    for key in SANITIZED_ENV_ALLOWLIST {
-        if *key == "TERM" {
-            continue;
-        }
-        if let Some(value) = std::env::var_os(key) {
-            command.env(OsStr::new(key), value);
-        }
-    }
+fn apply_terminal_env(command: &mut CommandBuilder) {
     command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TINTO_IADE", "1");
+    command.env(
+        "TINTO_IADE_NAME",
+        "Integrated Agentic Development Environment",
+    );
+    command.env("TINTO_TURN_DONE_MARKER", TINTO_TURN_DONE_MARKER);
 }
-
-const SANITIZED_ENV_ALLOWLIST: &[&str] = &[
-    "PATH",
-    "PATHEXT",
-    "SystemRoot",
-    "WINDIR",
-    "COMSPEC",
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_CACHE_HOME",
-    "CODEX_HOME",
-    "USER",
-    "USERNAME",
-    "TMP",
-    "TEMP",
-    "LANG",
-    "LC_ALL",
-    "TERM",
-];
 
 fn spawn_error(message: String) -> AgentConsoleError {
     AgentConsoleError::new("pty_spawn_failed", message)
@@ -330,7 +387,7 @@ fn kill_process_tree(_pid: u32) -> Result<(), AgentConsoleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
 
     #[test]
     fn build_agent_command_uses_binary_and_working_dir() {
@@ -344,23 +401,20 @@ mod tests {
     }
 
     #[test]
-    fn build_agent_command_clears_unallowlisted_environment() {
+    fn build_agent_command_sets_terminal_environment() {
         let command = build_agent_command(Path::new("codex"), Path::new("/tmp/repo"));
 
-        assert!(command.get_env("OPENAI_API_KEY").is_none());
-        assert!(command.get_env("ANTHROPIC_API_KEY").is_none());
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
-    }
-
-    #[test]
-    fn build_agent_command_preserves_agent_profile_environment() {
-        let command = build_agent_command(Path::new("codex"), Path::new("/tmp/repo"));
-
-        for key in ["APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "CODEX_HOME"] {
-            if let Some(value) = std::env::var_os(key) {
-                assert_eq!(command.get_env(key), Some(value.as_os_str()));
-            }
-        }
+        assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new("truecolor")));
+        assert_eq!(command.get_env("TINTO_IADE"), Some(OsStr::new("1")));
+        assert_eq!(
+            command.get_env("TINTO_IADE_NAME"),
+            Some(OsStr::new("Integrated Agentic Development Environment"))
+        );
+        assert_eq!(
+            command.get_env("TINTO_TURN_DONE_MARKER"),
+            Some(OsStr::new(TINTO_TURN_DONE_MARKER))
+        );
     }
 
     #[test]
@@ -377,18 +431,23 @@ mod tests {
         let command =
             build_wsl_agent_command("Ubuntu", "codex", Path::new("/home/me/repo")).unwrap();
 
+        let argv = command.get_argv();
         assert_eq!(
-            command.get_argv(),
-            &[
+            &argv[..6],
+            [
                 OsString::from("wsl.exe"),
                 OsString::from("-d"),
                 OsString::from("Ubuntu"),
                 OsString::from("--exec"),
                 OsString::from("bash"),
                 OsString::from("-lc"),
-                OsString::from(
-                    "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH\"; cd \"$1\" || exit 127; shift; exec \"$@\"",
-                ),
+            ]
+        );
+        assert!(argv[6].to_string_lossy().contains(".bashrc"));
+        assert!(argv[6].to_string_lossy().contains("command -v"));
+        assert_eq!(
+            &argv[7..],
+            [
                 OsString::from("tinto-agent-console"),
                 OsString::from("/home/me/repo"),
                 OsString::from("codex"),
@@ -397,5 +456,11 @@ mod tests {
         );
         assert!(command.get_cwd().is_none());
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
+        assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new("truecolor")));
+        assert_eq!(command.get_env("TINTO_IADE"), Some(OsStr::new("1")));
+        assert_eq!(
+            command.get_env("TINTO_TURN_DONE_MARKER"),
+            Some(OsStr::new(TINTO_TURN_DONE_MARKER))
+        );
     }
 }

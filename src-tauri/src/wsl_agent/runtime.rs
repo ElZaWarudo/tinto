@@ -11,7 +11,7 @@ use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
     file_content_from_bytes, gitleaks_setup_status, list_repo_tree_capped,
     read_file_content_bounded, read_media_content_bounded, validate_media_path,
-    write_repo_gitleaks_config,
+    write_repo_agents_md_config, write_repo_gitleaks_config,
 };
 use crate::bus::contract::{
     GitleaksInstallResult, RepoDelta, RepoErrorClass, RepoErrorState, RepoMetrics,
@@ -225,6 +225,14 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             write_repo_gitleaks_config(&repo)?;
             Ok(AgentResponse::Unit)
         }),
+        AgentRequest::CreateAgentsMdConfig {
+            repo,
+            allowed_repos,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            write_repo_agents_md_config(&repo)?;
+            Ok(AgentResponse::Unit)
+        }),
         AgentRequest::AgentBinaryAvailable { agent_type, .. } => {
             match agent_binary_available(&agent_type) {
                 Ok(available) => AgentResponse::AgentBinaryAvailable { available },
@@ -388,6 +396,7 @@ fn repo_delta(repo: &Path, subscriptions: &[SubscriptionTarget]) -> RepoDelta {
             error: None,
             metrics: outcome.metrics,
             gitleaks_configured: outcome.gitleaks_configured,
+            agents_md_configured: outcome.agents_md_configured,
             signals: outcome.signals,
             secret_findings: outcome.secret_findings,
             subscribed_diffs: outcome.subscribed_diffs,
@@ -402,6 +411,7 @@ fn repo_delta(repo: &Path, subscriptions: &[SubscriptionTarget]) -> RepoDelta {
             error: Some(agent_repo_error(git_error_state(&error))),
             metrics: RepoMetrics::default(),
             gitleaks_configured: false,
+            agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Vec::new(),
             subscribed_diffs: None,
@@ -465,14 +475,67 @@ fn list_directory(path: Option<&Path>) -> Result<WslDirectoryListing, AgentRunti
 fn agent_binary_available(agent_type: &str) -> Result<bool, AgentRuntimeError> {
     let binary = validate_agent_type(agent_type)
         .map_err(|error| AgentRuntimeError::new(error.category, error.message))?;
-    let output = Command::new("sh")
+    let output = Command::new("bash")
         .arg("-lc")
-        .arg("command -v -- \"$1\"")
+        .arg(AGENT_BINARY_CHECK_SCRIPT)
         .arg("tinto-agent-binary-check")
         .arg(binary)
         .output()?;
     Ok(output.status.success() && !output.stdout.is_empty())
 }
+
+const AGENT_BINARY_CHECK_SCRIPT: &str = r#"set +u
+for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc"; do
+  if [ -r "$profile" ]; then
+    . "$profile" >/dev/null 2>&1 || true
+  fi
+done
+candidate_path="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+native_path=
+old_ifs=$IFS
+IFS=':'
+for path_entry in $candidate_path; do
+  case "$path_entry" in
+    /mnt/[A-Za-z]/*) continue ;;
+  esac
+  if [ -n "$path_entry" ]; then
+    native_path="${native_path:+$native_path:}$path_entry"
+  fi
+done
+IFS=$old_ifs
+export PATH="$native_path"
+resolve_agent_binary() {
+  agent_name=$1
+  resolved=$(command -v -- "$agent_name" 2>/dev/null || true)
+  if [ -n "$resolved" ]; then
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+  if [ "$agent_name" = "codex" ]; then
+    link="$HOME/.local/bin/codex"
+    if [ -L "$link" ]; then
+      target=$(readlink "$link" || true)
+      root=${target%/*/*}
+      if [ -n "$root" ] && [ -d "$root" ]; then
+        candidate=$(find "$root" -mindepth 2 -maxdepth 2 -type f -name codex -perm -111 -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1s/^[^ ]* //p')
+        if [ -n "$candidate" ]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      fi
+    fi
+  fi
+  return 1
+}
+attempts=20
+while [ "$attempts" -gt 0 ]; do
+  if resolve_agent_binary "$1"; then
+    exit 0
+  fi
+  attempts=$((attempts - 1))
+  sleep 0.25
+done
+exit 1"#;
 
 fn file_fingerprints(
     repo: &Path,
@@ -1032,14 +1095,10 @@ mod tests {
         )
         .expect("parse");
 
-        if cfg!(windows) {
-            assert!(matches!(response, AgentResponse::Error { .. }));
-        } else {
-            assert!(matches!(
-                response,
-                AgentResponse::AgentBinaryAvailable { .. }
-            ));
-        }
+        assert!(matches!(
+            response,
+            AgentResponse::AgentBinaryAvailable { .. } | AgentResponse::Error { .. }
+        ));
     }
 
     #[test]

@@ -422,7 +422,7 @@ describe("TerminalPanel", () => {
       });
     });
 
-    expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1);
+    await waitFor(() => expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1));
     expect(Array.from(xtermMocks.terminalInstances[0].writes[0] as Uint8Array)).toEqual([
       104, 105, 13,
     ]);
@@ -441,7 +441,7 @@ describe("TerminalPanel", () => {
     });
 
     expect(panel.panelApi.setActive).not.toHaveBeenCalled();
-    expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1);
+    await waitFor(() => expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1));
     expect(Array.from(xtermMocks.terminalInstances[0].writes[0] as Uint8Array)).toEqual([
       98, 97, 99, 107, 103, 114, 111, 117, 110, 100, 13,
     ]);
@@ -457,7 +457,7 @@ describe("TerminalPanel", () => {
     const panel = props({ sessionId: "sess-1" });
     render(<TerminalPanel {...panel.props} />);
 
-    expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1);
+    await waitFor(() => expect(xtermMocks.terminalInstances[0].writes).toHaveLength(1));
     expect(Array.from(xtermMocks.terminalInstances[0].writes[0] as Uint8Array)).toEqual([
       67, 111, 100, 101, 120, 32, 114, 101, 97, 100, 121, 13,
     ]);
