@@ -122,6 +122,20 @@ Chunks are live only; the first ACI-002 stream bridge does not replay historical
 
 `kind` is `"created" | "modified" | "removed"`. Change logs are emitted when sessions are listed or reverted; they are also embedded in `AgentSession.change_log`.
 
+### `tinto://agent-session-timeline` - native agent timeline item
+
+```jsonc
+{
+  "session_id": "sess-1",
+  "id": "sess-1:1760000000000:7",
+  "kind": "agent_message", // "user_message" | "agent_message" | "command_output" | "lifecycle"
+  "text": "I updated the file.",
+  "timestamp_ms": 1760000000000
+}
+```
+
+Timeline items are the primary stream for the IADE agent UI. `agent-session-output` remains additive compatibility for raw PTY bytes and debugging surfaces. Items are emitted live, mirrored into `AgentSession.timeline`, and appended to the local agent journal so remounted views can replay native turns instead of reconstructing chat from terminal bytes. Local Codex app-server sessions should avoid terminal prompts/echo in output so timeline rendering can show user turns, agent messages, lifecycle notices, and future command output as native UI blocks.
+
 ## Commands (frontend `invoke` → backend)
 
 | Command | Args | Response | Notes |
@@ -165,6 +179,7 @@ The agent console backend exposes session lifecycle metadata through additive co
   "id": "sess-1",
   "repo": "/canonical/path/to/repo",
   "agent_type": "codex",
+  "wsl_distro": null,
   "status": "running",              // "starting" | "running" | "completed" | "failed" | ...
   "pid": 12345,                      // null before spawn or when unavailable
   "started_at_ms": 1760000000000,
@@ -196,6 +211,15 @@ The agent console backend exposes session lifecycle metadata through additive co
       ]
     }
   ],
+  "timeline": [
+    {
+      "session_id": "sess-1",
+      "id": "sess-1:1760000000000:7",
+      "kind": "agent_message",
+      "text": "I updated the file.",
+      "timestamp_ms": 1760000000000
+    }
+  ],
   "reverted_at_ms": null,
   "active_sessions": 1,
   "age_ms": 1200,
@@ -206,9 +230,12 @@ The agent console backend exposes session lifecycle metadata through additive co
 - `AgentSessionStatus`: `"starting" | "running" | "exited" | "error" | "completed" | "failed" | "reverted"`. `exited` remains in the additive contract for compatibility; new completed sessions report `completed` for exit code 0 and `failed` for non-zero exit.
 - `AgentSessionError`: `{ category: string, message: string }`; messages are safe for UI display and must not include secrets.
 - `agent_type`: canonical supported agent id, currently planned as `"claude"`, `"codex"`, or `"opencode"`.
+- `wsl_distro`: optional distro name for WSL-backed sessions. Missing/null means a host-local session.
 - `repo`: canonical repo identity, using the same opaque path convention as `RepoDelta.repo`.
 - `start_agent_session` rejects repos outside the active workbench before spawning. Errors use the same `{ category, message }` command-error shape as other Tauri commands. Local Codex sessions start `codex app-server --stdio`, initialize a thread with the repo as `cwd`, subscribe to `fs/watch`, and stream app-server deltas into the same output event used by PTY sessions. If app-server spawn/initialization fails, local Codex falls back to the PTY command. WSL session start creates the reversible checkpoint and validates the allowlisted agent binary through `tinto-agent` before spawning the PTY. The interactive WSL PTY process is then launched via `wsl.exe -d <distro> --exec bash -lc ...`; repo path and agent id are passed as argv, not interpolated into the shell script.
-- `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live session output chunks. PTY sessions preserve terminal bytes and ANSI sequences; Codex app-server sessions emit assistant/command deltas and local line-editing echo bytes for the terminal surface.
+- `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live session output chunks. PTY sessions preserve terminal bytes and ANSI sequences; Codex app-server sessions keep this stream as compatibility output, while the product UI consumes the native timeline event below.
+- `AgentSession.timeline`: bounded replay buffer of `AgentSessionTimelineItem` values for this session. `list_agent_sessions` returns it so tabs, detached windows, and late-mounted panels can hydrate the native conversation model without waiting for new live events.
+- `AgentSessionTimelineItem`: `{ session_id, id, kind, text, timestamp_ms }`; emitted on `tinto://agent-session-timeline` and persisted in the local agent journal. `kind` is `"user_message" | "agent_message" | "command_output" | "lifecycle"`. The Agents panel uses this as the primary conversation model and falls back to raw output only when timeline items are unavailable.
 - `AgentSessionCheckpoint`: local git checkpoints are used only when the repo is clean and HEAD is readable; dirty or non-git local repos use a filesystem snapshot under `~/.tinto/checkpoints/<repo-hash>/<session-id>/` with bounded size and per-repo retention. WSL Agent Console sessions create equivalent checkpoint records inside Ubuntu through `tinto-agent`; change-log scan and explicit-consent revert also run inside Ubuntu and are allowlisted to the active WSL repo. Sessions with `checkpoint: null` can still exist for legacy/fallback states and return `checkpoint_unsupported`; the UI disables Revert for those sessions.
 - `AgentSessionChangeLog`: `{ session_id, changes }`; emitted on `tinto://agent-session-change-log` and mirrored in the session record.
 - `AgentSessionTurnStatus`: `"waiting" | "working" | "settling"`. PTY sessions derive this from fallback signals: PTY output activity, optional Tinto turn-done marker, and stable filesystem/checkpoint scans. Local Codex app-server sessions additionally consume structured app-server events: file/diff/watch notifications mark activity and `turn/completed` force-closes the turn through the existing checkpoint scanner. Tinto remains the authority for final changed files.

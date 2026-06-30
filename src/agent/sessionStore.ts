@@ -1,20 +1,29 @@
 import { useSyncExternalStore } from "react";
-import type { AgentSession, AgentSessionChange, AgentSessionOutput } from "../bus/contract";
+import type {
+  AgentSession,
+  AgentSessionChange,
+  AgentSessionOutput,
+  AgentSessionTimelineItem,
+} from "../bus/contract";
 
 export interface AgentSessionState {
   sessions: Record<string, AgentSession>;
   output: Record<string, AgentSessionOutput[]>;
   outputTotal: Record<string, number>;
+  timeline: Record<string, AgentSessionTimelineItem[]>;
 }
 
 const EMPTY: AgentSessionState = {
   sessions: {},
   output: {},
   outputTotal: {},
+  timeline: {},
 };
 
 const MAX_OUTPUT_CHUNKS_PER_SESSION = 20000;
+const MAX_TIMELINE_ITEMS_PER_SESSION = 2000;
 const EMPTY_OUTPUT: AgentSessionOutput[] = [];
+const EMPTY_TIMELINE: AgentSessionTimelineItem[] = [];
 const outputSnapshotCache = new Map<
   string,
   { chunks: AgentSessionOutput[]; total: number; snapshot: AgentSessionOutputSnapshot }
@@ -43,17 +52,24 @@ export class AgentSessionStore {
 
   setSessions(sessions: AgentSession[]) {
     const next: Record<string, AgentSession> = {};
-    for (const session of sessions) next[session.id] = normalizeSession(session);
-    this.set({ ...this.state, sessions: next });
+    let timeline = this.state.timeline;
+    for (const session of sessions) {
+      const normalized = normalizeSession(session);
+      next[session.id] = normalized;
+      timeline = mergeSessionTimeline(timeline, normalized);
+    }
+    this.set({ ...this.state, sessions: next, timeline });
   }
 
   upsertSession(session: AgentSession) {
+    const normalized = normalizeSession(session);
     this.set({
       ...this.state,
       sessions: {
         ...this.state.sessions,
-        [session.id]: normalizeSession(session),
+        [session.id]: normalized,
       },
+      timeline: mergeSessionTimeline(this.state.timeline, normalized),
     });
   }
 
@@ -80,6 +96,18 @@ export class AgentSessionStore {
     });
   }
 
+  appendTimelineItem(item: AgentSessionTimelineItem) {
+    const current = this.state.timeline[item.session_id] ?? [];
+    if (current.some((existing) => existing.id === item.id)) return;
+    this.set({
+      ...this.state,
+      timeline: {
+        ...this.state.timeline,
+        [item.session_id]: [...current, item].slice(-MAX_TIMELINE_ITEMS_PER_SESSION),
+      },
+    });
+  }
+
   reset() {
     outputSnapshotCache.clear();
     this.set(EMPTY);
@@ -92,6 +120,30 @@ function normalizeSession(session: AgentSession): AgentSession {
     change_log: session.change_log ?? [],
     turn_status: session.turn_status ?? "waiting",
     turn_checkpoints: session.turn_checkpoints ?? [],
+    timeline: session.timeline ?? [],
+  };
+}
+
+function mergeSessionTimeline(
+  stateTimeline: Record<string, AgentSessionTimelineItem[]>,
+  session: AgentSession,
+): Record<string, AgentSessionTimelineItem[]> {
+  if (!session.timeline || session.timeline.length === 0) return stateTimeline;
+  const current = stateTimeline[session.id] ?? [];
+  const seen = new Set(current.map((item) => item.id));
+  const merged = [...current];
+  for (const item of session.timeline) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+  const nextItems = merged
+    .sort((a, b) => a.timestamp_ms - b.timestamp_ms || a.id.localeCompare(b.id))
+    .slice(-MAX_TIMELINE_ITEMS_PER_SESSION);
+  if (nextItems === current) return stateTimeline;
+  return {
+    ...stateTimeline,
+    [session.id]: nextItems,
   };
 }
 
@@ -117,6 +169,14 @@ export function useAgentSessionOutput(sessionId: string): {
     agentSessionStore.subscribe,
     () => outputSnapshot(sessionId),
     () => ({ chunks: EMPTY_OUTPUT, total: 0 }),
+  );
+}
+
+export function useAgentSessionTimeline(sessionId: string): AgentSessionTimelineItem[] {
+  return useSyncExternalStore(
+    agentSessionStore.subscribe,
+    () => agentSessionStore.getState().timeline[sessionId] ?? EMPTY_TIMELINE,
+    () => EMPTY_TIMELINE,
   );
 }
 

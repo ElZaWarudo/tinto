@@ -13,6 +13,7 @@ export const EVENT_WATCHING_STATE = "tinto://watching-state";
 export const EVENT_AGENT_SESSIONS_CHANGED = "tinto://agent-sessions-changed";
 export const EVENT_AGENT_SESSION_OUTPUT = "tinto://agent-session-output";
 export const EVENT_AGENT_SESSION_CHANGE_LOG = "tinto://agent-session-change-log";
+export const EVENT_AGENT_SESSION_TIMELINE = "tinto://agent-session-timeline";
 
 // ---- Agent console sessions (ACI-001) ----
 export type AgentSessionStatus =
@@ -71,6 +72,7 @@ export interface AgentSession {
   id: string;
   repo: string;
   agent_type: string;
+  wsl_distro?: string | null;
   status: AgentSessionStatus;
   pid: number | null;
   started_at_ms: number;
@@ -81,6 +83,7 @@ export interface AgentSession {
   change_log?: AgentSessionChange[];
   turn_status?: AgentSessionTurnStatus;
   turn_checkpoints?: AgentSessionTurnCheckpoint[];
+  timeline?: AgentSessionTimelineItem[];
   reverted_at_ms?: number | null;
   active_sessions: number;
   age_ms: number;
@@ -91,6 +94,35 @@ export interface AgentSessionOutput {
   session_id: string;
   chunk_base64: string;
   timestamp_ms: number;
+}
+
+export type AgentSessionTimelineKind =
+  | "user_message"
+  | "agent_message"
+  | "command_output"
+  | "lifecycle";
+
+export interface AgentSessionTimelineItem {
+  session_id: string;
+  id: string;
+  kind: AgentSessionTimelineKind;
+  text: string;
+  timestamp_ms: number;
+}
+
+export interface AgentJournalSessionSummary {
+  id: string;
+  repo: string;
+  agent_type: string;
+  wsl_distro?: string | null;
+  status: AgentSessionStatus;
+  started_at_ms: number;
+  ended_at_ms?: number | null;
+  updated_at_ms: number;
+  event_count: number;
+  last_event_kind?: AgentSessionTimelineKind | null;
+  last_event_text?: string | null;
+  last_event_at_ms?: number | null;
 }
 
 // ---- Git value types ----

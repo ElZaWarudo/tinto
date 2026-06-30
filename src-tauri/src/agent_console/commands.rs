@@ -10,18 +10,20 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::{
+    journal::AgentJournal,
     pty::TINTO_TURN_DONE_MARKER,
     validation::{resolve_agent_binary, validate_agent_type},
     AgentConsoleError, AgentSessionRegistry,
 };
 use crate::bus::{
     contract::{
-        AgentSession, AgentSessionChangeLog, AgentSessionOutput, EVENT_AGENT_SESSIONS_CHANGED,
-        EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT,
+        AgentJournalSessionSummary, AgentSession, AgentSessionChangeLog, AgentSessionOutput,
+        AgentSessionTimelineItem, AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED,
+        EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
     },
     BusHandle, RepoResolveError,
 };
@@ -33,6 +35,8 @@ use crate::wsl_agent::{
 
 const SESSION_OUTPUT_QUIET_REFRESH_MS: u64 = 2_500;
 const SESSION_OUTPUT_MONITOR_TICK_MS: u64 = 500;
+pub(crate) const TIMELINE_FRAME_PREFIX: &[u8] = b"\x1dTINTO_TIMELINE ";
+static TIMELINE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -80,8 +84,21 @@ pub async fn start_agent_session(
     if let Some(output_reader) = started.output_reader {
         spawn_output_reader(app.clone(), started.id.clone(), output_reader);
     }
+    emit_timeline_text(
+        &app,
+        &started.id,
+        AgentSessionTimelineKind::Lifecycle,
+        Some("Session started".to_string()),
+        now_ms(),
+    );
     refresh_and_emit_sessions(&app);
     Ok(started.id)
+}
+
+#[derive(Debug, Deserialize)]
+struct TimelineFrame {
+    kind: AgentSessionTimelineKind,
+    text: String,
 }
 
 #[tauri::command]
@@ -111,6 +128,28 @@ pub fn list_agent_sessions(
     emit_sessions_snapshot(&app, &sessions);
     emit_change_logs(&app, &sessions);
     Ok(sessions)
+}
+
+#[tauri::command]
+pub fn list_agent_journal_sessions(
+    journal: State<'_, Mutex<AgentJournal>>,
+    limit: Option<usize>,
+) -> Result<Vec<AgentJournalSessionSummary>, CommandError> {
+    let journal = lock_journal(&journal)?;
+    journal
+        .session_summaries(limit.unwrap_or(24))
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))
+}
+
+#[tauri::command]
+pub fn get_agent_journal_session(
+    journal: State<'_, Mutex<AgentJournal>>,
+    session_id: String,
+) -> Result<Option<AgentSession>, CommandError> {
+    let journal = lock_journal(&journal)?;
+    journal
+        .session_from_journal(&session_id)
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))
 }
 
 #[tauri::command]
@@ -151,11 +190,20 @@ pub fn write_agent_session_input(
     let input = STANDARD
         .decode(input_base64)
         .map_err(|e| CommandError::new("invalid_input", e.to_string()))?;
+    let timestamp_ms = now_ms();
     let mut registry = lock_registry(&registry)?;
     registry
         .write_session_input(&session_id, &input)
         .map_err(CommandError::from)?;
-    emit_sessions_snapshot(&app, &registry.list_sessions());
+    drop(registry);
+    emit_timeline_text(
+        &app,
+        &session_id,
+        AgentSessionTimelineKind::UserMessage,
+        timeline_text_from_input(&input),
+        timestamp_ms,
+    );
+    refresh_and_emit_sessions(&app);
     Ok(())
 }
 
@@ -263,6 +311,14 @@ fn lock_registry(
         .map_err(|_| CommandError::new("lock_poisoned", "el registro de agentes fallo"))
 }
 
+fn lock_journal(
+    journal: &Mutex<AgentJournal>,
+) -> Result<std::sync::MutexGuard<'_, AgentJournal>, CommandError> {
+    journal
+        .lock()
+        .map_err(|_| CommandError::new("lock_poisoned", "el diario de agentes fallo"))
+}
+
 fn spawn_output_reader(
     app: AppHandle,
     session_id: String,
@@ -331,12 +387,118 @@ fn emit_output_chunk(app: &AppHandle, session_id: &str, chunk: &[u8], timestamp_
     if chunk.is_empty() {
         return;
     }
+    if let Some(frame) = parse_timeline_frame(chunk) {
+        emit_timeline_text(app, session_id, frame.kind, Some(frame.text), timestamp_ms);
+        return;
+    }
     let payload = AgentSessionOutput {
         session_id: session_id.to_string(),
         chunk_base64: STANDARD.encode(chunk),
         timestamp_ms,
     };
     let _ = app.emit(EVENT_AGENT_SESSION_OUTPUT, payload);
+    emit_timeline_text(
+        app,
+        session_id,
+        AgentSessionTimelineKind::AgentMessage,
+        timeline_text_from_output(chunk),
+        timestamp_ms,
+    );
+}
+
+fn parse_timeline_frame(chunk: &[u8]) -> Option<TimelineFrame> {
+    let payload = chunk.strip_prefix(TIMELINE_FRAME_PREFIX)?;
+    let payload = payload.strip_suffix(b"\n").unwrap_or(payload);
+    serde_json::from_slice(payload).ok()
+}
+
+fn emit_timeline_text(
+    app: &AppHandle,
+    session_id: &str,
+    kind: AgentSessionTimelineKind,
+    text: Option<String>,
+    timestamp_ms: u64,
+) {
+    let Some(text) = text else {
+        return;
+    };
+    if text.trim().is_empty() {
+        return;
+    }
+    let payload = AgentSessionTimelineItem {
+        session_id: session_id.to_string(),
+        id: format!(
+            "{}:{}:{}",
+            session_id,
+            timestamp_ms,
+            TIMELINE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ),
+        kind,
+        text,
+        timestamp_ms,
+    };
+    record_timeline_item(app, payload.clone());
+    let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, payload);
+}
+
+fn record_timeline_item(app: &AppHandle, item: AgentSessionTimelineItem) {
+    let mut session_snapshot = None;
+    if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
+        if let Ok(mut registry) = registry.lock() {
+            let _ = registry.record_session_timeline_item(item.clone());
+            session_snapshot = registry.get_session(&item.session_id);
+        }
+    }
+    if let Some(journal) = app.try_state::<Mutex<AgentJournal>>() {
+        if let Ok(journal) = journal.lock() {
+            if let Some(session) = session_snapshot.as_ref() {
+                let _ = journal.record_session(session);
+            }
+            let _ = journal.record_timeline_item(&item);
+        }
+    }
+}
+
+fn timeline_text_from_input(input: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(input)
+        .replace('\r', "\n")
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn timeline_text_from_output(output: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(output)
+        .replace('\r', "\n")
+        .trim()
+        .to_string();
+    if text.is_empty() || text == ">" {
+        None
+    } else {
+        Some(strip_ansi(&text))
+    }
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            let _ = chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    output
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -391,7 +553,20 @@ fn refresh_and_emit_sessions(app: &AppHandle) {
 }
 
 fn emit_sessions_snapshot(app: &AppHandle, sessions: &[AgentSession]) {
+    persist_session_snapshots(app, sessions);
     let _ = app.emit(EVENT_AGENT_SESSIONS_CHANGED, sessions);
+}
+
+fn persist_session_snapshots(app: &AppHandle, sessions: &[AgentSession]) {
+    let Some(journal) = app.try_state::<Mutex<AgentJournal>>() else {
+        return;
+    };
+    let Ok(journal) = journal.lock() else {
+        return;
+    };
+    for session in sessions {
+        let _ = journal.record_session(session);
+    }
 }
 
 fn emit_change_logs(app: &AppHandle, sessions: &[AgentSession]) {
@@ -447,6 +622,23 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.category, "invalid_input");
+    }
+
+    #[test]
+    fn timeline_frame_parses_native_command_output() {
+        let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
+        frame.extend(br#"{"kind":"command_output","text":"cargo test"}"#);
+        frame.push(b'\n');
+
+        let parsed = parse_timeline_frame(&frame).unwrap();
+
+        assert_eq!(parsed.kind, AgentSessionTimelineKind::CommandOutput);
+        assert_eq!(parsed.text, "cargo test");
+    }
+
+    #[test]
+    fn ordinary_output_is_not_a_timeline_frame() {
+        assert!(parse_timeline_frame(b"plain output").is_none());
     }
 
     #[test]

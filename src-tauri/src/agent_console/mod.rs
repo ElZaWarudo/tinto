@@ -5,6 +5,7 @@
 pub mod app_server;
 pub mod checkpoint;
 pub mod commands;
+pub mod journal;
 pub mod pty;
 pub mod session;
 pub mod validation;
@@ -17,7 +18,9 @@ use std::{
     sync::Arc,
 };
 
-use crate::bus::contract::{AgentSession, AgentSessionError, AgentSessionLimits};
+use crate::bus::contract::{
+    AgentSession, AgentSessionError, AgentSessionLimits, AgentSessionTimelineItem,
+};
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
     protocol::{AgentError, AgentRequest, AgentResponse, PROTOCOL_VERSION},
@@ -310,6 +313,18 @@ impl AgentSessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         session.record_output_activity(timestamp_ms);
+        Ok(())
+    }
+
+    pub fn record_session_timeline_item(
+        &mut self,
+        item: AgentSessionTimelineItem,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(&item.session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(&item.session_id))?;
+        session.record_timeline_item(item);
         Ok(())
     }
 

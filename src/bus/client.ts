@@ -9,12 +9,15 @@ import {
   EVENT_AGENT_SESSIONS_CHANGED,
   EVENT_AGENT_SESSION_OUTPUT,
   EVENT_AGENT_SESSION_CHANGE_LOG,
+  EVENT_AGENT_SESSION_TIMELINE,
   EVENT_FS_EVENTS,
   EVENT_WATCHING_STATE,
   EVENT_WORKBENCH_DELTA,
   type CommitInfo,
   type AgentSessionChangeLog,
+  type AgentJournalSessionSummary,
   type AgentSessionOutput,
+  type AgentSessionTimelineItem,
   type AgentSession,
   type GitleaksSetupStatus,
   type GitleaksInstallResult,
@@ -112,6 +115,12 @@ export const startAgentSession = (repo: string, agentType: string) =>
 export const stopAgentSession = (sessionId: string) => invoke("stop_agent_session", { sessionId });
 
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
+
+export const listAgentJournalSessions = (limit?: number) =>
+  invoke<AgentJournalSessionSummary[]>("list_agent_journal_sessions", { limit });
+
+export const getAgentJournalSession = (sessionId: string) =>
+  invoke<AgentSession | null>("get_agent_journal_session", { sessionId });
 
 export const getGitleaksSetupStatus = () =>
   invoke<GitleaksSetupStatus>("get_gitleaks_setup_status");
@@ -243,6 +252,11 @@ export const onAgentSessionChangeLog = (
   cb: (changeLog: AgentSessionChangeLog) => void,
 ): Promise<UnlistenFn> =>
   listen<AgentSessionChangeLog>(EVENT_AGENT_SESSION_CHANGE_LOG, (e) => cb(e.payload));
+
+export const onAgentSessionTimeline = (
+  cb: (item: AgentSessionTimelineItem) => void,
+): Promise<UnlistenFn> =>
+  listen<AgentSessionTimelineItem>(EVENT_AGENT_SESSION_TIMELINE, (e) => cb(e.payload));
 
 const encodeAgentInput = (input: string | Uint8Array) => {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;

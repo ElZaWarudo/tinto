@@ -12,8 +12,12 @@ use std::{
 
 use serde_json::{json, Value};
 
-use super::pty::{AgentProcess, AgentProcessEvent};
 use super::AgentConsoleError;
+use super::{
+    commands::TIMELINE_FRAME_PREFIX,
+    pty::{AgentProcess, AgentProcessEvent},
+};
+use crate::bus::contract::AgentSessionTimelineKind;
 
 #[cfg(windows)]
 use crate::windows_process::hide_console;
@@ -73,9 +77,6 @@ impl CodexAppServerHandle {
             },
         );
 
-        let _ = output_tx
-            .send(b"Codex app-server ready. Type a message and press Enter.\r\n> ".to_vec());
-
         Ok(Self {
             child,
             stdin,
@@ -127,24 +128,18 @@ impl AgentProcess for CodexAppServerHandle {
         for byte in input {
             match *byte {
                 b'\r' | b'\n' => {
-                    let _ = self.output_tx.send(b"\r\n".to_vec());
                     let text = buffered_turn_text(&self.line_buffer);
                     self.line_buffer.clear();
                     if !text.is_empty() {
                         self.submit_turn(text)?;
-                    } else {
-                        let _ = self.output_tx.send(b"> ".to_vec());
                     }
                 }
                 0x08 | 0x7f => {
-                    if self.line_buffer.pop().is_some() {
-                        let _ = self.output_tx.send(b"\x08 \x08".to_vec());
-                    }
+                    let _ = self.line_buffer.pop();
                 }
                 byte if byte.is_ascii_control() => {}
                 byte => {
                     self.line_buffer.push(byte);
-                    let _ = self.output_tx.send(vec![byte]);
                 }
             }
         }
@@ -289,16 +284,26 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         return;
     };
     match method {
-        "item/agentMessage/delta" | "item/commandExecution/outputDelta" => {
+        "item/agentMessage/delta" => {
             if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
-                let _ = context.output_tx.send(delta.as_bytes().to_vec());
+                let _ = context.output_tx.send(timeline_frame(
+                    AgentSessionTimelineKind::AgentMessage,
+                    delta,
+                ));
+            }
+        }
+        "item/commandExecution/outputDelta" => {
+            if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
+                let _ = context.output_tx.send(timeline_frame(
+                    AgentSessionTimelineKind::CommandOutput,
+                    delta,
+                ));
             }
         }
         "turn/completed" => {
             let _ = context.event_tx.send(AgentProcessEvent::TurnCompleted {
                 timestamp_ms: now_ms(),
             });
-            let _ = context.output_tx.send(b"\r\n> ".to_vec());
         }
         "turn/started" | "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
             let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
@@ -307,6 +312,21 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         }
         _ => {}
     }
+}
+
+fn timeline_frame(kind: AgentSessionTimelineKind, text: &str) -> Vec<u8> {
+    let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
+    frame.extend(
+        serde_json::to_vec(&json!({
+            "kind": kind,
+            "text": text
+        }))
+        .unwrap_or_else(|_| {
+            b"{\"kind\":\"lifecycle\",\"text\":\"timeline encode failed\"}".to_vec()
+        }),
+    );
+    frame.push(b'\n');
+    frame
 }
 
 fn now_ms() -> u64 {
@@ -462,7 +482,7 @@ mod tests {
             event_rx.recv().unwrap(),
             AgentProcessEvent::TurnCompleted { .. }
         ));
-        assert_eq!(rx.recv().unwrap(), b"\r\n> ");
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -482,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_delta_is_forwarded_as_output() {
+    fn agent_delta_is_forwarded_as_timeline_frame() {
         let (tx, rx) = mpsc::channel();
         let (event_tx, _event_rx) = mpsc::channel();
         let context = dummy_context(tx, event_tx);
@@ -491,7 +511,26 @@ mod tests {
             &context,
         );
 
-        assert_eq!(rx.recv().unwrap(), b"hello");
+        let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(frame.starts_with("\u{1d}TINTO_TIMELINE "));
+        assert!(frame.contains("\"kind\":\"agent_message\""));
+        assert!(frame.contains("\"text\":\"hello\""));
+    }
+
+    #[test]
+    fn command_delta_is_forwarded_as_command_timeline_frame() {
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({"method":"item/commandExecution/outputDelta","params":{"delta":"cargo test"}}),
+            &context,
+        );
+
+        let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(frame.starts_with("\u{1d}TINTO_TIMELINE "));
+        assert!(frame.contains("\"kind\":\"command_output\""));
+        assert!(frame.contains("\"text\":\"cargo test\""));
     }
 
     #[test]
