@@ -86,6 +86,7 @@ pub(crate) struct RecalcOutcome {
     pub subscribed_diffs: Option<Vec<crate::git::FileDiff>>,
     pub metrics: RepoMetrics,
     pub gitleaks_configured: bool,
+    pub agents_md_configured: bool,
     pub signals: Vec<PassiveSignal>,
     pub secret_findings: Vec<SecretFinding>,
 }
@@ -101,6 +102,7 @@ pub(crate) struct RepoLiveState {
     revision: u64,
     metrics: RepoMetrics,
     gitleaks_configured: bool,
+    agents_md_configured: bool,
     signals: Vec<PassiveSignal>,
     secret_findings: Vec<SecretFinding>,
     /// Último tamaño conocido por path vigilado (delta de tamaño, Plano 2).
@@ -121,6 +123,7 @@ impl RepoLiveState {
             error: self.error.clone(),
             metrics: self.metrics.clone(),
             gitleaks_configured: self.gitleaks_configured,
+            agents_md_configured: self.agents_md_configured,
             signals: self.signals.clone(),
             secret_findings: self.secret_findings.clone(),
             subscribed_diffs: None,
@@ -143,6 +146,7 @@ impl RepoLiveState {
         self.error = None;
         self.metrics = outcome.metrics.clone();
         self.gitleaks_configured = outcome.gitleaks_configured;
+        self.agents_md_configured = outcome.agents_md_configured;
         self.signals = outcome.signals.clone();
         self.secret_findings = outcome.secret_findings.clone();
         self.revision += 1;
@@ -162,6 +166,7 @@ impl RepoLiveState {
         self.error = delta.error.clone();
         self.metrics = delta.metrics.clone();
         self.gitleaks_configured = delta.gitleaks_configured;
+        self.agents_md_configured = delta.agents_md_configured;
         self.signals = delta.signals.clone();
         self.secret_findings = delta.secret_findings.clone();
         self.revision += 1;
@@ -1414,6 +1419,7 @@ fn empty_wsl_error_delta(repo: &Path, category: &str, message: &str) -> RepoDelt
         }),
         metrics: RepoMetrics::default(),
         gitleaks_configured: false,
+        agents_md_configured: false,
         signals: Vec::new(),
         secret_findings: Vec::new(),
         subscribed_diffs: None,
@@ -1599,6 +1605,7 @@ pub(crate) fn recalc_blocking(
     let worktree_diffs = engine.worktree_diff()?;
     let secret_findings = secret_scan::detect_secret_findings(repo, &status, &worktree_diffs);
     let gitleaks_configured = secret_scan::has_repo_gitleaks_config(repo);
+    let agents_md_configured = commands::has_repo_agents_md_config(repo);
     let (metrics, signals) = metrics_and_signals(&status, &worktree_diffs, &secret_findings);
 
     let subscribed_diffs = if subs.is_empty() {
@@ -1632,6 +1639,7 @@ pub(crate) fn recalc_blocking(
         subscribed_diffs,
         metrics,
         gitleaks_configured,
+        agents_md_configured,
         signals,
         secret_findings,
     })
@@ -1706,6 +1714,7 @@ mod tests {
             subscribed_diffs: None,
             metrics: RepoMetrics::default(),
             gitleaks_configured: false,
+            agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Vec::new(),
         };
@@ -1744,6 +1753,7 @@ mod tests {
             subscribed_diffs: None,
             metrics: RepoMetrics::default(),
             gitleaks_configured: false,
+            agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Vec::new(),
         };

@@ -1149,6 +1149,74 @@ select option {
 .repo-panel__muted {
   color: var(--fg-muted);
 }
+.repo-config-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.repo-config-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.repo-config-section__head h3 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.repo-config-section__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.repo-config-section__item--configured {
+  padding: 4px 0;
+}
+.repo-config-section__item:first-of-type {
+  border-top: 0;
+}
+.repo-config-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.repo-config-section__body strong {
+  font-size: 13px;
+}
+.repo-config-section__body span {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.repo-config-section__error {
+  color: var(--danger) !important;
+}
+.repo-config-section__action {
+  border: 1px solid rgba(76, 132, 255, 0.7);
+  background: rgba(76, 132, 255, 0.16);
+  color: #dce8ff;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.repo-config-section__action:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.repo-config-section__status {
+  color: var(--fg-muted);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+}
 .status-list h4 {
   margin: 10px 0 2px;
   font-size: 12px;
@@ -1450,6 +1518,21 @@ select option {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.repo-source-badge {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #d7ecff;
+  border: 1px solid rgba(120, 180, 255, 0.75);
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: rgba(41, 113, 210, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(215, 236, 255, 0.08);
+}
+.repo-panel__source-badge {
+  align-self: center;
 }
 .repo-card__remove {
   flex-shrink: 0;

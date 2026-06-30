@@ -10,6 +10,7 @@
 export const EVENT_WORKBENCH_DELTA = "tinto://workbench-delta";
 export const EVENT_FS_EVENTS = "tinto://fs-events";
 export const EVENT_WATCHING_STATE = "tinto://watching-state";
+export const EVENT_AGENT_SESSIONS_CHANGED = "tinto://agent-sessions-changed";
 export const EVENT_AGENT_SESSION_OUTPUT = "tinto://agent-session-output";
 export const EVENT_AGENT_SESSION_CHANGE_LOG = "tinto://agent-session-change-log";
 
@@ -201,6 +202,7 @@ export interface RepoDelta {
   error: RepoErrorState | null;
   metrics?: RepoMetrics; // RDM-011 additive
   gitleaks_configured?: boolean; // additive
+  agents_md_configured?: boolean; // additive
   signals?: PassiveSignal[]; // RDM-011 additive
   secret_findings?: SecretFinding[]; // additive
   subscribed_diffs?: FileDiff[] | null; // RDM-008

@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { DockviewReact, themeVisualStudio } from "dockview-react";
 import type { DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
 import { getCommitLog, retryRepo } from "../bus/client";
-import type { CommitInfo, RepoDelta } from "../bus/contract";
+import type { CommitInfo, RepoDelta, RepoEntry, WorkbenchConfig } from "../bus/contract";
 import {
   busStore,
   commitDate,
@@ -29,11 +29,61 @@ import { MetricsPill, SignalBadges } from "./SignalBadges";
 import { WatchedFilesSection } from "./WatchedFilesSection";
 import { FileView } from "./file/FileView";
 import { FileTab } from "./FileTab";
-import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
+import { RepoConfigSection } from "./RepoConfigSection";
+import { RepoSourceBadge } from "./RepoSourceBadge";
 import { ProjectExplorer } from "./tree/ProjectExplorer";
 import { useExplorerCollapsed } from "./tree/explorerCollapseState";
 
 const COMMIT_LOG_LIMIT = 30;
+
+function configuredRepoEntry(
+  config: WorkbenchConfig | null | undefined,
+  repo: string,
+): RepoEntry | null {
+  const workbenches = config?.workbenches ?? [];
+  const activeConfig = workbenches.find((w) => w.name === config?.active);
+  return (
+    activeConfig?.repos.find((r) => r.path === repo) ??
+    workbenches.flatMap((w) => w.repos).find((r) => r.path === repo) ??
+    null
+  );
+}
+
+function RepoPanelHeader({
+  repo,
+  repoEntry,
+  removable,
+  onRemove,
+}: {
+  repo: string;
+  repoEntry: RepoEntry | null;
+  removable?: boolean;
+  onRemove?: () => void;
+}) {
+  return (
+    <header className="repo-panel__head">
+      <h2>{busStore.displayName(repo)}</h2>
+      <RepoSourceBadge
+        repo={repo}
+        source={repoEntry?.source}
+        distro={repoEntry?.distro}
+        className="repo-panel__source-badge"
+      />
+      <span className="repo-panel__path">{repo}</span>
+      {removable && (
+        <button
+          type="button"
+          className="repo-panel__remove"
+          data-testid="repo-panel-remove"
+          title="Remove from workbench"
+          onClick={onRemove}
+        >
+          Remove
+        </button>
+      )}
+    </header>
+  );
+}
 
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -58,6 +108,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const dock = useRepoDock(repo);
   const empty = dock.open.length === 0;
   const [explorerCollapsed, toggleExplorer] = useExplorerCollapsed(repo);
+  const repoEntry = configuredRepoEntry(busState.config, repo);
 
   // Drop the nested dock binding when the project tab unmounts.
   useEffect(() => () => fileDock.unregister(repo), [repo]);
@@ -70,10 +121,7 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
         <div className="repo-panel__main">
           <div className="repo-panel__overview-wrap" data-testid={`repo-loading-${repo}`}>
             <div className="repo-overview repo-overview--missing">
-              <header className="repo-panel__head">
-                <h2>{busStore.displayName(repo)}</h2>
-                <span className="repo-panel__path">{repo}</span>
-              </header>
+              <RepoPanelHeader repo={repo} repoEntry={repoEntry} />
               <p>Loading...</p>
             </div>
           </div>
@@ -134,6 +182,7 @@ function RepoOverview({ repo }: { repo: string }) {
   const { removeRepo, openFile } = useWorkspaceActions();
   const nowMs = useNow(30_000);
   const delta = repos[repo];
+  const repoEntry = configuredRepoEntry(state.config, repo);
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [logError, setLogError] = useState(false);
 
@@ -162,19 +211,12 @@ function RepoOverview({ repo }: { repo: string }) {
   if (!delta) {
     return (
       <div className="repo-overview repo-overview--missing" data-testid="repo-overview-missing">
-        <header className="repo-panel__head">
-          <h2>{busStore.displayName(repo)}</h2>
-          <span className="repo-panel__path">{repo}</span>
-          <button
-            type="button"
-            className="repo-panel__remove"
-            data-testid="repo-panel-remove"
-            title="Remove from workbench"
-            onClick={() => removeRepo(repo)}
-          >
-            Remove
-          </button>
-        </header>
+        <RepoPanelHeader
+          repo={repo}
+          repoEntry={repoEntry}
+          removable
+          onRemove={() => removeRepo(repo)}
+        />
         <p>This repo is no longer accessible or is not in the active workbench.</p>
       </div>
     );
@@ -194,23 +236,14 @@ function RepoOverview({ repo }: { repo: string }) {
     nowMs,
   );
   const activeWorkbench = state.config?.active ?? null;
-  const activeConfig = (state.config?.workbenches ?? []).find((w) => w.name === activeWorkbench);
-  const repoEntry = activeConfig?.repos.find((r) => r.path === repo);
   return (
     <div className="repo-overview" data-testid={`repo-overview-${repo}`}>
-      <header className="repo-panel__head">
-        <h2>{busStore.displayName(repo)}</h2>
-        <span className="repo-panel__path">{repo}</span>
-        <button
-          type="button"
-          className="repo-panel__remove"
-          data-testid="repo-panel-remove"
-          title="Remove from workbench"
-          onClick={() => removeRepo(repo)}
-        >
-          Remove
-        </button>
-      </header>
+      <RepoPanelHeader
+        repo={repo}
+        repoEntry={repoEntry}
+        removable
+        onRemove={() => removeRepo(repo)}
+      />
 
       {error && (
         <div className="repo-panel__error" data-testid="repo-panel-error">
@@ -225,7 +258,11 @@ function RepoOverview({ repo }: { repo: string }) {
         </div>
       )}
 
-      {delta.gitleaks_configured === false && <GitleaksConfigNotice repo={repo} />}
+      <RepoConfigSection
+        repo={repo}
+        gitleaksConfigured={delta.gitleaks_configured !== false}
+        agentsMdConfigured={delta.agents_md_configured === true}
+      />
 
       <section className="repo-panel__signals" data-testid="repo-signals">
         <h3>Passive signals</h3>

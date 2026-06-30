@@ -6,11 +6,13 @@ const h = vi.hoisted(() => ({
   deltaCb: null as ((d: unknown) => void) | null,
   fsCb: null as ((b: unknown) => void) | null,
   watchCb: null as ((w: unknown) => void) | null,
+  sessionsCb: null as ((sessions: unknown) => void) | null,
   changeLogCb: null as ((log: unknown) => void) | null,
   outputCb: null as ((output: unknown) => void) | null,
   unlistenDelta: vi.fn(),
   unlistenFs: vi.fn(),
   unlistenWatch: vi.fn(),
+  unlistenSessions: vi.fn(),
   unlistenChangeLog: vi.fn(),
   unlistenOutput: vi.fn(),
   getSnapshot: vi.fn(),
@@ -32,6 +34,10 @@ vi.mock("./client", () => ({
   onWatchingState: vi.fn((cb) => {
     h.watchCb = cb;
     return Promise.resolve(h.unlistenWatch);
+  }),
+  onAgentSessionsChanged: vi.fn((cb) => {
+    h.sessionsCb = cb;
+    return Promise.resolve(h.unlistenSessions);
   }),
   onAgentSessionChangeLog: vi.fn((cb) => {
     h.changeLogCb = cb;
@@ -91,6 +97,7 @@ describe("useBusConnection", () => {
     expect(h.deltaCb).toBeTypeOf("function");
     expect(h.fsCb).toBeTypeOf("function");
     expect(h.watchCb).toBeTypeOf("function");
+    expect(h.sessionsCb).toBeTypeOf("function");
     expect(h.changeLogCb).toBeTypeOf("function");
     expect(h.outputCb).toBeTypeOf("function");
     expect(busStore.getState().config?.active).toBe("Work");
@@ -136,6 +143,7 @@ describe("useBusConnection", () => {
     await waitFor(() => expect(h.unlistenDelta).toHaveBeenCalled());
     expect(h.unlistenFs).toHaveBeenCalled();
     expect(h.unlistenWatch).toHaveBeenCalled();
+    expect(h.unlistenSessions).toHaveBeenCalled();
     expect(h.unlistenChangeLog).toHaveBeenCalled();
     expect(h.unlistenOutput).toHaveBeenCalled();
 
@@ -158,6 +166,34 @@ describe("useBusConnection", () => {
     );
 
     expect(agentSessionStore.getState().output["sess-1"]).toHaveLength(1);
+  });
+
+  it("applies pushed agent session snapshots", async () => {
+    render(createElement(Probe));
+    await waitFor(() => expect(h.sessionsCb).toBeTypeOf("function"));
+
+    act(() =>
+      h.sessionsCb!([
+        {
+          id: "sess-1",
+          repo: "/r/a",
+          agent_type: "codex",
+          status: "running",
+          pid: 123,
+          started_at_ms: 1,
+          exit_code: null,
+          error: null,
+          checkpoint: null,
+          change_log: [],
+          turn_status: "working",
+          turn_checkpoints: [],
+          active_sessions: 1,
+          age_ms: 10,
+        },
+      ]),
+    );
+
+    expect(agentSessionStore.getState().sessions["sess-1"]?.status).toBe("running");
   });
 
   it("swallows a failed config load without throwing", async () => {
