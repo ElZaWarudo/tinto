@@ -509,7 +509,21 @@ fn prune_checkpoints(repo_dir: &Path, keep: usize) -> Result<(), AgentConsoleErr
 }
 
 fn enforce_repo_budget(repo_dir: &Path, max_bytes: u64) -> Result<(), AgentConsoleError> {
-    let total = dir_size(repo_dir)?;
+    let mut total = dir_size(repo_dir)?;
+    if total <= max_bytes {
+        return Ok(());
+    }
+
+    let mut dirs = checkpoint_dirs(repo_dir)?;
+    dirs.sort_by_key(|(_, modified)| *modified);
+
+    while total > max_bytes && dirs.len() > 1 {
+        let (path, _) = dirs.remove(0);
+        let reclaimed = dir_size(&path)?;
+        fs::remove_dir_all(path).map_err(io_error)?;
+        total = total.saturating_sub(reclaimed);
+    }
+
     if total <= max_bytes {
         Ok(())
     } else {
@@ -800,6 +814,34 @@ mod tests {
         let repo_dir = last_dir.unwrap().parent().unwrap().to_path_buf();
         let dirs = checkpoint_dirs(&repo_dir).unwrap();
         assert_eq!(dirs.len(), 5);
+    }
+
+    #[test]
+    fn repo_budget_prunes_old_checkpoints_before_failing_start() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "dirty\n");
+        let config = CheckpointConfig {
+            retention_per_repo: 10,
+            max_checkpoint_bytes: 2048,
+            max_repo_bytes: 1800,
+        };
+        let mut newest_dir = None;
+
+        for i in 0..4 {
+            repo.write("base.txt", &format!("dirty {i}\n{}", "x".repeat(512)));
+            let record =
+                create_checkpoint(repo.path(), &format!("budget-{i}"), i, &config).unwrap();
+            newest_dir = Some(record.checkpoint_dir);
+        }
+
+        let newest_dir = newest_dir.unwrap();
+        let repo_dir = newest_dir.parent().unwrap().to_path_buf();
+        let dirs = checkpoint_dirs(&repo_dir).unwrap();
+        let total = dir_size(&repo_dir).unwrap();
+
+        assert!(newest_dir.exists());
+        assert!(dirs.len() < 4);
+        assert!(total <= config.max_repo_bytes);
     }
 
     #[test]

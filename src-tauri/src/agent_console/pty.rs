@@ -263,7 +263,7 @@ export PATH="$native_path"
 resolve_agent_binary() {
   agent_name=$1
   resolved=$(command -v -- "$agent_name" 2>/dev/null || true)
-  if [ -n "$resolved" ]; then
+  if [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]; then
     printf '%s\n' "$resolved"
     return 0
   fi
@@ -296,7 +296,7 @@ while [ "$attempts" -gt 0 ]; do
   sleep 0.25
 done
 if ! resolved_agent=$(resolve_agent_binary "$agent_name"); then
-  printf 'Tinto: no se encontro %s en PATH dentro de WSL. Instala el agente en esta distro o crea un enlace en ~/.local/bin.\n' "$agent_name" >&2
+  printf 'Tinto: no se encontro un ejecutable nativo de %s en PATH dentro de WSL. Instala el agente en esta distro o crea un enlace ejecutable en ~/.local/bin.\n' "$agent_name" >&2
   exit 127
 fi
 exec "$resolved_agent" "$@""#;

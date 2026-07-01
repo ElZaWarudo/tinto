@@ -507,7 +507,7 @@ export PATH="$native_path"
 resolve_agent_binary() {
   agent_name=$1
   resolved=$(command -v -- "$agent_name" 2>/dev/null || true)
-  if [ -n "$resolved" ]; then
+  if [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]; then
     printf '%s\n' "$resolved"
     return 0
   fi
