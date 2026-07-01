@@ -1,6 +1,6 @@
 ---
 title: State/Event bus — backend→frontend integration
-status: ready
+status: review-passed
 roadmap_item: RDM-006
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-11-rdm-006-state-event-bus-requirements.md
