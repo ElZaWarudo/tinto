@@ -126,6 +126,7 @@ pub fn run() {
             agent_console::commands::resize_agent_session,
             agent_console::commands::revert_session,
             agent_console::commands::revert_session_turn_file,
+            agent_console::commands::restore_session_turn,
             file_ops::commands::copy_to_repo,
             file_ops::commands::copy_within_repo,
             file_ops::commands::move_within_repo,

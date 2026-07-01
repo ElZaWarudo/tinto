@@ -21,6 +21,12 @@ const revertSessionTurnFileMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(sessionFixture({ status: "completed", turn_checkpoints: [] }));
 });
+const restoreSessionTurnMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve(
+    sessionFixture({ status: "completed", restored_to_turn_index: 1, turn_checkpoints: [] }),
+  );
+});
 const stopAgentSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
@@ -40,6 +46,7 @@ vi.mock("../../bus/client", () => ({
   listAgentSessions: () => listAgentSessionsMock(),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
+  restoreSessionTurn: (...a: unknown[]) => restoreSessionTurnMock(...a),
   stopAgentSession: (...a: unknown[]) => stopAgentSessionMock(...a),
   writeAgentSessionInput: (...a: unknown[]) => writeAgentSessionInputMock(...a),
 }));
@@ -70,6 +77,7 @@ function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
     turn_status: "working",
     turn_checkpoints: [],
     reverted_at_ms: null,
+    restored_to_turn_index: null,
     active_sessions: 1,
     age_ms: 1,
     output_bytes_per_second: null,
@@ -158,6 +166,7 @@ describe("TerminalPanel", () => {
     getAgentJournalSessionMock.mockResolvedValue(null);
     revertSessionMock.mockClear();
     revertSessionTurnFileMock.mockClear();
+    restoreSessionTurnMock.mockClear();
     stopAgentSessionMock.mockClear();
     confirmMock.mockClear();
   });
@@ -219,31 +228,23 @@ describe("TerminalPanel", () => {
       screen.getByTitle("Codex agent side rail for a: focused turn and Agent Lens column."),
     ).toHaveClass("agent-panel__side-rail");
     expect(
-      screen.getByTitle("Codex agent composer for a: quick actions and message input."),
+      screen.getByTitle(
+        "Codex agent composer for a: command menu, skill mentions, and message input.",
+      ),
     ).toHaveClass("agent-panel__composer");
     expect(
-      screen.getByTitle("Codex agent composer quick actions for a: suggested prompt shortcuts."),
+      screen.getByTitle(
+        "Codex command menu for a: type / for Codex and Tinto commands or $ for skills.",
+      ),
     ).toHaveClass("agent-panel__composer-actions");
-    expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute(
-      "title",
-      "Codex quick action Plan for a: Draft a plan for the next turn.",
-    );
-    expect(screen.getByTitle("Composer quick-action label: Plan.")).toHaveTextContent("Plan");
-    expect(screen.getByRole("button", { name: "Review" })).toHaveAttribute(
-      "title",
-      "Codex quick action Review for a: Ask for a focused review.",
-    );
-    expect(screen.getByTitle("Composer quick-action label: Review.")).toHaveTextContent("Review");
-    expect(screen.getByRole("button", { name: "Test" })).toHaveAttribute(
-      "title",
-      "Codex quick action Test for a: Ask for verification.",
-    );
-    expect(screen.getByTitle("Composer quick-action label: Test.")).toHaveTextContent("Test");
-    expect(screen.getByRole("button", { name: "Handoff" })).toHaveAttribute(
-      "title",
-      "Codex quick action Handoff for a: Ask for a handoff summary.",
-    );
-    expect(screen.getByTitle("Composer quick-action label: Handoff.")).toHaveTextContent("Handoff");
+    expect(
+      screen.getByTitle("Composer command hint: type / for Codex and Tinto commands or $ for skills."),
+    ).toHaveTextContent("Type / for commands or $ for skills");
+    expect(
+      screen.getByTitle(
+        "Composer command scopes: Codex prompt commands, Tinto session commands, and skills.",
+      ),
+    ).toHaveTextContent("Codex + Tinto + Skills");
     expect(
       screen.getByTitle("Codex agent composer input row for a: message draft and send control."),
     ).toHaveClass("agent-panel__composer-row");
@@ -406,23 +407,50 @@ describe("TerminalPanel", () => {
     expect(errorBanner).toHaveAttribute("title", "Agent session error banner: Write failed");
   });
 
-  it("prepares editable turns from quick actions", async () => {
+  it("prepares editable turns from composer commands and skill mentions", async () => {
     const user = userEvent.setup();
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
     const composer = await screen.findByLabelText("Message Codex");
-    await user.click(screen.getByRole("button", { name: "Plan" }));
+    await user.type(composer, "/plan");
+    expect(screen.getByRole("listbox", { name: "Composer commands" })).toHaveAttribute(
+      "title",
+      "Composer command menu: 1 command matching /plan.",
+    );
+    expect(screen.getByRole("option", { name: /\/plan/ })).toHaveAttribute(
+      "title",
+      "Run /plan: Draft a plan for the next turn.",
+    );
+    await user.type(composer, "{Enter}");
 
     expect(composer).toHaveValue(
       "Create a concise implementation plan for the next change before editing.",
     );
 
-    await user.click(screen.getByRole("button", { name: "Review" }));
+    await user.type(composer, "{Shift>}{Enter}{/Shift}/review{Enter}");
     expect(composer).toHaveValue(
       [
         "Create a concise implementation plan for the next change before editing.",
         "Review the current changes and call out concrete bugs, regressions, or missing tests.",
+      ].join("\n\n"),
+    );
+
+    await user.type(composer, "{Shift>}{Enter}{/Shift}$warden");
+    expect(screen.getByRole("listbox", { name: "Composer commands" })).toHaveAttribute(
+      "title",
+      "Composer command menu: 1 command matching $warden.",
+    );
+    expect(screen.getByRole("option", { name: /\$krt-interface-warden/ })).toHaveAttribute(
+      "title",
+      "Run $krt-interface-warden: Design or revise a distinctive working-surface interface.",
+    );
+    await user.type(composer, "{Enter}");
+    expect(composer).toHaveValue(
+      [
+        "Create a concise implementation plan for the next change before editing.",
+        "Review the current changes and call out concrete bugs, regressions, or missing tests.",
+        "$krt-interface-warden ",
       ].join("\n\n"),
     );
   });
@@ -1322,14 +1350,14 @@ describe("TerminalPanel", () => {
     );
     expect(
       screen.getByTitle(
-        "Codex agent composer quick actions for a: archived transcripts are read-only.",
+        "Codex command menu for a: archived transcripts are read-only.",
       ),
     ).toHaveClass("agent-panel__composer-actions");
-    expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute(
-      "title",
-      "Codex quick action Plan for a: Archived transcripts are read-only.",
-    );
+    expect(
+      screen.getByTitle("Composer commands are disabled because this transcript is archived."),
+    ).toHaveTextContent("Archived transcript");
+    expect(screen.queryByRole("listbox", { name: "Composer commands" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toHaveAttribute(
       "title",
       "Codex agent send control for a: archived transcript is read-only.",
@@ -1337,12 +1365,12 @@ describe("TerminalPanel", () => {
     const archivedFocus = screen.getByLabelText("Focused turn");
     expect(
       within(archivedFocus).getByTitle(
-        "Focused turn action container for turn 1: prompt-drafting actions are disabled because the session is read-only or unavailable.",
+        "Focused turn restore container for turn 1: stop the session before restoring.",
       ),
     ).toHaveClass("agent-panel__turn-focus-actions");
-    expect(within(archivedFocus).getByRole("button", { name: "Continue" })).toHaveAttribute(
+    expect(within(archivedFocus).getByRole("button", { name: "Restore here" })).toHaveAttribute(
       "title",
-      "Cannot draft a continuation prompt for turn 1: session is read-only or unavailable.",
+      "Restore turn 1: stop the session before restoring.",
     );
 
     unmount();
@@ -2635,14 +2663,9 @@ describe("TerminalPanel", () => {
     ).toHaveTextContent("+1 more");
     expect(
       within(focus).getByTitle(
-        "Focused turn action container for turn 2: prompt-drafting actions are available.",
+        "Focused turn restore container for turn 2: stop the session before restoring.",
       ),
     ).toHaveClass("agent-panel__turn-focus-actions");
-    expect(
-      within(focus).getByTitle(
-        "Focused turn utility container for turn 2: navigation and copy utilities.",
-      ),
-    ).toHaveClass("agent-panel__turn-focus-utilities");
 
     await user.click(within(screen.getByLabelText("Turn map")).getByRole("button", { name: /T1/ }));
 
@@ -2725,86 +2748,17 @@ describe("TerminalPanel", () => {
       ),
     ).toHaveClass("agent-panel__chat-turn-files");
 
-    expect(within(focus).getByRole("button", { name: "Jump" })).toHaveAttribute(
+    expect(within(focus).queryByRole("button", { name: "Jump" })).not.toBeInTheDocument();
+    expect(within(focus).queryByRole("button", { name: "Copy focus" })).not.toBeInTheDocument();
+    expect(within(focus).queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+    expect(within(focus).queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    expect(within(focus).queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
+    expect(within(focus).queryByRole("button", { name: "Handoff" })).not.toBeInTheDocument();
+    expect(within(focus).getByRole("button", { name: "Restore here" })).toHaveAttribute(
       "title",
-      "Scroll conversation turn 1 into view.",
+      "Restore turn 1: stop the session before restoring.",
     );
-    expect(within(focus).getByTitle("Focused turn utility label: Jump.")).toHaveTextContent("Jump");
-    const continueAction = within(focus).getByRole("button", { name: "Continue" });
-    const reviewAction = within(focus).getByRole("button", { name: "Review" });
-    const testAction = within(focus).getByRole("button", { name: "Test" });
-    const handoffAction = within(focus).getByRole("button", { name: "Handoff" });
-    expect(continueAction).toHaveAttribute("title", "Draft a continuation prompt for turn 1.");
-    expect(reviewAction).toHaveAttribute("title", "Draft a focused review prompt for turn 1.");
-    expect(testAction).toHaveAttribute("title", "Draft a verification prompt for turn 1.");
-    expect(handoffAction).toHaveAttribute("title", "Draft a handoff prompt for turn 1.");
-    expect(within(focus).getByTitle("Focused turn action label: Continue.")).toHaveTextContent(
-      "Continue",
-    );
-    expect(within(focus).getByTitle("Focused turn action label: Review.")).toHaveTextContent(
-      "Review",
-    );
-    expect(within(focus).getByTitle("Focused turn action label: Test.")).toHaveTextContent("Test");
-    expect(within(focus).getByTitle("Focused turn action label: Handoff.")).toHaveTextContent(
-      "Handoff",
-    );
-
-    await user.click(continueAction);
-
-    const composerValue = (screen.getByLabelText("Message Codex") as HTMLTextAreaElement).value;
-    expect(composerValue).toContain("Continue from turn 1.");
-    expect(composerValue).toContain("Artifact summary: Code 1.");
-    expect(composerValue).toContain("Touched files: modified src/first.ts.");
-    expect(composerValue).not.toContain("Recent commands:");
-
-    await user.click(testAction);
-
-    const testComposerValue = (screen.getByLabelText("Message Codex") as HTMLTextAreaElement).value;
-    expect(testComposerValue).toContain("Test the work from turn 1.");
-    expect(testComposerValue).toContain("Recent commands: npm test first.");
-    expect(testComposerValue).toContain("run the most relevant verification");
-
-    await user.click(reviewAction);
-
-    const reviewComposerValue = (screen.getByLabelText("Message Codex") as HTMLTextAreaElement)
-      .value;
-    expect(reviewComposerValue).toContain("Review turn 1.");
-    expect(reviewComposerValue).toContain("concrete bugs, regressions, or missing tests");
-
-    await user.click(handoffAction);
-
-    const handoffComposerValue = (screen.getByLabelText("Message Codex") as HTMLTextAreaElement)
-      .value;
-    expect(handoffComposerValue).toContain("Prepare a handoff from turn 1.");
-    expect(handoffComposerValue).toContain("Artifact summary: Code 1.");
-    expect(handoffComposerValue).toContain("Recent commands: npm test first.");
-    expect(handoffComposerValue).toContain("changed files, verification, risks");
-
-    const copyFocus = within(focus).getByRole("button", { name: "Copy focus" });
-    expect(copyFocus).toHaveAttribute(
-      "title",
-      "Copy focused turn 1 context, including artifact summary and transcript.",
-    );
-    expect(within(focus).getByTitle("Focused turn utility label: Copy focus.")).toHaveTextContent(
-      "Copy focus",
-    );
-    await user.click(copyFocus);
-
-    await waitFor(() => expect(writeClipboardTextMock).toHaveBeenCalled());
-    const copied = String(
-      writeClipboardTextMock.mock.calls[writeClipboardTextMock.mock.calls.length - 1]?.[0] ?? "",
-    );
-    expect(copied).toContain("Turn 1");
-    expect(copied).toContain("Artifacts: Code 1.");
-    expect(copied).toContain("First task");
-    expect(copied).toContain("src/first.ts");
-    expect(within(focus).getByRole("button", { name: "Copied" })).toHaveAttribute(
-      "title",
-      "Copied focused turn 1 context to clipboard.",
-    );
-    expect(within(focus).getByTitle("Focused turn utility label: Copied.")).toHaveTextContent(
-      "Copied",
-    );
+    expect(screen.getByLabelText("Message Codex")).toHaveValue("");
   });
 
   it("shows session change log files in Agent Lens when turn checkpoints are unavailable", async () => {
@@ -3040,6 +2994,84 @@ describe("TerminalPanel", () => {
       true,
     );
     expect(revertSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("restores files and chat view to a completed turn", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        status: "completed",
+        pid: null,
+        exit_code: 0,
+        turn_status: "waiting",
+        turn_checkpoints: [
+          {
+            id: "sess-1:turn-1",
+            index: 1,
+            started_at_ms: 1,
+            ended_at_ms: 2,
+            checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
+            restore_checkpoint: {
+              checkpoint_type: "fs_snapshot",
+              git_hash: null,
+              snapshot_files: [],
+            },
+            changes: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
+          },
+        ],
+      }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await act(async () => {
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:user:1",
+        kind: "user_message",
+        text: "First request",
+        timestamp_ms: 1,
+      });
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:agent:1",
+        kind: "agent_message",
+        text: "First done",
+        timestamp_ms: 2,
+      });
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:user:2",
+        kind: "user_message",
+        text: "Second request",
+        timestamp_ms: 3,
+      });
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:agent:2",
+        kind: "agent_message",
+        text: "Second done",
+        timestamp_ms: 4,
+      });
+    });
+
+    const conversation = screen.getByLabelText("Agent conversation");
+    expect(await within(conversation).findByText("Second done")).toBeInTheDocument();
+    await user.click(within(screen.getByLabelText("Turn map")).getByRole("button", { name: /T1/ }));
+
+    const restore = await screen.findByRole("button", { name: "Restore here" });
+    expect(restore).toHaveAttribute(
+      "title",
+      "Restore turn 1: return files and chat view to this turn.",
+    );
+    await user.click(restore);
+
+    expect(confirmMock).toHaveBeenCalled();
+    expect(restoreSessionTurnMock).toHaveBeenCalledWith("sess-1", "sess-1:turn-1", true);
+    await waitFor(() =>
+      expect(within(conversation).queryByText("Second done")).not.toBeInTheDocument(),
+    );
+    expect(within(conversation).getByText("First done")).toBeInTheDocument();
   });
 
   it("stops the backend session when the panel closes", async () => {

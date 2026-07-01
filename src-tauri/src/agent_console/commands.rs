@@ -256,6 +256,24 @@ pub fn revert_session_turn_file(
     Ok(session)
 }
 
+#[tauri::command]
+pub fn restore_session_turn(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    turn_checkpoint_id: String,
+    user_consent: bool,
+) -> Result<AgentSession, CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    let session = registry
+        .restore_turn(&session_id, &turn_checkpoint_id, user_consent)
+        .map_err(CommandError::from)?;
+    let sessions = registry.list_sessions();
+    emit_sessions_snapshot(&app, &sessions);
+    emit_change_logs(&app, std::slice::from_ref(&session));
+    Ok(session)
+}
+
 async fn ensure_known_agent_repo(
     bus: &BusHandle,
     repo: &Path,

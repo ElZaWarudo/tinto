@@ -68,7 +68,8 @@ impl AgentJournal {
               status TEXT NOT NULL,
               started_at_ms INTEGER NOT NULL,
               ended_at_ms INTEGER,
-              updated_at_ms INTEGER NOT NULL
+              updated_at_ms INTEGER NOT NULL,
+              restored_to_turn_index INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS agent_turns (
@@ -99,19 +100,36 @@ impl AgentJournal {
               ON agent_sessions(repo, updated_at_ms DESC);
             "#,
         )?;
+        self.ensure_agent_sessions_restore_column()?;
+        Ok(())
+    }
+
+    fn ensure_agent_sessions_restore_column(&self) -> Result<(), AgentJournalError> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(agent_sessions)")?;
+        let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for column in columns {
+            if column? == "restored_to_turn_index" {
+                return Ok(());
+            }
+        }
+        self.conn.execute(
+            "ALTER TABLE agent_sessions ADD COLUMN restored_to_turn_index INTEGER",
+            [],
+        )?;
         Ok(())
     }
 
     pub fn record_session(&self, session: &AgentSession) -> Result<(), AgentJournalError> {
         let repo = session.repo.to_string_lossy().to_string();
         let ended_at_ms = session.ended_at_ms.map(|value| value as i64);
+        let restored_to_turn_index = session.restored_to_turn_index.map(|value| value as i64);
         let updated_at_ms = now_ms() as i64;
         self.conn.execute(
             r#"
             INSERT INTO agent_sessions (
               id, repo, agent_type, source_kind, distro, status,
-              started_at_ms, ended_at_ms, updated_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+              started_at_ms, ended_at_ms, updated_at_ms, restored_to_turn_index
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
               repo = excluded.repo,
               agent_type = excluded.agent_type,
@@ -119,7 +137,8 @@ impl AgentJournal {
               distro = excluded.distro,
               status = excluded.status,
               ended_at_ms = excluded.ended_at_ms,
-              updated_at_ms = excluded.updated_at_ms
+              updated_at_ms = excluded.updated_at_ms,
+              restored_to_turn_index = excluded.restored_to_turn_index
             "#,
             params![
                 &session.id,
@@ -135,6 +154,7 @@ impl AgentJournal {
                 session.started_at_ms as i64,
                 ended_at_ms,
                 updated_at_ms,
+                restored_to_turn_index,
             ],
         )?;
         Ok(())
@@ -256,7 +276,9 @@ impl AgentJournal {
             .conn
             .query_row(
                 r#"
-                SELECT id, repo, agent_type, distro, status, started_at_ms, ended_at_ms
+                SELECT
+                  id, repo, agent_type, distro, status, started_at_ms, ended_at_ms,
+                  restored_to_turn_index
                 FROM agent_sessions
                 WHERE id = ?1
                 "#,
@@ -270,11 +292,21 @@ impl AgentJournal {
                         row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((id, repo, agent_type, wsl_distro, status, started_at_ms, ended_at_ms)) = session
+        let Some((
+            id,
+            repo,
+            agent_type,
+            wsl_distro,
+            status,
+            started_at_ms,
+            ended_at_ms,
+            restored_to_turn_index,
+        )) = session
         else {
             return Ok(None);
         };
@@ -298,6 +330,7 @@ impl AgentJournal {
             turn_checkpoints: Vec::new(),
             timeline,
             reverted_at_ms: None,
+            restored_to_turn_index: restored_to_turn_index.map(|value| value as u32),
             active_sessions: 0,
             age_ms: now_ms().saturating_sub(started_at_ms as u64),
             output_bytes_per_second: None,
@@ -385,6 +418,7 @@ mod tests {
             turn_checkpoints: Vec::new(),
             timeline: Vec::new(),
             reverted_at_ms: None,
+            restored_to_turn_index: None,
             active_sessions: 1,
             age_ms: 10,
             output_bytes_per_second: None,
@@ -444,6 +478,40 @@ mod tests {
             Some(AgentSessionTimelineKind::AgentMessage)
         );
         assert_eq!(summaries[0].last_event_text.as_deref(), Some("preview"));
+    }
+
+    #[test]
+    fn journal_reconstructs_restored_turn_index() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut restored = session("sess-1");
+        restored.restored_to_turn_index = Some(1);
+        journal.record_session(&restored).expect("session");
+        journal
+            .record_timeline_item(&AgentSessionTimelineItem {
+                session_id: "sess-1".to_string(),
+                id: "event-1".to_string(),
+                kind: AgentSessionTimelineKind::UserMessage,
+                text: "first".to_string(),
+                timestamp_ms: 200,
+            })
+            .expect("event 1");
+        journal
+            .record_timeline_item(&AgentSessionTimelineItem {
+                session_id: "sess-1".to_string(),
+                id: "event-2".to_string(),
+                kind: AgentSessionTimelineKind::AgentMessage,
+                text: "second".to_string(),
+                timestamp_ms: 300,
+            })
+            .expect("event 2");
+
+        let archived = journal
+            .session_from_journal("sess-1")
+            .expect("read")
+            .expect("session");
+
+        assert_eq!(archived.restored_to_turn_index, Some(1));
+        assert_eq!(archived.timeline.len(), 2);
     }
 
     #[test]

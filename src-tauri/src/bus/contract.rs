@@ -88,6 +88,8 @@ pub struct AgentSessionTurnCheckpoint {
     pub started_at_ms: u64,
     pub ended_at_ms: u64,
     pub checkpoint: AgentSessionCheckpoint,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restore_checkpoint: Option<AgentSessionCheckpoint>,
     pub changes: Vec<AgentSessionChange>,
 }
 
@@ -124,6 +126,8 @@ pub struct AgentSession {
     pub timeline: Vec<AgentSessionTimelineItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_to_turn_index: Option<u32>,
     pub active_sessions: usize,
     pub age_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,6 +506,11 @@ mod tests {
                     git_hash: Some("abc123".into()),
                     snapshot_files: Vec::new(),
                 },
+                restore_checkpoint: Some(AgentSessionCheckpoint {
+                    checkpoint_type: AgentSessionCheckpointType::GitRef,
+                    git_hash: Some("def456".into()),
+                    snapshot_files: Vec::new(),
+                }),
                 changes: vec![AgentSessionChange {
                     path: "src/a.rs".into(),
                     kind: AgentSessionChangeKind::Modified,
@@ -516,6 +525,7 @@ mod tests {
                 timestamp_ms: 1760000000101,
             }],
             reverted_at_ms: None,
+            restored_to_turn_index: None,
             active_sessions: 1,
             age_ms: 42,
             output_bytes_per_second: None,

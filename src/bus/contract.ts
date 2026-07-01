@@ -59,6 +59,7 @@ export interface AgentSessionTurnCheckpoint {
   started_at_ms: number;
   ended_at_ms: number;
   checkpoint: AgentSessionCheckpoint;
+  restore_checkpoint?: AgentSessionCheckpoint | null;
   changes: AgentSessionChange[];
 }
 
@@ -85,6 +86,7 @@ export interface AgentSession {
   turn_checkpoints?: AgentSessionTurnCheckpoint[];
   timeline?: AgentSessionTimelineItem[];
   reverted_at_ms?: number | null;
+  restored_to_turn_index?: number | null;
   active_sessions: number;
   age_ms: number;
   output_bytes_per_second?: number | null;

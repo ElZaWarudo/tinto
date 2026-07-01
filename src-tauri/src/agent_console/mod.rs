@@ -361,6 +361,26 @@ impl AgentSessionRegistry {
         Ok(session.to_contract())
     }
 
+    pub fn restore_turn(
+        &mut self,
+        session_id: &str,
+        turn_checkpoint_id: &str,
+        user_consent: bool,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        if !user_consent {
+            return Err(AgentConsoleError::new(
+                "consent_required",
+                "restore requires explicit user consent",
+            ));
+        }
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.restore_to_turn(turn_checkpoint_id)?;
+        Ok(session.to_contract())
+    }
+
     pub fn list_sessions(&self) -> Vec<AgentSession> {
         let now = now_ms();
         let active = self.active_session_count();

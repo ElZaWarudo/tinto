@@ -9,6 +9,7 @@ import {
   listAgentSessions,
   revertSession,
   revertSessionTurnFile,
+  restoreSessionTurn,
   stopAgentSession,
   writeAgentSessionInput,
 } from "../../bus/client";
@@ -74,18 +75,56 @@ const AGENT_QUICK_ACTIONS = [
   },
 ] as const;
 
-const FOCUSED_TURN_ACTIONS = [
-  { id: "continue", label: "Continue" },
-  { id: "review", label: "Review" },
-  { id: "test", label: "Test" },
-  { id: "handoff", label: "Handoff" },
+const AGENT_SKILL_SHORTCUTS = [
+  {
+    id: "krt-interface-warden",
+    label: "Interface Warden",
+    title: "Design or revise a distinctive working-surface interface",
+  },
+  {
+    id: "krt-interface-inquisitor",
+    label: "Interface Inquisitor",
+    title: "Run an adversarial visual critique of an implemented interface",
+  },
+  {
+    id: "krt-repo-medic",
+    label: "Repo Medic",
+    title: "Diagnose repository health, test hygiene, and maintenance risks",
+  },
+  {
+    id: "krt-ci-questor",
+    label: "CI Questor",
+    title: "Investigate CI failures and summarize likely causes",
+  },
+  {
+    id: "krt-gitflow-knight",
+    label: "Gitflow Knight",
+    title: "Prepare scoped commits on a proper feature branch",
+  },
+  {
+    id: "krt-release-marshal",
+    label: "Release Marshal",
+    title: "Prepare delivery flow, pull request, and release handoff",
+  },
 ] as const;
 
-type FocusedTurnAction = (typeof FOCUSED_TURN_ACTIONS)[number]["id"];
 type AgentLensScope = "focused" | "session";
 type AgentLensTab = "files" | "commands" | "timeline";
+type AgentComposerCommandScope = "Codex" | "Tinto" | "Skill";
+type AgentComposerCommandTrigger = "/" | "$";
+
+interface AgentComposerCommand {
+  id: string;
+  command: string;
+  description: string;
+  disabled: boolean;
+  label: string;
+  scope: AgentComposerCommandScope;
+  trigger: AgentComposerCommandTrigger;
+}
 
 const AGENT_LENS_TAB_ORDER: AgentLensTab[] = ["files", "commands", "timeline"];
+const COMPOSER_COMMAND_TRIGGER_RE = /(^|\n)([/$])([a-zA-Z0-9:_-]*)$/;
 
 interface AgentTurnView {
   id: string;
@@ -97,6 +136,8 @@ interface AgentTurnView {
   commandText: string[];
   systemText: string[];
   changes: Array<{ path: string; kind: string }>;
+  restoreCheckpointId: string | null;
+  restoreReady: boolean;
 }
 
 interface AgentSessionOverviewView {
@@ -134,7 +175,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [stopping, setStopping] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [revertingFile, setRevertingFile] = useState<string | null>(null);
+  const [restoringTurnId, setRestoringTurnId] = useState<string | null>(null);
   const [focusedTurnIndex, setFocusedTurnIndex] = useState<number | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
+  const [activeSlashCommandIndex, setActiveSlashCommandIndex] = useState(0);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptSearchRef = useRef<HTMLInputElement | null>(null);
 
   const turns = useMemo(
@@ -205,6 +251,52 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "reverted" &&
     session?.status !== "error";
   const canSend = canCompose && draft.trim().length > 0;
+  const canRestoreTurn =
+    !!sessionId &&
+    !readOnly &&
+    session?.status !== "running" &&
+    session?.status !== "starting" &&
+    session?.status !== "reverted" &&
+    session?.status !== "error";
+  const composerCommandTrigger = readComposerCommandTrigger(draft);
+  const composerCommandQuery = composerCommandTrigger?.query ?? "";
+  const composerCommandItems = useMemo<AgentComposerCommand[]>(
+    () => [
+      ...AGENT_QUICK_ACTIONS.map((action) => ({
+        id: action.id,
+        command: action.id,
+        description: action.title,
+        disabled: !canCompose,
+        label: action.label,
+        scope: "Codex" as const,
+        trigger: "/" as const,
+      })),
+      {
+        id: "details",
+        command: "details",
+        description: "Open session details, files, commands, timeline, and focused-turn tools",
+        disabled: !session,
+        label: "Details",
+        scope: "Tinto",
+        trigger: "/" as const,
+      },
+      ...AGENT_SKILL_SHORTCUTS.map((skill) => ({
+        id: skill.id,
+        command: skill.id,
+        description: skill.title,
+        disabled: !canCompose,
+        label: skill.label,
+        scope: "Skill" as const,
+        trigger: "$" as const,
+      })),
+    ],
+    [canCompose, session],
+  );
+  const filteredComposerCommandItems = useMemo(
+    () => filterComposerCommands(composerCommandItems, composerCommandTrigger),
+    [composerCommandItems, composerCommandTrigger],
+  );
+  const commandMenuVisible = slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
 
   const focusVisibleTurn = (direction: "previous" | "next") => {
     if (visibleTurns.length === 0) return;
@@ -316,28 +408,84 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   };
 
   const onDraftKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (commandMenuVisible) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveSlashCommandIndex((current) =>
+          nextComposerCommandIndex(
+            current,
+            filteredComposerCommandItems.length,
+            event.key === "ArrowDown",
+          ),
+        );
+        return;
+      }
+      if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        filteredComposerCommandItems.length > 0
+      ) {
+        event.preventDefault();
+        applyComposerCommand(
+          filteredComposerCommandItems[activeSlashCommandIndex] ?? filteredComposerCommandItems[0],
+        );
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashMenuOpen(false);
+        return;
+      }
+    }
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
     void sendDraft();
   };
 
-  const applyQuickAction = (prompt: string) => {
-    if (!canCompose) return;
-    setDraft((current) => {
-      const trimmed = current.trimEnd();
-      return trimmed ? `${trimmed}\n\n${prompt}` : prompt;
-    });
+  const onDraftChange = (value: string) => {
+    setDraft(value);
+    setSlashMenuOpen(canCompose && Boolean(readComposerCommandTrigger(value)));
   };
 
-  const applyFocusedTurnAction = (turn: AgentTurnView, action: FocusedTurnAction) => {
+  const insertComposerPrompt = (prompt: string) => {
     if (!canCompose) return;
-    setFocusedTurnIndex(turn.index);
-    setDraft((current) => {
-      const trimmed = current.trimEnd();
-      const prompt = focusedTurnPrompt(turn, action);
-      return trimmed ? `${trimmed}\n\n${prompt}` : prompt;
-    });
+    setDraft((current) => replaceDraftComposerCommand(current, prompt));
+    setSlashMenuOpen(false);
+    window.setTimeout(() => composerInputRef.current?.focus(), 0);
   };
+
+  const insertSkillMention = (skillName: string) => {
+    if (!canCompose) return;
+    setDraft((current) => replaceDraftComposerCommand(current, `$${skillName} `));
+    setSlashMenuOpen(false);
+    window.setTimeout(() => composerInputRef.current?.focus(), 0);
+  };
+
+  const clearComposerCommand = () => {
+    setDraft((current) => clearDraftComposerCommand(current));
+    setSlashMenuOpen(false);
+    window.setTimeout(() => composerInputRef.current?.focus(), 0);
+  };
+
+  const applyComposerCommand = (command: AgentComposerCommand | undefined) => {
+    if (!command || command.disabled) return;
+    if (command.trigger === "$") {
+      insertSkillMention(command.command);
+      return;
+    }
+    const quickAction = AGENT_QUICK_ACTIONS.find((action) => action.id === command.id);
+    if (quickAction) {
+      insertComposerPrompt(quickAction.prompt);
+      return;
+    }
+    if (command.id === "details") {
+      setDetailsOpen(true);
+      clearComposerCommand();
+    }
+  };
+
+  useEffect(() => {
+    setActiveSlashCommandIndex(0);
+  }, [composerCommandQuery, composerCommandTrigger?.trigger, filteredComposerCommandItems.length]);
 
   const applyFileActionPrompt = (context: AgentLensFilePromptContext) => {
     if (!canCompose) return;
@@ -358,6 +506,31 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       );
     } catch (e) {
       setError(commandMessage(e));
+    }
+  };
+
+  const onRestoreTurn = async (turn: AgentTurnView) => {
+    if (!sessionId || !turn.restoreCheckpointId || restoringTurnId) return;
+    const ok = await confirm(
+      `This will restore files and the chat view to turn ${turn.index}. Continue?`,
+      {
+        title: "Restore agent turn",
+        kind: "warning",
+        okLabel: "Restore",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!ok) return;
+    setRestoringTurnId(turn.restoreCheckpointId);
+    setError(null);
+    try {
+      const updated = await restoreSessionTurn(sessionId, turn.restoreCheckpointId, true);
+      agentSessionStore.upsertSession(updated);
+      setFocusedTurnIndex(turn.index);
+    } catch (e) {
+      setError(commandMessage(e));
+    } finally {
+      setRestoringTurnId(null);
     }
   };
 
@@ -491,18 +664,18 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         </div>
       )}
 
-      <div className="agent-panel__workspace" title={agentWorkspaceTitle(agentType, repo)}>
-        <AgentSessionOverview
-          overview={overview}
-          focusedTurnIndex={focusedTurn?.index ?? null}
-          onSelectTurn={(turnIndex) => {
-            setFocusedTurnIndex(turnIndex);
-            scrollToAgentTurn(sessionId, turnIndex, "start");
-          }}
-        />
-        <AgentActivityStrip overview={overview} readOnly={readOnly} session={session} />
-
-        <section className="agent-panel__chat-shell" title={agentChatShellTitle(agentType, repo)}>
+      <div
+        className={`agent-panel__workspace${
+          detailsOpen ? " agent-panel__workspace--details" : ""
+        }`}
+        title={agentWorkspaceTitle(agentType, repo)}
+      >
+        <section
+          className={`agent-panel__chat-shell${
+            !detailsOpen ? " agent-panel__chat-shell--active" : ""
+          }`}
+          title={agentChatShellTitle(agentType, repo)}
+        >
           <div
             className="agent-panel__chat-tools"
             title={transcriptToolsContainerTitle(
@@ -619,6 +792,21 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   {copiedTarget === "transcript" ? "Copied" : "Copy visible"}
                 </span>
               </button>
+              {session && (
+                <button
+                  aria-expanded={detailsOpen}
+                  className="agent-panel__details-toggle"
+                  onClick={() => setDetailsOpen((open) => !open)}
+                  title={
+                    detailsOpen
+                      ? "Hide session details and return to the conversation."
+                      : "Show session details, focused turn actions, files, commands, and timeline."
+                  }
+                  type="button"
+                >
+                  <span>{detailsOpen ? "Hide details" : "Details"}</span>
+                </button>
+              )}
             </div>
           </div>
           <main
@@ -675,37 +863,62 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           </main>
         </section>
 
-        {session && (
-          <aside
-            className="agent-panel__side-rail"
-            aria-label="Agent inspection rail"
-            title={agentSideRailTitle(agentType, repo)}
-          >
-            <AgentTurnFocus
-              copiedTarget={copiedTarget}
-              firstTurnAtMs={turns[0]?.startedAtMs ?? null}
-              canContinue={canCompose}
-              onAction={applyFocusedTurnAction}
-              onCopyTurn={(target, text) => void copyText(target, text)}
-              onJump={(turnIndex) => scrollToAgentTurn(sessionId, turnIndex, "start")}
-              turn={focusedTurn}
+        <aside
+          className={`agent-panel__side-rail${
+            detailsOpen ? " agent-panel__side-rail--active" : ""
+          }`}
+          aria-label="Agent inspection rail"
+          title={agentSideRailTitle(agentType, repo)}
+        >
+          {detailsOpen && (
+            <AgentDetailsHeader
+              files={overview.files}
+              focusedTurnIndex={focusedTurn?.index ?? null}
+              onClose={() => setDetailsOpen(false)}
+              turns={overview.turns}
             />
-            <AgentLens
-              session={session}
-              turns={turns}
-              focusedTurn={focusedTurn}
-              repo={sessionRepo}
-              canRevertTurnFile={canRevertTurnFile}
-              canPromptForFile={canCompose}
-              revertingFile={revertingFile}
-              onOpenFile={(path) => {
-                if (sessionRepo) openFile(sessionRepo, path, true);
-              }}
-              onPromptFile={applyFileActionPrompt}
-              onRevertTurnFile={onRevertTurnFile}
-            />
-          </aside>
-        )}
+          )}
+          <AgentSessionOverview
+            overview={overview}
+            focusedTurnIndex={focusedTurn?.index ?? null}
+            onSelectTurn={(turnIndex) => {
+              setFocusedTurnIndex(turnIndex);
+              scrollToAgentTurn(sessionId, turnIndex, "start");
+            }}
+          />
+          <AgentActivityStrip overview={overview} readOnly={readOnly} session={session} />
+          {session && (
+            <>
+              <div className="agent-panel__focus-pane">
+                <AgentTurnFocus
+                  canRestore={canRestoreTurn}
+                  firstTurnAtMs={turns[0]?.startedAtMs ?? null}
+                  onRestoreTurn={(turn) => void onRestoreTurn(turn)}
+                  restoringTurnId={restoringTurnId}
+                  turn={focusedTurn}
+                />
+              </div>
+              {session && (
+                <div className="agent-panel__lens-pane">
+                  <AgentLens
+                    session={session}
+                    turns={turns}
+                    focusedTurn={focusedTurn}
+                    repo={sessionRepo}
+                    canRevertTurnFile={canRevertTurnFile}
+                    canPromptForFile={canCompose}
+                    revertingFile={revertingFile}
+                    onOpenFile={(path) => {
+                      if (sessionRepo) openFile(sessionRepo, path, true);
+                    }}
+                    onPromptFile={applyFileActionPrompt}
+                    onRevertTurnFile={onRevertTurnFile}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </aside>
       </div>
 
       <form
@@ -715,34 +928,70 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       >
         <div
           className="agent-panel__composer-actions"
-          aria-label="Agent quick actions"
+          aria-label="Agent command menu"
           title={agentComposerActionsTitle(agentType, repo, readOnly, canCompose)}
         >
-          {AGENT_QUICK_ACTIONS.map((action) => (
-            <button
-              className="agent-panel__quick-action"
-              disabled={!canCompose}
-              key={action.id}
-              onClick={() => applyQuickAction(action.prompt)}
-              title={agentQuickActionButtonTitle(
-                agentType,
-                repo,
-                action.label,
-                action.title,
-                readOnly,
-                canCompose,
-              )}
-              type="button"
-            >
-              <span title={agentQuickActionLabelTitle(action.label)}>{action.label}</span>
-            </button>
-          ))}
+          <span title={agentCommandHintTitle(canCompose, readOnly)}>
+            {canCompose
+              ? "Type / for commands or $ for skills"
+              : readOnly
+                ? "Archived transcript"
+                : "Commands unavailable"}
+          </span>
+          <small title={agentCommandScopeHintTitle()}>Codex + Tinto + Skills</small>
         </div>
+        {commandMenuVisible && (
+          <div
+            aria-label="Composer commands"
+            className="agent-panel__slash-menu"
+            role="listbox"
+            title={agentCommandMenuTitle(
+              composerCommandTrigger,
+              filteredComposerCommandItems.length,
+            )}
+          >
+            {filteredComposerCommandItems.length > 0 ? (
+              filteredComposerCommandItems.map((command, index) => (
+                <button
+                  aria-selected={index === activeSlashCommandIndex}
+                  className={`agent-panel__slash-command${
+                    index === activeSlashCommandIndex ? " agent-panel__slash-command--active" : ""
+                  }`}
+                  disabled={command.disabled}
+                  key={command.id}
+                  onClick={() => applyComposerCommand(command)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  role="option"
+                  title={agentComposerCommandTitle(command)}
+                  type="button"
+                >
+                  <code title={agentComposerCommandCodeTitle(command)}>
+                    {command.trigger}
+                    {command.command}
+                  </code>
+                  <span title={agentComposerCommandLabelTitle(command.label)}>{command.label}</span>
+                  <small title={agentComposerCommandDescriptionTitle(command)}>
+                    {command.scope} / {command.description}
+                  </small>
+                </button>
+              ))
+            ) : (
+              <div
+                className="agent-panel__slash-empty"
+                title={agentCommandEmptyTitle(composerCommandTrigger)}
+              >
+                No command matches {composerCommandTrigger?.trigger}
+                {composerCommandQuery}
+              </div>
+            )}
+          </div>
+        )}
         <div className="agent-panel__composer-row" title={agentComposerRowTitle(agentType, repo)}>
           <textarea
             aria-label={`Message ${agentLabel(agentType)}`}
+            ref={composerInputRef}
             value={draft}
-            onChange={(event) => setDraft(event.currentTarget.value)}
+            onChange={(event) => onDraftChange(event.currentTarget.value)}
             onKeyDown={onDraftKeyDown}
             title={agentComposerInputTitle(agentType, repo, readOnly, canCompose)}
             placeholder={
@@ -772,6 +1021,41 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         </div>
       </form>
     </div>
+  );
+}
+
+function AgentDetailsHeader({
+  files,
+  focusedTurnIndex,
+  onClose,
+  turns,
+}: {
+  files: number;
+  focusedTurnIndex: number | null;
+  onClose: () => void;
+  turns: number;
+}) {
+  return (
+    <header
+      className="agent-panel__details-head"
+      title="Session details: turn map, current activity, focused turn actions, and Agent Lens."
+    >
+      <div>
+        <strong>Details</strong>
+        <small>
+          {turns} {turnNoun(turns)} / {files} {files === 1 ? "file" : "files"}
+          {focusedTurnIndex ? ` / T${focusedTurnIndex}` : ""}
+        </small>
+      </div>
+      <button
+        className="agent-panel__details-close"
+        onClick={onClose}
+        title="Close session details."
+        type="button"
+      >
+        Close
+      </button>
+    </header>
   );
 }
 
@@ -969,20 +1253,16 @@ function AgentActivityStrip({
 }
 
 function AgentTurnFocus({
-  canContinue,
-  copiedTarget,
+  canRestore,
   firstTurnAtMs,
-  onAction,
-  onCopyTurn,
-  onJump,
+  onRestoreTurn,
+  restoringTurnId,
   turn,
 }: {
-  canContinue: boolean;
-  copiedTarget: string | null;
+  canRestore: boolean;
   firstTurnAtMs: number | null;
-  onAction: (turn: AgentTurnView, action: FocusedTurnAction) => void;
-  onCopyTurn: (target: string, text: string) => void;
-  onJump: (turnIndex: number) => void;
+  onRestoreTurn: (turn: AgentTurnView) => void;
+  restoringTurnId: string | null;
   turn: AgentTurnView | null;
 }) {
   if (!turn) {
@@ -1006,12 +1286,13 @@ function AgentTurnFocus({
 
   const timeLabel = turnTimeLabel(turn, firstTurnAtMs);
   const latest = latestActivityText(turn);
-  const copyTarget = `${turn.id}:focus`;
   const visibleChanges = turn.changes.slice(0, 4);
   const hiddenChangeCount = Math.max(0, turn.changes.length - visibleChanges.length);
   const artifactSummary = turnArtifactSummary(turn.changes);
   const commandSummary = turnCommandSummaryText(turn);
-  const focusCopied = copiedTarget === copyTarget;
+  const restoreDisabled = !canRestore || !turn.restoreReady || restoringTurnId != null;
+  const isRestoringThisTurn =
+    turn.restoreCheckpointId != null && restoringTurnId === turn.restoreCheckpointId;
   return (
     <section
       className="agent-panel__turn-focus"
@@ -1103,38 +1384,21 @@ function AgentTurnFocus({
       )}
       <div
         className="agent-panel__turn-focus-actions"
-        title={focusedTurnActionsContainerTitle(turn.index, canContinue)}
-      >
-        {FOCUSED_TURN_ACTIONS.map((action) => (
-          <button
-            disabled={!canContinue}
-            key={action.id}
-            onClick={() => onAction(turn, action.id)}
-            title={focusedTurnActionTitle(action.id, turn.index, canContinue)}
-            type="button"
-          >
-            <span title={focusedTurnActionLabelTitle(action.label)}>{action.label}</span>
-          </button>
-        ))}
-      </div>
-      <div
-        className="agent-panel__turn-focus-utilities"
-        title={focusedTurnUtilitiesContainerTitle(turn.index)}
+        title={focusedTurnRestoreContainerTitle(turn.index, canRestore, turn.restoreReady)}
       >
         <button
-          onClick={() => onJump(turn.index)}
-          title={focusedTurnJumpButtonTitle(turn.index)}
+          disabled={restoreDisabled}
+          onClick={() => onRestoreTurn(turn)}
+          title={focusedTurnRestoreButtonTitle(
+            turn.index,
+            canRestore,
+            turn.restoreReady,
+            isRestoringThisTurn,
+          )}
           type="button"
         >
-          <span title={focusedTurnUtilityLabelTitle("Jump")}>Jump</span>
-        </button>
-        <button
-          onClick={() => onCopyTurn(copyTarget, turnTranscriptText(turn, firstTurnAtMs))}
-          title={focusedTurnCopyButtonTitle(turn.index, focusCopied)}
-          type="button"
-        >
-          <span title={focusedTurnUtilityLabelTitle(focusCopied ? "Copied" : "Copy focus")}>
-            {focusCopied ? "Copied" : "Copy focus"}
+          <span title={focusedTurnRestoreLabelTitle(isRestoringThisTurn)}>
+            {isRestoringThisTurn ? "Restoring" : "Restore here"}
           </span>
         </button>
       </div>
@@ -1482,7 +1746,7 @@ function agentSideRailTitle(agentType: string, repo?: string): string {
 
 function agentComposerTitle(agentType: string, repo?: string): string {
   const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent composer for ${repoLabel}: quick actions and message input.`;
+  return `${agentLabel(agentType)} agent composer for ${repoLabel}: command menu, skill mentions, and message input.`;
 }
 
 function agentComposerActionsTitle(
@@ -1493,33 +1757,106 @@ function agentComposerActionsTitle(
 ): string {
   const repoLabel = repo ? repoName(repo) : "Agent session";
   if (readOnly) {
-    return `${agentLabel(agentType)} agent composer quick actions for ${repoLabel}: archived transcripts are read-only.`;
+    return `${agentLabel(agentType)} command menu for ${repoLabel}: archived transcripts are read-only.`;
   }
   if (!canCompose) {
-    return `${agentLabel(agentType)} agent composer quick actions for ${repoLabel}: waiting for a writable session.`;
+    return `${agentLabel(agentType)} command menu for ${repoLabel}: waiting for a writable session.`;
   }
-  return `${agentLabel(agentType)} agent composer quick actions for ${repoLabel}: suggested prompt shortcuts.`;
+  return `${agentLabel(agentType)} command menu for ${repoLabel}: type / for Codex and Tinto commands or $ for skills.`;
 }
 
-function agentQuickActionButtonTitle(
-  agentType: string,
-  repo: string | undefined,
-  label: string,
-  actionTitle: string,
-  readOnly: boolean,
-  canCompose: boolean,
+function agentCommandHintTitle(canCompose: boolean, readOnly: boolean): string {
+  if (readOnly) return "Composer commands are disabled because this transcript is archived.";
+  if (!canCompose) return "Composer commands are waiting for a writable session.";
+  return "Composer command hint: type / for Codex and Tinto commands or $ for skills.";
+}
+
+function agentCommandScopeHintTitle(): string {
+  return "Composer command scopes: Codex prompt commands, Tinto session commands, and skills.";
+}
+
+function agentCommandMenuTitle(
+  trigger: { trigger: AgentComposerCommandTrigger; query: string } | null,
+  count: number,
 ): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  const state = readOnly
-    ? "Archived transcripts are read-only"
-    : canCompose
-      ? actionTitle
-      : "Waiting for a writable session";
-  return `${agentLabel(agentType)} quick action ${label} for ${repoLabel}: ${state}.`;
+  const prefix = trigger?.trigger ?? "/";
+  const query = trigger?.query ?? "";
+  const suffix = query ? ` matching ${prefix}${query}` : "";
+  const noun = count === 1 ? "command" : "commands";
+  return `Composer command menu: ${count} ${noun}${suffix}.`;
 }
 
-function agentQuickActionLabelTitle(label: string): string {
-  return `Composer quick-action label: ${label}.`;
+function agentComposerCommandTitle(command: AgentComposerCommand): string {
+  const state = command.disabled ? "Unavailable" : "Run";
+  return `${state} ${command.trigger}${command.command}: ${command.description}.`;
+}
+
+function agentComposerCommandCodeTitle(command: AgentComposerCommand): string {
+  return `Composer command trigger: ${command.trigger}${command.command}.`;
+}
+
+function agentComposerCommandLabelTitle(label: string): string {
+  return `Composer command label: ${label}.`;
+}
+
+function agentComposerCommandDescriptionTitle(command: AgentComposerCommand): string {
+  return `${command.scope} composer command description for ${command.trigger}${command.command}: ${command.description}.`;
+}
+
+function agentCommandEmptyTitle(
+  trigger: { trigger: AgentComposerCommandTrigger; query: string } | null,
+): string {
+  const prefix = trigger?.trigger ?? "/";
+  return `No composer commands match ${prefix}${trigger?.query ?? ""}.`;
+}
+
+function readComposerCommandTrigger(
+  value: string,
+): { trigger: AgentComposerCommandTrigger; query: string } | null {
+  const match = value.match(COMPOSER_COMMAND_TRIGGER_RE);
+  const trigger = match?.[2];
+  if (trigger !== "/" && trigger !== "$") return null;
+  return { trigger, query: match?.[3] ?? "" };
+}
+
+function filterComposerCommands(
+  commands: AgentComposerCommand[],
+  trigger: { trigger: AgentComposerCommandTrigger; query: string } | null,
+): AgentComposerCommand[] {
+  if (!trigger) return [];
+  const normalized = trigger.query.trim().toLowerCase();
+  const scopedCommands = commands.filter((command) => command.trigger === trigger.trigger);
+  if (!normalized) return scopedCommands;
+  return scopedCommands.filter((command) => {
+    const haystack = `${command.command} ${command.label} ${command.scope} ${command.description}`
+      .toLowerCase()
+      .trim();
+    return haystack.includes(normalized);
+  });
+}
+
+function nextComposerCommandIndex(current: number, count: number, forward: boolean): number {
+  if (count <= 0) return 0;
+  if (forward) return (current + 1) % count;
+  return current <= 0 ? count - 1 : current - 1;
+}
+
+function replaceDraftComposerCommand(current: string, replacement: string): string {
+  const match = current.match(COMPOSER_COMMAND_TRIGGER_RE);
+  if (!match || match.index == null) {
+    const trimmed = current.trimEnd();
+    return trimmed ? `${trimmed}\n\n${replacement}` : replacement;
+  }
+  const prefix = current.slice(0, match.index);
+  const trimmedPrefix = prefix.trimEnd();
+  return trimmedPrefix ? `${trimmedPrefix}\n\n${replacement}` : replacement;
+}
+
+function clearDraftComposerCommand(current: string): string {
+  const match = current.match(COMPOSER_COMMAND_TRIGGER_RE);
+  if (!match || match.index == null) return current;
+  const prefix = current.slice(0, match.index);
+  return match[1] === "\n" ? prefix : prefix.trimEnd();
 }
 
 function agentComposerRowTitle(agentType: string, repo?: string): string {
@@ -3839,92 +4176,6 @@ function turnTranscriptText(turn: AgentTurnView, firstTurnAtMs: number | null): 
   return parts.join("\n\n");
 }
 
-function focusedTurnPrompt(turn: AgentTurnView, action: FocusedTurnAction): string {
-  const latest = latestActivityText(turn);
-  const files = turn.changes.map((change) => `${change.kind} ${change.path}`).slice(0, 6);
-  const artifactSummary = turnArtifactSummaryText(turn.changes);
-  const commandSummary =
-    action === "test" || action === "handoff" ? turnCommandSummaryText(turn) : null;
-  const actionLine = focusedTurnActionLine(action, turn.index);
-  const instruction = focusedTurnInstruction(action);
-  const parts = [
-    actionLine,
-    latest ? `Recent context: ${compactActivityText(latest)}` : null,
-    artifactSummary ? `Artifact summary: ${artifactSummary}.` : null,
-    commandSummary ? `Recent commands: ${commandSummary}.` : null,
-    files.length > 0 ? `Touched files: ${files.join(", ")}.` : null,
-    instruction,
-  ];
-  return parts.filter(Boolean).join("\n");
-}
-
-function focusedTurnActionLine(action: FocusedTurnAction, turnIndex: number): string {
-  switch (action) {
-    case "review":
-      return `Review turn ${turnIndex}.`;
-    case "test":
-      return `Test the work from turn ${turnIndex}.`;
-    case "handoff":
-      return `Prepare a handoff from turn ${turnIndex}.`;
-    case "continue":
-    default:
-      return `Continue from turn ${turnIndex}.`;
-  }
-}
-
-function focusedTurnInstruction(action: FocusedTurnAction): string {
-  switch (action) {
-    case "review":
-      return "Use this turn as the immediate context and call out concrete bugs, regressions, or missing tests.";
-    case "test":
-      return "Use this turn as the immediate context, run the most relevant verification, and summarize failures before fixing them.";
-    case "handoff":
-      return "Use this turn as the immediate context and summarize state, changed files, verification, risks, and the next recommended step.";
-    case "continue":
-    default:
-      return "Use this turn as the immediate context for the next step.";
-  }
-}
-
-function focusedTurnActionTitle(
-  action: FocusedTurnAction,
-  turnIndex: number,
-  canContinue: boolean,
-): string {
-  if (!canContinue) {
-    switch (action) {
-      case "review":
-        return `Cannot draft a focused review prompt for turn ${turnIndex}: session is read-only or unavailable.`;
-      case "test":
-        return `Cannot draft a verification prompt for turn ${turnIndex}: session is read-only or unavailable.`;
-      case "handoff":
-        return `Cannot draft a handoff prompt for turn ${turnIndex}: session is read-only or unavailable.`;
-      case "continue":
-      default:
-        return `Cannot draft a continuation prompt for turn ${turnIndex}: session is read-only or unavailable.`;
-    }
-  }
-  switch (action) {
-    case "review":
-      return `Draft a focused review prompt for turn ${turnIndex}.`;
-    case "test":
-      return `Draft a verification prompt for turn ${turnIndex}.`;
-    case "handoff":
-      return `Draft a handoff prompt for turn ${turnIndex}.`;
-    case "continue":
-    default:
-      return `Draft a continuation prompt for turn ${turnIndex}.`;
-  }
-}
-
-function focusedTurnActionLabelTitle(label: string): string {
-  return `Focused turn action label: ${label}.`;
-}
-
-function focusedTurnUtilityLabelTitle(label: "Jump" | "Copy focus" | "Copied"): string {
-  return `Focused turn utility label: ${label}.`;
-}
-
 function focusedTurnHeadingLabelTitle(): string {
   return "Focused turn heading label: Focused turn.";
 }
@@ -3980,18 +4231,35 @@ function focusedTurnFilesContainerTitle(
   return `Focused turn files container for turn ${turnIndex}: ${visibleCount} ${visibleLabel}${hiddenText}.`;
 }
 
-function focusedTurnActionsContainerTitle(turnIndex: number, canContinue: boolean): string {
-  return canContinue
-    ? `Focused turn action container for turn ${turnIndex}: prompt-drafting actions are available.`
-    : `Focused turn action container for turn ${turnIndex}: prompt-drafting actions are disabled because the session is read-only or unavailable.`;
+function focusedTurnRestoreContainerTitle(
+  turnIndex: number,
+  canRestore: boolean,
+  restoreReady: boolean,
+): string {
+  if (!canRestore) {
+    return `Focused turn restore container for turn ${turnIndex}: stop the session before restoring.`;
+  }
+  return restoreReady
+    ? `Focused turn restore container for turn ${turnIndex}: restore files and chat view to this turn.`
+    : `Focused turn restore container for turn ${turnIndex}: no completed restore checkpoint is available.`;
 }
 
-function focusedTurnUtilitiesContainerTitle(turnIndex: number): string {
-  return `Focused turn utility container for turn ${turnIndex}: navigation and copy utilities.`;
+function focusedTurnRestoreButtonTitle(
+  turnIndex: number,
+  canRestore: boolean,
+  restoreReady: boolean,
+  restoring: boolean,
+): string {
+  if (restoring) return `Restoring files and chat view to turn ${turnIndex}.`;
+  if (!canRestore) return `Restore turn ${turnIndex}: stop the session before restoring.`;
+  if (!restoreReady) {
+    return `Restore turn ${turnIndex}: unavailable because this turn has no completed checkpoint.`;
+  }
+  return `Restore turn ${turnIndex}: return files and chat view to this turn.`;
 }
 
-function focusedTurnJumpButtonTitle(turnIndex: number): string {
-  return `Scroll conversation turn ${turnIndex} into view.`;
+function focusedTurnRestoreLabelTitle(restoring: boolean): string {
+  return restoring ? "Focused turn restore label: Restoring." : "Focused turn restore label: Restore here.";
 }
 
 function focusedTurnTimeTitle(turnIndex: number, timeLabel: string): string {
@@ -4391,12 +4659,6 @@ function conversationContainerTitle(
   return `Agent conversation transcript: showing all ${totalCount} ${turnNoun(totalCount)}.`;
 }
 
-function focusedTurnCopyButtonTitle(turnIndex: number, copied: boolean): string {
-  return copied
-    ? `Copied focused turn ${turnIndex} context to clipboard.`
-    : `Copy focused turn ${turnIndex} context, including artifact summary and transcript.`;
-}
-
 function turnCopyButtonTitle(turnIndex: number, copied: boolean): string {
   return copied
     ? `Copied full transcript for turn ${turnIndex} to clipboard.`
@@ -4486,7 +4748,7 @@ function agentTurns(
   session: AgentSession | undefined,
 ): AgentTurnView[] {
   if (timeline.length > 0) {
-    return attachCheckpointChanges(buildTurnsFromTimeline(timeline), session);
+    return limitRestoredTurns(attachCheckpointChanges(buildTurnsFromTimeline(timeline), session), session);
   }
   const text = chunks.map((chunk) => decodeBase64Text(chunk.chunk_base64)).join("");
   const cleaned = stripAnsi(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
@@ -4497,20 +4759,25 @@ function agentTurns(
     .filter(Boolean)
     .map((part) => part);
   if (fallbackBlocks.length === 0) return [];
-  return attachCheckpointChanges(
-    [
-      {
-        id: "fallback-output",
-        index: 1,
-        startedAtMs: chunks[0]?.timestamp_ms ?? null,
-        updatedAtMs: chunks[chunks.length - 1]?.timestamp_ms ?? chunks[0]?.timestamp_ms ?? null,
-        userText: null,
-        agentText: fallbackBlocks,
-        commandText: [],
-        systemText: [],
-        changes: [],
-      },
-    ],
+  return limitRestoredTurns(
+    attachCheckpointChanges(
+      [
+        {
+          id: "fallback-output",
+          index: 1,
+          startedAtMs: chunks[0]?.timestamp_ms ?? null,
+          updatedAtMs: chunks[chunks.length - 1]?.timestamp_ms ?? chunks[0]?.timestamp_ms ?? null,
+          userText: null,
+          agentText: fallbackBlocks,
+          commandText: [],
+          systemText: [],
+          changes: [],
+          restoreCheckpointId: null,
+          restoreReady: false,
+        },
+      ],
+      session,
+    ),
     session,
   );
 }
@@ -4532,6 +4799,8 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
         commandText: [],
         systemText: [],
         changes: [],
+        restoreCheckpointId: null,
+        restoreReady: false,
       };
       turns.push(current);
       continue;
@@ -4547,6 +4816,8 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
         commandText: [],
         systemText: [],
         changes: [],
+        restoreCheckpointId: null,
+        restoreReady: false,
       };
       turns.push(current);
     }
@@ -4594,6 +4865,8 @@ function attachCheckpointChanges(
         commandText: [],
         systemText: [],
         changes: [],
+        restoreCheckpointId: null,
+        restoreReady: false,
       };
       next.push(turn);
     }
@@ -4606,8 +4879,19 @@ function attachCheckpointChanges(
       path: change.path,
       kind: change.kind,
     }));
+    turn.restoreCheckpointId = checkpoint.id;
+    turn.restoreReady = Boolean(checkpoint.restore_checkpoint);
   }
   return next.sort((a, b) => a.index - b.index);
+}
+
+function limitRestoredTurns(
+  turns: AgentTurnView[],
+  session: AgentSession | undefined,
+): AgentTurnView[] {
+  const restoredToTurnIndex = session?.restored_to_turn_index;
+  if (!restoredToTurnIndex) return turns;
+  return turns.filter((turn) => turn.index <= restoredToTurnIndex);
 }
 
 function needsLineBreak(left: string, right: string): boolean {

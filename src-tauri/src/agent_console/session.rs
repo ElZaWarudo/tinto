@@ -50,6 +50,7 @@ pub struct AgentSessionRecord {
     next_turn_index: u32,
     timeline: Vec<AgentSessionTimelineItem>,
     reverted_at_ms: Option<u64>,
+    restored_to_turn_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +96,7 @@ impl AgentSessionRecord {
             next_turn_index: 1,
             timeline: Vec::new(),
             reverted_at_ms: None,
+            restored_to_turn_index: None,
         }
     }
 
@@ -287,6 +289,42 @@ impl AgentSessionRecord {
         Ok(())
     }
 
+    pub fn restore_to_turn(&mut self, turn_checkpoint_id: &str) -> Result<(), AgentConsoleError> {
+        self.refresh_status()?;
+        if self.status == AgentSessionStatus::Running || self.status == AgentSessionStatus::Starting
+        {
+            return Err(AgentConsoleError::new(
+                "session_still_running",
+                "stop the session before restoring a turn checkpoint",
+            ));
+        }
+        let turn = self
+            .turn_checkpoints
+            .iter()
+            .find(|turn| turn.id == turn_checkpoint_id)
+            .ok_or_else(|| {
+                AgentConsoleError::new(
+                    "turn_checkpoint_not_found",
+                    "no existe el checkpoint del turno",
+                )
+            })?;
+        let checkpoint = turn.restore_checkpoint.clone().ok_or_else(|| {
+            AgentConsoleError::new(
+                "turn_restore_checkpoint_not_found",
+                "no existe el checkpoint posterior del turno",
+            )
+        })?;
+        match self.checkpoint_backend {
+            CheckpointBackend::Local => revert_checkpoint(&checkpoint)?,
+            CheckpointBackend::Wsl => {
+                revert_wsl_checkpoint(self.wsl_distro.as_deref(), &checkpoint)?
+            }
+        }
+        self.restored_to_turn_index = Some(turn.index);
+        self.refresh_change_log()?;
+        Ok(())
+    }
+
     pub fn record_output_activity(&mut self, timestamp_ms: u64) {
         self.last_output_at_ms = Some(timestamp_ms);
         self.note_turn_activity(timestamp_ms);
@@ -379,16 +417,18 @@ impl AgentSessionRecord {
             return Ok(());
         };
         let index = self.next_turn_index;
+        let restore_checkpoint = self.create_followup_checkpoint(index, now_ms)?;
         self.turn_checkpoints.push(AgentTurnCheckpointRecord {
             id: format!("{}:turn-{index}", self.id),
             index,
             started_at_ms: self.turn_started_at_ms.unwrap_or(now_ms),
             ended_at_ms: now_ms,
             checkpoint,
+            restore_checkpoint: Some(restore_checkpoint.clone()),
             changes,
         });
         self.next_turn_index = self.next_turn_index.saturating_add(1);
-        self.turn_baseline = Some(self.create_followup_checkpoint(index, now_ms)?);
+        self.turn_baseline = Some(restore_checkpoint);
         self.pending_turn_signature = None;
         self.pending_turn_seen_at_ms = None;
         self.turn_started_at_ms = None;
@@ -448,6 +488,7 @@ impl AgentSessionRecord {
                 .collect(),
             timeline: self.timeline.clone(),
             reverted_at_ms: self.reverted_at_ms,
+            restored_to_turn_index: self.restored_to_turn_index,
             active_sessions,
             age_ms: now_ms.saturating_sub(self.started_at_ms),
             output_bytes_per_second: None,
@@ -504,6 +545,7 @@ struct AgentTurnCheckpointRecord {
     started_at_ms: u64,
     ended_at_ms: u64,
     checkpoint: CheckpointRecord,
+    restore_checkpoint: Option<CheckpointRecord>,
     changes: Vec<AgentSessionChange>,
 }
 
@@ -515,6 +557,10 @@ impl AgentTurnCheckpointRecord {
             started_at_ms: self.started_at_ms,
             ended_at_ms: self.ended_at_ms,
             checkpoint: self.checkpoint.contract.clone(),
+            restore_checkpoint: self
+                .restore_checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.contract.clone()),
             changes: self.changes.clone(),
         }
     }
@@ -862,6 +908,7 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.turn_checkpoints.len(), 1);
         assert_eq!(contract.turn_checkpoints[0].index, 1);
+        assert!(contract.turn_checkpoints[0].restore_checkpoint.is_some());
         assert!(contract.turn_checkpoints[0]
             .changes
             .iter()
@@ -875,6 +922,17 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
             "before\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("other.txt")).unwrap(),
+            "other after\n"
+        );
+
+        session.restore_to_turn(&turn_id).unwrap();
+        assert_eq!(session.to_contract().restored_to_turn_index, Some(1));
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "after\n"
         );
         assert_eq!(
             std::fs::read_to_string(repo.path().join("other.txt")).unwrap(),

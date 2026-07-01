@@ -150,6 +150,17 @@ export const revertSessionTurnFile = (
     userConsent,
   });
 
+export const restoreSessionTurn = (
+  sessionId: string,
+  turnCheckpointId: string,
+  userConsent: boolean,
+) =>
+  invoke<AgentSession>("restore_session_turn", {
+    sessionId,
+    turnCheckpointId,
+    userConsent,
+  });
+
 export const agentBinaryAvailable = (agentType: string) =>
   invoke<boolean>("agent_binary_available", { agentType });
 

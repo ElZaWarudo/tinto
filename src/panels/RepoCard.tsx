@@ -1,7 +1,7 @@
-// A single repo "bento" tile: at-a-glance health, always visible (no expand).
+// A single repo ledger row: at-a-glance health, always visible (no expand).
 // Identity + activity, branch/upstream, change counts, passive metrics/signals,
-// and the latest commit. A single click opens the project; files are drilled
-// into via the project's own explorer, not here.
+// agent launch, and the latest commit. A single click opens the project; files
+// are drilled into via the project's own explorer, not here.
 
 import { memo, useEffect, useState } from "react";
 import type { BranchInfo, RepoDelta } from "../bus/contract";
@@ -96,6 +96,7 @@ function RepoCardImpl({
   const cls = ["repo-card", error ? "repo-card--error" : active ? "repo-card--active" : ""]
     .filter(Boolean)
     .join(" ");
+  const stateLabel = error ? error.class : active ? "live" : "idle";
 
   const launch = () => {
     if (available === false || launching) return;
@@ -107,26 +108,30 @@ function RepoCardImpl({
   };
 
   return (
-    <div
+    <article
       className={cls}
       data-testid={`card-${delta.repo}`}
-      tabIndex={0}
-      role="button"
+      aria-label={`${name} repository ledger row`}
       onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
     >
+      <div className="repo-card__state-mark" aria-label={`Repo state: ${stateLabel}`}>
+        <span
+          className={active ? "activity-dot activity-dot--active" : "activity-dot"}
+          data-testid="activity"
+          aria-label={active ? "active now" : "idle"}
+        />
+        <span>{stateLabel}</span>
+      </div>
       <header className="repo-card__head">
-        <div className="repo-card__identity">
-          <span
-            className={active ? "activity-dot activity-dot--active" : "activity-dot"}
-            data-testid="activity"
-            aria-label={active ? "active now" : "idle"}
-          />
+        <button
+          className="repo-card__identity repo-card__open"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
           <RepoSourceBadge
             repo={delta.repo}
             source={source}
@@ -136,7 +141,7 @@ function RepoCardImpl({
           <span className="repo-card__name" title={delta.repo}>
             {name}
           </span>
-        </div>
+        </button>
         {error && (
           <span className="error-badge" data-testid="error-badge">
             {error.class}
@@ -155,12 +160,23 @@ function RepoCardImpl({
         >
           ✕
         </button>
+        <div className="repo-card__branch" data-testid="branch">
+          <span className="repo-card__branch-name">{branchLabel(branch, head)}</span>
+          {upstream && <span className="repo-card__upstream">{upstream}</span>}
+        </div>
+        <footer className="repo-card__foot">
+          {head ? (
+            <span className="repo-card__commit" title={`${head.summary} Â· ${head.id}`}>
+              <span className="repo-card__commit-summary">{head.summary}</span>
+              <span className="repo-card__commit-time">
+                {commitDate(head.timestamp).toLocaleDateString()}
+              </span>
+            </span>
+          ) : (
+            <span className="repo-card__commit repo-card__commit--none">no commits yet</span>
+          )}
+        </footer>
       </header>
-
-      <div className="repo-card__branch" data-testid="branch">
-        <span className="repo-card__branch-name">{branchLabel(branch, head)}</span>
-        {upstream && <span className="repo-card__upstream">{upstream}</span>}
-      </div>
 
       <div className="repo-card__counts" data-testid="counts">
         <span className="count count--modified">
@@ -252,19 +268,6 @@ function RepoCardImpl({
         </span>
       </div>
 
-      <footer className="repo-card__foot">
-        {head ? (
-          <span className="repo-card__commit" title={`${head.summary} · ${head.id}`}>
-            <span className="repo-card__commit-summary">{head.summary}</span>
-            <span className="repo-card__commit-time">
-              {commitDate(head.timestamp).toLocaleDateString()}
-            </span>
-          </span>
-        ) : (
-          <span className="repo-card__commit repo-card__commit--none">no commits yet</span>
-        )}
-      </footer>
-
       {error && (
         <div className="repo-card__error" data-testid="error-detail">
           <span className="repo-card__error-msg">{error.message}</span>
@@ -282,7 +285,7 @@ function RepoCardImpl({
           )}
         </div>
       )}
-    </div>
+    </article>
   );
 }
 
