@@ -1,6 +1,6 @@
 ---
 title: Capa de git read-only — trait GitEngine + impl git2-rs
-status: ready
+status: review-passed
 roadmap_item: RDM-002
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-11-rdm-002-git-engine-requirements.md

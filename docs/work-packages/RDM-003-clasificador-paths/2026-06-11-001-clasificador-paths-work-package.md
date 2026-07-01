@@ -1,6 +1,6 @@
 ---
 title: Clasificador de paths en tres buckets
-status: ready
+status: review-passed
 roadmap_item: RDM-003
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-11-rdm-003-clasificador-paths-requirements.md

@@ -1,6 +1,6 @@
 ---
 title: Workbench manager con persistencia TOML y autodetección
-status: ready
+status: review-passed
 roadmap_item: RDM-005
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-11-rdm-005-workbench-manager-requirements.md
