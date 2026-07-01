@@ -1,6 +1,6 @@
 ---
 title: Workbench selection and management completion
-status: ci-passed
+status: completed
 roadmap_item: RDM-014
 origin_roadmap: docs/roadmaps/2026-06-26-005-workbench-management-completion-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-26-014-workbench-management-completion.md

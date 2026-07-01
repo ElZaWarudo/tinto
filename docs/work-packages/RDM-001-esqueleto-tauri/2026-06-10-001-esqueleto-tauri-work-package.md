@@ -1,6 +1,6 @@
 ---
 title: Esqueleto Tauri 2 + React + tooling base
-status: implemented-verified-awaiting-release
+status: completed
 roadmap_item: RDM-001
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-10-rdm-001-esqueleto-tauri-requirements.md
