@@ -1,6 +1,6 @@
 ---
 title: Timeline and commit history panel
-status: implemented-verified-awaiting-release
+status: completed
 roadmap_item: RDM-010
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-15-rdm-010-timeline-history-requirements.md

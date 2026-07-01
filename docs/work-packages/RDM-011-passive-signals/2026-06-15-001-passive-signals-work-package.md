@@ -1,6 +1,6 @@
 ---
 title: Passive signals and lightweight metrics
-status: implemented-verified-awaiting-release
+status: completed
 roadmap_item: RDM-011
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-15-rdm-011-passive-signals-requirements.md

@@ -1,6 +1,6 @@
 ---
 title: Dashboard UI — dockable workspace, repo cards, workbench management
-status: implemented-verified-awaiting-release
+status: completed
 roadmap_item: RDM-007
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-15-rdm-007-dashboard-ui-requirements.md

@@ -1,6 +1,6 @@
 ---
 title: Watched files UI
-status: implemented-verified-awaiting-release
+status: completed
 roadmap_item: RDM-009
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-15-rdm-009-watched-files-ui-requirements.md

@@ -1,6 +1,6 @@
 ---
 title: RUL-001 File Overview Ruler VS Code Parity
-status: in-review
+status: review-passed
 roadmap_item: RUL-001
 origin_roadmap: docs/roadmaps/2026-06-22-003-post-closeout-ux.md
 origin_brainstorm: docs/brainstorms/2026-06-22-001-rul-overview-ruler-requirements.md
@@ -20,6 +20,10 @@ allowed_mutation_classes: []
 ---
 
 # RUL-001 File Overview Ruler VS Code Parity
+
+## Supersession Note
+
+This 2026-06-22 artifact is historical. The current RUL-001 source of truth is `docs/work-packages/RUL-001-file-overview-ruler-parity/2026-06-23-003-file-overview-ruler-parity-work-package.md`, which records RU1/RU2/RU3 as implemented, verified, and review-passed. Compound Master state also records the 2026-06-23 package as the current work package and release-ready unit. This file is kept for traceability only and must not be used as an active `in-review` blocker.
 
 ## Scope
 
@@ -215,7 +219,7 @@ Open `http://127.0.0.1:1420/demo.html` in Chrome/Firefox with DevTools (F12) ope
 
 ## Execution Status
 
-- RU1 implementation status: re-applied locally on `develop` after the previous revert. Awaiting user review via the dev fixture.
+- Historical RU1 implementation status: re-applied locally on `develop` after the previous revert. This status was superseded by the 2026-06-23 RUL-001 parity package, where RU1/RU2/RU3 are implemented, verified, and review-passed.
 - RU1 changed surfaces (re-applied):
   - `src/panels/file/FileOverviewRuler.tsx` (rewrite: always-visible track, scroll-synced caret, click-to-jump, active marker highlight with scroll-past clear, `source` discriminator on `FileOverviewMarker`, a11y `role=slider` + aria-valuemin/max/now/valuetext, keyboard nav, `aria-hidden` on caret).
   - `src/panels/file/useOverviewScrollSync.ts` (new: passive scroll listener + `ResizeObserver` + `requestAnimationFrame` coalescing; first line whose bottom is strictly below the viewport top).
@@ -244,7 +248,7 @@ Open `http://127.0.0.1:1420/demo.html` in Chrome/Firefox with DevTools (F12) ope
   - `npx prettier --check <changed files>` clean.
   - `npm run build` clean (only the pre-existing Vite chunk-size warning).
   - Vite dev server serves `demo.html` (HTTP 200) and `src/demo/main.tsx` (transformed).
-- RU1 user review status: pending. The user is reviewing RU1 via the dev fixture at `http://127.0.0.1:1420/demo.html`. After the user confirms, the release plan is: 4 semantic commits (feat + test + chore(dev) + docs `[skip ci]`) and push to `origin/develop`, no PR, no Jira.
-- RU2 implementation status: not started. Blocked on RU1 user review and merge.
-- RU3 implementation status: deferred placeholder, blocked on a separate file-content search feature.
-- RUL-001 package status: RU1 in review (awaiting user verification via the dev fixture).
+- Historical RU1 user review status: superseded. The current 2026-06-23 RUL-001 package records the dev fixture review and verification evidence.
+- Historical RU2 implementation status: superseded. The current 2026-06-23 RUL-001 package records diff hunk markers as implemented and review-passed.
+- Historical RU3 implementation status: superseded. The current 2026-06-23 RUL-001 package records search marker source compatibility as implemented and review-passed without adding search UI or backend behavior.
+- RUL-001 package status: superseded by the current 2026-06-23 RUL-001 parity package; no active `in-review` blocker remains in this historical artifact.
