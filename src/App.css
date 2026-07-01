@@ -3271,6 +3271,12 @@ select option {
   color: var(--fg-muted);
   font-size: 12px;
 }
+.agent-panel__empty-lens {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .agent-panel__empty-chat {
   min-height: 160px;
   display: grid;
@@ -3583,9 +3589,15 @@ select option {
   outline: 2px solid rgba(59, 130, 246, 0.72);
   outline-offset: 2px;
 }
+.agent-panel__lens-view {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .agent-panel__lens-filter {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px 8px;
   align-items: end;
   padding: 8px;
@@ -3620,6 +3632,25 @@ select option {
   font-weight: 700;
   white-space: nowrap;
 }
+.agent-panel__lens-filter-clear,
+.agent-panel__empty-lens-action {
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+.agent-panel__lens-filter-clear:focus-visible,
+.agent-panel__empty-lens-action:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.72);
+  outline-offset: 2px;
+}
 .agent-panel__lens-list {
   min-height: 0;
   display: flex;
@@ -3629,12 +3660,23 @@ select option {
 .agent-panel__lens-preview {
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px 8px;
   padding: 8px;
   border: 1px solid rgba(125, 211, 252, 0.16);
   border-radius: 7px;
   background: rgba(14, 165, 233, 0.06);
+}
+.agent-panel__lens-preview:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.72);
+  outline-offset: 2px;
+}
+.agent-panel__lens-preview-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .agent-panel__lens-preview span,
 .agent-panel__lens-preview small {
@@ -3650,9 +3692,41 @@ select option {
   white-space: nowrap;
   font-size: 12px;
 }
-.agent-panel__lens-preview small,
-.agent-panel__lens-preview p {
-  grid-column: 1 / -1;
+.agent-panel__lens-preview-detail {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.agent-panel__lens-preview-nav,
+.agent-panel__lens-preview-actions {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.agent-panel__lens-preview-nav {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.agent-panel__lens-preview-actions {
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+}
+.agent-panel__lens-preview-nav button,
+.agent-panel__lens-preview-actions button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.18);
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+.agent-panel__lens-preview-nav button:focus-visible,
+.agent-panel__lens-preview-actions button:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.72);
+  outline-offset: 2px;
 }
 .agent-panel__lens-preview p {
   margin: 0;
