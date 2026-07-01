@@ -146,9 +146,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     () => filterAgentTurns(turns, transcriptQuery),
     [transcriptQuery, turns],
   );
+  const validFocusedTurnIndex =
+    focusedTurnIndex != null && turns.some((turn) => turn.index === focusedTurnIndex)
+      ? focusedTurnIndex
+      : null;
   const focusedTurn = useMemo(
-    () => turns.find((turn) => turn.index === focusedTurnIndex) ?? turns[turns.length - 1] ?? null,
-    [focusedTurnIndex, turns],
+    () =>
+      validFocusedTurnIndex != null
+        ? (turns.find((turn) => turn.index === validFocusedTurnIndex) ?? null)
+        : (turns[turns.length - 1] ?? null),
+    [turns, validFocusedTurnIndex],
   );
   const sessionRepo = session?.repo ?? repo;
   const hasTranscriptQuery = transcriptQuery.trim().length > 0;
@@ -201,7 +208,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const focusVisibleTurn = (direction: "previous" | "next") => {
     if (visibleTurns.length === 0) return;
-    const currentIndex = visibleTurns.findIndex((turn) => turn.index === focusedTurnIndex);
+    const currentIndex = visibleTurns.findIndex((turn) => turn.index === validFocusedTurnIndex);
     const nextIndex =
       direction === "next"
         ? (currentIndex + 1) % visibleTurns.length
@@ -266,13 +273,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       );
     };
   }, [mode, readOnly, sessionId]);
-
-  useEffect(() => {
-    if (focusedTurnIndex == null) return;
-    if (!turns.some((turn) => turn.index === focusedTurnIndex)) {
-      setFocusedTurnIndex(null);
-    }
-  }, [focusedTurnIndex, turns]);
 
   const canRevert =
     !!session &&
@@ -4624,8 +4624,10 @@ function decodeBase64Text(chunk: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+const ansiEscapePattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
+
 function stripAnsi(text: string): string {
-  return text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+  return text.replace(ansiEscapePattern, "");
 }
 
 function commandMessage(error: unknown): string {
