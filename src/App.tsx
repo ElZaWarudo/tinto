@@ -111,7 +111,7 @@ export function armConsolesExternalDetach(event: TabDragEvent, api: DockviewApi)
 
 export default function App() {
   useBusConnection();
-  const { config, loaded, repos } = useBusState();
+  const { config, loaded } = useBusState();
   const { glanceMode } = useQualityState();
   const apiRef = useRef<DockviewApi | null>(null);
   const [showAddRepo, setShowAddRepo] = useState(false);
@@ -133,13 +133,6 @@ export default function App() {
     zoomStore.hydrate();
     return installZoomKeybindings();
   }, []);
-
-  // Background-preload every repo's file tree so each project's explorer is
-  // "always loaded" — no spinner when its tab opens. ensureLoaded is idempotent.
-  const repoKeys = Object.keys(repos).sort().join("\n");
-  useEffect(() => {
-    if (repoKeys) repoTreeStore.preload(repoKeys.split("\n"));
-  }, [repoKeys]);
 
   const actions = useMemo<WorkspaceActions>(
     () => ({

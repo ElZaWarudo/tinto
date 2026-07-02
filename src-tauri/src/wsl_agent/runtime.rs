@@ -1,3 +1,4 @@
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
@@ -30,8 +31,9 @@ use uuid::Uuid;
 
 use super::protocol::{
     encode_agent_response, parse_agent_request_line, AgentError, AgentErrorCategory, AgentRequest,
-    AgentResponse, FileFingerprint, RepoFileFingerprintSnapshot, RepoFsWatchConfig,
-    WslDirectoryEntry, WslDirectoryListing,
+    AgentResponse, FileFingerprint, GitReviewFinding, GitReviewSummary,
+    RepoFileFingerprintSnapshot, RepoFsWatchConfig, RepoSnapshotScope, WslDirectoryEntry,
+    WslDirectoryListing,
 };
 
 pub fn respond_to_request_line(line: &str) -> Result<String, AgentError> {
@@ -75,22 +77,24 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
         AgentRequest::RepoSnapshot {
             repos,
             subscriptions,
+            scope,
             ..
         } => AgentResponse::RepoSnapshot {
             repos: repos
                 .iter()
-                .map(|repo| repo_delta(repo, &subscriptions))
+                .map(|repo| repo_delta(repo, &subscriptions, scope))
                 .collect(),
         },
         AgentRequest::RepoSnapshotWithFsEvents {
             repos,
             subscriptions,
             fs_watch,
+            scope,
             ..
         } => {
             let deltas = repos
                 .iter()
-                .map(|repo| repo_delta(repo, &subscriptions))
+                .map(|repo| repo_delta(repo, &subscriptions, scope))
                 .collect();
             let fingerprints = repos
                 .iter()
@@ -190,6 +194,34 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
         } => with_allowed_repo(&repo, &allowed_repos, || {
             let tree = list_repo_tree_capped(&repo, REPO_TREE_MAX_ENTRIES)?;
             Ok(AgentResponse::RepoTree { tree })
+        }),
+        AgentRequest::GitReviewSummary {
+            repo,
+            allowed_repos,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            Ok(AgentResponse::GitReviewSummary {
+                summary: git_review_summary_linux(&repo)?,
+            })
+        }),
+        AgentRequest::CreateGitWorktree {
+            repo,
+            allowed_repos,
+            session_id,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            Ok(AgentResponse::GitWorktreeCreated {
+                path: create_git_worktree_linux(&repo, &session_id)?,
+            })
+        }),
+        AgentRequest::RemoveGitWorktree {
+            repo,
+            allowed_repos,
+            target,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            remove_git_worktree_linux(&repo, &target)?;
+            Ok(AgentResponse::Unit)
         }),
         AgentRequest::GitleaksSetupStatus {
             repo,
@@ -378,14 +410,344 @@ where
     }
 }
 
-fn repo_delta(repo: &Path, subscriptions: &[SubscriptionTarget]) -> RepoDelta {
+fn git_review_summary_linux(repo: &Path) -> Result<GitReviewSummary, AgentRuntimeError> {
+    let branch = git_stdout_linux(repo, &["branch", "--show-current"])?;
+    let branch = if branch.trim().is_empty() {
+        "detached HEAD".to_string()
+    } else {
+        branch.trim().to_string()
+    };
+    let status = git_stdout_linux(repo, &["status", "--short"])?;
+    let status_lines = status
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let files = status_lines.iter().take(12).cloned().collect::<Vec<_>>();
+    let changed_files = status_lines.len();
+    let truncated_count = changed_files.saturating_sub(files.len());
+    let working_shortstat = empty_to_none(git_stdout_linux(repo, &["diff", "--shortstat"])?);
+    let staged_shortstat = empty_to_none(git_stdout_linux(
+        repo,
+        &["diff", "--cached", "--shortstat"],
+    )?);
+    let findings = git_review_findings_linux(repo, &status_lines);
+    Ok(GitReviewSummary {
+        branch,
+        changed_files,
+        working_shortstat,
+        staged_shortstat,
+        files,
+        truncated_count,
+        findings,
+    })
+}
+
+fn git_review_findings_linux(repo: &Path, status_lines: &[String]) -> Vec<GitReviewFinding> {
+    let mut findings = Vec::new();
+    let changed_paths = changed_paths_from_status(repo, status_lines);
+    let has_package_json = changed_paths
+        .iter()
+        .any(|path| path == Path::new("package.json"));
+    if changed_paths
+        .iter()
+        .any(|path| path == Path::new("package-lock.json"))
+        && !has_package_json
+    {
+        findings.push(GitReviewFinding {
+            severity: "medium".to_string(),
+            title: "Lockfile changed without package manifest".to_string(),
+            detail: "package-lock.json changed but package.json did not; verify the lockfile was intentionally regenerated without dependency metadata changes.".to_string(),
+            path: Some(PathBuf::from("package-lock.json")),
+            line: None,
+        });
+    }
+    for path in changed_paths {
+        if sensitive_review_path(&path) {
+            findings.push(GitReviewFinding {
+                severity: "high".to_string(),
+                title: "Sensitive path changed".to_string(),
+                detail: format!(
+                    "{} looks like an environment, credential, or secret-bearing path; verify no secrets are committed.",
+                    path.display()
+                ),
+                path: Some(path.clone()),
+                line: None,
+            });
+        }
+        if let Some(line) = conflict_marker_line(repo, &path) {
+            findings.push(GitReviewFinding {
+                severity: "high".to_string(),
+                title: "Conflict marker present".to_string(),
+                detail: format!(
+                    "{} still contains a merge conflict marker; resolve it before review.",
+                    path.display()
+                ),
+                path: Some(path),
+                line: Some(line),
+            });
+        }
+    }
+    findings
+}
+
+fn git_stdout_linux(repo: &Path, args: &[&str]) -> Result<String, AgentRuntimeError> {
+    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let message = if stderr.is_empty() { stdout } else { stderr };
+        Err(AgentRuntimeError::new("git_review_failed", message))
+    }
+}
+
+fn changed_paths_from_status(repo: &Path, status_lines: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in status_lines {
+        let Some(path) = line.get(2..).map(str::trim) else {
+            continue;
+        };
+        let path = path.rsplit_once(" -> ").map(|(_, new)| new).unwrap_or(path);
+        if path.is_empty() {
+            continue;
+        }
+        let path_buf = PathBuf::from(path);
+        paths.push(path_buf.clone());
+        if path.ends_with('/') {
+            append_changed_directory_paths(repo, &path_buf, &mut paths, 64);
+        }
+    }
+    paths
+}
+
+fn append_changed_directory_paths(
+    repo: &Path,
+    relative_dir: &Path,
+    paths: &mut Vec<PathBuf>,
+    limit: usize,
+) {
+    let mut added = 0;
+    let mut stack = vec![relative_dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        if added >= limit {
+            return;
+        }
+        let Ok(abs) = safe_join(repo, &current) else {
+            continue;
+        };
+        let Ok(entries) = fs::read_dir(abs) else {
+            continue;
+        };
+        let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if added >= limit {
+                return;
+            }
+            let name = entry.file_name();
+            if name == ".git" {
+                continue;
+            }
+            let child = current.join(name);
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(child);
+            } else if file_type.is_file() {
+                paths.push(child);
+                added += 1;
+            }
+        }
+    }
+}
+
+fn sensitive_review_path(path: &Path) -> bool {
+    let lower = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    file_name == ".env"
+        || file_name.starts_with(".env.")
+        || file_name.ends_with(".pem")
+        || file_name.ends_with(".key")
+        || file_name == "id_rsa"
+        || file_name == "id_ed25519"
+        || lower.contains("/secrets/")
+        || lower.contains("/secret/")
+}
+
+fn conflict_marker_line(repo: &Path, path: &Path) -> Option<usize> {
+    let abs = safe_join(repo, path).ok()?;
+    if !abs.is_file() {
+        return None;
+    }
+    let metadata = fs::metadata(&abs).ok()?;
+    if metadata.len() > 512 * 1024 {
+        return None;
+    }
+    let bytes = fs::read(&abs).ok()?;
+    if bytes.contains(&0) {
+        return None;
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    text.lines().enumerate().find_map(|(index, line)| {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("<<<<<<< ")
+            || trimmed.starts_with("=======")
+            || trimmed.starts_with(">>>>>>> ")
+        {
+            Some(index + 1)
+        } else {
+            None
+        }
+    })
+}
+
+fn empty_to_none(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn create_git_worktree_linux(repo: &Path, session_id: &str) -> Result<PathBuf, AgentRuntimeError> {
+    if !git_has_head_linux(repo)? {
+        return Err(AgentRuntimeError::new(
+            "worktree_no_head",
+            "this repo has no HEAD commit yet",
+        ));
+    }
+    let target = linux_fork_worktree_path(repo, session_id)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| AgentRuntimeError::new("worktree_path_invalid", "invalid worktree path"))?;
+    fs::create_dir_all(parent)?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "add", "--detach"])
+        .arg(&target)
+        .arg("HEAD")
+        .output()?;
+    if output.status.success() {
+        Ok(target)
+    } else {
+        Err(AgentRuntimeError::new(
+            "worktree_create_failed",
+            command_output_message(&output),
+        ))
+    }
+}
+
+fn remove_git_worktree_linux(repo: &Path, target: &Path) -> Result<(), AgentRuntimeError> {
+    ensure_tinto_worktree_target(target)?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "remove", "--force"])
+        .arg(target)
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AgentRuntimeError::new(
+            "worktree_remove_failed",
+            command_output_message(&output),
+        ))
+    }
+}
+
+fn git_has_head_linux(repo: &Path) -> Result<bool, AgentRuntimeError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()?;
+    Ok(output.status.success())
+}
+
+fn linux_fork_worktree_path(repo: &Path, session_id: &str) -> Result<PathBuf, AgentRuntimeError> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| AgentRuntimeError::new("worktree_home_unavailable", "HOME unavailable"))?;
+    Ok(home
+        .join(".tinto")
+        .join("worktrees")
+        .join(linux_path_hash(repo))
+        .join(format!(
+            "fork-{}-{}",
+            short_session_id(session_id),
+            Uuid::new_v4()
+        )))
+}
+
+fn ensure_tinto_worktree_target(target: &Path) -> Result<(), AgentRuntimeError> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| AgentRuntimeError::new("worktree_home_unavailable", "HOME unavailable"))?;
+    let root = home.join(".tinto").join("worktrees");
+    if target.is_absolute() && target.starts_with(root) {
+        Ok(())
+    } else {
+        Err(AgentRuntimeError::new(
+            "worktree_target_not_allowed",
+            "worktree target is outside the Tinto worktree root",
+        ))
+    }
+}
+
+fn linux_path_hash(path: &Path) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn short_session_id(session_id: &str) -> String {
+    let short = session_id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(8)
+        .collect::<String>();
+    if short.is_empty() {
+        "session".to_string()
+    } else {
+        short
+    }
+}
+
+fn command_output_message(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("command exited with status {}", output.status)
+    }
+}
+
+fn repo_delta(
+    repo: &Path,
+    subscriptions: &[SubscriptionTarget],
+    scope: RepoSnapshotScope,
+) -> RepoDelta {
     let subs: Vec<SubscriptionTarget> = subscriptions
         .iter()
         .filter(|target| same_linux_path(&target.repo, repo))
         .cloned()
         .collect();
 
-    match recalc_blocking(repo, RecalcScope::Everything, &subs) {
+    match recalc_blocking(repo, recalc_scope_for_snapshot(scope), &subs) {
         Ok(outcome) => RepoDelta {
             repo: repo.to_path_buf(),
             revision: 0,
@@ -416,6 +778,14 @@ fn repo_delta(repo: &Path, subscriptions: &[SubscriptionTarget]) -> RepoDelta {
             secret_findings: Vec::new(),
             subscribed_diffs: None,
         },
+    }
+}
+
+fn recalc_scope_for_snapshot(scope: RepoSnapshotScope) -> RecalcScope {
+    match scope {
+        RepoSnapshotScope::StatusOnly => RecalcScope::StatusOnly,
+        RepoSnapshotScope::Metadata => RecalcScope::Metadata,
+        RepoSnapshotScope::Everything => RecalcScope::Everything,
     }
 }
 
@@ -1130,6 +1500,7 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             repos: vec![repo.path().to_path_buf()],
             subscriptions: Vec::new(),
+            scope: RepoSnapshotScope::Everything,
         };
         let line = encode_agent_request(&request).expect("encode");
         let response_line = respond_to_request_line(&line).expect("respond");
@@ -1144,6 +1515,89 @@ mod tests {
             .status
             .untracked
             .contains(&PathBuf::from("changed.txt")));
+    }
+
+    #[test]
+    fn git_review_summary_returns_bounded_changed_files_for_allowed_repo() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "linea 1\nlinea 2\nlinea 3\nlinea 4\n");
+        repo.write("new.txt", "new\n");
+        fs::create_dir_all(repo.path().join("src")).expect("create src");
+        repo.write("src/App.tsx", "<<<<<<< HEAD\nconflict\n");
+        repo.write(".env", "TOKEN=value\n");
+        repo.write("package-lock.json", "{}\n");
+        let request = AgentRequest::GitReviewSummary {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.path().to_path_buf(),
+            allowed_repos: vec![repo.path().to_path_buf()],
+        };
+        let line = encode_agent_request(&request).expect("encode");
+        let response_line = respond_to_request_line(&line).expect("respond");
+        let response = parse_agent_response_line(&response_line).expect("parse");
+
+        let AgentResponse::GitReviewSummary { summary } = response else {
+            panic!("expected git review summary");
+        };
+        assert_eq!(summary.changed_files, 5);
+        assert!(summary.files.iter().any(|file| file.contains("M base.txt")));
+        assert!(summary.files.iter().any(|file| file.contains("?? new.txt")));
+        assert_eq!(summary.truncated_count, 0);
+        assert!(summary
+            .findings
+            .iter()
+            .any(|finding| finding.title == "Conflict marker present"
+                && finding.path == Some(PathBuf::from("src/App.tsx"))
+                && finding.line == Some(1)));
+        assert!(summary
+            .findings
+            .iter()
+            .any(|finding| finding.title == "Sensitive path changed"
+                && finding.path == Some(PathBuf::from(".env"))));
+        assert!(summary.findings.iter().any(|finding| finding.title
+            == "Lockfile changed without package manifest"
+            && finding.path == Some(PathBuf::from("package-lock.json"))));
+    }
+
+    #[test]
+    fn create_git_worktree_request_creates_detached_worktree_under_tinto_home() {
+        let repo = TempRepo::with_initial_commit();
+        let home = tempfile::tempdir().expect("home");
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+
+        let request = AgentRequest::CreateGitWorktree {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.path().to_path_buf(),
+            allowed_repos: vec![repo.path().to_path_buf()],
+            session_id: "sess-worktree".into(),
+        };
+        let line = encode_agent_request(&request).expect("encode");
+        let response_line = respond_to_request_line(&line).expect("respond");
+        let response = parse_agent_response_line(&response_line).expect("parse");
+
+        let AgentResponse::GitWorktreeCreated { path } = response else {
+            panic!("expected worktree response");
+        };
+        assert!(path.starts_with(home.path().join(".tinto").join("worktrees")));
+        assert!(path.join("base.txt").is_file());
+
+        let remove = AgentRequest::RemoveGitWorktree {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.path().to_path_buf(),
+            allowed_repos: vec![repo.path().to_path_buf()],
+            target: path.clone(),
+        };
+        let line = encode_agent_request(&remove).expect("encode remove");
+        let response_line = respond_to_request_line(&line).expect("respond remove");
+        let response = parse_agent_response_line(&response_line).expect("parse remove");
+        assert_eq!(response, AgentResponse::Unit);
+        assert!(!path.exists());
+
+        if let Some(old_home) = old_home {
+            std::env::set_var("HOME", old_home);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[test]
@@ -1196,6 +1650,7 @@ mod tests {
                 repo: repo.path().to_path_buf(),
                 patterns: vec![".env".into()],
             }],
+            scope: RepoSnapshotScope::Everything,
         };
         let line = encode_agent_request(&request).expect("encode");
         let response_line = respond_to_request_line(&line).expect("respond");

@@ -1,6 +1,8 @@
 use std::{
+    hash::{Hash, Hasher},
     io::Read,
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -20,17 +22,24 @@ use super::{
     AgentConsoleError, AgentSessionRegistry,
 };
 use crate::bus::{
+    commands::write_repo_agents_md_config,
     contract::{
-        AgentJournalSessionSummary, AgentSession, AgentSessionChangeLog, AgentSessionOutput,
-        AgentSessionTimelineItem, AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED,
-        EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
+        AgentHostCommandResult, AgentHostCommandStatus, AgentJournalSessionSummary,
+        AgentReviewFinding, AgentReviewSummary, AgentSession, AgentSessionChangeLog,
+        AgentSessionContextSummary, AgentSessionFeedback, AgentSessionOutput,
+        AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
+        AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG,
+        EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
     },
     BusHandle, RepoResolveError,
 };
+#[cfg(target_os = "windows")]
+use crate::windows_process::hide_console;
 use crate::workbench::RepoSource;
+use crate::workbench::{WorkbenchError, WorkbenchStore};
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
-    protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
+    protocol::{AgentRequest, AgentResponse, GitReviewSummary, PROTOCOL_VERSION},
 };
 
 const SESSION_OUTPUT_QUIET_REFRESH_MS: u64 = 2_500;
@@ -186,6 +195,7 @@ pub fn write_agent_session_input(
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     session_id: String,
     input_base64: String,
+    options: Option<AgentSessionRuntimeOptions>,
 ) -> Result<(), CommandError> {
     let input = STANDARD
         .decode(input_base64)
@@ -193,7 +203,7 @@ pub fn write_agent_session_input(
     let timestamp_ms = now_ms();
     let mut registry = lock_registry(&registry)?;
     registry
-        .write_session_input(&session_id, &input)
+        .write_session_input(&session_id, &input, options)
         .map_err(CommandError::from)?;
     drop(registry);
     emit_timeline_text(
@@ -205,6 +215,122 @@ pub fn write_agent_session_input(
     );
     refresh_and_emit_sessions(&app);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn run_agent_host_command(
+    app: AppHandle,
+    bus: State<'_, BusHandle>,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    workbenches: State<'_, Mutex<WorkbenchStore>>,
+    session_id: String,
+    command: String,
+    argument: Option<String>,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let normalized = normalize_host_command(&command);
+    let session = {
+        let mut registry = lock_registry(&registry)?;
+        registry
+            .refresh_session_statuses()
+            .map_err(CommandError::from)?;
+        registry
+            .get_session(&session_id)
+            .ok_or_else(|| CommandError::new("session_not_found", "session not found"))?
+    };
+
+    let result = match normalized.as_str() {
+        "status" => AgentHostCommandResult {
+            command: normalized.clone(),
+            status: AgentHostCommandStatus::Completed,
+            message: host_status_message(&session),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        },
+        "init" => {
+            create_agents_md_for_session(&bus, &session).await?;
+            refresh_and_emit_sessions(&app);
+            AgentHostCommandResult {
+                command: normalized.clone(),
+                status: AgentHostCommandStatus::Completed,
+                message: "AGENTS.md is configured for this repo.".to_string(),
+                session_id: None,
+                repo: None,
+                agent_type: None,
+                review_summary: None,
+                review_findings: None,
+            }
+        }
+        "goal" | "objective" => run_goal_host_command(&app, &registry, &session, argument)?,
+        "plan" | "plan-mode" => {
+            run_plan_mode_host_command(&app, &registry, &session, &normalized, argument)?
+        }
+        "personality" => run_personality_host_command(&app, &registry, &session, argument)?,
+        "comments" | "feedback" => {
+            run_feedback_host_command(&app, &registry, &session, &normalized, argument)?
+        }
+        "review" | "code-review" => run_review_host_command(&bus, &session, &normalized).await?,
+        "compact" => run_compact_host_command(&app, &registry, &session, argument)?,
+        "branch" | "fork" | "lateral" => {
+            run_fork_host_command(
+                &normalized,
+                &app,
+                &bus,
+                &registry,
+                &workbenches,
+                &session,
+                argument,
+            )
+            .await?
+        }
+        "mcp" => run_mcp_host_command()?,
+        "details" => AgentHostCommandResult {
+            command: normalized.clone(),
+            status: AgentHostCommandStatus::Completed,
+            message: "Session details opened in Tinto.".to_string(),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        },
+        "model" | "reasoning" | "effort" | "fast" => AgentHostCommandResult {
+            command: normalized.clone(),
+            status: AgentHostCommandStatus::Completed,
+            message: "Use the Codex runtime controls in the composer for this command.".to_string(),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        },
+        known if is_known_pending_host_command(known) => AgentHostCommandResult {
+            command: known.to_string(),
+            status: AgentHostCommandStatus::Unavailable,
+            message: format!(
+                "/{} needs a Tinto host backend before it can run from this palette.",
+                known
+            ),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        },
+        _ => AgentHostCommandResult {
+            command: normalized.clone(),
+            status: AgentHostCommandStatus::Unavailable,
+            message: format!("/{command} is not a known Tinto host command."),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        },
+    };
+    Ok(result)
 }
 
 #[tauri::command]
@@ -321,6 +447,977 @@ fn wsl_agent_binary_available(distro: &str, agent_type: String) -> Result<bool, 
     }
 }
 
+async fn create_agents_md_for_session(
+    bus: &BusHandle,
+    session: &AgentSession,
+) -> Result<(), CommandError> {
+    let resolved = ensure_known_agent_repo(bus, &session.repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo = resolved.path;
+            tokio::task::spawn_blocking(move || write_repo_agents_md_config(&repo))
+                .await
+                .map_err(|_| CommandError::new("internal", "AGENTS.md task failed"))?
+                .map_err(|error| CommandError::new(error.category, error.message))
+        }
+        RepoSource::Wsl => {
+            let distro = resolved
+                .distro
+                .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
+            match request_wsl_agent(
+                &distro,
+                &AgentRequest::CreateAgentsMdConfig {
+                    protocol_version: PROTOCOL_VERSION,
+                    repo: resolved.path,
+                    allowed_repos: resolved.wsl_repos,
+                },
+            ) {
+                Ok(AgentResponse::Unit) => Ok(()),
+                Ok(AgentResponse::Error { category, message }) => {
+                    Err(CommandError::new(category, message))
+                }
+                Ok(_) => Err(CommandError::new(
+                    "malformed_response",
+                    "respuesta inesperada del agente WSL",
+                )),
+                Err(error) => Err(CommandError::new(error.safe_category(), error.message)),
+            }
+        }
+    }
+}
+
+fn normalize_host_command(command: &str) -> String {
+    command
+        .trim()
+        .trim_start_matches('/')
+        .to_lowercase()
+        .replace('_', "-")
+}
+
+fn is_known_pending_host_command(command: &str) -> bool {
+    matches!(command, "mascot" | "memories" | "memory")
+}
+
+async fn run_fork_host_command(
+    command_name: &str,
+    app: &AppHandle,
+    bus: &BusHandle,
+    registry: &Mutex<AgentSessionRegistry>,
+    workbenches: &Mutex<WorkbenchStore>,
+    session: &AgentSession,
+    argument: Option<String>,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let requested_mode = argument.unwrap_or_default().trim().to_lowercase();
+    let worktree_requested = matches!(
+        requested_mode.as_str(),
+        "worktree" | "new-worktree" | "isolated"
+    );
+    let session_active = matches!(
+        session.status,
+        AgentSessionStatus::Starting | AgentSessionStatus::Running
+    );
+
+    let resolved = ensure_known_agent_repo(bus, &session.repo).await?;
+    let (launch_repo, fork_kind) = match resolved.source {
+        RepoSource::Local if session_active || worktree_requested => {
+            let Some(worktree_repo) =
+                provision_local_fork_worktree(bus, workbenches, &resolved.path, session).await?
+            else {
+                return Ok(AgentHostCommandResult {
+                    command: command_name.to_string(),
+                    status: AgentHostCommandStatus::Unavailable,
+                    message:
+                        "This repo has no HEAD commit yet; worktree forks need at least one commit."
+                            .to_string(),
+                    session_id: None,
+                    repo: None,
+                    agent_type: None,
+                    review_summary: None,
+                    review_findings: None,
+                });
+            };
+            (worktree_repo, "worktree")
+        }
+        RepoSource::Wsl if session_active || worktree_requested => {
+            let distro = resolved
+                .distro
+                .clone()
+                .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
+            let Some(worktree_repo) = provision_wsl_fork_worktree(
+                bus,
+                workbenches,
+                &distro,
+                &resolved.path,
+                &resolved.wsl_repos,
+                session,
+            )
+            .await?
+            else {
+                return Ok(AgentHostCommandResult {
+                    command: command_name.to_string(),
+                    status: AgentHostCommandStatus::Unavailable,
+                    message:
+                        "This repo has no HEAD commit yet; worktree forks need at least one commit."
+                            .to_string(),
+                    session_id: None,
+                    repo: None,
+                    agent_type: None,
+                    review_summary: None,
+                    review_findings: None,
+                });
+            };
+            (worktree_repo, "worktree")
+        }
+        _ => (resolved.path.clone(), "session"),
+    };
+    let started_result = {
+        let mut registry = lock_registry(registry)?;
+        match resolved.source {
+            RepoSource::Local => registry
+                .start_session_with_output(launch_repo.clone(), session.agent_type.clone())
+                .map_err(CommandError::from),
+            RepoSource::Wsl => {
+                let distro = resolved
+                    .distro
+                    .clone()
+                    .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
+                registry
+                    .start_wsl_session_with_output(
+                        launch_repo.clone(),
+                        distro,
+                        session.agent_type.clone(),
+                    )
+                    .map_err(CommandError::from)
+            }
+        }
+    };
+    let started = match started_result {
+        Ok(started) => started,
+        Err(error) => {
+            if fork_kind == "worktree" {
+                match resolved.source {
+                    RepoSource::Local => {
+                        cleanup_local_fork_worktree(bus, workbenches, &resolved.path, &launch_repo)
+                            .await;
+                    }
+                    RepoSource::Wsl => {
+                        if let Some(distro) = resolved.distro.as_deref() {
+                            cleanup_wsl_fork_worktree(
+                                bus,
+                                workbenches,
+                                distro,
+                                &resolved.path,
+                                &launch_repo,
+                                &resolved.wsl_repos,
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+            return Err(error);
+        }
+    };
+    if let Some(output_reader) = started.output_reader {
+        spawn_output_reader(app.clone(), started.id.clone(), output_reader);
+    }
+    emit_timeline_text(
+        app,
+        &started.id,
+        AgentSessionTimelineKind::Lifecycle,
+        Some(format!(
+            "Forked from session {} into {fork_kind}",
+            session.id
+        )),
+        now_ms(),
+    );
+    refresh_and_emit_sessions(app);
+    Ok(AgentHostCommandResult {
+        command: command_name.to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: format!(
+            "Forked {fork_kind} session {} from {}.",
+            started.id, session.id
+        ),
+        session_id: Some(started.id),
+        repo: Some(launch_repo),
+        agent_type: Some(session.agent_type.clone()),
+        review_summary: None,
+        review_findings: None,
+    })
+}
+
+async fn provision_local_fork_worktree(
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    source_repo: &Path,
+    session: &AgentSession,
+) -> Result<Option<PathBuf>, CommandError> {
+    if !git_has_head(source_repo)? {
+        return Ok(None);
+    }
+    let target = local_fork_worktree_path(source_repo, &session.id)?;
+    let target_parent = target
+        .parent()
+        .ok_or_else(|| CommandError::new("worktree_path_invalid", "invalid worktree path"))?;
+    std::fs::create_dir_all(target_parent)
+        .map_err(|error| CommandError::new("worktree_create_failed", error.to_string()))?;
+    create_git_worktree(source_repo, &target)?;
+    let canonical = target
+        .canonicalize()
+        .map_err(|error| CommandError::new("worktree_create_failed", error.to_string()))?;
+    let repos = {
+        let mut store = lock_workbenches(workbenches)?;
+        let active = store
+            .active_workbench_runtime()
+            .ok_or_else(|| CommandError::new("workbench_not_active", "no active workbench"))?;
+        let alias = Some(format!("fork {}", short_session_id(&session.id)));
+        if let Err(error) = store.add_repo(&active.name, canonical.clone(), alias, true) {
+            let _ = remove_git_worktree(source_repo, &canonical);
+            return Err(map_workbench_error(error));
+        }
+        store
+            .active_workbench_runtime()
+            .filter(|workbench| workbench.name == active.name)
+            .map(|workbench| workbench.repos)
+            .unwrap_or_default()
+    };
+    bus.set_workbench(repos);
+    Ok(Some(canonical))
+}
+
+async fn provision_wsl_fork_worktree(
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    distro: &str,
+    source_repo: &Path,
+    allowed_repos: &[PathBuf],
+    session: &AgentSession,
+) -> Result<Option<PathBuf>, CommandError> {
+    let target = match request_wsl_agent(
+        distro,
+        &AgentRequest::CreateGitWorktree {
+            protocol_version: PROTOCOL_VERSION,
+            repo: source_repo.to_path_buf(),
+            allowed_repos: allowed_repos.to_vec(),
+            session_id: session.id.clone(),
+        },
+    ) {
+        Ok(AgentResponse::GitWorktreeCreated { path }) => path,
+        Ok(AgentResponse::Error { category, message }) if category == "worktree_no_head" => {
+            let _ = message;
+            return Ok(None);
+        }
+        Ok(AgentResponse::Error { category, message }) => {
+            return Err(CommandError::new(category, message));
+        }
+        Ok(_) => {
+            return Err(CommandError::new(
+                "malformed_response",
+                "respuesta inesperada del agente WSL",
+            ));
+        }
+        Err(error) => return Err(CommandError::new(error.safe_category(), error.message)),
+    };
+    let repos = {
+        let mut store = lock_workbenches(workbenches)?;
+        let active = store
+            .active_workbench_runtime()
+            .ok_or_else(|| CommandError::new("workbench_not_active", "no active workbench"))?;
+        let alias = Some(format!("fork {}", short_session_id(&session.id)));
+        if let Err(error) = store.add_wsl_repo(
+            &active.name,
+            distro.to_string(),
+            target.to_string_lossy().to_string(),
+            alias,
+        ) {
+            cleanup_wsl_git_worktree(distro, source_repo, &target, allowed_repos);
+            return Err(map_workbench_error(error));
+        }
+        store
+            .active_workbench_runtime()
+            .filter(|workbench| workbench.name == active.name)
+            .map(|workbench| workbench.repos)
+            .unwrap_or_default()
+    };
+    bus.set_workbench(repos);
+    Ok(Some(target))
+}
+
+async fn cleanup_local_fork_worktree(
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    source_repo: &Path,
+    worktree_repo: &Path,
+) {
+    let repos = {
+        let Ok(mut store) = workbenches.lock() else {
+            let _ = remove_git_worktree(source_repo, worktree_repo);
+            return;
+        };
+        let active_name = store
+            .active_workbench_runtime()
+            .map(|workbench| workbench.name);
+        if let Some(active_name) = active_name {
+            let _ = store.remove_repo(&active_name, worktree_repo);
+            store
+                .active_workbench_runtime()
+                .filter(|workbench| workbench.name == active_name)
+                .map(|workbench| workbench.repos)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    };
+    if !repos.is_empty() {
+        bus.set_workbench(repos);
+    }
+    let _ = remove_git_worktree(source_repo, worktree_repo);
+}
+
+async fn cleanup_wsl_fork_worktree(
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    distro: &str,
+    source_repo: &Path,
+    worktree_repo: &Path,
+    allowed_repos: &[PathBuf],
+) {
+    let repos = {
+        let Ok(mut store) = workbenches.lock() else {
+            cleanup_wsl_git_worktree(distro, source_repo, worktree_repo, allowed_repos);
+            return;
+        };
+        let active_name = store
+            .active_workbench_runtime()
+            .map(|workbench| workbench.name);
+        if let Some(active_name) = active_name {
+            let _ = store.remove_wsl_repo(&active_name, distro, &worktree_repo.to_string_lossy());
+            store
+                .active_workbench_runtime()
+                .filter(|workbench| workbench.name == active_name)
+                .map(|workbench| workbench.repos)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    };
+    if !repos.is_empty() {
+        bus.set_workbench(repos);
+    }
+    cleanup_wsl_git_worktree(distro, source_repo, worktree_repo, allowed_repos);
+}
+
+fn cleanup_wsl_git_worktree(
+    distro: &str,
+    source_repo: &Path,
+    worktree_repo: &Path,
+    allowed_repos: &[PathBuf],
+) {
+    let _ = request_wsl_agent(
+        distro,
+        &AgentRequest::RemoveGitWorktree {
+            protocol_version: PROTOCOL_VERSION,
+            repo: source_repo.to_path_buf(),
+            allowed_repos: allowed_repos.to_vec(),
+            target: worktree_repo.to_path_buf(),
+        },
+    );
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct McpServerSummary {
+    name: String,
+    command_found: Option<bool>,
+}
+
+fn run_mcp_host_command() -> Result<AgentHostCommandResult, CommandError> {
+    Ok(AgentHostCommandResult {
+        command: "mcp".to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: codex_mcp_status_message()?,
+        session_id: None,
+        repo: None,
+        agent_type: None,
+        review_summary: None,
+        review_findings: None,
+    })
+}
+
+fn codex_mcp_status_message() -> Result<String, CommandError> {
+    let Some(config_path) = codex_config_path() else {
+        return Ok("No Codex config directory was found for MCP status.".to_string());
+    };
+    if !config_path.is_file() {
+        return Ok("No Codex MCP config was found.".to_string());
+    }
+    let raw = std::fs::read_to_string(&config_path)
+        .map_err(|error| CommandError::new("mcp_config_read_failed", error.to_string()))?;
+    let servers = mcp_servers_from_codex_config(&raw)
+        .map_err(|error| CommandError::new("mcp_config_invalid", error.to_string()))?;
+    if servers.is_empty() {
+        return Ok("No MCP servers are configured in Codex config.".to_string());
+    }
+    let available = servers
+        .iter()
+        .filter(|server| server.command_found == Some(true))
+        .count();
+    let missing = servers
+        .iter()
+        .filter(|server| server.command_found == Some(false))
+        .count();
+    let unknown = servers.len().saturating_sub(available + missing);
+    let names = servers
+        .iter()
+        .take(8)
+        .map(|server| match server.command_found {
+            Some(true) => format!("{}: command found", server.name),
+            Some(false) => format!("{}: command missing", server.name),
+            None => format!("{}: command unchecked", server.name),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let overflow = servers.len().saturating_sub(8);
+    let overflow_text = if overflow > 0 {
+        format!("; plus {overflow} more")
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        "MCP: {} configured server(s); {} command(s) found, {} missing, {} unchecked. {}{}.",
+        servers.len(),
+        available,
+        missing,
+        unknown,
+        names,
+        overflow_text
+    ))
+}
+
+fn codex_config_path() -> Option<PathBuf> {
+    let home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
+    Some(home.join("config.toml"))
+}
+
+fn mcp_servers_from_codex_config(raw: &str) -> Result<Vec<McpServerSummary>, toml::de::Error> {
+    let value = toml::from_str::<toml::Value>(raw)?;
+    let mut servers = std::collections::BTreeMap::new();
+    for table_name in ["mcp_servers", "mcpServers"] {
+        let Some(table) = value.get(table_name).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (name, server) in table {
+            let command_found = server
+                .get("command")
+                .and_then(toml::Value::as_str)
+                .and_then(command_availability);
+            servers.entry(name.clone()).or_insert(McpServerSummary {
+                name: name.to_string(),
+                command_found,
+            });
+        }
+    }
+    Ok(servers.into_values().collect())
+}
+
+fn command_availability(command: &str) -> Option<bool> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Some(false);
+    }
+    let path = Path::new(command);
+    if path.is_absolute() || command.contains('\\') || command.contains('/') {
+        return Some(path.is_file());
+    }
+    None
+}
+
+fn run_compact_host_command(
+    app: &AppHandle,
+    registry: &Mutex<AgentSessionRegistry>,
+    session: &AgentSession,
+    argument: Option<String>,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let raw = argument.unwrap_or_default();
+    let argument = raw.trim();
+    let mut registry = lock_registry(registry)?;
+    let updated = if matches!(
+        argument.to_lowercase().as_str(),
+        "clear" | "reset" | "none" | "off"
+    ) {
+        registry
+            .clear_session_context_summary(&session.id)
+            .map_err(CommandError::from)?
+    } else {
+        let summary = build_context_summary(session, now_ms());
+        registry
+            .set_session_context_summary(&session.id, summary)
+            .map_err(CommandError::from)?
+    };
+    let sessions = registry.list_sessions();
+    emit_sessions_snapshot(app, &sessions);
+    Ok(AgentHostCommandResult {
+        command: "compact".to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: updated
+            .context_summary
+            .as_ref()
+            .map(|summary| {
+                format!(
+                    "Context summary saved from {} events across {} turns.",
+                    summary.source_events, summary.source_turns
+                )
+            })
+            .unwrap_or_else(|| "Context summary cleared for this session.".to_string()),
+        session_id: None,
+        repo: None,
+        agent_type: None,
+        review_summary: None,
+        review_findings: None,
+    })
+}
+
+fn build_context_summary(session: &AgentSession, created_at_ms: u64) -> AgentSessionContextSummary {
+    let mut lines = Vec::new();
+    lines.push(format!("Session: {} ({})", session.id, session.agent_type));
+    lines.push(format!("Repo: {}", session.repo.to_string_lossy()));
+    lines.push(format!("Status: {:?}", session.status));
+    if let Some(goal) = session.goal.as_ref() {
+        lines.push(format!("Goal: {}", goal.text));
+    }
+    if let Some(personality) = session.personality.as_ref() {
+        lines.push(format!("Personality: {}", personality.name));
+    }
+    if let Some(plan_mode) = session.plan_mode.as_ref() {
+        lines.push(format!(
+            "Plan mode: {}",
+            if plan_mode.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ));
+    }
+    if let Some(feedback) = session.feedback.last() {
+        lines.push(format!("Latest {}: {}", feedback.kind, feedback.text));
+    }
+    if !session.change_log.is_empty() {
+        let files = session
+            .change_log
+            .iter()
+            .take(8)
+            .map(|change| format!("{}:{:?}", change.path.to_string_lossy(), change.kind))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("Tracked changes: {}", files));
+    }
+    let event_count = session.timeline.len();
+    let turn_count = session.turn_checkpoints.len();
+    let recent = session
+        .timeline
+        .iter()
+        .rev()
+        .filter(|item| !item.text.trim().is_empty())
+        .take(6)
+        .map(|item| format!("{:?}: {}", item.kind, compact_summary_text(&item.text)))
+        .collect::<Vec<_>>();
+    if !recent.is_empty() {
+        lines.push("Recent timeline:".to_string());
+        for item in recent.into_iter().rev() {
+            lines.push(format!("- {item}"));
+        }
+    }
+    AgentSessionContextSummary {
+        text: lines.join("\n"),
+        created_at_ms,
+        source_events: event_count,
+        source_turns: turn_count,
+    }
+}
+
+fn compact_summary_text(text: &str) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_LEN: usize = 180;
+    if compact.len() <= MAX_LEN {
+        compact
+    } else {
+        let truncated = compact.chars().take(MAX_LEN).collect::<String>();
+        format!("{truncated}...")
+    }
+}
+
+fn run_plan_mode_host_command(
+    app: &AppHandle,
+    registry: &Mutex<AgentSessionRegistry>,
+    session: &AgentSession,
+    command_name: &str,
+    argument: Option<String>,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let raw = argument.unwrap_or_default();
+    let argument = raw.trim().to_lowercase();
+    let current = session
+        .plan_mode
+        .as_ref()
+        .map(|plan_mode| plan_mode.enabled)
+        .unwrap_or(false);
+    if argument.is_empty() {
+        return Ok(AgentHostCommandResult {
+            command: command_name.to_string(),
+            status: AgentHostCommandStatus::Completed,
+            message: format!(
+                "Plan mode is currently {}. Use /plan on, /plan off, or /plan toggle.",
+                if current { "enabled" } else { "disabled" }
+            ),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        });
+    }
+    let next = match argument.as_str() {
+        "on" | "true" | "yes" | "enable" | "enabled" => true,
+        "off" | "false" | "no" | "disable" | "disabled" | "clear" | "reset" => false,
+        "toggle" => !current,
+        _ => {
+            return Ok(AgentHostCommandResult {
+                command: command_name.to_string(),
+                status: AgentHostCommandStatus::Unavailable,
+                message: "Use /plan on, /plan off, or /plan toggle.".to_string(),
+                session_id: None,
+                repo: None,
+                agent_type: None,
+                review_summary: None,
+                review_findings: None,
+            });
+        }
+    };
+    let mut registry = lock_registry(registry)?;
+    let updated = registry
+        .set_session_plan_mode(&session.id, next, now_ms())
+        .map_err(CommandError::from)?;
+    let sessions = registry.list_sessions();
+    emit_sessions_snapshot(app, &sessions);
+    let enabled = updated
+        .plan_mode
+        .as_ref()
+        .map(|plan_mode| plan_mode.enabled)
+        .unwrap_or(false);
+    Ok(AgentHostCommandResult {
+        command: command_name.to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: format!(
+            "Plan mode {} for this session.",
+            if enabled { "enabled" } else { "disabled" }
+        ),
+        session_id: None,
+        repo: None,
+        agent_type: None,
+        review_summary: None,
+        review_findings: None,
+    })
+}
+
+fn run_goal_host_command(
+    app: &AppHandle,
+    registry: &Mutex<AgentSessionRegistry>,
+    session: &AgentSession,
+    argument: Option<String>,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let raw = argument.unwrap_or_default();
+    let goal = raw.trim();
+    if goal.is_empty() {
+        let message = session
+            .goal
+            .as_ref()
+            .map(|goal| format!("Current goal: {}", goal.text))
+            .unwrap_or_else(|| "No goal is set for this session.".to_string());
+        return Ok(AgentHostCommandResult {
+            command: "goal".to_string(),
+            status: AgentHostCommandStatus::Completed,
+            message,
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        });
+    }
+    let mut registry = lock_registry(registry)?;
+    let updated = if matches!(
+        goal.to_lowercase().as_str(),
+        "clear" | "reset" | "none" | "off"
+    ) {
+        registry
+            .clear_session_goal(&session.id)
+            .map_err(CommandError::from)?
+    } else {
+        registry
+            .set_session_goal(&session.id, goal.to_string(), now_ms())
+            .map_err(CommandError::from)?
+    };
+    let sessions = registry.list_sessions();
+    emit_sessions_snapshot(app, &sessions);
+    Ok(AgentHostCommandResult {
+        command: "goal".to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: updated
+            .goal
+            .as_ref()
+            .map(|goal| format!("Goal set: {}", goal.text))
+            .unwrap_or_else(|| "Goal cleared for this session.".to_string()),
+        session_id: None,
+        repo: None,
+        agent_type: None,
+        review_summary: None,
+        review_findings: None,
+    })
+}
+
+fn run_personality_host_command(
+    app: &AppHandle,
+    registry: &Mutex<AgentSessionRegistry>,
+    session: &AgentSession,
+    argument: Option<String>,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let raw = argument.unwrap_or_default();
+    let personality = raw.trim();
+    if personality.is_empty() {
+        let message = session
+            .personality
+            .as_ref()
+            .map(|personality| format!("Current personality: {}", personality.name))
+            .unwrap_or_else(|| {
+                "No personality is set for this session. Try /personality precise, /personality friendly, or /personality concise.".to_string()
+            });
+        return Ok(AgentHostCommandResult {
+            command: "personality".to_string(),
+            status: AgentHostCommandStatus::Completed,
+            message,
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        });
+    }
+    let mut registry = lock_registry(registry)?;
+    let updated = if matches!(
+        personality.to_lowercase().as_str(),
+        "clear" | "reset" | "none" | "off"
+    ) {
+        registry
+            .clear_session_personality(&session.id)
+            .map_err(CommandError::from)?
+    } else {
+        registry
+            .set_session_personality(&session.id, personality.to_string(), now_ms())
+            .map_err(CommandError::from)?
+    };
+    let sessions = registry.list_sessions();
+    emit_sessions_snapshot(app, &sessions);
+    Ok(AgentHostCommandResult {
+        command: "personality".to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: updated
+            .personality
+            .as_ref()
+            .map(|personality| format!("Personality set: {}", personality.name))
+            .unwrap_or_else(|| "Personality cleared for this session.".to_string()),
+        session_id: None,
+        repo: None,
+        agent_type: None,
+        review_summary: None,
+        review_findings: None,
+    })
+}
+
+fn run_feedback_host_command(
+    app: &AppHandle,
+    registry: &Mutex<AgentSessionRegistry>,
+    session: &AgentSession,
+    command_name: &str,
+    argument: Option<String>,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let raw = argument.unwrap_or_default();
+    let text = raw.trim();
+    let kind = if command_name == "comments" {
+        "comment"
+    } else {
+        "feedback"
+    };
+    if text.is_empty() {
+        let message = session.feedback.last().map_or_else(
+            || format!("No {kind} notes are saved for this session."),
+            |feedback| {
+                format!(
+                    "{} saved note(s). Latest {}: {}",
+                    session.feedback.len(),
+                    feedback.kind,
+                    feedback.text
+                )
+            },
+        );
+        return Ok(AgentHostCommandResult {
+            command: command_name.to_string(),
+            status: AgentHostCommandStatus::Completed,
+            message,
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        });
+    }
+    let mut registry = lock_registry(registry)?;
+    let updated = if matches!(
+        text.to_lowercase().as_str(),
+        "clear" | "reset" | "none" | "off"
+    ) {
+        registry
+            .clear_session_feedback(&session.id)
+            .map_err(CommandError::from)?
+    } else {
+        registry
+            .add_session_feedback(
+                &session.id,
+                AgentSessionFeedback {
+                    kind: kind.to_string(),
+                    text: text.to_string(),
+                    created_at_ms: now_ms(),
+                },
+            )
+            .map_err(CommandError::from)?
+    };
+    let sessions = registry.list_sessions();
+    emit_sessions_snapshot(app, &sessions);
+    Ok(AgentHostCommandResult {
+        command: command_name.to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: updated.feedback.last().map_or_else(
+            || "Feedback notes cleared for this session.".to_string(),
+            |feedback| format!("Saved {}: {}", feedback.kind, feedback.text),
+        ),
+        session_id: None,
+        repo: None,
+        agent_type: None,
+        review_summary: None,
+        review_findings: None,
+    })
+}
+
+async fn run_review_host_command(
+    bus: &BusHandle,
+    session: &AgentSession,
+    command_name: &str,
+) -> Result<AgentHostCommandResult, CommandError> {
+    let resolved = ensure_known_agent_repo(bus, &session.repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        let distro = resolved
+            .distro
+            .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
+        let (summary, findings) = match request_wsl_agent(
+            &distro,
+            &AgentRequest::GitReviewSummary {
+                protocol_version: PROTOCOL_VERSION,
+                repo: resolved.path,
+                allowed_repos: resolved.wsl_repos,
+            },
+        ) {
+            Ok(AgentResponse::GitReviewSummary { summary }) => {
+                let findings = agent_review_findings(&summary);
+                (agent_review_summary(summary), findings)
+            }
+            Ok(AgentResponse::Error { category, message }) => {
+                return Err(CommandError::new(category, message));
+            }
+            Ok(_) => {
+                return Err(CommandError::new(
+                    "malformed_response",
+                    "respuesta inesperada del agente WSL",
+                ));
+            }
+            Err(error) => return Err(CommandError::new(error.safe_category(), error.message)),
+        };
+        return Ok(AgentHostCommandResult {
+            command: command_name.to_string(),
+            status: AgentHostCommandStatus::Completed,
+            message: git_review_summary_message(&summary),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: Some(summary),
+            review_findings: Some(findings),
+        });
+    }
+    let (summary, findings) = local_git_review(&resolved.path)?;
+    Ok(AgentHostCommandResult {
+        command: command_name.to_string(),
+        status: AgentHostCommandStatus::Completed,
+        message: git_review_summary_message(&summary),
+        session_id: None,
+        repo: None,
+        agent_type: None,
+        review_summary: Some(summary),
+        review_findings: Some(findings),
+    })
+}
+
+fn host_status_message(session: &AgentSession) -> String {
+    let runtime = if session.runtime_options.is_empty() {
+        "runtime auto".to_string()
+    } else {
+        format!(
+            "model {}, reasoning {}, speed {}",
+            session.runtime_options.model.as_deref().unwrap_or("auto"),
+            session
+                .runtime_options
+                .reasoning_effort
+                .as_deref()
+                .unwrap_or("auto"),
+            session
+                .runtime_options
+                .speed
+                .as_deref()
+                .unwrap_or("standard")
+        )
+    };
+    let context_summary = session
+        .context_summary
+        .as_ref()
+        .map(|summary| format!("saved from {} events", summary.source_events))
+        .unwrap_or_else(|| "not saved".to_string());
+    format!(
+        "Session {}: {:?}; agent {}; repo {}; {} turns; {} tracked changes; {}; goal {}; personality {}; plan mode {}; feedback notes {}; context summary {}.",
+        session.id,
+        session.status,
+        session.agent_type,
+        session.repo.to_string_lossy(),
+        session.turn_checkpoints.len(),
+        session.change_log.len(),
+        runtime,
+        session
+            .goal
+            .as_ref()
+            .map(|goal| goal.text.as_str())
+            .unwrap_or("not set"),
+        session
+            .personality
+            .as_ref()
+            .map(|personality| personality.name.as_str())
+            .unwrap_or("not set"),
+        session
+            .plan_mode
+            .as_ref()
+            .map(|plan_mode| if plan_mode.enabled { "enabled" } else { "disabled" })
+            .unwrap_or("disabled"),
+        session.feedback.len(),
+        context_summary
+    )
+}
+
 fn lock_registry(
     registry: &Mutex<AgentSessionRegistry>,
 ) -> Result<std::sync::MutexGuard<'_, AgentSessionRegistry>, CommandError> {
@@ -329,12 +1426,400 @@ fn lock_registry(
         .map_err(|_| CommandError::new("lock_poisoned", "el registro de agentes fallo"))
 }
 
+fn lock_workbenches(
+    workbenches: &Mutex<WorkbenchStore>,
+) -> Result<std::sync::MutexGuard<'_, WorkbenchStore>, CommandError> {
+    workbenches
+        .lock()
+        .map_err(|_| CommandError::new("lock_poisoned", "el store de workbenches fallo"))
+}
+
 fn lock_journal(
     journal: &Mutex<AgentJournal>,
 ) -> Result<std::sync::MutexGuard<'_, AgentJournal>, CommandError> {
     journal
         .lock()
         .map_err(|_| CommandError::new("lock_poisoned", "el diario de agentes fallo"))
+}
+
+fn map_workbench_error(error: WorkbenchError) -> CommandError {
+    let value = serde_json::to_value(&error).unwrap_or_default();
+    let category = value
+        .get("kind")
+        .and_then(|kind| kind.as_str())
+        .unwrap_or("workbench_error");
+    CommandError::new(category, error.to_string())
+}
+
+fn git_has_head(repo: &Path) -> Result<bool, CommandError> {
+    let output = git_command(repo)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .map_err(|error| CommandError::new("git_unavailable", error.to_string()))?;
+    Ok(output.status.success())
+}
+
+fn local_git_review(
+    repo: &Path,
+) -> Result<(AgentReviewSummary, Vec<AgentReviewFinding>), CommandError> {
+    let branch = git_stdout(repo, &["branch", "--show-current"], "git_review_failed")?;
+    let branch = if branch.trim().is_empty() {
+        "detached HEAD".to_string()
+    } else {
+        branch.trim().to_string()
+    };
+    let status = git_stdout(repo, &["status", "--short"], "git_review_failed")?;
+    let status_lines = status
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let files = status_lines.iter().take(12).cloned().collect::<Vec<_>>();
+    let total = status_lines.len();
+    let working_shortstat = git_stdout(repo, &["diff", "--shortstat"], "git_review_failed")?
+        .trim()
+        .to_string();
+    let staged_shortstat = git_stdout(
+        repo,
+        &["diff", "--cached", "--shortstat"],
+        "git_review_failed",
+    )?
+    .trim()
+    .to_string();
+    let truncated_count = total.saturating_sub(files.len());
+    let findings = local_git_review_findings(repo, &status_lines);
+    Ok((
+        AgentReviewSummary {
+            branch,
+            changed_files: total,
+            working_shortstat: empty_to_none(working_shortstat),
+            staged_shortstat: empty_to_none(staged_shortstat),
+            files,
+            truncated_count,
+        },
+        findings,
+    ))
+}
+
+fn local_git_review_findings(repo: &Path, status_lines: &[String]) -> Vec<AgentReviewFinding> {
+    let mut findings = Vec::new();
+    let changed_paths = changed_paths_from_status(repo, status_lines);
+    let has_package_json = changed_paths
+        .iter()
+        .any(|path| path == Path::new("package.json"));
+    if changed_paths
+        .iter()
+        .any(|path| path == Path::new("package-lock.json"))
+        && !has_package_json
+    {
+        findings.push(AgentReviewFinding {
+            severity: "medium".to_string(),
+            title: "Lockfile changed without package manifest".to_string(),
+            detail: "package-lock.json changed but package.json did not; verify the lockfile was intentionally regenerated without dependency metadata changes.".to_string(),
+            path: Some(PathBuf::from("package-lock.json")),
+            line: None,
+        });
+    }
+    for path in changed_paths {
+        if sensitive_review_path(&path) {
+            findings.push(AgentReviewFinding {
+                severity: "high".to_string(),
+                title: "Sensitive path changed".to_string(),
+                detail: format!(
+                    "{} looks like an environment, credential, or secret-bearing path; verify no secrets are committed.",
+                    path.display()
+                ),
+                path: Some(path.clone()),
+                line: None,
+            });
+        }
+        if let Some(line) = conflict_marker_line(repo, &path) {
+            findings.push(AgentReviewFinding {
+                severity: "high".to_string(),
+                title: "Conflict marker present".to_string(),
+                detail: format!(
+                    "{} still contains a merge conflict marker; resolve it before review.",
+                    path.display()
+                ),
+                path: Some(path),
+                line: Some(line),
+            });
+        }
+    }
+    findings
+}
+
+fn agent_review_findings(summary: &GitReviewSummary) -> Vec<AgentReviewFinding> {
+    summary
+        .findings
+        .iter()
+        .map(|finding| AgentReviewFinding {
+            severity: finding.severity.clone(),
+            title: finding.title.clone(),
+            detail: finding.detail.clone(),
+            path: finding.path.clone(),
+            line: finding.line,
+        })
+        .collect()
+}
+
+fn agent_review_summary(summary: GitReviewSummary) -> AgentReviewSummary {
+    AgentReviewSummary {
+        branch: summary.branch,
+        changed_files: summary.changed_files,
+        working_shortstat: summary.working_shortstat,
+        staged_shortstat: summary.staged_shortstat,
+        files: summary.files,
+        truncated_count: summary.truncated_count,
+    }
+}
+
+fn changed_paths_from_status(repo: &Path, status_lines: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in status_lines {
+        let Some(path) = line.get(2..).map(str::trim) else {
+            continue;
+        };
+        let path = path.rsplit_once(" -> ").map(|(_, new)| new).unwrap_or(path);
+        if path.is_empty() {
+            continue;
+        }
+        let path_buf = PathBuf::from(path);
+        paths.push(path_buf.clone());
+        if path.ends_with('/') {
+            append_changed_directory_paths(repo, &path_buf, &mut paths, 64);
+        }
+    }
+    paths
+}
+
+fn append_changed_directory_paths(
+    repo: &Path,
+    relative_dir: &Path,
+    paths: &mut Vec<PathBuf>,
+    limit: usize,
+) {
+    let mut added = 0;
+    let mut stack = vec![relative_dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        if added >= limit {
+            return;
+        }
+        let abs = repo.join(&current);
+        let Ok(entries) = std::fs::read_dir(abs) else {
+            continue;
+        };
+        let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if added >= limit {
+                return;
+            }
+            let name = entry.file_name();
+            if name == ".git" {
+                continue;
+            }
+            let child = current.join(name);
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(child);
+            } else if file_type.is_file() {
+                paths.push(child);
+                added += 1;
+            }
+        }
+    }
+}
+
+fn sensitive_review_path(path: &Path) -> bool {
+    let lower = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    file_name == ".env"
+        || file_name.starts_with(".env.")
+        || file_name.ends_with(".pem")
+        || file_name.ends_with(".key")
+        || file_name == "id_rsa"
+        || file_name == "id_ed25519"
+        || lower.contains("/secrets/")
+        || lower.contains("/secret/")
+}
+
+fn conflict_marker_line(repo: &Path, path: &Path) -> Option<usize> {
+    let abs = repo.join(path);
+    if !abs.is_file() {
+        return None;
+    }
+    let metadata = std::fs::metadata(&abs).ok()?;
+    if metadata.len() > 512 * 1024 {
+        return None;
+    }
+    let bytes = std::fs::read(&abs).ok()?;
+    if bytes.contains(&0) {
+        return None;
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    text.lines().enumerate().find_map(|(index, line)| {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("<<<<<<< ")
+            || trimmed.starts_with("=======")
+            || trimmed.starts_with(">>>>>>> ")
+        {
+            Some(index + 1)
+        } else {
+            None
+        }
+    })
+}
+
+fn git_review_summary_message(summary: &AgentReviewSummary) -> String {
+    if summary.changed_files == 0 {
+        return format!(
+            "Review summary for branch {}: no local changes detected.",
+            summary.branch
+        );
+    }
+    let file_list = if summary.files.is_empty() {
+        "no file list available".to_string()
+    } else {
+        summary.files.join("; ")
+    };
+    let overflow_text = if summary.truncated_count > 0 {
+        format!("; plus {} more", summary.truncated_count)
+    } else {
+        String::new()
+    };
+    let working = summary
+        .working_shortstat
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| "no unstaged line diff".to_string());
+    let staged = summary
+        .staged_shortstat
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| "no staged line diff".to_string());
+    format!(
+        "Review summary for branch {}: {} changed file(s). Working tree: {}. Staged: {}. Files: {}{}.",
+        summary.branch, summary.changed_files, working, staged, file_list, overflow_text
+    )
+}
+
+fn empty_to_none(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn git_stdout(repo: &Path, args: &[&str], category: &str) -> Result<String, CommandError> {
+    let output = git_command(repo)
+        .args(args)
+        .output()
+        .map_err(|error| CommandError::new(category, error.to_string()))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(CommandError::new(category, git_output_message(&output)))
+    }
+}
+
+fn create_git_worktree(source_repo: &Path, target: &Path) -> Result<(), CommandError> {
+    let output = git_command(source_repo)
+        .args(["worktree", "add", "--detach"])
+        .arg(target)
+        .arg("HEAD")
+        .output()
+        .map_err(|error| CommandError::new("worktree_create_failed", error.to_string()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "worktree_create_failed",
+            git_output_message(&output),
+        ))
+    }
+}
+
+fn remove_git_worktree(source_repo: &Path, target: &Path) -> Result<(), CommandError> {
+    let output = git_command(source_repo)
+        .args(["worktree", "remove", "--force"])
+        .arg(target)
+        .output()
+        .map_err(|error| CommandError::new("worktree_remove_failed", error.to_string()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "worktree_remove_failed",
+            git_output_message(&output),
+        ))
+    }
+}
+
+fn git_output_message(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("git exited with status {}", output.status)
+    }
+}
+
+fn git_command(repo: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo);
+    #[cfg(target_os = "windows")]
+    {
+        hide_console(&mut command);
+    }
+    command
+}
+
+fn local_fork_worktree_path(source_repo: &Path, session_id: &str) -> Result<PathBuf, CommandError> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        CommandError::new("worktree_home_unavailable", "home directory unavailable")
+    })?;
+    Ok(home
+        .join(".tinto")
+        .join("worktrees")
+        .join(path_hash(source_repo))
+        .join(format!(
+            "fork-{}-{}",
+            short_session_id(session_id),
+            now_ms()
+        )))
+}
+
+fn path_hash(path: &Path) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn short_session_id(session_id: &str) -> String {
+    let short = session_id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(8)
+        .collect::<String>();
+    if short.is_empty() {
+        "session".to_string()
+    } else {
+        short
+    }
 }
 
 fn spawn_output_reader(
@@ -686,5 +2171,199 @@ mod tests {
         let error = wsl_agent_binary_available("Ubuntu", "powershell".into()).unwrap_err();
 
         assert_eq!(error.category, "unsupported_agent");
+    }
+
+    #[test]
+    fn git_has_head_reports_unborn_repo() {
+        let root = tempfile::tempdir().unwrap();
+        run_git_test_command(root.path(), &["init"]);
+
+        assert!(!git_has_head(root.path()).unwrap());
+    }
+
+    #[test]
+    fn create_git_worktree_creates_detached_checkout() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("fork");
+        std::fs::create_dir_all(&source).unwrap();
+        run_git_test_command(&source, &["init"]);
+        std::fs::write(source.join("base.txt"), "hello\n").unwrap();
+        run_git_test_command(&source, &["add", "base.txt"]);
+        run_git_test_command(
+            &source,
+            &[
+                "-c",
+                "user.email=tinto@example.invalid",
+                "-c",
+                "user.name=Tinto",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        assert!(git_has_head(&source).unwrap());
+        create_git_worktree(&source, &target).unwrap();
+
+        let content = std::fs::read_to_string(target.join("base.txt")).unwrap();
+        assert_eq!(content.replace("\r\n", "\n"), "hello\n");
+        remove_git_worktree(&source, &target).unwrap();
+    }
+
+    #[test]
+    fn local_git_review_summary_reports_changed_files() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path();
+        run_git_test_command(repo, &["init"]);
+        std::fs::write(repo.join("base.txt"), "hello\n").unwrap();
+        run_git_test_command(repo, &["add", "base.txt"]);
+        run_git_test_command(
+            repo,
+            &[
+                "-c",
+                "user.email=tinto@example.invalid",
+                "-c",
+                "user.name=Tinto",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+        std::fs::write(repo.join("base.txt"), "hello\nworld\n").unwrap();
+        std::fs::write(repo.join("new.txt"), "new\n").unwrap();
+
+        let (summary, findings) = local_git_review(repo).unwrap();
+        let message = git_review_summary_message(&summary);
+
+        assert_eq!(summary.changed_files, 2);
+        assert!(findings.is_empty());
+        assert!(summary.files.iter().any(|file| file.contains("M base.txt")));
+        assert!(summary.files.iter().any(|file| file.contains("?? new.txt")));
+        assert!(message.contains("Review summary for branch"));
+        assert!(message.contains("2 changed file(s)"));
+    }
+
+    #[test]
+    fn local_git_review_reports_deterministic_findings() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path();
+        run_git_test_command(repo, &["init"]);
+        std::fs::write(repo.join("base.txt"), "hello\n").unwrap();
+        run_git_test_command(repo, &["add", "base.txt"]);
+        run_git_test_command(
+            repo,
+            &[
+                "-c",
+                "user.email=tinto@example.invalid",
+                "-c",
+                "user.name=Tinto",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src").join("App.tsx"), "<<<<<<< HEAD\nconflict\n").unwrap();
+        std::fs::write(repo.join(".env"), "TOKEN=value\n").unwrap();
+        std::fs::write(repo.join("package-lock.json"), "{}\n").unwrap();
+
+        let (_, findings) = local_git_review(repo).unwrap();
+
+        assert!(findings.iter().any(|finding| {
+            finding.title == "Conflict marker present"
+                && finding.path.as_deref() == Some(Path::new("src/App.tsx"))
+                && finding.line == Some(1)
+        }));
+        assert!(findings.iter().any(|finding| {
+            finding.title == "Sensitive path changed"
+                && finding.path.as_deref() == Some(Path::new(".env"))
+        }));
+        assert!(findings.iter().any(|finding| {
+            finding.title == "Lockfile changed without package manifest"
+                && finding.path.as_deref() == Some(Path::new("package-lock.json"))
+        }));
+    }
+
+    #[test]
+    fn git_review_summary_message_reports_truncated_remote_summary() {
+        let message = git_review_summary_message(&agent_review_summary(GitReviewSummary {
+            branch: "main".to_string(),
+            changed_files: 14,
+            working_shortstat: Some("1 file changed, 2 insertions(+)".to_string()),
+            staged_shortstat: None,
+            files: vec!["M src/a.ts".to_string(), "?? src/b.ts".to_string()],
+            truncated_count: 12,
+            findings: Vec::new(),
+        }));
+
+        assert!(message.contains("Review summary for branch main"));
+        assert!(message.contains("14 changed file(s)"));
+        assert!(message.contains("no staged line diff"));
+        assert!(message.contains("M src/a.ts; ?? src/b.ts; plus 12 more"));
+    }
+
+    #[test]
+    fn mcp_servers_from_codex_config_lists_servers_without_secret_details() {
+        let root = tempfile::tempdir().unwrap();
+        let command = root.path().join(if cfg!(target_os = "windows") {
+            "server.exe"
+        } else {
+            "server"
+        });
+        std::fs::write(&command, "fake").unwrap();
+        let raw = format!(
+            r#"
+[mcp_servers.node_repl]
+command = "{}"
+args = ["--secret-token", "do-not-render"]
+
+[mcp_servers.remote]
+command = "npx"
+
+[mcpServers.node_repl]
+command = "duplicate"
+"#,
+            command.to_string_lossy().replace('\\', "\\\\")
+        );
+
+        let servers = mcp_servers_from_codex_config(&raw).unwrap();
+
+        assert_eq!(
+            servers,
+            vec![
+                McpServerSummary {
+                    name: "node_repl".to_string(),
+                    command_found: Some(true),
+                },
+                McpServerSummary {
+                    name: "remote".to_string(),
+                    command_found: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn command_availability_reports_missing_absolute_path() {
+        let missing = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("missing-mcp-server");
+
+        assert_eq!(
+            command_availability(missing.to_string_lossy().as_ref()),
+            Some(false)
+        );
+    }
+
+    fn run_git_test_command(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .expect("git command runs");
+        assert!(status.success(), "git {args:?} failed with {status}");
     }
 }

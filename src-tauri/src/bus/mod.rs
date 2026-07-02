@@ -28,7 +28,8 @@ use crate::watcher::{ClassifiedEvent, EventType, FsWatcher, WatcherError, Watche
 use crate::workbench::{RepoEntry, RepoSource};
 use crate::wsl_agent::launcher::request_wsl_agent;
 use crate::wsl_agent::protocol::{
-    AgentRequest, AgentResponse, FileFingerprint, RepoFsWatchConfig, PROTOCOL_VERSION,
+    AgentRequest, AgentResponse, FileFingerprint, RepoFsWatchConfig, RepoSnapshotScope,
+    PROTOCOL_VERSION,
 };
 use contract::{
     FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
@@ -72,7 +73,9 @@ fn now_ms() -> u64 {
 pub(crate) enum RecalcScope {
     /// Solo `status` (cambios Plane1 ordinarios).
     StatusOnly,
-    /// status + branch + head (GitMeta, `.gitignore`, RescanNeeded, snapshot).
+    /// status + branch + head sin diff/análisis profundo.
+    Metadata,
+    /// status + branch + head + diff/análisis profundo.
     Everything,
 }
 
@@ -158,17 +161,19 @@ impl RepoLiveState {
         self.revision += 1;
     }
 
-    pub(crate) fn apply_external_delta(&mut self, delta: &RepoDelta) {
+    pub(crate) fn apply_external_delta(&mut self, delta: &RepoDelta, analysis_included: bool) {
         self.status = delta.status.clone();
         self.branch = delta.branch.clone();
         self.head = delta.head.clone();
         self.last_activity_ms = delta.last_activity_ms;
         self.error = delta.error.clone();
-        self.metrics = delta.metrics.clone();
         self.gitleaks_configured = delta.gitleaks_configured;
         self.agents_md_configured = delta.agents_md_configured;
-        self.signals = delta.signals.clone();
-        self.secret_findings = delta.secret_findings.clone();
+        if analysis_included {
+            self.metrics = delta.metrics.clone();
+            self.signals = delta.signals.clone();
+            self.secret_findings = delta.secret_findings.clone();
+        }
         self.revision += 1;
     }
 
@@ -753,6 +758,7 @@ enum RecalcPayload {
         delta: RepoDelta,
         fingerprints: Option<Vec<FileFingerprint>>,
         fs_watch: Vec<String>,
+        analysis_included: bool,
     },
 }
 
@@ -1034,7 +1040,7 @@ async fn run_bus_inner(
                     .collect();
                 trigger_wsl_recalc_batch(
                     wsl_entries,
-                    RecalcScope::Everything,
+                    RecalcScope::Metadata,
                     &subscriptions,
                     &results_tx,
                     &mut inflight,
@@ -1065,6 +1071,7 @@ async fn run_bus_inner(
                         delta: external,
                         fingerprints,
                         fs_watch,
+                        analysis_included,
                     } => {
                         if let Some(fingerprints) = fingerprints {
                             let fs_events = state.wsl_fs_events(fingerprints, fs_watch);
@@ -1081,7 +1088,7 @@ async fn run_bus_inner(
                             }
                         }
                         let subscribed_diffs = external.subscribed_diffs.clone();
-                        state.apply_external_delta(&external);
+                        state.apply_external_delta(&external, analysis_included);
                         let mut delta = state.delta(&result.repo);
                         delta.subscribed_diffs = subscribed_diffs;
                         emit(&sink, EVENT_WORKBENCH_DELTA, &delta);
@@ -1100,8 +1107,16 @@ async fn run_bus_inner(
     }
 }
 
+fn repo_snapshot_scope(scope: RecalcScope) -> RepoSnapshotScope {
+    match scope {
+        RecalcScope::StatusOnly => RepoSnapshotScope::StatusOnly,
+        RecalcScope::Metadata => RepoSnapshotScope::Metadata,
+        RecalcScope::Everything => RepoSnapshotScope::Everything,
+    }
+}
+
 /// Remonta el workbench: canonicaliza, reconstruye estados y dispara el
-/// snapshot completo (recálculo Everything por repo).
+/// snapshot inicial por repo.
 #[allow(clippy::too_many_arguments)]
 fn set_workbench(
     repos: Vec<RepoEntry>,
@@ -1171,7 +1186,7 @@ fn set_workbench(
     }
     trigger_wsl_recalc_batch(
         wsl_entries,
-        RecalcScope::Everything,
+        RecalcScope::Metadata,
         subscriptions,
         results_tx,
         inflight,
@@ -1202,6 +1217,7 @@ fn trigger_wsl_recalc_batch(
                     ),
                     fingerprints: None,
                     fs_watch: entry.fs_watch,
+                    analysis_included: false,
                 },
             });
             continue;
@@ -1228,6 +1244,8 @@ fn trigger_wsl_recalc_batch(
                 patterns: entry.fs_watch.clone(),
             })
             .collect();
+        let snapshot_scope = repo_snapshot_scope(scope);
+        let analysis_included = snapshot_scope == RepoSnapshotScope::Everything;
         let tx = results_tx.clone();
 
         tokio::spawn(async move {
@@ -1241,6 +1259,7 @@ fn trigger_wsl_recalc_batch(
                     repos: repos_for_request.clone(),
                     subscriptions: subs,
                     fs_watch,
+                    scope: snapshot_scope,
                 };
                 match request_wsl_agent(&distro, &request) {
                     Ok(AgentResponse::RepoSnapshotWithFsEvents {
@@ -1271,6 +1290,7 @@ fn trigger_wsl_recalc_batch(
                                     delta,
                                     fingerprints,
                                     fs_watch: entry.fs_watch,
+                                    analysis_included,
                                 },
                             )
                         })
@@ -1285,6 +1305,7 @@ fn trigger_wsl_recalc_batch(
                                     delta: empty_wsl_error_delta(&repo, &category, &message),
                                     fingerprints: None,
                                     fs_watch: entry.fs_watch,
+                                    analysis_included: false,
                                 },
                             )
                         })
@@ -1303,6 +1324,7 @@ fn trigger_wsl_recalc_batch(
                                     ),
                                     fingerprints: None,
                                     fs_watch: entry.fs_watch,
+                                    analysis_included: false,
                                 },
                             )
                         })
@@ -1321,6 +1343,7 @@ fn trigger_wsl_recalc_batch(
                                     ),
                                     fingerprints: None,
                                     fs_watch: entry.fs_watch,
+                                    analysis_included: false,
                                 },
                             )
                         })
@@ -1343,6 +1366,7 @@ fn trigger_wsl_recalc_batch(
                                 ),
                                 fingerprints: None,
                                 fs_watch: entry.fs_watch,
+                                analysis_included: false,
                             },
                         )
                     })
@@ -1588,7 +1612,7 @@ pub(crate) fn recalc_blocking(
     let status = engine.status()?;
     let (branch, head) = match scope {
         RecalcScope::StatusOnly => (None, None),
-        RecalcScope::Everything => {
+        RecalcScope::Metadata | RecalcScope::Everything => {
             let branch = engine.branch_info()?;
             let head = match engine.head_commit() {
                 Ok(c) => Some(c),
@@ -1599,14 +1623,24 @@ pub(crate) fn recalc_blocking(
         }
     };
 
-    // RDM-011 metrics/signals are computed from the current worktree diff.
-    // This is intentionally read-only and runs inside the existing bounded
-    // spawn_blocking recompute path.
-    let worktree_diffs = engine.worktree_diff()?;
-    let secret_findings = secret_scan::detect_secret_findings(repo, &status, &worktree_diffs);
+    let needs_analysis = scope == RecalcScope::Everything || !subs.is_empty();
+    let worktree_diffs = if needs_analysis {
+        engine.worktree_diff()?
+    } else {
+        Vec::new()
+    };
+    let secret_findings = if needs_analysis {
+        secret_scan::detect_secret_findings(repo, &status, &worktree_diffs)
+    } else {
+        Vec::new()
+    };
     let gitleaks_configured = secret_scan::has_repo_gitleaks_config(repo);
     let agents_md_configured = commands::has_repo_agents_md_config(repo);
-    let (metrics, signals) = metrics_and_signals(&status, &worktree_diffs, &secret_findings);
+    let (metrics, signals) = if needs_analysis {
+        metrics_and_signals(&status, &worktree_diffs, &secret_findings)
+    } else {
+        (RepoMetrics::default(), Vec::new())
+    };
 
     let subscribed_diffs = if subs.is_empty() {
         None
@@ -1702,6 +1736,76 @@ mod tests {
             )]),
             None
         );
+    }
+
+    #[test]
+    fn metadata_recalc_skips_deep_analysis_but_keeps_branch() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("changed.txt", "hello\n");
+
+        let outcome = recalc_blocking(repo.path(), RecalcScope::Metadata, &[]).unwrap();
+
+        assert!(outcome
+            .status
+            .untracked
+            .contains(&PathBuf::from("changed.txt")));
+        assert!(outcome.branch.is_some());
+        assert!(outcome.head.as_ref().is_some_and(|head| head.is_some()));
+        assert_eq!(outcome.metrics, RepoMetrics::default());
+        assert!(outcome.signals.is_empty());
+        assert!(outcome.secret_findings.is_empty());
+        assert!(outcome.subscribed_diffs.is_none());
+    }
+
+    #[test]
+    fn lightweight_external_delta_preserves_previous_analysis() {
+        let mut state = RepoLiveState::default();
+        state.metrics = RepoMetrics {
+            changed_files: 2,
+            lines_added: 10,
+            lines_removed: 1,
+        };
+        state.signals = vec![signal(
+            PassiveSignalKind::ConfigChange,
+            SignalSeverity::Info,
+            Some(PathBuf::from("package.json")),
+            "Configuration file changed",
+        )];
+        state.secret_findings = vec![SecretFinding {
+            path: PathBuf::from(".env"),
+            line: 1,
+            rule_id: "fallback-secret".into(),
+            description: "Possible secret".into(),
+        }];
+
+        let delta = RepoDelta {
+            repo: PathBuf::from("/repo"),
+            revision: 0,
+            status: crate::git::RepoStatus {
+                modified: vec![PathBuf::from("src/main.rs")],
+                staged: Vec::new(),
+                untracked: Vec::new(),
+            },
+            branch: None,
+            head: None,
+            last_activity_ms: 42,
+            error: None,
+            metrics: RepoMetrics::default(),
+            gitleaks_configured: true,
+            agents_md_configured: true,
+            signals: Vec::new(),
+            secret_findings: Vec::new(),
+            subscribed_diffs: None,
+        };
+
+        state.apply_external_delta(&delta, false);
+
+        assert_eq!(state.metrics.changed_files, 2);
+        assert_eq!(state.signals.len(), 1);
+        assert_eq!(state.secret_findings.len(), 1);
+        assert_eq!(state.status.modified, vec![PathBuf::from("src/main.rs")]);
+        assert!(state.gitleaks_configured);
+        assert!(state.agents_md_configured);
     }
 
     #[test]

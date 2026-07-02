@@ -32,8 +32,13 @@ export async function reloadActiveWorkbench(): Promise<void> {
   try {
     const snapshot = await getWorkbenchSnapshot();
     busStore.loadSnapshot(snapshot.repos, snapshot.watching);
-  } catch {
-    /* leave prior state; a watching banner / errors surface separately */
+  } catch (error) {
+    if (!busStore.getState().loaded) {
+      busStore.loadSnapshot([], {
+        available: false,
+        reason: snapshotFailureReason(error),
+      });
+    }
   }
   try {
     const sessions = await listAgentSessions();
@@ -43,14 +48,20 @@ export async function reloadActiveWorkbench(): Promise<void> {
   }
 }
 
+function snapshotFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("transformCallback")) {
+    return "Tauri bridge unavailable; run inside the Tauri shell for live repo data.";
+  }
+  return message || "Unable to load repo snapshots.";
+}
+
 export function useBusConnection(): void {
   useEffect(() => {
     let active = true;
     const applyDelta = (delta: RepoDelta) => {
       if (!active) return;
-      if (busStore.applyDelta(delta)) {
-        repoTreeStore.ensureLoaded(delta.repo);
-      }
+      busStore.applyDelta(delta);
     };
     const applyFsEvents = (batch: FsEventBatch) => {
       if (!active) return;

@@ -28,6 +28,7 @@ use super::protocol::{
 };
 
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_SMOKE_DISTRO: &str = "Ubuntu";
 pub const PACKAGED_AGENT_ENV: &str = "TINTO_WSL_AGENT_LINUX_BIN";
 pub const DEV_SOURCE_FALLBACK_ENV: &str = "TINTO_WSL_AGENT_ALLOW_DEV_SOURCE";
@@ -167,18 +168,18 @@ pub fn request_with_transport<T: HandshakeTransport>(
 }
 
 pub fn request_ubuntu_dev_source(request: &AgentRequest) -> Result<AgentResponse, AgentError> {
-    request_ubuntu_dev_source_with_timeout(request, DEFAULT_STARTUP_TIMEOUT)
+    request_ubuntu_dev_source_with_timeout(request, DEFAULT_REQUEST_TIMEOUT)
 }
 
 pub fn request_ubuntu_agent(request: &AgentRequest) -> Result<AgentResponse, AgentError> {
-    request_ubuntu_agent_with_timeout(request, DEFAULT_STARTUP_TIMEOUT)
+    request_ubuntu_agent_with_timeout(request, DEFAULT_REQUEST_TIMEOUT)
 }
 
 pub fn request_wsl_agent(
     distro: &str,
     request: &AgentRequest,
 ) -> Result<AgentResponse, AgentError> {
-    request_wsl_agent_with_timeout(distro, request, DEFAULT_STARTUP_TIMEOUT)
+    request_wsl_agent_with_timeout(distro, request, DEFAULT_REQUEST_TIMEOUT)
 }
 
 pub fn request_wsl_agent_with_timeout(
@@ -615,6 +616,7 @@ fn request_is_retry_safe(request: &AgentRequest) -> bool {
             | AgentRequest::FileContent { .. }
             | AgentRequest::MediaContent { .. }
             | AgentRequest::RepoTree { .. }
+            | AgentRequest::GitReviewSummary { .. }
             | AgentRequest::GitleaksSetupStatus { .. }
             | AgentRequest::CreateGitleaksConfig { .. }
             | AgentRequest::CreateAgentsMdConfig { .. }
@@ -1060,6 +1062,13 @@ mod tests {
     }
 
     #[test]
+    fn agent_requests_have_more_room_than_startup() {
+        assert_eq!(DEFAULT_STARTUP_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(DEFAULT_REQUEST_TIMEOUT, Duration::from_secs(30));
+        assert!(DEFAULT_REQUEST_TIMEOUT > DEFAULT_STARTUP_TIMEOUT);
+    }
+
+    #[test]
     fn packaged_agent_path_accepts_linux_elf_artifact() {
         let path = temp_agent_path("elf");
         std::fs::write(&path, b"\x7FELFplaceholder").expect("write artifact");
@@ -1190,6 +1199,7 @@ mod tests {
             repos: vec!["/home/me/repo".into()],
             subscriptions: Vec::new(),
             fs_watch: Vec::new(),
+            scope: crate::wsl_agent::protocol::RepoSnapshotScope::Everything,
         };
         let availability = AgentRequest::AgentBinaryAvailable {
             protocol_version: PROTOCOL_VERSION,
@@ -1229,6 +1239,12 @@ mod tests {
             },
             path: "src/a.rs".into(),
         };
+        let mutating_worktree = AgentRequest::CreateGitWorktree {
+            protocol_version: PROTOCOL_VERSION,
+            repo: "/home/me/repo".into(),
+            allowed_repos: vec!["/home/me/repo".into()],
+            session_id: "sess".into(),
+        };
 
         assert!(request_is_retry_safe(&read_only));
         assert!(request_is_retry_safe(&availability));
@@ -1236,6 +1252,7 @@ mod tests {
         assert!(!request_is_retry_safe(&mutating_delete));
         assert!(!request_is_retry_safe(&mutating_checkpoint));
         assert!(!request_is_retry_safe(&mutating_checkpoint_file));
+        assert!(!request_is_retry_safe(&mutating_worktree));
     }
 
     #[test]

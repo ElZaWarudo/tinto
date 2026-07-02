@@ -69,6 +69,40 @@ export interface AgentSessionLimits {
   max_lifetime_ms: number;
 }
 
+export interface AgentSessionRuntimeOptions {
+  model?: string | null;
+  reasoning_effort?: string | null;
+  speed?: string | null;
+}
+
+export interface AgentSessionGoal {
+  text: string;
+  updated_at_ms: number;
+}
+
+export interface AgentSessionPersonality {
+  name: string;
+  updated_at_ms: number;
+}
+
+export interface AgentSessionPlanMode {
+  enabled: boolean;
+  updated_at_ms: number;
+}
+
+export interface AgentSessionFeedback {
+  kind: string;
+  text: string;
+  created_at_ms: number;
+}
+
+export interface AgentSessionContextSummary {
+  text: string;
+  created_at_ms: number;
+  source_events: number;
+  source_turns: number;
+}
+
 export interface AgentSession {
   id: string;
   repo: string;
@@ -85,6 +119,12 @@ export interface AgentSession {
   turn_status?: AgentSessionTurnStatus;
   turn_checkpoints?: AgentSessionTurnCheckpoint[];
   timeline?: AgentSessionTimelineItem[];
+  runtime_options?: AgentSessionRuntimeOptions;
+  goal?: AgentSessionGoal | null;
+  personality?: AgentSessionPersonality | null;
+  plan_mode?: AgentSessionPlanMode | null;
+  feedback?: AgentSessionFeedback[];
+  context_summary?: AgentSessionContextSummary | null;
   reverted_at_ms?: number | null;
   restored_to_turn_index?: number | null;
   active_sessions: number;
@@ -125,6 +165,36 @@ export interface AgentJournalSessionSummary {
   last_event_kind?: AgentSessionTimelineKind | null;
   last_event_text?: string | null;
   last_event_at_ms?: number | null;
+}
+
+export type AgentHostCommandStatus = "completed" | "unavailable";
+
+export interface AgentReviewSummary {
+  branch: string;
+  changed_files: number;
+  working_shortstat?: string | null;
+  staged_shortstat?: string | null;
+  files: string[];
+  truncated_count: number;
+}
+
+export interface AgentReviewFinding {
+  severity: string;
+  title: string;
+  detail: string;
+  path?: string | null;
+  line?: number | null;
+}
+
+export interface AgentHostCommandResult {
+  command: string;
+  status: AgentHostCommandStatus;
+  message: string;
+  session_id?: string | null;
+  repo?: string | null;
+  agent_type?: string | null;
+  review_summary?: AgentReviewSummary | null;
+  review_findings?: AgentReviewFinding[] | null;
 }
 
 // ---- Git value types ----

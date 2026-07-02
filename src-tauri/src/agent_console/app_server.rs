@@ -17,7 +17,7 @@ use super::{
     commands::TIMELINE_FRAME_PREFIX,
     pty::{AgentProcess, AgentProcessEvent},
 };
-use crate::bus::contract::AgentSessionTimelineKind;
+use crate::bus::contract::{AgentSessionRuntimeOptions, AgentSessionTimelineKind};
 
 #[cfg(windows)]
 use crate::windows_process::hide_console;
@@ -34,8 +34,9 @@ pub struct CodexAppServerHandle {
     event_rx: Receiver<AgentProcessEvent>,
     output_reader: Option<ChannelReader>,
     line_buffer: Vec<u8>,
+    pending_options: Option<AgentSessionRuntimeOptions>,
     thread_id: Arc<Mutex<Option<String>>>,
-    pending_turns: Arc<Mutex<VecDeque<String>>>,
+    pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
@@ -84,6 +85,7 @@ impl CodexAppServerHandle {
             event_rx,
             output_reader: Some(ChannelReader::new(output_rx)),
             line_buffer: Vec::new(),
+            pending_options: None,
             thread_id,
             pending_turns,
             next_request_id,
@@ -91,16 +93,60 @@ impl CodexAppServerHandle {
         })
     }
 
-    fn submit_turn(&mut self, text: String) -> Result<(), AgentConsoleError> {
+    fn submit_turn(
+        &mut self,
+        text: String,
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
         let thread = self.thread_id.lock().ok().and_then(|thread| thread.clone());
         if let Some(thread_id) = thread {
             let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
-            send_turn_start(&self.stdin, request_id, &thread_id, &text, &self.cwd)?;
+            send_turn_start(
+                &self.stdin,
+                request_id,
+                &thread_id,
+                &text,
+                &self.cwd,
+                options.as_ref(),
+            )?;
         } else if let Ok(mut pending) = self.pending_turns.lock() {
-            pending.push_back(text);
+            pending.push_back(PendingTurn { text, options });
             let _ = self
                 .output_tx
                 .send(b"\r\nCodex app-server is still initializing; queued turn.\r\n".to_vec());
+        }
+        Ok(())
+    }
+
+    fn write_input_inner(
+        &mut self,
+        input: &[u8],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        if options.is_some() {
+            self.pending_options = options;
+        }
+        for byte in input {
+            match *byte {
+                b'\r' => {
+                    let text = buffered_turn_text(&self.line_buffer);
+                    let options = self.pending_options.take();
+                    self.line_buffer.clear();
+                    if !text.is_empty() {
+                        self.submit_turn(text, options)?;
+                    }
+                }
+                b'\n' => {
+                    self.line_buffer.push(*byte);
+                }
+                0x08 | 0x7f => {
+                    let _ = self.line_buffer.pop();
+                }
+                byte if byte.is_ascii_control() => {}
+                byte => {
+                    self.line_buffer.push(byte);
+                }
+            }
         }
         Ok(())
     }
@@ -125,25 +171,15 @@ impl AgentProcess for CodexAppServerHandle {
     }
 
     fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
-        for byte in input {
-            match *byte {
-                b'\r' | b'\n' => {
-                    let text = buffered_turn_text(&self.line_buffer);
-                    self.line_buffer.clear();
-                    if !text.is_empty() {
-                        self.submit_turn(text)?;
-                    }
-                }
-                0x08 | 0x7f => {
-                    let _ = self.line_buffer.pop();
-                }
-                byte if byte.is_ascii_control() => {}
-                byte => {
-                    self.line_buffer.push(byte);
-                }
-            }
-        }
-        Ok(())
+        self.write_input_inner(input, None)
+    }
+
+    fn write_input_with_options(
+        &mut self,
+        input: &[u8],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        self.write_input_inner(input, options)
     }
 
     fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
@@ -247,9 +283,14 @@ struct ServerRuntimeContext {
     event_tx: Sender<AgentProcessEvent>,
     stdin: Arc<Mutex<ChildStdin>>,
     thread_id: Arc<Mutex<Option<String>>>,
-    pending_turns: Arc<Mutex<VecDeque<String>>>,
+    pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
+}
+
+struct PendingTurn {
+    text: String,
+    options: Option<AgentSessionRuntimeOptions>,
 }
 
 fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
@@ -342,7 +383,7 @@ fn buffered_turn_text(bytes: &[u8]) -> String {
 
 fn flush_pending_turns(
     stdin: &Arc<Mutex<ChildStdin>>,
-    pending_turns: &Arc<Mutex<VecDeque<String>>>,
+    pending_turns: &Arc<Mutex<VecDeque<PendingTurn>>>,
     next_request_id: &Arc<AtomicU64>,
     thread_id: &str,
     cwd: &Path,
@@ -353,7 +394,14 @@ fn flush_pending_turns(
     };
     while let Some(text) = pending.pop_front() {
         let request_id = next_request_id.fetch_add(1, Ordering::SeqCst);
-        if let Err(error) = send_turn_start(stdin, request_id, thread_id, &text, cwd) {
+        if let Err(error) = send_turn_start(
+            stdin,
+            request_id,
+            thread_id,
+            &text.text,
+            cwd,
+            text.options.as_ref(),
+        ) {
             let _ = output_tx
                 .send(format!("\r\nCodex app-server error: {}\r\n> ", error.message).into_bytes());
             break;
@@ -367,17 +415,25 @@ fn send_turn_start(
     thread_id: &str,
     text: &str,
     cwd: &Path,
+    options: Option<&AgentSessionRuntimeOptions>,
 ) -> Result<(), AgentConsoleError> {
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": cwd.to_string_lossy(),
+        "input": [{ "type": "text", "text": text }]
+    });
+    if let Some(model) = options.and_then(|options| options.model.as_deref()) {
+        params["model"] = json!(model);
+    }
+    if let Some(effort) = options.and_then(|options| options.reasoning_effort.as_deref()) {
+        params["effort"] = json!(effort);
+    }
     write_json(
         stdin,
         &json!({
             "method": "turn/start",
             "id": request_id,
-            "params": {
-                "threadId": thread_id,
-                "cwd": cwd.to_string_lossy(),
-                "input": [{ "type": "text", "text": text }]
-            }
+            "params": params
         }),
     )
 }

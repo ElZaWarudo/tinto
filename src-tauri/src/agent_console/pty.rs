@@ -7,6 +7,7 @@ use std::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use super::{app_server::CodexAppServerHandle, AgentConsoleError};
+use crate::bus::contract::AgentSessionRuntimeOptions;
 
 pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
 
@@ -18,6 +19,13 @@ pub trait AgentProcess: Send {
     fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError>;
     fn kill(&mut self) -> Result<(), AgentConsoleError>;
     fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError>;
+    fn write_input_with_options(
+        &mut self,
+        input: &[u8],
+        _options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        self.write_input(input)
+    }
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {

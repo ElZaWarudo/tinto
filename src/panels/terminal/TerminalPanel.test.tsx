@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSession, FileDiff, RepoDelta } from "../../bus/contract";
+import type { AgentHostCommandResult, AgentSession, FileDiff, RepoDelta } from "../../bus/contract";
 
 const writeAgentSessionInputMock = vi.fn((...args: unknown[]) => {
   void args;
@@ -31,6 +31,10 @@ const stopAgentSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
 });
+const runAgentHostCommandMock = vi.fn((...args: unknown[]): Promise<AgentHostCommandResult> => {
+  void args;
+  return Promise.resolve({ command: "status", status: "completed", message: "Host command done." });
+});
 const confirmMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(true);
@@ -47,6 +51,7 @@ vi.mock("../../bus/client", () => ({
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
   restoreSessionTurn: (...a: unknown[]) => restoreSessionTurnMock(...a),
+  runAgentHostCommand: (...a: unknown[]) => runAgentHostCommandMock(...a),
   stopAgentSession: (...a: unknown[]) => stopAgentSessionMock(...a),
   writeAgentSessionInput: (...a: unknown[]) => writeAgentSessionInputMock(...a),
 }));
@@ -60,6 +65,7 @@ import { agentSessionStore } from "../../agent/sessionStore";
 import { busStore } from "../../bus/store";
 import { markTerminalDetached } from "./detachTerminalWindow";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/actions";
+import { consoleDock } from "../../workspace/consoleDock";
 
 function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -158,9 +164,16 @@ describe("TerminalPanel", () => {
     installClipboardMock();
     agentSessionStore.reset();
     busStore.resetAll();
+    consoleDock.resetForTests();
     scrollIntoViewMock.mockClear();
     writeClipboardTextMock.mockClear();
     writeAgentSessionInputMock.mockClear();
+    runAgentHostCommandMock.mockClear();
+    runAgentHostCommandMock.mockResolvedValue({
+      command: "status",
+      status: "completed",
+      message: "Host command done.",
+    });
     listAgentSessionsMock.mockClear();
     getAgentJournalSessionMock.mockClear();
     getAgentJournalSessionMock.mockResolvedValue(null);
@@ -238,7 +251,9 @@ describe("TerminalPanel", () => {
       ),
     ).toHaveClass("agent-panel__composer-actions");
     expect(
-      screen.getByTitle("Composer command hint: type / for Codex and Tinto commands or $ for skills."),
+      screen.getByTitle(
+        "Composer command hint: type / for Codex and Tinto commands or $ for skills.",
+      ),
     ).toHaveTextContent("Type / for commands or $ for skills");
     expect(
       screen.getByTitle(
@@ -379,6 +394,41 @@ describe("TerminalPanel", () => {
     expect(screen.queryByTestId("terminal-surface")).not.toBeInTheDocument();
   });
 
+  it("shows active host context that will steer the next turn", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        goal: { text: "Build the host harness", updated_at_ms: 4 },
+        personality: { name: "precise", updated_at_ms: 5 },
+        plan_mode: { enabled: true, updated_at_ms: 6 },
+        context_summary: {
+          text: "Review findings are structured and WSL parity is working.",
+          created_at_ms: 7,
+          source_events: 3,
+          source_turns: 2,
+        },
+      }),
+    ]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const context = await screen.findByLabelText("Turn context");
+    expect(context).toHaveAttribute(
+      "title",
+      "Turn context strip: Goal Build the host harness; Style precise; Plan On; Compact Review findings are structured and WSL parity is working.",
+    );
+    expect(within(context).getByTitle("Turn context label.")).toHaveTextContent("Turn context");
+    expect(within(context).getByTitle("Turn context items: 4 items.")).toBeInTheDocument();
+    expect(
+      within(context).getByTitle("Turn context goal: Build the host harness."),
+    ).toHaveTextContent("Build the host harness");
+    expect(within(context).getByTitle("Turn context style: precise.")).toHaveTextContent("precise");
+    expect(within(context).getByTitle("Turn context plan: On.")).toHaveTextContent("On");
+    expect(
+      within(context).getByTitle(
+        "Turn context compact: Review findings are structured and WSL parity is working.",
+      ),
+    ).toHaveTextContent("Review findings are structured and WSL parity is working.");
+  });
+
   it("sends composer text as an agent turn", async () => {
     const user = userEvent.setup();
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
@@ -388,8 +438,54 @@ describe("TerminalPanel", () => {
     await user.type(composer, "implementa la vista");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r");
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
+      speed: "standard",
+    });
     expect(composer).toHaveValue("");
+  });
+
+  it("sends Codex turns with runtime controls selected from the composer popover", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await user.click(await screen.findByRole("button", { name: /Reasoning/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Alto" }));
+    await user.click(screen.getByRole("button", { name: /Model/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: "GPT-5.5" }));
+
+    const composer = screen.getByLabelText("Message Codex");
+    await user.type(composer, "implementa la vista");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
+      model: "gpt-5.5",
+      reasoning_effort: "high",
+      speed: "standard",
+    });
+  });
+
+  it("applies natural runtime slash aliases without sending them to the agent", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/modelo gpt-5.5");
+    await user.type(composer, "{Enter}");
+    await user.type(composer, "/razonamiento alto");
+    await user.type(composer, "{Enter}");
+    await user.type(composer, "/rápido");
+    await user.type(composer, "{Enter}");
+    await user.type(composer, "implementa la vista");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(writeAgentSessionInputMock).toHaveBeenCalledTimes(1);
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
+      model: "gpt-5.5",
+      reasoning_effort: "high",
+      speed: "fast",
+    });
   });
 
   it("shows a titled error banner when sending a turn fails", async () => {
@@ -413,27 +509,19 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
     const composer = await screen.findByLabelText("Message Codex");
-    await user.type(composer, "/plan");
+    await user.type(composer, "/test");
     expect(screen.getByRole("listbox", { name: "Composer commands" })).toHaveAttribute(
       "title",
-      "Composer command menu: 1 command matching /plan.",
+      "Composer command menu: 1 command matching /test.",
     );
-    expect(screen.getByRole("option", { name: /\/plan/ })).toHaveAttribute(
+    expect(screen.getByRole("option", { name: /\/test/ })).toHaveAttribute(
       "title",
-      "Run /plan: Draft a plan for the next turn.",
+      "Run /test: Run the most relevant verification for this repo.",
     );
     await user.type(composer, "{Enter}");
 
     expect(composer).toHaveValue(
-      "Create a concise implementation plan for the next change before editing.",
-    );
-
-    await user.type(composer, "{Shift>}{Enter}{/Shift}/review{Enter}");
-    expect(composer).toHaveValue(
-      [
-        "Create a concise implementation plan for the next change before editing.",
-        "Review the current changes and call out concrete bugs, regressions, or missing tests.",
-      ].join("\n\n"),
+      "Run the most relevant verification for this repo and summarize failures before fixing them.",
     );
 
     await user.type(composer, "{Shift>}{Enter}{/Shift}$warden");
@@ -448,11 +536,541 @@ describe("TerminalPanel", () => {
     await user.type(composer, "{Enter}");
     expect(composer).toHaveValue(
       [
-        "Create a concise implementation plan for the next change before editing.",
-        "Review the current changes and call out concrete bugs, regressions, or missing tests.",
+        "Run the most relevant verification for this repo and summarize failures before fixing them.",
         "$krt-interface-warden ",
       ].join("\n\n"),
     );
+
+    await user.clear(composer);
+    await user.type(composer, "/details");
+    expect(screen.getByRole("option", { name: /\/details/ })).toHaveAttribute(
+      "title",
+      "Run /details: Open session details, files, commands, timeline, and restore points.",
+    );
+  });
+
+  it("shows the non-memory Codex-style command palette", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/");
+
+    const menu = screen.getByRole("listbox", { name: "Composer commands" });
+    expect(menu).toHaveAttribute("title", expect.stringMatching(/^Composer command menu: /));
+    for (const command of [
+      "/branch",
+      "/comments",
+      "/compact",
+      "/status",
+      "/init",
+      "/fork",
+      "/mcp",
+      "/mascot",
+      "/model",
+      "/plan",
+      "/goal",
+      "/personality",
+      "/reasoning",
+      "/review",
+      "/fast",
+    ]) {
+      expect(within(menu).getByTitle(`Composer command trigger: ${command}.`)).toBeInTheDocument();
+    }
+    expect(within(menu).queryByRole("option", { name: /\/memories/ })).not.toBeInTheDocument();
+    expect(within(menu).queryByText(/Memorias/)).not.toBeInTheDocument();
+  });
+
+  it("opens details from the slash command without sending it as an agent turn", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "details",
+      status: "completed",
+      message: "Session details opened in Tinto.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/details");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "details", undefined),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByTitle(
+        "Session details: turn map, current activity, restore points, and Agent Lens.",
+      ),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Session details opened in Tinto.")).toBeInTheDocument();
+  });
+
+  it("toggles plan mode through the host command backend", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "plan",
+      status: "completed",
+      message: "Plan mode enabled for this session.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/plan on");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "plan", "on"),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Plan mode enabled for this session.")).toBeInTheDocument();
+  });
+
+  it("runs host slash commands without sending them to the agent", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "status",
+      status: "completed",
+      message: "Session sess-1: running.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/status");
+    expect(screen.getByRole("option", { name: /\/status/ })).toHaveAttribute(
+      "title",
+      "Run /status: Mostrar el ID del chat, estado, uso y runtime. Aliases: /estado.",
+    );
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "status", undefined),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("");
+    expect(await screen.findByText("Session sess-1: running.")).toBeInTheDocument();
+  });
+
+  it("toggles the local Tinto companion from the mascot command", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/mascot");
+    await user.type(composer, "{Enter}");
+
+    const mascot = await screen.findByLabelText("Tinto companion");
+    expect(mascot).toHaveAttribute("title", "Tinto companion is awake for Codex on a.");
+    expect(within(mascot).getByTitle("Tinto companion status.")).toHaveTextContent("Awake");
+    expect(await screen.findByText("Mascot awake in this agent panel.")).toBeInTheDocument();
+    expect(runAgentHostCommandMock).not.toHaveBeenCalled();
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+
+    await user.type(composer, "/mascot");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() => expect(screen.queryByLabelText("Tinto companion")).not.toBeInTheDocument());
+    expect(await screen.findByText("Mascot hidden.")).toBeInTheDocument();
+    expect(runAgentHostCommandMock).not.toHaveBeenCalled();
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+  });
+
+  it("defers memory slash commands without sending them to the agent", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/memorias");
+    expect(screen.queryByRole("option", { name: /memories|memorias/i })).not.toBeInTheDocument();
+    await user.type(composer, "{Enter}");
+
+    expect(
+      await screen.findByText("Memory commands are deferred for the later Tinto memory plan."),
+    ).toBeInTheDocument();
+    expect(composer).toHaveValue("");
+    expect(runAgentHostCommandMock).not.toHaveBeenCalled();
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+  });
+
+  it("routes natural Codex slash aliases through canonical host commands", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock
+      .mockResolvedValueOnce({
+        command: "goal",
+        status: "completed",
+        message: "Goal set: Build the host harness.",
+      })
+      .mockResolvedValueOnce({
+        command: "review",
+        status: "completed",
+        message: "Review summary for branch main: no local changes detected.",
+        review_summary: {
+          branch: "main",
+          changed_files: 0,
+          working_shortstat: null,
+          staged_shortstat: null,
+          files: [],
+          truncated_count: 0,
+        },
+        review_findings: [],
+      })
+      .mockResolvedValueOnce({
+        command: "fork",
+        status: "completed",
+        message: "Forked session sess-child from sess-1.",
+        session_id: "sess-child",
+        repo: "/r/a",
+        agent_type: "codex",
+      });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/objective");
+    expect(screen.getByRole("option", { name: /\/goal/ })).toHaveAttribute(
+      "title",
+      "Run /goal: Establecer un objetivo hacia el que Codex seguirá trabajando. Aliases: /objective, /objetivo.",
+    );
+    await user.type(composer, " Build the host harness");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith(
+        "sess-1",
+        "goal",
+        "Build the host harness",
+      ),
+    );
+    expect(await screen.findByText("Goal set: Build the host harness.")).toBeInTheDocument();
+    await waitFor(() => expect(composer).toHaveValue(""));
+
+    await user.type(composer, "/revisión");
+    expect(screen.getByRole("option", { name: /\/review/ })).toBeInTheDocument();
+    await user.type(composer, "{Enter}");
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "review", undefined),
+    );
+    expect(
+      await screen.findByText("Review summary for branch main: no local changes detected."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(composer).toHaveValue(""));
+
+    await user.type(composer, "/lateral");
+    expect(screen.getByRole("option", { name: /\/fork/ })).toBeInTheDocument();
+    await user.type(composer, "{Enter}");
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "fork", undefined),
+    );
+
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+  });
+
+  it("runs init through the host command backend from the palette", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "init",
+      status: "completed",
+      message: "AGENTS.md is configured for this repo.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/init");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "init", undefined),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("AGENTS.md is configured for this repo.")).toBeInTheDocument();
+  });
+
+  it("runs review through the host command backend", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "review",
+      status: "completed",
+      message: "Review summary for branch main: 2 changed file(s).",
+      review_summary: {
+        branch: "main",
+        changed_files: 2,
+        working_shortstat: "1 file changed, 3 insertions(+)",
+        staged_shortstat: null,
+        files: [" M src/App.tsx", "?? docs/review.md"],
+        truncated_count: 0,
+      },
+      review_findings: [
+        {
+          severity: "high",
+          title: "Conflict marker present",
+          detail: "src/App.tsx still contains a merge conflict marker.",
+          path: "src/App.tsx",
+          line: 12,
+        },
+      ],
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/review");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "review", undefined),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Review summary for branch main: 2 changed file(s)."),
+    ).toBeInTheDocument();
+    const review = await screen.findByLabelText("Review summary");
+    expect(review).toHaveAttribute("title", "Review summary for main: 2 changed files.");
+    expect(within(review).getByTitle("Review summary branch.")).toHaveTextContent("main");
+    expect(within(review).getByText("1 file changed, 3 insertions(+)")).toBeInTheDocument();
+    expect(within(review).getByText("?? docs/review.md")).toBeInTheDocument();
+    expect(within(review).getByLabelText("Review findings")).toBeInTheDocument();
+    expect(within(review).getByText("Conflict marker present")).toBeInTheDocument();
+    expect(within(review).getByText("src/App.tsx:12")).toBeInTheDocument();
+    const reviewPromptButton = within(review).getByRole("button", {
+      name: "Draft semantic review prompt",
+    });
+    expect(reviewPromptButton).toHaveAttribute(
+      "title",
+      "Draft a semantic code-review prompt from this review summary with 1 finding.",
+    );
+    expect(
+      within(reviewPromptButton).getByTitle("Review semantic prompt action label."),
+    ).toHaveTextContent("Ask review");
+
+    await user.click(reviewPromptButton);
+    expect(
+      within(review).getByTitle("Semantic review prompt is drafted in the composer."),
+    ).toHaveTextContent("Review draft ready");
+    expect(composer).toHaveValue(
+      [
+        "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
+        "Branch: main",
+        "Changed files: 2",
+        "Working tree diff: 1 file changed, 3 insertions(+)",
+        "Files:",
+        "-  M src/App.tsx",
+        "- ?? docs/review.md",
+        "Host review findings to verify first:",
+        "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
+        "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
+      ].join("\n"),
+    );
+
+    await user.type(composer, "{Enter}");
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith(
+      "sess-1",
+      `${[
+        "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
+        "Branch: main",
+        "Changed files: 2",
+        "Working tree diff: 1 file changed, 3 insertions(+)",
+        "Files:",
+        "-  M src/App.tsx",
+        "- ?? docs/review.md",
+        "Host review findings to verify first:",
+        "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
+        "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
+      ].join("\n")}\r`,
+      { speed: "standard" },
+    );
+    expect(
+      await within(review).findByTitle("Semantic review prompt was sent as an agent turn."),
+    ).toHaveTextContent("Review request sent");
+  });
+
+  it("sets a persistent session goal through the host command backend", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "goal",
+      status: "completed",
+      message: "Goal set: Build the host harness.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/goal Build the host harness");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith(
+        "sess-1",
+        "goal",
+        "Build the host harness",
+      ),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Goal set: Build the host harness.")).toBeInTheDocument();
+  });
+
+  it("sets a persistent session personality through the host command backend", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "personality",
+      status: "completed",
+      message: "Personality set: precise.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/personality precise");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "personality", "precise"),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Personality set: precise.")).toBeInTheDocument();
+  });
+
+  it("saves feedback through the host command backend", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "feedback",
+      status: "completed",
+      message: "Saved feedback: Keep the controls native.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/feedback Keep the controls native.");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith(
+        "sess-1",
+        "feedback",
+        "Keep the controls native.",
+      ),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Saved feedback: Keep the controls native."),
+    ).toBeInTheDocument();
+  });
+
+  it("saves comments through the host command backend", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "comments",
+      status: "completed",
+      message: "Saved comment: The palette should explain unavailable actions.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/comments The palette should explain unavailable actions.");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith(
+        "sess-1",
+        "comments",
+        "The palette should explain unavailable actions.",
+      ),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Saved comment: The palette should explain unavailable actions."),
+    ).toBeInTheDocument();
+  });
+
+  it("compacts session context through the host command backend", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "compact",
+      status: "completed",
+      message: "Context summary saved from 3 events across 1 turns.",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/compact");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "compact", undefined),
+    );
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Context summary saved from 3 events across 1 turns."),
+    ).toBeInTheDocument();
+  });
+
+  it("opens a child terminal when a host command returns a forked session", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([
+      sessionFixture(),
+      sessionFixture({ id: "sess-child", repo: "/r/a", agent_type: "codex" }),
+    ]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "fork",
+      status: "completed",
+      message: "Forked session sess-child from sess-1.",
+      session_id: "sess-child",
+      repo: "/r/a",
+      agent_type: "codex",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/fork");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "fork", undefined),
+    );
+    expect(consoleDock.openTerminalParams()).toEqual(
+      expect.arrayContaining([{ sessionId: "sess-child", repo: "/r/a", agentType: "codex" }]),
+    );
+    expect(await screen.findByText("Forked session sess-child from sess-1.")).toBeInTheDocument();
+  });
+
+  it("routes branch through the host fork backend and opens the child terminal", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([
+      sessionFixture(),
+      sessionFixture({ id: "sess-branch", repo: "/r/branch", agent_type: "codex" }),
+    ]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "branch",
+      status: "completed",
+      message: "Forked worktree session sess-branch from sess-1.",
+      session_id: "sess-branch",
+      repo: "/r/branch",
+      agent_type: "codex",
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/branch worktree");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() =>
+      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "branch", "worktree"),
+    );
+    expect(consoleDock.openTerminalParams()).toEqual(
+      expect.arrayContaining([{ sessionId: "sess-branch", repo: "/r/branch", agentType: "codex" }]),
+    );
+    expect(
+      await screen.findByText("Forked worktree session sess-branch from sess-1."),
+    ).toBeInTheDocument();
   });
 
   it("uses Enter to send and Shift+Enter to keep composing", async () => {
@@ -465,7 +1083,9 @@ describe("TerminalPanel", () => {
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
 
     await user.type(composer, "{Enter}");
-    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "line one\nline two\r");
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "line one\nline two\r", {
+      speed: "standard",
+    });
   });
 
   it("renders streamed output as a readable transcript", async () => {
@@ -520,7 +1140,6 @@ describe("TerminalPanel", () => {
     expect(
       screen.getByTitle("Agent message header for You: role label and copy control."),
     ).toHaveTextContent("You");
-    expect(screen.getByText("Turn 1")).toBeInTheDocument();
     expect(screen.getByTitle("Conversation turn index label: Turn 1.")).toHaveTextContent("Turn 1");
     expect(screen.getByText("Haz el cambio")).toBeInTheDocument();
     expect(screen.getByTitle("Rendered You Markdown content for turn 1.")).toHaveTextContent(
@@ -1349,9 +1968,7 @@ describe("TerminalPanel", () => {
       "Codex agent message input for a: archived transcript is read-only.",
     );
     expect(
-      screen.getByTitle(
-        "Codex command menu for a: archived transcripts are read-only.",
-      ),
+      screen.getByTitle("Codex command menu for a: archived transcripts are read-only."),
     ).toHaveClass("agent-panel__composer-actions");
     expect(
       screen.getByTitle("Composer commands are disabled because this transcript is archived."),
@@ -2075,7 +2692,7 @@ describe("TerminalPanel", () => {
     );
     expect(
       within(lens).getByTitle(
-        "Agent Lens metrics summarize Working state and 1 file for the focused turn.",
+        "Agent Lens metrics summarize Working state, 1 file, and 0 restorable turn checkpoints for the focused turn.",
       ),
     ).toHaveTextContent("Working");
     expect(within(lens).getByTitle("Agent Lens turn state value: Working.")).toHaveTextContent(
@@ -2090,6 +2707,16 @@ describe("TerminalPanel", () => {
     expect(within(lens).getByTitle("Agent Lens focused scope includes 1 file.")).toHaveTextContent(
       "Focused files",
     );
+    expect(
+      within(lens).getByTitle(
+        "Agent Lens restore-point value: 0 of 2 turn checkpoints are restorable.",
+      ),
+    ).toHaveTextContent("0/2");
+    expect(
+      within(lens).getByTitle(
+        "Agent Lens restore-point metric: 0 restore points from 2 turn checkpoints.",
+      ),
+    ).toHaveTextContent("Restore points");
     expect(
       within(lens).getByTitle("Agent Lens view tabs: 1 file, 1 command output, 2 timeline items."),
     ).toHaveAttribute("role", "tablist");
@@ -2185,7 +2812,7 @@ describe("TerminalPanel", () => {
     );
     expect(
       within(lens).getByTitle(
-        "Agent Lens metrics summarize Working state and 2 files for the current session.",
+        "Agent Lens metrics summarize Working state, 2 files, and 0 restorable turn checkpoints for the current session.",
       ),
     ).toHaveTextContent("2");
     expect(
@@ -2194,6 +2821,11 @@ describe("TerminalPanel", () => {
     expect(within(lens).getByTitle("Agent Lens session scope includes 2 files.")).toHaveTextContent(
       "Session files",
     );
+    expect(
+      within(lens).getByTitle(
+        "Agent Lens restore-point value: 0 of 2 turn checkpoints are restorable.",
+      ),
+    ).toHaveTextContent("0/2");
     expect(
       within(lens).getByTitle(
         "Agent Lens view tabs: 2 files, 2 command outputs, 4 timeline items.",
@@ -2754,6 +3386,16 @@ describe("TerminalPanel", () => {
     expect(within(focus).queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
     expect(within(focus).queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
     expect(within(focus).queryByRole("button", { name: "Handoff" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details" })).toHaveAttribute(
+      "title",
+      "Show session details, restore points, files, commands, and timeline.",
+    );
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(
+      screen.getByTitle(
+        "Session details: turn map, current activity, restore points, and Agent Lens.",
+      ),
+    ).toHaveClass("agent-panel__details-head");
     expect(within(focus).getByRole("button", { name: "Restore here" })).toHaveAttribute(
       "title",
       "Restore turn 1: stop the session before restoring.",
@@ -3057,6 +3699,17 @@ describe("TerminalPanel", () => {
 
     const conversation = screen.getByLabelText("Agent conversation");
     expect(await within(conversation).findByText("Second done")).toBeInTheDocument();
+    const lens = await screen.findByLabelText("Agent Lens");
+    expect(
+      within(lens).getByTitle(
+        "Agent Lens restore-point value: 1 of 1 turn checkpoints are restorable. Latest restorable turn: 1.",
+      ),
+    ).toHaveTextContent("1/1");
+    expect(
+      within(lens).getByTitle(
+        "Agent Lens restore-point metric: 1 restore point from 1 turn checkpoint. Latest restorable turn is 1.",
+      ),
+    ).toHaveTextContent("Restore points");
     await user.click(within(screen.getByLabelText("Turn map")).getByRole("button", { name: /T1/ }));
 
     const restore = await screen.findByRole("button", { name: "Restore here" });

@@ -192,10 +192,17 @@ export async function sendTerminalToDetachedConsoles(
 export async function onDetachedConsolesOpenTerminal(
   callback: (params: TerminalPanelParams) => void,
 ): Promise<UnlistenFn> {
-  const { listen } = await import("@tauri-apps/api/event");
-  return listen<TerminalPanelParams>(DETACHED_CONSOLES_OPEN_TERMINAL_EVENT, (event) => {
-    callback(event.payload);
-  });
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<TerminalPanelParams>(DETACHED_CONSOLES_OPEN_TERMINAL_EVENT, (event) => {
+      callback(event.payload);
+    });
+  } catch (error) {
+    if (!isUnavailableTauriEventBridgeError(error)) {
+      throw error;
+    }
+    return () => {};
+  }
 }
 
 export async function reattachDetachedConsoles(params: TerminalPanelParams[]): Promise<boolean> {
@@ -212,10 +219,21 @@ export async function reattachDetachedConsoles(params: TerminalPanelParams[]): P
 export async function onDetachedConsolesReattach(
   callback: (params: TerminalPanelParams[]) => void,
 ): Promise<UnlistenFn> {
-  const { listen } = await import("@tauri-apps/api/event");
-  return listen<TerminalPanelParams[]>(DETACHED_CONSOLES_REATTACH_EVENT, (event) => {
-    callback(event.payload);
-  });
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<TerminalPanelParams[]>(DETACHED_CONSOLES_REATTACH_EVENT, (event) => {
+      callback(event.payload);
+    });
+  } catch (error) {
+    if (!isUnavailableTauriEventBridgeError(error)) {
+      throw error;
+    }
+    return () => {};
+  }
+}
+
+function isUnavailableTauriEventBridgeError(error: unknown): boolean {
+  return error instanceof TypeError && error.message.includes("transformCallback");
 }
 
 export async function closeCurrentDetachedWindow(): Promise<void> {

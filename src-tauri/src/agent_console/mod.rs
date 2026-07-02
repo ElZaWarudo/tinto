@@ -19,7 +19,8 @@ use std::{
 };
 
 use crate::bus::contract::{
-    AgentSession, AgentSessionError, AgentSessionLimits, AgentSessionTimelineItem,
+    AgentSession, AgentSessionContextSummary, AgentSessionError, AgentSessionFeedback,
+    AgentSessionLimits, AgentSessionRuntimeOptions, AgentSessionTimelineItem,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -256,12 +257,129 @@ impl AgentSessionRegistry {
         &mut self,
         session_id: &str,
         input: &[u8],
+        options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         let session = self
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
-        session.write_input(input)
+        session.write_input(input, options)
+    }
+
+    pub fn set_session_goal(
+        &mut self,
+        session_id: &str,
+        goal: String,
+        updated_at_ms: u64,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_goal(goal, updated_at_ms);
+        Ok(session.to_contract())
+    }
+
+    pub fn clear_session_goal(
+        &mut self,
+        session_id: &str,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.clear_goal();
+        Ok(session.to_contract())
+    }
+
+    pub fn set_session_personality(
+        &mut self,
+        session_id: &str,
+        personality: String,
+        updated_at_ms: u64,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_personality(personality, updated_at_ms);
+        Ok(session.to_contract())
+    }
+
+    pub fn clear_session_personality(
+        &mut self,
+        session_id: &str,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.clear_personality();
+        Ok(session.to_contract())
+    }
+
+    pub fn set_session_plan_mode(
+        &mut self,
+        session_id: &str,
+        enabled: bool,
+        updated_at_ms: u64,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_plan_mode(enabled, updated_at_ms);
+        Ok(session.to_contract())
+    }
+
+    pub fn add_session_feedback(
+        &mut self,
+        session_id: &str,
+        feedback: AgentSessionFeedback,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.add_feedback(feedback);
+        Ok(session.to_contract())
+    }
+
+    pub fn clear_session_feedback(
+        &mut self,
+        session_id: &str,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.clear_feedback();
+        Ok(session.to_contract())
+    }
+
+    pub fn set_session_context_summary(
+        &mut self,
+        session_id: &str,
+        summary: AgentSessionContextSummary,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_context_summary(summary);
+        Ok(session.to_contract())
+    }
+
+    pub fn clear_session_context_summary(
+        &mut self,
+        session_id: &str,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.clear_context_summary();
+        Ok(session.to_contract())
     }
 
     pub fn resize_session(
@@ -853,7 +971,7 @@ mod tests {
             .start_session_with_binary(repo.path().into(), "codex".into(), binary)
             .unwrap();
 
-        registry.write_session_input(&id, b"hello\r").unwrap();
+        registry.write_session_input(&id, b"hello\r", None).unwrap();
         registry.resize_session(&id, 120, 36).unwrap();
 
         assert_eq!(
@@ -878,7 +996,9 @@ mod tests {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry = AgentSessionRegistry::with_process_factory(factory);
 
-        let missing = registry.write_session_input("missing", b"x").unwrap_err();
+        let missing = registry
+            .write_session_input("missing", b"x", None)
+            .unwrap_err();
         assert_eq!(missing.category, "session_not_found");
 
         let repo = tempfile::tempdir().unwrap();
@@ -889,7 +1009,7 @@ mod tests {
             .unwrap();
         registry.stop_session(&id).unwrap();
 
-        let stopped = registry.write_session_input(&id, b"x").unwrap_err();
+        let stopped = registry.write_session_input(&id, b"x", None).unwrap_err();
         assert_eq!(stopped.category, "session_not_running");
     }
 
@@ -958,6 +1078,63 @@ mod tests {
             "before\n"
         );
         assert!(!repo.path().join("created.txt").exists());
+    }
+
+    #[test]
+    fn registry_local_turn_checkpoint_can_restore_completed_session_to_post_turn_state() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("base.txt"), "before\n").unwrap();
+        let binary = tempfile::NamedTempFile::new().unwrap();
+
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary.path().into())
+            .unwrap();
+        registry
+            .record_session_timeline_item(AgentSessionTimelineItem {
+                session_id: id.clone(),
+                id: "turn-user-1".into(),
+                kind: crate::bus::contract::AgentSessionTimelineKind::UserMessage,
+                text: "modify the temp repo".into(),
+                timestamp_ms: 10,
+            })
+            .unwrap();
+        std::fs::write(repo.path().join("base.txt"), "after\n").unwrap();
+        std::fs::write(repo.path().join("created.txt"), "new\n").unwrap();
+        registry.record_session_turn_done(&id, 11).unwrap();
+        registry.stop_session(&id).unwrap();
+
+        let completed = registry.get_session(&id).unwrap();
+        assert_eq!(completed.status, AgentSessionStatus::Completed);
+        assert_eq!(completed.turn_checkpoints.len(), 1);
+        let turn = completed.turn_checkpoints[0].clone();
+        assert_eq!(turn.index, 1);
+        assert!(turn.restore_checkpoint.is_some());
+        assert!(turn
+            .changes
+            .iter()
+            .any(|change| change.path == PathBuf::from("base.txt")));
+        assert!(turn
+            .changes
+            .iter()
+            .any(|change| change.path == PathBuf::from("created.txt")));
+
+        std::fs::write(repo.path().join("base.txt"), "later\n").unwrap();
+        std::fs::write(repo.path().join("late.txt"), "late\n").unwrap();
+
+        let restored = registry.restore_turn(&id, &turn.id, true).unwrap();
+
+        assert_eq!(restored.restored_to_turn_index, Some(1));
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "after\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("created.txt")).unwrap(),
+            "new\n"
+        );
+        assert!(!repo.path().join("late.txt").exists());
     }
 
     #[test]

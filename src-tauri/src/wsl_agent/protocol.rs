@@ -65,6 +65,41 @@ pub struct WslDirectoryListing {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitReviewSummary {
+    pub branch: String,
+    pub changed_files: usize,
+    pub working_shortstat: Option<String>,
+    pub staged_shortstat: Option<String>,
+    pub files: Vec<String>,
+    pub truncated_count: usize,
+    #[serde(default)]
+    pub findings: Vec<GitReviewFinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitReviewFinding {
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+    pub path: Option<PathBuf>,
+    pub line: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoSnapshotScope {
+    StatusOnly,
+    Metadata,
+    Everything,
+}
+
+impl Default for RepoSnapshotScope {
+    fn default() -> Self {
+        Self::Everything
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentRequest {
     Handshake {
@@ -75,12 +110,16 @@ pub enum AgentRequest {
         protocol_version: u16,
         repos: Vec<PathBuf>,
         subscriptions: Vec<SubscriptionTarget>,
+        #[serde(default)]
+        scope: RepoSnapshotScope,
     },
     RepoSnapshotWithFsEvents {
         protocol_version: u16,
         repos: Vec<PathBuf>,
         subscriptions: Vec<SubscriptionTarget>,
         fs_watch: Vec<RepoFsWatchConfig>,
+        #[serde(default)]
+        scope: RepoSnapshotScope,
     },
     ListDirectory {
         protocol_version: u16,
@@ -127,6 +166,23 @@ pub enum AgentRequest {
         protocol_version: u16,
         repo: PathBuf,
         allowed_repos: Vec<PathBuf>,
+    },
+    GitReviewSummary {
+        protocol_version: u16,
+        repo: PathBuf,
+        allowed_repos: Vec<PathBuf>,
+    },
+    CreateGitWorktree {
+        protocol_version: u16,
+        repo: PathBuf,
+        allowed_repos: Vec<PathBuf>,
+        session_id: String,
+    },
+    RemoveGitWorktree {
+        protocol_version: u16,
+        repo: PathBuf,
+        allowed_repos: Vec<PathBuf>,
+        target: PathBuf,
     },
     GitleaksSetupStatus {
         protocol_version: u16,
@@ -265,6 +321,12 @@ pub enum AgentResponse {
     },
     RepoTree {
         tree: RepoTree,
+    },
+    GitReviewSummary {
+        summary: GitReviewSummary,
+    },
+    GitWorktreeCreated {
+        path: PathBuf,
     },
     GitleaksSetupStatus {
         status: GitleaksSetupStatus,
@@ -489,6 +551,15 @@ impl AgentRequest {
             | Self::RepoTree {
                 protocol_version, ..
             }
+            | Self::GitReviewSummary {
+                protocol_version, ..
+            }
+            | Self::CreateGitWorktree {
+                protocol_version, ..
+            }
+            | Self::RemoveGitWorktree {
+                protocol_version, ..
+            }
             | Self::GitleaksSetupStatus {
                 protocol_version, ..
             }
@@ -644,6 +715,28 @@ mod tests {
         assert_eq!(parsed, request);
 
         let response = AgentResponse::WorktreeDiff { diffs: Vec::new() };
+        let line = encode_agent_response(&response).expect("encode response");
+        let parsed = parse_agent_response_line(&line).expect("parse response");
+
+        assert_eq!(parsed, response);
+    }
+
+    #[test]
+    fn git_worktree_request_response_roundtrip() {
+        let request = AgentRequest::CreateGitWorktree {
+            protocol_version: PROTOCOL_VERSION,
+            repo: "/home/me/repo".into(),
+            allowed_repos: vec!["/home/me/repo".into()],
+            session_id: "sess-1".into(),
+        };
+        let line = encode_agent_request(&request).expect("encode");
+        let parsed = parse_agent_request_line(&line).expect("parse request");
+
+        assert_eq!(parsed, request);
+
+        let response = AgentResponse::GitWorktreeCreated {
+            path: "/home/me/.tinto/worktrees/fork".into(),
+        };
         let line = encode_agent_response(&response).expect("encode response");
         let parsed = parse_agent_response_line(&line).expect("parse response");
 

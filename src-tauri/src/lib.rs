@@ -123,6 +123,7 @@ pub fn run() {
             agent_console::commands::agent_binary_available,
             agent_console::commands::agent_binary_available_for_repo,
             agent_console::commands::write_agent_session_input,
+            agent_console::commands::run_agent_host_command,
             agent_console::commands::resize_agent_session,
             agent_console::commands::revert_session,
             agent_console::commands::revert_session_turn_file,

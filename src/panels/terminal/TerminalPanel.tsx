@@ -10,6 +10,7 @@ import {
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
+  runAgentHostCommand,
   stopAgentSession,
   writeAgentSessionInput,
 } from "../../bus/client";
@@ -20,7 +21,10 @@ import {
   useAgentSessionTimeline,
 } from "../../agent/sessionStore";
 import type {
+  AgentReviewFinding,
+  AgentReviewSummary,
   AgentSession,
+  AgentSessionRuntimeOptions,
   AgentSessionOutput,
   AgentSessionTimelineItem,
   FileDiff,
@@ -31,6 +35,7 @@ import codexLogo from "../../assets/agents/codex.svg";
 import claudeLogo from "../../assets/agents/claude.svg";
 import opencodeLogo from "../../assets/agents/opencode.svg";
 import { useWorkspaceActions } from "../../workspace/actions";
+import { consoleDock } from "../../workspace/consoleDock";
 import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
 
 export interface TerminalPanelParams {
@@ -45,35 +50,6 @@ type TerminalPanelProps = IDockviewPanelProps<TerminalPanelParams>;
 const panelCloseStopTimers = new Map<string, number>();
 const PANEL_CLOSE_STOP_DELAY_MS = 250;
 const DETACHED_TRANSFER_STOP_DELAY_MS = 5000;
-
-const AGENT_QUICK_ACTIONS = [
-  {
-    id: "plan",
-    label: "Plan",
-    title: "Draft a plan for the next turn",
-    prompt: "Create a concise implementation plan for the next change before editing.",
-  },
-  {
-    id: "review",
-    label: "Review",
-    title: "Ask for a focused review",
-    prompt: "Review the current changes and call out concrete bugs, regressions, or missing tests.",
-  },
-  {
-    id: "test",
-    label: "Test",
-    title: "Ask for verification",
-    prompt:
-      "Run the most relevant verification for this repo and summarize failures before fixing them.",
-  },
-  {
-    id: "handoff",
-    label: "Handoff",
-    title: "Ask for a handoff summary",
-    prompt:
-      "Summarize the current session state, changed files, verification, and next recommended step.",
-  },
-] as const;
 
 const AGENT_SKILL_SHORTCUTS = [
   {
@@ -112,6 +88,25 @@ type AgentLensScope = "focused" | "session";
 type AgentLensTab = "files" | "commands" | "timeline";
 type AgentComposerCommandScope = "Codex" | "Tinto" | "Skill";
 type AgentComposerCommandTrigger = "/" | "$";
+type CodexModelSelection = "auto" | "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.3-codex";
+type CodexReasoningSelection = "auto" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type CodexSpeedSelection = "standard" | "fast";
+type CodexRuntimeMenu = "reasoning" | "model" | "speed" | null;
+type AgentComposerHostCommand =
+  | "branch"
+  | "comments"
+  | "compact"
+  | "details"
+  | "feedback"
+  | "fork"
+  | "goal"
+  | "init"
+  | "mcp"
+  | "mascot"
+  | "personality"
+  | "plan"
+  | "review"
+  | "status";
 
 interface AgentComposerCommand {
   id: string;
@@ -119,12 +114,172 @@ interface AgentComposerCommand {
   description: string;
   disabled: boolean;
   label: string;
+  aliases?: string[];
+  prompt?: string;
   scope: AgentComposerCommandScope;
   trigger: AgentComposerCommandTrigger;
+  hostCommand?: AgentComposerHostCommand;
+  runtimeCommand?: "model" | "reasoning" | "fast";
 }
 
+const CODEX_HOST_COMMANDS: Array<{
+  id: AgentComposerHostCommand;
+  command: string;
+  description: string;
+  label: string;
+  aliases?: string[];
+  prompt?: string;
+  scope: AgentComposerCommandScope;
+}> = [
+  {
+    id: "branch",
+    command: "branch",
+    label: "Bifurcar",
+    description: "Bifurca este chat en local o en un worktree nuevo",
+    aliases: ["fork-worktree", "bifurcar-worktree", "worktree"],
+    scope: "Tinto",
+  },
+  {
+    id: "comments",
+    command: "comments",
+    label: "Comentarios",
+    description: "Enviar comentarios sobre este chat",
+    aliases: ["comment", "comentarios", "comentario"],
+    scope: "Tinto",
+  },
+  {
+    id: "compact",
+    command: "compact",
+    label: "Compactar",
+    description: "Compactar el contexto de este hilo",
+    aliases: ["compactar"],
+    scope: "Tinto",
+  },
+  {
+    id: "status",
+    command: "status",
+    label: "Estado",
+    description: "Mostrar el ID del chat, estado, uso y runtime",
+    aliases: ["estado"],
+    scope: "Tinto",
+  },
+  {
+    id: "init",
+    command: "init",
+    label: "Inicializar",
+    description: "Crear o actualizar AGENTS.md para Tinto",
+    aliases: ["initialize", "inicializar"],
+    scope: "Tinto",
+  },
+  {
+    id: "fork",
+    command: "fork",
+    label: "Lateral",
+    aliases: ["lateral", "bifurcar", "parallel"],
+    description: "Iniciar una conversación paralela aislada",
+    scope: "Tinto",
+  },
+  {
+    id: "mcp",
+    command: "mcp",
+    label: "MCP",
+    description: "Mostrar estado del servidor MCP",
+    scope: "Tinto",
+  },
+  {
+    id: "mascot",
+    command: "mascot",
+    label: "Mascota",
+    description: "Despertar u ocultar la mascota de escritorio",
+    scope: "Tinto",
+  },
+  {
+    id: "plan",
+    command: "plan",
+    label: "Modo plan",
+    aliases: ["mode-plan", "plan-mode", "modo-plan"],
+    description: "Activar modo plan para el siguiente turno",
+    scope: "Tinto",
+  },
+  {
+    id: "goal",
+    command: "goal",
+    label: "Objetivo",
+    aliases: ["objective", "objetivo"],
+    description: "Establecer un objetivo hacia el que Codex seguirá trabajando",
+    scope: "Tinto",
+  },
+  {
+    id: "personality",
+    command: "personality",
+    label: "Personalidad",
+    aliases: ["personalidad"],
+    description: "Elegir cómo responde Codex",
+    scope: "Tinto",
+  },
+  {
+    id: "review",
+    command: "review",
+    aliases: ["code-review", "revision", "revision-codigo", "revision-de-codigo"],
+    label: "Revisión de código",
+    description: "Revisar cambios no preparados o comparar cambios",
+    scope: "Tinto",
+  },
+  {
+    id: "feedback",
+    command: "feedback",
+    label: "Feedback",
+    aliases: ["commentary", "comentarios-feedback"],
+    description: "Enviar feedback sobre esta sesión",
+    scope: "Tinto",
+  },
+];
+
+const CODEX_MODEL_OPTIONS: Array<{
+  value: CodexModelSelection;
+  label: string;
+  description: string;
+}> = [
+  { value: "auto", label: "Auto", description: "Use the configured Codex default model" },
+  { value: "gpt-5.5", label: "GPT-5.5", description: "Best default for complex agent work" },
+  { value: "gpt-5.4", label: "GPT-5.4", description: "Strong general coding and reasoning" },
+  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", description: "Faster scans and small edits" },
+  {
+    value: "gpt-5.3-codex",
+    label: "GPT-5.3 Codex",
+    description: "Codex-focused compatibility option",
+  },
+];
+
+const CODEX_REASONING_OPTIONS: Array<{
+  value: CodexReasoningSelection;
+  label: string;
+  description: string;
+}> = [
+  { value: "auto", label: "Auto", description: "Let Codex choose from the model default" },
+  { value: "minimal", label: "Minimo", description: "Shortest reasoning budget" },
+  { value: "low", label: "Bajo", description: "Fast, lightweight reasoning" },
+  { value: "medium", label: "Medio", description: "Balanced default for implementation work" },
+  { value: "high", label: "Alto", description: "Deeper reasoning for risky changes" },
+  { value: "xhigh", label: "Extremadamente alto", description: "Maximum effort when supported" },
+];
+
+const CODEX_SPEED_OPTIONS: Array<{
+  value: CodexSpeedSelection;
+  label: string;
+  description: string;
+}> = [
+  { value: "standard", label: "Normal", description: "Respect the selected model and reasoning" },
+  {
+    value: "fast",
+    label: "Velocidad",
+    description: "Prefer fast defaults when model or reasoning are not fixed",
+  },
+];
+
 const AGENT_LENS_TAB_ORDER: AgentLensTab[] = ["files", "commands", "timeline"];
-const COMPOSER_COMMAND_TRIGGER_RE = /(^|\n)([/$])([a-zA-Z0-9:_-]*)$/;
+const COMPOSER_COMMAND_TRIGGER_RE = /(^|\n)([/$])([^\s/$]*)$/;
+const COMPOSER_COMMAND_LINE_RE = /(^|\n)([/$])([^\s/$]*)(?:[^\n]*)$/;
 
 interface AgentTurnView {
   id: string;
@@ -180,6 +335,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [activeSlashCommandIndex, setActiveSlashCommandIndex] = useState(0);
+  const [runtimeMenu, setRuntimeMenu] = useState<CodexRuntimeMenu>(null);
+  const [selectedModel, setSelectedModel] = useState<CodexModelSelection>("auto");
+  const [selectedReasoning, setSelectedReasoning] = useState<CodexReasoningSelection>("auto");
+  const [selectedSpeed, setSelectedSpeed] = useState<CodexSpeedSelection>("standard");
+  const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [mascotAwake, setMascotAwake] = useState(false);
+  const [reviewSummary, setReviewSummary] = useState<AgentReviewSummary | null>(null);
+  const [reviewFindings, setReviewFindings] = useState<AgentReviewFinding[]>([]);
+  const [reviewPromptDraft, setReviewPromptDraft] = useState<string | null>(null);
+  const [reviewPromptState, setReviewPromptState] = useState<"drafted" | "sent" | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptSearchRef = useRef<HTMLInputElement | null>(null);
 
@@ -258,23 +423,93 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "starting" &&
     session?.status !== "reverted" &&
     session?.status !== "error";
+  const isCodexSession = agentType === "codex";
   const composerCommandTrigger = readComposerCommandTrigger(draft);
   const composerCommandQuery = composerCommandTrigger?.query ?? "";
   const composerCommandItems = useMemo<AgentComposerCommand[]>(
     () => [
-      ...AGENT_QUICK_ACTIONS.map((action) => ({
-        id: action.id,
-        command: action.id,
-        description: action.title,
-        disabled: !canCompose,
-        label: action.label,
-        scope: "Codex" as const,
+      ...CODEX_HOST_COMMANDS.map((command) => ({
+        id: command.id,
+        command: command.command,
+        description: command.description,
+        disabled: !canCompose || (command.id === "details" && !session),
+        hostCommand: command.prompt ? undefined : command.id,
+        label: command.label,
+        aliases: command.aliases,
+        prompt: command.prompt,
+        scope: command.scope,
         trigger: "/" as const,
       })),
       {
+        id: "model",
+        command: "model",
+        description: "Choose the active Codex model",
+        disabled: !canCompose || !isCodexSession,
+        label: "Model",
+        aliases: ["modelo"],
+        runtimeCommand: "model" as const,
+        scope: "Codex" as const,
+        trigger: "/" as const,
+      },
+      {
+        id: "reasoning",
+        command: "reasoning",
+        description: "Choose Codex reasoning effort",
+        disabled: !canCompose || !isCodexSession,
+        label: "Reasoning",
+        aliases: ["razonamiento"],
+        runtimeCommand: "reasoning" as const,
+        scope: "Codex" as const,
+        trigger: "/" as const,
+      },
+      {
+        id: "effort",
+        command: "effort",
+        description: "Alias for reasoning effort",
+        disabled: !canCompose || !isCodexSession,
+        label: "Effort",
+        aliases: ["razonamiento"],
+        runtimeCommand: "reasoning" as const,
+        scope: "Codex" as const,
+        trigger: "/" as const,
+      },
+      {
+        id: "fast",
+        command: "fast",
+        description: "Toggle the fast Codex preset",
+        disabled: !canCompose || !isCodexSession,
+        label: "Fast",
+        aliases: ["speed", "velocidad", "rapido", "rapida"],
+        runtimeCommand: "fast" as const,
+        scope: "Codex" as const,
+        trigger: "/" as const,
+      },
+      {
+        id: "test",
+        command: "test",
+        description: "Run the most relevant verification for this repo",
+        disabled: !canCompose,
+        label: "Test",
+        prompt:
+          "Run the most relevant verification for this repo and summarize failures before fixing them.",
+        scope: "Codex" as const,
+        trigger: "/" as const,
+      },
+      {
+        id: "handoff",
+        command: "handoff",
+        description: "Summarize session state, changes, verification, and next step",
+        disabled: !canCompose,
+        label: "Handoff",
+        prompt:
+          "Summarize the current session state, changed files, verification, and next recommended step.",
+        scope: "Codex" as const,
+        trigger: "/" as const,
+      },
+      {
         id: "details",
         command: "details",
-        description: "Open session details, files, commands, timeline, and focused-turn tools",
+        description: "Open session details, files, commands, timeline, and restore points",
         disabled: !session,
         label: "Details",
         scope: "Tinto",
@@ -290,13 +525,25 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         trigger: "$" as const,
       })),
     ],
-    [canCompose, session],
+    [canCompose, isCodexSession, session],
   );
   const filteredComposerCommandItems = useMemo(
     () => filterComposerCommands(composerCommandItems, composerCommandTrigger),
     [composerCommandItems, composerCommandTrigger],
   );
   const commandMenuVisible = slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
+  const effectiveRuntimeOptions = useMemo(
+    () => codexRuntimeOptions(selectedModel, selectedReasoning, selectedSpeed),
+    [selectedModel, selectedReasoning, selectedSpeed],
+  );
+
+  useEffect(() => {
+    if (!session?.runtime_options || !isCodexSession) return;
+    const restored = runtimeSelectionsFromOptions(session.runtime_options);
+    setSelectedModel(restored.model);
+    setSelectedReasoning(restored.reasoning);
+    setSelectedSpeed(restored.speed);
+  }, [isCodexSession, session?.id]);
 
   const focusVisibleTurn = (direction: "previous" | "next") => {
     if (visibleTurns.length === 0) return;
@@ -390,11 +637,31 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const sendDraft = async () => {
     if (!canSend) return;
     const text = draft.trimEnd();
+    const slashCommandHandled =
+      isCodexSession &&
+      applyCodexRuntimeSlashCommand(text, {
+        setModel: setSelectedModel,
+        setReasoning: setSelectedReasoning,
+        setSpeed: setSelectedSpeed,
+        setNotice: setRuntimeNotice,
+      });
+    if (slashCommandHandled) {
+      setDraft("");
+      setSlashMenuOpen(false);
+      return;
+    }
+    if (await applyComposerSlashCommand(text)) {
+      return;
+    }
     setSending(true);
     setError(null);
     try {
-      await writeAgentSessionInput(sessionId, `${text}\r`);
+      await writeAgentSessionInput(sessionId, `${text}\r`, effectiveRuntimeOptions);
+      if (reviewPromptDraft && text.trim() === reviewPromptDraft.trim()) {
+        setReviewPromptState("sent");
+      }
       setDraft("");
+      setRuntimeNotice(null);
     } catch (e) {
       setError(commandMessage(e));
     } finally {
@@ -466,20 +733,152 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     window.setTimeout(() => composerInputRef.current?.focus(), 0);
   };
 
+  const draftRuntimeCommand = (command: "model" | "reasoning") => {
+    if (!canCompose) return;
+    setDraft((current) => replaceDraftComposerCommand(current, `/${command} `));
+    setSlashMenuOpen(false);
+    window.setTimeout(() => composerInputRef.current?.focus(), 0);
+  };
+
+  const toggleFastPreset = () => {
+    setSelectedSpeed((current) => {
+      const next = current === "fast" ? "standard" : "fast";
+      setRuntimeNotice(next === "fast" ? "Fast preset enabled." : "Fast preset disabled.");
+      return next;
+    });
+    clearComposerCommand();
+  };
+
+  const executeHostCommand = async (command: AgentComposerHostCommand, argument?: string) => {
+    if (!sessionId || !canCompose) return;
+    if (command === "mascot") {
+      setMascotAwake((current) => {
+        const next = !current;
+        setRuntimeNotice(next ? "Mascot awake in this agent panel." : "Mascot hidden.");
+        return next;
+      });
+      clearComposerCommand();
+      return;
+    }
+    if (command === "details") {
+      setDetailsOpen(true);
+    }
+    setSending(true);
+    setError(null);
+    try {
+      const result = await runAgentHostCommand(sessionId, command, argument);
+      setRuntimeNotice(result.message);
+      if (result.review_summary) {
+        setReviewSummary(result.review_summary);
+        setReviewFindings(result.review_findings ?? []);
+        setReviewPromptDraft(null);
+        setReviewPromptState(null);
+        setDetailsOpen(true);
+      } else if (command === "review") {
+        setReviewSummary(null);
+        setReviewFindings([]);
+        setReviewPromptDraft(null);
+        setReviewPromptState(null);
+      }
+      if (result.status === "completed") {
+        const sessions = await listAgentSessions();
+        agentSessionStore.setSessions(sessions);
+        if (result.session_id) {
+          consoleDock.openTerminal({
+            sessionId: result.session_id,
+            repo: result.repo ?? sessionRepo,
+            agentType: result.agent_type ?? agentType,
+          });
+        }
+      }
+    } catch (e) {
+      setError(commandMessage(e));
+    } finally {
+      setSending(false);
+      clearComposerCommand();
+    }
+  };
+
+  const applyComposerSlashCommand = async (text: string): Promise<boolean> => {
+    const match = text.trim().match(/^\/([^\s/]+)(?:\s+([\s\S]+))?$/);
+    if (!match) return false;
+    const commandName = normalizeComposerCommandToken(match[1]);
+    const argument = match[2]?.trim();
+    if (isDeferredMemoryCommand(commandName)) {
+      setRuntimeNotice("Memory commands are deferred for the later Tinto memory plan.");
+      clearComposerCommand();
+      return true;
+    }
+    const command = composerCommandItems.find(
+      (item) => item.trigger === "/" && composerCommandMatchesName(item, commandName),
+    );
+    if (!command || command.disabled) return false;
+    if (command.prompt) {
+      insertComposerPrompt(command.prompt);
+      return true;
+    }
+    if (command.runtimeCommand || command.hostCommand || command.id === "details") {
+      if (command.runtimeCommand === "model") {
+        draftRuntimeCommand("model");
+        return true;
+      }
+      if (command.runtimeCommand === "reasoning") {
+        draftRuntimeCommand("reasoning");
+        return true;
+      }
+      if (command.runtimeCommand === "fast") {
+        toggleFastPreset();
+        return true;
+      }
+      await executeHostCommand(command.hostCommand ?? "details", argument);
+      return true;
+    }
+    return false;
+  };
+
   const applyComposerCommand = (command: AgentComposerCommand | undefined) => {
     if (!command || command.disabled) return;
     if (command.trigger === "$") {
       insertSkillMention(command.command);
       return;
     }
-    const quickAction = AGENT_QUICK_ACTIONS.find((action) => action.id === command.id);
-    if (quickAction) {
-      insertComposerPrompt(quickAction.prompt);
+    if (command.runtimeCommand === "model") {
+      draftRuntimeCommand("model");
+      return;
+    }
+    if (command.runtimeCommand === "reasoning") {
+      draftRuntimeCommand("reasoning");
+      return;
+    }
+    if (command.runtimeCommand === "fast") {
+      toggleFastPreset();
+      return;
+    }
+    if (command.prompt) {
+      insertComposerPrompt(command.prompt);
+      return;
+    }
+    if (command.hostCommand) {
+      if (command.hostCommand === "plan") {
+        void executeHostCommand("plan", "toggle");
+        return;
+      }
+      if (
+        command.hostCommand === "goal" ||
+        command.hostCommand === "personality" ||
+        command.hostCommand === "comments" ||
+        command.hostCommand === "feedback"
+      ) {
+        setDraft((current) => replaceDraftComposerCommand(current, `/${command.hostCommand} `));
+        setSlashMenuOpen(false);
+        window.setTimeout(() => composerInputRef.current?.focus(), 0);
+        return;
+      }
+      void executeHostCommand(command.hostCommand);
       return;
     }
     if (command.id === "details") {
-      setDetailsOpen(true);
-      clearComposerCommand();
+      void executeHostCommand("details");
     }
   };
 
@@ -494,6 +893,19 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       const prompt = fileActionPrompt(context);
       return trimmed ? `${trimmed}\n\n${prompt}` : prompt;
     });
+  };
+
+  const applyReviewPrompt = (summary: AgentReviewSummary, findings: AgentReviewFinding[]) => {
+    if (!canCompose) return;
+    const prompt = reviewActionPrompt(summary, findings);
+    setDraft((current) => {
+      const trimmed = current.trimEnd();
+      return trimmed ? `${trimmed}\n\n${prompt}` : prompt;
+    });
+    setReviewPromptDraft(prompt);
+    setReviewPromptState("drafted");
+    setSlashMenuOpen(false);
+    window.setTimeout(() => composerInputRef.current?.focus(), 0);
   };
 
   const copyText = async (target: string, text: string) => {
@@ -665,9 +1077,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       )}
 
       <div
-        className={`agent-panel__workspace${
-          detailsOpen ? " agent-panel__workspace--details" : ""
-        }`}
+        className={`agent-panel__workspace${detailsOpen ? " agent-panel__workspace--details" : ""}`}
         title={agentWorkspaceTitle(agentType, repo)}
       >
         <section
@@ -800,7 +1210,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   title={
                     detailsOpen
                       ? "Hide session details and return to the conversation."
-                      : "Show session details, focused turn actions, files, commands, and timeline."
+                      : "Show session details, restore points, files, commands, and timeline."
                   }
                   type="button"
                 >
@@ -886,6 +1296,17 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               scrollToAgentTurn(sessionId, turnIndex, "start");
             }}
           />
+          {session && <AgentHostContextStrip session={session} />}
+          {mascotAwake && <AgentMascotPanel agentType={agentType} repo={repo} />}
+          {reviewSummary && (
+            <AgentReviewSummaryPanel
+              canPrompt={canCompose}
+              findings={reviewFindings}
+              onPromptReview={() => applyReviewPrompt(reviewSummary, reviewFindings)}
+              promptState={reviewPromptState}
+              summary={reviewSummary}
+            />
+          )}
           <AgentActivityStrip overview={overview} readOnly={readOnly} session={session} />
           {session && (
             <>
@@ -940,6 +1361,31 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           </span>
           <small title={agentCommandScopeHintTitle()}>Codex + Tinto + Skills</small>
         </div>
+        {isCodexSession && (
+          <CodexRuntimeControls
+            menu={runtimeMenu}
+            model={selectedModel}
+            reasoning={selectedReasoning}
+            speed={selectedSpeed}
+            disabled={!canCompose}
+            notice={runtimeNotice}
+            onMenuChange={setRuntimeMenu}
+            onModelChange={(value) => {
+              setSelectedModel(value);
+              setRuntimeNotice(`Model set to ${codexModelLabel(value)}.`);
+            }}
+            onReasoningChange={(value) => {
+              setSelectedReasoning(value);
+              setRuntimeNotice(`Reasoning set to ${codexReasoningLabel(value)}.`);
+            }}
+            onSpeedChange={(value) => {
+              setSelectedSpeed(value);
+              setRuntimeNotice(
+                value === "fast" ? "Fast preset enabled." : "Standard speed enabled.",
+              );
+            }}
+          />
+        )}
         {commandMenuVisible && (
           <div
             aria-label="Composer commands"
@@ -972,6 +1418,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   <span title={agentComposerCommandLabelTitle(command.label)}>{command.label}</span>
                   <small title={agentComposerCommandDescriptionTitle(command)}>
                     {command.scope} / {command.description}
+                    {agentComposerCommandAliasText(command)}
                   </small>
                 </button>
               ))
@@ -1024,6 +1471,324 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   );
 }
 
+function AgentMascotPanel({ agentType, repo }: { agentType: string; repo?: string }) {
+  const label = agentLabel(agentType);
+  const repoLabel = repo ? repoName(repo) : "this session";
+  return (
+    <section
+      aria-label="Tinto companion"
+      className="agent-panel__mascot"
+      title={`Tinto companion is awake for ${label} on ${repoLabel}.`}
+    >
+      <span aria-hidden="true" className="agent-panel__mascot-mark" title="Tinto companion mark.">
+        T
+      </span>
+      <div className="agent-panel__mascot-copy">
+        <strong title="Tinto companion status.">Awake</strong>
+        <small title={`Tinto companion scope: ${repoLabel}.`}>Watching this turn surface</small>
+      </div>
+    </section>
+  );
+}
+
+function AgentReviewSummaryPanel({
+  canPrompt,
+  findings,
+  onPromptReview,
+  promptState,
+  summary,
+}: {
+  canPrompt: boolean;
+  findings: AgentReviewFinding[];
+  onPromptReview: () => void;
+  promptState: "drafted" | "sent" | null;
+  summary: AgentReviewSummary;
+}) {
+  const visibleFiles = summary.files.slice(0, 8);
+  const visibleFindings = findings.slice(0, 4);
+  const hiddenCount =
+    summary.truncated_count + Math.max(0, summary.files.length - visibleFiles.length);
+  const working = summary.working_shortstat ?? "no unstaged line diff";
+  const staged = summary.staged_shortstat ?? "no staged line diff";
+  return (
+    <section
+      className="agent-panel__review-summary"
+      aria-label="Review summary"
+      title={`Review summary for ${summary.branch}: ${summary.changed_files} changed files.`}
+    >
+      <div className="agent-panel__review-summary-head">
+        <span title="Review summary branch.">{summary.branch}</span>
+        <small title="Review summary changed file count.">
+          {summary.changed_files} {summary.changed_files === 1 ? "file" : "files"}
+        </small>
+      </div>
+      <button
+        aria-label="Draft semantic review prompt"
+        className="agent-panel__review-action"
+        disabled={!canPrompt}
+        onClick={onPromptReview}
+        title={reviewPromptActionTitle(canPrompt, findings.length)}
+        type="button"
+      >
+        <span title="Review semantic prompt action label.">Ask review</span>
+      </button>
+      {promptState && (
+        <p
+          className="agent-panel__review-request-state"
+          title={reviewPromptStateTitle(promptState)}
+        >
+          {reviewPromptStateLabel(promptState)}
+        </p>
+      )}
+      <div className="agent-panel__review-summary-stats" aria-label="Review diff stats">
+        <span title={`Working tree diff: ${working}`}>{working}</span>
+        <span title={`Staged diff: ${staged}`}>{staged}</span>
+      </div>
+      {visibleFiles.length > 0 ? (
+        <ul className="agent-panel__review-summary-files" aria-label="Review changed files">
+          {visibleFiles.map((file) => (
+            <li key={file} title={`Review changed file: ${file}`}>
+              {file}
+            </li>
+          ))}
+          {hiddenCount > 0 && (
+            <li title={`Review summary has ${hiddenCount} more changed files.`}>
+              +{hiddenCount} more
+            </li>
+          )}
+        </ul>
+      ) : (
+        <p title="Review summary has no local changed files.">No local changes detected.</p>
+      )}
+      {visibleFindings.length > 0 && (
+        <ul className="agent-panel__review-findings" aria-label="Review findings">
+          {visibleFindings.map((finding, index) => {
+            const location = reviewFindingLocation(finding);
+            return (
+              <li
+                key={`${finding.title}:${finding.path ?? "session"}:${finding.line ?? index}`}
+                title={`${finding.severity}: ${finding.title}. ${finding.detail}`}
+              >
+                <span title={`Review finding severity: ${finding.severity}.`}>
+                  {finding.severity}
+                </span>
+                <strong title={`Review finding: ${finding.title}.`}>{finding.title}</strong>
+                {location && (
+                  <small title={`Review finding location: ${location}.`}>{location}</small>
+                )}
+              </li>
+            );
+          })}
+          {findings.length > visibleFindings.length && (
+            <li title={`Review has ${findings.length - visibleFindings.length} more findings.`}>
+              <span title="Review finding overflow severity.">more</span>
+              <strong title="Review finding overflow count.">
+                +{findings.length - visibleFindings.length} findings
+              </strong>
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function reviewFindingLocation(finding: AgentReviewFinding): string | null {
+  if (!finding.path) return null;
+  return finding.line ? `${finding.path}:${finding.line}` : finding.path;
+}
+
+function reviewPromptActionTitle(canPrompt: boolean, findingCount: number): string {
+  const findingText =
+    findingCount > 0
+      ? `with ${overviewMetricCount("Findings", findingCount)}`
+      : "with no deterministic findings";
+  return canPrompt
+    ? `Draft a semantic code-review prompt from this review summary ${findingText}.`
+    : "Cannot draft a semantic code-review prompt because the session is archived or inactive.";
+}
+
+function reviewPromptStateLabel(state: "drafted" | "sent"): string {
+  return state === "sent" ? "Review request sent" : "Review draft ready";
+}
+
+function reviewPromptStateTitle(state: "drafted" | "sent"): string {
+  return state === "sent"
+    ? "Semantic review prompt was sent as an agent turn."
+    : "Semantic review prompt is drafted in the composer.";
+}
+
+function reviewActionPrompt(summary: AgentReviewSummary, findings: AgentReviewFinding[]): string {
+  const lines = [
+    "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
+    `Branch: ${summary.branch}`,
+    `Changed files: ${summary.changed_files}`,
+  ];
+  if (summary.working_shortstat) lines.push(`Working tree diff: ${summary.working_shortstat}`);
+  if (summary.staged_shortstat) lines.push(`Staged diff: ${summary.staged_shortstat}`);
+  if (summary.files.length > 0) {
+    lines.push("Files:");
+    for (const file of summary.files.slice(0, 12)) {
+      lines.push(`- ${file}`);
+    }
+    if (summary.truncated_count > 0) {
+      lines.push(`- plus ${summary.truncated_count} more changed files`);
+    }
+  }
+  if (findings.length > 0) {
+    lines.push("Host review findings to verify first:");
+    for (const finding of findings.slice(0, 8)) {
+      const location = reviewFindingLocation(finding);
+      lines.push(
+        `- ${finding.severity}: ${finding.title}${location ? ` (${location})` : ""} - ${finding.detail}`,
+      );
+    }
+    if (findings.length > 8) {
+      lines.push(`- plus ${findings.length - 8} more host findings`);
+    }
+  }
+  lines.push(
+    "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
+  );
+  return lines.join("\n");
+}
+
+function CodexRuntimeControls({
+  disabled,
+  menu,
+  model,
+  notice,
+  onMenuChange,
+  onModelChange,
+  onReasoningChange,
+  onSpeedChange,
+  reasoning,
+  speed,
+}: {
+  disabled: boolean;
+  menu: CodexRuntimeMenu;
+  model: CodexModelSelection;
+  notice: string | null;
+  onMenuChange: (menu: CodexRuntimeMenu) => void;
+  onModelChange: (value: CodexModelSelection) => void;
+  onReasoningChange: (value: CodexReasoningSelection) => void;
+  onSpeedChange: (value: CodexSpeedSelection) => void;
+  reasoning: CodexReasoningSelection;
+  speed: CodexSpeedSelection;
+}) {
+  const close = () => onMenuChange(null);
+  return (
+    <div className="agent-panel__runtime" aria-label="Codex runtime controls">
+      <div className="agent-panel__runtime-buttons">
+        <button
+          type="button"
+          className="agent-panel__runtime-button"
+          disabled={disabled}
+          onClick={() => onMenuChange(menu === "reasoning" ? null : "reasoning")}
+          title={`Reasoning: ${codexReasoningLabel(reasoning)}.`}
+        >
+          <span aria-hidden="true">○</span>
+          <span>{codexReasoningShortLabel(reasoning)}</span>
+        </button>
+        <button
+          type="button"
+          className="agent-panel__runtime-button"
+          disabled={disabled}
+          onClick={() => onMenuChange(menu === "model" ? null : "model")}
+          title={`Model: ${codexModelLabel(model)}.`}
+        >
+          <span aria-hidden="true">⚡</span>
+          <span>{codexModelShortLabel(model)}</span>
+        </button>
+        <button
+          type="button"
+          className="agent-panel__runtime-button"
+          disabled={disabled}
+          onClick={() => onMenuChange(menu === "speed" ? null : "speed")}
+          title={`Speed: ${codexSpeedLabel(speed)}.`}
+        >
+          <span aria-hidden="true">↗</span>
+          <span>{codexSpeedLabel(speed)}</span>
+        </button>
+      </div>
+      {notice && (
+        <span className="agent-panel__runtime-notice" title={`Codex runtime update: ${notice}`}>
+          {notice}
+        </span>
+      )}
+      {menu && (
+        <div className="agent-panel__runtime-popover" role="menu" title="Codex runtime picker">
+          {menu === "reasoning" &&
+            CODEX_REASONING_OPTIONS.map((option) => (
+              <RuntimeOptionButton
+                active={reasoning === option.value}
+                description={option.description}
+                key={option.value}
+                label={option.label}
+                onClick={() => {
+                  onReasoningChange(option.value);
+                  close();
+                }}
+              />
+            ))}
+          {menu === "model" &&
+            CODEX_MODEL_OPTIONS.map((option) => (
+              <RuntimeOptionButton
+                active={model === option.value}
+                description={option.description}
+                key={option.value}
+                label={option.label}
+                onClick={() => {
+                  onModelChange(option.value);
+                  close();
+                }}
+              />
+            ))}
+          {menu === "speed" &&
+            CODEX_SPEED_OPTIONS.map((option) => (
+              <RuntimeOptionButton
+                active={speed === option.value}
+                description={option.description}
+                key={option.value}
+                label={option.label}
+                onClick={() => {
+                  onSpeedChange(option.value);
+                  close();
+                }}
+              />
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuntimeOptionButton({
+  active,
+  description,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  description: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={active}
+      className={`agent-panel__runtime-option${active ? " agent-panel__runtime-option--active" : ""}`}
+      onClick={onClick}
+      title={`${label}: ${description}.`}
+    >
+      <span>{label}</span>
+      {active && <span aria-hidden="true">✓</span>}
+    </button>
+  );
+}
+
 function AgentDetailsHeader({
   files,
   focusedTurnIndex,
@@ -1038,7 +1803,7 @@ function AgentDetailsHeader({
   return (
     <header
       className="agent-panel__details-head"
-      title="Session details: turn map, current activity, focused turn actions, and Agent Lens."
+      title="Session details: turn map, current activity, restore points, and Agent Lens."
     >
       <div>
         <strong>Details</strong>
@@ -1210,6 +1975,94 @@ function overviewLatestActivityTextTitle(latest: string | null): string {
   return latest
     ? `Agent session overview latest activity: ${latest}.`
     : "Agent session overview latest activity: waiting for the first turn.";
+}
+
+function AgentHostContextStrip({ session }: { session: AgentSession }) {
+  const items = agentHostContextItems(session);
+  if (items.length === 0) return null;
+  return (
+    <section
+      aria-label="Turn context"
+      className="agent-panel__context-strip"
+      title={agentHostContextStripTitle(items)}
+    >
+      <span title={agentHostContextLabelTitle()}>Turn context</span>
+      <div className="agent-panel__context-items" title={agentHostContextItemsTitle(items.length)}>
+        {items.map((item) => (
+          <div
+            className="agent-panel__context-item"
+            key={item.kind}
+            title={agentHostContextItemTitle(item)}
+          >
+            <small title={agentHostContextItemLabelTitle(item.label)}>{item.label}</small>
+            <strong title={agentHostContextItemValueTitle(item)}>{item.value}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+type AgentHostContextItem = {
+  kind: "goal" | "personality" | "plan" | "compact";
+  label: string;
+  value: string;
+};
+
+function agentHostContextItems(session: AgentSession): AgentHostContextItem[] {
+  const items: AgentHostContextItem[] = [];
+  const goal = compactContextValue(session.goal?.text ?? null);
+  if (goal) {
+    items.push({ kind: "goal", label: "Goal", value: goal });
+  }
+  const personality = compactContextValue(session.personality?.name ?? null);
+  if (personality) {
+    items.push({ kind: "personality", label: "Style", value: personality });
+  }
+  if (session.plan_mode?.enabled) {
+    items.push({ kind: "plan", label: "Plan", value: "On" });
+  }
+  const summary = compactContextValue(session.context_summary?.text ?? null);
+  if (summary) {
+    items.push({ kind: "compact", label: "Compact", value: summary });
+  }
+  return items;
+}
+
+function compactContextValue(value: string | null | undefined): string | null {
+  const normalized = value?.trim().replace(/\s+/g, " ");
+  if (!normalized) return null;
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
+}
+
+function agentHostContextStripTitle(items: AgentHostContextItem[]): string {
+  return `Turn context strip: ${punctuatedTitleValue(
+    items.map((item) => `${item.label} ${item.value}`).join("; "),
+  )}`;
+}
+
+function agentHostContextLabelTitle(): string {
+  return "Turn context label.";
+}
+
+function agentHostContextItemsTitle(count: number): string {
+  return `Turn context items: ${overviewMetricCount("Items", count)}.`;
+}
+
+function agentHostContextItemTitle(item: AgentHostContextItem): string {
+  return `Turn context ${item.label.toLowerCase()}: ${punctuatedTitleValue(item.value)}`;
+}
+
+function agentHostContextItemLabelTitle(label: string): string {
+  return `Turn context item label: ${label}.`;
+}
+
+function agentHostContextItemValueTitle(item: AgentHostContextItem): string {
+  return `Turn context ${item.label.toLowerCase()} value: ${punctuatedTitleValue(item.value)}`;
+}
+
+function punctuatedTitleValue(value: string): string {
+  return /[.!?]$/.test(value) ? value : `${value}.`;
 }
 
 function AgentActivityStrip({
@@ -1788,7 +2641,8 @@ function agentCommandMenuTitle(
 
 function agentComposerCommandTitle(command: AgentComposerCommand): string {
   const state = command.disabled ? "Unavailable" : "Run";
-  return `${state} ${command.trigger}${command.command}: ${command.description}.`;
+  const aliases = agentComposerCommandAliasTitle(command);
+  return `${state} ${command.trigger}${command.command}: ${command.description}.${aliases}`;
 }
 
 function agentComposerCommandCodeTitle(command: AgentComposerCommand): string {
@@ -1800,7 +2654,20 @@ function agentComposerCommandLabelTitle(label: string): string {
 }
 
 function agentComposerCommandDescriptionTitle(command: AgentComposerCommand): string {
-  return `${command.scope} composer command description for ${command.trigger}${command.command}: ${command.description}.`;
+  const aliases = agentComposerCommandAliasTitle(command);
+  return `${command.scope} composer command description for ${command.trigger}${command.command}: ${command.description}.${aliases}`;
+}
+
+function agentComposerCommandAliasText(command: AgentComposerCommand): string {
+  const aliases = command.aliases?.slice(0, 3) ?? [];
+  if (aliases.length === 0) return "";
+  return ` · Also ${aliases.map((alias) => `${command.trigger}${alias}`).join(", ")}`;
+}
+
+function agentComposerCommandAliasTitle(command: AgentComposerCommand): string {
+  const aliases = command.aliases ?? [];
+  if (aliases.length === 0) return "";
+  return ` Aliases: ${aliases.map((alias) => `${command.trigger}${alias}`).join(", ")}.`;
 }
 
 function agentCommandEmptyTitle(
@@ -1824,15 +2691,50 @@ function filterComposerCommands(
   trigger: { trigger: AgentComposerCommandTrigger; query: string } | null,
 ): AgentComposerCommand[] {
   if (!trigger) return [];
-  const normalized = trigger.query.trim().toLowerCase();
+  const normalized = normalizeComposerCommandToken(trigger.query);
   const scopedCommands = commands.filter((command) => command.trigger === trigger.trigger);
   if (!normalized) return scopedCommands;
-  return scopedCommands.filter((command) => {
-    const haystack = `${command.command} ${command.label} ${command.scope} ${command.description}`
-      .toLowerCase()
-      .trim();
-    return haystack.includes(normalized);
-  });
+  return scopedCommands
+    .map((command) => ({ command, score: composerCommandMatchScore(command, normalized) }))
+    .filter((item) => item.score < Number.POSITIVE_INFINITY)
+    .sort((left, right) => left.score - right.score)
+    .map((item) => item.command);
+}
+
+function composerCommandMatchesName(command: AgentComposerCommand, name: string | undefined) {
+  if (!name) return false;
+  return (
+    normalizeComposerCommandToken(command.command) === name ||
+    (command.aliases ?? []).some((alias) => normalizeComposerCommandToken(alias) === name)
+  );
+}
+
+function composerCommandMatchScore(command: AgentComposerCommand, normalizedQuery: string): number {
+  const commandName = normalizeComposerCommandToken(command.command);
+  const aliases = (command.aliases ?? []).map((alias) => normalizeComposerCommandToken(alias));
+  if (commandName === normalizedQuery || aliases.includes(normalizedQuery)) return 0;
+  if (commandName.startsWith(normalizedQuery)) return 1;
+  if (aliases.some((alias) => alias.startsWith(normalizedQuery))) return 2;
+  const haystack = [command.command, ...aliases, command.label, command.scope, command.description]
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+  return haystack.includes(normalizedQuery) ? 3 : Number.POSITIVE_INFINITY;
+}
+
+function normalizeComposerCommandToken(value: string | undefined): string {
+  return (value ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+}
+
+function isDeferredMemoryCommand(commandName: string): boolean {
+  return commandName === "memory" || commandName === "memories" || commandName === "memorias";
 }
 
 function nextComposerCommandIndex(current: number, count: number, forward: boolean): number {
@@ -1853,10 +2755,141 @@ function replaceDraftComposerCommand(current: string, replacement: string): stri
 }
 
 function clearDraftComposerCommand(current: string): string {
-  const match = current.match(COMPOSER_COMMAND_TRIGGER_RE);
+  const match = current.match(COMPOSER_COMMAND_LINE_RE);
   if (!match || match.index == null) return current;
   const prefix = current.slice(0, match.index);
   return match[1] === "\n" ? prefix : prefix.trimEnd();
+}
+
+function codexRuntimeOptions(
+  model: CodexModelSelection,
+  reasoning: CodexReasoningSelection,
+  speed: CodexSpeedSelection,
+): AgentSessionRuntimeOptions {
+  const resolvedModel = model === "auto" && speed === "fast" ? "gpt-5.4-mini" : model;
+  const resolvedReasoning = reasoning === "auto" && speed === "fast" ? "low" : reasoning;
+  const options: AgentSessionRuntimeOptions = { speed };
+  if (resolvedModel !== "auto") options.model = resolvedModel;
+  if (resolvedReasoning !== "auto") options.reasoning_effort = resolvedReasoning;
+  return options;
+}
+
+function runtimeSelectionsFromOptions(options: AgentSessionRuntimeOptions): {
+  model: CodexModelSelection;
+  reasoning: CodexReasoningSelection;
+  speed: CodexSpeedSelection;
+} {
+  return {
+    model: isCodexModelSelection(options.model) ? options.model : "auto",
+    reasoning: isCodexReasoningSelection(options.reasoning_effort)
+      ? options.reasoning_effort
+      : "auto",
+    speed: options.speed === "fast" ? "fast" : "standard",
+  };
+}
+
+function applyCodexRuntimeSlashCommand(
+  text: string,
+  setters: {
+    setModel: (value: CodexModelSelection) => void;
+    setNotice: (value: string) => void;
+    setReasoning: (value: CodexReasoningSelection) => void;
+    setSpeed: (value: CodexSpeedSelection) => void;
+  },
+): boolean {
+  const match = text.trim().match(/^\/([^\s/]+)(?:\s+(.+))?$/);
+  if (!match) return false;
+  const command = normalizeComposerCommandToken(match[1]);
+  const rawValue = normalizeComposerCommandToken(match[2]);
+  if (
+    command === "fast" ||
+    command === "speed" ||
+    command === "velocidad" ||
+    command === "rapido" ||
+    command === "rapida"
+  ) {
+    const next = normalizeCodexSpeed(rawValue);
+    setters.setSpeed(next);
+    setters.setNotice(next === "fast" ? "Fast preset enabled." : "Fast preset disabled.");
+    return true;
+  }
+  if (command === "model" || command === "modelo") {
+    const model = normalizeCodexModel(rawValue);
+    setters.setModel(model);
+    setters.setNotice(`Model set to ${codexModelLabel(model)}.`);
+    return true;
+  }
+  if (command !== "reasoning" && command !== "razonamiento" && command !== "effort") {
+    return false;
+  }
+  const reasoning = normalizeCodexReasoning(rawValue);
+  setters.setReasoning(reasoning);
+  setters.setNotice(`Reasoning set to ${codexReasoningLabel(reasoning)}.`);
+  return true;
+}
+
+function normalizeCodexModel(value: string | undefined): CodexModelSelection {
+  if (!value || value === "default") return "auto";
+  const normalized = normalizeComposerCommandToken(value);
+  return isCodexModelSelection(normalized) ? normalized : "auto";
+}
+
+function normalizeCodexReasoning(value: string | undefined): CodexReasoningSelection {
+  if (!value || value === "default" || value === "predeterminado") return "auto";
+  const normalized = normalizeComposerCommandToken(value)
+    .replace(/^minimo$/, "minimal")
+    .replace(/^mínimo$/, "minimal")
+    .replace(/^bajo$/, "low")
+    .replace(/^medio$/, "medium")
+    .replace(/^alto$/, "high")
+    .replace(/^extremadamente-alto$/, "xhigh")
+    .replace(/^extra$/, "xhigh")
+    .replace(/^extra-high$/, "xhigh");
+  return isCodexReasoningSelection(normalized) ? normalized : "auto";
+}
+
+function normalizeCodexSpeed(value: string | undefined): CodexSpeedSelection {
+  if (
+    value === "off" ||
+    value === "false" ||
+    value === "standard" ||
+    value === "normal" ||
+    value === "estandar" ||
+    value === "estándar"
+  ) {
+    return "standard";
+  }
+  return "fast";
+}
+
+function isCodexModelSelection(value: unknown): value is CodexModelSelection {
+  return CODEX_MODEL_OPTIONS.some((option) => option.value === value);
+}
+
+function isCodexReasoningSelection(value: unknown): value is CodexReasoningSelection {
+  return CODEX_REASONING_OPTIONS.some((option) => option.value === value);
+}
+
+function codexModelLabel(value: CodexModelSelection): string {
+  return CODEX_MODEL_OPTIONS.find((option) => option.value === value)?.label ?? "Auto";
+}
+
+function codexModelShortLabel(value: CodexModelSelection): string {
+  if (value === "auto") return "Model";
+  return codexModelLabel(value).replace(/^GPT-/, "");
+}
+
+function codexReasoningLabel(value: CodexReasoningSelection): string {
+  return CODEX_REASONING_OPTIONS.find((option) => option.value === value)?.label ?? "Auto";
+}
+
+function codexReasoningShortLabel(value: CodexReasoningSelection): string {
+  if (value === "auto") return "Reasoning";
+  return codexReasoningLabel(value);
+}
+
+function codexSpeedLabel(value: CodexSpeedSelection): string {
+  return CODEX_SPEED_OPTIONS.find((option) => option.value === value)?.label ?? "Normal";
 }
 
 function agentComposerRowTitle(agentType: string, repo?: string): string {
@@ -2097,6 +3130,10 @@ function AgentLens({
   const activeScope = focusedTurn ? scope : "session";
   const focusedTurnIndex = activeScope === "focused" ? (focusedTurn?.index ?? null) : null;
   const turnCheckpoints = session.turn_checkpoints ?? [];
+  const restorableTurnCheckpoints = turnCheckpoints.filter((checkpoint) =>
+    Boolean(checkpoint.restore_checkpoint),
+  );
+  const latestRestorableTurn = restorableTurnCheckpoints[restorableTurnCheckpoints.length - 1];
   const busState = useBusState();
   const liveRepo = repo ? busState.repos[repo] : undefined;
   const liveDiffs = repo ? busState.diffs[repo] : undefined;
@@ -2254,6 +3291,8 @@ function AgentLens({
         title={agentLensMetricsTitle(
           activeScope,
           fileItems.length,
+          turnCheckpoints.length,
+          restorableTurnCheckpoints.length,
           session.turn_status ?? "waiting",
         )}
       >
@@ -2271,6 +3310,26 @@ function AgentLens({
           </span>
           <small title={agentLensFileMetricTitle(activeScope, fileItems.length)}>
             {activeScope === "focused" ? "Focused files" : "Session files"}
+          </small>
+        </div>
+        <div>
+          <span
+            title={agentLensRestoreMetricValueTitle(
+              turnCheckpoints.length,
+              restorableTurnCheckpoints.length,
+              latestRestorableTurn?.index ?? null,
+            )}
+          >
+            {restorableTurnCheckpoints.length}/{turnCheckpoints.length}
+          </span>
+          <small
+            title={agentLensRestoreMetricTitle(
+              turnCheckpoints.length,
+              restorableTurnCheckpoints.length,
+              latestRestorableTurn?.index ?? null,
+            )}
+          >
+            Restore points
           </small>
         </div>
       </div>
@@ -3171,11 +4230,14 @@ function agentLensScopeGroupTitle(
 function agentLensMetricsTitle(
   activeScope: AgentLensScope,
   fileCount: number,
+  turnCheckpointCount: number,
+  restorableCount: number,
   turnStatus: string,
 ): string {
   const fileLabel = fileCount === 1 ? "file" : "files";
+  const checkpointLabel = turnCheckpointCount === 1 ? "turn checkpoint" : "turn checkpoints";
   const scopeLabel = activeScope === "focused" ? "focused turn" : "current session";
-  return `Agent Lens metrics summarize ${turnStatusLabel(turnStatus)} state and ${fileCount} ${fileLabel} for the ${scopeLabel}.`;
+  return `Agent Lens metrics summarize ${turnStatusLabel(turnStatus)} state, ${fileCount} ${fileLabel}, and ${restorableCount} restorable ${checkpointLabel} for the ${scopeLabel}.`;
 }
 
 function agentLensTurnStateMetricTitle(turnStatus: string): string {
@@ -3198,6 +4260,36 @@ function agentLensFileMetricValueTitle(activeScope: AgentLensScope, count: numbe
   const fileLabel = count === 1 ? "file" : "files";
   const scopeLabel = activeScope === "focused" ? "focused scope" : "session scope";
   return `Agent Lens ${scopeLabel} file count value: ${count} ${fileLabel}.`;
+}
+
+function agentLensRestoreMetricTitle(
+  turnCheckpointCount: number,
+  restorableCount: number,
+  latestRestorableTurnIndex: number | null,
+): string {
+  if (turnCheckpointCount === 0) {
+    return "Agent Lens restore-point metric: no completed turn checkpoints yet.";
+  }
+  const checkpointLabel = turnCheckpointCount === 1 ? "turn checkpoint" : "turn checkpoints";
+  const restorableLabel = restorableCount === 1 ? "restore point" : "restore points";
+  const latest = latestRestorableTurnIndex
+    ? ` Latest restorable turn is ${latestRestorableTurnIndex}.`
+    : "";
+  return `Agent Lens restore-point metric: ${restorableCount} ${restorableLabel} from ${turnCheckpointCount} ${checkpointLabel}.${latest}`;
+}
+
+function agentLensRestoreMetricValueTitle(
+  turnCheckpointCount: number,
+  restorableCount: number,
+  latestRestorableTurnIndex: number | null,
+): string {
+  if (turnCheckpointCount === 0) {
+    return "Agent Lens restore-point value: 0 of 0 turn checkpoints are restorable.";
+  }
+  const latest = latestRestorableTurnIndex
+    ? ` Latest restorable turn: ${latestRestorableTurnIndex}.`
+    : "";
+  return `Agent Lens restore-point value: ${restorableCount} of ${turnCheckpointCount} turn checkpoints are restorable.${latest}`;
 }
 
 function agentLensFileFilterStatusId(sessionId: string): string {
@@ -4259,7 +5351,9 @@ function focusedTurnRestoreButtonTitle(
 }
 
 function focusedTurnRestoreLabelTitle(restoring: boolean): string {
-  return restoring ? "Focused turn restore label: Restoring." : "Focused turn restore label: Restore here.";
+  return restoring
+    ? "Focused turn restore label: Restoring."
+    : "Focused turn restore label: Restore here.";
 }
 
 function focusedTurnTimeTitle(turnIndex: number, timeLabel: string): string {
@@ -4748,7 +5842,10 @@ function agentTurns(
   session: AgentSession | undefined,
 ): AgentTurnView[] {
   if (timeline.length > 0) {
-    return limitRestoredTurns(attachCheckpointChanges(buildTurnsFromTimeline(timeline), session), session);
+    return limitRestoredTurns(
+      attachCheckpointChanges(buildTurnsFromTimeline(timeline), session),
+      session,
+    );
   }
   const text = chunks.map((chunk) => decodeBase64Text(chunk.chunk_base64)).join("");
   const cleaned = stripAnsi(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
