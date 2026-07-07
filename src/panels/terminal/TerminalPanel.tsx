@@ -381,6 +381,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         : null,
     [reviewPromptDraft, reviewPromptState, turns],
   );
+  const reviewPromptTurnIndex = useMemo(
+    () =>
+      reviewPromptDraft && reviewPromptState === "sent"
+        ? reviewPromptTurnIndexForPrompt(turns, reviewPromptDraft)
+        : null,
+    [reviewPromptDraft, reviewPromptState, turns],
+  );
   const sessionRepo = session?.repo ?? repo;
   const hasTranscriptQuery = transcriptQuery.trim().length > 0;
   const canNavigateSearchResults = hasTranscriptQuery && visibleTurns.length > 1;
@@ -786,12 +793,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         setReviewFindings(result.review_findings ?? []);
         setReviewPromptDraft(null);
         setReviewPromptState(null);
+        setCopiedTarget((current) => (isReviewClipboardTarget(current) ? null : current));
         setDetailsOpen(true);
       } else if (command === "review") {
         setReviewSummary(null);
         setReviewFindings([]);
         setReviewPromptDraft(null);
         setReviewPromptState(null);
+        setCopiedTarget((current) => (isReviewClipboardTarget(current) ? null : current));
       }
       if (result.status === "completed") {
         const sessions = await listAgentSessions();
@@ -917,8 +926,15 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     });
     setReviewPromptDraft(prompt);
     setReviewPromptState("drafted");
+    setCopiedTarget((current) => (isReviewClipboardTarget(current) ? null : current));
     setSlashMenuOpen(false);
     window.setTimeout(() => composerInputRef.current?.focus(), 0);
+  };
+
+  const resetReviewPrompt = () => {
+    setReviewPromptDraft(null);
+    setReviewPromptState(null);
+    setCopiedTarget((current) => (isReviewClipboardTarget(current) ? null : current));
   };
 
   const copyText = async (target: string, text: string) => {
@@ -1314,15 +1330,38 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           {reviewSummary && (
             <AgentReviewSummaryPanel
               canPrompt={canCompose}
+              copiedExchange={copiedTarget === "review-exchange"}
+              copiedFiles={copiedTarget === "review-files"}
+              copiedFindings={copiedTarget === "review-findings"}
+              copiedPrompt={copiedTarget === "review-prompt"}
               copiedResponse={copiedTarget === "review-response"}
+              copiedSummary={copiedTarget === "review-summary"}
               findings={reviewFindings}
+              onCopyExchange={(prompt, response) =>
+                void copyText("review-exchange", reviewExchangeCopyText(prompt, response))
+              }
+              onCopyFindings={(findings) =>
+                void copyText("review-findings", reviewFindingsCopyText(findings))
+              }
+              onCopyFiles={(summary) => void copyText("review-files", reviewFilesCopyText(summary))}
+              onCopyPrompt={(prompt) => void copyText("review-prompt", prompt)}
               onCopyResponse={(response) => void copyText("review-response", response.text)}
+              onCopySummary={(summary, findings) =>
+                void copyText("review-summary", reviewSummaryCopyText(summary, findings))
+              }
               onPromptReview={() => applyReviewPrompt(reviewSummary, reviewFindings)}
+              onResetReview={resetReviewPrompt}
+              onShowPromptRequest={(turnIndex) => {
+                setFocusedTurnIndex(turnIndex);
+                scrollToAgentTurn(sessionId, turnIndex, "center");
+              }}
               onShowResponse={(response) => {
                 setFocusedTurnIndex(response.turnIndex);
                 scrollToAgentTurn(sessionId, response.turnIndex, "center");
               }}
+              promptDraft={reviewPromptDraft}
               promptState={reviewPromptState}
+              promptTurnIndex={reviewPromptTurnIndex}
               response={reviewResponse}
               summary={reviewSummary}
             />
@@ -1513,22 +1552,50 @@ function AgentMascotPanel({ agentType, repo }: { agentType: string; repo?: strin
 
 function AgentReviewSummaryPanel({
   canPrompt,
+  copiedExchange,
+  copiedFiles,
+  copiedFindings,
+  copiedPrompt,
   copiedResponse,
+  copiedSummary,
   findings,
+  onCopyExchange,
+  onCopyFiles,
+  onCopyFindings,
+  onCopyPrompt,
   onCopyResponse,
+  onCopySummary,
   onPromptReview,
+  onResetReview,
+  onShowPromptRequest,
   onShowResponse,
+  promptDraft,
   promptState,
+  promptTurnIndex,
   response,
   summary,
 }: {
   canPrompt: boolean;
+  copiedExchange: boolean;
+  copiedFiles: boolean;
+  copiedFindings: boolean;
+  copiedPrompt: boolean;
   copiedResponse: boolean;
+  copiedSummary: boolean;
   findings: AgentReviewFinding[];
+  onCopyExchange: (prompt: string, response: AgentReviewResponseView) => void;
+  onCopyFiles: (summary: AgentReviewSummary) => void;
+  onCopyFindings: (findings: AgentReviewFinding[]) => void;
+  onCopyPrompt: (prompt: string) => void;
   onCopyResponse: (response: AgentReviewResponseView) => void;
+  onCopySummary: (summary: AgentReviewSummary, findings: AgentReviewFinding[]) => void;
   onPromptReview: () => void;
+  onResetReview: () => void;
+  onShowPromptRequest: (turnIndex: number) => void;
   onShowResponse: (response: AgentReviewResponseView) => void;
+  promptDraft: string | null;
   promptState: "drafted" | "sent" | null;
+  promptTurnIndex: number | null;
   response: AgentReviewResponseView | null;
   summary: AgentReviewSummary;
 }) {
@@ -1560,6 +1627,43 @@ function AgentReviewSummaryPanel({
       >
         <span title="Review semantic prompt action label.">Ask review</span>
       </button>
+      <button
+        aria-label="Copy structured review summary"
+        className="agent-panel__review-action"
+        onClick={() => onCopySummary(summary, findings)}
+        title={reviewSummaryCopyButtonTitle(copiedSummary)}
+        type="button"
+      >
+        <span title={reviewSummaryCopyLabelTitle(copiedSummary ? "Copied" : "Copy summary")}>
+          {copiedSummary ? "Copied" : "Copy summary"}
+        </span>
+      </button>
+      {summary.files.length > 0 && (
+        <button
+          aria-label="Copy review changed files"
+          className="agent-panel__review-action"
+          onClick={() => onCopyFiles(summary)}
+          title={reviewFilesCopyButtonTitle(copiedFiles, summary.files.length)}
+          type="button"
+        >
+          <span title={reviewFilesCopyLabelTitle(copiedFiles ? "Copied" : "Copy files")}>
+            {copiedFiles ? "Copied" : "Copy files"}
+          </span>
+        </button>
+      )}
+      {findings.length > 0 && (
+        <button
+          aria-label="Copy deterministic review findings"
+          className="agent-panel__review-action"
+          onClick={() => onCopyFindings(findings)}
+          title={reviewFindingsCopyButtonTitle(copiedFindings, findings.length)}
+          type="button"
+        >
+          <span title={reviewFindingsCopyLabelTitle(copiedFindings ? "Copied" : "Copy findings")}>
+            {copiedFindings ? "Copied" : "Copy findings"}
+          </span>
+        </button>
+      )}
       {promptState && (
         <p
           className="agent-panel__review-request-state"
@@ -1567,6 +1671,41 @@ function AgentReviewSummaryPanel({
         >
           {reviewPromptStateLabel(promptState)}
         </p>
+      )}
+      {promptDraft && promptState && (
+        <button
+          aria-label="Copy semantic review prompt"
+          className="agent-panel__review-action"
+          onClick={() => onCopyPrompt(promptDraft)}
+          title={reviewPromptCopyButtonTitle(copiedPrompt, promptState)}
+          type="button"
+        >
+          <span title={reviewPromptCopyLabelTitle(copiedPrompt ? "Copied" : "Copy prompt")}>
+            {copiedPrompt ? "Copied" : "Copy prompt"}
+          </span>
+        </button>
+      )}
+      {promptTurnIndex != null && (
+        <button
+          aria-label="Show semantic review request turn"
+          className="agent-panel__review-action"
+          onClick={() => onShowPromptRequest(promptTurnIndex)}
+          title={reviewPromptShowButtonTitle(promptTurnIndex)}
+          type="button"
+        >
+          <span title="Semantic review request navigation label: Show request.">Show request</span>
+        </button>
+      )}
+      {(promptState || response) && (
+        <button
+          aria-label="Reset semantic review workflow"
+          className="agent-panel__review-action"
+          onClick={onResetReview}
+          title={reviewPromptResetButtonTitle(response != null)}
+          type="button"
+        >
+          <span title="Semantic review reset label: Reset review.">Reset review</span>
+        </button>
       )}
       {response && (
         <div
@@ -1602,6 +1741,19 @@ function AgentReviewSummaryPanel({
         >
           <span title={reviewResponseCopyLabelTitle(copiedResponse ? "Copied" : "Copy response")}>
             {copiedResponse ? "Copied" : "Copy response"}
+          </span>
+        </button>
+      )}
+      {promptDraft && response && (
+        <button
+          aria-label="Copy semantic review exchange"
+          className="agent-panel__review-action"
+          onClick={() => onCopyExchange(promptDraft, response)}
+          title={reviewExchangeCopyButtonTitle(copiedExchange)}
+          type="button"
+        >
+          <span title={reviewExchangeCopyLabelTitle(copiedExchange ? "Copied" : "Copy exchange")}>
+            {copiedExchange ? "Copied" : "Copy exchange"}
           </span>
         </button>
       )}
@@ -1663,6 +1815,104 @@ function reviewFindingLocation(finding: AgentReviewFinding): string | null {
   return finding.line ? `${finding.path}:${finding.line}` : finding.path;
 }
 
+function reviewSummaryCopyButtonTitle(copied: boolean): string {
+  return copied
+    ? "Copied structured review summary to clipboard."
+    : "Copy the structured review summary to the clipboard.";
+}
+
+function reviewSummaryCopyLabelTitle(label: "Copy summary" | "Copied"): string {
+  return `Structured review summary copy label: ${label}.`;
+}
+
+function isReviewClipboardTarget(target: string | null): boolean {
+  return (
+    target === "review-summary" ||
+    target === "review-files" ||
+    target === "review-findings" ||
+    target === "review-prompt" ||
+    target === "review-response" ||
+    target === "review-exchange"
+  );
+}
+
+function reviewFilesCopyButtonTitle(copied: boolean, fileCount: number): string {
+  return copied
+    ? "Copied review changed files to clipboard."
+    : `Copy ${overviewMetricCount("Files", fileCount)} to the clipboard.`;
+}
+
+function reviewFilesCopyLabelTitle(label: "Copy files" | "Copied"): string {
+  return `Review changed files copy label: ${label}.`;
+}
+
+function reviewFilesCopyText(summary: AgentReviewSummary): string {
+  if (summary.files.length === 0) return "Review changed files: none";
+  const lines = ["Review changed files:", ...summary.files.map((file) => `- ${file}`)];
+  if (summary.truncated_count > 0) {
+    lines.push(`- +${summary.truncated_count} more changed files`);
+  }
+  return lines.join("\n");
+}
+
+function reviewFindingsCopyButtonTitle(copied: boolean, findingCount: number): string {
+  return copied
+    ? "Copied deterministic review findings to clipboard."
+    : `Copy ${overviewMetricCount("Findings", findingCount)} to the clipboard.`;
+}
+
+function reviewFindingsCopyLabelTitle(label: "Copy findings" | "Copied"): string {
+  return `Deterministic review findings copy label: ${label}.`;
+}
+
+function reviewFindingsCopyText(findings: AgentReviewFinding[]): string {
+  if (findings.length === 0) return "Host review findings: none";
+  return [
+    "Host review findings:",
+    ...findings.map((finding) => {
+      const location = reviewFindingLocation(finding);
+      return `- ${finding.severity}: ${finding.title}${
+        location ? ` (${location})` : ""
+      } - ${finding.detail}`;
+    }),
+  ].join("\n");
+}
+
+function reviewSummaryCopyText(
+  summary: AgentReviewSummary,
+  findings: AgentReviewFinding[],
+): string {
+  const lines = [
+    "Structured review summary:",
+    `Branch: ${summary.branch}`,
+    `Changed files: ${summary.changed_files}`,
+    `Working tree diff: ${summary.working_shortstat ?? "no unstaged line diff"}`,
+    `Staged diff: ${summary.staged_shortstat ?? "no staged line diff"}`,
+  ];
+  if (summary.files.length > 0) {
+    lines.push("Files:", ...summary.files.map((file) => `- ${file}`));
+    if (summary.truncated_count > 0) {
+      lines.push(`- +${summary.truncated_count} more changed files`);
+    }
+  } else {
+    lines.push("Files: none");
+  }
+  if (findings.length > 0) {
+    lines.push("Host review findings:");
+    for (const finding of findings) {
+      const location = reviewFindingLocation(finding);
+      lines.push(
+        `- ${finding.severity}: ${finding.title}${location ? ` (${location})` : ""} - ${
+          finding.detail
+        }`,
+      );
+    }
+  } else {
+    lines.push("Host review findings: none");
+  }
+  return lines.join("\n");
+}
+
 function reviewPromptActionTitle(canPrompt: boolean, findingCount: number): string {
   const findingText =
     findingCount > 0
@@ -1683,6 +1933,27 @@ function reviewPromptStateTitle(state: "drafted" | "sent"): string {
     : "Semantic review prompt is drafted in the composer.";
 }
 
+function reviewPromptCopyButtonTitle(copied: boolean, state: "drafted" | "sent"): string {
+  if (copied) return "Copied semantic review prompt to clipboard.";
+  return state === "sent"
+    ? "Copy the sent semantic review prompt to the clipboard."
+    : "Copy the drafted semantic review prompt to the clipboard.";
+}
+
+function reviewPromptCopyLabelTitle(label: "Copy prompt" | "Copied"): string {
+  return `Semantic review prompt copy label: ${label}.`;
+}
+
+function reviewPromptShowButtonTitle(turnIndex: number): string {
+  return `Show the sent semantic review request in conversation turn ${turnIndex}.`;
+}
+
+function reviewPromptResetButtonTitle(hasResponse: boolean): string {
+  return hasResponse
+    ? "Reset the captured semantic review response and request state for this review summary."
+    : "Reset the drafted semantic review prompt state for this review summary.";
+}
+
 function reviewResponseTitle(turnIndex: number): string {
   return `Semantic review response captured from turn ${turnIndex}; verify findings before acting.`;
 }
@@ -1701,13 +1972,33 @@ function reviewResponseCopyLabelTitle(label: "Copy response" | "Copied"): string
   return `Semantic review response copy label: ${label}.`;
 }
 
+function reviewExchangeCopyButtonTitle(copied: boolean): string {
+  return copied
+    ? "Copied semantic review request and response to clipboard."
+    : "Copy the semantic review request and captured response to the clipboard.";
+}
+
+function reviewExchangeCopyLabelTitle(label: "Copy exchange" | "Copied"): string {
+  return `Semantic review exchange copy label: ${label}.`;
+}
+
+function reviewExchangeCopyText(prompt: string, response: AgentReviewResponseView): string {
+  return [
+    "Semantic review request:",
+    prompt.trim(),
+    "",
+    "Semantic review response:",
+    response.text.trim(),
+  ].join("\n");
+}
+
 function reviewResponseForPrompt(
   turns: AgentTurnView[],
   prompt: string,
 ): AgentReviewResponseView | null {
   const promptText = prompt.trim();
-  if (!promptText) return null;
-  const turn = turns.find((candidate) => candidate.userText?.trim() === promptText);
+  const turnIndex = reviewPromptTurnIndexForPrompt(turns, promptText);
+  const turn = turnIndex == null ? null : turns.find((candidate) => candidate.index === turnIndex);
   const responseText = turn?.agentText.join("\n").trim();
   if (!turn || !responseText) return null;
   return {
@@ -1715,6 +2006,12 @@ function reviewResponseForPrompt(
     text: responseText,
     excerpt: compactActivityText(responseText),
   };
+}
+
+function reviewPromptTurnIndexForPrompt(turns: AgentTurnView[], prompt: string): number | null {
+  const promptText = prompt.trim();
+  if (!promptText) return null;
+  return turns.find((candidate) => candidate.userText?.trim() === promptText)?.index ?? null;
 }
 
 function reviewActionPrompt(summary: AgentReviewSummary, findings: AgentReviewFinding[]): string {

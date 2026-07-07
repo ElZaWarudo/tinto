@@ -838,6 +838,86 @@ describe("TerminalPanel", () => {
     expect(within(review).getByLabelText("Review findings")).toBeInTheDocument();
     expect(within(review).getByText("Conflict marker present")).toBeInTheDocument();
     expect(within(review).getByText("src/App.tsx:12")).toBeInTheDocument();
+    const copySummary = within(review).getByRole("button", {
+      name: "Copy structured review summary",
+    });
+    expect(copySummary).toHaveAttribute(
+      "title",
+      "Copy the structured review summary to the clipboard.",
+    );
+    expect(
+      within(copySummary).getByTitle("Structured review summary copy label: Copy summary."),
+    ).toHaveTextContent("Copy summary");
+
+    installClipboardMock();
+    fireEvent.click(copySummary);
+    await waitFor(() =>
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(
+        [
+          "Structured review summary:",
+          "Branch: main",
+          "Changed files: 2",
+          "Working tree diff: 1 file changed, 3 insertions(+)",
+          "Staged diff: no staged line diff",
+          "Files:",
+          "-  M src/App.tsx",
+          "- ?? docs/review.md",
+          "Host review findings:",
+          "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
+        ].join("\n"),
+      ),
+    );
+    expect(copySummary).toHaveAttribute("title", "Copied structured review summary to clipboard.");
+    expect(
+      within(copySummary).getByTitle("Structured review summary copy label: Copied."),
+    ).toHaveTextContent("Copied");
+
+    const copyFiles = within(review).getByRole("button", {
+      name: "Copy review changed files",
+    });
+    expect(copyFiles).toHaveAttribute("title", "Copy 2 files to the clipboard.");
+    expect(
+      within(copyFiles).getByTitle("Review changed files copy label: Copy files."),
+    ).toHaveTextContent("Copy files");
+
+    installClipboardMock();
+    fireEvent.click(copyFiles);
+    await waitFor(() =>
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(
+        ["Review changed files:", "-  M src/App.tsx", "- ?? docs/review.md"].join("\n"),
+      ),
+    );
+    expect(copyFiles).toHaveAttribute("title", "Copied review changed files to clipboard.");
+    expect(
+      within(copyFiles).getByTitle("Review changed files copy label: Copied."),
+    ).toHaveTextContent("Copied");
+
+    const copyFindings = within(review).getByRole("button", {
+      name: "Copy deterministic review findings",
+    });
+    expect(copyFindings).toHaveAttribute("title", "Copy 1 finding to the clipboard.");
+    expect(
+      within(copyFindings).getByTitle("Deterministic review findings copy label: Copy findings."),
+    ).toHaveTextContent("Copy findings");
+
+    installClipboardMock();
+    fireEvent.click(copyFindings);
+    await waitFor(() =>
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(
+        [
+          "Host review findings:",
+          "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
+        ].join("\n"),
+      ),
+    );
+    expect(copyFindings).toHaveAttribute(
+      "title",
+      "Copied deterministic review findings to clipboard.",
+    );
+    expect(
+      within(copyFindings).getByTitle("Deterministic review findings copy label: Copied."),
+    ).toHaveTextContent("Copied");
+
     const reviewPromptButton = within(review).getByRole("button", {
       name: "Draft semantic review prompt",
     });
@@ -853,38 +933,53 @@ describe("TerminalPanel", () => {
     expect(
       within(review).getByTitle("Semantic review prompt is drafted in the composer."),
     ).toHaveTextContent("Review draft ready");
-    expect(composer).toHaveValue(
-      [
-        "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
-        "Branch: main",
-        "Changed files: 2",
-        "Working tree diff: 1 file changed, 3 insertions(+)",
-        "Files:",
-        "-  M src/App.tsx",
-        "- ?? docs/review.md",
-        "Host review findings to verify first:",
-        "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
-        "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
-      ].join("\n"),
+    const draftReset = within(review).getByRole("button", {
+      name: "Reset semantic review workflow",
+    });
+    expect(draftReset).toHaveAttribute(
+      "title",
+      "Reset the drafted semantic review prompt state for this review summary.",
     );
+    expect(
+      within(draftReset).getByTitle("Semantic review reset label: Reset review."),
+    ).toHaveTextContent("Reset review");
+    const expectedReviewPrompt = [
+      "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
+      "Branch: main",
+      "Changed files: 2",
+      "Working tree diff: 1 file changed, 3 insertions(+)",
+      "Files:",
+      "-  M src/App.tsx",
+      "- ?? docs/review.md",
+      "Host review findings to verify first:",
+      "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
+      "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
+    ].join("\n");
+    expect(composer).toHaveValue(expectedReviewPrompt);
+
+    const copyPrompt = within(review).getByRole("button", {
+      name: "Copy semantic review prompt",
+    });
+    expect(copyPrompt).toHaveAttribute(
+      "title",
+      "Copy the drafted semantic review prompt to the clipboard.",
+    );
+    expect(
+      within(copyPrompt).getByTitle("Semantic review prompt copy label: Copy prompt."),
+    ).toHaveTextContent("Copy prompt");
+
+    installClipboardMock();
+    fireEvent.click(copyPrompt);
+    await waitFor(() => expect(writeClipboardTextMock).toHaveBeenCalledWith(expectedReviewPrompt));
+    expect(copyPrompt).toHaveAttribute("title", "Copied semantic review prompt to clipboard.");
+    expect(
+      within(copyPrompt).getByTitle("Semantic review prompt copy label: Copied."),
+    ).toHaveTextContent("Copied");
 
     await user.type(composer, "{Enter}");
-    expect(writeAgentSessionInputMock).toHaveBeenCalledWith(
-      "sess-1",
-      `${[
-        "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
-        "Branch: main",
-        "Changed files: 2",
-        "Working tree diff: 1 file changed, 3 insertions(+)",
-        "Files:",
-        "-  M src/App.tsx",
-        "- ?? docs/review.md",
-        "Host review findings to verify first:",
-        "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
-        "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
-      ].join("\n")}\r`,
-      { speed: "standard" },
-    );
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", `${expectedReviewPrompt}\r`, {
+      speed: "standard",
+    });
     expect(
       await within(review).findByTitle("Semantic review prompt was sent as an agent turn."),
     ).toHaveTextContent("Review request sent");
@@ -913,6 +1008,28 @@ describe("TerminalPanel", () => {
       ),
     ).toHaveTextContent("Review response captured");
     expect(within(review).getByText(/Found one high severity issue/)).toBeInTheDocument();
+    const responseReset = within(review).getByRole("button", {
+      name: "Reset semantic review workflow",
+    });
+    expect(responseReset).toHaveAttribute(
+      "title",
+      "Reset the captured semantic review response and request state for this review summary.",
+    );
+
+    const showRequest = screen.getByRole("button", {
+      name: "Show semantic review request turn",
+    });
+    expect(showRequest).toHaveAttribute(
+      "title",
+      "Show the sent semantic review request in conversation turn 1.",
+    );
+    expect(
+      within(showRequest).getByTitle("Semantic review request navigation label: Show request."),
+    ).toHaveTextContent("Show request");
+
+    scrollIntoViewMock.mockClear();
+    fireEvent.click(showRequest);
+    await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalled());
 
     const showResponse = screen.getByRole("button", {
       name: "Show semantic review response turn",
@@ -950,6 +1067,179 @@ describe("TerminalPanel", () => {
     expect(
       within(copyResponse).getByTitle("Semantic review response copy label: Copied."),
     ).toHaveTextContent("Copied");
+
+    const copyExchange = screen.getByRole("button", {
+      name: "Copy semantic review exchange",
+    });
+    expect(copyExchange).toHaveAttribute(
+      "title",
+      "Copy the semantic review request and captured response to the clipboard.",
+    );
+    expect(
+      within(copyExchange).getByTitle("Semantic review exchange copy label: Copy exchange."),
+    ).toHaveTextContent("Copy exchange");
+
+    installClipboardMock();
+    fireEvent.click(copyExchange);
+    await waitFor(() =>
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(
+        [
+          "Semantic review request:",
+          expectedReviewPrompt,
+          "",
+          "Semantic review response:",
+          "Found one high severity issue in src/App.tsx:12. Add a regression test before merging.",
+        ].join("\n"),
+      ),
+    );
+    expect(copyExchange).toHaveAttribute(
+      "title",
+      "Copied semantic review request and response to clipboard.",
+    );
+    expect(
+      within(copyExchange).getByTitle("Semantic review exchange copy label: Copied."),
+    ).toHaveTextContent("Copied");
+
+    fireEvent.click(responseReset);
+    expect(
+      within(review).queryByTitle("Semantic review prompt was sent as an agent turn."),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByTitle(
+        "Semantic review response captured from turn 1; verify findings before acting.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByRole("button", { name: "Reset semantic review workflow" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByRole("button", { name: "Show semantic review response turn" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByRole("button", { name: "Copy semantic review response" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByRole("button", { name: "Copy semantic review prompt" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByRole("button", { name: "Show semantic review request turn" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByRole("button", { name: "Copy semantic review exchange" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("resets semantic review copied state when redrafting the review prompt", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock.mockResolvedValueOnce({
+      command: "review",
+      status: "completed",
+      message: "Review summary for branch main: 1 changed file.",
+      review_summary: {
+        branch: "main",
+        changed_files: 1,
+        working_shortstat: "1 file changed, 1 insertion(+)",
+        staged_shortstat: null,
+        files: [" M src/App.tsx"],
+        truncated_count: 0,
+      },
+      review_findings: [],
+    });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/review");
+    await user.type(composer, "{Enter}");
+
+    const review = await screen.findByLabelText("Review summary");
+    const reviewPromptButton = within(review).getByRole("button", {
+      name: "Draft semantic review prompt",
+    });
+    await user.click(reviewPromptButton);
+
+    const copyPrompt = within(review).getByRole("button", {
+      name: "Copy semantic review prompt",
+    });
+    installClipboardMock();
+    fireEvent.click(copyPrompt);
+    await waitFor(() =>
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(
+        expect.stringContaining("Review the current Git changes"),
+      ),
+    );
+    expect(copyPrompt).toHaveAttribute("title", "Copied semantic review prompt to clipboard.");
+
+    await user.click(reviewPromptButton);
+    expect(copyPrompt).toHaveAttribute(
+      "title",
+      "Copy the drafted semantic review prompt to the clipboard.",
+    );
+    expect(
+      within(copyPrompt).getByTitle("Semantic review prompt copy label: Copy prompt."),
+    ).toHaveTextContent("Copy prompt");
+  });
+
+  it("resets review clipboard state when the structured review summary refreshes", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
+    runAgentHostCommandMock
+      .mockResolvedValueOnce({
+        command: "review",
+        status: "completed",
+        message: "Review summary for branch main: 1 changed file.",
+        review_summary: {
+          branch: "main",
+          changed_files: 1,
+          working_shortstat: "1 file changed, 1 insertion(+)",
+          staged_shortstat: null,
+          files: [" M src/App.tsx"],
+          truncated_count: 0,
+        },
+        review_findings: [],
+      })
+      .mockResolvedValueOnce({
+        command: "review",
+        status: "completed",
+        message: "Review summary for branch feature: 1 changed file.",
+        review_summary: {
+          branch: "feature",
+          changed_files: 1,
+          working_shortstat: "1 file changed, 2 insertions(+)",
+          staged_shortstat: null,
+          files: [" M src/Feature.tsx"],
+          truncated_count: 0,
+        },
+        review_findings: [],
+      });
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/review");
+    await user.type(composer, "{Enter}");
+
+    const review = await screen.findByLabelText("Review summary");
+    const copySummary = within(review).getByRole("button", {
+      name: "Copy structured review summary",
+    });
+    installClipboardMock();
+    fireEvent.click(copySummary);
+    await waitFor(() =>
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(expect.stringContaining("Branch: main")),
+    );
+    expect(copySummary).toHaveAttribute("title", "Copied structured review summary to clipboard.");
+
+    await user.type(composer, "/review");
+    await user.type(composer, "{Enter}");
+
+    await waitFor(() => expect(within(review).getByText("M src/Feature.tsx")).toBeInTheDocument());
+    expect(copySummary).toHaveAttribute(
+      "title",
+      "Copy the structured review summary to the clipboard.",
+    );
+    expect(
+      within(copySummary).getByTitle("Structured review summary copy label: Copy summary."),
+    ).toHaveTextContent("Copy summary");
   });
 
   it("sets a persistent session goal through the host command backend", async () => {
