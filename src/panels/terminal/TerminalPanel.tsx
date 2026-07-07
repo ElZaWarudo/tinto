@@ -1113,7 +1113,10 @@ function AgentTurn({
           <span title={turnIndexLabelTitle(turn.index)}>Turn {turn.index}</span>
           <small title={turnSummaryTitle(turn)}>{turnSummaryLabel(turn)}</small>
         </div>
-        <div className="agent-panel__chat-turn-meta">
+        <div
+          className="agent-panel__chat-turn-meta"
+          title={conversationTurnMetaContainerTitle(turn.index)}
+        >
           {timeLabel && <small title={turnTimeTitle(turn.index, timeLabel)}>{timeLabel}</small>}
           {turn.changes.length > 0 && (
             <small title={turnTouchedFilesTitle(turn.index, turn.changes.length)}>
@@ -1177,6 +1180,7 @@ function AgentTurn({
           label="You"
           onCopy={() => onCopyMessage(`${turn.id}:user`, turn.userText ?? "")}
           text={turn.userText}
+          turnIndex={turn.index}
         />
       )}
       {turn.agentText.map((text, index) => (
@@ -1191,6 +1195,7 @@ function AgentTurn({
           label="Agent"
           onCopy={() => onCopyMessage(`${turn.id}:agent:${index}`, text)}
           text={text}
+          turnIndex={turn.index}
           key={`a-${index}`}
         />
       ))}
@@ -1206,6 +1211,7 @@ function AgentTurn({
           label="Command"
           onCopy={() => onCopyMessage(`${turn.id}:command:${index}`, text)}
           text={text}
+          turnIndex={turn.index}
           key={`c-${index}`}
         />
       ))}
@@ -1221,11 +1227,15 @@ function AgentTurn({
           label="System"
           onCopy={() => onCopyMessage(`${turn.id}:system:${index}`, text)}
           text={text}
+          turnIndex={turn.index}
           key={`s-${index}`}
         />
       ))}
       {turn.changes.length > 0 && (
-        <div className="agent-panel__chat-turn-files">
+        <div
+          className="agent-panel__chat-turn-files"
+          title={turnTouchedFilesContainerTitle(turn.index, turn.changes.length)}
+        >
           {turn.changes.map((change) => (
             <span
               key={`${change.kind}:${change.path}`}
@@ -1247,6 +1257,7 @@ function AgentMessageBlock({
   label,
   onCopy,
   text,
+  turnIndex,
 }: {
   copied: boolean;
   copyTitle: string;
@@ -1254,13 +1265,17 @@ function AgentMessageBlock({
   label: string;
   onCopy: () => void;
   text: string;
+  turnIndex: number;
 }) {
   const technical = kind === "command_output";
   const commandSummary = technical ? commandOutputSummary(text) : null;
   const commandSummaryLabel = commandSummary ?? "Command output";
   const collapseCommand = technical && shouldCollapseCommandOutput(text);
   return (
-    <div className={`agent-panel__message agent-panel__message--${kind}`}>
+    <div
+      className={`agent-panel__message agent-panel__message--${kind}`}
+      title={messageBlockContainerTitle(turnIndex, label)}
+    >
       <div className="agent-panel__message-head" title={messageHeaderTitle(label)}>
         <div className="agent-panel__message-role" title={messageRoleLabelTitle(label)}>
           {label}
@@ -1279,20 +1294,36 @@ function AgentMessageBlock({
       </div>
       {technical ? (
         collapseCommand ? (
-          <details className="agent-panel__command-block">
-            <summary>
+          <details
+            className="agent-panel__command-block"
+            title={collapsedCommandBlockContainerTitle(turnIndex, label)}
+          >
+            <summary title={collapsedCommandSummaryContainerTitle(turnIndex, label)}>
               <span title={collapsedCommandSummaryLabelTitle(commandSummaryLabel)}>
                 {commandSummaryLabel}
               </span>
               <small title={collapsedCommandDisclosureLabelTitle()}>Show output</small>
             </summary>
-            <pre className="agent-panel__message-terminal">{text}</pre>
+            <pre
+              className="agent-panel__message-terminal"
+              title={messageTerminalContentTitle(turnIndex, label)}
+            >
+              {text}
+            </pre>
           </details>
         ) : (
-          <pre className="agent-panel__message-terminal">{text}</pre>
+          <pre
+            className="agent-panel__message-terminal"
+            title={messageTerminalContentTitle(turnIndex, label)}
+          >
+            {text}
+          </pre>
         )
       ) : (
-        <div className="agent-panel__markdown">
+        <div
+          className="agent-panel__markdown"
+          title={messageMarkdownContentTitle(turnIndex, label)}
+        >
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
         </div>
       )}
@@ -1317,12 +1348,32 @@ function collapsedCommandSummaryLabelTitle(summary: string): string {
   return `Collapsed command output summary: ${summary}.`;
 }
 
+function collapsedCommandBlockContainerTitle(turnIndex: number, label: string): string {
+  return `Collapsed command block for turn ${turnIndex}, ${label}: summary disclosure and terminal output.`;
+}
+
+function collapsedCommandSummaryContainerTitle(turnIndex: number, label: string): string {
+  return `Collapsed command summary row for turn ${turnIndex}, ${label}: command summary and disclosure label.`;
+}
+
 function collapsedCommandDisclosureLabelTitle(): string {
   return "Collapsed command output disclosure label: Show output.";
 }
 
 function messageRoleLabelTitle(label: string): string {
   return `Agent message role label: ${label}.`;
+}
+
+function messageBlockContainerTitle(turnIndex: number, label: string): string {
+  return `Conversation message block for turn ${turnIndex}, ${label}: message content and copy control.`;
+}
+
+function messageMarkdownContentTitle(turnIndex: number, label: string): string {
+  return `Conversation message markdown content for turn ${turnIndex}, ${label}.`;
+}
+
+function messageTerminalContentTitle(turnIndex: number, label: string): string {
+  return `Conversation message terminal output for turn ${turnIndex}, ${label}.`;
 }
 
 function messageHeaderTitle(label: string): string {
@@ -2831,6 +2882,10 @@ function conversationTurnTitleContainerTitle(turnIndex: number): string {
   return `Conversation turn title container for turn ${turnIndex}: Turn label and transcript summary.`;
 }
 
+function conversationTurnMetaContainerTitle(turnIndex: number): string {
+  return `Conversation turn metadata container for turn ${turnIndex}: timing, touched-file count, and copy control.`;
+}
+
 function turnIndexLabelTitle(turnIndex: number): string {
   return `Conversation turn index label: Turn ${turnIndex}.`;
 }
@@ -2838,6 +2893,11 @@ function turnIndexLabelTitle(turnIndex: number): string {
 function turnTouchedFilesTitle(turnIndex: number, count: number): string {
   const fileLabel = count === 1 ? "file" : "files";
   return `Turn ${turnIndex} touched ${count} ${fileLabel}.`;
+}
+
+function turnTouchedFilesContainerTitle(turnIndex: number, count: number): string {
+  const fileLabel = count === 1 ? "touched-file chip" : "touched-file chips";
+  return `Conversation turn touched-files container for turn ${turnIndex}: ${count} ${fileLabel}.`;
 }
 
 function turnTouchedFileTitle(turnIndex: number, kind: string, path: string): string {

@@ -352,6 +352,8 @@ describe("TerminalPanel", () => {
     });
 
     expect(await screen.findByText("You")).toBeInTheDocument();
+    expect(screen.getByTitle("Conversation message block for turn 1, You: message content and copy control."))
+      .toHaveClass("agent-panel__message--user_message");
     expect(screen.getByTitle("Agent message role label: You.")).toHaveTextContent("You");
     expect(screen.getByTitle("Agent message header for You: role label and copy control."))
       .toHaveTextContent("You");
@@ -360,15 +362,25 @@ describe("TerminalPanel", () => {
       "Turn 1",
     );
     expect(screen.getByText("Haz el cambio")).toBeInTheDocument();
+    expect(screen.getByTitle("Conversation message markdown content for turn 1, You."))
+      .toHaveClass("agent-panel__markdown");
     expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.getByTitle("Conversation message block for turn 1, Agent: message content and copy control."))
+      .toHaveClass("agent-panel__message--agent_message");
     expect(screen.getByTitle("Agent message role label: Agent.")).toHaveTextContent("Agent");
     expect(screen.getByTitle("Agent message header for Agent: role label and copy control."))
       .toHaveTextContent("Agent");
     expect(screen.getByText("Voy con ello")).toBeInTheDocument();
+    expect(screen.getByTitle("Conversation message markdown content for turn 1, Agent."))
+      .toHaveClass("agent-panel__markdown");
     expect(screen.getByText("Command")).toBeInTheDocument();
+    expect(screen.getByTitle("Conversation message block for turn 1, Command: message content and copy control."))
+      .toHaveClass("agent-panel__message--command_output");
     expect(screen.getByTitle("Agent message role label: Command.")).toHaveTextContent("Command");
     expect(screen.getByTitle("Agent message header for Command: role label and copy control."))
       .toHaveTextContent("Command");
+    expect(screen.getByTitle("Conversation message terminal output for turn 1, Command."))
+      .toHaveClass("agent-panel__message-terminal");
     const conversation = screen.getByLabelText("Agent conversation");
     expect(conversation).toHaveAttribute(
       "title",
@@ -631,6 +643,14 @@ describe("TerminalPanel", () => {
       within(conversation).getByTitle("Collapsed command output summary: npm test -- --run."),
     ).toHaveTextContent("npm test -- --run");
     expect(toggle.closest("details")).not.toHaveAttribute("open");
+    expect(toggle.closest("details")).toHaveAttribute(
+      "title",
+      "Collapsed command block for turn 1, Command: summary disclosure and terminal output.",
+    );
+    expect(toggle.closest("summary")).toHaveAttribute(
+      "title",
+      "Collapsed command summary row for turn 1, Command: command summary and disclosure label.",
+    );
     expect(within(conversation).getAllByText("npm test -- --run").length).toBeGreaterThan(0);
   });
 
@@ -1150,6 +1170,11 @@ describe("TerminalPanel", () => {
     expect(screen.getByTitle("Touched file in turn 1: modified src/a.ts.")).toHaveTextContent(
       "modified src/a.ts",
     );
+    expect(
+      screen.getByTitle(
+        "Conversation turn touched-files container for turn 1: 1 touched-file chip.",
+      ),
+    ).toHaveClass("agent-panel__chat-turn-files");
     expect(screen.getByText("1 files touched")).toHaveAttribute(
       "title",
       "Turn 1 touched 1 file.",
@@ -1955,6 +1980,11 @@ describe("TerminalPanel", () => {
         "Conversation turn title container for turn 1: Turn label and transcript summary.",
       ),
     ).toHaveClass("agent-panel__chat-turn-title");
+    expect(
+      within(firstTurnArticle!).getByTitle(
+        "Conversation turn metadata container for turn 1: timing, touched-file count, and copy control.",
+      ),
+    ).toHaveClass("agent-panel__chat-turn-meta");
     const turnCommandSummary = within(firstTurnArticle!).getByLabelText("Turn 1 command summary");
     expect(turnCommandSummary).toHaveAttribute(
       "title",
