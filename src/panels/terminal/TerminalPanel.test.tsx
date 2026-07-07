@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import type { ReactElement } from "react";
@@ -888,6 +888,68 @@ describe("TerminalPanel", () => {
     expect(
       await within(review).findByTitle("Semantic review prompt was sent as an agent turn."),
     ).toHaveTextContent("Review request sent");
+
+    const sentPrompt = String(writeAgentSessionInputMock.mock.calls[0]?.[1] ?? "").trim();
+    await act(async () => {
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:user:review",
+        kind: "user_message",
+        text: sentPrompt,
+        timestamp_ms: 10,
+      });
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:agent:review",
+        kind: "agent_message",
+        text: "Found one high severity issue in src/App.tsx:12. Add a regression test before merging.",
+        timestamp_ms: 20,
+      });
+    });
+
+    expect(
+      await within(review).findByTitle(
+        "Semantic review response captured from turn 1; verify findings before acting.",
+      ),
+    ).toHaveTextContent("Review response captured");
+    expect(within(review).getByText(/Found one high severity issue/)).toBeInTheDocument();
+
+    const showResponse = screen.getByRole("button", {
+      name: "Show semantic review response turn",
+    });
+    expect(showResponse).toHaveAttribute(
+      "title",
+      "Show the full semantic review response in conversation turn 1.",
+    );
+    expect(
+      within(showResponse).getByTitle("Semantic review response navigation label: Show response."),
+    ).toHaveTextContent("Show response");
+
+    fireEvent.click(showResponse);
+    await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalled());
+
+    const copyResponse = screen.getByRole("button", {
+      name: "Copy semantic review response",
+    });
+    expect(copyResponse).toHaveAttribute(
+      "title",
+      "Copy the captured semantic review response to the clipboard.",
+    );
+    expect(
+      within(copyResponse).getByTitle("Semantic review response copy label: Copy response."),
+    ).toHaveTextContent("Copy response");
+
+    installClipboardMock();
+    fireEvent.click(copyResponse);
+    await waitFor(() =>
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(
+        "Found one high severity issue in src/App.tsx:12. Add a regression test before merging.",
+      ),
+    );
+    expect(copyResponse).toHaveAttribute("title", "Copied semantic review response to clipboard.");
+    expect(
+      within(copyResponse).getByTitle("Semantic review response copy label: Copied."),
+    ).toHaveTextContent("Copied");
   });
 
   it("sets a persistent session goal through the host command backend", async () => {

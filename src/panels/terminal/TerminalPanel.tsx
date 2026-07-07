@@ -295,6 +295,12 @@ interface AgentTurnView {
   restoreReady: boolean;
 }
 
+interface AgentReviewResponseView {
+  turnIndex: number;
+  text: string;
+  excerpt: string;
+}
+
 interface AgentSessionOverviewView {
   turns: number;
   messages: number;
@@ -367,6 +373,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         ? (turns.find((turn) => turn.index === validFocusedTurnIndex) ?? null)
         : (turns[turns.length - 1] ?? null),
     [turns, validFocusedTurnIndex],
+  );
+  const reviewResponse = useMemo(
+    () =>
+      reviewPromptDraft && reviewPromptState === "sent"
+        ? reviewResponseForPrompt(turns, reviewPromptDraft)
+        : null,
+    [reviewPromptDraft, reviewPromptState, turns],
   );
   const sessionRepo = session?.repo ?? repo;
   const hasTranscriptQuery = transcriptQuery.trim().length > 0;
@@ -1301,9 +1314,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           {reviewSummary && (
             <AgentReviewSummaryPanel
               canPrompt={canCompose}
+              copiedResponse={copiedTarget === "review-response"}
               findings={reviewFindings}
+              onCopyResponse={(response) => void copyText("review-response", response.text)}
               onPromptReview={() => applyReviewPrompt(reviewSummary, reviewFindings)}
+              onShowResponse={(response) => {
+                setFocusedTurnIndex(response.turnIndex);
+                scrollToAgentTurn(sessionId, response.turnIndex, "center");
+              }}
               promptState={reviewPromptState}
+              response={reviewResponse}
               summary={reviewSummary}
             />
           )}
@@ -1493,15 +1513,23 @@ function AgentMascotPanel({ agentType, repo }: { agentType: string; repo?: strin
 
 function AgentReviewSummaryPanel({
   canPrompt,
+  copiedResponse,
   findings,
+  onCopyResponse,
   onPromptReview,
+  onShowResponse,
   promptState,
+  response,
   summary,
 }: {
   canPrompt: boolean;
+  copiedResponse: boolean;
   findings: AgentReviewFinding[];
+  onCopyResponse: (response: AgentReviewResponseView) => void;
   onPromptReview: () => void;
+  onShowResponse: (response: AgentReviewResponseView) => void;
   promptState: "drafted" | "sent" | null;
+  response: AgentReviewResponseView | null;
   summary: AgentReviewSummary;
 }) {
   const visibleFiles = summary.files.slice(0, 8);
@@ -1539,6 +1567,43 @@ function AgentReviewSummaryPanel({
         >
           {reviewPromptStateLabel(promptState)}
         </p>
+      )}
+      {response && (
+        <div
+          className="agent-panel__review-response"
+          title={reviewResponseTitle(response.turnIndex)}
+        >
+          <strong title="Semantic review response status.">Review response captured</strong>
+          <span title={`Semantic review response excerpt: ${response.excerpt}`}>
+            {response.excerpt}
+          </span>
+        </div>
+      )}
+      {response && (
+        <button
+          aria-label="Show semantic review response turn"
+          className="agent-panel__review-action"
+          onClick={() => onShowResponse(response)}
+          title={reviewResponseShowButtonTitle(response.turnIndex)}
+          type="button"
+        >
+          <span title="Semantic review response navigation label: Show response.">
+            Show response
+          </span>
+        </button>
+      )}
+      {response && (
+        <button
+          aria-label="Copy semantic review response"
+          className="agent-panel__review-action"
+          onClick={() => onCopyResponse(response)}
+          title={reviewResponseCopyButtonTitle(copiedResponse)}
+          type="button"
+        >
+          <span title={reviewResponseCopyLabelTitle(copiedResponse ? "Copied" : "Copy response")}>
+            {copiedResponse ? "Copied" : "Copy response"}
+          </span>
+        </button>
       )}
       <div className="agent-panel__review-summary-stats" aria-label="Review diff stats">
         <span title={`Working tree diff: ${working}`}>{working}</span>
@@ -1616,6 +1681,40 @@ function reviewPromptStateTitle(state: "drafted" | "sent"): string {
   return state === "sent"
     ? "Semantic review prompt was sent as an agent turn."
     : "Semantic review prompt is drafted in the composer.";
+}
+
+function reviewResponseTitle(turnIndex: number): string {
+  return `Semantic review response captured from turn ${turnIndex}; verify findings before acting.`;
+}
+
+function reviewResponseCopyButtonTitle(copied: boolean): string {
+  return copied
+    ? "Copied semantic review response to clipboard."
+    : "Copy the captured semantic review response to the clipboard.";
+}
+
+function reviewResponseShowButtonTitle(turnIndex: number): string {
+  return `Show the full semantic review response in conversation turn ${turnIndex}.`;
+}
+
+function reviewResponseCopyLabelTitle(label: "Copy response" | "Copied"): string {
+  return `Semantic review response copy label: ${label}.`;
+}
+
+function reviewResponseForPrompt(
+  turns: AgentTurnView[],
+  prompt: string,
+): AgentReviewResponseView | null {
+  const promptText = prompt.trim();
+  if (!promptText) return null;
+  const turn = turns.find((candidate) => candidate.userText?.trim() === promptText);
+  const responseText = turn?.agentText.join("\n").trim();
+  if (!turn || !responseText) return null;
+  return {
+    turnIndex: turn.index,
+    text: responseText,
+    excerpt: compactActivityText(responseText),
+  };
 }
 
 function reviewActionPrompt(summary: AgentReviewSummary, findings: AgentReviewFinding[]): string {
