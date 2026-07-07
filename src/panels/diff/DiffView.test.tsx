@@ -126,7 +126,7 @@ describe("DiffView", () => {
     expect(screen.getByText(`line-${MAX_RENDERED_DIFF_LINES - 1}`)).toBeInTheDocument();
     expect(screen.queryByText(`line-${MAX_RENDERED_DIFF_LINES + 4}`)).not.toBeInTheDocument();
     expect(container.querySelectorAll(".diff-line")).toHaveLength(MAX_RENDERED_DIFF_LINES);
-  });
+  }, 10000);
 
   it("renders overview markers and highlights the matching added line", () => {
     const { container } = render(

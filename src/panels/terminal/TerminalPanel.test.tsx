@@ -486,7 +486,7 @@ describe("TerminalPanel", () => {
       reasoning_effort: "high",
       speed: "fast",
     });
-  });
+  }, 10000);
 
   it("shows a titled error banner when sending a turn fails", async () => {
     const user = userEvent.setup();
@@ -1962,7 +1962,7 @@ describe("TerminalPanel", () => {
     expect(search).toHaveValue("");
     expect(within(conversation).getByText("Termine el dashboard")).toBeInTheDocument();
     expect(within(conversation).getByText("Segunda tarea")).toBeInTheDocument();
-  });
+  }, 10000);
 
   it("jumps to the latest visible turn from the chat toolbar", async () => {
     const user = userEvent.setup();

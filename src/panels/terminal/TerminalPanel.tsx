@@ -560,10 +560,17 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   useEffect(() => {
     if (!session?.runtime_options || !isCodexSession) return;
     const restored = runtimeSelectionsFromOptions(session.runtime_options);
-    setSelectedModel(restored.model);
-    setSelectedReasoning(restored.reasoning);
-    setSelectedSpeed(restored.speed);
-  }, [isCodexSession, session?.id]);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSelectedModel(restored.model);
+      setSelectedReasoning(restored.reasoning);
+      setSelectedSpeed(restored.speed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCodexSession, session?.id, session?.runtime_options]);
 
   const focusVisibleTurn = (direction: "previous" | "next") => {
     if (visibleTurns.length === 0) return;
@@ -905,7 +912,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   };
 
   useEffect(() => {
-    setActiveSlashCommandIndex(0);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setActiveSlashCommandIndex(0);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [composerCommandQuery, composerCommandTrigger?.trigger, filteredComposerCommandItems.length]);
 
   const applyFileActionPrompt = (context: AgentLensFilePromptContext) => {

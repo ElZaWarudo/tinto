@@ -1759,24 +1759,26 @@ mod tests {
 
     #[test]
     fn lightweight_external_delta_preserves_previous_analysis() {
-        let mut state = RepoLiveState::default();
-        state.metrics = RepoMetrics {
-            changed_files: 2,
-            lines_added: 10,
-            lines_removed: 1,
+        let mut state = RepoLiveState {
+            metrics: RepoMetrics {
+                changed_files: 2,
+                lines_added: 10,
+                lines_removed: 1,
+            },
+            signals: vec![signal(
+                PassiveSignalKind::ConfigChange,
+                SignalSeverity::Info,
+                Some(PathBuf::from("package.json")),
+                "Configuration file changed",
+            )],
+            secret_findings: vec![SecretFinding {
+                path: PathBuf::from(".env"),
+                line: 1,
+                rule_id: "fallback-secret".into(),
+                description: "Possible secret".into(),
+            }],
+            ..Default::default()
         };
-        state.signals = vec![signal(
-            PassiveSignalKind::ConfigChange,
-            SignalSeverity::Info,
-            Some(PathBuf::from("package.json")),
-            "Configuration file changed",
-        )];
-        state.secret_findings = vec![SecretFinding {
-            path: PathBuf::from(".env"),
-            line: 1,
-            rule_id: "fallback-secret".into(),
-            description: "Possible secret".into(),
-        }];
 
         let delta = RepoDelta {
             repo: PathBuf::from("/repo"),

@@ -1114,11 +1114,11 @@ mod tests {
         assert!(turn
             .changes
             .iter()
-            .any(|change| change.path == PathBuf::from("base.txt")));
+            .any(|change| change.path.as_path() == Path::new("base.txt")));
         assert!(turn
             .changes
             .iter()
-            .any(|change| change.path == PathBuf::from("created.txt")));
+            .any(|change| change.path.as_path() == Path::new("created.txt")));
 
         std::fs::write(repo.path().join("base.txt"), "later\n").unwrap();
         std::fs::write(repo.path().join("late.txt"), "late\n").unwrap();

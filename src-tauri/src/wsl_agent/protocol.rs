@@ -85,18 +85,13 @@ pub struct GitReviewFinding {
     pub line: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoSnapshotScope {
     StatusOnly,
     Metadata,
+    #[default]
     Everything,
-}
-
-impl Default for RepoSnapshotScope {
-    fn default() -> Self {
-        Self::Everything
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
