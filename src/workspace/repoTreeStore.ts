@@ -1,8 +1,7 @@
-// Per-repo file-tree cache. The in-project explorer must feel "always loaded":
-// trees are fetched once (list_repo_tree), cached for the session, and served
-// stale-while-revalidate — a cached tree stays on screen while a refresh runs,
-// so re-opening a project never flashes a spinner. App preloads every repo in
-// the background as soon as the workbench snapshot lands.
+// Per-repo file-tree cache. Trees are fetched on first project-explorer use,
+// cached for the session, and served stale-while-revalidate. A cached tree stays
+// on screen while a refresh runs, so re-opening a project never flashes a
+// spinner.
 
 import { useSyncExternalStore } from "react";
 import { listRepoTree } from "../bus/client";
@@ -48,16 +47,11 @@ class RepoTreeStore {
       .finally(() => this.inflight.delete(repo));
   }
 
-  /** Fetch only if never loaded (used for background preloading + on mount). */
+  /** Fetch only if never loaded (used on project-explorer mount). */
   ensureLoaded(repo: string): void {
     const s = this.get(repo);
     if (s.tree || s.loading || this.inflight.has(repo)) return;
     this.refresh(repo);
-  }
-
-  /** Background-preload a set of repos so their explorers are ready on open. */
-  preload(repos: string[]): void {
-    for (const r of repos) this.ensureLoaded(r);
   }
 
   /** Forget a repo's cached tree (e.g. it left the workbench). */

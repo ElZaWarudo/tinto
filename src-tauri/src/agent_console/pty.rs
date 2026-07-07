@@ -7,6 +7,7 @@ use std::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use super::{app_server::CodexAppServerHandle, AgentConsoleError};
+use crate::bus::contract::AgentSessionRuntimeOptions;
 
 pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
 
@@ -18,6 +19,13 @@ pub trait AgentProcess: Send {
     fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError>;
     fn kill(&mut self) -> Result<(), AgentConsoleError>;
     fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError>;
+    fn write_input_with_options(
+        &mut self,
+        input: &[u8],
+        _options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        self.write_input(input)
+    }
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
@@ -263,7 +271,7 @@ export PATH="$native_path"
 resolve_agent_binary() {
   agent_name=$1
   resolved=$(command -v -- "$agent_name" 2>/dev/null || true)
-  if [ -n "$resolved" ]; then
+  if [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]; then
     printf '%s\n' "$resolved"
     return 0
   fi
@@ -296,7 +304,7 @@ while [ "$attempts" -gt 0 ]; do
   sleep 0.25
 done
 if ! resolved_agent=$(resolve_agent_binary "$agent_name"); then
-  printf 'Tinto: no se encontro %s en PATH dentro de WSL. Instala el agente en esta distro o crea un enlace en ~/.local/bin.\n' "$agent_name" >&2
+  printf 'Tinto: no se encontro un ejecutable nativo de %s en PATH dentro de WSL. Instala el agente en esta distro o crea un enlace ejecutable en ~/.local/bin.\n' "$agent_name" >&2
   exit 127
 fi
 exec "$resolved_agent" "$@""#;

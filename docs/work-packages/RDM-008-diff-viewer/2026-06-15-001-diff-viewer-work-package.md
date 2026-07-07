@@ -1,6 +1,6 @@
 ---
 title: Diff viewer — structured render, live diff, full-file view, tree drill-through
-status: pr-opened
+status: completed
 roadmap_item: RDM-008
 origin_roadmap: docs/roadmaps/2026-06-10-001-tinto-roadmap.md
 origin_brainstorm: docs/brainstorms/2026-06-15-rdm-008-diff-viewer-requirements.md

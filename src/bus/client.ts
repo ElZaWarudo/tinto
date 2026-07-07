@@ -19,6 +19,8 @@ import {
   type AgentSessionOutput,
   type AgentSessionTimelineItem,
   type AgentSession,
+  type AgentSessionRuntimeOptions,
+  type AgentHostCommandResult,
   type GitleaksSetupStatus,
   type GitleaksInstallResult,
   type CopyResult,
@@ -150,16 +152,39 @@ export const revertSessionTurnFile = (
     userConsent,
   });
 
+export const restoreSessionTurn = (
+  sessionId: string,
+  turnCheckpointId: string,
+  userConsent: boolean,
+) =>
+  invoke<AgentSession>("restore_session_turn", {
+    sessionId,
+    turnCheckpointId,
+    userConsent,
+  });
+
 export const agentBinaryAvailable = (agentType: string) =>
   invoke<boolean>("agent_binary_available", { agentType });
 
 export const agentBinaryAvailableForRepo = (repo: string, agentType: string) =>
   invoke<boolean>("agent_binary_available_for_repo", { repo, agentType });
 
-export const writeAgentSessionInput = (sessionId: string, input: string | Uint8Array) =>
+export const writeAgentSessionInput = (
+  sessionId: string,
+  input: string | Uint8Array,
+  options?: AgentSessionRuntimeOptions,
+) =>
   invoke("write_agent_session_input", {
     sessionId,
     inputBase64: encodeAgentInput(input),
+    options: options ?? null,
+  });
+
+export const runAgentHostCommand = (sessionId: string, command: string, argument?: string) =>
+  invoke<AgentHostCommandResult>("run_agent_host_command", {
+    sessionId,
+    command,
+    argument: argument ?? null,
   });
 
 export const resizeAgentSession = (sessionId: string, cols: number, rows: number) =>
@@ -229,34 +254,54 @@ export const redoDeletedFromRepo = (repo: string, token: string) =>
 // ---- Event listeners (StrictMode-safe; see KTD6) ----
 // Each returns a promise resolving to an unlisten fn. Callers attach in an
 // effect with an `active` guard and call the unlisten on cleanup.
+const noopUnlisten: UnlistenFn = () => {};
+
+function safeListen<T>(
+  event: string,
+  handler: Parameters<typeof listen<T>>[1],
+): Promise<UnlistenFn> {
+  try {
+    return listen<T>(event, handler);
+  } catch (error) {
+    if (!isUnavailableTauriEventBridgeError(error)) {
+      return Promise.reject(error);
+    }
+    return Promise.resolve(noopUnlisten);
+  }
+}
+
+function isUnavailableTauriEventBridgeError(error: unknown): boolean {
+  return error instanceof TypeError && error.message.includes("transformCallback");
+}
+
 export const onWorkbenchDelta = (cb: (d: RepoDelta) => void): Promise<UnlistenFn> =>
-  listen<RepoDelta>(EVENT_WORKBENCH_DELTA, (e) => cb(e.payload));
+  safeListen<RepoDelta>(EVENT_WORKBENCH_DELTA, (e) => cb(e.payload));
 
 export const onFsEvents = (cb: (b: FsEventBatch) => void): Promise<UnlistenFn> =>
-  listen<FsEventBatch>(EVENT_FS_EVENTS, (e) => cb(e.payload));
+  safeListen<FsEventBatch>(EVENT_FS_EVENTS, (e) => cb(e.payload));
 
 export const onWatchingState = (cb: (w: WatchingState) => void): Promise<UnlistenFn> =>
-  listen<WatchingState>(EVENT_WATCHING_STATE, (e) => cb(e.payload));
+  safeListen<WatchingState>(EVENT_WATCHING_STATE, (e) => cb(e.payload));
 
 export const onAgentSessionsChanged = (
   cb: (sessions: AgentSession[]) => void,
 ): Promise<UnlistenFn> =>
-  listen<AgentSession[]>(EVENT_AGENT_SESSIONS_CHANGED, (e) => cb(e.payload));
+  safeListen<AgentSession[]>(EVENT_AGENT_SESSIONS_CHANGED, (e) => cb(e.payload));
 
 export const onAgentSessionOutput = (
   cb: (output: AgentSessionOutput) => void,
 ): Promise<UnlistenFn> =>
-  listen<AgentSessionOutput>(EVENT_AGENT_SESSION_OUTPUT, (e) => cb(e.payload));
+  safeListen<AgentSessionOutput>(EVENT_AGENT_SESSION_OUTPUT, (e) => cb(e.payload));
 
 export const onAgentSessionChangeLog = (
   cb: (changeLog: AgentSessionChangeLog) => void,
 ): Promise<UnlistenFn> =>
-  listen<AgentSessionChangeLog>(EVENT_AGENT_SESSION_CHANGE_LOG, (e) => cb(e.payload));
+  safeListen<AgentSessionChangeLog>(EVENT_AGENT_SESSION_CHANGE_LOG, (e) => cb(e.payload));
 
 export const onAgentSessionTimeline = (
   cb: (item: AgentSessionTimelineItem) => void,
 ): Promise<UnlistenFn> =>
-  listen<AgentSessionTimelineItem>(EVENT_AGENT_SESSION_TIMELINE, (e) => cb(e.payload));
+  safeListen<AgentSessionTimelineItem>(EVENT_AGENT_SESSION_TIMELINE, (e) => cb(e.payload));
 
 const encodeAgentInput = (input: string | Uint8Array) => {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;

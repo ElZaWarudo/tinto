@@ -23,6 +23,8 @@
 
 ## Events (backend `emit` → frontend)
 
+Frontend event listeners are active only when the Tauri event bridge is present. Browser-only Vite smoke runs do not have that bridge; the TypeScript client treats the known missing-bridge `transformCallback` listener failure as a no-op subscription with a no-op cleanup function, so UI surfaces can render for inspection. Unexpected listener setup failures must still reject instead of being hidden. If the initial snapshot cannot be loaded, the frontend marks the bus as loaded with an empty degraded watcher state rather than leaving the dashboard in an indefinite loading state; later refresh failures keep prior state. This fallback is frontend-only and does not change backend event emission or any payload shape below.
+
 ### `tinto://workbench-delta` — state delta for ONE repo
 
 ```jsonc
@@ -159,7 +161,8 @@ Timeline items are the primary stream for the IADE agent UI. `agent-session-outp
 | `list_agent_sessions` | none | `Vec<AgentSession>` | Returns known sessions after refreshing completed process statuses and applying lifetime limits. |
 | `agent_binary_available` | `agent_type` | `bool` | Host-scoped compatibility check for the allowlisted agent binary through PATH lookup. Known missing binaries return `false`; unsupported agent ids return `unsupported_agent`. |
 | `agent_binary_available_for_repo` | `repo, agent_type` | `bool` | Source-aware availability check. Local repos inspect the host PATH; WSL repos ask the persistent Ubuntu `tinto-agent` to resolve the allowlisted binary inside Linux, so host misses do not block Linux agents. |
-| `write_agent_session_input` | `session_id, input_base64` | `()` | Writes decoded bytes to a running session. PTY-backed sessions receive raw terminal input; Codex app-server sessions echo line input locally and submit a Codex turn on Enter. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
+| `write_agent_session_input` | `session_id, input_base64, options?` | `()` | Writes decoded bytes to a running session. If the session has host goal/personality/context-summary state, the backend prefixes a visible Tinto host-context block before the submitted turn. If plan mode is enabled, the existing visible plan instruction is included in that same turn. PTY-backed sessions receive terminal input and ignore runtime options. Codex app-server sessions echo line input locally and submit a Codex turn on Enter, applying supported per-turn runtime options to `turn/start`. Invalid base64 returns `invalid_input`; stopped/exited sessions return `session_not_running`. |
+| `run_agent_host_command` | `session_id, command, argument?` | `AgentHostCommandResult` | Runs a Tinto host command for an agent session without sending it as agent prompt text. Initial supported commands are `status`, `init`, `goal`, `plan`, `personality`, `feedback`, `comments`, `compact`, `branch`, `fork`, `mcp`, `review`, `details`, and runtime-command guidance for `model`/`reasoning`/`effort`/`fast`; known but unimplemented host commands return `status="unavailable"` with a safe message. Composer aliases such as `/objective`, `/code-review`, and `/lateral` are UI conveniences that route to canonical host commands such as `goal`, `review`, and `fork`. |
 | `resize_agent_session` | `session_id, cols, rows` | `()` | Resizes a running session's PTY. `cols` and `rows` must be positive; invalid dimensions return `invalid_terminal_size`. |
 | `revert_session` | `session_id, user_consent` | `AgentSession` | Restores the repo to the session checkpoint. `user_consent=false` returns `consent_required`; running sessions return `session_still_running`; sessions without a checkpoint return `checkpoint_unsupported`; repeated revert is idempotent. |
 | `revert_session_turn_file` | `session_id, turn_checkpoint_id, path, user_consent` | `AgentSession` | Restores one file from the selected turn checkpoint. `user_consent=false` returns `consent_required`; running sessions return `session_still_running`; unknown turn checkpoints return `turn_checkpoint_not_found`; containment rejects path traversal and `.git`. |
@@ -195,6 +198,36 @@ The agent console backend exposes session lifecycle metadata through additive co
     { "path": "src/a.ts", "kind": "modified", "timestamp_ms": 1760000000000 }
   ],
   "turn_status": "settling",        // "waiting" | "working" | "settling"
+  "runtime_options": {
+    "model": "gpt-5.5",
+    "reasoning_effort": "high",
+    "speed": "standard"
+  },
+  "goal": {
+    "text": "Build the host command harness",
+    "updated_at_ms": 1760000000200
+  },
+  "personality": {
+    "name": "precise",
+    "updated_at_ms": 1760000000250
+  },
+  "plan_mode": {
+    "enabled": true,
+    "updated_at_ms": 1760000000255
+  },
+  "feedback": [
+    {
+      "kind": "feedback",
+      "text": "Keep the composer controls native.",
+      "created_at_ms": 1760000000260
+    }
+  ],
+  "context_summary": {
+    "text": "Session: sess-1...\nRecent timeline:\n- AgentMessage: I updated the file.",
+    "created_at_ms": 1760000000300,
+    "source_events": 4,
+    "source_turns": 1
+  },
   "turn_checkpoints": [
     {
       "id": "sess-1:turn-1",
@@ -236,6 +269,17 @@ The agent console backend exposes session lifecycle metadata through additive co
 - `AgentSessionOutput`: `{ session_id: string, chunk_base64: string, timestamp_ms: number }`; emitted on `tinto://agent-session-output` for live session output chunks. PTY sessions preserve terminal bytes and ANSI sequences; Codex app-server sessions keep this stream as compatibility output, while the product UI consumes the native timeline event below.
 - `AgentSession.timeline`: bounded replay buffer of `AgentSessionTimelineItem` values for this session. `list_agent_sessions` returns it so tabs, detached windows, and late-mounted panels can hydrate the native conversation model without waiting for new live events.
 - `AgentSessionTimelineItem`: `{ session_id, id, kind, text, timestamp_ms }`; emitted on `tinto://agent-session-timeline` and persisted in the local agent journal. `kind` is `"user_message" | "agent_message" | "command_output" | "lifecycle"`. The Agents panel uses this as the primary conversation model and falls back to raw output only when timeline items are unavailable.
+- `AgentSession.runtime_options`: optional per-session echo of the latest Codex runtime selection. The Tauri input command accepts `options?: { model?: string, reasoning_effort?: string, speed?: string }`; local Codex app-server turns forward supported fields as `model` and `effort` in `turn/start`. `speed` is a Tinto UI preset hint and is intentionally ignored by PTY-backed sessions.
+- `AgentSession.goal`: optional persistent session objective set through `/goal <text>` or cleared with `/goal clear`. The journal persists `goal.text` and `goal.updated_at_ms` so archived sessions can reconstruct the objective. When present, outgoing turn input is prefixed with a visible Tinto host-context block that includes this goal.
+- `AgentSession.personality`: optional persistent response-style preference set through `/personality <name>` or cleared with `/personality clear`. `/personality` without an argument reports the current value. The journal persists the name and update time so archived sessions can reconstruct the preference. When present, outgoing turn input is prefixed with a visible Tinto host-context block that includes this preference. This is Tinto host state; it does not implement memory.
+- `AgentSession.plan_mode`: optional persistent session mode toggled through `/plan on`, `/plan off`, `/plan toggle`, or the composer palette's `Modo plan` entry. `/plan` without an argument reports the current value. When enabled, the session backend prefixes outgoing turn input with a visible one-line instruction asking Codex to provide a concise implementation plan before editing files. The journal persists `enabled` and `updated_at_ms` so archived sessions can reconstruct the mode. This is Tinto host state and does not implement memory.
+- `AgentSession.feedback`: persistent local session notes created through `/feedback <text>` or `/comments <text>` and cleared with `/feedback clear` or `/comments clear`. This stores user feedback/commentary in Tinto's local journal only; it does not send feedback to an external service and does not implement memory.
+- `AgentSession.context_summary`: optional persistent session summary created through `/compact` and cleared with `/compact clear`. This is Tinto host context, not a guarantee that Codex app-server has internally discarded prior context. The journal persists summary text, creation time, and source event/turn counts for archived session reconstruction. When present, outgoing turn input is prefixed with a visible Tinto host-context block that includes a bounded single-line compact context value.
+- `AgentHostCommandResult`: `{ command, status, message, session_id?, repo?, agent_type?, review_summary?, review_findings? }`, where `status` is `"completed" | "unavailable"`. Host commands are Tinto app actions, not agent prompts; unsupported or pending host commands must return `unavailable` instead of being sent to the agent as raw slash text. `/branch`, `/fork`, and `/lateral` return the optional session fields when they start a child session. `/review` and `/code-review` return optional `review_summary` data when Git summary collection succeeds, plus optional `review_findings` for deterministic host-side findings. Active local and WSL same-repo forks create isolated Git worktrees under `~/.tinto/worktrees`, add them to the active workbench, reseed the bus, and start the child session there. Local or WSL repos without a `HEAD` commit return `unavailable` with a specific message.
+- `AgentReviewSummary`: `{ branch, changed_files, working_shortstat?, staged_shortstat?, files, truncated_count }`. The file list is bounded for UI display; `message` remains the human-readable compatibility summary.
+- `AgentReviewFinding`: `{ severity, title, detail, path?, line? }`. Findings are bounded, deterministic review hints produced from local or WSL Git state. Current rules flag sensitive path changes, conflict markers in changed text files, and `package-lock.json` changes without a matching `package.json` change. They are review prompts, not a full semantic code-review verdict.
+- `/mcp` inspects the local Codex config (`$CODEX_HOME/config.toml` or `~/.codex/config.toml`) for `mcp_servers` / `mcpServers` entries and reports server names plus safe command availability counts. It does not print args/env values and does not start MCP servers as a health check.
+- `/review` and `/code-review` produce a Git review summary for local and WSL repos: current branch, changed-file count, unstaged/staged shortstat, a capped changed-file list, and deterministic findings for high-signal local hazards. This is a host-side orientation surface for code review, not a claim that semantic bug review has completed. WSL summaries/findings are resolved through the allowlisted Linux-side `tinto-agent` protocol and remain read-only.
 - `AgentSessionCheckpoint`: local git checkpoints are used only when the repo is clean and HEAD is readable; dirty or non-git local repos use a filesystem snapshot under `~/.tinto/checkpoints/<repo-hash>/<session-id>/` with bounded size and per-repo retention. WSL Agent Console sessions create equivalent checkpoint records inside Ubuntu through `tinto-agent`; change-log scan and explicit-consent revert also run inside Ubuntu and are allowlisted to the active WSL repo. Sessions with `checkpoint: null` can still exist for legacy/fallback states and return `checkpoint_unsupported`; the UI disables Revert for those sessions.
 - `AgentSessionChangeLog`: `{ session_id, changes }`; emitted on `tinto://agent-session-change-log` and mirrored in the session record.
 - `AgentSessionTurnStatus`: `"waiting" | "working" | "settling"`. PTY sessions derive this from fallback signals: PTY output activity, optional Tinto turn-done marker, and stable filesystem/checkpoint scans. Local Codex app-server sessions additionally consume structured app-server events: file/diff/watch notifications mark activity and `turn/completed` force-closes the turn through the existing checkpoint scanner. Tinto remains the authority for final changed files.

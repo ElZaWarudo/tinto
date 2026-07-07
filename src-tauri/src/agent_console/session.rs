@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
 use crate::bus::contract::{
-    AgentSession, AgentSessionChange, AgentSessionError, AgentSessionStatus,
-    AgentSessionTimelineItem, AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
+    AgentSession, AgentSessionChange, AgentSessionContextSummary, AgentSessionError,
+    AgentSessionFeedback, AgentSessionGoal, AgentSessionPersonality, AgentSessionPlanMode,
+    AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
+    AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -49,7 +51,14 @@ pub struct AgentSessionRecord {
     last_turn_scan_at_ms: Option<u64>,
     next_turn_index: u32,
     timeline: Vec<AgentSessionTimelineItem>,
+    runtime_options: AgentSessionRuntimeOptions,
+    goal: Option<AgentSessionGoal>,
+    personality: Option<AgentSessionPersonality>,
+    plan_mode: Option<AgentSessionPlanMode>,
+    feedback: Vec<AgentSessionFeedback>,
+    context_summary: Option<AgentSessionContextSummary>,
     reverted_at_ms: Option<u64>,
+    restored_to_turn_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +103,14 @@ impl AgentSessionRecord {
             last_turn_scan_at_ms: None,
             next_turn_index: 1,
             timeline: Vec::new(),
+            runtime_options: AgentSessionRuntimeOptions::default(),
+            goal: None,
+            personality: None,
+            plan_mode: None,
+            feedback: Vec::new(),
+            context_summary: None,
             reverted_at_ms: None,
+            restored_to_turn_index: None,
         }
     }
 
@@ -154,10 +170,29 @@ impl AgentSessionRecord {
         Ok(())
     }
 
-    pub fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
+    pub fn write_input(
+        &mut self,
+        input: &[u8],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
         self.note_turn_activity(now_ms());
-        let process = self.running_process_mut()?;
-        process.write_input(input)
+        let planned_input = plan_mode_input(self.plan_mode.as_ref(), input);
+        let input = planned_input.as_deref().unwrap_or(input);
+        let contextual_input = turn_context_input(
+            self.goal.as_ref(),
+            self.personality.as_ref(),
+            self.context_summary.as_ref(),
+            input,
+        );
+        let input = contextual_input.as_deref().unwrap_or(input);
+        if let Some(options) = options {
+            self.runtime_options = options.clone();
+            let process = self.running_process_mut()?;
+            process.write_input_with_options(input, Some(options))
+        } else {
+            let process = self.running_process_mut()?;
+            process.write_input(input)
+        }
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
@@ -187,6 +222,51 @@ impl AgentSessionRecord {
         }
 
         Ok(())
+    }
+
+    pub fn set_goal(&mut self, text: String, updated_at_ms: u64) {
+        self.goal = Some(AgentSessionGoal {
+            text: text.trim().to_string(),
+            updated_at_ms,
+        });
+    }
+
+    pub fn clear_goal(&mut self) {
+        self.goal = None;
+    }
+
+    pub fn set_personality(&mut self, name: String, updated_at_ms: u64) {
+        self.personality = Some(AgentSessionPersonality {
+            name,
+            updated_at_ms,
+        });
+    }
+
+    pub fn clear_personality(&mut self) {
+        self.personality = None;
+    }
+
+    pub fn set_plan_mode(&mut self, enabled: bool, updated_at_ms: u64) {
+        self.plan_mode = Some(AgentSessionPlanMode {
+            enabled,
+            updated_at_ms,
+        });
+    }
+
+    pub fn add_feedback(&mut self, feedback: AgentSessionFeedback) {
+        self.feedback.push(feedback);
+    }
+
+    pub fn clear_feedback(&mut self) {
+        self.feedback.clear();
+    }
+
+    pub fn set_context_summary(&mut self, summary: AgentSessionContextSummary) {
+        self.context_summary = Some(summary);
+    }
+
+    pub fn clear_context_summary(&mut self) {
+        self.context_summary = None;
     }
 
     fn apply_process_event(&mut self, event: AgentProcessEvent) -> Result<(), AgentConsoleError> {
@@ -287,6 +367,42 @@ impl AgentSessionRecord {
         Ok(())
     }
 
+    pub fn restore_to_turn(&mut self, turn_checkpoint_id: &str) -> Result<(), AgentConsoleError> {
+        self.refresh_status()?;
+        if self.status == AgentSessionStatus::Running || self.status == AgentSessionStatus::Starting
+        {
+            return Err(AgentConsoleError::new(
+                "session_still_running",
+                "stop the session before restoring a turn checkpoint",
+            ));
+        }
+        let turn = self
+            .turn_checkpoints
+            .iter()
+            .find(|turn| turn.id == turn_checkpoint_id)
+            .ok_or_else(|| {
+                AgentConsoleError::new(
+                    "turn_checkpoint_not_found",
+                    "no existe el checkpoint del turno",
+                )
+            })?;
+        let checkpoint = turn.restore_checkpoint.clone().ok_or_else(|| {
+            AgentConsoleError::new(
+                "turn_restore_checkpoint_not_found",
+                "no existe el checkpoint posterior del turno",
+            )
+        })?;
+        match self.checkpoint_backend {
+            CheckpointBackend::Local => revert_checkpoint(&checkpoint)?,
+            CheckpointBackend::Wsl => {
+                revert_wsl_checkpoint(self.wsl_distro.as_deref(), &checkpoint)?
+            }
+        }
+        self.restored_to_turn_index = Some(turn.index);
+        self.refresh_change_log()?;
+        Ok(())
+    }
+
     pub fn record_output_activity(&mut self, timestamp_ms: u64) {
         self.last_output_at_ms = Some(timestamp_ms);
         self.note_turn_activity(timestamp_ms);
@@ -379,16 +495,18 @@ impl AgentSessionRecord {
             return Ok(());
         };
         let index = self.next_turn_index;
+        let restore_checkpoint = self.create_followup_checkpoint(index, now_ms)?;
         self.turn_checkpoints.push(AgentTurnCheckpointRecord {
             id: format!("{}:turn-{index}", self.id),
             index,
             started_at_ms: self.turn_started_at_ms.unwrap_or(now_ms),
             ended_at_ms: now_ms,
             checkpoint,
+            restore_checkpoint: Some(restore_checkpoint.clone()),
             changes,
         });
         self.next_turn_index = self.next_turn_index.saturating_add(1);
-        self.turn_baseline = Some(self.create_followup_checkpoint(index, now_ms)?);
+        self.turn_baseline = Some(restore_checkpoint);
         self.pending_turn_signature = None;
         self.pending_turn_seen_at_ms = None;
         self.turn_started_at_ms = None;
@@ -447,7 +565,14 @@ impl AgentSessionRecord {
                 .map(AgentTurnCheckpointRecord::to_contract)
                 .collect(),
             timeline: self.timeline.clone(),
+            runtime_options: self.runtime_options.clone(),
+            goal: self.goal.clone(),
+            personality: self.personality.clone(),
+            plan_mode: self.plan_mode.clone(),
+            feedback: self.feedback.clone(),
+            context_summary: self.context_summary.clone(),
             reverted_at_ms: self.reverted_at_ms,
+            restored_to_turn_index: self.restored_to_turn_index,
             active_sessions,
             age_ms: now_ms.saturating_sub(self.started_at_ms),
             output_bytes_per_second: None,
@@ -504,6 +629,7 @@ struct AgentTurnCheckpointRecord {
     started_at_ms: u64,
     ended_at_ms: u64,
     checkpoint: CheckpointRecord,
+    restore_checkpoint: Option<CheckpointRecord>,
     changes: Vec<AgentSessionChange>,
 }
 
@@ -515,6 +641,10 @@ impl AgentTurnCheckpointRecord {
             started_at_ms: self.started_at_ms,
             ended_at_ms: self.ended_at_ms,
             checkpoint: self.checkpoint.contract.clone(),
+            restore_checkpoint: self
+                .restore_checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.contract.clone()),
             changes: self.changes.clone(),
         }
     }
@@ -666,18 +796,125 @@ fn change_signature(changes: &[AgentSessionChange]) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
+const PLAN_MODE_PREFIX: &str = "Tinto plan mode is enabled for this turn: before editing files, first provide a concise implementation plan and wait for the plan to be accepted or revised. User request: ";
+const HOST_CONTEXT_HEADER: &str = "Tinto host context for this turn:";
+const HOST_CONTEXT_USER_REQUEST: &str = "User request:";
+const MAX_HOST_CONTEXT_VALUE_CHARS: usize = 1200;
+
+fn turn_context_input(
+    goal: Option<&AgentSessionGoal>,
+    personality: Option<&AgentSessionPersonality>,
+    context_summary: Option<&AgentSessionContextSummary>,
+    input: &[u8],
+) -> Option<Vec<u8>> {
+    let mut lines = Vec::new();
+    if let Some(goal) = goal.and_then(|goal| trimmed_context_value(&goal.text)) {
+        lines.push(format!("- Goal: {}", bounded_context_value(goal)));
+    }
+    if let Some(personality) =
+        personality.and_then(|personality| trimmed_context_value(&personality.name))
+    {
+        lines.push(format!(
+            "- Personality: {}",
+            bounded_context_value(personality)
+        ));
+    }
+    if let Some(summary) = context_summary.and_then(|summary| trimmed_context_value(&summary.text))
+    {
+        lines.push(format!(
+            "- Compact context: {}",
+            bounded_context_value(summary)
+        ));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+
+    let line_end = input
+        .iter()
+        .rposition(|byte| *byte == b'\r' || *byte == b'\n')?;
+    let (message, suffix) = input.split_at(line_end);
+    if message.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(message);
+    if text.starts_with(HOST_CONTEXT_HEADER) {
+        return None;
+    }
+
+    let mut context = String::new();
+    context.push_str(HOST_CONTEXT_HEADER);
+    context.push('\n');
+    context.push_str(&lines.join("\n"));
+    context.push_str("\n\n");
+    context.push_str(HOST_CONTEXT_USER_REQUEST);
+    context.push(' ');
+
+    let mut contextual = Vec::with_capacity(context.len() + input.len());
+    contextual.extend_from_slice(context.as_bytes());
+    contextual.extend_from_slice(message);
+    contextual.extend_from_slice(suffix);
+    Some(contextual)
+}
+
+fn trimmed_context_value(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn bounded_context_value(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= MAX_HOST_CONTEXT_VALUE_CHARS {
+        return normalized;
+    }
+    let mut bounded = normalized
+        .chars()
+        .take(MAX_HOST_CONTEXT_VALUE_CHARS)
+        .collect::<String>();
+    bounded.push_str("...");
+    bounded
+}
+
+fn plan_mode_input(plan_mode: Option<&AgentSessionPlanMode>, input: &[u8]) -> Option<Vec<u8>> {
+    if !plan_mode.is_some_and(|mode| mode.enabled) {
+        return None;
+    }
+    let line_end = input
+        .iter()
+        .rposition(|byte| *byte == b'\r' || *byte == b'\n')?;
+    let (message, suffix) = input.split_at(line_end);
+    if message.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(message);
+    if text.starts_with("Tinto plan mode is enabled for this turn.") {
+        return None;
+    }
+    let mut planned = Vec::with_capacity(PLAN_MODE_PREFIX.len() + input.len());
+    planned.extend_from_slice(PLAN_MODE_PREFIX.as_bytes());
+    planned.extend_from_slice(message);
+    planned.extend_from_slice(suffix);
+    Some(planned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bus::contract::{AgentSessionCheckpoint, AgentSessionCheckpointType};
     use crate::git::test_fixtures::TempRepo;
     use std::io::Read;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Debug)]
     struct FakeProcess {
         pid: Option<u32>,
         exit_code: Option<i32>,
         status_error: Option<AgentConsoleError>,
+        writes: Option<Arc<Mutex<Vec<Vec<u8>>>>>,
     }
 
     impl AgentProcess for FakeProcess {
@@ -697,7 +934,10 @@ mod tests {
             Ok(())
         }
 
-        fn write_input(&mut self, _input: &[u8]) -> Result<(), AgentConsoleError> {
+        fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
+            if let Some(writes) = self.writes.as_ref() {
+                writes.lock().unwrap().push(input.to_vec());
+            }
             Ok(())
         }
 
@@ -750,6 +990,7 @@ mod tests {
                 pid: Some(42),
                 exit_code: None,
                 status_error: None,
+                writes: None,
             }))
             .unwrap();
         let contract = session.to_contract();
@@ -770,6 +1011,7 @@ mod tests {
                 pid: Some(42),
                 exit_code: Some(17),
                 status_error: None,
+                writes: None,
             }))
             .unwrap();
 
@@ -788,6 +1030,7 @@ mod tests {
                 pid: Some(1),
                 exit_code: None,
                 status_error: None,
+                writes: None,
             }))
             .unwrap();
 
@@ -796,6 +1039,7 @@ mod tests {
                 pid: Some(2),
                 exit_code: None,
                 status_error: None,
+                writes: None,
             }))
             .unwrap_err();
 
@@ -813,6 +1057,7 @@ mod tests {
                     "process_status_failed",
                     "fallo leyendo estado",
                 )),
+                writes: None,
             }))
             .unwrap();
 
@@ -822,6 +1067,90 @@ mod tests {
         assert_eq!(error.category, "process_status_failed");
         assert_eq!(contract.status, AgentSessionStatus::Error);
         assert_eq!(contract.error.unwrap().category, "process_status_failed");
+    }
+
+    #[test]
+    fn plan_mode_prefixes_visible_instruction_before_turn_input() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        session
+            .start(Box::new(FakeProcess {
+                pid: Some(1),
+                exit_code: None,
+                status_error: None,
+                writes: Some(writes.clone()),
+            }))
+            .unwrap();
+        session.set_plan_mode(true, 20);
+
+        session
+            .write_input(b"implement feature\r", None)
+            .expect("write");
+
+        let writes = writes.lock().unwrap();
+        let written = String::from_utf8(writes[0].clone()).unwrap();
+        assert!(written.starts_with("Tinto plan mode is enabled for this turn:"));
+        assert!(written.contains("before editing files"));
+        assert!(written.ends_with("implement feature\r"));
+    }
+
+    #[test]
+    fn host_context_prefixes_goal_personality_and_summary_before_turn_input() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        session
+            .start(Box::new(FakeProcess {
+                pid: Some(1),
+                exit_code: None,
+                status_error: None,
+                writes: Some(writes.clone()),
+            }))
+            .unwrap();
+        session.set_goal("Ship the Codex harness".into(), 20);
+        session.set_personality("precise".into(), 21);
+        session.set_context_summary(AgentSessionContextSummary {
+            text: "Recent work: /review now returns findings.\nNext: steer context.".into(),
+            created_at_ms: 22,
+            source_events: 3,
+            source_turns: 2,
+        });
+
+        session.write_input(b"continue\r", None).expect("write");
+
+        let writes = writes.lock().unwrap();
+        let written = String::from_utf8(writes[0].clone()).unwrap();
+        assert!(written.starts_with("Tinto host context for this turn:\n"));
+        assert!(written.contains("- Goal: Ship the Codex harness"));
+        assert!(written.contains("- Personality: precise"));
+        assert!(written.contains(
+            "- Compact context: Recent work: /review now returns findings. Next: steer context."
+        ));
+        assert!(written.ends_with("User request: continue\r"));
+    }
+
+    #[test]
+    fn host_context_wraps_plan_mode_instruction_when_both_are_enabled() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        session
+            .start(Box::new(FakeProcess {
+                pid: Some(1),
+                exit_code: None,
+                status_error: None,
+                writes: Some(writes.clone()),
+            }))
+            .unwrap();
+        session.set_goal("Keep the turn scoped".into(), 20);
+        session.set_plan_mode(true, 21);
+
+        session.write_input(b"edit files\r", None).expect("write");
+
+        let writes = writes.lock().unwrap();
+        let written = String::from_utf8(writes[0].clone()).unwrap();
+        assert!(written.starts_with("Tinto host context for this turn:\n"));
+        assert!(written.contains("- Goal: Keep the turn scoped"));
+        assert!(written.contains("User request: Tinto plan mode is enabled for this turn:"));
+        assert!(written.ends_with("edit files\r"));
     }
 
     #[test]
@@ -862,6 +1191,7 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.turn_checkpoints.len(), 1);
         assert_eq!(contract.turn_checkpoints[0].index, 1);
+        assert!(contract.turn_checkpoints[0].restore_checkpoint.is_some());
         assert!(contract.turn_checkpoints[0]
             .changes
             .iter()
@@ -875,6 +1205,17 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
             "before\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("other.txt")).unwrap(),
+            "other after\n"
+        );
+
+        session.restore_to_turn(&turn_id).unwrap();
+        assert_eq!(session.to_contract().restored_to_turn_index, Some(1));
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "after\n"
         );
         assert_eq!(
             std::fs::read_to_string(repo.path().join("other.txt")).unwrap(),

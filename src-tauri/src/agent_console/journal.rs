@@ -6,8 +6,9 @@ use std::{
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::bus::contract::{
-    AgentJournalSessionSummary, AgentSession, AgentSessionStatus, AgentSessionTimelineItem,
-    AgentSessionTurnStatus,
+    AgentJournalSessionSummary, AgentSession, AgentSessionContextSummary, AgentSessionFeedback,
+    AgentSessionGoal, AgentSessionPersonality, AgentSessionPlanMode, AgentSessionStatus,
+    AgentSessionTimelineItem, AgentSessionTurnStatus,
 };
 
 #[derive(Debug)]
@@ -68,7 +69,19 @@ impl AgentJournal {
               status TEXT NOT NULL,
               started_at_ms INTEGER NOT NULL,
               ended_at_ms INTEGER,
-              updated_at_ms INTEGER NOT NULL
+              updated_at_ms INTEGER NOT NULL,
+              restored_to_turn_index INTEGER,
+              goal_text TEXT,
+              goal_updated_at_ms INTEGER,
+              personality_name TEXT,
+              personality_updated_at_ms INTEGER,
+              plan_mode_enabled INTEGER,
+              plan_mode_updated_at_ms INTEGER,
+              feedback_json TEXT,
+              context_summary_text TEXT,
+              context_summary_created_at_ms INTEGER,
+              context_summary_source_events INTEGER,
+              context_summary_source_turns INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS agent_turns (
@@ -99,19 +112,95 @@ impl AgentJournal {
               ON agent_sessions(repo, updated_at_ms DESC);
             "#,
         )?;
+        self.ensure_agent_sessions_column("restored_to_turn_index", "INTEGER")?;
+        self.ensure_agent_sessions_column("goal_text", "TEXT")?;
+        self.ensure_agent_sessions_column("goal_updated_at_ms", "INTEGER")?;
+        self.ensure_agent_sessions_column("personality_name", "TEXT")?;
+        self.ensure_agent_sessions_column("personality_updated_at_ms", "INTEGER")?;
+        self.ensure_agent_sessions_column("plan_mode_enabled", "INTEGER")?;
+        self.ensure_agent_sessions_column("plan_mode_updated_at_ms", "INTEGER")?;
+        self.ensure_agent_sessions_column("feedback_json", "TEXT")?;
+        self.ensure_agent_sessions_column("context_summary_text", "TEXT")?;
+        self.ensure_agent_sessions_column("context_summary_created_at_ms", "INTEGER")?;
+        self.ensure_agent_sessions_column("context_summary_source_events", "INTEGER")?;
+        self.ensure_agent_sessions_column("context_summary_source_turns", "INTEGER")?;
+        Ok(())
+    }
+
+    fn ensure_agent_sessions_column(
+        &self,
+        name: &str,
+        definition: &str,
+    ) -> Result<(), AgentJournalError> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(agent_sessions)")?;
+        let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for column in columns {
+            if column? == name {
+                return Ok(());
+            }
+        }
+        self.conn.execute(
+            &format!("ALTER TABLE agent_sessions ADD COLUMN {name} {definition}"),
+            [],
+        )?;
         Ok(())
     }
 
     pub fn record_session(&self, session: &AgentSession) -> Result<(), AgentJournalError> {
         let repo = session.repo.to_string_lossy().to_string();
         let ended_at_ms = session.ended_at_ms.map(|value| value as i64);
+        let restored_to_turn_index = session.restored_to_turn_index.map(|value| value as i64);
+        let goal_text = session.goal.as_ref().map(|goal| goal.text.as_str());
+        let goal_updated_at_ms = session.goal.as_ref().map(|goal| goal.updated_at_ms as i64);
+        let personality_name = session
+            .personality
+            .as_ref()
+            .map(|personality| personality.name.as_str());
+        let personality_updated_at_ms = session
+            .personality
+            .as_ref()
+            .map(|personality| personality.updated_at_ms as i64);
+        let plan_mode_enabled =
+            session
+                .plan_mode
+                .as_ref()
+                .map(|plan_mode| if plan_mode.enabled { 1_i64 } else { 0_i64 });
+        let plan_mode_updated_at_ms = session
+            .plan_mode
+            .as_ref()
+            .map(|plan_mode| plan_mode.updated_at_ms as i64);
+        let feedback_json = if session.feedback.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&session.feedback)?)
+        };
+        let context_summary_text = session
+            .context_summary
+            .as_ref()
+            .map(|summary| summary.text.as_str());
+        let context_summary_created_at_ms = session
+            .context_summary
+            .as_ref()
+            .map(|summary| summary.created_at_ms as i64);
+        let context_summary_source_events = session
+            .context_summary
+            .as_ref()
+            .map(|summary| summary.source_events as i64);
+        let context_summary_source_turns = session
+            .context_summary
+            .as_ref()
+            .map(|summary| summary.source_turns as i64);
         let updated_at_ms = now_ms() as i64;
         self.conn.execute(
             r#"
             INSERT INTO agent_sessions (
               id, repo, agent_type, source_kind, distro, status,
-              started_at_ms, ended_at_ms, updated_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+              started_at_ms, ended_at_ms, updated_at_ms, restored_to_turn_index,
+              goal_text, goal_updated_at_ms, personality_name,
+              personality_updated_at_ms, plan_mode_enabled, plan_mode_updated_at_ms,
+              feedback_json, context_summary_text, context_summary_created_at_ms,
+              context_summary_source_events, context_summary_source_turns
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
             ON CONFLICT(id) DO UPDATE SET
               repo = excluded.repo,
               agent_type = excluded.agent_type,
@@ -119,7 +208,19 @@ impl AgentJournal {
               distro = excluded.distro,
               status = excluded.status,
               ended_at_ms = excluded.ended_at_ms,
-              updated_at_ms = excluded.updated_at_ms
+              updated_at_ms = excluded.updated_at_ms,
+              restored_to_turn_index = excluded.restored_to_turn_index,
+              goal_text = excluded.goal_text,
+              goal_updated_at_ms = excluded.goal_updated_at_ms,
+              personality_name = excluded.personality_name,
+              personality_updated_at_ms = excluded.personality_updated_at_ms,
+              plan_mode_enabled = excluded.plan_mode_enabled,
+              plan_mode_updated_at_ms = excluded.plan_mode_updated_at_ms,
+              feedback_json = excluded.feedback_json,
+              context_summary_text = excluded.context_summary_text,
+              context_summary_created_at_ms = excluded.context_summary_created_at_ms,
+              context_summary_source_events = excluded.context_summary_source_events,
+              context_summary_source_turns = excluded.context_summary_source_turns
             "#,
             params![
                 &session.id,
@@ -135,6 +236,18 @@ impl AgentJournal {
                 session.started_at_ms as i64,
                 ended_at_ms,
                 updated_at_ms,
+                restored_to_turn_index,
+                goal_text,
+                goal_updated_at_ms,
+                personality_name,
+                personality_updated_at_ms,
+                plan_mode_enabled,
+                plan_mode_updated_at_ms,
+                feedback_json,
+                context_summary_text,
+                context_summary_created_at_ms,
+                context_summary_source_events,
+                context_summary_source_turns,
             ],
         )?;
         Ok(())
@@ -256,7 +369,14 @@ impl AgentJournal {
             .conn
             .query_row(
                 r#"
-                SELECT id, repo, agent_type, distro, status, started_at_ms, ended_at_ms
+                SELECT
+                  id, repo, agent_type, distro, status, started_at_ms, ended_at_ms,
+                  restored_to_turn_index, goal_text, goal_updated_at_ms,
+                  personality_name, personality_updated_at_ms,
+                  plan_mode_enabled, plan_mode_updated_at_ms,
+                  feedback_json,
+                  context_summary_text, context_summary_created_at_ms,
+                  context_summary_source_events, context_summary_source_turns
                 FROM agent_sessions
                 WHERE id = ?1
                 "#,
@@ -270,15 +390,51 @@ impl AgentJournal {
                         row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<i64>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<i64>>(11)?,
+                        row.get::<_, Option<i64>>(12)?,
+                        row.get::<_, Option<i64>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, Option<String>>(15)?,
+                        row.get::<_, Option<i64>>(16)?,
+                        row.get::<_, Option<i64>>(17)?,
+                        row.get::<_, Option<i64>>(18)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((id, repo, agent_type, wsl_distro, status, started_at_ms, ended_at_ms)) = session
+        let Some((
+            id,
+            repo,
+            agent_type,
+            wsl_distro,
+            status,
+            started_at_ms,
+            ended_at_ms,
+            restored_to_turn_index,
+            goal_text,
+            goal_updated_at_ms,
+            personality_name,
+            personality_updated_at_ms,
+            plan_mode_enabled,
+            plan_mode_updated_at_ms,
+            feedback_json,
+            context_summary_text,
+            context_summary_created_at_ms,
+            context_summary_source_events,
+            context_summary_source_turns,
+        )) = session
         else {
             return Ok(None);
         };
         let timeline = self.timeline_for_session(&id)?;
+        let feedback = feedback_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<AgentSessionFeedback>>(json).ok())
+            .unwrap_or_default();
         let ended_at_ms = ended_at_ms.map(|value| value as u64);
         let status = archived_status(status_from_name(&status), ended_at_ms);
         Ok(Some(AgentSession {
@@ -297,7 +453,28 @@ impl AgentJournal {
             turn_status: AgentSessionTurnStatus::Waiting,
             turn_checkpoints: Vec::new(),
             timeline,
+            runtime_options: Default::default(),
+            goal: goal_text.map(|text| AgentSessionGoal {
+                text,
+                updated_at_ms: goal_updated_at_ms.unwrap_or(started_at_ms) as u64,
+            }),
+            personality: personality_name.map(|name| AgentSessionPersonality {
+                name,
+                updated_at_ms: personality_updated_at_ms.unwrap_or(started_at_ms) as u64,
+            }),
+            plan_mode: plan_mode_enabled.map(|enabled| AgentSessionPlanMode {
+                enabled: enabled != 0,
+                updated_at_ms: plan_mode_updated_at_ms.unwrap_or(started_at_ms) as u64,
+            }),
+            feedback,
+            context_summary: context_summary_text.map(|text| AgentSessionContextSummary {
+                text,
+                created_at_ms: context_summary_created_at_ms.unwrap_or(started_at_ms) as u64,
+                source_events: context_summary_source_events.unwrap_or(0).max(0) as usize,
+                source_turns: context_summary_source_turns.unwrap_or(0).max(0) as usize,
+            }),
             reverted_at_ms: None,
+            restored_to_turn_index: restored_to_turn_index.map(|value| value as u32),
             active_sessions: 0,
             age_ms: now_ms().saturating_sub(started_at_ms as u64),
             output_bytes_per_second: None,
@@ -384,7 +561,14 @@ mod tests {
             turn_status: crate::bus::contract::AgentSessionTurnStatus::Waiting,
             turn_checkpoints: Vec::new(),
             timeline: Vec::new(),
+            runtime_options: Default::default(),
+            goal: None,
+            personality: None,
+            plan_mode: None,
+            feedback: Vec::new(),
+            context_summary: None,
             reverted_at_ms: None,
+            restored_to_turn_index: None,
             active_sessions: 1,
             age_ms: 10,
             output_bytes_per_second: None,
@@ -444,6 +628,149 @@ mod tests {
             Some(AgentSessionTimelineKind::AgentMessage)
         );
         assert_eq!(summaries[0].last_event_text.as_deref(), Some("preview"));
+    }
+
+    #[test]
+    fn journal_reconstructs_restored_turn_index() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut restored = session("sess-1");
+        restored.restored_to_turn_index = Some(1);
+        journal.record_session(&restored).expect("session");
+        journal
+            .record_timeline_item(&AgentSessionTimelineItem {
+                session_id: "sess-1".to_string(),
+                id: "event-1".to_string(),
+                kind: AgentSessionTimelineKind::UserMessage,
+                text: "first".to_string(),
+                timestamp_ms: 200,
+            })
+            .expect("event 1");
+        journal
+            .record_timeline_item(&AgentSessionTimelineItem {
+                session_id: "sess-1".to_string(),
+                id: "event-2".to_string(),
+                kind: AgentSessionTimelineKind::AgentMessage,
+                text: "second".to_string(),
+                timestamp_ms: 300,
+            })
+            .expect("event 2");
+
+        let archived = journal
+            .session_from_journal("sess-1")
+            .expect("read")
+            .expect("session");
+
+        assert_eq!(archived.restored_to_turn_index, Some(1));
+        assert_eq!(archived.timeline.len(), 2);
+    }
+
+    #[test]
+    fn journal_reconstructs_session_goal() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut with_goal = session("sess-1");
+        with_goal.goal = Some(AgentSessionGoal {
+            text: "Build the host harness".to_string(),
+            updated_at_ms: 200,
+        });
+        journal.record_session(&with_goal).expect("session");
+
+        let archived = journal
+            .session_from_journal("sess-1")
+            .expect("read")
+            .expect("session");
+
+        let goal = archived.goal.expect("goal");
+        assert_eq!(goal.text, "Build the host harness");
+        assert_eq!(goal.updated_at_ms, 200);
+    }
+
+    #[test]
+    fn journal_reconstructs_session_personality() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut with_personality = session("sess-1");
+        with_personality.personality = Some(AgentSessionPersonality {
+            name: "precise".to_string(),
+            updated_at_ms: 220,
+        });
+        journal.record_session(&with_personality).expect("session");
+
+        let archived = journal
+            .session_from_journal("sess-1")
+            .expect("read")
+            .expect("session");
+
+        let personality = archived.personality.expect("personality");
+        assert_eq!(personality.name, "precise");
+        assert_eq!(personality.updated_at_ms, 220);
+    }
+
+    #[test]
+    fn journal_reconstructs_session_plan_mode() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut planning = session("sess-1");
+        planning.plan_mode = Some(AgentSessionPlanMode {
+            enabled: true,
+            updated_at_ms: 225,
+        });
+        journal.record_session(&planning).expect("session");
+
+        let archived = journal
+            .session_from_journal("sess-1")
+            .expect("read")
+            .expect("session");
+
+        let plan_mode = archived.plan_mode.expect("plan mode");
+        assert!(plan_mode.enabled);
+        assert_eq!(plan_mode.updated_at_ms, 225);
+    }
+
+    #[test]
+    fn journal_reconstructs_session_feedback() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut with_feedback = session("sess-1");
+        with_feedback.feedback = vec![AgentSessionFeedback {
+            kind: "comment".to_string(),
+            text: "Make the command palette feel native.".to_string(),
+            created_at_ms: 230,
+        }];
+        journal.record_session(&with_feedback).expect("session");
+
+        let archived = journal
+            .session_from_journal("sess-1")
+            .expect("read")
+            .expect("session");
+
+        assert_eq!(archived.feedback.len(), 1);
+        assert_eq!(archived.feedback[0].kind, "comment");
+        assert_eq!(
+            archived.feedback[0].text,
+            "Make the command palette feel native."
+        );
+        assert_eq!(archived.feedback[0].created_at_ms, 230);
+    }
+
+    #[test]
+    fn journal_reconstructs_context_summary() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut compacted = session("sess-1");
+        compacted.context_summary = Some(AgentSessionContextSummary {
+            text: "Goal: Build the host harness".to_string(),
+            created_at_ms: 240,
+            source_events: 3,
+            source_turns: 2,
+        });
+        journal.record_session(&compacted).expect("session");
+
+        let archived = journal
+            .session_from_journal("sess-1")
+            .expect("read")
+            .expect("session");
+
+        let summary = archived.context_summary.expect("context summary");
+        assert_eq!(summary.text, "Goal: Build the host harness");
+        assert_eq!(summary.created_at_ms, 240);
+        assert_eq!(summary.source_events, 3);
+        assert_eq!(summary.source_turns, 2);
     }
 
     #[test]

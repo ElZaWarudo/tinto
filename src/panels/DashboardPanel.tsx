@@ -1,15 +1,22 @@
-// Dashboard: a card grid of the active workbench's repos. Handles loading
+// Dashboard: a control-table ledger of the active workbench's repos. Handles loading
 // (skeletons), the degraded watching banner, the zero-repos state, and live
-// updates (memoized cards re-render only on their own repo's change).
+// updates (memoized rows re-render only on their own repo's change).
 
 import { useEffect, useState } from "react";
 import { listAgentSessions, retryRepo, startAgentSession } from "../bus/client";
 import { agentSessionStore } from "../agent/sessionStore";
-import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
+import {
+  busStore,
+  getRepoMetrics,
+  getRepoSignals,
+  sortedRepoPaths,
+  useBusState,
+} from "../bus/store";
 import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
 import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
 import { agentAvailabilityKey } from "./agentAvailability";
+import { ACTIVITY_WINDOW_MS } from "./constants";
 import { RepoCard } from "./RepoCard";
 import { DashboardFilters } from "./DashboardFilters";
 import type { RepoDelta } from "../bus/contract";
@@ -63,7 +70,12 @@ export function DashboardPanel() {
   if (!loaded) {
     return (
       <div className="dashboard">
-        <div className="card-grid" data-testid="skeletons">
+        <div className="dashboard__status-band dashboard__status-band--loading">
+          <span className="dashboard__status-label">Workbench ledger</span>
+          <strong>Loading repo snapshots</strong>
+          <small>Waiting for the local watcher plane</small>
+        </div>
+        <div className="repo-ledger repo-ledger--loading" data-testid="skeletons">
           {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
             <div className="repo-card repo-card--skeleton" key={i} />
           ))}
@@ -93,18 +105,58 @@ export function DashboardPanel() {
   const paths = filterRepoPaths(effectiveState, allPaths, filters, (repo) =>
     busStore.displayName(repo),
   );
+  const allDeltas = allPaths.map((path) => effectiveRepos[path]);
+  const activeCount = allPaths.filter(
+    (path) => nowMs - (activity[path] ?? 0) < ACTIVITY_WINDOW_MS,
+  ).length;
+  const changedFileCount = allDeltas.reduce(
+    (sum, repo) => sum + getRepoMetrics(repo).changed_files,
+    0,
+  );
+  const signalCount = allDeltas.reduce((sum, repo) => sum + getRepoSignals(repo).length, 0);
+  const blockedCount = allDeltas.filter((repo) => repo.error).length;
 
   return (
     <div className="dashboard">
-      <DashboardFilters />
-      <div className="dashboard__actions" aria-label="repo actions">
-        <button type="button" onClick={addRepo} data-testid="dashboard-add-repo">
-          Add repo
-        </button>
-        <button type="button" onClick={openAgents} data-testid="dashboard-open-agents">
-          Agents
-        </button>
+      <div className="dashboard__status-band" aria-label="Workbench status">
+        <div className="dashboard__status-title">
+          <span className="dashboard__status-label">Workbench ledger</span>
+          <strong>{state.config?.active ?? "Active workbench"}</strong>
+          <small>{watching.available ? "Watcher plane online" : "Watcher plane degraded"}</small>
+        </div>
+        <dl className="dashboard__counters">
+          <div>
+            <dt>Repos</dt>
+            <dd>{allPaths.length}</dd>
+          </div>
+          <div>
+            <dt>Live</dt>
+            <dd>{activeCount}</dd>
+          </div>
+          <div>
+            <dt>Files</dt>
+            <dd>{changedFileCount}</dd>
+          </div>
+          <div>
+            <dt>Signals</dt>
+            <dd>{signalCount}</dd>
+          </div>
+          <div className={blockedCount > 0 ? "dashboard__counter--warn" : undefined}>
+            <dt>Blocked</dt>
+            <dd>{blockedCount}</dd>
+          </div>
+        </dl>
+        <div className="dashboard__actions" aria-label="repo actions">
+          <button type="button" onClick={addRepo} data-testid="dashboard-add-repo">
+            Add repo
+          </button>
+          <button type="button" onClick={openAgents} data-testid="dashboard-open-agents">
+            Agents
+          </button>
+        </div>
       </div>
+
+      <DashboardFilters />
 
       {!watching.available && (
         <div className="banner banner--warn" data-testid="degraded-banner">
@@ -125,32 +177,41 @@ export function DashboardPanel() {
           <p>No repos match the current filters.</p>
         </div>
       ) : (
-        <div className="card-grid">
-          {paths.map((p) => {
-            const entry = repoEntries.get(p) ?? configuredRepoEntries.get(p);
-            return (
-              <RepoCard
-                key={p}
-                delta={effectiveRepos[p]}
-                name={busStore.displayName(p)}
-                source={entry?.source}
-                distro={entry?.distro ?? null}
-                activityMs={activity[p] ?? 0}
-                nowMs={nowMs}
-                availabilityKey={agentAvailabilityKey(entry?.source, entry?.distro)}
-                onOpen={() => openRepo(p)}
-                onRetry={() => void retryRepo(p)}
-                onRemove={() => removeRepo(p)}
-                onLaunch={async (agentType) => {
-                  const sessionId = await startAgentSession(p, agentType);
-                  const sessions = await listAgentSessions();
-                  agentSessionStore.setSessions(sessions);
-                  openAgentTerminal({ sessionId, repo: p, agentType });
-                }}
-              />
-            );
-          })}
-        </div>
+        <>
+          <div className="dashboard__ledger-ruler" aria-hidden="true">
+            <span>Repo / branch</span>
+            <span>Git state</span>
+            <span>Change volume</span>
+            <span>Signals</span>
+            <span>Agent launch</span>
+          </div>
+          <div className="repo-ledger">
+            {paths.map((p) => {
+              const entry = repoEntries.get(p) ?? configuredRepoEntries.get(p);
+              return (
+                <RepoCard
+                  key={p}
+                  delta={effectiveRepos[p]}
+                  name={busStore.displayName(p)}
+                  source={entry?.source}
+                  distro={entry?.distro ?? null}
+                  activityMs={activity[p] ?? 0}
+                  nowMs={nowMs}
+                  availabilityKey={agentAvailabilityKey(entry?.source, entry?.distro)}
+                  onOpen={() => openRepo(p)}
+                  onRetry={() => void retryRepo(p)}
+                  onRemove={() => removeRepo(p)}
+                  onLaunch={async (agentType) => {
+                    const sessionId = await startAgentSession(p, agentType);
+                    const sessions = await listAgentSessions();
+                    agentSessionStore.setSessions(sessions);
+                    openAgentTerminal({ sessionId, repo: p, agentType });
+                  }}
+                />
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );

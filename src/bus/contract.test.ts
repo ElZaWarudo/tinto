@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
+  AgentHostCommandResult,
   AgentSession,
   AgentSessionChangeLog,
   AgentSessionOutput,
@@ -118,6 +119,39 @@ describe("workbench source contract types", () => {
 });
 
 describe("agent session contract types", () => {
+  it("accepts host command review summaries", () => {
+    const wire = JSON.stringify({
+      command: "review",
+      status: "completed",
+      message: "Review summary for branch main: 1 changed file(s).",
+      review_summary: {
+        branch: "main",
+        changed_files: 1,
+        working_shortstat: "1 file changed, 2 insertions(+)",
+        staged_shortstat: null,
+        files: [" M src/App.tsx"],
+        truncated_count: 0,
+      },
+      review_findings: [
+        {
+          severity: "high",
+          title: "Conflict marker present",
+          detail: "src/App.tsx still contains a merge conflict marker.",
+          path: "src/App.tsx",
+          line: 12,
+        },
+      ],
+    });
+
+    const result = JSON.parse(wire) as AgentHostCommandResult;
+    expect(result.review_summary?.branch).toBe("main");
+    expect(result.review_summary?.changed_files).toBe(1);
+    expect(result.review_summary?.files[0]).toBe(" M src/App.tsx");
+    expect(result.review_findings?.[0].severity).toBe("high");
+    expect(result.review_findings?.[0].path).toBe("src/App.tsx");
+    expect(result.review_findings?.[0].line).toBe(12);
+  });
+
   it("accepts session lifecycle metadata with snake_case status", () => {
     const wire = JSON.stringify({
       id: "sess-1",
@@ -147,10 +181,25 @@ describe("agent session contract types", () => {
             git_hash: "abc123",
             snapshot_files: [],
           },
+          restore_checkpoint: {
+            checkpoint_type: "git_ref",
+            git_hash: "def456",
+            snapshot_files: [],
+          },
           changes: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 1760000000100 }],
         },
       ],
+      personality: { name: "precise", updated_at_ms: 1760000000200 },
+      plan_mode: { enabled: true, updated_at_ms: 1760000000250 },
+      feedback: [
+        {
+          kind: "feedback",
+          text: "Keep comments inside the Tinto host.",
+          created_at_ms: 1760000000300,
+        },
+      ],
       reverted_at_ms: null,
+      restored_to_turn_index: null,
       active_sessions: 1,
       age_ms: 100,
       output_bytes_per_second: null,
@@ -164,6 +213,11 @@ describe("agent session contract types", () => {
     expect(session.change_log?.[0].kind).toBe("modified");
     expect(session.turn_status).toBe("settling");
     expect(session.turn_checkpoints?.[0].changes[0].path).toBe("src/a.ts");
+    expect(session.turn_checkpoints?.[0].restore_checkpoint?.git_hash).toBe("def456");
+    expect(session.personality?.name).toBe("precise");
+    expect(session.plan_mode?.enabled).toBe(true);
+    expect(session.feedback?.[0].text).toBe("Keep comments inside the Tinto host.");
+    expect(session.restored_to_turn_index).toBeNull();
     expect(session.active_sessions).toBe(1);
     expect(session.age_ms).toBe(100);
   });
@@ -231,6 +285,8 @@ import {
   resizeAgentSession,
   revertSession,
   revertSessionTurnFile,
+  restoreSessionTurn,
+  runAgentHostCommand,
   removeWslRepo,
   setSubscriptions,
   startAgentSession,
@@ -375,6 +431,13 @@ describe("RDM-008 client wrappers", () => {
       userConsent: true,
     });
 
+    void restoreSessionTurn("sess-1", "sess-1:turn-1", true);
+    expect(invokeMock).toHaveBeenCalledWith("restore_session_turn", {
+      sessionId: "sess-1",
+      turnCheckpointId: "sess-1:turn-1",
+      userConsent: true,
+    });
+
     void agentBinaryAvailable("codex");
     expect(invokeMock).toHaveBeenCalledWith("agent_binary_available", {
       agentType: "codex",
@@ -385,6 +448,13 @@ describe("RDM-008 client wrappers", () => {
       repo: "/r/api",
       agentType: "codex",
     });
+
+    void runAgentHostCommand("sess-1", "goal", "Ship host commands");
+    expect(invokeMock).toHaveBeenCalledWith("run_agent_host_command", {
+      sessionId: "sess-1",
+      command: "goal",
+      argument: "Ship host commands",
+    });
   });
 
   it("agent terminal stream wrappers encode input and resize dimensions", () => {
@@ -392,12 +462,25 @@ describe("RDM-008 client wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("write_agent_session_input", {
       sessionId: "sess-1",
       inputBase64: "aGkN",
+      options: null,
     });
 
     void writeAgentSessionInput("sess-1", new Uint8Array([0x1b, 0x5b, 0x41]));
     expect(invokeMock).toHaveBeenCalledWith("write_agent_session_input", {
       sessionId: "sess-1",
       inputBase64: "G1tB",
+      options: null,
+    });
+
+    void writeAgentSessionInput("sess-1", "hi\r", {
+      model: "gpt-5.5",
+      reasoning_effort: "high",
+      speed: "standard",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("write_agent_session_input", {
+      sessionId: "sess-1",
+      inputBase64: "aGkN",
+      options: { model: "gpt-5.5", reasoning_effort: "high", speed: "standard" },
     });
 
     void resizeAgentSession("sess-1", 120, 36);
@@ -421,6 +504,25 @@ describe("RDM-008 client wrappers", () => {
       "tinto://agent-session-change-log",
       expect.any(Function),
     );
+  });
+
+  it("returns a no-op unlisten when the Tauri event bridge is unavailable", async () => {
+    listenMock.mockImplementationOnce(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'transformCallback')");
+    });
+
+    const unlisten = await onAgentSessionOutput(() => {});
+
+    expect(typeof unlisten).toBe("function");
+    expect(() => unlisten()).not.toThrow();
+  });
+
+  it("rethrows unexpected listener setup failures", async () => {
+    listenMock.mockImplementationOnce(() => {
+      throw new Error("permission denied");
+    });
+
+    await expect(onAgentSessionOutput(() => {})).rejects.toThrow("permission denied");
   });
 
   it("addon wrappers call registered command names", () => {

@@ -110,12 +110,26 @@ describe("useBusConnection", () => {
     expect(busStore.getState().config?.active).toBe("Work");
   });
 
-  it("applies a delta received while mounted", async () => {
+  it("marks the initial snapshot degraded when the Tauri bridge is unavailable", async () => {
+    h.getSnapshot.mockRejectedValueOnce(
+      new TypeError("Cannot read properties of undefined (reading 'transformCallback')"),
+    );
+
+    render(createElement(Probe));
+
+    await waitFor(() => expect(busStore.getState().loaded).toBe(true));
+    expect(busStore.getState().watching).toEqual({
+      available: false,
+      reason: "Tauri bridge unavailable; run inside the Tauri shell for live repo data.",
+    });
+  });
+
+  it("applies a delta received while mounted without preloading the file tree", async () => {
     render(createElement(Probe));
     await waitFor(() => expect(h.deltaCb).toBeTypeOf("function"));
     act(() => h.deltaCb!(makeDelta("/r/a")));
     expect(busStore.getState().repos["/r/a"]).toBeDefined();
-    expect(h.ensureTreeLoaded).toHaveBeenCalledWith("/r/a");
+    expect(h.ensureTreeLoaded).not.toHaveBeenCalled();
     expect(h.refreshTree).not.toHaveBeenCalled();
   });
 

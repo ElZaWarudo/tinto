@@ -88,6 +88,8 @@ pub struct AgentSessionTurnCheckpoint {
     pub started_at_ms: u64,
     pub ended_at_ms: u64,
     pub checkpoint: AgentSessionCheckpoint,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restore_checkpoint: Option<AgentSessionCheckpoint>,
     pub changes: Vec<AgentSessionChange>,
 }
 
@@ -96,6 +98,49 @@ pub struct AgentSessionLimits {
     pub max_sessions: usize,
     pub max_sessions_per_repo: usize,
     pub max_lifetime_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionRuntimeOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionGoal {
+    pub text: String,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionPersonality {
+    pub name: String,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionPlanMode {
+    pub enabled: bool,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionFeedback {
+    pub kind: String,
+    pub text: String,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionContextSummary {
+    pub text: String,
+    pub created_at_ms: u64,
+    pub source_events: usize,
+    pub source_turns: usize,
 }
 
 /// Metadata publica de una sesion de agente. La E/S PTY se anade en ACI-002.
@@ -122,12 +167,32 @@ pub struct AgentSession {
     pub turn_checkpoints: Vec<AgentSessionTurnCheckpoint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timeline: Vec<AgentSessionTimelineItem>,
+    #[serde(default, skip_serializing_if = "AgentSessionRuntimeOptions::is_empty")]
+    pub runtime_options: AgentSessionRuntimeOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<AgentSessionGoal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<AgentSessionPersonality>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_mode: Option<AgentSessionPlanMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub feedback: Vec<AgentSessionFeedback>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_summary: Option<AgentSessionContextSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_to_turn_index: Option<u32>,
     pub active_sessions: usize,
     pub age_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_bytes_per_second: Option<u64>,
+}
+
+impl AgentSessionRuntimeOptions {
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.reasoning_effort.is_none() && self.speed.is_none()
+    }
 }
 
 /// Chunk binario del PTY de una sesion de agente, transportado en base64 para
@@ -177,6 +242,53 @@ pub struct AgentJournalSessionSummary {
     pub last_event_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHostCommandStatus {
+    Completed,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentReviewSummary {
+    pub branch: String,
+    pub changed_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_shortstat: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staged_shortstat: Option<String>,
+    pub files: Vec<String>,
+    pub truncated_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentReviewFinding {
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentHostCommandResult {
+    pub command: String,
+    pub status: AgentHostCommandStatus,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_summary: Option<AgentReviewSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_findings: Option<Vec<AgentReviewFinding>>,
 }
 
 pub const FILE_CONTENT_MAX_BYTES: usize = 1024 * 1024;
@@ -502,6 +614,11 @@ mod tests {
                     git_hash: Some("abc123".into()),
                     snapshot_files: Vec::new(),
                 },
+                restore_checkpoint: Some(AgentSessionCheckpoint {
+                    checkpoint_type: AgentSessionCheckpointType::GitRef,
+                    git_hash: Some("def456".into()),
+                    snapshot_files: Vec::new(),
+                }),
                 changes: vec![AgentSessionChange {
                     path: "src/a.rs".into(),
                     kind: AgentSessionChangeKind::Modified,
@@ -515,7 +632,36 @@ mod tests {
                 text: "Listo".into(),
                 timestamp_ms: 1760000000101,
             }],
+            runtime_options: AgentSessionRuntimeOptions {
+                model: Some("gpt-5.5".into()),
+                reasoning_effort: Some("high".into()),
+                speed: Some("standard".into()),
+            },
+            goal: Some(AgentSessionGoal {
+                text: "Ship host commands".into(),
+                updated_at_ms: 1760000000200,
+            }),
+            personality: Some(AgentSessionPersonality {
+                name: "precise".into(),
+                updated_at_ms: 1760000000250,
+            }),
+            plan_mode: Some(AgentSessionPlanMode {
+                enabled: true,
+                updated_at_ms: 1760000000255,
+            }),
+            feedback: vec![AgentSessionFeedback {
+                kind: "feedback".into(),
+                text: "The command palette should stay native.".into(),
+                created_at_ms: 1760000000260,
+            }],
+            context_summary: Some(AgentSessionContextSummary {
+                text: "Goal: Ship host commands".into(),
+                created_at_ms: 1760000000300,
+                source_events: 4,
+                source_turns: 2,
+            }),
             reverted_at_ms: None,
+            restored_to_turn_index: None,
             active_sessions: 1,
             age_ms: 42,
             output_bytes_per_second: None,
@@ -540,6 +686,25 @@ mod tests {
         );
         assert_eq!(json["timeline"][0]["kind"], "agent_message");
         assert_eq!(json["timeline"][0]["text"], "Listo");
+        assert_eq!(json["runtime_options"]["model"], "gpt-5.5");
+        assert_eq!(json["runtime_options"]["reasoning_effort"], "high");
+        assert_eq!(json["runtime_options"]["speed"], "standard");
+        assert_eq!(json["goal"]["text"], "Ship host commands");
+        assert_eq!(json["goal"]["updated_at_ms"], 1760000000200u64);
+        assert_eq!(json["personality"]["name"], "precise");
+        assert_eq!(json["personality"]["updated_at_ms"], 1760000000250u64);
+        assert_eq!(json["plan_mode"]["enabled"], true);
+        assert_eq!(json["plan_mode"]["updated_at_ms"], 1760000000255u64);
+        assert_eq!(json["feedback"][0]["kind"], "feedback");
+        assert_eq!(
+            json["feedback"][0]["text"],
+            "The command palette should stay native."
+        );
+        assert_eq!(json["feedback"][0]["created_at_ms"], 1760000000260u64);
+        assert_eq!(json["context_summary"]["text"], "Goal: Ship host commands");
+        assert_eq!(json["context_summary"]["created_at_ms"], 1760000000300u64);
+        assert_eq!(json["context_summary"]["source_events"], 4);
+        assert_eq!(json["context_summary"]["source_turns"], 2);
         assert_eq!(json["active_sessions"], 1);
         assert_eq!(json["age_ms"], 42);
     }
@@ -556,6 +721,47 @@ mod tests {
         assert_eq!(json["session_id"], "sess-1");
         assert_eq!(json["chunk_base64"], "SG9sYQ0K");
         assert_eq!(json["timestamp_ms"], 1760000000001u64);
+    }
+
+    #[test]
+    fn agent_host_command_result_serializa_estado_snake_case() {
+        let result = AgentHostCommandResult {
+            command: "status".into(),
+            status: AgentHostCommandStatus::Unavailable,
+            message: "pending backend".into(),
+            session_id: Some("sess-child".into()),
+            repo: Some(PathBuf::from("/r/api-fork")),
+            agent_type: Some("codex".into()),
+            review_summary: Some(AgentReviewSummary {
+                branch: "main".into(),
+                changed_files: 1,
+                working_shortstat: Some("1 file changed, 2 insertions(+)".into()),
+                staged_shortstat: None,
+                files: vec![" M src/App.tsx".into()],
+                truncated_count: 0,
+            }),
+            review_findings: Some(vec![AgentReviewFinding {
+                severity: "high".into(),
+                title: "Conflict marker present".into(),
+                detail: "src/App.tsx still contains a merge conflict marker.".into(),
+                path: Some(PathBuf::from("src/App.tsx")),
+                line: Some(12),
+            }]),
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["command"], "status");
+        assert_eq!(json["status"], "unavailable");
+        assert_eq!(json["message"], "pending backend");
+        assert_eq!(json["session_id"], "sess-child");
+        assert_eq!(json["repo"], "/r/api-fork");
+        assert_eq!(json["agent_type"], "codex");
+        assert_eq!(json["review_summary"]["branch"], "main");
+        assert_eq!(json["review_summary"]["changed_files"], 1);
+        assert_eq!(json["review_summary"]["files"][0], " M src/App.tsx");
+        assert_eq!(json["review_findings"][0]["severity"], "high");
+        assert_eq!(json["review_findings"][0]["path"], "src/App.tsx");
+        assert_eq!(json["review_findings"][0]["line"], 12);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { createRepoAgentsMdConfig, createRepoGitleaksConfig } from "../bus/client";
 
@@ -30,12 +30,9 @@ function RepoConfigItem({
   onConfigure: () => Promise<unknown>;
 }) {
   const [isConfiguring, setIsConfiguring] = useState(false);
-  const [isConfigured, setIsConfigured] = useState(configured);
+  const [configuredLocally, setConfiguredLocally] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setIsConfigured(configured);
-  }, [configured]);
+  const isConfigured = configured || configuredLocally;
 
   const configure = async () => {
     if (isConfiguring || isConfigured) return;
@@ -43,7 +40,7 @@ function RepoConfigItem({
     setError(null);
     try {
       await onConfigure();
-      setIsConfigured(true);
+      setConfiguredLocally(true);
     } catch (cause) {
       setError(commandMessage(cause, "No se pudo aplicar la configuracion."));
     } finally {
@@ -95,6 +92,7 @@ export function RepoConfigSection({
         <h3>Repo configuration</h3>
       </div>
       <RepoConfigItem
+        key={`gitleaks-${repo}`}
         title="Gitleaks"
         detail={
           <>
@@ -106,6 +104,7 @@ export function RepoConfigSection({
         onConfigure={() => createRepoGitleaksConfig(repo)}
       />
       <RepoConfigItem
+        key={`agents-md-${repo}`}
         title="AGENTS.md"
         detail={
           <>

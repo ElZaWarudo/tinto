@@ -1,6 +1,6 @@
 // In-project file explorer: the left pane of a project (level-1) tab. Shows the
-// repo's own files (always loaded via repoTreeStore — cached + preloaded, so no
-// spinner on re-open), with the quality filters applied and the active file
+// repo's own files (loaded on demand via repoTreeStore and cached, so no spinner
+// on re-open), with the quality filters applied and the active file
 // highlighted. Single click previews a file, double click pins it (VS Code).
 
 import {

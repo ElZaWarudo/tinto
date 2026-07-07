@@ -1,0 +1,19 @@
+.agent-lens-fixture {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg, #1e1e1e);
+  color: var(--fg, #e0e0e0);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.agent-lens-fixture__panel {
+  height: 100%;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  .agent-lens-fixture {
+    height: 100dvh;
+  }
+}

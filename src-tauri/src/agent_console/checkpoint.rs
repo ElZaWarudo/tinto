@@ -47,7 +47,7 @@ pub struct CheckpointRecord {
     pub created_at_ms: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct CheckpointMetadata {
     repo: PathBuf,
     session_id: String,
@@ -55,6 +55,17 @@ struct CheckpointMetadata {
     checkpoint_type: AgentSessionCheckpointType,
     git_hash: Option<String>,
     snapshot_files: Vec<PathBuf>,
+    #[serde(default)]
+    dirty_created_files: Vec<PathBuf>,
+    #[serde(default)]
+    dirty_deleted_files: Vec<PathBuf>,
+}
+
+struct GitCheckpointState {
+    head_hash: String,
+    snapshot_files: Vec<PathBuf>,
+    created_files: Vec<PathBuf>,
+    deleted_files: Vec<PathBuf>,
 }
 
 pub fn create_checkpoint(
@@ -71,19 +82,49 @@ pub fn create_checkpoint(
     }
     fs::create_dir_all(&checkpoint_dir).map_err(io_error)?;
 
-    let contract = match clean_git_head(&repo)? {
-        Some(hash) => {
+    let contract = match git_checkpoint_state(&repo)? {
+        Some(state) if state.snapshot_files.is_empty() && state.deleted_files.is_empty() => {
             let contract = AgentSessionCheckpoint {
                 checkpoint_type: AgentSessionCheckpointType::GitRef,
-                git_hash: Some(hash),
+                git_hash: Some(state.head_hash),
                 snapshot_files: Vec::new(),
             };
-            write_metadata(&checkpoint_dir, &repo, session_id, created_at_ms, &contract)?;
+            write_metadata(
+                &checkpoint_dir,
+                &repo,
+                session_id,
+                created_at_ms,
+                &contract,
+                &[],
+                &[],
+            )?;
+            contract
+        }
+        Some(state) => {
+            let (contract, created_files, deleted_files) =
+                snapshot_dirty_git_filesystem(&repo, &checkpoint_dir, config, state)?;
+            write_metadata(
+                &checkpoint_dir,
+                &repo,
+                session_id,
+                created_at_ms,
+                &contract,
+                &created_files,
+                &deleted_files,
+            )?;
             contract
         }
         None => {
             let contract = snapshot_filesystem(&repo, &checkpoint_dir, config)?;
-            write_metadata(&checkpoint_dir, &repo, session_id, created_at_ms, &contract)?;
+            write_metadata(
+                &checkpoint_dir,
+                &repo,
+                session_id,
+                created_at_ms,
+                &contract,
+                &[],
+                &[],
+            )?;
             contract
         }
     };
@@ -128,7 +169,7 @@ pub fn scan_change_log(
     }
 }
 
-fn clean_git_head(repo: &Path) -> Result<Option<String>, AgentConsoleError> {
+fn git_checkpoint_state(repo: &Path) -> Result<Option<GitCheckpointState>, AgentConsoleError> {
     let Ok(repository) = Repository::open(repo) else {
         return Ok(None);
     };
@@ -148,10 +189,51 @@ fn clean_git_head(repo: &Path) -> Result<Option<String>, AgentConsoleError> {
         .statuses(Some(&mut opts))
         .map_err(|e| AgentConsoleError::new("checkpoint_git_failed", e.to_string()))?;
     if statuses.is_empty() {
-        Ok(Some(oid.to_string()))
-    } else {
-        Ok(None)
+        return Ok(Some(GitCheckpointState {
+            head_hash: oid.to_string(),
+            snapshot_files: Vec::new(),
+            created_files: Vec::new(),
+            deleted_files: Vec::new(),
+        }));
     }
+
+    let mut snapshot_files = HashSet::new();
+    let mut created_files = HashSet::new();
+    let mut deleted_files = HashSet::new();
+    for entry in statuses.iter() {
+        let Some(path) = entry.path() else { continue };
+        let rel = PathBuf::from(path);
+        let status = entry.status();
+        if status.is_index_renamed()
+            || status.is_wt_renamed()
+            || status.is_index_typechange()
+            || status.is_wt_typechange()
+        {
+            return Ok(None);
+        }
+        if repo.join(&rel).is_file() {
+            if status.is_index_new() || status.is_wt_new() {
+                created_files.insert(rel.clone());
+            }
+            snapshot_files.insert(rel);
+        } else if status.is_index_deleted() || status.is_wt_deleted() {
+            deleted_files.insert(rel);
+        } else {
+            return Ok(None);
+        }
+    }
+    let mut snapshot_files = snapshot_files.into_iter().collect::<Vec<_>>();
+    let mut created_files = created_files.into_iter().collect::<Vec<_>>();
+    let mut deleted_files = deleted_files.into_iter().collect::<Vec<_>>();
+    snapshot_files.sort();
+    created_files.sort();
+    deleted_files.sort();
+    Ok(Some(GitCheckpointState {
+        head_hash: oid.to_string(),
+        snapshot_files,
+        created_files,
+        deleted_files,
+    }))
 }
 
 fn snapshot_filesystem(
@@ -193,6 +275,49 @@ fn snapshot_filesystem(
     })
 }
 
+fn snapshot_dirty_git_filesystem(
+    repo: &Path,
+    checkpoint_dir: &Path,
+    config: &CheckpointConfig,
+    state: GitCheckpointState,
+) -> Result<(AgentSessionCheckpoint, Vec<PathBuf>, Vec<PathBuf>), AgentConsoleError> {
+    let snapshot_root = checkpoint_dir.join("files");
+    fs::create_dir_all(&snapshot_root).map_err(io_error)?;
+
+    let total_bytes = state.snapshot_files.iter().try_fold(0u64, |acc, rel| {
+        file_size(repo.join(rel)).map(|size| acc + size)
+    })?;
+    if total_bytes > config.max_checkpoint_bytes {
+        let _ = fs::remove_dir_all(checkpoint_dir);
+        return Err(AgentConsoleError::new(
+            "checkpoint_too_large",
+            format!(
+                "checkpoint exceeds {} MB",
+                config.max_checkpoint_bytes / 1024 / 1024
+            ),
+        ));
+    }
+
+    for rel in &state.snapshot_files {
+        let source = repo.join(rel);
+        let target = snapshot_root.join(rel);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(io_error)?;
+        }
+        fs::copy(&source, &target).map_err(io_error)?;
+    }
+
+    Ok((
+        AgentSessionCheckpoint {
+            checkpoint_type: AgentSessionCheckpointType::FsSnapshot,
+            git_hash: Some(state.head_hash),
+            snapshot_files: state.snapshot_files,
+        },
+        state.created_files,
+        state.deleted_files,
+    ))
+}
+
 fn revert_git(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
     let Some(hash) = &record.contract.git_hash else {
         return Err(AgentConsoleError::new(
@@ -226,6 +351,9 @@ fn revert_git_file(record: &CheckpointRecord, rel: &Path) -> Result<(), AgentCon
 }
 
 fn revert_fs(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
+    if record.contract.git_hash.is_some() {
+        return revert_dirty_git_snapshot(record);
+    }
     let snapshot_root = record.checkpoint_dir.join("files");
     let snapshot_files: HashSet<PathBuf> = record.contract.snapshot_files.iter().cloned().collect();
     let current_files: HashSet<PathBuf> = collect_repo_files(&record.repo)?.into_iter().collect();
@@ -247,6 +375,36 @@ fn revert_fs(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
         fs::copy(&source, &target).map_err(io_error)?;
     }
 
+    Ok(())
+}
+
+fn revert_dirty_git_snapshot(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
+    let Some(hash) = &record.contract.git_hash else {
+        return Err(AgentConsoleError::new(
+            "checkpoint_invalid",
+            "dirty git checkpoint has no hash",
+        ));
+    };
+    let metadata = read_metadata(&record.checkpoint_dir)?;
+    run_git(&record.repo, &["checkout", hash, "--", "."])?;
+    run_git(&record.repo, &["clean", "-fd"])?;
+
+    let snapshot_root = record.checkpoint_dir.join("files");
+    for rel in &record.contract.snapshot_files {
+        let source = snapshot_root.join(rel);
+        let target = prepare_restore_target(&record.repo, rel)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(io_error)?;
+        }
+        fs::copy(source, target).map_err(io_error)?;
+    }
+    for rel in metadata.dirty_deleted_files {
+        validate_current_path_ancestors(&record.repo, &rel)?;
+        let target = record.repo.join(rel);
+        if target.exists() {
+            fs::remove_file(target).map_err(io_error)?;
+        }
+    }
     Ok(())
 }
 
@@ -317,6 +475,9 @@ fn scan_fs_changes(
     record: &CheckpointRecord,
     timestamp_ms: u64,
 ) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    if record.contract.git_hash.is_some() {
+        return scan_dirty_git_snapshot_changes(record, timestamp_ms);
+    }
     let snapshot_root = record.checkpoint_dir.join("files");
     let snapshot_files: HashSet<PathBuf> = record.contract.snapshot_files.iter().cloned().collect();
     let current_files: HashSet<PathBuf> = collect_repo_files(&record.repo)?.into_iter().collect();
@@ -335,6 +496,73 @@ fn scan_fs_changes(
             changes.push(change(rel, AgentSessionChangeKind::Modified, timestamp_ms));
         }
     }
+    changes.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| kind_name(a.kind).cmp(kind_name(b.kind)))
+    });
+    Ok(changes)
+}
+
+fn scan_dirty_git_snapshot_changes(
+    record: &CheckpointRecord,
+    timestamp_ms: u64,
+) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    let metadata = read_metadata(&record.checkpoint_dir)?;
+    let state = git_checkpoint_state(&record.repo)?.unwrap_or(GitCheckpointState {
+        head_hash: record.contract.git_hash.clone().unwrap_or_default(),
+        snapshot_files: Vec::new(),
+        created_files: Vec::new(),
+        deleted_files: Vec::new(),
+    });
+    let baseline_files: HashSet<PathBuf> = record.contract.snapshot_files.iter().cloned().collect();
+    let baseline_created: HashSet<PathBuf> = metadata.dirty_created_files.into_iter().collect();
+    let baseline_deleted: HashSet<PathBuf> = metadata.dirty_deleted_files.into_iter().collect();
+    let current_files: HashSet<PathBuf> = state.snapshot_files.into_iter().collect();
+    let current_created: HashSet<PathBuf> = state.created_files.into_iter().collect();
+    let current_deleted: HashSet<PathBuf> = state.deleted_files.into_iter().collect();
+    let snapshot_root = record.checkpoint_dir.join("files");
+    let mut changes = Vec::new();
+    let mut seen = HashSet::new();
+
+    for rel in current_files.difference(&baseline_files) {
+        if seen.insert(rel.clone()) {
+            let kind = if current_created.contains(rel) {
+                AgentSessionChangeKind::Created
+            } else {
+                AgentSessionChangeKind::Modified
+            };
+            changes.push(change(rel, kind, timestamp_ms));
+        }
+    }
+    for rel in current_deleted.difference(&baseline_deleted) {
+        if seen.insert(rel.clone()) {
+            changes.push(change(rel, AgentSessionChangeKind::Removed, timestamp_ms));
+        }
+    }
+    for rel in baseline_files.difference(&current_files) {
+        if seen.insert(rel.clone()) {
+            let kind = if baseline_created.contains(rel) {
+                AgentSessionChangeKind::Removed
+            } else {
+                AgentSessionChangeKind::Modified
+            };
+            changes.push(change(rel, kind, timestamp_ms));
+        }
+    }
+    for rel in baseline_deleted.difference(&current_deleted) {
+        if seen.insert(rel.clone()) {
+            changes.push(change(rel, AgentSessionChangeKind::Modified, timestamp_ms));
+        }
+    }
+    for rel in baseline_files.intersection(&current_files) {
+        let before = fs::read(snapshot_root.join(rel)).map_err(io_error)?;
+        let after = fs::read(record.repo.join(rel)).map_err(io_error)?;
+        if before != after && seen.insert(rel.clone()) {
+            changes.push(change(rel, AgentSessionChangeKind::Modified, timestamp_ms));
+        }
+    }
+
     changes.sort_by(|a, b| {
         a.path
             .cmp(&b.path)
@@ -479,6 +707,8 @@ fn write_metadata(
     session_id: &str,
     created_at_ms: u64,
     contract: &AgentSessionCheckpoint,
+    dirty_created_files: &[PathBuf],
+    dirty_deleted_files: &[PathBuf],
 ) -> Result<(), AgentConsoleError> {
     let metadata = CheckpointMetadata {
         repo: repo.to_path_buf(),
@@ -487,10 +717,18 @@ fn write_metadata(
         checkpoint_type: contract.checkpoint_type,
         git_hash: contract.git_hash.clone(),
         snapshot_files: contract.snapshot_files.clone(),
+        dirty_created_files: dirty_created_files.to_vec(),
+        dirty_deleted_files: dirty_deleted_files.to_vec(),
     };
     let json = serde_json::to_vec_pretty(&metadata)
         .map_err(|e| AgentConsoleError::new("checkpoint_metadata_failed", e.to_string()))?;
     fs::write(checkpoint_dir.join("metadata.json"), json).map_err(io_error)
+}
+
+fn read_metadata(checkpoint_dir: &Path) -> Result<CheckpointMetadata, AgentConsoleError> {
+    let bytes = fs::read(checkpoint_dir.join("metadata.json")).map_err(io_error)?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| AgentConsoleError::new("checkpoint_metadata_failed", e.to_string()))
 }
 
 fn prune_checkpoints(repo_dir: &Path, keep: usize) -> Result<(), AgentConsoleError> {
@@ -509,7 +747,21 @@ fn prune_checkpoints(repo_dir: &Path, keep: usize) -> Result<(), AgentConsoleErr
 }
 
 fn enforce_repo_budget(repo_dir: &Path, max_bytes: u64) -> Result<(), AgentConsoleError> {
-    let total = dir_size(repo_dir)?;
+    let mut total = dir_size(repo_dir)?;
+    if total <= max_bytes {
+        return Ok(());
+    }
+
+    let mut dirs = checkpoint_dirs(repo_dir)?;
+    dirs.sort_by_key(|(_, modified)| *modified);
+
+    while total > max_bytes && dirs.len() > 1 {
+        let (path, _) = dirs.remove(0);
+        let reclaimed = dir_size(&path)?;
+        fs::remove_dir_all(path).map_err(io_error)?;
+        total = total.saturating_sub(reclaimed);
+    }
+
     if total <= max_bytes {
         Ok(())
     } else {
@@ -631,6 +883,7 @@ mod tests {
     fn dirty_git_repo_uses_filesystem_snapshot() {
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty\n");
+        repo.write("untracked.txt", "new\n");
 
         let record =
             create_checkpoint(repo.path(), "sess-dirty", 1, &CheckpointConfig::default()).unwrap();
@@ -639,11 +892,20 @@ mod tests {
             record.contract.checkpoint_type,
             AgentSessionCheckpointType::FsSnapshot
         );
+        assert_eq!(
+            record.contract.git_hash.as_deref(),
+            Some(repo.head_id().as_str())
+        );
+        assert_eq!(
+            record.contract.snapshot_files,
+            vec![PathBuf::from("base.txt"), PathBuf::from("untracked.txt")]
+        );
         assert!(record
             .contract
             .snapshot_files
             .contains(&PathBuf::from("base.txt")));
         assert!(record.checkpoint_dir.join("files/base.txt").is_file());
+        assert!(record.checkpoint_dir.join("files/untracked.txt").is_file());
     }
 
     #[test]
@@ -683,6 +945,7 @@ mod tests {
     fn filesystem_revert_restores_modified_and_deletes_created_files() {
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty before\n");
+        repo.write("baseline-new.txt", "baseline untracked\n");
         let record = create_checkpoint(
             repo.path(),
             "sess-fs-revert",
@@ -693,11 +956,16 @@ mod tests {
 
         repo.write("base.txt", "after\n");
         repo.write("created.txt", "new\n");
+        fs::remove_file(repo.path().join("baseline-new.txt")).unwrap();
         revert_checkpoint(&record).unwrap();
 
         assert_eq!(
             fs::read_to_string(repo.path().join("base.txt")).unwrap(),
             "dirty before\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join("baseline-new.txt")).unwrap(),
+            "baseline untracked\n"
         );
         assert!(!repo.path().join("created.txt").exists());
         revert_checkpoint(&record).unwrap();
@@ -800,6 +1068,34 @@ mod tests {
         let repo_dir = last_dir.unwrap().parent().unwrap().to_path_buf();
         let dirs = checkpoint_dirs(&repo_dir).unwrap();
         assert_eq!(dirs.len(), 5);
+    }
+
+    #[test]
+    fn repo_budget_prunes_old_checkpoints_before_failing_start() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "dirty\n");
+        let config = CheckpointConfig {
+            retention_per_repo: 10,
+            max_checkpoint_bytes: 2048,
+            max_repo_bytes: 1800,
+        };
+        let mut newest_dir = None;
+
+        for i in 0..4 {
+            repo.write("base.txt", &format!("dirty {i}\n{}", "x".repeat(512)));
+            let record =
+                create_checkpoint(repo.path(), &format!("budget-{i}"), i, &config).unwrap();
+            newest_dir = Some(record.checkpoint_dir);
+        }
+
+        let newest_dir = newest_dir.unwrap();
+        let repo_dir = newest_dir.parent().unwrap().to_path_buf();
+        let dirs = checkpoint_dirs(&repo_dir).unwrap();
+        let total = dir_size(&repo_dir).unwrap();
+
+        assert!(newest_dir.exists());
+        assert!(dirs.len() < 4);
+        assert!(total <= config.max_repo_bytes);
     }
 
     #[test]
