@@ -78,6 +78,11 @@ export function FileOverviewRuler({
     onActiveLineChange?.(line);
   };
 
+  const clearActiveLine = () => {
+    setActiveLine(null);
+    onActiveLineChange?.(null);
+  };
+
   const onTrackClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!bodyRef?.current || !hasLines) return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -95,12 +100,21 @@ export function FileOverviewRuler({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       jumpToLine(Math.max(1, (activeLine ?? topLine) - 1));
+    } else if (event.key === "PageDown") {
+      event.preventDefault();
+      jumpToLine(Math.min(totalLines, (activeLine ?? topLine) + visibleLineCount));
+    } else if (event.key === "PageUp") {
+      event.preventDefault();
+      jumpToLine(Math.max(1, (activeLine ?? topLine) - visibleLineCount));
     } else if (event.key === "Home") {
       event.preventDefault();
       jumpToLine(1);
     } else if (event.key === "End") {
       event.preventDefault();
       jumpToLine(totalLines);
+    } else if (event.key === "Escape" && activeLine != null) {
+      event.preventDefault();
+      clearActiveLine();
     }
   };
 
@@ -123,6 +137,7 @@ export function FileOverviewRuler({
         );
   const viewportTopPx = trackHeight == null ? 0 : (trackHeight * viewportTopPercent) / 100;
   const viewportHeightPx = trackHeight == null ? 18 : (trackHeight * viewportHeightPercent) / 100;
+  const currentLine = hasLines ? (activeLine ?? topLine) : 1;
   const rulerStyle =
     rulerHeight == null
       ? undefined
@@ -168,8 +183,8 @@ export function FileOverviewRuler({
         aria-label="Posición de desplazamiento"
         aria-valuemin={1}
         aria-valuemax={hasLines ? totalLines : 1}
-        aria-valuenow={hasLines ? topLine : 1}
-        aria-valuetext={hasLines ? `Línea ${topLine} de ${totalLines}` : undefined}
+        aria-valuenow={currentLine}
+        aria-valuetext={hasLines ? `Línea ${currentLine} de ${totalLines}` : undefined}
         onClick={onTrackClick}
         onKeyDown={onTrackKeyDown}
         data-testid="file-overview-ruler-track"

@@ -141,6 +141,11 @@ Verification results:
 - `http://127.0.0.1:1422/demo.html`: HTTP 200.
 - Visual screenshot verification: skipped because no Browser control tool was exposed and `playwright`/`puppeteer` are missing.
 
+Residual keyboard/accessibility continuation (2026-07-08):
+- `FileOverviewRuler` extends keyboard navigation on the slider track from ArrowUp/ArrowDown/Home/End to also include PageUp/PageDown and Escape. The track now reports the keyboard-selected line through `aria-valuenow`/`aria-valuetext`; Escape clears the active marker state.
+- `FileView` exposes the scrollable file body as a focusable `region` with `tabIndex=0`, letting native browser arrow/page scrolling reach file contents by keyboard, and Escape blurs that body when it has direct focus.
+- Verification passed: `npm test -- src\panels\file\FileView.test.tsx src\panels\file\FileOverviewRuler.test.tsx --run` (34/34) and `npx tsc --noEmit`.
+
 ## Review Gate
 
 - Code review threshold: P0-P2.

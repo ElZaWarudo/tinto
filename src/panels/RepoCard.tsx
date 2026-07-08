@@ -11,6 +11,7 @@ import { ACTIVITY_WINDOW_MS } from "./constants";
 import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
 import { RepoSourceBadge } from "./RepoSourceBadge";
 import { SignalBadges } from "./SignalBadges";
+import { REPO_STATUS_MARKS } from "./statusMarks";
 
 export interface RepoCardProps {
   delta: RepoDelta;
@@ -22,6 +23,7 @@ export interface RepoCardProps {
   onOpen: () => void;
   onRetry: () => void;
   onRemove: () => void;
+  onFetch?: () => Promise<unknown> | unknown;
   onLaunch: (agentType: string) => Promise<void> | void;
   availabilityKey?: string;
 }
@@ -58,6 +60,7 @@ function RepoCardImpl({
   onOpen,
   onRetry,
   onRemove,
+  onFetch,
   onLaunch,
   availabilityKey = `repo:${delta.repo}`,
 }: RepoCardProps) {
@@ -67,8 +70,11 @@ function RepoCardImpl({
   const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
   const [launchMessage, setLaunchMessage] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchMessage, setFetchMessage] = useState<string | null>(null);
   const active = nowMs - activityMs < ACTIVITY_WINDOW_MS;
   const upstream = upstreamLabel(branch);
+  const hasRemoteUpstream = branch?.ahead != null && branch?.behind != null;
   const metrics = getRepoMetrics(delta);
   const signals = getRepoSignals(delta);
   const counts = signalCounts(signals);
@@ -105,6 +111,15 @@ function RepoCardImpl({
     Promise.resolve(onLaunch(agentType))
       .catch((e) => setLaunchMessage(commandMessage(e)))
       .finally(() => setLaunching(false));
+  };
+
+  const fetchRemote = () => {
+    if (!onFetch || fetching) return;
+    setFetching(true);
+    setFetchMessage(null);
+    Promise.resolve(onFetch())
+      .catch((e) => setFetchMessage(commandMessage(e)))
+      .finally(() => setFetching(false));
   };
 
   return (
@@ -163,7 +178,28 @@ function RepoCardImpl({
         <div className="repo-card__branch" data-testid="branch">
           <span className="repo-card__branch-name">{branchLabel(branch, head)}</span>
           {upstream && <span className="repo-card__upstream">{upstream}</span>}
+          {hasRemoteUpstream && source !== "wsl" && onFetch && (
+            <button
+              type="button"
+              className="repo-card__fetch"
+              data-testid="repo-card-fetch"
+              title="Fetch remote refs for this repo"
+              disabled={fetching}
+              onClick={(e) => {
+                e.stopPropagation();
+                fetchRemote();
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {fetching ? "Fetching" : "Fetch"}
+            </button>
+          )}
         </div>
+        {fetchMessage && (
+          <span className="repo-card__fetch-error" role="alert">
+            {fetchMessage}
+          </span>
+        )}
         <footer className="repo-card__foot">
           {head ? (
             <span className="repo-card__commit" title={`${head.summary} Â· ${head.id}`}>
@@ -179,18 +215,20 @@ function RepoCardImpl({
       </header>
 
       <div className="repo-card__counts" data-testid="counts">
-        <span className="count count--modified">
-          <strong>{status.modified.length}</strong>
-          <span>M</span>
-        </span>
-        <span className="count count--staged">
-          <strong>{status.staged.length}</strong>
-          <span>S</span>
-        </span>
-        <span className="count count--untracked">
-          <strong>{status.untracked.length}</strong>
-          <span>U</span>
-        </span>
+        {REPO_STATUS_MARKS.map((mark) => {
+          const count = mark.count(status);
+          return (
+            <span
+              aria-label={`${count} ${mark.label.toLowerCase()} ${count === 1 ? "file" : "files"}`}
+              className={`count count--${mark.className}`}
+              key={mark.kind}
+              title={`${mark.label} files: ${count}`}
+            >
+              <strong>{count}</strong>
+              <span>{mark.short}</span>
+            </span>
+          );
+        })}
         {signals.length > 0 && (
           <span className="repo-card__signal-count" data-testid="signal-count">
             {counts.critical > 0 ? counts.critical : signals.length} signal

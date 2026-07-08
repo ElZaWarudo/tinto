@@ -9,7 +9,9 @@ import {
   autodetectReposUnder,
   createWorkbench,
   deleteWorkbench,
+  fetchRepo,
   forgetRepo,
+  getRepoFetchPreview,
   listWorkbenches,
   listWslDirectory,
   listWslDistros,
@@ -113,6 +115,18 @@ export async function addWslRepoFlow(
   const stored = await addWslRepo(active, input.distro, path, input.alias?.trim() || undefined);
   await reloadActiveWorkbench();
   return stored;
+}
+
+export async function fetchRepoFlow(repo: string): Promise<boolean> {
+  const preview = await getRepoFetchPreview(repo);
+  const ok = await confirm(
+    `Fetch ${preview.remote} from ${preview.sanitized_url}?\n\nHost to contact: ${preview.host}\n\nThis only refreshes remote-tracking refs and will not touch your working tree or index.`,
+    { title: "Fetch remote refs", kind: "warning" },
+  );
+  if (!ok) return false;
+  await fetchRepo(repo, preview.remote, preview.host, true);
+  await reloadActiveWorkbench();
+  return true;
 }
 
 export async function listWslDistrosFlow(): Promise<string[]> {

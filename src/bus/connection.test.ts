@@ -65,7 +65,7 @@ vi.mock("../workspace/repoTreeStore", () => ({
   },
 }));
 
-import { useBusConnection } from "./connection";
+import { reloadActiveWorkbench, useBusConnection } from "./connection";
 import { agentSessionStore } from "../agent/sessionStore";
 import { busStore } from "./store";
 import type { RepoDelta } from "./contract";
@@ -80,6 +80,16 @@ function makeDelta(repo: string, revision = 1): RepoDelta {
     last_activity_ms: 1,
     error: null,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 const Probe = () => {
@@ -250,5 +260,31 @@ describe("useBusConnection", () => {
     render(createElement(Probe));
     await waitFor(() => expect(h.getSnapshot).toHaveBeenCalled());
     expect(busStore.getState().config).toBeNull(); // not set, no crash
+  });
+
+  it("ignores a stale workbench reload snapshot after a newer reload starts", async () => {
+    const staleSnapshot = deferred<{
+      watching: { available: boolean };
+      repos: RepoDelta[];
+    }>();
+    h.listWb
+      .mockResolvedValueOnce({ version: 1, active: "Work", workbenches: [] })
+      .mockResolvedValueOnce({ version: 1, active: "Side", workbenches: [] });
+    h.getSnapshot
+      .mockReturnValueOnce(staleSnapshot.promise)
+      .mockResolvedValueOnce({ watching: { available: true }, repos: [makeDelta("/r/side", 2)] });
+
+    const staleReload = reloadActiveWorkbench();
+    await waitFor(() => expect(h.getSnapshot).toHaveBeenCalledTimes(1));
+
+    await reloadActiveWorkbench();
+    expect(busStore.getState().config?.active).toBe("Side");
+    expect(Object.keys(busStore.getState().repos)).toEqual(["/r/side"]);
+
+    staleSnapshot.resolve({ watching: { available: true }, repos: [makeDelta("/r/work", 1)] });
+    await staleReload;
+
+    expect(busStore.getState().config?.active).toBe("Side");
+    expect(Object.keys(busStore.getState().repos)).toEqual(["/r/side"]);
   });
 });

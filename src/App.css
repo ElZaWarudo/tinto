@@ -1785,6 +1785,23 @@ select option {
   color: var(--accent-fg);
   font-variant-numeric: tabular-nums;
 }
+.repo-card__fetch {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.repo-card__fetch:disabled {
+  opacity: 0.65;
+}
+.repo-card__fetch-error {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  font-size: 11px;
+}
 .repo-card__counts {
   grid-column: 3;
   grid-row: 1;

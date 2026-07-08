@@ -115,6 +115,8 @@ pub fn run() {
             bus::commands::install_repo_gitleaks,
             bus::commands::create_repo_gitleaks_config,
             bus::commands::create_repo_agents_md_config,
+            bus::commands::get_repo_fetch_preview,
+            bus::commands::fetch_repo,
             agent_console::commands::start_agent_session,
             agent_console::commands::stop_agent_session,
             agent_console::commands::list_agent_sessions,

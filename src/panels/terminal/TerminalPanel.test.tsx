@@ -582,6 +582,48 @@ describe("TerminalPanel", () => {
     expect(within(menu).queryByText(/Memorias/)).not.toBeInTheDocument();
   });
 
+  it("supports accessible keyboard navigation in the composer command palette", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const composer = await screen.findByLabelText("Message Codex");
+    await user.type(composer, "/");
+
+    const menu = screen.getByRole("listbox", { name: "Composer commands" });
+    expect(composer).toHaveAttribute("aria-controls", menu.id);
+    expect(composer).toHaveAttribute("aria-expanded", "true");
+    expect(composer).toHaveAttribute("aria-haspopup", "listbox");
+    expect(composer).toHaveAttribute("aria-activedescendant", "composer-command-sess-1-branch");
+    expect(document.getElementById("composer-command-sess-1-branch")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.keyboard("{ArrowDown}");
+    expect(composer).toHaveAttribute("aria-activedescendant", "composer-command-sess-1-comments");
+    expect(document.getElementById("composer-command-sess-1-comments")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.keyboard("{End}");
+    expect(composer).toHaveAttribute("aria-activedescendant", "composer-command-sess-1-details");
+    expect(document.getElementById("composer-command-sess-1-details")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.keyboard("{Home}");
+    expect(composer).toHaveAttribute("aria-activedescendant", "composer-command-sess-1-branch");
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox", { name: "Composer commands" })).not.toBeInTheDocument();
+    expect(composer).toHaveAttribute("aria-expanded", "false");
+    expect(composer).not.toHaveAttribute("aria-controls");
+    expect(composer).not.toHaveAttribute("aria-activedescendant");
+  });
+
   it("opens details from the slash command without sending it as an agent turn", async () => {
     const user = userEvent.setup();
     listAgentSessionsMock.mockResolvedValue([sessionFixture()]);

@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { FileContent } from "../../bus/contract";
 
 let content: FileContent = { encoding: "utf8", content: "one\ntwo\n", truncated: false };
 let rejects: unknown[] = [];
+let contentLoads: Array<Promise<FileContent>> = [];
 
 vi.mock("../../bus/client", () => ({
   getFileContent: vi.fn(() => {
+    const nextLoad = contentLoads.shift();
+    if (nextLoad) return nextLoad;
     const nextReject = rejects.shift();
     if (nextReject) return Promise.reject(nextReject);
     return Promise.resolve(content);
@@ -19,6 +22,7 @@ describe("FullFileView", () => {
   beforeEach(() => {
     content = { encoding: "utf8", content: "one\ntwo\n", truncated: false };
     rejects = [];
+    contentLoads = [];
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -53,6 +57,42 @@ describe("FullFileView", () => {
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
     expect(container.querySelector(".full-file__line .diff-content")).toHaveTextContent("visible");
     expect(screen.getByTestId("full-truncated")).toHaveTextContent("File truncated");
+  });
+
+  it("ignores stale full-file content when the repo revision changes mid-load", async () => {
+    let resolveOld: (value: FileContent) => void = () => {};
+    let resolveFresh: (value: FileContent) => void = () => {};
+    contentLoads = [
+      new Promise<FileContent>((resolve) => {
+        resolveOld = resolve;
+      }),
+      new Promise<FileContent>((resolve) => {
+        resolveFresh = resolve;
+      }),
+    ];
+
+    const { container, rerender } = render(
+      <FullFileView repo="/r/a" path="src/a.ts" repoRevision={1} changedLines={new Set()} />,
+    );
+    rerender(
+      <FullFileView repo="/r/a" path="src/a.ts" repoRevision={2} changedLines={new Set()} />,
+    );
+
+    await act(async () => {
+      resolveOld({ encoding: "utf8", content: "old revision\n", truncated: false });
+      resolveFresh({ encoding: "utf8", content: "fresh revision\n", truncated: false });
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".full-file__line .diff-content")).toHaveTextContent(
+        "fresh revision",
+      );
+    });
+    expect(
+      Array.from(container.querySelectorAll(".full-file__line .diff-content")).some((node) =>
+        node.textContent?.includes("old revision"),
+      ),
+    ).toBe(false);
   });
 
   it("shows an error state when file content cannot be loaded", async () => {

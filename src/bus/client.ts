@@ -29,6 +29,8 @@ import {
   type FileDiff,
   type FsEventBatch,
   type RepoDelta,
+  type RepoFetchPreview,
+  type RepoFetchResult,
   type RepoTree,
   type SubscriptionTarget,
   type WatchingState,
@@ -135,6 +137,20 @@ export const createRepoGitleaksConfig = (repo: string) =>
   invoke("create_repo_gitleaks_config", { repo });
 export const createRepoAgentsMdConfig = (repo: string) =>
   invoke("create_repo_agents_md_config", { repo });
+export const getRepoFetchPreview = (repo: string) =>
+  invoke<RepoFetchPreview>("get_repo_fetch_preview", { repo });
+export const fetchRepo = (
+  repo: string,
+  remote: string,
+  confirmedHost: string,
+  userConsent: boolean,
+) =>
+  invoke<RepoFetchResult>("fetch_repo", {
+    repo,
+    remote,
+    confirmedHost,
+    userConsent,
+  });
 
 export const revertSession = (sessionId: string, userConsent: boolean) =>
   invoke<AgentSession>("revert_session", { sessionId, userConsent });

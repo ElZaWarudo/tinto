@@ -22,17 +22,32 @@ import {
   onWorkbenchDelta,
 } from "./client";
 
+let activeReloadGeneration = 0;
+
+function nextReloadGeneration(): number {
+  activeReloadGeneration += 1;
+  return activeReloadGeneration;
+}
+
+function isCurrentReload(generation: number): boolean {
+  return generation === activeReloadGeneration;
+}
+
 export async function reloadActiveWorkbench(): Promise<void> {
+  const generation = nextReloadGeneration();
   try {
     const config = await listWorkbenches();
+    if (!isCurrentReload(generation)) return;
     busStore.setConfig(config);
   } catch {
     /* config is best-effort; names fall back to basenames */
   }
   try {
     const snapshot = await getWorkbenchSnapshot();
+    if (!isCurrentReload(generation)) return;
     busStore.loadSnapshot(snapshot.repos, snapshot.watching);
   } catch (error) {
+    if (!isCurrentReload(generation)) return;
     if (!busStore.getState().loaded) {
       busStore.loadSnapshot([], {
         available: false,
@@ -42,6 +57,7 @@ export async function reloadActiveWorkbench(): Promise<void> {
   }
   try {
     const sessions = await listAgentSessions();
+    if (!isCurrentReload(generation)) return;
     agentSessionStore.setSessions(sessions);
   } catch {
     /* agent sessions are best-effort and ephemeral */

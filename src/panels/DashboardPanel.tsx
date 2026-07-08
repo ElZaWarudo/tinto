@@ -15,6 +15,7 @@ import {
 import { filterRepoPaths, hasActiveFilters } from "../qol/filters";
 import { useQualityState } from "../qol/state";
 import { useWorkspaceActions } from "../workspace/actions";
+import { fetchRepoFlow } from "../workbench/operations";
 import { agentAvailabilityKey } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import { RepoCard } from "./RepoCard";
@@ -201,6 +202,7 @@ export function DashboardPanel() {
                   onOpen={() => openRepo(p)}
                   onRetry={() => void retryRepo(p)}
                   onRemove={() => removeRepo(p)}
+                  onFetch={() => fetchRepoFlow(p)}
                   onLaunch={async (agentType) => {
                     const sessionId = await startAgentSession(p, agentType);
                     const sessions = await listAgentSessions();

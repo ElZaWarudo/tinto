@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, io};
 
 use base64::engine::general_purpose::STANDARD;
@@ -52,6 +53,20 @@ printf '%s\n' "$TINTO_TURN_DONE_MARKER"
 ```
 <!-- tinto-iade:end -->
 "#;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RepoFetchPreview {
+    pub remote: String,
+    pub host: String,
+    pub sanitized_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RepoFetchResult {
+    pub remote: String,
+    pub host: String,
+    pub fetched_at_ms: u64,
+}
 
 #[tauri::command]
 pub fn get_gitleaks_setup_status() -> Result<GitleaksSetupStatus, CommandError> {
@@ -190,6 +205,51 @@ pub async fn create_repo_agents_md_config(
     }
 }
 
+#[tauri::command]
+pub async fn get_repo_fetch_preview(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+) -> Result<RepoFetchPreview, CommandError> {
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo_abs = resolved.path;
+            blocking(move || repo_fetch_preview(&repo_abs, None)).await
+        }
+        RepoSource::Wsl => Err(CommandError::new(
+            "unsupported-repo-source",
+            "fetch opt-in solo está disponible para repos locales",
+        )),
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    remote: String,
+    confirmed_host: String,
+    user_consent: bool,
+) -> Result<RepoFetchResult, CommandError> {
+    if !user_consent {
+        return Err(CommandError::new(
+            "user-consent-required",
+            "fetch requiere confirmación explícita del usuario",
+        ));
+    }
+    let resolved = resolve_read_repo(&bus, &repo).await?;
+    match resolved.source {
+        RepoSource::Local => {
+            let repo_abs = resolved.path;
+            blocking(move || fetch_repo_local(&repo_abs, &remote, &confirmed_host)).await
+        }
+        RepoSource::Wsl => Err(CommandError::new(
+            "unsupported-repo-source",
+            "fetch opt-in solo está disponible para repos locales",
+        )),
+    }
+}
+
 pub(crate) fn gitleaks_setup_status() -> GitleaksSetupStatus {
     let Some(path) = secret_scan::gitleaks_binary_path() else {
         return GitleaksSetupStatus {
@@ -217,6 +277,195 @@ pub(crate) fn gitleaks_setup_status() -> GitleaksSetupStatus {
         installed: true,
         version,
         binary_path: Some(path.to_string_lossy().to_string()),
+    }
+}
+
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+pub(crate) fn repo_fetch_preview(
+    repo_abs: &Path,
+    remote_override: Option<&str>,
+) -> Result<RepoFetchPreview, CommandError> {
+    let repo = git2::Repository::open(repo_abs).map_err(GitError::Internal)?;
+    let remote = remote_override
+        .map(str::to_string)
+        .or_else(|| current_fetch_remote(&repo).ok())
+        .unwrap_or_else(|| "origin".to_string());
+    if remote.trim().is_empty() || remote == "." {
+        return Err(CommandError::new(
+            "remote-without-host",
+            "el upstream local no requiere fetch de red",
+        ));
+    }
+    let git_remote = repo.find_remote(&remote).map_err(|_| {
+        CommandError::new(
+            "remote-not-found",
+            format!("remote no encontrado: {}", safe_error_fragment(&remote)),
+        )
+    })?;
+    let url = git_remote
+        .url()
+        .ok_or_else(|| CommandError::new("remote-url-missing", "remote sin URL"))?;
+    let host = remote_host(url).ok_or_else(|| {
+        CommandError::new(
+            "remote-without-host",
+            "remote sin host verificable para fetch opt-in",
+        )
+    })?;
+    Ok(RepoFetchPreview {
+        remote,
+        host,
+        sanitized_url: sanitize_remote_url(url),
+    })
+}
+
+fn current_fetch_remote(repo: &git2::Repository) -> Result<String, CommandError> {
+    let head = repo.head().map_err(GitError::Internal)?;
+    let branch = head
+        .shorthand()
+        .ok_or_else(|| CommandError::new("detached-head", "HEAD detached no tiene upstream"))?;
+    let config = repo.config().map_err(GitError::Internal)?;
+    config
+        .get_string(&format!("branch.{branch}.remote"))
+        .or_else(|_| Ok("origin".to_string()))
+}
+
+pub(crate) fn fetch_repo_local(
+    repo_abs: &Path,
+    remote: &str,
+    confirmed_host: &str,
+) -> Result<RepoFetchResult, CommandError> {
+    let preview = repo_fetch_preview(repo_abs, Some(remote))?;
+    if preview.host != confirmed_host {
+        return Err(CommandError::new(
+            "host-confirmation-mismatch",
+            "el host confirmado no coincide con el remote actual",
+        ));
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_abs)
+        .arg("fetch")
+        .arg("--prune")
+        .arg(&preview.remote)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|_| CommandError::new("git-unavailable", "git no está disponible"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(fetch_command_error(&stderr));
+    }
+
+    Ok(RepoFetchResult {
+        remote: preview.remote,
+        host: preview.host,
+        fetched_at_ms: now_epoch_ms(),
+    })
+}
+
+fn fetch_command_error(stderr: &str) -> CommandError {
+    let lower = stderr.to_lowercase();
+    let category = if lower.contains("host key verification failed")
+        || lower.contains("certificate")
+        || lower.contains("ssl")
+    {
+        "host-not-verified"
+    } else if lower.contains("could not read username")
+        || lower.contains("terminal prompts disabled")
+    {
+        "credential-missing"
+    } else if lower.contains("authentication failed") || lower.contains("permission denied") {
+        "auth-rejected"
+    } else if lower.contains("could not resolve host")
+        || lower.contains("failed to connect")
+        || lower.contains("network")
+    {
+        "network-unreachable"
+    } else {
+        "fetch-failed"
+    };
+    CommandError::new(category, safe_error_fragment(stderr))
+}
+
+fn safe_error_fragment(input: &str) -> String {
+    let sanitized = sanitize_remote_url(input);
+    let mut lines = sanitized
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    lines
+        .next()
+        .unwrap_or("fetch falló")
+        .chars()
+        .take(240)
+        .collect()
+}
+
+pub(crate) fn sanitize_remote_url(input: &str) -> String {
+    if let Some((scheme, rest)) = input.split_once("://") {
+        let (authority, tail) = match rest.find(['/', '\n', '\r', ' ', '\t']) {
+            Some(index) => (&rest[..index], &rest[index..]),
+            None => (rest, ""),
+        };
+        let host = authority
+            .rsplit_once('@')
+            .map(|(_, host)| host)
+            .unwrap_or(authority);
+        return format!("{scheme}://{host}{tail}");
+    }
+
+    let first = input.split_whitespace().next().unwrap_or(input);
+    if let Some((left, right)) = first.split_once(':') {
+        if !left.contains('/') {
+            let host = left.rsplit_once('@').map(|(_, host)| host).unwrap_or(left);
+            return input.replacen(first, &format!("{host}:{right}"), 1);
+        }
+    }
+    input.to_string()
+}
+
+pub(crate) fn remote_host(url: &str) -> Option<String> {
+    if let Some((_scheme, rest)) = url.split_once("://") {
+        let authority = rest.split(['/', '\n', '\r', ' ', '\t']).next()?.trim();
+        let host_port = authority
+            .rsplit_once('@')
+            .map(|(_, host)| host)
+            .unwrap_or(authority);
+        return host_from_authority(host_port);
+    }
+
+    let first = url.split_whitespace().next().unwrap_or(url);
+    let (left, _path) = first.split_once(':')?;
+    if left.contains('/') {
+        return None;
+    }
+    let host = left.rsplit_once('@').map(|(_, host)| host).unwrap_or(left);
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
+fn host_from_authority(authority: &str) -> Option<String> {
+    if authority.is_empty() {
+        return None;
+    }
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split_once(']').map(|(host, _)| host.to_string());
+    }
+    let host = authority.split(':').next().unwrap_or(authority);
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
     }
 }
 
@@ -957,6 +1206,57 @@ mod tests {
         assert!(content.starts_with("Project instructions"));
         assert!(!content.contains("\nold\n"));
         assert_eq!(content.matches("<!-- tinto-iade:start -->").count(), 1);
+    }
+
+    #[test]
+    fn repo_fetch_preview_sanitizes_remote_credentials_and_resolves_host() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(repo_dir.path()).unwrap();
+        repo.remote("origin", "https://user:secret@github.com/acme/repo.git")
+            .unwrap();
+
+        let preview = repo_fetch_preview(repo_dir.path(), Some("origin")).unwrap();
+
+        assert_eq!(preview.remote, "origin");
+        assert_eq!(preview.host, "github.com");
+        assert_eq!(preview.sanitized_url, "https://github.com/acme/repo.git");
+        assert!(!preview.sanitized_url.contains("secret"));
+    }
+
+    #[test]
+    fn repo_fetch_helpers_support_scp_style_remotes_without_userinfo() {
+        assert_eq!(
+            remote_host("git@github.com:acme/repo.git"),
+            Some("github.com".to_string())
+        );
+        assert_eq!(
+            sanitize_remote_url("git@github.com:acme/repo.git"),
+            "github.com:acme/repo.git"
+        );
+    }
+
+    #[test]
+    fn fetch_command_error_classifies_and_sanitizes_credential_failures() {
+        let err = fetch_command_error(
+            "fatal: could not read Username for 'https://token@github.com/acme/repo.git': terminal prompts disabled",
+        );
+
+        assert_eq!(err.category, "credential-missing");
+        assert!(!err.message.contains("token@"));
+        assert!(err.message.contains("https://github.com/acme/repo.git"));
+    }
+
+    #[test]
+    fn fetch_repo_local_fails_closed_when_confirmed_host_drifted() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(repo_dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/repo.git")
+            .unwrap();
+
+        let err =
+            fetch_repo_local(repo_dir.path(), "origin", "gitlab.com").expect_err("host mismatch");
+
+        assert_eq!(err.category, "host-confirmation-mismatch");
     }
 
     #[test]

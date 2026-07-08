@@ -10,6 +10,8 @@
     "tauri": "tauri",
     "tauri:dev:wsl": "node scripts/tauri-dev-wsl.mjs",
     "brand:generate": "python3 scripts/generate_brand_assets.py",
+    "contract:generate": "node scripts/generate-bus-contract.mjs",
+    "contract:check": "node scripts/generate-bus-contract.mjs --check",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -31,10 +31,15 @@ vi.mock("./panels/terminal/TerminalPanel", () => ({
 
 const captured = vi.hoisted(() => ({
   components: undefined as Record<string, unknown> | undefined,
+  props: undefined as { onApi?: (api: unknown) => void } | undefined,
 }));
 vi.mock("./workspace/DockWorkspace", () => ({
-  DockWorkspace: (props: { components: Record<string, unknown> }) => {
+  DockWorkspace: (props: {
+    components: Record<string, unknown>;
+    onApi?: (api: unknown) => void;
+  }) => {
     captured.components = props.components;
+    captured.props = props;
     return <div data-testid="workspace-stub" />;
   },
 }));
@@ -57,6 +62,7 @@ describe("App", () => {
   beforeEach(() => {
     busStore.resetAll();
     captured.components = undefined;
+    captured.props = undefined;
     detachedWindowMocks.markTerminalDetached.mockClear();
     detachedWindowMocks.onDetachedConsolesReattach.mockClear();
     detachedWindowMocks.onDetachedConsolesReattach.mockResolvedValue(() => {});
@@ -111,6 +117,49 @@ describe("App", () => {
     };
 
     closePanelsForRemovedRepo(api as never, "/r/a");
+
+    expect(closed).toEqual([repoPanelId("/r/a")]);
+  });
+
+  it("closes repo project tabs outside the active workbench after a workbench switch", () => {
+    const workConfig: WorkbenchConfig = {
+      version: 1,
+      active: "Work",
+      workbenches: [
+        {
+          name: "Work",
+          repos: [
+            { path: "/r/a", alias: null, fs_watch: [] },
+            { path: "/r/shared", alias: null, fs_watch: [] },
+          ],
+        },
+        {
+          name: "Side",
+          repos: [
+            { path: "/r/shared", alias: null, fs_watch: [] },
+            { path: "/r/c", alias: null, fs_watch: [] },
+          ],
+        },
+      ],
+    };
+    const sideConfig: WorkbenchConfig = { ...workConfig, active: "Side" };
+    const closed: string[] = [];
+    const panel = (id: string) => ({ id, api: { close: () => closed.push(id) } });
+    const panels = [panel(repoPanelId("/r/a")), panel(repoPanelId("/r/shared"))];
+    const api = {
+      panels,
+      getPanel: (id: string) => panels.find((p) => p.id === id),
+    };
+
+    act(() => {
+      busStore.setConfig(workConfig);
+      busStore.loadSnapshot([], { available: true });
+    });
+    render(<App />);
+    act(() => captured.props?.onApi?.(api));
+    expect(closed).toEqual([]);
+
+    act(() => busStore.setConfig(sideConfig));
 
     expect(closed).toEqual([repoPanelId("/r/a")]);
   });

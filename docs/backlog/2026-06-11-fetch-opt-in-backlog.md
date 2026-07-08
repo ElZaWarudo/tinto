@@ -1,6 +1,6 @@
 ---
 title: "Backlog: fetch opt-in para el git engine"
-status: backlog
+status: completed
 date: 2026-06-11
 relates_to: src-tauri/src/git/ (RDM-002, entregado read-only sin red en PR #2)
 ---
@@ -36,3 +36,20 @@ Una operación `fetch` **opt-in** (explícita, disparada por el usuario, nunca a
 ## Cuándo activarlo
 
 Cuando haya evidencia de que el ahead/behind stale confunde al supervisor (o el usuario lo pida). Entrar por brainstorm corto → plan → package con RU única + Security Sentinel.
+
+## Activacion 2026-07-08
+
+Estado: completado como slice de producto con un limite de implementacion distinto al diseno original.
+
+- Se agregaron los comandos aditivos `get_repo_fetch_preview` y `fetch_repo` para repos locales del workbench activo.
+- El dashboard muestra `Fetch` solo cuando el repo local tiene upstream real; WSL y ramas sin upstream no exponen la accion.
+- La UI obtiene primero una previsualizacion con `remote`, `host` y `sanitized_url`, muestra el host exacto al usuario y solo llama `fetch_repo` tras confirmacion explicita.
+- El backend revalida que el host actual del remote coincida con `confirmed_host`, ejecuta `git fetch --prune <remote>` con `GIT_TERMINAL_PROMPT=0`, clasifica errores comunes y elimina userinfo de URLs antes de devolver mensajes.
+- El fetch sigue sin tocar working tree ni indice; la escritura queda acotada al comportamiento normal de `git fetch` dentro de `.git` (refs/objetos).
+- El `Git2Engine` principal permanece read-only/sin red. No se implemento el diseno anterior de callbacks `credentials`/`certificate_check` de libgit2; la excepcion de red queda aislada en el comando explicito de sistema `git`.
+
+Verificacion local:
+
+- `cargo test --manifest-path src-tauri\Cargo.toml fetch -- --test-threads=1` (4/4)
+- `npm test -- src\bus\contract.test.ts src\workbench\operations.test.ts src\panels\RepoCard.test.tsx src\panels\DashboardPanel.test.tsx --run` (80/80)
+- `npx tsc --noEmit`

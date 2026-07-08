@@ -7,7 +7,9 @@ const client = vi.hoisted(() => ({
   autodetectReposUnder: vi.fn(),
   createWorkbench: vi.fn(),
   deleteWorkbench: vi.fn(),
+  fetchRepo: vi.fn(),
   forgetRepo: vi.fn(),
+  getRepoFetchPreview: vi.fn(),
   listWorkbenches: vi.fn(),
   listWslDirectory: vi.fn(),
   listWslDistros: vi.fn(),
@@ -37,6 +39,7 @@ import {
   removeRepoFlow,
   renameWorkbenchFlow,
   deleteWorkbenchFlow,
+  fetchRepoFlow,
 } from "./operations";
 import { busStore } from "../bus/store";
 import type { WorkbenchConfig } from "../bus/contract";
@@ -57,7 +60,13 @@ describe("workbench operations", () => {
     client.setActiveWorkbench.mockResolvedValue(undefined);
     client.createWorkbench.mockResolvedValue(undefined);
     client.deleteWorkbench.mockResolvedValue(undefined);
+    client.fetchRepo.mockResolvedValue({ remote: "origin", host: "github.com", fetched_at_ms: 1 });
     client.forgetRepo.mockResolvedValue(undefined);
+    client.getRepoFetchPreview.mockResolvedValue({
+      remote: "origin",
+      host: "github.com",
+      sanitized_url: "https://github.com/acme/repo.git",
+    });
     client.listWorkbenches.mockResolvedValue({ version: 1, active: null, workbenches: [] });
     client.removeRepo.mockResolvedValue(undefined);
     client.removeWslRepo.mockResolvedValue(undefined);
@@ -78,6 +87,28 @@ describe("workbench operations", () => {
     await switchWorkbench("Work", "Work"); // same
     await switchWorkbench("", "Work"); // empty
     expect(client.setActiveWorkbench).not.toHaveBeenCalled();
+  });
+
+  it("fetchRepoFlow previews, confirms host, fetches, and reloads", async () => {
+    const fetched = await fetchRepoFlow("/r/api");
+
+    expect(fetched).toBe(true);
+    expect(client.getRepoFetchPreview).toHaveBeenCalledWith("/r/api");
+    expect(dialogMock.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Host to contact: github.com"),
+      { title: "Fetch remote refs", kind: "warning" },
+    );
+    expect(client.fetchRepo).toHaveBeenCalledWith("/r/api", "origin", "github.com", true);
+    expect(reloadMock).toHaveBeenCalled();
+  });
+
+  it("fetchRepoFlow does not fetch when confirmation is declined", async () => {
+    dialogMock.confirm.mockResolvedValueOnce(false);
+
+    await expect(fetchRepoFlow("/r/api")).resolves.toBe(false);
+
+    expect(client.fetchRepo).not.toHaveBeenCalled();
+    expect(reloadMock).not.toHaveBeenCalled();
   });
 
   it("createAndActivate trims, creates, activates, reloads; ignores blank", async () => {

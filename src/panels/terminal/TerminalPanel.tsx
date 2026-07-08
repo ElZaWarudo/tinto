@@ -552,6 +552,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     [composerCommandItems, composerCommandTrigger],
   );
   const commandMenuVisible = slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
+  const composerCommandListboxId = `composer-command-menu-${sessionId}`;
+  const activeComposerCommand = commandMenuVisible
+    ? (filteredComposerCommandItems[activeSlashCommandIndex] ?? filteredComposerCommandItems[0])
+    : null;
+  const activeComposerCommandId = activeComposerCommand
+    ? composerCommandOptionId(sessionId, activeComposerCommand.id)
+    : undefined;
   const effectiveRuntimeOptions = useMemo(
     () => codexRuntimeOptions(selectedModel, selectedReasoning, selectedSpeed),
     [selectedModel, selectedReasoning, selectedSpeed],
@@ -712,6 +719,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             event.key === "ArrowDown",
           ),
         );
+        return;
+      }
+      if (event.key === "Home" && filteredComposerCommandItems.length > 0) {
+        event.preventDefault();
+        setActiveSlashCommandIndex(0);
+        return;
+      }
+      if (event.key === "End" && filteredComposerCommandItems.length > 0) {
+        event.preventDefault();
+        setActiveSlashCommandIndex(filteredComposerCommandItems.length - 1);
         return;
       }
       if (
@@ -1462,6 +1479,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           <div
             aria-label="Composer commands"
             className="agent-panel__slash-menu"
+            id={composerCommandListboxId}
             role="listbox"
             title={agentCommandMenuTitle(
               composerCommandTrigger,
@@ -1476,6 +1494,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                     index === activeSlashCommandIndex ? " agent-panel__slash-command--active" : ""
                   }`}
                   disabled={command.disabled}
+                  id={composerCommandOptionId(sessionId, command.id)}
                   key={command.id}
                   onClick={() => applyComposerCommand(command)}
                   onMouseDown={(event) => event.preventDefault()}
@@ -1507,6 +1526,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         )}
         <div className="agent-panel__composer-row" title={agentComposerRowTitle(agentType, repo)}>
           <textarea
+            aria-activedescendant={activeComposerCommandId}
+            aria-controls={commandMenuVisible ? composerCommandListboxId : undefined}
+            aria-expanded={commandMenuVisible}
+            aria-haspopup="listbox"
             aria-label={`Message ${agentLabel(agentType)}`}
             ref={composerInputRef}
             value={draft}
@@ -3046,6 +3069,10 @@ function agentCommandMenuTitle(
   const suffix = query ? ` matching ${prefix}${query}` : "";
   const noun = count === 1 ? "command" : "commands";
   return `Composer command menu: ${count} ${noun}${suffix}.`;
+}
+
+function composerCommandOptionId(sessionId: string, commandId: string): string {
+  return `composer-command-${sessionId}-${commandId}`;
 }
 
 function agentComposerCommandTitle(command: AgentComposerCommand): string {

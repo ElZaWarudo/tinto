@@ -19,7 +19,10 @@ import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
 import { openDashboardPanel, resetToDashboardPanel } from "./workspace/openDashboard";
 import { openAgentConsolesPanel, openAgentTerminalPanel } from "./workspace/openAgentTerminal";
-import { closePanelsForRemovedRepo } from "./workspace/closePanels";
+import {
+  closePanelsForRemovedRepo,
+  closePanelsOutsideActiveWorkbench,
+} from "./workspace/closePanels";
 import { consoleDock } from "./workspace/consoleDock";
 import { fileDock } from "./workspace/fileDock";
 import { repoTreeStore } from "./workspace/repoTreeStore";
@@ -42,6 +45,7 @@ import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
 import { isWindowsHost } from "./workbench/platform";
 import { useBusConnection } from "./bus/connection";
 import { busStore, useBusState } from "./bus/store";
+import type { WorkbenchConfig } from "./bus/contract";
 import { GlanceMode } from "./qol/GlanceMode";
 import { NotificationWatcher } from "./qol/notifications";
 import { useQualityState } from "./qol/state";
@@ -62,6 +66,20 @@ const tabComponents: TabComponents = {
 };
 
 const detachingConsolesPanels = new Set<string>();
+
+function dropRepoUiState(path: string): void {
+  fileDock.drop(path);
+  repoTreeStore.drop(path);
+}
+
+function closeInactiveRepoPanels(
+  api: DockviewApi,
+  config: WorkbenchConfig | null | undefined,
+): void {
+  for (const path of closePanelsOutsideActiveWorkbench(api, config)) {
+    dropRepoUiState(path);
+  }
+}
 
 export async function detachConsolesPanelFromWorkspaceDrop(
   event: DockviewWillDropEvent,
@@ -153,8 +171,7 @@ export default function App() {
         void removeRepoFlow(active, path)
           .then((removed) => {
             if (!removed) return;
-            fileDock.drop(path);
-            repoTreeStore.drop(path);
+            dropRepoUiState(path);
             // If the backend already removed the repo (or never had it) but the
             // bus snapshot is stale, drop it from the frontend store so the
             // dashboard stops showing the orphan card immediately.
@@ -237,6 +254,12 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    closeInactiveRepoPanels(api, config);
+  }, [config]);
+
   // First-run: once loaded, no active workbench → the create flow.
   if (loaded && !config?.active) {
     return (
@@ -282,6 +305,7 @@ export default function App() {
               }}
               onApi={(api) => {
                 apiRef.current = api;
+                closeInactiveRepoPanels(api, busStore.getState().config);
               }}
             />
           )}

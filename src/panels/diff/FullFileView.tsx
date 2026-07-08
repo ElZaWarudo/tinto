@@ -14,12 +14,14 @@ interface LoadedFileContent {
 export function FullFileView({
   repo,
   path,
+  repoRevision,
   changedLines,
   overviewMarkers = [],
   bodyRef,
 }: {
   repo: string;
   path: string;
+  repoRevision?: number;
   changedLines: Set<number>;
   overviewMarkers?: FileOverviewMarker[];
   bodyRef?: React.RefObject<HTMLElement | null>;
@@ -27,7 +29,7 @@ export function FullFileView({
   const [loaded, setLoaded] = useState<LoadedFileContent | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const requestKey = `${repo}\0${path}\0${reloadToken}`;
+  const requestKey = `${repo}\0${path}\0${repoRevision ?? "unknown"}\0${reloadToken}`;
   const content = loaded?.key === requestKey ? loaded.content : undefined;
   const errorMessage = error?.key === requestKey ? error.message : null;
 

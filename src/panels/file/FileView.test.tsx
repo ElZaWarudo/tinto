@@ -16,12 +16,16 @@ vi.mock("react-markdown", () => ({
 vi.mock("remark-gfm", () => ({ default: {} }));
 
 let worktree: { value: unknown; reject?: unknown } = { value: [] };
+let worktreeQueue: Array<Promise<unknown>> = [];
 let fileContent: unknown = { encoding: "utf8", content: "a\nb\nc", truncated: false };
 let fileContentRejects: unknown[] = [];
 let mediaContent: unknown = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
 const invokeMock = vi.fn((cmd: string) => {
-  if (cmd === "get_worktree_diff")
+  if (cmd === "get_worktree_diff") {
+    const queued = worktreeQueue.shift();
+    if (queued) return queued;
     return worktree.reject ? Promise.reject(worktree.reject) : Promise.resolve(worktree.value);
+  }
   if (cmd === "get_file_content") {
     const nextReject = fileContentRejects.shift();
     return nextReject ? Promise.reject(nextReject) : Promise.resolve(fileContent);
@@ -73,6 +77,16 @@ const fileDiffWithAddedLines = (path: string, lines: number[]): FileDiff => ({
   ],
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function delta(over: Partial<RepoDelta> = {}): RepoDelta {
   return {
     repo: REPO,
@@ -94,6 +108,7 @@ describe("FileView", () => {
     invokeMock.mockClear();
     Element.prototype.scrollIntoView = vi.fn();
     worktree = { value: [] };
+    worktreeQueue = [];
     fileContent = { encoding: "utf8", content: "a\nb\nc", truncated: false };
     fileContentRejects = [];
     mediaContent = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
@@ -106,6 +121,18 @@ describe("FileView", () => {
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
     expect(screen.queryByTestId("diff-empty")).not.toBeInTheDocument();
     expect(invokeMock).not.toHaveBeenCalledWith("get_worktree_diff", { repo: REPO });
+  });
+
+  it("exposes the file body as a keyboard scroll region and lets Escape leave it", async () => {
+    render(<FileView repo={REPO} path={PATH} />);
+    expect(await screen.findByTestId("full-file")).toBeInTheDocument();
+
+    const body = screen.getByRole("region", { name: `${PATH} file contents` });
+    expect(body).toHaveAttribute("tabindex", "0");
+    body.focus();
+    expect(document.activeElement).toBe(body);
+    fireEvent.keyDown(body, { key: "Escape" });
+    expect(document.activeElement).not.toBe(body);
   });
 
   it("does not keep the prior file content visible while a new path loads", async () => {
@@ -327,6 +354,36 @@ describe("FileView", () => {
     worktree = { value: [fileDiff(PATH, "ok now")] };
     fireEvent.click(screen.getByTestId("diff-error-retry"));
     expect(await screen.findByText("ok now")).toBeInTheDocument();
+  });
+
+  it("ignores a stale manual one-shot retry that resolves after a newer retry", async () => {
+    act(() =>
+      busStore.applyDelta(delta({ status: { modified: [PATH], staged: [], untracked: [] } })),
+    );
+    const stale = deferred<FileDiff[]>();
+    const fresh = deferred<FileDiff[]>();
+    worktree = { value: [], reject: { category: "repo-not-allowed", message: "not allowed" } };
+
+    render(<FileView repo={REPO} path={PATH} />);
+    expect(await screen.findByTestId("diff-error")).toHaveTextContent(
+      "repo-not-allowed: not allowed",
+    );
+
+    worktree = { value: [] };
+    worktreeQueue = [stale.promise, fresh.promise];
+    fireEvent.click(screen.getByTestId("diff-error-retry"));
+    fireEvent.click(screen.getByTestId("diff-error-retry"));
+
+    await act(async () => {
+      fresh.resolve([fileDiff(PATH, "fresh retry")]);
+    });
+    expect(await screen.findByText("fresh retry")).toBeInTheDocument();
+
+    await act(async () => {
+      stale.resolve([fileDiff(PATH, "stale retry")]);
+    });
+    expect(screen.getByText("fresh retry")).toBeInTheDocument();
+    expect(screen.queryByText("stale retry")).not.toBeInTheDocument();
   });
 
   it("drops the subscription and the cached diff on unmount", async () => {

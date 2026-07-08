@@ -233,6 +233,27 @@ full-file/diff revision skew (accepted per R4, documented in code); DiffPanel `u
 S/M/U mark consolidation (discretionary); reconciler `liveKeys` perf (negligible at cap 8); workbench-switch
 diff-panel orphan (bigger flow — defer).
 
+**Residual cleanup continuation (2026-07-08):** the manual one-shot reload cancellation race named above is
+now resolved. `FileView` gates one-shot diff loads with a monotonic request id so an older slow initial/retry
+load cannot overwrite a newer manual retry result. Verification passed:
+`npm test -- src\panels\file\FileView.test.tsx --run` (19/19) and `npx tsc --noEmit`.
+
+**Residual cleanup continuation (2026-07-08):** the S/M/U mark consolidation named above is now resolved for
+the repo card and project tree surfaces. `src/panels/statusMarks.ts` centralizes modified/staged/untracked
+letters, labels, display classes, and file-tree priority; `RepoCard`, `fileTree`, and `FileTreeNode` now reuse
+that helper and expose readable titles/ARIA labels for status marks. Verification passed:
+`npm test -- src\panels\RepoCard.test.tsx src\panels\tree\fileTree.test.ts src\panels\tree\ProjectExplorer.test.tsx --run`
+(38/38) and `npx tsc --noEmit`.
+
+**Residual cleanup continuation (2026-07-08):** the remaining diff viewer hardening items named above are now
+resolved. `FileView` delegates live subscription, one-shot fallback/retry, stale retry guards, renamed-target,
+and repo-ready state into `src/panels/file/useDiffData.ts`; `FullFileView` now keys full-file content loads by
+the current repo revision so an older mid-edit response cannot render after a newer revision takes over; and
+`App` closes open repo/file tabs for repos that fall out of the active workbench on workbench switch while
+preserving repos shared by both workbenches. Verification passed:
+`npm test -- src\panels\file\FileView.test.tsx src\panels\diff\FullFileView.test.tsx src\App.test.tsx --run`
+(34/34) and `npx tsc --noEmit`.
+
 Review-fix coverage added/strengthened:
 
 - `DiffPanel.test.tsx`: reverted-after-live does not resurface the one-shot; live-before-one-shot remains

@@ -267,12 +267,14 @@ import {
   getAgentJournalSession,
   getCommitDiff,
   getGitleaksSetupStatus,
+  getRepoFetchPreview,
   getRepoGitleaksSetupStatus,
   getFileContent,
   getMediaContent,
   getWorktreeDiff,
   installGitleaks,
   installRepoGitleaks,
+  fetchRepo,
   createRepoAgentsMdConfig,
   createRepoGitleaksConfig,
   listAgentJournalSessions,
@@ -543,5 +545,16 @@ describe("RDM-008 client wrappers", () => {
 
     void createRepoAgentsMdConfig("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("create_repo_agents_md_config", { repo: "/r/api" });
+
+    void getRepoFetchPreview("/r/api");
+    expect(invokeMock).toHaveBeenCalledWith("get_repo_fetch_preview", { repo: "/r/api" });
+
+    void fetchRepo("/r/api", "origin", "github.com", true);
+    expect(invokeMock).toHaveBeenCalledWith("fetch_repo", {
+      repo: "/r/api",
+      remote: "origin",
+      confirmedHost: "github.com",
+      userConsent: true,
+    });
   });
 });

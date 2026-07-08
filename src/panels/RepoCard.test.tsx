@@ -77,6 +77,15 @@ describe("RepoCard", () => {
     expect(screen.getByTestId("counts")).toHaveTextContent("2M");
     expect(screen.getByTestId("counts")).toHaveTextContent("1S");
     expect(screen.getByTestId("counts")).toHaveTextContent("3U");
+    expect(screen.getByTitle("Modified files: 2")).toHaveAttribute(
+      "aria-label",
+      "2 modified files",
+    );
+    expect(screen.getByTitle("Staged files: 1")).toHaveAttribute("aria-label", "1 staged file");
+    expect(screen.getByTitle("Untracked files: 3")).toHaveAttribute(
+      "aria-label",
+      "3 untracked files",
+    );
     expect(screen.getByTestId("branch")).toHaveTextContent("main");
     // Everything is visible without an expand toggle.
     expect(screen.getByText(/fix parser/)).toBeInTheDocument();
@@ -159,6 +168,28 @@ describe("RepoCard", () => {
       branch: { name: "feat", detached: false, unborn: false, ahead: null, behind: null },
     });
     expect(screen.getByText(/no upstream/)).toBeInTheDocument();
+  });
+
+  it("shows opt-in fetch for local repos with an upstream and stops row activation", () => {
+    const onFetch = vi.fn(() => Promise.resolve());
+    const { onOpen } = renderCard({}, { source: "local", onFetch });
+
+    fireEvent.click(screen.getByTestId("repo-card-fetch"));
+
+    expect(onFetch).toHaveBeenCalledOnce();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("hides opt-in fetch for WSL repos and repos without upstream counts", () => {
+    renderCard({}, { source: "wsl", onFetch: vi.fn() });
+    expect(screen.queryByTestId("repo-card-fetch")).toBeNull();
+
+    renderCard(
+      { branch: { name: "feat", detached: false, unborn: false, ahead: null, behind: null } },
+      { source: "local", onFetch: vi.fn() },
+    );
+    expect(screen.getAllByTestId("branch")[1]).toHaveTextContent("no upstream");
+    expect(screen.queryAllByTestId("repo-card-fetch")).toHaveLength(0);
   });
 
   // Covers AE10: activity indicator within/outside the window

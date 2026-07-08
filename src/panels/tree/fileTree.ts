@@ -3,8 +3,9 @@
 // status. No I/O — unit-tested directly.
 
 import type { RepoStatus, TreeEntry } from "../../bus/contract";
+import { changeKindForPath, type RepoChangeKind } from "../statusMarks";
 
-export type ChangeKind = "staged" | "modified" | "untracked";
+export type ChangeKind = RepoChangeKind;
 
 export interface TreeNode {
   name: string;
@@ -28,14 +29,6 @@ function basename(path: string): string {
 
 function normalizeTreePath(path: string): string {
   return path.replace(/\\/g, "/");
-}
-
-/** Change kind for a file path; staged wins over modified wins over untracked. */
-function changeKind(path: string, status: RepoStatus): ChangeKind | null {
-  if (status.staged.includes(path)) return "staged";
-  if (status.modified.includes(path)) return "modified";
-  if (status.untracked.includes(path)) return "untracked";
-  return null;
 }
 
 function sortChildren(node: TreeNode): void {
@@ -93,7 +86,7 @@ export function buildFileTree(entries: TreeEntry[], status: RepoStatus): TreeNod
         name: basename(path),
         path,
         isDir: false,
-        changed: changeKind(path, status),
+        changed: changeKindForPath(status, path),
         hasChanges: false,
         children: [],
       });

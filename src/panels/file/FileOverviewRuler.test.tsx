@@ -261,4 +261,35 @@ describe("FileOverviewRuler", () => {
     const caret = screen.getByTestId("file-overview-ruler-caret");
     expect(caret).toHaveAttribute("aria-hidden", "true");
   });
+
+  it("navigates the track with keyboard controls and clears active line with Escape", () => {
+    const { ref, node } = makeBody(100);
+    render(
+      <FileOverviewRuler
+        markers={[]}
+        totalLines={100}
+        topLine={10}
+        visibleLineCount={10}
+        bodyRef={ref}
+      />,
+    );
+    const track = screen.getByTestId("file-overview-ruler-track");
+
+    expect(track).toHaveAttribute("aria-valuenow", "10");
+    fireEvent.keyDown(track, { key: "ArrowDown" });
+    expect(track).toHaveAttribute("aria-valuenow", "11");
+    expect(node.querySelector('[data-line="11"]')?.scrollIntoView).toHaveBeenCalled();
+
+    fireEvent.keyDown(track, { key: "PageDown" });
+    expect(track).toHaveAttribute("aria-valuenow", "21");
+    fireEvent.keyDown(track, { key: "End" });
+    expect(track).toHaveAttribute("aria-valuenow", "100");
+    fireEvent.keyDown(track, { key: "PageUp" });
+    expect(track).toHaveAttribute("aria-valuenow", "90");
+    fireEvent.keyDown(track, { key: "Home" });
+    expect(track).toHaveAttribute("aria-valuenow", "1");
+
+    fireEvent.keyDown(track, { key: "Escape" });
+    expect(track).toHaveAttribute("aria-valuenow", "10");
+  });
 });

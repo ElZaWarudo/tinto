@@ -7,9 +7,8 @@ import { useState, type CSSProperties, type MouseEvent } from "react";
 import type { RepoDelta } from "../../bus/contract";
 import { getPathSignals } from "../../bus/store";
 import { SignalBadges } from "../SignalBadges";
+import { statusMarkForKind } from "../statusMarks";
 import type { TreeNode } from "./fileTree";
-
-const MARK: Record<string, string> = { staged: "S", modified: "M", untracked: "U" };
 
 function fileIconShape(kind: string): string {
   switch (kind) {
@@ -541,6 +540,7 @@ export function FileTreeNode({
   if (node.changed) classes.push("tree-file--changed");
   if (node.path === activePath) classes.push("tree-file--active");
   const iconKind = fileIconKind(node.name);
+  const changeMark = node.changed ? statusMarkForKind(node.changed) : null;
 
   return (
     <div
@@ -573,9 +573,13 @@ export function FileTreeNode({
       <span className="tree-file__name" title={node.name}>
         {node.name}
       </span>
-      {node.changed && (
-        <span className={`tree-file__mark tree-file__mark--${node.changed}`}>
-          {MARK[node.changed]}
+      {changeMark && (
+        <span
+          aria-label={`${changeMark.label} file`}
+          className={`tree-file__mark tree-file__mark--${changeMark.kind}`}
+          title={`${changeMark.label} file`}
+        >
+          {changeMark.short}
         </span>
       )}
       <SignalBadges signals={getPathSignals(delta, node.path)} limit={1} compact />
