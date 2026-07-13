@@ -164,7 +164,7 @@ impl AgentSessionRecord {
         self.ended_at_ms = Some(now_ms());
         self.status = status_from_exit_code(self.exit_code);
         self.process = None;
-        self.error = None;
+        self.error = self.exit_code.and_then(process_exit_error);
         self.refresh_turn_checkpoints(now_ms(), true)?;
         self.refresh_change_log()?;
         Ok(())
@@ -215,6 +215,7 @@ impl AgentSessionRecord {
                 self.exit_code = Some(exit_code);
                 self.ended_at_ms = Some(now_ms());
                 self.status = status_from_exit_code(self.exit_code);
+                self.error = process_exit_error(exit_code);
                 self.process = None;
                 self.refresh_turn_checkpoints(now_ms(), true)?;
                 self.refresh_change_log()?;
@@ -772,6 +773,17 @@ fn status_from_exit_code(exit_code: Option<i32>) -> AgentSessionStatus {
     }
 }
 
+fn process_exit_error(exit_code: i32) -> Option<AgentConsoleError> {
+    (exit_code != 0).then(|| {
+        AgentConsoleError::new(
+            "agent_process_failed",
+            format!(
+                "el proceso del agente termino inesperadamente con codigo {exit_code}; revisa la salida de la sesion"
+            ),
+        )
+    })
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1004,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_marks_completed_process_as_exited() {
+    fn refresh_marks_nonzero_exit_as_failed_with_error() {
         let (_repo, _checkpoint_dir, mut session) = session_record();
         session
             .start(Box::new(FakeProcess {
@@ -1020,6 +1032,9 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.status, AgentSessionStatus::Failed);
         assert_eq!(contract.exit_code, Some(17));
+        let error = contract.error.expect("failed process exposes its error");
+        assert_eq!(error.category, "agent_process_failed");
+        assert!(error.message.contains("17"));
     }
 
     #[test]

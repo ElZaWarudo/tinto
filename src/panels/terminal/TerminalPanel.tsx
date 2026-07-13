@@ -55,32 +55,32 @@ const AGENT_SKILL_SHORTCUTS = [
   {
     id: "krt-interface-warden",
     label: "Interface Warden",
-    title: "Design or revise a distinctive working-surface interface",
+    title: "Diseñar o revisar una interfaz de trabajo con identidad propia",
   },
   {
     id: "krt-interface-inquisitor",
     label: "Interface Inquisitor",
-    title: "Run an adversarial visual critique of an implemented interface",
+    title: "Hacer una crítica visual exigente de una interfaz ya implementada",
   },
   {
     id: "krt-repo-medic",
     label: "Repo Medic",
-    title: "Diagnose repository health, test hygiene, and maintenance risks",
+    title: "Diagnosticar la salud del repositorio, las pruebas y los riesgos de mantenimiento",
   },
   {
     id: "krt-ci-questor",
     label: "CI Questor",
-    title: "Investigate CI failures and summarize likely causes",
+    title: "Investigar fallos de CI y resumir sus causas probables",
   },
   {
     id: "krt-gitflow-knight",
     label: "Gitflow Knight",
-    title: "Prepare scoped commits on a proper feature branch",
+    title: "Preparar commits acotados en una rama de funcionalidad adecuada",
   },
   {
     id: "krt-release-marshal",
     label: "Release Marshal",
-    title: "Prepare delivery flow, pull request, and release handoff",
+    title: "Preparar el flujo de entrega, el pull request y el relevo de la publicación",
   },
 ] as const;
 
@@ -240,14 +240,26 @@ const CODEX_MODEL_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: "auto", label: "Auto", description: "Use the configured Codex default model" },
-  { value: "gpt-5.5", label: "GPT-5.5", description: "Best default for complex agent work" },
-  { value: "gpt-5.4", label: "GPT-5.4", description: "Strong general coding and reasoning" },
-  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", description: "Faster scans and small edits" },
+  { value: "auto", label: "Automático", description: "Usar el modelo predeterminado de Codex" },
+  {
+    value: "gpt-5.5",
+    label: "GPT-5.5",
+    description: "La mejor opción general para trabajo complejo con agentes",
+  },
+  {
+    value: "gpt-5.4",
+    label: "GPT-5.4",
+    description: "Buen rendimiento general en programación y razonamiento",
+  },
+  {
+    value: "gpt-5.4-mini",
+    label: "GPT-5.4 mini",
+    description: "Más rápido para revisiones y cambios pequeños",
+  },
   {
     value: "gpt-5.3-codex",
     label: "GPT-5.3 Codex",
-    description: "Codex-focused compatibility option",
+    description: "Opción de compatibilidad centrada en Codex",
   },
 ];
 
@@ -256,12 +268,20 @@ const CODEX_REASONING_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: "auto", label: "Auto", description: "Let Codex choose from the model default" },
-  { value: "minimal", label: "Minimo", description: "Shortest reasoning budget" },
-  { value: "low", label: "Bajo", description: "Fast, lightweight reasoning" },
-  { value: "medium", label: "Medio", description: "Balanced default for implementation work" },
-  { value: "high", label: "Alto", description: "Deeper reasoning for risky changes" },
-  { value: "xhigh", label: "Extremadamente alto", description: "Maximum effort when supported" },
+  {
+    value: "auto",
+    label: "Automático",
+    description: "Dejar que Codex use el nivel predeterminado del modelo",
+  },
+  { value: "minimal", label: "Mínimo", description: "El presupuesto de razonamiento más corto" },
+  { value: "low", label: "Bajo", description: "Razonamiento rápido y ligero" },
+  { value: "medium", label: "Medio", description: "Equilibrado para tareas de implementación" },
+  { value: "high", label: "Alto", description: "Razonamiento más profundo para cambios delicados" },
+  {
+    value: "xhigh",
+    label: "Muy alto",
+    description: "El máximo esfuerzo cuando el modelo lo admite",
+  },
 ];
 
 const CODEX_SPEED_OPTIONS: Array<{
@@ -269,11 +289,15 @@ const CODEX_SPEED_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: "standard", label: "Normal", description: "Respect the selected model and reasoning" },
+  {
+    value: "standard",
+    label: "Normal",
+    description: "Respetar el modelo y el razonamiento seleccionados",
+  },
   {
     value: "fast",
-    label: "Velocidad",
-    description: "Prefer fast defaults when model or reasoning are not fixed",
+    label: "Rápido",
+    description: "Priorizar opciones rápidas si no se han fijado el modelo ni el razonamiento",
   },
 ];
 
@@ -400,12 +424,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       : `- / ${visibleTurns.length}`
     : null;
   const transcriptSearchCountDescription = hasTranscriptQuery
-    ? `${visibleTurns.length} matching ${turnNoun(visibleTurns.length)} out of ${turns.length} total ${turnNoun(turns.length)}.`
-    : `Showing all ${turns.length} transcript ${turnNoun(turns.length)}.`;
+    ? `${visibleTurns.length} ${turnNoun(visibleTurns.length)} coincidentes de ${turns.length} en total.`
+    : `Se muestran los ${turns.length} ${turnNoun(turns.length)} de la transcripción.`;
   const activeSearchResultDescription = activeSearchResultLabel
     ? activeSearchResultIndex >= 0
-      ? `Focused search result ${activeSearchResultIndex + 1} of ${visibleTurns.length} matching ${turnNoun(visibleTurns.length)}.`
-      : `No focused search result selected out of ${visibleTurns.length} matching ${turnNoun(visibleTurns.length)}.`
+      ? `Resultado de búsqueda seleccionado: ${activeSearchResultIndex + 1} de ${visibleTurns.length}.`
+      : `No hay ningún resultado seleccionado entre los ${visibleTurns.length} coincidentes.`
     : null;
   const previousSearchResultTitle = transcriptSearchNavigationTitle(
     "previous",
@@ -463,9 +487,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         id: "model",
         command: "model",
-        description: "Choose the active Codex model",
+        description: "Elegir el modelo activo de Codex",
         disabled: !canCompose || !isCodexSession,
-        label: "Model",
+        label: "Modelo",
         aliases: ["modelo"],
         runtimeCommand: "model" as const,
         scope: "Codex" as const,
@@ -474,9 +498,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         id: "reasoning",
         command: "reasoning",
-        description: "Choose Codex reasoning effort",
+        description: "Elegir el nivel de razonamiento de Codex",
         disabled: !canCompose || !isCodexSession,
-        label: "Reasoning",
+        label: "Razonamiento",
         aliases: ["razonamiento"],
         runtimeCommand: "reasoning" as const,
         scope: "Codex" as const,
@@ -485,9 +509,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         id: "effort",
         command: "effort",
-        description: "Alias for reasoning effort",
+        description: "Alias del nivel de razonamiento",
         disabled: !canCompose || !isCodexSession,
-        label: "Effort",
+        label: "Esfuerzo",
         aliases: ["razonamiento"],
         runtimeCommand: "reasoning" as const,
         scope: "Codex" as const,
@@ -496,9 +520,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         id: "fast",
         command: "fast",
-        description: "Toggle the fast Codex preset",
+        description: "Activar o desactivar el ajuste rápido de Codex",
         disabled: !canCompose || !isCodexSession,
-        label: "Fast",
+        label: "Rápido",
         aliases: ["speed", "velocidad", "rapido", "rapida"],
         runtimeCommand: "fast" as const,
         scope: "Codex" as const,
@@ -507,31 +531,33 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         id: "test",
         command: "test",
-        description: "Run the most relevant verification for this repo",
+        description: "Ejecutar la verificación más relevante para este repositorio",
         disabled: !canCompose,
-        label: "Test",
+        label: "Probar",
         prompt:
-          "Run the most relevant verification for this repo and summarize failures before fixing them.",
+          "Ejecuta la verificación más relevante para este repositorio y resume los fallos antes de corregirlos.",
         scope: "Codex" as const,
         trigger: "/" as const,
       },
       {
         id: "handoff",
         command: "handoff",
-        description: "Summarize session state, changes, verification, and next step",
+        description:
+          "Resumir el estado de la sesión, los cambios, la verificación y el siguiente paso",
         disabled: !canCompose,
-        label: "Handoff",
+        label: "Relevo",
         prompt:
-          "Summarize the current session state, changed files, verification, and next recommended step.",
+          "Resume el estado actual de la sesión, los archivos modificados, la verificación y el siguiente paso recomendado.",
         scope: "Codex" as const,
         trigger: "/" as const,
       },
       {
         id: "details",
         command: "details",
-        description: "Open session details, files, commands, timeline, and restore points",
+        description:
+          "Abrir los detalles, archivos, comandos, Timeline y puntos de restauración de la sesión",
         disabled: !session,
-        label: "Details",
+        label: "Detalles",
         scope: "Tinto",
         trigger: "/" as const,
       },
@@ -553,6 +579,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   );
   const commandMenuVisible = slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
   const composerCommandListboxId = `composer-command-menu-${sessionId}`;
+  const composerHintId = `agent-composer-hint-${sessionId}`;
   const activeComposerCommand = commandMenuVisible
     ? (filteredComposerCommandItems[activeSlashCommandIndex] ?? filteredComposerCommandItems[0])
     : null;
@@ -627,7 +654,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         if (mode === "journal") {
           const session = sessions[0];
           if (session) agentSessionStore.upsertSession(session);
-          else setError("Session transcript was not found.");
+          else setError("No se encontró la transcripción de la sesión.");
         } else {
           agentSessionStore.setSessions(sessions);
         }
@@ -787,7 +814,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const toggleFastPreset = () => {
     setSelectedSpeed((current) => {
       const next = current === "fast" ? "standard" : "fast";
-      setRuntimeNotice(next === "fast" ? "Fast preset enabled." : "Fast preset disabled.");
+      setRuntimeNotice(next === "fast" ? "Modo rápido activado." : "Modo rápido desactivado.");
       return next;
     });
     clearComposerCommand();
@@ -798,7 +825,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     if (command === "mascot") {
       setMascotAwake((current) => {
         const next = !current;
-        setRuntimeNotice(next ? "Mascot awake in this agent panel." : "Mascot hidden.");
+        setRuntimeNotice(
+          next ? "La mascota está activa en este panel de Agent." : "Mascota oculta.",
+        );
         return next;
       });
       clearComposerCommand();
@@ -851,7 +880,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     const commandName = normalizeComposerCommandToken(match[1]);
     const argument = match[2]?.trim();
     if (isDeferredMemoryCommand(commandName)) {
-      setRuntimeNotice("Memory commands are deferred for the later Tinto memory plan.");
+      setRuntimeNotice("Los comandos de memoria quedan pendientes para una futura fase de Tinto.");
       clearComposerCommand();
       return true;
     }
@@ -983,12 +1012,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const onRestoreTurn = async (turn: AgentTurnView) => {
     if (!sessionId || !turn.restoreCheckpointId || restoringTurnId) return;
     const ok = await confirm(
-      `This will restore files and the chat view to turn ${turn.index}. Continue?`,
+      `Se restaurarán los archivos y la conversación al turno ${turn.index}. ¿Quieres continuar?`,
       {
-        title: "Restore agent turn",
+        title: "Restaurar turno de Agent",
         kind: "warning",
-        okLabel: "Restore",
-        cancelLabel: "Cancel",
+        okLabel: "Restaurar",
+        cancelLabel: "Cancelar",
       },
     );
     if (!ok) return;
@@ -1007,12 +1036,15 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const onRevert = async () => {
     if (!sessionId || !canRevert || reverting) return;
-    const ok = await confirm("This will undo all changes made by this session. Continue?", {
-      title: "Revert agent session",
-      kind: "warning",
-      okLabel: "Revert",
-      cancelLabel: "Cancel",
-    });
+    const ok = await confirm(
+      "Se desharán todos los cambios hechos por esta sesión. ¿Quieres continuar?",
+      {
+        title: "Revertir sesión de Agent",
+        kind: "warning",
+        okLabel: "Revertir",
+        cancelLabel: "Cancelar",
+      },
+    );
     if (!ok) return;
     setReverting(true);
     setError(null);
@@ -1043,11 +1075,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const onRevertTurnFile = async (turnCheckpointId: string, path: string) => {
     if (!sessionId || !canRevertTurnFile || revertingFile) return;
-    const ok = await confirm(`Revert ${path} from this turn checkpoint?`, {
-      title: "Revert file from turn",
+    const ok = await confirm(`¿Revertir ${path} al punto de control de este turno?`, {
+      title: "Revertir archivo desde el turno",
       kind: "warning",
-      okLabel: "Revert file",
-      cancelLabel: "Cancel",
+      okLabel: "Revertir archivo",
+      cancelLabel: "Cancelar",
     });
     if (!ok) return;
     setRevertingFile(`${turnCheckpointId}:${path}`);
@@ -1085,7 +1117,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             {agentLabel(agentType)}
           </span>
           <span className="agent-panel__repo" title={agentRepoLabelTitle(agentType, repo)}>
-            {repo ? repoName(repo) : "Agent session"}
+            {repo ? repoName(repo) : "Sesión de Agent"}
           </span>
         </div>
         <SessionStatus session={session} />
@@ -1101,7 +1133,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             type="button"
           >
             <span title={agentStopControlLabelTitle(stopping)}>
-              {stopping ? "Stopping" : "Stop"}
+              {stopping ? "Deteniendo" : "Detener"}
             </span>
           </button>
           <button
@@ -1119,7 +1151,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             type="button"
           >
             <span title={agentRevertControlLabelTitle(reverting)}>
-              {reverting ? "Reverting" : "Revert"}
+              {reverting ? "Revirtiendo" : "Revertir"}
             </span>
           </button>
         </div>
@@ -1129,6 +1161,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         <div
           className="agent-panel__error"
           data-testid="terminal-panel-error"
+          role="alert"
           title={agentErrorBannerTitle(error)}
         >
           {error}
@@ -1161,68 +1194,76 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 turns.length,
               )}
             >
-              <span title={transcriptSearchLabelTitle()}>Search transcript</span>
+              <span title={transcriptSearchLabelTitle()}>Buscar en la transcripción</span>
               <span className="sr-only" id="agent-transcript-search-hint">
-                Press Enter to move through matching turns and Escape to clear the search.
+                Pulsa Intro para recorrer los turnos coincidentes y Escape para borrar la búsqueda.
               </span>
               <input
                 aria-describedby="agent-transcript-search-hint"
-                aria-label="Search transcript"
+                aria-label="Buscar en la transcripción"
                 ref={transcriptSearchRef}
                 value={transcriptQuery}
                 onChange={(event) => setTranscriptQuery(event.currentTarget.value)}
                 onKeyDown={onTranscriptSearchKeyDown}
-                placeholder="Find messages, commands, files..."
+                placeholder="Buscar mensajes, comandos o archivos..."
                 title={transcriptSearchInputTitle()}
                 type="search"
               />
             </label>
-            <span
-              aria-label={transcriptSearchCountDescription}
-              aria-live="polite"
-              className="agent-panel__chat-search-count"
-              title={transcriptSearchCountTitle(
-                hasTranscriptQuery,
-                visibleTurns.length,
-                turns.length,
-              )}
+            <div
+              aria-label="Navegación por los resultados de la transcripción"
+              className="agent-panel__chat-result-actions"
+              role="group"
             >
-              {hasTranscriptQuery ? `${visibleTurns.length} of ${turns.length} turns` : "All turns"}
-            </span>
-            {activeSearchResultLabel && (
               <span
-                aria-label={activeSearchResultDescription ?? "Active search result"}
-                className="agent-panel__chat-search-position"
-                title={activeSearchResultPositionTitle(
-                  activeSearchResultIndex,
+                aria-label={transcriptSearchCountDescription}
+                aria-live="polite"
+                className="agent-panel__chat-search-count"
+                title={transcriptSearchCountTitle(
+                  hasTranscriptQuery,
                   visibleTurns.length,
+                  turns.length,
                 )}
               >
-                {activeSearchResultLabel}
+                {hasTranscriptQuery
+                  ? `${visibleTurns.length} de ${turns.length} turnos`
+                  : "Todos los turnos"}
               </span>
-            )}
-            <button
-              aria-label="Previous result"
-              className="agent-panel__chat-nav"
-              disabled={!canNavigateSearchResults}
-              onClick={() => focusVisibleTurn("previous")}
-              title={previousSearchResultTitle}
-              type="button"
-            >
-              <span title={transcriptSearchNavigationLabelTitle("previous")}>Prev</span>
-            </button>
-            <button
-              aria-label="Next result"
-              className="agent-panel__chat-nav"
-              disabled={!canNavigateSearchResults}
-              onClick={() => focusVisibleTurn("next")}
-              title={nextSearchResultTitle}
-              type="button"
-            >
-              <span title={transcriptSearchNavigationLabelTitle("next")}>Next</span>
-            </button>
+              {activeSearchResultLabel && (
+                <span
+                  aria-label={activeSearchResultDescription ?? "Resultado de búsqueda activo"}
+                  className="agent-panel__chat-search-position"
+                  title={activeSearchResultPositionTitle(
+                    activeSearchResultIndex,
+                    visibleTurns.length,
+                  )}
+                >
+                  {activeSearchResultLabel}
+                </span>
+              )}
+              <button
+                aria-label="Resultado anterior"
+                className="agent-panel__chat-nav"
+                disabled={!canNavigateSearchResults}
+                onClick={() => focusVisibleTurn("previous")}
+                title={previousSearchResultTitle}
+                type="button"
+              >
+                <span title={transcriptSearchNavigationLabelTitle("previous")}>Anterior</span>
+              </button>
+              <button
+                aria-label="Resultado siguiente"
+                className="agent-panel__chat-nav"
+                disabled={!canNavigateSearchResults}
+                onClick={() => focusVisibleTurn("next")}
+                title={nextSearchResultTitle}
+                type="button"
+              >
+                <span title={transcriptSearchNavigationLabelTitle("next")}>Siguiente</span>
+              </button>
+            </div>
             <div
-              aria-label="Transcript secondary actions"
+              aria-label="Acciones de la transcripción"
               className="agent-panel__chat-secondary-actions"
               role="group"
               title={transcriptSecondaryActionsTitle(
@@ -1244,7 +1285,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 title={latestTurnTitle}
                 type="button"
               >
-                <span title={transcriptSecondaryActionLabelTitle("Latest")}>Latest</span>
+                <span title={transcriptSecondaryActionLabelTitle("Último")}>Último</span>
               </button>
               <button
                 className="agent-panel__chat-copy agent-panel__chat-copy--secondary"
@@ -1255,10 +1296,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               >
                 <span
                   title={transcriptSecondaryActionLabelTitle(
-                    copiedTarget === "transcript" ? "Copied" : "Copy visible",
+                    copiedTarget === "transcript" ? "Copiado" : "Copiar lo visible",
                   )}
                 >
-                  {copiedTarget === "transcript" ? "Copied" : "Copy visible"}
+                  {copiedTarget === "transcript" ? "Copiado" : "Copiar lo visible"}
                 </span>
               </button>
               {session && (
@@ -1268,19 +1309,23 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   onClick={() => setDetailsOpen((open) => !open)}
                   title={
                     detailsOpen
-                      ? "Hide session details and return to the conversation."
-                      : "Show session details, restore points, files, commands, and timeline."
+                      ? "Ocultar los detalles y volver a la conversación."
+                      : "Mostrar los detalles, puntos de restauración, archivos, comandos y Timeline."
                   }
                   type="button"
                 >
-                  <span>{detailsOpen ? "Hide details" : "Details"}</span>
+                  <span>{detailsOpen ? "Ocultar detalles" : "Detalles"}</span>
                 </button>
               )}
             </div>
           </div>
           <main
             className="agent-panel__chat"
-            aria-label="Agent conversation"
+            aria-label="Conversación con Agent"
+            aria-live="polite"
+            aria-relevant="additions text"
+            aria-atomic="false"
+            role="log"
             title={conversationContainerTitle(
               hasTranscriptQuery,
               visibleTurns.length,
@@ -1308,15 +1353,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 title={emptyChatContainerTitle(hasTranscriptQuery, readOnly)}
               >
                 <span title={emptyChatStateLabelTitle(hasTranscriptQuery, readOnly)}>
-                  {hasTranscriptQuery ? "No matches" : readOnly ? "Transcript" : "Ready"}
+                  {hasTranscriptQuery ? "Sin coincidencias" : readOnly ? "Transcripción" : "Listo"}
                 </span>
-                <p title={emptyChatHelperTextTitle(hasTranscriptQuery, readOnly)}>
-                  {hasTranscriptQuery
-                    ? "Try another search across messages, commands, and touched files."
-                    : readOnly
-                      ? "No timeline items were saved for this session."
-                      : "Start a turn from the composer below."}
-                </p>
+                {!hasTranscriptQuery && readOnly && (
+                  <p title={emptyChatHelperTextTitle()}>
+                    No se guardaron eventos de Timeline para esta sesión.
+                  </p>
+                )}
                 {hasTranscriptQuery && (
                   <button
                     className="agent-panel__empty-chat-action"
@@ -1324,7 +1367,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                     title={emptyChatClearSearchActionTitle()}
                     type="button"
                   >
-                    <span title={transcriptClearSearchLabelTitle()}>Clear search</span>
+                    <span title={transcriptClearSearchLabelTitle()}>Borrar búsqueda</span>
                   </button>
                 )}
               </div>
@@ -1336,7 +1379,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           className={`agent-panel__side-rail${
             detailsOpen ? " agent-panel__side-rail--active" : ""
           }`}
-          aria-label="Agent inspection rail"
+          aria-label="Panel de inspección de Agent"
           title={agentSideRailTitle(agentType, repo)}
         >
           {detailsOpen && (
@@ -1436,20 +1479,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         onSubmit={onSubmit}
         title={agentComposerTitle(agentType, repo)}
       >
-        <div
-          className="agent-panel__composer-actions"
-          aria-label="Agent command menu"
-          title={agentComposerActionsTitle(agentType, repo, readOnly, canCompose)}
-        >
-          <span title={agentCommandHintTitle(canCompose, readOnly)}>
-            {canCompose
-              ? "Type / for commands or $ for skills"
-              : readOnly
-                ? "Archived transcript"
-                : "Commands unavailable"}
-          </span>
-          <small title={agentCommandScopeHintTitle()}>Codex + Tinto + Skills</small>
-        </div>
+        <span className="sr-only" id={composerHintId}>
+          {canCompose
+            ? "Escribe / para ver comandos o $ para ver skills."
+            : readOnly
+              ? "La transcripción está archivada y es de solo lectura."
+              : "El compositor no está disponible."}
+        </span>
         {isCodexSession && (
           <CodexRuntimeControls
             menu={runtimeMenu}
@@ -1461,23 +1497,23 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             onMenuChange={setRuntimeMenu}
             onModelChange={(value) => {
               setSelectedModel(value);
-              setRuntimeNotice(`Model set to ${codexModelLabel(value)}.`);
+              setRuntimeNotice(`Modelo cambiado a ${codexModelLabel(value)}.`);
             }}
             onReasoningChange={(value) => {
               setSelectedReasoning(value);
-              setRuntimeNotice(`Reasoning set to ${codexReasoningLabel(value)}.`);
+              setRuntimeNotice(`Razonamiento cambiado a ${codexReasoningLabel(value)}.`);
             }}
             onSpeedChange={(value) => {
               setSelectedSpeed(value);
               setRuntimeNotice(
-                value === "fast" ? "Fast preset enabled." : "Standard speed enabled.",
+                value === "fast" ? "Modo rápido activado." : "Velocidad normal activada.",
               );
             }}
           />
         )}
         {commandMenuVisible && (
           <div
-            aria-label="Composer commands"
+            aria-label="Comandos del compositor"
             className="agent-panel__slash-menu"
             id={composerCommandListboxId}
             role="listbox"
@@ -1518,7 +1554,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 className="agent-panel__slash-empty"
                 title={agentCommandEmptyTitle(composerCommandTrigger)}
               >
-                No command matches {composerCommandTrigger?.trigger}
+                Ningún comando coincide con {composerCommandTrigger?.trigger}
                 {composerCommandQuery}
               </div>
             )}
@@ -1528,18 +1564,17 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           <textarea
             aria-activedescendant={activeComposerCommandId}
             aria-controls={commandMenuVisible ? composerCommandListboxId : undefined}
+            aria-describedby={composerHintId}
             aria-expanded={commandMenuVisible}
             aria-haspopup="listbox"
-            aria-label={`Message ${agentLabel(agentType)}`}
+            aria-label={`Mensaje para ${agentLabel(agentType)}`}
             ref={composerInputRef}
             value={draft}
             onChange={(event) => onDraftChange(event.currentTarget.value)}
             onKeyDown={onDraftKeyDown}
             title={agentComposerInputTitle(agentType, repo, readOnly, canCompose)}
             placeholder={
-              readOnly
-                ? "Archived transcript"
-                : `Ask ${agentLabel(agentType)} what to do in this repo...`
+              readOnly ? "Transcripción archivada" : `Mensaje para ${agentLabel(agentType)}`
             }
             disabled={!canCompose}
             rows={2}
@@ -1558,7 +1593,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               draft.trim().length > 0,
             )}
           >
-            <span title={agentComposerSendLabelTitle(sending)}>{sending ? "Sending" : "Send"}</span>
+            <span title={agentComposerSendLabelTitle(sending)}>
+              {sending ? "Enviando" : "Enviar"}
+            </span>
           </button>
         </div>
       </form>
@@ -1568,19 +1605,22 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
 function AgentMascotPanel({ agentType, repo }: { agentType: string; repo?: string }) {
   const label = agentLabel(agentType);
-  const repoLabel = repo ? repoName(repo) : "this session";
+  const repoLabel = repo ? repoName(repo) : "esta sesión";
   return (
     <section
-      aria-label="Tinto companion"
+      aria-label="Asistente Tinto"
       className="agent-panel__mascot"
-      title={`Tinto companion is awake for ${label} on ${repoLabel}.`}
+      title={`El asistente Tinto está activo con ${label} en ${repoLabel}.`}
     >
-      <span aria-hidden="true" className="agent-panel__mascot-mark" title="Tinto companion mark.">
+      <span
+        aria-hidden="true"
+        className="agent-panel__mascot-mark"
+        title="Marca del asistente Tinto."
+      >
         T
       </span>
       <div className="agent-panel__mascot-copy">
-        <strong title="Tinto companion status.">Awake</strong>
-        <small title={`Tinto companion scope: ${repoLabel}.`}>Watching this turn surface</small>
+        <strong title="Estado del asistente Tinto.">Activo</strong>
       </div>
     </section>
   );
@@ -1639,64 +1679,66 @@ function AgentReviewSummaryPanel({
   const visibleFindings = findings.slice(0, 4);
   const hiddenCount =
     summary.truncated_count + Math.max(0, summary.files.length - visibleFiles.length);
-  const working = summary.working_shortstat ?? "no unstaged line diff";
-  const staged = summary.staged_shortstat ?? "no staged line diff";
+  const working = summary.working_shortstat ?? "sin cambios de líneas sin preparar";
+  const staged = summary.staged_shortstat ?? "sin cambios de líneas preparados";
   return (
     <section
       className="agent-panel__review-summary"
-      aria-label="Review summary"
-      title={`Review summary for ${summary.branch}: ${summary.changed_files} changed files.`}
+      aria-label="Resumen de la revisión"
+      title={`Resumen de la revisión de ${summary.branch}: ${summary.changed_files} archivos modificados.`}
     >
       <div className="agent-panel__review-summary-head">
-        <span title="Review summary branch.">{summary.branch}</span>
-        <small title="Review summary changed file count.">
-          {summary.changed_files} {summary.changed_files === 1 ? "file" : "files"}
+        <span title="Rama revisada.">{summary.branch}</span>
+        <small title="Cantidad de archivos modificados en la revisión.">
+          {summary.changed_files} {summary.changed_files === 1 ? "archivo" : "archivos"}
         </small>
       </div>
       <button
-        aria-label="Draft semantic review prompt"
+        aria-label="Preparar prompt de revisión semántica"
         className="agent-panel__review-action"
         disabled={!canPrompt}
         onClick={onPromptReview}
         title={reviewPromptActionTitle(canPrompt, findings.length)}
         type="button"
       >
-        <span title="Review semantic prompt action label.">Ask review</span>
+        <span title="Acción para solicitar una revisión semántica.">Pedir revisión</span>
       </button>
       <button
-        aria-label="Copy structured review summary"
+        aria-label="Copiar resumen estructurado de la revisión"
         className="agent-panel__review-action"
         onClick={() => onCopySummary(summary, findings)}
         title={reviewSummaryCopyButtonTitle(copiedSummary)}
         type="button"
       >
-        <span title={reviewSummaryCopyLabelTitle(copiedSummary ? "Copied" : "Copy summary")}>
-          {copiedSummary ? "Copied" : "Copy summary"}
+        <span title={reviewSummaryCopyLabelTitle(copiedSummary ? "Copiado" : "Copiar resumen")}>
+          {copiedSummary ? "Copiado" : "Copiar resumen"}
         </span>
       </button>
       {summary.files.length > 0 && (
         <button
-          aria-label="Copy review changed files"
+          aria-label="Copiar archivos modificados de la revisión"
           className="agent-panel__review-action"
           onClick={() => onCopyFiles(summary)}
           title={reviewFilesCopyButtonTitle(copiedFiles, summary.files.length)}
           type="button"
         >
-          <span title={reviewFilesCopyLabelTitle(copiedFiles ? "Copied" : "Copy files")}>
-            {copiedFiles ? "Copied" : "Copy files"}
+          <span title={reviewFilesCopyLabelTitle(copiedFiles ? "Copiado" : "Copiar archivos")}>
+            {copiedFiles ? "Copiado" : "Copiar archivos"}
           </span>
         </button>
       )}
       {findings.length > 0 && (
         <button
-          aria-label="Copy deterministic review findings"
+          aria-label="Copiar hallazgos automáticos de la revisión"
           className="agent-panel__review-action"
           onClick={() => onCopyFindings(findings)}
           title={reviewFindingsCopyButtonTitle(copiedFindings, findings.length)}
           type="button"
         >
-          <span title={reviewFindingsCopyLabelTitle(copiedFindings ? "Copied" : "Copy findings")}>
-            {copiedFindings ? "Copied" : "Copy findings"}
+          <span
+            title={reviewFindingsCopyLabelTitle(copiedFindings ? "Copiados" : "Copiar hallazgos")}
+          >
+            {copiedFindings ? "Copiados" : "Copiar hallazgos"}
           </span>
         </button>
       )}
@@ -1710,37 +1752,37 @@ function AgentReviewSummaryPanel({
       )}
       {promptDraft && promptState && (
         <button
-          aria-label="Copy semantic review prompt"
+          aria-label="Copiar prompt de revisión semántica"
           className="agent-panel__review-action"
           onClick={() => onCopyPrompt(promptDraft)}
           title={reviewPromptCopyButtonTitle(copiedPrompt, promptState)}
           type="button"
         >
-          <span title={reviewPromptCopyLabelTitle(copiedPrompt ? "Copied" : "Copy prompt")}>
-            {copiedPrompt ? "Copied" : "Copy prompt"}
+          <span title={reviewPromptCopyLabelTitle(copiedPrompt ? "Copiado" : "Copiar prompt")}>
+            {copiedPrompt ? "Copiado" : "Copiar prompt"}
           </span>
         </button>
       )}
       {promptTurnIndex != null && (
         <button
-          aria-label="Show semantic review request turn"
+          aria-label="Mostrar el turno de la solicitud de revisión semántica"
           className="agent-panel__review-action"
           onClick={() => onShowPromptRequest(promptTurnIndex)}
           title={reviewPromptShowButtonTitle(promptTurnIndex)}
           type="button"
         >
-          <span title="Semantic review request navigation label: Show request.">Show request</span>
+          <span title="Mostrar la solicitud de revisión semántica.">Ver solicitud</span>
         </button>
       )}
       {(promptState || response) && (
         <button
-          aria-label="Reset semantic review workflow"
+          aria-label="Reiniciar el flujo de revisión semántica"
           className="agent-panel__review-action"
           onClick={onResetReview}
           title={reviewPromptResetButtonTitle(response != null)}
           type="button"
         >
-          <span title="Semantic review reset label: Reset review.">Reset review</span>
+          <span title="Reiniciar la revisión semántica.">Reiniciar revisión</span>
         </button>
       )}
       {response && (
@@ -1748,73 +1790,87 @@ function AgentReviewSummaryPanel({
           className="agent-panel__review-response"
           title={reviewResponseTitle(response.turnIndex)}
         >
-          <strong title="Semantic review response status.">Review response captured</strong>
-          <span title={`Semantic review response excerpt: ${response.excerpt}`}>
+          <strong title="Estado de la respuesta de revisión semántica.">
+            Respuesta de revisión recibida
+          </strong>
+          <span title={`Extracto de la respuesta de revisión semántica: ${response.excerpt}`}>
             {response.excerpt}
           </span>
         </div>
       )}
       {response && (
         <button
-          aria-label="Show semantic review response turn"
+          aria-label="Mostrar el turno de la respuesta de revisión semántica"
           className="agent-panel__review-action"
           onClick={() => onShowResponse(response)}
           title={reviewResponseShowButtonTitle(response.turnIndex)}
           type="button"
         >
-          <span title="Semantic review response navigation label: Show response.">
-            Show response
-          </span>
+          <span title="Mostrar la respuesta de revisión semántica.">Ver respuesta</span>
         </button>
       )}
       {response && (
         <button
-          aria-label="Copy semantic review response"
+          aria-label="Copiar respuesta de revisión semántica"
           className="agent-panel__review-action"
           onClick={() => onCopyResponse(response)}
           title={reviewResponseCopyButtonTitle(copiedResponse)}
           type="button"
         >
-          <span title={reviewResponseCopyLabelTitle(copiedResponse ? "Copied" : "Copy response")}>
-            {copiedResponse ? "Copied" : "Copy response"}
+          <span
+            title={reviewResponseCopyLabelTitle(copiedResponse ? "Copiada" : "Copiar respuesta")}
+          >
+            {copiedResponse ? "Copiada" : "Copiar respuesta"}
           </span>
         </button>
       )}
       {promptDraft && response && (
         <button
-          aria-label="Copy semantic review exchange"
+          aria-label="Copiar intercambio de revisión semántica"
           className="agent-panel__review-action"
           onClick={() => onCopyExchange(promptDraft, response)}
           title={reviewExchangeCopyButtonTitle(copiedExchange)}
           type="button"
         >
-          <span title={reviewExchangeCopyLabelTitle(copiedExchange ? "Copied" : "Copy exchange")}>
-            {copiedExchange ? "Copied" : "Copy exchange"}
+          <span
+            title={reviewExchangeCopyLabelTitle(copiedExchange ? "Copiado" : "Copiar intercambio")}
+          >
+            {copiedExchange ? "Copiado" : "Copiar intercambio"}
           </span>
         </button>
       )}
-      <div className="agent-panel__review-summary-stats" aria-label="Review diff stats">
-        <span title={`Working tree diff: ${working}`}>{working}</span>
-        <span title={`Staged diff: ${staged}`}>{staged}</span>
+      <div
+        className="agent-panel__review-summary-stats"
+        aria-label="Estadísticas del diff revisado"
+      >
+        <span title={`Diff del árbol de trabajo: ${working}`}>{working}</span>
+        <span title={`Diff preparado: ${staged}`}>{staged}</span>
       </div>
       {visibleFiles.length > 0 ? (
-        <ul className="agent-panel__review-summary-files" aria-label="Review changed files">
+        <ul
+          className="agent-panel__review-summary-files"
+          aria-label="Archivos modificados de la revisión"
+        >
           {visibleFiles.map((file) => (
-            <li key={file} title={`Review changed file: ${file}`}>
+            <li key={file} title={`Archivo modificado de la revisión: ${file}`}>
               {file}
             </li>
           ))}
           {hiddenCount > 0 && (
-            <li title={`Review summary has ${hiddenCount} more changed files.`}>
-              +{hiddenCount} more
+            <li
+              title={`El resumen de la revisión incluye ${hiddenCount} archivos modificados más.`}
+            >
+              +{hiddenCount} más
             </li>
           )}
         </ul>
       ) : (
-        <p title="Review summary has no local changed files.">No local changes detected.</p>
+        <p title="El resumen de la revisión no incluye cambios locales.">
+          No se detectaron cambios locales.
+        </p>
       )}
       {visibleFindings.length > 0 && (
-        <ul className="agent-panel__review-findings" aria-label="Review findings">
+        <ul className="agent-panel__review-findings" aria-label="Hallazgos de la revisión">
           {visibleFindings.map((finding, index) => {
             const location = reviewFindingLocation(finding);
             return (
@@ -1822,10 +1878,12 @@ function AgentReviewSummaryPanel({
                 key={`${finding.title}:${finding.path ?? "session"}:${finding.line ?? index}`}
                 title={`${finding.severity}: ${finding.title}. ${finding.detail}`}
               >
-                <span title={`Review finding severity: ${finding.severity}.`}>
-                  {finding.severity}
+                <span title={`Gravedad del hallazgo: ${reviewSeverityLabel(finding.severity)}.`}>
+                  {reviewSeverityLabel(finding.severity)}
                 </span>
-                <strong title={`Review finding: ${finding.title}.`}>{finding.title}</strong>
+                <strong title={`Hallazgo de la revisión: ${finding.title}.`}>
+                  {finding.title}
+                </strong>
                 {location && (
                   <small title={`Review finding location: ${location}.`}>{location}</small>
                 )}
@@ -1833,10 +1891,12 @@ function AgentReviewSummaryPanel({
             );
           })}
           {findings.length > visibleFindings.length && (
-            <li title={`Review has ${findings.length - visibleFindings.length} more findings.`}>
-              <span title="Review finding overflow severity.">more</span>
-              <strong title="Review finding overflow count.">
-                +{findings.length - visibleFindings.length} findings
+            <li
+              title={`La revisión incluye ${findings.length - visibleFindings.length} hallazgos más.`}
+            >
+              <span title="Indicador de hallazgos adicionales.">más</span>
+              <strong title="Cantidad de hallazgos adicionales.">
+                +{findings.length - visibleFindings.length} hallazgos
               </strong>
             </li>
           )}
@@ -1853,12 +1913,31 @@ function reviewFindingLocation(finding: AgentReviewFinding): string | null {
 
 function reviewSummaryCopyButtonTitle(copied: boolean): string {
   return copied
-    ? "Copied structured review summary to clipboard."
-    : "Copy the structured review summary to the clipboard.";
+    ? "Resumen estructurado de la revisión copiado al portapapeles."
+    : "Copiar el resumen estructurado de la revisión al portapapeles.";
 }
 
-function reviewSummaryCopyLabelTitle(label: "Copy summary" | "Copied"): string {
-  return `Structured review summary copy label: ${label}.`;
+function reviewSeverityLabel(severity: string): string {
+  switch (severity.toLocaleLowerCase()) {
+    case "critical":
+      return "crítico";
+    case "high":
+      return "alto";
+    case "medium":
+      return "medio";
+    case "low":
+      return "bajo";
+    case "warning":
+      return "advertencia";
+    case "info":
+      return "información";
+    default:
+      return severity;
+  }
+}
+
+function reviewSummaryCopyLabelTitle(label: "Copiar resumen" | "Copiado"): string {
+  return `Acción para copiar el resumen estructurado de la revisión: ${label}.`;
 }
 
 function isReviewClipboardTarget(target: string | null): boolean {
@@ -1874,37 +1953,40 @@ function isReviewClipboardTarget(target: string | null): boolean {
 
 function reviewFilesCopyButtonTitle(copied: boolean, fileCount: number): string {
   return copied
-    ? "Copied review changed files to clipboard."
-    : `Copy ${overviewMetricCount("Files", fileCount)} to the clipboard.`;
+    ? "Archivos modificados de la revisión copiados al portapapeles."
+    : `Copiar ${countLabel(fileCount, "archivo", "archivos")} al portapapeles.`;
 }
 
-function reviewFilesCopyLabelTitle(label: "Copy files" | "Copied"): string {
-  return `Review changed files copy label: ${label}.`;
+function reviewFilesCopyLabelTitle(label: "Copiar archivos" | "Copiado"): string {
+  return `Acción para copiar los archivos modificados: ${label}.`;
 }
 
 function reviewFilesCopyText(summary: AgentReviewSummary): string {
-  if (summary.files.length === 0) return "Review changed files: none";
-  const lines = ["Review changed files:", ...summary.files.map((file) => `- ${file}`)];
+  if (summary.files.length === 0) return "Archivos modificados de la revisión: ninguno";
+  const lines = [
+    "Archivos modificados de la revisión:",
+    ...summary.files.map((file) => `- ${file}`),
+  ];
   if (summary.truncated_count > 0) {
-    lines.push(`- +${summary.truncated_count} more changed files`);
+    lines.push(`- +${summary.truncated_count} archivos modificados más`);
   }
   return lines.join("\n");
 }
 
 function reviewFindingsCopyButtonTitle(copied: boolean, findingCount: number): string {
   return copied
-    ? "Copied deterministic review findings to clipboard."
-    : `Copy ${overviewMetricCount("Findings", findingCount)} to the clipboard.`;
+    ? "Hallazgos automáticos de la revisión copiados al portapapeles."
+    : `Copiar ${countLabel(findingCount, "hallazgo", "hallazgos")} al portapapeles.`;
 }
 
-function reviewFindingsCopyLabelTitle(label: "Copy findings" | "Copied"): string {
-  return `Deterministic review findings copy label: ${label}.`;
+function reviewFindingsCopyLabelTitle(label: "Copiar hallazgos" | "Copiados"): string {
+  return `Acción para copiar los hallazgos automáticos: ${label}.`;
 }
 
 function reviewFindingsCopyText(findings: AgentReviewFinding[]): string {
-  if (findings.length === 0) return "Host review findings: none";
+  if (findings.length === 0) return "Hallazgos de la revisión local: ninguno";
   return [
-    "Host review findings:",
+    "Hallazgos de la revisión local:",
     ...findings.map((finding) => {
       const location = reviewFindingLocation(finding);
       return `- ${finding.severity}: ${finding.title}${
@@ -1919,22 +2001,22 @@ function reviewSummaryCopyText(
   findings: AgentReviewFinding[],
 ): string {
   const lines = [
-    "Structured review summary:",
-    `Branch: ${summary.branch}`,
-    `Changed files: ${summary.changed_files}`,
-    `Working tree diff: ${summary.working_shortstat ?? "no unstaged line diff"}`,
-    `Staged diff: ${summary.staged_shortstat ?? "no staged line diff"}`,
+    "Resumen estructurado de la revisión:",
+    `Rama: ${summary.branch}`,
+    `Archivos modificados: ${summary.changed_files}`,
+    `Diff del árbol de trabajo: ${summary.working_shortstat ?? "sin cambios de líneas sin preparar"}`,
+    `Diff preparado: ${summary.staged_shortstat ?? "sin cambios de líneas preparados"}`,
   ];
   if (summary.files.length > 0) {
-    lines.push("Files:", ...summary.files.map((file) => `- ${file}`));
+    lines.push("Archivos:", ...summary.files.map((file) => `- ${file}`));
     if (summary.truncated_count > 0) {
-      lines.push(`- +${summary.truncated_count} more changed files`);
+      lines.push(`- +${summary.truncated_count} archivos modificados más`);
     }
   } else {
-    lines.push("Files: none");
+    lines.push("Archivos: ninguno");
   }
   if (findings.length > 0) {
-    lines.push("Host review findings:");
+    lines.push("Hallazgos de la revisión local:");
     for (const finding of findings) {
       const location = reviewFindingLocation(finding);
       lines.push(
@@ -1944,7 +2026,7 @@ function reviewSummaryCopyText(
       );
     }
   } else {
-    lines.push("Host review findings: none");
+    lines.push("Hallazgos de la revisión local: ninguno");
   }
   return lines.join("\n");
 }
@@ -1952,78 +2034,78 @@ function reviewSummaryCopyText(
 function reviewPromptActionTitle(canPrompt: boolean, findingCount: number): string {
   const findingText =
     findingCount > 0
-      ? `with ${overviewMetricCount("Findings", findingCount)}`
-      : "with no deterministic findings";
+      ? `con ${countLabel(findingCount, "hallazgo", "hallazgos")}`
+      : "sin hallazgos automáticos";
   return canPrompt
-    ? `Draft a semantic code-review prompt from this review summary ${findingText}.`
-    : "Cannot draft a semantic code-review prompt because the session is archived or inactive.";
+    ? `Preparar un prompt de revisión semántica del código a partir de este resumen ${findingText}.`
+    : "No se puede preparar el prompt porque la sesión está archivada o inactiva.";
 }
 
 function reviewPromptStateLabel(state: "drafted" | "sent"): string {
-  return state === "sent" ? "Review request sent" : "Review draft ready";
+  return state === "sent" ? "Solicitud de revisión enviada" : "Borrador de revisión listo";
 }
 
 function reviewPromptStateTitle(state: "drafted" | "sent"): string {
   return state === "sent"
-    ? "Semantic review prompt was sent as an agent turn."
-    : "Semantic review prompt is drafted in the composer.";
+    ? "El prompt de revisión semántica se envió como un turno de Agent."
+    : "El prompt de revisión semántica está preparado en el compositor.";
 }
 
 function reviewPromptCopyButtonTitle(copied: boolean, state: "drafted" | "sent"): string {
-  if (copied) return "Copied semantic review prompt to clipboard.";
+  if (copied) return "Prompt de revisión semántica copiado al portapapeles.";
   return state === "sent"
-    ? "Copy the sent semantic review prompt to the clipboard."
-    : "Copy the drafted semantic review prompt to the clipboard.";
+    ? "Copiar el prompt de revisión semántica enviado al portapapeles."
+    : "Copiar el borrador del prompt de revisión semántica al portapapeles.";
 }
 
-function reviewPromptCopyLabelTitle(label: "Copy prompt" | "Copied"): string {
-  return `Semantic review prompt copy label: ${label}.`;
+function reviewPromptCopyLabelTitle(label: "Copiar prompt" | "Copiado"): string {
+  return `Acción para copiar el prompt de revisión semántica: ${label}.`;
 }
 
 function reviewPromptShowButtonTitle(turnIndex: number): string {
-  return `Show the sent semantic review request in conversation turn ${turnIndex}.`;
+  return `Mostrar la solicitud de revisión semántica enviada en el turno ${turnIndex}.`;
 }
 
 function reviewPromptResetButtonTitle(hasResponse: boolean): string {
   return hasResponse
-    ? "Reset the captured semantic review response and request state for this review summary."
-    : "Reset the drafted semantic review prompt state for this review summary.";
+    ? "Reiniciar la respuesta capturada y la solicitud de revisión semántica de este resumen."
+    : "Reiniciar el borrador del prompt de revisión semántica de este resumen.";
 }
 
 function reviewResponseTitle(turnIndex: number): string {
-  return `Semantic review response captured from turn ${turnIndex}; verify findings before acting.`;
+  return `Respuesta de revisión semántica recibida en el turno ${turnIndex}; verifica los hallazgos antes de actuar.`;
 }
 
 function reviewResponseCopyButtonTitle(copied: boolean): string {
   return copied
-    ? "Copied semantic review response to clipboard."
-    : "Copy the captured semantic review response to the clipboard.";
+    ? "Respuesta de revisión semántica copiada al portapapeles."
+    : "Copiar la respuesta de revisión semántica al portapapeles.";
 }
 
 function reviewResponseShowButtonTitle(turnIndex: number): string {
-  return `Show the full semantic review response in conversation turn ${turnIndex}.`;
+  return `Mostrar la respuesta completa de la revisión semántica en el turno ${turnIndex}.`;
 }
 
-function reviewResponseCopyLabelTitle(label: "Copy response" | "Copied"): string {
-  return `Semantic review response copy label: ${label}.`;
+function reviewResponseCopyLabelTitle(label: "Copiar respuesta" | "Copiada"): string {
+  return `Acción para copiar la respuesta de revisión semántica: ${label}.`;
 }
 
 function reviewExchangeCopyButtonTitle(copied: boolean): string {
   return copied
-    ? "Copied semantic review request and response to clipboard."
-    : "Copy the semantic review request and captured response to the clipboard.";
+    ? "Solicitud y respuesta de revisión semántica copiadas al portapapeles."
+    : "Copiar la solicitud y la respuesta de revisión semántica al portapapeles.";
 }
 
-function reviewExchangeCopyLabelTitle(label: "Copy exchange" | "Copied"): string {
-  return `Semantic review exchange copy label: ${label}.`;
+function reviewExchangeCopyLabelTitle(label: "Copiar intercambio" | "Copiado"): string {
+  return `Acción para copiar el intercambio de revisión semántica: ${label}.`;
 }
 
 function reviewExchangeCopyText(prompt: string, response: AgentReviewResponseView): string {
   return [
-    "Semantic review request:",
+    "Solicitud de revisión semántica:",
     prompt.trim(),
     "",
-    "Semantic review response:",
+    "Respuesta de revisión semántica:",
     response.text.trim(),
   ].join("\n");
 }
@@ -2052,23 +2134,24 @@ function reviewPromptTurnIndexForPrompt(turns: AgentTurnView[], prompt: string):
 
 function reviewActionPrompt(summary: AgentReviewSummary, findings: AgentReviewFinding[]): string {
   const lines = [
-    "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
-    `Branch: ${summary.branch}`,
-    `Changed files: ${summary.changed_files}`,
+    "Revisa los cambios actuales de Git en busca de errores, regresiones, riesgos de seguridad y pruebas ausentes.",
+    `Rama: ${summary.branch}`,
+    `Archivos modificados: ${summary.changed_files}`,
   ];
-  if (summary.working_shortstat) lines.push(`Working tree diff: ${summary.working_shortstat}`);
-  if (summary.staged_shortstat) lines.push(`Staged diff: ${summary.staged_shortstat}`);
+  if (summary.working_shortstat)
+    lines.push(`Diff del árbol de trabajo: ${summary.working_shortstat}`);
+  if (summary.staged_shortstat) lines.push(`Diff preparado: ${summary.staged_shortstat}`);
   if (summary.files.length > 0) {
-    lines.push("Files:");
+    lines.push("Archivos:");
     for (const file of summary.files.slice(0, 12)) {
       lines.push(`- ${file}`);
     }
     if (summary.truncated_count > 0) {
-      lines.push(`- plus ${summary.truncated_count} more changed files`);
+      lines.push(`- y ${summary.truncated_count} archivos modificados más`);
     }
   }
   if (findings.length > 0) {
-    lines.push("Host review findings to verify first:");
+    lines.push("Hallazgos de la revisión local que debes comprobar primero:");
     for (const finding of findings.slice(0, 8)) {
       const location = reviewFindingLocation(finding);
       lines.push(
@@ -2076,11 +2159,11 @@ function reviewActionPrompt(summary: AgentReviewSummary, findings: AgentReviewFi
       );
     }
     if (findings.length > 8) {
-      lines.push(`- plus ${findings.length - 8} more host findings`);
+      lines.push(`- y ${findings.length - 8} hallazgos locales más`);
     }
   }
   lines.push(
-    "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
+    "Presenta primero los hallazgos, ordenados por gravedad y con referencias a archivo y línea cuando sea posible. Si no hay problemas, indícalo con claridad y menciona cualquier carencia que quede en las pruebas.",
   );
   return lines.join("\n");
 }
@@ -2110,14 +2193,14 @@ function CodexRuntimeControls({
 }) {
   const close = () => onMenuChange(null);
   return (
-    <div className="agent-panel__runtime" aria-label="Codex runtime controls">
+    <div className="agent-panel__runtime" aria-label="Controles de ejecución de Codex">
       <div className="agent-panel__runtime-buttons">
         <button
           type="button"
           className="agent-panel__runtime-button"
           disabled={disabled}
           onClick={() => onMenuChange(menu === "reasoning" ? null : "reasoning")}
-          title={`Reasoning: ${codexReasoningLabel(reasoning)}.`}
+          title={`Razonamiento: ${codexReasoningLabel(reasoning)}.`}
         >
           <span aria-hidden="true">○</span>
           <span>{codexReasoningShortLabel(reasoning)}</span>
@@ -2127,7 +2210,7 @@ function CodexRuntimeControls({
           className="agent-panel__runtime-button"
           disabled={disabled}
           onClick={() => onMenuChange(menu === "model" ? null : "model")}
-          title={`Model: ${codexModelLabel(model)}.`}
+          title={`Modelo: ${codexModelLabel(model)}.`}
         >
           <span aria-hidden="true">⚡</span>
           <span>{codexModelShortLabel(model)}</span>
@@ -2137,19 +2220,26 @@ function CodexRuntimeControls({
           className="agent-panel__runtime-button"
           disabled={disabled}
           onClick={() => onMenuChange(menu === "speed" ? null : "speed")}
-          title={`Speed: ${codexSpeedLabel(speed)}.`}
+          title={`Velocidad: ${codexSpeedLabel(speed)}.`}
         >
           <span aria-hidden="true">↗</span>
           <span>{codexSpeedLabel(speed)}</span>
         </button>
       </div>
       {notice && (
-        <span className="agent-panel__runtime-notice" title={`Codex runtime update: ${notice}`}>
+        <span
+          className="agent-panel__runtime-notice"
+          title={`Cambio de ejecución de Codex: ${notice}`}
+        >
           {notice}
         </span>
       )}
       {menu && (
-        <div className="agent-panel__runtime-popover" role="menu" title="Codex runtime picker">
+        <div
+          className="agent-panel__runtime-popover"
+          role="menu"
+          title="Selector de ejecución de Codex"
+        >
           {menu === "reasoning" &&
             CODEX_REASONING_OPTIONS.map((option) => (
               <RuntimeOptionButton
@@ -2235,22 +2325,22 @@ function AgentDetailsHeader({
   return (
     <header
       className="agent-panel__details-head"
-      title="Session details: turn map, current activity, restore points, and Agent Lens."
+      title="Detalles de la sesión: mapa de turnos, actividad actual, puntos de restauración y Agent Lens."
     >
       <div>
-        <strong>Details</strong>
+        <strong>Detalles</strong>
         <small>
-          {turns} {turnNoun(turns)} / {files} {files === 1 ? "file" : "files"}
+          {turns} {turnNoun(turns)} / {files} {files === 1 ? "archivo" : "archivos"}
           {focusedTurnIndex ? ` / T${focusedTurnIndex}` : ""}
         </small>
       </div>
       <button
         className="agent-panel__details-close"
         onClick={onClose}
-        title="Close session details."
+        title="Cerrar los detalles de la sesión."
         type="button"
       >
-        Close
+        Cerrar
       </button>
     </header>
   );
@@ -2268,31 +2358,31 @@ function AgentSessionOverview({
   return (
     <section
       className="agent-panel__overview"
-      aria-label="Agent session overview"
+      aria-label="Resumen de la sesión de Agent"
       title={overviewSectionTitle(overview)}
     >
       <div
         className="agent-panel__overview-metrics"
         title={overviewMetricsContainerTitle(overview)}
       >
-        <OverviewMetric value={overview.turns} label="Turns" />
-        <OverviewMetric value={overview.messages} label="Messages" />
-        <OverviewMetric value={overview.commands} label="Commands" />
-        <OverviewMetric value={overview.files} label="Files" />
+        <OverviewMetric value={overview.turns} label="Turnos" />
+        <OverviewMetric value={overview.messages} label="Mensajes" />
+        <OverviewMetric value={overview.commands} label="Comandos" />
+        <OverviewMetric value={overview.files} label="Archivos" />
       </div>
       <div
         className="agent-panel__overview-activity"
         title={overviewLatestActivityGroupTitle(overview.latest)}
       >
-        <span title={overviewLatestActivityLabelTitle()}>Latest activity</span>
+        <span title={overviewLatestActivityLabelTitle()}>Actividad reciente</span>
         <p title={overviewLatestActivityTextTitle(overview.latest)}>
-          {overview.latest ?? "Waiting for the first turn."}
+          {overview.latest ?? "Esperando el primer turno."}
         </p>
       </div>
       {overview.turnMap.length > 0 && (
         <div
           className="agent-panel__overview-turns"
-          aria-label="Turn map"
+          aria-label="Mapa de turnos"
           title={turnMapContainerTitle(overview.turnMap.length)}
         >
           {overview.turnMap.map((turn) => (
@@ -2322,7 +2412,7 @@ function AgentSessionOverview({
               )}
               {turn.files > 0 && (
                 <small title={turnMapFileCountTitle(turn.index, turn.files)}>
-                  {turn.files} files
+                  {turn.files} {turn.files === 1 ? "archivo" : "archivos"}
                 </small>
               )}
             </button>
@@ -2334,32 +2424,32 @@ function AgentSessionOverview({
 }
 
 function turnMapContainerTitle(turnCount: number): string {
-  return `Agent session overview turn map: ${overviewMetricCount("Turns", turnCount)}.`;
+  return `Mapa de turnos del resumen de la sesión de Agent: ${overviewMetricCount("Turnos", turnCount)}.`;
 }
 
 function overviewSectionTitle(overview: AgentSessionOverviewView): string {
-  const latestSummary = overview.latest ?? "waiting for the first turn";
+  const latestSummary = overview.latest ?? "esperando el primer turno";
   const turnMapSummary =
     overview.turnMap.length > 0
-      ? `turn map ${overviewMetricCount("Turns", overview.turnMap.length)}`
-      : "turn map waiting for turns";
-  return `Agent session overview: ${overviewMetricCount(
-    "Turns",
+      ? `mapa de turnos: ${overviewMetricCount("Turnos", overview.turnMap.length)}`
+      : "mapa de turnos a la espera de actividad";
+  return `Resumen de la sesión de Agent: ${overviewMetricCount(
+    "Turnos",
     overview.turns,
-  )}, ${overviewMetricCount("Messages", overview.messages)}, ${overviewMetricCount(
-    "Commands",
+  )}, ${overviewMetricCount("Mensajes", overview.messages)}, ${overviewMetricCount(
+    "Comandos",
     overview.commands,
-  )}, ${overviewMetricCount("Files", overview.files)}; latest activity: ${latestSummary}; ${turnMapSummary}.`;
+  )}, ${overviewMetricCount("Archivos", overview.files)}; actividad reciente: ${latestSummary}; ${turnMapSummary}.`;
 }
 
 function overviewMetricsContainerTitle(overview: AgentSessionOverviewView): string {
-  return `Agent session overview metrics: ${overviewMetricCount(
-    "Turns",
+  return `Métricas del resumen de la sesión de Agent: ${overviewMetricCount(
+    "Turnos",
     overview.turns,
-  )}, ${overviewMetricCount("Messages", overview.messages)}, ${overviewMetricCount(
-    "Commands",
+  )}, ${overviewMetricCount("Mensajes", overview.messages)}, ${overviewMetricCount(
+    "Comandos",
     overview.commands,
-  )}, ${overviewMetricCount("Files", overview.files)}.`;
+  )}, ${overviewMetricCount("Archivos", overview.files)}.`;
 }
 
 function OverviewMetric({ value, label }: { value: number; label: string }) {
@@ -2376,15 +2466,15 @@ function OverviewMetric({ value, label }: { value: number; label: string }) {
 }
 
 function overviewMetricTitle(label: string, value: number): string {
-  return `Agent session overview ${label.toLowerCase()} metric: ${overviewMetricCount(label, value)}.`;
+  return `Métrica ${label.toLowerCase()} del resumen de la sesión de Agent: ${overviewMetricCount(label, value)}.`;
 }
 
 function overviewMetricValueTitle(label: string, value: number): string {
-  return `Agent session overview ${label.toLowerCase()} value: ${value}.`;
+  return `Valor de ${label.toLowerCase()} del resumen de la sesión de Agent: ${value}.`;
 }
 
 function overviewMetricLabelTitle(label: string): string {
-  return `Agent session overview metric label: ${label}.`;
+  return `Etiqueta de métrica del resumen de la sesión de Agent: ${label}.`;
 }
 
 function overviewMetricCount(label: string, value: number): string {
@@ -2393,20 +2483,24 @@ function overviewMetricCount(label: string, value: number): string {
   return `${value} ${unit}`;
 }
 
+function countLabel(value: number, singular: string, plural: string): string {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
 function overviewLatestActivityGroupTitle(latest: string | null): string {
   return latest
-    ? "Agent session overview latest-activity area: latest captured activity."
-    : "Agent session overview latest-activity area: waiting for the first turn.";
+    ? "Área de actividad reciente del resumen de la sesión de Agent: última actividad registrada."
+    : "Área de actividad reciente del resumen de la sesión de Agent: esperando el primer turno.";
 }
 
 function overviewLatestActivityLabelTitle(): string {
-  return "Agent session overview latest-activity label.";
+  return "Etiqueta de actividad reciente del resumen de la sesión de Agent.";
 }
 
 function overviewLatestActivityTextTitle(latest: string | null): string {
   return latest
-    ? `Agent session overview latest activity: ${latest}.`
-    : "Agent session overview latest activity: waiting for the first turn.";
+    ? `Actividad reciente del resumen de la sesión de Agent: ${latest}.`
+    : "Actividad reciente del resumen de la sesión de Agent: esperando el primer turno.";
 }
 
 function AgentHostContextStrip({ session }: { session: AgentSession }) {
@@ -2414,11 +2508,11 @@ function AgentHostContextStrip({ session }: { session: AgentSession }) {
   if (items.length === 0) return null;
   return (
     <section
-      aria-label="Turn context"
+      aria-label="Contexto del turno"
       className="agent-panel__context-strip"
       title={agentHostContextStripTitle(items)}
     >
-      <span title={agentHostContextLabelTitle()}>Turn context</span>
+      <span title={agentHostContextLabelTitle()}>Contexto del turno</span>
       <div className="agent-panel__context-items" title={agentHostContextItemsTitle(items.length)}>
         {items.map((item) => (
           <div
@@ -2445,18 +2539,18 @@ function agentHostContextItems(session: AgentSession): AgentHostContextItem[] {
   const items: AgentHostContextItem[] = [];
   const goal = compactContextValue(session.goal?.text ?? null);
   if (goal) {
-    items.push({ kind: "goal", label: "Goal", value: goal });
+    items.push({ kind: "goal", label: "Objetivo", value: goal });
   }
   const personality = compactContextValue(session.personality?.name ?? null);
   if (personality) {
-    items.push({ kind: "personality", label: "Style", value: personality });
+    items.push({ kind: "personality", label: "Estilo", value: personality });
   }
   if (session.plan_mode?.enabled) {
-    items.push({ kind: "plan", label: "Plan", value: "On" });
+    items.push({ kind: "plan", label: "Plan", value: "Activo" });
   }
   const summary = compactContextValue(session.context_summary?.text ?? null);
   if (summary) {
-    items.push({ kind: "compact", label: "Compact", value: summary });
+    items.push({ kind: "compact", label: "Resumen", value: summary });
   }
   return items;
 }
@@ -2468,29 +2562,29 @@ function compactContextValue(value: string | null | undefined): string | null {
 }
 
 function agentHostContextStripTitle(items: AgentHostContextItem[]): string {
-  return `Turn context strip: ${punctuatedTitleValue(
+  return `Franja de contexto del turno: ${punctuatedTitleValue(
     items.map((item) => `${item.label} ${item.value}`).join("; "),
   )}`;
 }
 
 function agentHostContextLabelTitle(): string {
-  return "Turn context label.";
+  return "Etiqueta del contexto del turno.";
 }
 
 function agentHostContextItemsTitle(count: number): string {
-  return `Turn context items: ${overviewMetricCount("Items", count)}.`;
+  return `Elementos del contexto del turno: ${countLabel(count, "elemento", "elementos")}.`;
 }
 
 function agentHostContextItemTitle(item: AgentHostContextItem): string {
-  return `Turn context ${item.label.toLowerCase()}: ${punctuatedTitleValue(item.value)}`;
+  return `Contexto del turno, ${item.label.toLowerCase()}: ${punctuatedTitleValue(item.value)}`;
 }
 
 function agentHostContextItemLabelTitle(label: string): string {
-  return `Turn context item label: ${label}.`;
+  return `Etiqueta de elemento del contexto del turno: ${label}.`;
 }
 
 function agentHostContextItemValueTitle(item: AgentHostContextItem): string {
-  return `Turn context ${item.label.toLowerCase()} value: ${punctuatedTitleValue(item.value)}`;
+  return `Valor de ${item.label.toLowerCase()} del contexto del turno: ${punctuatedTitleValue(item.value)}`;
 }
 
 function punctuatedTitleValue(value: string): string {
@@ -2510,7 +2604,7 @@ function AgentActivityStrip({
   return (
     <section
       className="agent-panel__activity"
-      aria-label="Agent activity"
+      aria-label="Actividad de Agent"
       title={agentActivityStripTitle(activity, overview)}
     >
       <div className="agent-panel__activity-main" title={agentActivityMainTitle(activity)}>
@@ -2524,8 +2618,12 @@ function AgentActivityStrip({
         </div>
       </div>
       <div className="agent-panel__activity-facts" title={agentActivityFactsTitle()}>
-        <span title={agentActivityTurnsFactTitle(overview.turns)}>{overview.turns} turns</span>
-        <span title={agentActivityFilesFactTitle(overview.files)}>{overview.files} files</span>
+        <span title={agentActivityTurnsFactTitle(overview.turns)}>
+          {overview.turns} {turnNoun(overview.turns)}
+        </span>
+        <span title={agentActivityFilesFactTitle(overview.files)}>
+          {overview.files} {overview.files === 1 ? "archivo" : "archivos"}
+        </span>
         <span title={agentActivityCheckpointFactTitle(activity.checkpoint)}>
           {activity.checkpoint}
         </span>
@@ -2554,17 +2652,14 @@ function AgentTurnFocus({
     return (
       <section
         className="agent-panel__turn-focus"
-        aria-label="Focused turn"
+        aria-label="Turno seleccionado"
         title={focusedTurnIdleContainerTitle()}
       >
         <div className="agent-panel__turn-focus-head">
-          <span title={focusedTurnHeadingLabelTitle()}>Focused turn</span>
-          <small title={focusedTurnIdleStatusLabelTitle()}>Idle</small>
+          <span title={focusedTurnHeadingLabelTitle()}>Turno seleccionado</span>
+          <small title={focusedTurnIdleStatusLabelTitle()}>Inactivo</small>
         </div>
-        <strong title={focusedTurnEmptyStateLabelTitle()}>No turn selected</strong>
-        <p title={focusedTurnIdleHelperTitle()}>
-          The next agent response will appear here as a navigable turn.
-        </p>
+        <strong title={focusedTurnEmptyStateLabelTitle()}>Ningún turno seleccionado</strong>
       </section>
     );
   }
@@ -2581,17 +2676,17 @@ function AgentTurnFocus({
   return (
     <section
       className="agent-panel__turn-focus"
-      aria-label="Focused turn"
+      aria-label="Turno seleccionado"
       title={focusedTurnSelectedContainerTitle(turn.index)}
     >
       <div className="agent-panel__turn-focus-head">
-        <span title={focusedTurnHeadingLabelTitle()}>Focused turn</span>
+        <span title={focusedTurnHeadingLabelTitle()}>Turno seleccionado</span>
         {timeLabel && (
           <small title={focusedTurnTimeTitle(turn.index, timeLabel)}>{timeLabel}</small>
         )}
       </div>
       <div className="agent-panel__turn-focus-title">
-        <strong title={focusedTurnIndexLabelTitle(turn.index)}>Turn {turn.index}</strong>
+        <strong title={focusedTurnIndexLabelTitle(turn.index)}>Turno {turn.index}</strong>
         <small title={focusedTurnSummaryTitle(turn)}>{turnSummaryLabel(turn)}</small>
       </div>
       <p
@@ -2601,7 +2696,7 @@ function AgentTurnFocus({
             : focusedTurnFallbackTextTitle(turn.index)
         }
       >
-        {latest ? compactActivityText(latest) : "No text captured."}
+        {latest ? compactActivityText(latest) : "No se capturó texto."}
       </p>
       <div
         className="agent-panel__turn-focus-facts"
@@ -2612,21 +2707,21 @@ function AgentTurnFocus({
         )}
       >
         <span title={focusedTurnFactTitle(turn.index, "commands", turn.commandText.length)}>
-          {turn.commandText.length} commands
+          {turn.commandText.length} {turn.commandText.length === 1 ? "comando" : "comandos"}
         </span>
         <span title={focusedTurnFactTitle(turn.index, "files", turn.changes.length)}>
-          {turn.changes.length} files
+          {turn.changes.length} {turn.changes.length === 1 ? "archivo" : "archivos"}
         </span>
       </div>
       {artifactSummary.length > 0 && (
         <div
           className="agent-panel__turn-artifacts"
-          aria-label="Focused turn artifact summary"
+          aria-label="Resumen de artefactos del turno seleccionado"
           title={focusedTurnArtifactSummaryContainerTitle(turn.index, artifactSummary.length)}
         >
           {artifactSummary.map((item) => (
             <span key={item.kind} title={turnArtifactSummaryChipTitle(turn.index, item)}>
-              {item.kind} {item.count}
+              {artifactKindLabel(item.kind)} {item.count}
             </span>
           ))}
         </div>
@@ -2634,18 +2729,18 @@ function AgentTurnFocus({
       {commandSummary && (
         <div
           className="agent-panel__turn-commands"
-          aria-label="Focused turn command summary"
+          aria-label="Resumen de comandos del turno seleccionado"
           title={focusedTurnCommandSummaryContainerTitle(turn.index)}
         >
           <span title={turnCommandSummaryTitle(turn.index, commandSummary)}>
-            Recent command {commandSummary}
+            Comando reciente: {commandSummary}
           </span>
         </div>
       )}
       {visibleChanges.length > 0 && (
         <div
           className="agent-panel__turn-focus-files"
-          aria-label="Focused turn files"
+          aria-label="Archivos del turno seleccionado"
           title={focusedTurnFilesContainerTitle(
             turn.index,
             visibleChanges.length,
@@ -2657,12 +2752,12 @@ function AgentTurnFocus({
               key={`${change.kind}:${change.path}`}
               title={focusedTurnFileRowTitle(turn.index, change)}
             >
-              {change.kind} {change.path}
+              {changeKindLabel(change.kind)} {change.path}
             </span>
           ))}
           {hiddenChangeCount > 0 && (
             <span title={focusedTurnHiddenFileOverflowTitle(turn.index, hiddenChangeCount)}>
-              +{hiddenChangeCount} more
+              +{hiddenChangeCount} más
             </span>
           )}
         </div>
@@ -2683,7 +2778,7 @@ function AgentTurnFocus({
           type="button"
         >
           <span title={focusedTurnRestoreLabelTitle(isRestoringThisTurn)}>
-            {isRestoringThisTurn ? "Restoring" : "Restore here"}
+            {isRestoringThisTurn ? "Restaurando" : "Restaurar aquí"}
           </span>
         </button>
       </div>
@@ -2715,7 +2810,7 @@ function AgentTurn({
   const artifactSummary = turnArtifactSummary(turn.changes);
   const commandSummary = turnCommandSummaryText(turn);
   const searchMatches = agentTurnSearchMatches(turn, searchQuery);
-  const searchMatchesLabel = `Turn ${turn.index} search matches`;
+  const searchMatchesLabel = `Coincidencias de búsqueda del turno ${turn.index}`;
   const turnCopied = copiedTarget === turnTarget;
   return (
     <article
@@ -2732,7 +2827,7 @@ function AgentTurn({
           className="agent-panel__chat-turn-title"
           title={conversationTurnTitleContainerTitle(turn.index)}
         >
-          <span title={turnIndexLabelTitle(turn.index)}>Turn {turn.index}</span>
+          <span title={turnIndexLabelTitle(turn.index)}>Turno {turn.index}</span>
           <small title={turnSummaryTitle(turn)}>{turnSummaryLabel(turn)}</small>
         </div>
         <div
@@ -2742,7 +2837,8 @@ function AgentTurn({
           {timeLabel && <small title={turnTimeTitle(turn.index, timeLabel)}>{timeLabel}</small>}
           {turn.changes.length > 0 && (
             <small title={turnTouchedFilesTitle(turn.index, turn.changes.length)}>
-              {turn.changes.length} files touched
+              {turn.changes.length}{" "}
+              {turn.changes.length === 1 ? "archivo modificado" : "archivos modificados"}
             </small>
           )}
           <button
@@ -2751,8 +2847,8 @@ function AgentTurn({
             title={turnCopyButtonTitle(turn.index, turnCopied)}
             type="button"
           >
-            <span title={turnCopyLabelTitle(turnCopied ? "Copied" : "Copy turn")}>
-              {turnCopied ? "Copied" : "Copy turn"}
+            <span title={turnCopyLabelTitle(turnCopied ? "Copiado" : "Copiar turno")}>
+              {turnCopied ? "Copiado" : "Copiar turno"}
             </span>
           </button>
         </div>
@@ -2760,12 +2856,12 @@ function AgentTurn({
       {artifactSummary.length > 0 && (
         <div
           className="agent-panel__turn-artifacts"
-          aria-label={`Turn ${turn.index} artifact summary`}
+          aria-label={`Resumen de artefactos del turno ${turn.index}`}
           title={turnArtifactSummaryContainerTitle(turn.index, artifactSummary.length)}
         >
           {artifactSummary.map((item) => (
             <span key={item.kind} title={turnArtifactSummaryChipTitle(turn.index, item)}>
-              {item.kind} {item.count}
+              {artifactKindLabel(item.kind)} {item.count}
             </span>
           ))}
         </div>
@@ -2773,11 +2869,11 @@ function AgentTurn({
       {commandSummary && (
         <div
           className="agent-panel__turn-commands"
-          aria-label={`Turn ${turn.index} command summary`}
+          aria-label={`Resumen de comandos del turno ${turn.index}`}
           title={turnCommandSummaryContainerTitle(turn.index)}
         >
           <span title={turnCommandSummaryTitle(turn.index, commandSummary)}>
-            Recent command {commandSummary}
+            Comando reciente: {commandSummary}
           </span>
         </div>
       )}
@@ -2785,7 +2881,7 @@ function AgentTurn({
         <div
           className="agent-panel__turn-search-matches"
           aria-label={searchMatchesLabel}
-          title={`${searchMatchesLabel}: why this visible turn matched the transcript search.`}
+          title={`${searchMatchesLabel}: explica por qué este turno coincide con la búsqueda.`}
         >
           {searchMatches.map((match) => (
             <span key={match.key} title={match.title}>
@@ -2799,7 +2895,7 @@ function AgentTurn({
           copied={copiedTarget === `${turn.id}:user`}
           copyTitle={messageCopyButtonTitle(turn.index, "You", copiedTarget === `${turn.id}:user`)}
           kind="user_message"
-          label="You"
+          label="Tú"
           onCopy={() => onCopyMessage(`${turn.id}:user`, turn.userText ?? "")}
           text={turn.userText}
           turnIndex={turn.index}
@@ -2826,11 +2922,11 @@ function AgentTurn({
           copied={copiedTarget === `${turn.id}:command:${index}`}
           copyTitle={messageCopyButtonTitle(
             turn.index,
-            "Command",
+            "Comando",
             copiedTarget === `${turn.id}:command:${index}`,
           )}
           kind="command_output"
-          label="Command"
+          label="Comando"
           onCopy={() => onCopyMessage(`${turn.id}:command:${index}`, text)}
           text={text}
           key={`c-${index}`}
@@ -2842,11 +2938,11 @@ function AgentTurn({
           copied={copiedTarget === `${turn.id}:system:${index}`}
           copyTitle={messageCopyButtonTitle(
             turn.index,
-            "System",
+            "Sistema",
             copiedTarget === `${turn.id}:system:${index}`,
           )}
           kind="lifecycle"
-          label="System"
+          label="Sistema"
           onCopy={() => onCopyMessage(`${turn.id}:system:${index}`, text)}
           text={text}
           key={`s-${index}`}
@@ -2863,7 +2959,7 @@ function AgentTurn({
               key={`${change.kind}:${change.path}`}
               title={turnTouchedFileTitle(turn.index, change.kind, change.path)}
             >
-              {change.kind} {change.path}
+              {changeKindLabel(change.kind)} {change.path}
             </span>
           ))}
         </div>
@@ -2891,7 +2987,7 @@ function AgentMessageBlock({
 }) {
   const technical = kind === "command_output";
   const commandSummary = technical ? commandOutputSummary(text) : null;
-  const commandSummaryLabel = commandSummary ?? "Command output";
+  const commandSummaryLabel = commandSummary ?? "Salida del comando";
   const collapseCommand = technical && shouldCollapseCommandOutput(text);
   return (
     <div
@@ -2904,13 +3000,13 @@ function AgentMessageBlock({
         </div>
         <button
           className="agent-panel__message-copy"
-          aria-label={`Copy ${label} message`}
+          aria-label={`Copiar mensaje de ${label}`}
           onClick={onCopy}
           title={copyTitle}
           type="button"
         >
-          <span title={messageCopyLabelTitle(copied ? "Copied" : "Copy")}>
-            {copied ? "Copied" : "Copy"}
+          <span title={messageCopyLabelTitle(copied ? "Copiado" : "Copiar")}>
+            {copied ? "Copiado" : "Copiar"}
           </span>
         </button>
       </div>
@@ -2924,7 +3020,7 @@ function AgentMessageBlock({
               <span title={collapsedCommandSummaryLabelTitle(commandSummaryLabel)}>
                 {commandSummaryLabel}
               </span>
-              <small title={collapsedCommandDisclosureLabelTitle()}>Show output</small>
+              <small title={collapsedCommandDisclosureLabelTitle()}>Mostrar salida</small>
             </summary>
             <pre
               className="agent-panel__message-terminal"
@@ -2962,102 +3058,70 @@ function commandOutputSummary(text: string): string {
     .split(/\r\n|\r|\n/)
     .map((line) => line.trim())
     .find(Boolean);
-  if (!firstLine) return "Command output";
+  if (!firstLine) return "Salida del comando";
   return firstLine.length > 96 ? `${firstLine.slice(0, 93)}...` : firstLine;
 }
 
 function agentErrorBannerTitle(error: string): string {
-  return `Agent session error banner: ${error}`;
+  return `Aviso de error de la sesión de Agent: ${error}`;
 }
 
 function emptyChatContainerTitle(hasTranscriptQuery: boolean, readOnly: boolean): string {
   if (hasTranscriptQuery) {
-    return "Agent conversation empty state: no transcript matches for the current search.";
+    return "Estado vacío de la conversación con Agent: ningún turno coincide con la búsqueda actual.";
   }
   if (readOnly) {
-    return "Agent conversation empty state: archived transcript has no saved timeline items.";
+    return "Estado vacío de la conversación con Agent: la transcripción archivada no contiene turnos guardados.";
   }
-  return "Agent conversation empty state: ready for the first turn.";
+  return "Estado vacío de la conversación con Agent: lista para el primer turno.";
 }
 
 function emptyChatStateLabelTitle(hasTranscriptQuery: boolean, readOnly: boolean): string {
   if (hasTranscriptQuery) {
-    return "Agent conversation empty-state label: No matches.";
+    return "Etiqueta del estado vacío de la conversación con Agent: Sin coincidencias.";
   }
   if (readOnly) {
-    return "Agent conversation empty-state label: Transcript.";
+    return "Etiqueta del estado vacío de la conversación con Agent: Transcripción.";
   }
-  return "Agent conversation empty-state label: Ready.";
+  return "Etiqueta del estado vacío de la conversación con Agent: Listo.";
 }
 
-function emptyChatHelperTextTitle(hasTranscriptQuery: boolean, readOnly: boolean): string {
-  if (hasTranscriptQuery) {
-    return "Agent conversation empty-state helper: try another transcript search.";
-  }
-  if (readOnly) {
-    return "Agent conversation empty-state helper: no timeline items were saved.";
-  }
-  return "Agent conversation empty-state helper: start a turn from the composer.";
+function emptyChatHelperTextTitle(): string {
+  return "Estado de la transcripción archivada: no se guardaron turnos.";
 }
 
 function emptyChatClearSearchActionTitle(): string {
-  return "Agent conversation empty-state action: clear search, restore all turns, and return focus to search.";
+  return "Acción del estado vacío de la conversación con Agent: borrar la búsqueda, recuperar todos los turnos y devolver el foco al buscador.";
 }
 
 function agentHeaderTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent header for ${repoLabel}: identity, status, and session controls.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Cabecera de ${agentLabel(agentType)} para ${repoLabel}: identidad, estado y controles de sesión.`;
 }
 
 function agentPanelTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent session surface for ${repoLabel}: header, status, conversation, Agent Lens, and composer.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Superficie de la sesión de ${agentLabel(agentType)} para ${repoLabel}: cabecera, estado, conversación, Agent Lens y compositor.`;
 }
 
 function agentWorkspaceTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent workspace for ${repoLabel}: overview, activity, conversation, inspection rail, and composer.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Espacio de trabajo de ${agentLabel(agentType)} para ${repoLabel}: resumen, actividad, conversación, panel de inspección y compositor.`;
 }
 
 function agentChatShellTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent chat shell for ${repoLabel}: transcript tools and conversation column.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Contenedor de chat de ${agentLabel(agentType)} para ${repoLabel}: herramientas de transcripción y columna de conversación.`;
 }
 
 function agentSideRailTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent side rail for ${repoLabel}: focused turn and Agent Lens column.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Panel lateral de ${agentLabel(agentType)} para ${repoLabel}: turno seleccionado y columna de Agent Lens.`;
 }
 
 function agentComposerTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent composer for ${repoLabel}: command menu, skill mentions, and message input.`;
-}
-
-function agentComposerActionsTitle(
-  agentType: string,
-  repo: string | undefined,
-  readOnly: boolean,
-  canCompose: boolean,
-): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  if (readOnly) {
-    return `${agentLabel(agentType)} command menu for ${repoLabel}: archived transcripts are read-only.`;
-  }
-  if (!canCompose) {
-    return `${agentLabel(agentType)} command menu for ${repoLabel}: waiting for a writable session.`;
-  }
-  return `${agentLabel(agentType)} command menu for ${repoLabel}: type / for Codex and Tinto commands or $ for skills.`;
-}
-
-function agentCommandHintTitle(canCompose: boolean, readOnly: boolean): string {
-  if (readOnly) return "Composer commands are disabled because this transcript is archived.";
-  if (!canCompose) return "Composer commands are waiting for a writable session.";
-  return "Composer command hint: type / for Codex and Tinto commands or $ for skills.";
-}
-
-function agentCommandScopeHintTitle(): string {
-  return "Composer command scopes: Codex prompt commands, Tinto session commands, and skills.";
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Compositor de ${agentLabel(agentType)} para ${repoLabel}: menú de comandos, menciones de skills y entrada de mensajes.`;
 }
 
 function agentCommandMenuTitle(
@@ -3066,9 +3130,11 @@ function agentCommandMenuTitle(
 ): string {
   const prefix = trigger?.trigger ?? "/";
   const query = trigger?.query ?? "";
-  const suffix = query ? ` matching ${prefix}${query}` : "";
-  const noun = count === 1 ? "command" : "commands";
-  return `Composer command menu: ${count} ${noun}${suffix}.`;
+  const suffix = query
+    ? ` ${count === 1 ? "coincidente" : "coincidentes"} con ${prefix}${query}`
+    : "";
+  const noun = count === 1 ? "comando" : "comandos";
+  return `Menú de comandos del compositor: ${count} ${noun}${suffix}.`;
 }
 
 function composerCommandOptionId(sessionId: string, commandId: string): string {
@@ -3076,41 +3142,41 @@ function composerCommandOptionId(sessionId: string, commandId: string): string {
 }
 
 function agentComposerCommandTitle(command: AgentComposerCommand): string {
-  const state = command.disabled ? "Unavailable" : "Run";
+  const state = command.disabled ? "No disponible" : "Ejecutar";
   const aliases = agentComposerCommandAliasTitle(command);
   return `${state} ${command.trigger}${command.command}: ${command.description}.${aliases}`;
 }
 
 function agentComposerCommandCodeTitle(command: AgentComposerCommand): string {
-  return `Composer command trigger: ${command.trigger}${command.command}.`;
+  return `Activador del comando del compositor: ${command.trigger}${command.command}.`;
 }
 
 function agentComposerCommandLabelTitle(label: string): string {
-  return `Composer command label: ${label}.`;
+  return `Etiqueta del comando del compositor: ${label}.`;
 }
 
 function agentComposerCommandDescriptionTitle(command: AgentComposerCommand): string {
   const aliases = agentComposerCommandAliasTitle(command);
-  return `${command.scope} composer command description for ${command.trigger}${command.command}: ${command.description}.${aliases}`;
+  return `Descripción del comando ${command.trigger}${command.command} del compositor, ámbito ${command.scope}: ${command.description}.${aliases}`;
 }
 
 function agentComposerCommandAliasText(command: AgentComposerCommand): string {
   const aliases = command.aliases?.slice(0, 3) ?? [];
   if (aliases.length === 0) return "";
-  return ` · Also ${aliases.map((alias) => `${command.trigger}${alias}`).join(", ")}`;
+  return ` · También ${aliases.map((alias) => `${command.trigger}${alias}`).join(", ")}`;
 }
 
 function agentComposerCommandAliasTitle(command: AgentComposerCommand): string {
   const aliases = command.aliases ?? [];
   if (aliases.length === 0) return "";
-  return ` Aliases: ${aliases.map((alias) => `${command.trigger}${alias}`).join(", ")}.`;
+  return ` Alias disponibles: ${aliases.map((alias) => `${command.trigger}${alias}`).join(", ")}.`;
 }
 
 function agentCommandEmptyTitle(
   trigger: { trigger: AgentComposerCommandTrigger; query: string } | null,
 ): string {
   const prefix = trigger?.trigger ?? "/";
-  return `No composer commands match ${prefix}${trigger?.query ?? ""}.`;
+  return `Ningún comando del compositor coincide con ${prefix}${trigger?.query ?? ""}.`;
 }
 
 function readComposerCommandTrigger(
@@ -3246,13 +3312,13 @@ function applyCodexRuntimeSlashCommand(
   ) {
     const next = normalizeCodexSpeed(rawValue);
     setters.setSpeed(next);
-    setters.setNotice(next === "fast" ? "Fast preset enabled." : "Fast preset disabled.");
+    setters.setNotice(next === "fast" ? "Modo rápido activado." : "Modo rápido desactivado.");
     return true;
   }
   if (command === "model" || command === "modelo") {
     const model = normalizeCodexModel(rawValue);
     setters.setModel(model);
-    setters.setNotice(`Model set to ${codexModelLabel(model)}.`);
+    setters.setNotice(`Modelo cambiado a ${codexModelLabel(model)}.`);
     return true;
   }
   if (command !== "reasoning" && command !== "razonamiento" && command !== "effort") {
@@ -3260,7 +3326,7 @@ function applyCodexRuntimeSlashCommand(
   }
   const reasoning = normalizeCodexReasoning(rawValue);
   setters.setReasoning(reasoning);
-  setters.setNotice(`Reasoning set to ${codexReasoningLabel(reasoning)}.`);
+  setters.setNotice(`Razonamiento cambiado a ${codexReasoningLabel(reasoning)}.`);
   return true;
 }
 
@@ -3307,20 +3373,20 @@ function isCodexReasoningSelection(value: unknown): value is CodexReasoningSelec
 }
 
 function codexModelLabel(value: CodexModelSelection): string {
-  return CODEX_MODEL_OPTIONS.find((option) => option.value === value)?.label ?? "Auto";
+  return CODEX_MODEL_OPTIONS.find((option) => option.value === value)?.label ?? "Automático";
 }
 
 function codexModelShortLabel(value: CodexModelSelection): string {
-  if (value === "auto") return "Model";
+  if (value === "auto") return "Modelo";
   return codexModelLabel(value).replace(/^GPT-/, "");
 }
 
 function codexReasoningLabel(value: CodexReasoningSelection): string {
-  return CODEX_REASONING_OPTIONS.find((option) => option.value === value)?.label ?? "Auto";
+  return CODEX_REASONING_OPTIONS.find((option) => option.value === value)?.label ?? "Automático";
 }
 
 function codexReasoningShortLabel(value: CodexReasoningSelection): string {
-  if (value === "auto") return "Reasoning";
+  if (value === "auto") return "Razonamiento";
   return codexReasoningLabel(value);
 }
 
@@ -3329,8 +3395,8 @@ function codexSpeedLabel(value: CodexSpeedSelection): string {
 }
 
 function agentComposerRowTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent composer input row for ${repoLabel}: message draft and send control.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Fila de entrada del compositor de ${agentLabel(agentType)} para ${repoLabel}: borrador del mensaje y control de envío.`;
 }
 
 function agentComposerInputTitle(
@@ -3339,14 +3405,14 @@ function agentComposerInputTitle(
   readOnly: boolean,
   canCompose: boolean,
 ): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
+  const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (readOnly) {
-    return `${agentLabel(agentType)} agent message input for ${repoLabel}: archived transcript is read-only.`;
+    return `Entrada de mensajes de ${agentLabel(agentType)} para ${repoLabel}: la transcripción archivada es de solo lectura.`;
   }
   if (!canCompose) {
-    return `${agentLabel(agentType)} agent message input for ${repoLabel}: waiting for a writable session.`;
+    return `Entrada de mensajes de ${agentLabel(agentType)} para ${repoLabel}: esperando una sesión en la que se pueda escribir.`;
   }
-  return `${agentLabel(agentType)} agent message input for ${repoLabel}: draft the next instruction.`;
+  return `Entrada de mensajes de ${agentLabel(agentType)} para ${repoLabel}: prepara la siguiente instrucción.`;
 }
 
 function agentComposerSendTitle(
@@ -3358,37 +3424,37 @@ function agentComposerSendTitle(
   canCompose: boolean,
   hasDraft: boolean,
 ): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
+  const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (sending) {
-    return `${agentLabel(agentType)} agent send control for ${repoLabel}: sending drafted message.`;
+    return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: enviando el borrador.`;
   }
   if (readOnly) {
-    return `${agentLabel(agentType)} agent send control for ${repoLabel}: archived transcript is read-only.`;
+    return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: la transcripción archivada es de solo lectura.`;
   }
   if (!canCompose) {
-    return `${agentLabel(agentType)} agent send control for ${repoLabel}: waiting for a writable session.`;
+    return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: esperando una sesión en la que se pueda escribir.`;
   }
   if (!hasDraft) {
-    return `${agentLabel(agentType)} agent send control for ${repoLabel}: message input is empty.`;
+    return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: el mensaje está vacío.`;
   }
   if (!canSend) {
-    return `${agentLabel(agentType)} agent send control for ${repoLabel}: message input is empty or unavailable.`;
+    return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: el mensaje está vacío o no está disponible.`;
   }
-  return `${agentLabel(agentType)} agent send control for ${repoLabel}: send drafted message.`;
+  return `Enviar el borrador a ${agentLabel(agentType)} para ${repoLabel}.`;
 }
 
 function agentComposerSendLabelTitle(sending: boolean): string {
-  return `Composer send button label: ${sending ? "Sending" : "Send"}.`;
+  return `Acción de envío del compositor: ${sending ? "Enviando" : "Enviar"}.`;
 }
 
 function agentIdentityTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent identity for ${repoLabel}: agent name and repo label.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Identidad de ${agentLabel(agentType)} para ${repoLabel}: nombre de Agent y etiqueta del repositorio.`;
 }
 
 function agentHeaderActionsTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent header actions for ${repoLabel}: Stop and Revert controls.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Acciones de cabecera de ${agentLabel(agentType)} para ${repoLabel}: controles Detener y Revertir.`;
 }
 
 function agentStopControlTitle(
@@ -3398,21 +3464,21 @@ function agentStopControlTitle(
   canStop: boolean,
   stopping: boolean,
 ): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
+  const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (stopping) {
-    return `${agentLabel(agentType)} stop control for ${repoLabel}: stopping session.`;
+    return `Detener ${agentLabel(agentType)} en ${repoLabel}: deteniendo la sesión.`;
   }
   if (readOnly) {
-    return `${agentLabel(agentType)} stop control for ${repoLabel}: archived transcripts are read-only.`;
+    return `Detener ${agentLabel(agentType)} en ${repoLabel}: las transcripciones archivadas son de solo lectura.`;
   }
   if (canStop) {
-    return `${agentLabel(agentType)} stop control for ${repoLabel}: stop the running session.`;
+    return `Detener la sesión en ejecución de ${agentLabel(agentType)} en ${repoLabel}.`;
   }
-  return `${agentLabel(agentType)} stop control for ${repoLabel}: session is not running.`;
+  return `Detener ${agentLabel(agentType)} en ${repoLabel}: la sesión no está en ejecución.`;
 }
 
 function agentStopControlLabelTitle(stopping: boolean): string {
-  return `Agent stop control label: ${stopping ? "Stopping" : "Stop"}.`;
+  return `Acción para detener Agent: ${stopping ? "Deteniendo" : "Detener"}.`;
 }
 
 function agentRevertControlTitle(
@@ -3423,93 +3489,105 @@ function agentRevertControlTitle(
   canRevert: boolean,
   reverting: boolean,
 ): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
+  const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (reverting) {
-    return `${agentLabel(agentType)} revert control for ${repoLabel}: reverting session changes.`;
+    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: revirtiendo.`;
   }
   if (readOnly) {
-    return `${agentLabel(agentType)} revert control for ${repoLabel}: archived transcripts are read-only.`;
+    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: la transcripción archivada es de solo lectura.`;
   }
   if (session?.status === "reverted") {
-    return `${agentLabel(agentType)} revert control for ${repoLabel}: session already reverted.`;
+    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: la sesión ya se revirtió.`;
   }
   if (session && !session.checkpoint) {
-    return `${agentLabel(agentType)} revert control for ${repoLabel}: no reversible checkpoint.`;
+    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: no hay un punto de control reversible.`;
   }
   if (canRevert) {
-    return `${agentLabel(agentType)} revert control for ${repoLabel}: revert session changes.`;
+    return `Revertir los cambios de la sesión de ${agentLabel(agentType)} en ${repoLabel}.`;
   }
-  return `${agentLabel(agentType)} revert control for ${repoLabel}: stop the session before reverting.`;
+  return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: detén la sesión antes de revertir.`;
 }
 
 function agentRevertControlLabelTitle(reverting: boolean): string {
-  return `Agent revert control label: ${reverting ? "Reverting" : "Revert"}.`;
+  return `Acción para revertir Agent: ${reverting ? "Revirtiendo" : "Revertir"}.`;
 }
 
 function agentLogoTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent logo for ${repoLabel}: agent mark.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Logotipo de ${agentLabel(agentType)} para ${repoLabel}: marca de Agent.`;
 }
 
 function agentRepoLabelTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
   if (!repo) {
-    return `${agentLabel(agentType)} agent repo label for ${repoLabel}: no repo path.`;
+    return `Etiqueta del repositorio de ${agentLabel(agentType)} para ${repoLabel}: sin ruta de repositorio.`;
   }
-  return `${agentLabel(agentType)} agent repo label for ${repoLabel}: full path ${repo}.`;
+  return `Etiqueta del repositorio de ${agentLabel(agentType)} para ${repoLabel}: ruta completa ${repo}.`;
 }
 
 function agentNameLabelTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "Agent session";
-  return `${agentLabel(agentType)} agent display-name label for ${repoLabel}.`;
+  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
+  return `Etiqueta del nombre visible de ${agentLabel(agentType)} para ${repoLabel}.`;
 }
 
 function collapsedCommandSummaryLabelTitle(summary: string): string {
-  return `Collapsed command output summary: ${summary}.`;
+  return `Resumen de la salida contraída del comando: ${summary}.`;
 }
 
 function collapsedCommandDisclosureLabelTitle(): string {
-  return "Collapsed command output disclosure label: Show output.";
+  return "Etiqueta del control de salida contraída del comando: Mostrar salida.";
 }
 
 function collapsedCommandBlockTitle(turnIndex: number): string {
-  return `Collapsed command output container for turn ${turnIndex}: summary disclosure and full output text.`;
+  return `Contenedor de la salida contraída del comando del turno ${turnIndex}: control de resumen y texto completo de la salida.`;
 }
 
 function collapsedCommandSummaryRowTitle(turnIndex: number): string {
-  return `Collapsed command output summary row for turn ${turnIndex}: click to show or hide full output.`;
+  return `Fila de resumen de la salida contraída del comando del turno ${turnIndex}: actívala para mostrar u ocultar la salida completa.`;
 }
 
 function messageRoleLabelTitle(label: string): string {
-  return `Agent message role label: ${label}.`;
+  return `Etiqueta del rol del mensaje de Agent: ${label}.`;
 }
 
 function messageBlockContainerTitle(turnIndex: number, label: string): string {
-  return `Agent message block for turn ${turnIndex}: ${label} content and copy control.`;
+  return `Bloque de mensaje de Agent del turno ${turnIndex}: contenido de ${label} y control para copiar.`;
 }
 
 function messageMarkdownContentTitle(turnIndex: number, label: string): string {
-  return `Rendered ${label} Markdown content for turn ${turnIndex}.`;
+  return `Contenido Markdown de ${label} renderizado para el turno ${turnIndex}.`;
 }
 
 function messageTerminalContentTitle(turnIndex: number): string {
-  return `Command output text for turn ${turnIndex}.`;
+  return `Texto de salida de comandos del turno ${turnIndex}.`;
 }
 
 function messageHeaderTitle(label: string): string {
-  return `Agent message header for ${label}: role label and copy control.`;
+  return `Cabecera del mensaje de Agent para ${label}: etiqueta de rol y control para copiar.`;
 }
 
 function SessionStatus({ session }: { session: AgentSession | undefined }) {
   if (!session) {
     return (
-      <div className="agent-panel__status-strip" title={loadingSessionStatusTitle()}>
-        <span title={loadingSessionStatusLabelTitle()}>Loading session</span>
+      <div
+        className="agent-panel__status-strip"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        title={loadingSessionStatusTitle()}
+      >
+        <span title={loadingSessionStatusLabelTitle()}>Cargando sesión</span>
       </div>
     );
   }
   return (
-    <div className="agent-panel__status-strip" title={auditTitle(session)}>
+    <div
+      className="agent-panel__status-strip"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      title={auditTitle(session)}
+    >
       <span
         className={`agent-panel__status agent-panel__status--${session.status}`}
         title={sessionStatusFacetTitle(session.status)}
@@ -3520,11 +3598,13 @@ function SessionStatus({ session }: { session: AgentSession | undefined }) {
         {turnStatusLabel(session.turn_status ?? "waiting")}
       </span>
       <span title={checkpointStatusFacetTitle(session.checkpoint?.checkpoint_type)}>
-        {session.checkpoint ? checkpointLabel(session.checkpoint.checkpoint_type) : "No checkpoint"}
+        {session.checkpoint
+          ? checkpointLabel(session.checkpoint.checkpoint_type)
+          : "Sin punto de control"}
       </span>
       {(session.change_log?.length ?? 0) > 0 && (
         <span title={changeLogStatusFacetTitle(session.change_log?.length ?? 0)}>
-          {session.change_log?.length} changes
+          {session.change_log?.length} {session.change_log?.length === 1 ? "cambio" : "cambios"}
         </span>
       )}
     </div>
@@ -3627,8 +3707,8 @@ function AgentLens({
   };
   const scopeLabel =
     activeScope === "focused" && focusedTurn
-      ? `Turn ${focusedTurn.index}`
-      : `${turns.length} turns`;
+      ? `Turno ${focusedTurn.index}`
+      : `${turns.length} ${turnNoun(turns.length)}`;
   const activateTab = (tab: AgentLensTab) => setActiveTab(tab);
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: AgentLensTab) => {
     const currentIndex = AGENT_LENS_TAB_ORDER.indexOf(tab);
@@ -3701,7 +3781,7 @@ function AgentLens({
       </div>
       <div
         className="agent-panel__lens-scope"
-        aria-label="Agent Lens scope"
+        aria-label="Ámbito de Agent Lens"
         title={agentLensScopeGroupTitle(activeScope, focusedTurn?.index ?? null)}
       >
         <button
@@ -3711,7 +3791,7 @@ function AgentLens({
           title={agentLensScopeTitle("focused", focusedTurn?.index ?? null)}
           type="button"
         >
-          Focus
+          Turno
         </button>
         <button
           aria-pressed={activeScope === "session"}
@@ -3719,7 +3799,7 @@ function AgentLens({
           title={agentLensScopeTitle("session", focusedTurn?.index ?? null)}
           type="button"
         >
-          Session
+          Sesión
         </button>
       </div>
       <div
@@ -3737,7 +3817,7 @@ function AgentLens({
             {turnStatusLabel(session.turn_status ?? "waiting")}
           </span>
           <small title={agentLensTurnStateMetricTitle(session.turn_status ?? "waiting")}>
-            Turn state
+            Estado del turno
           </small>
         </div>
         <div>
@@ -3745,7 +3825,7 @@ function AgentLens({
             {fileItems.length}
           </span>
           <small title={agentLensFileMetricTitle(activeScope, fileItems.length)}>
-            {activeScope === "focused" ? "Focused files" : "Session files"}
+            {activeScope === "focused" ? "Archivos del turno" : "Archivos de la sesión"}
           </small>
         </div>
         <div>
@@ -3765,7 +3845,7 @@ function AgentLens({
               latestRestorableTurn?.index ?? null,
             )}
           >
-            Restore points
+            Puntos de restauración
           </small>
         </div>
       </div>
@@ -3773,7 +3853,7 @@ function AgentLens({
       <div
         className="agent-panel__lens-tabs"
         role="tablist"
-        aria-label="Agent Lens views"
+        aria-label="Vistas de Agent Lens"
         aria-orientation="horizontal"
         title={agentLensTabListTitle(fileItems.length, commandItems.length, timelineItems.length)}
       >
@@ -3782,7 +3862,7 @@ function AgentLens({
           controlsId={agentLensPanelId(session.id, "files")}
           count={fileItems.length}
           id={agentLensTabId(session.id, "files")}
-          label="Files"
+          label="Archivos"
           onClick={() => activateTab("files")}
           onKeyDown={(event) => handleTabKeyDown(event, "files")}
         />
@@ -3791,7 +3871,7 @@ function AgentLens({
           controlsId={agentLensPanelId(session.id, "commands")}
           count={commandItems.length}
           id={agentLensTabId(session.id, "commands")}
-          label="Commands"
+          label="Comandos"
           onClick={() => activateTab("commands")}
           onKeyDown={(event) => handleTabKeyDown(event, "commands")}
         />
@@ -3809,7 +3889,7 @@ function AgentLens({
       {activeTab === "files" && (
         <div
           className="agent-panel__lens-view"
-          aria-label="Agent Lens Files view"
+          aria-label="Vista de archivos de Agent Lens"
           aria-labelledby={agentLensTabId(session.id, "files")}
           id={agentLensPanelId(session.id, "files")}
           role="tabpanel"
@@ -3831,10 +3911,10 @@ function AgentLens({
                   hasFileQuery,
                 )}
               >
-                <span title={agentLensFileFilterLabelTitle()}>Filter files</span>
+                <span title={agentLensFileFilterLabelTitle()}>Filtrar archivos</span>
                 <input
                   aria-describedby={agentLensFileFilterStatusId(session.id)}
-                  aria-label="Filter touched files"
+                  aria-label="Filtrar archivos modificados"
                   ref={fileFilterRef}
                   value={fileQuery}
                   onChange={(event) => setFileQuery(event.currentTarget.value)}
@@ -3844,7 +3924,7 @@ function AgentLens({
                       clearFileFilter();
                     }
                   }}
-                  placeholder="Path or change type..."
+                  placeholder="Ruta o tipo de cambio..."
                   title={agentLensFileFilterTitle(fileItems.length, hasFileQuery)}
                   type="search"
                 />
@@ -3858,8 +3938,8 @@ function AgentLens({
                   )}
                 >
                   {hasFileQuery
-                    ? `${filteredFileItems.length} of ${fileItems.length} files`
-                    : `${fileItems.length} files`}
+                    ? `${filteredFileItems.length} de ${fileItems.length} archivos`
+                    : `${fileItems.length} ${fileItems.length === 1 ? "archivo" : "archivos"}`}
                 </small>
                 {hasFileQuery && (
                   <button
@@ -3871,14 +3951,14 @@ function AgentLens({
                     )}
                     type="button"
                   >
-                    <span title={agentLensClearFileFilterLabelTitle()}>Clear</span>
+                    <span title={agentLensClearFileFilterLabelTitle()}>Borrar</span>
                   </button>
                 )}
               </label>
               {filteredFileItems.length > 0 ? (
                 <div
                   className="agent-panel__lens-list"
-                  aria-label="Touched files"
+                  aria-label="Archivos modificados"
                   title={agentLensTouchedFilesListTitle(
                     activeScope,
                     filteredFileItems.length,
@@ -3887,7 +3967,7 @@ function AgentLens({
                 >
                   <div
                     className="agent-panel__lens-preview"
-                    aria-label="Selected file preview"
+                    aria-label="Vista previa del archivo seleccionado"
                     onKeyDown={handlePreviewKeyDown}
                     tabIndex={previewCount > 1 ? 0 : undefined}
                     title={agentLensPreviewContainerTitle(
@@ -3897,17 +3977,17 @@ function AgentLens({
                     )}
                   >
                     <div className="agent-panel__lens-preview-head">
-                      <span title={agentLensPreviewLabelTitle()}>Preview</span>
+                      <span title={agentLensPreviewLabelTitle()}>Vista previa</span>
                       <small title={agentLensPreviewPositionTitle(previewPosition, previewCount)}>
                         {previewPosition} / {previewCount}
                       </small>
                     </div>
                     <strong title={agentLensPreviewSelectionTitle(previewItem?.path ?? null)}>
-                      {previewItem?.path ?? "No file selected"}
+                      {previewItem?.path ?? "Ningún archivo seleccionado"}
                     </strong>
                     {previewCount > 1 && (
                       <div
-                        aria-label="Preview navigation"
+                        aria-label="Navegación por la vista previa"
                         className="agent-panel__lens-preview-nav"
                         title={agentLensPreviewNavigationTitle(
                           previewItem?.path ?? null,
@@ -3922,7 +4002,7 @@ function AgentLens({
                           )}
                           type="button"
                         >
-                          <span title={agentLensPreviewNavLabelTitle("Previous")}>Previous</span>
+                          <span title={agentLensPreviewNavLabelTitle("Anterior")}>Anterior</span>
                         </button>
                         <button
                           onClick={selectNextPreview}
@@ -3932,13 +4012,13 @@ function AgentLens({
                           )}
                           type="button"
                         >
-                          <span title={agentLensPreviewNavLabelTitle("Next")}>Next</span>
+                          <span title={agentLensPreviewNavLabelTitle("Siguiente")}>Siguiente</span>
                         </button>
                       </div>
                     )}
                     {previewItem && (
                       <div
-                        aria-label={`Preview actions for ${previewItem.path}`}
+                        aria-label={`Acciones de vista previa para ${previewItem.path}`}
                         className="agent-panel__lens-preview-actions"
                         title={agentLensPreviewActionsTitle(
                           previewItem.path,
@@ -3946,16 +4026,16 @@ function AgentLens({
                         )}
                       >
                         <button
-                          aria-label="Open selected preview file"
+                          aria-label="Abrir el archivo seleccionado"
                           disabled={!repo}
                           onClick={() => onOpenFile(previewItem.path)}
                           title={agentLensOpenActionTitle(previewItem.path, Boolean(repo))}
                           type="button"
                         >
-                          <span title={agentLensPreviewActionLabelTitle("Open")}>Open</span>
+                          <span title={agentLensPreviewActionLabelTitle("Abrir")}>Abrir</span>
                         </button>
                         <button
-                          aria-label="Ask about selected preview file"
+                          aria-label="Preguntar por el archivo seleccionado"
                           disabled={!canPromptForFile}
                           onClick={() =>
                             onPromptFile({
@@ -3969,11 +4049,13 @@ function AgentLens({
                           title={agentLensAskActionTitle(previewItem.path, canPromptForFile)}
                           type="button"
                         >
-                          <span title={agentLensPreviewActionLabelTitle("Ask")}>Ask</span>
+                          <span title={agentLensPreviewActionLabelTitle("Preguntar")}>
+                            Preguntar
+                          </span>
                         </button>
                         {previewItem.turnCheckpointId && (
                           <button
-                            aria-label="Revert selected preview file"
+                            aria-label="Revertir el archivo seleccionado"
                             disabled={!canRevertTurnFile || isPreviewReverting}
                             onClick={() =>
                               onRevertTurnFile(previewItem.turnCheckpointId ?? "", previewItem.path)
@@ -3988,10 +4070,10 @@ function AgentLens({
                           >
                             <span
                               title={agentLensPreviewActionLabelTitle(
-                                isPreviewReverting ? "Reverting" : "Revert",
+                                isPreviewReverting ? "Revirtiendo" : "Revertir",
                               )}
                             >
-                              {isPreviewReverting ? "Reverting" : "Revert"}
+                              {isPreviewReverting ? "Revirtiendo" : "Revertir"}
                             </span>
                           </button>
                         )}
@@ -3999,7 +4081,7 @@ function AgentLens({
                     )}
                     {previewItem?.context?.preview ? (
                       <div
-                        aria-label={`Preview details for ${previewItem.path}`}
+                        aria-label={`Detalles de la vista previa de ${previewItem.path}`}
                         className="agent-panel__lens-preview-detail"
                         title={agentLensPreviewDetailGroupTitle(previewItem.path)}
                       >
@@ -4012,13 +4094,13 @@ function AgentLens({
                       </div>
                     ) : (
                       <p title={agentLensNoLiveHunkTitle(previewItem?.path ?? null)}>
-                        No live hunk data available for this file.
+                        No hay datos en vivo de los fragmentos de este archivo.
                       </p>
                     )}
                   </div>
                   {groupedFileItems.map((group) => (
                     <section
-                      aria-label={`${group.kind} files`}
+                      aria-label={`Archivos de ${group.kind.toLocaleLowerCase()}`}
                       className="agent-panel__lens-file-group"
                       key={group.kind}
                       title={agentLensFileGroupTitle(group.kind, group.items.length)}
@@ -4047,18 +4129,18 @@ function AgentLens({
                             <span
                               title={agentLensFileScopeMetaTitle(item.turnIndex, item.timeLabel)}
                             >
-                              {item.turnIndex ? `Turn ${item.turnIndex}` : "Session"}
+                              {item.turnIndex ? `Turno ${item.turnIndex}` : "Sesión"}
                               {item.timeLabel ? ` - ${item.timeLabel}` : ""}
                             </span>
                             <strong title={agentLensFilePathMetaTitle(item.path)}>
                               {item.path}
                             </strong>
                             <small title={agentLensFileKindMetaTitle(item.artifactKind, item.kind)}>
-                              {item.kind}
+                              {changeKindLabel(item.kind)}
                             </small>
                             {item.context && (
                               <div
-                                aria-label={`Live context for ${item.path}`}
+                                aria-label={`Contexto en vivo de ${item.path}`}
                                 className="agent-panel__lens-file-context"
                                 title={agentLensLiveContextTitle(item.path)}
                               >
@@ -4076,7 +4158,7 @@ function AgentLens({
                               </div>
                             )}
                             <div
-                              aria-label={`File actions for ${item.path}`}
+                              aria-label={`Acciones para ${item.path}`}
                               className="agent-panel__lens-file-actions"
                               title={agentLensFileActionsTitle(
                                 item.path,
@@ -4092,8 +4174,8 @@ function AgentLens({
                                 )}
                                 type="button"
                               >
-                                <span title={agentLensFileActionLabelTitle("Preview")}>
-                                  Preview
+                                <span title={agentLensFileActionLabelTitle("Vista previa")}>
+                                  Vista previa
                                 </span>
                               </button>
                               <button
@@ -4102,7 +4184,7 @@ function AgentLens({
                                 title={agentLensOpenActionTitle(item.path, Boolean(repo))}
                                 type="button"
                               >
-                                <span title={agentLensFileActionLabelTitle("Open")}>Open</span>
+                                <span title={agentLensFileActionLabelTitle("Abrir")}>Abrir</span>
                               </button>
                               <button
                                 disabled={!canPromptForFile}
@@ -4118,7 +4200,9 @@ function AgentLens({
                                 title={agentLensAskActionTitle(item.path, canPromptForFile)}
                                 type="button"
                               >
-                                <span title={agentLensFileActionLabelTitle("Ask")}>Ask</span>
+                                <span title={agentLensFileActionLabelTitle("Preguntar")}>
+                                  Preguntar
+                                </span>
                               </button>
                               {item.turnCheckpointId && (
                                 <button
@@ -4136,10 +4220,10 @@ function AgentLens({
                                 >
                                   <span
                                     title={agentLensFileActionLabelTitle(
-                                      revertingFile === key ? "Reverting" : "Revert",
+                                      revertingFile === key ? "Revirtiendo" : "Revertir",
                                     )}
                                   >
-                                    {revertingFile === key ? "Reverting" : "Revert"}
+                                    {revertingFile === key ? "Revirtiendo" : "Revertir"}
                                   </span>
                                 </button>
                               )}
@@ -4156,7 +4240,7 @@ function AgentLens({
                   title={agentLensNoFilesMatchTitle(fileQuery)}
                 >
                   <span title={agentLensNoFilesMatchLabelTitle(fileQuery)}>
-                    No files match this filter.
+                    Ningún archivo coincide con este filtro.
                   </span>
                   <button
                     className="agent-panel__empty-lens-action"
@@ -4164,7 +4248,7 @@ function AgentLens({
                     title={agentLensNoFilesMatchClearTitle(fileQuery)}
                     type="button"
                   >
-                    <span title={agentLensClearFileFilterLabelTitle()}>Clear</span>
+                    <span title={agentLensClearFileFilterLabelTitle()}>Borrar</span>
                   </button>
                 </div>
               )}
@@ -4174,7 +4258,7 @@ function AgentLens({
               className="agent-panel__empty-lens"
               title={agentLensNoTouchedFilesTitle(activeScope)}
             >
-              No touched files yet.
+              Aún no hay archivos modificados.
             </div>
           )}
         </div>
@@ -4183,7 +4267,7 @@ function AgentLens({
       {activeTab === "commands" && (
         <div
           className="agent-panel__lens-view"
-          aria-label="Agent Lens Commands view"
+          aria-label="Vista de comandos de Agent Lens"
           aria-labelledby={agentLensTabId(session.id, "commands")}
           id={agentLensPanelId(session.id, "commands")}
           role="tabpanel"
@@ -4206,10 +4290,10 @@ function AgentLens({
                   hasCommandQuery,
                 )}
               >
-                <span title={agentLensEventFilterLabelTitle("commands")}>Filter commands</span>
+                <span title={agentLensEventFilterLabelTitle("commands")}>Filtrar comandos</span>
                 <input
                   aria-describedby={agentLensEventFilterStatusId(session.id, "commands")}
-                  aria-label="Filter command output"
+                  aria-label="Filtrar la salida de comandos"
                   ref={commandFilterRef}
                   value={commandQuery}
                   onChange={(event) => setCommandQuery(event.currentTarget.value)}
@@ -4219,7 +4303,7 @@ function AgentLens({
                       clearCommandFilter();
                     }
                   }}
-                  placeholder="Command text..."
+                  placeholder="Texto del comando..."
                   title={agentLensEventFilterTitle(
                     "commands",
                     commandItems.length,
@@ -4255,14 +4339,14 @@ function AgentLens({
                     )}
                     type="button"
                   >
-                    <span title={agentLensClearEventFilterLabelTitle("commands")}>Clear</span>
+                    <span title={agentLensClearEventFilterLabelTitle("commands")}>Borrar</span>
                   </button>
                 )}
               </label>
               {filteredCommandItems.length > 0 ? (
                 <div
                   className="agent-panel__lens-list"
-                  aria-label="Command output"
+                  aria-label="Salida de comandos"
                   title={agentLensCommandListTitle(
                     activeScope,
                     filteredCommandItems.length,
@@ -4276,7 +4360,7 @@ function AgentLens({
                       title={agentLensCommandEventTitle(item)}
                     >
                       <span title={agentLensCommandEventMetaTitle(item)}>
-                        Turn {item.turnIndex} command
+                        Comando del turno {item.turnIndex}
                         {item.timeLabel ? ` - ${item.timeLabel}` : ""}
                       </span>
                       <pre title={agentLensCommandEventTextTitle(item)}>{item.text}</pre>
@@ -4289,7 +4373,7 @@ function AgentLens({
                   title={agentLensNoEventsMatchTitle("commands", commandQuery)}
                 >
                   <span title={agentLensNoEventsMatchLabelTitle("commands", commandQuery)}>
-                    No commands match this filter.
+                    Ningún comando coincide con este filtro.
                   </span>
                   <button
                     className="agent-panel__empty-lens-action"
@@ -4297,14 +4381,14 @@ function AgentLens({
                     title={agentLensNoEventsMatchClearTitle("commands", commandQuery)}
                     type="button"
                   >
-                    <span title={agentLensClearEventFilterLabelTitle("commands")}>Clear</span>
+                    <span title={agentLensClearEventFilterLabelTitle("commands")}>Borrar</span>
                   </button>
                 </div>
               )}
             </>
           ) : (
             <div className="agent-panel__empty-lens" title={agentLensNoCommandsTitle(activeScope)}>
-              No commands captured yet.
+              Aún no se han capturado comandos.
             </div>
           )}
         </div>
@@ -4313,7 +4397,7 @@ function AgentLens({
       {activeTab === "timeline" && (
         <div
           className="agent-panel__lens-view"
-          aria-label="Agent Lens Timeline view"
+          aria-label="Vista de Timeline de Agent Lens"
           aria-labelledby={agentLensTabId(session.id, "timeline")}
           id={agentLensPanelId(session.id, "timeline")}
           role="tabpanel"
@@ -4336,10 +4420,10 @@ function AgentLens({
                   hasTimelineQuery,
                 )}
               >
-                <span title={agentLensEventFilterLabelTitle("timeline")}>Filter timeline</span>
+                <span title={agentLensEventFilterLabelTitle("timeline")}>Filtrar Timeline</span>
                 <input
                   aria-describedby={agentLensEventFilterStatusId(session.id, "timeline")}
-                  aria-label="Filter timeline events"
+                  aria-label="Filtrar eventos de Timeline"
                   ref={timelineFilterRef}
                   value={timelineQuery}
                   onChange={(event) => setTimelineQuery(event.currentTarget.value)}
@@ -4349,7 +4433,7 @@ function AgentLens({
                       clearTimelineFilter();
                     }
                   }}
-                  placeholder="Event text or type..."
+                  placeholder="Texto o tipo de evento..."
                   title={agentLensEventFilterTitle(
                     "timeline",
                     timelineItems.length,
@@ -4385,14 +4469,14 @@ function AgentLens({
                     )}
                     type="button"
                   >
-                    <span title={agentLensClearEventFilterLabelTitle("timeline")}>Clear</span>
+                    <span title={agentLensClearEventFilterLabelTitle("timeline")}>Borrar</span>
                   </button>
                 )}
               </label>
               {filteredTimelineItems.length > 0 ? (
                 <div
                   className="agent-panel__lens-list"
-                  aria-label="Recent timeline"
+                  aria-label="Timeline reciente"
                   title={agentLensTimelineListTitle(
                     activeScope,
                     filteredTimelineItems.length,
@@ -4406,7 +4490,7 @@ function AgentLens({
                       title={agentLensTimelineEventTitle(item)}
                     >
                       <span title={agentLensTimelineEventMetaTitle(item)}>
-                        Turn {item.turnIndex} - {item.label}
+                        Turno {item.turnIndex} - {item.label}
                         {item.timeLabel ? ` - ${item.timeLabel}` : ""}
                       </span>
                       <pre title={agentLensTimelineEventTextTitle(item)}>{item.text}</pre>
@@ -4419,7 +4503,7 @@ function AgentLens({
                   title={agentLensNoEventsMatchTitle("timeline", timelineQuery)}
                 >
                   <span title={agentLensNoEventsMatchLabelTitle("timeline", timelineQuery)}>
-                    No timeline events match this filter.
+                    Ningún evento de Timeline coincide con este filtro.
                   </span>
                   <button
                     className="agent-panel__empty-lens-action"
@@ -4427,14 +4511,14 @@ function AgentLens({
                     title={agentLensNoEventsMatchClearTitle("timeline", timelineQuery)}
                     type="button"
                   >
-                    <span title={agentLensClearEventFilterLabelTitle("timeline")}>Clear</span>
+                    <span title={agentLensClearEventFilterLabelTitle("timeline")}>Borrar</span>
                   </button>
                 </div>
               )}
             </>
           ) : (
             <div className="agent-panel__empty-lens" title={agentLensNoTimelineTitle(activeScope)}>
-              No timeline captured yet.
+              Aún no se han capturado eventos de Timeline.
             </div>
           )}
         </div>
@@ -4480,39 +4564,33 @@ function AgentLensTabButton({
 }
 
 function agentLensTabTitle(label: string, count: number): string {
-  if (label === "Files") {
-    const fileLabel = count === 1 ? "file" : "files";
-    return `Show Agent Lens Files view with ${count} touched ${fileLabel}.`;
+  if (label === "Archivos") {
+    return `Mostrar la vista de archivos de Agent Lens con ${countLabel(count, "archivo modificado", "archivos modificados")}.`;
   }
-  if (label === "Commands") {
-    const commandLabel = count === 1 ? "command output" : "command outputs";
-    return `Show Agent Lens Commands view with ${count} ${commandLabel}.`;
+  if (label === "Comandos") {
+    return `Mostrar la vista de comandos de Agent Lens con ${countLabel(count, "salida", "salidas")}.`;
   }
   if (label === "Timeline") {
-    const itemLabel = count === 1 ? "timeline item" : "timeline items";
-    return `Show Agent Lens Timeline view with ${count} recent ${itemLabel}.`;
+    return `Mostrar la vista de Timeline de Agent Lens con ${countLabel(count, "evento reciente", "eventos recientes")}.`;
   }
-  return `Show Agent Lens ${label} view.`;
+  return `Mostrar la vista ${label} de Agent Lens.`;
 }
 
 function agentLensTabLabelTitle(label: string): string {
-  return `Agent Lens tab name: ${label} view.`;
+  return `Nombre de la pestaña de Agent Lens: vista ${label}.`;
 }
 
 function agentLensTabCountTitle(label: string, count: number): string {
-  if (label === "Files") {
-    const fileLabel = count === 1 ? "file" : "files";
-    return `Agent Lens Files tab count: ${count} touched ${fileLabel}.`;
+  if (label === "Archivos") {
+    return `Cantidad de la pestaña Archivos de Agent Lens: ${countLabel(count, "archivo modificado", "archivos modificados")}.`;
   }
-  if (label === "Commands") {
-    const commandLabel = count === 1 ? "command output" : "command outputs";
-    return `Agent Lens Commands tab count: ${count} ${commandLabel}.`;
+  if (label === "Comandos") {
+    return `Cantidad de la pestaña Comandos de Agent Lens: ${countLabel(count, "salida de comando", "salidas de comandos")}.`;
   }
   if (label === "Timeline") {
-    const itemLabel = count === 1 ? "timeline item" : "timeline items";
-    return `Agent Lens Timeline tab count: ${count} ${itemLabel}.`;
+    return `Cantidad de la pestaña Timeline de Agent Lens: ${countLabel(count, "evento", "eventos")}.`;
   }
-  return `Agent Lens ${label} tab count: ${count}.`;
+  return `Cantidad de la pestaña ${label} de Agent Lens: ${count}.`;
 }
 
 function agentLensTabId(sessionId: string, tab: AgentLensTab): string {
@@ -4537,14 +4615,11 @@ function agentLensRootTitle(
   timelineCount: number,
   turnStatus: string,
 ): string {
-  const fileLabel = fileCount === 1 ? "file" : "files";
-  const commandLabel = commandCount === 1 ? "command output" : "command outputs";
-  const timelineLabel = timelineCount === 1 ? "timeline item" : "timeline items";
-  return `Agent Lens inspector: ${agentLensScopeSummary(
+  return `Inspector de Agent Lens: ${agentLensScopeSummary(
     activeScope,
     focusedTurnIndex,
     turnCount,
-  )}; ${agentLensTabName(activeTab)} view active; ${fileCount} ${fileLabel}, ${commandCount} ${commandLabel}, ${timelineCount} ${timelineLabel}; turn state ${turnStatusLabel(turnStatus)}.`;
+  )}; vista ${agentLensTabName(activeTab)} activa; ${countLabel(fileCount, "archivo", "archivos")}, ${countLabel(commandCount, "salida de comando", "salidas de comandos")}, ${countLabel(timelineCount, "evento de Timeline", "eventos de Timeline")}; estado del turno: ${turnStatusLabel(turnStatus)}.`;
 }
 
 function agentLensViewContainerTitle(
@@ -4554,40 +4629,34 @@ function agentLensViewContainerTitle(
   visibleCount: number,
   hasQuery: boolean,
 ): string {
-  const scope = activeScope === "focused" ? "focused turn" : "current session";
+  const scope = activeScope === "focused" ? "turno seleccionado" : "sesión actual";
   if (tab === "files") {
-    const totalLabel = totalCount === 1 ? "file" : "files";
     if (hasQuery) {
-      const visibleLabel = visibleCount === 1 ? "file" : "files";
-      return `Agent Lens Files view for the ${scope}: showing ${visibleCount} ${visibleLabel} from ${totalCount} touched ${totalLabel}.`;
+      return `Vista Archivos de Agent Lens para el ${scope}: se muestran ${visibleCount} de ${countLabel(totalCount, "archivo modificado", "archivos modificados")}.`;
     }
-    return `Agent Lens Files view for the ${scope}: ${totalCount} touched ${totalLabel}.`;
+    return `Vista Archivos de Agent Lens para el ${scope}: ${countLabel(totalCount, "archivo modificado", "archivos modificados")}.`;
   }
   if (tab === "commands") {
-    const commandLabel = totalCount === 1 ? "command output" : "command outputs";
     if (hasQuery) {
-      const visibleLabel = visibleCount === 1 ? "command output" : "command outputs";
-      return `Agent Lens Commands view for the ${scope}: showing ${visibleCount} ${visibleLabel} from ${totalCount} ${commandLabel}.`;
+      return `Vista Comandos de Agent Lens para el ${scope}: se muestran ${visibleCount} de ${countLabel(totalCount, "salida de comando", "salidas de comandos")}.`;
     }
-    return `Agent Lens Commands view for the ${scope}: ${totalCount} ${commandLabel}.`;
+    return `Vista Comandos de Agent Lens para el ${scope}: ${countLabel(totalCount, "salida de comando", "salidas de comandos")}.`;
   }
-  const itemLabel = totalCount === 1 ? "timeline item" : "timeline items";
   if (hasQuery) {
-    const visibleLabel = visibleCount === 1 ? "timeline item" : "timeline items";
-    return `Agent Lens Timeline view for the ${scope}: showing ${visibleCount} ${visibleLabel} from ${totalCount} ${itemLabel}.`;
+    return `Vista Timeline de Agent Lens para el ${scope}: se muestran ${visibleCount} de ${countLabel(totalCount, "evento", "eventos")}.`;
   }
-  return `Agent Lens Timeline view for the ${scope}: ${totalCount} ${itemLabel}.`;
+  return `Vista Timeline de Agent Lens para el ${scope}: ${countLabel(totalCount, "evento", "eventos")}.`;
 }
 
 function agentLensTabName(tab: AgentLensTab): string {
   switch (tab) {
     case "commands":
-      return "Commands";
+      return "Comandos";
     case "timeline":
       return "Timeline";
     case "files":
     default:
-      return "Files";
+      return "Archivos";
   }
 }
 
@@ -4598,11 +4667,10 @@ function agentLensScopeSummary(
 ): string {
   if (activeScope === "focused") {
     return focusedTurnIndex
-      ? `focused turn ${focusedTurnIndex}`
-      : "focused scope waiting for a turn";
+      ? `turno seleccionado ${focusedTurnIndex}`
+      : "ámbito seleccionado a la espera de un turno";
   }
-  const turnLabel = turnCount === 1 ? "turn" : "turns";
-  return `current session with ${turnCount} ${turnLabel}`;
+  return `sesión actual con ${countLabel(turnCount, "turno", "turnos")}`;
 }
 
 function agentLensHeadingTitle(
@@ -4611,14 +4679,13 @@ function agentLensHeadingTitle(
   turnCount: number,
 ): string {
   if (activeScope === "focused" && focusedTurnIndex) {
-    return `Agent Lens inspector for focused turn ${focusedTurnIndex}.`;
+    return `Inspector de Agent Lens para el turno seleccionado ${focusedTurnIndex}.`;
   }
-  const turnLabel = turnCount === 1 ? "turn" : "turns";
-  return `Agent Lens inspector for the full session with ${turnCount} ${turnLabel}.`;
+  return `Inspector de Agent Lens para la sesión completa con ${countLabel(turnCount, "turno", "turnos")}.`;
 }
 
 function agentLensHeadingLabelTitle(): string {
-  return "Agent Lens heading label.";
+  return "Etiqueta de cabecera de Agent Lens.";
 }
 
 function agentLensTabListTitle(
@@ -4626,19 +4693,16 @@ function agentLensTabListTitle(
   commandCount: number,
   timelineCount: number,
 ): string {
-  const fileLabel = fileCount === 1 ? "file" : "files";
-  const commandLabel = commandCount === 1 ? "command output" : "command outputs";
-  const timelineLabel = timelineCount === 1 ? "timeline item" : "timeline items";
-  return `Agent Lens view tabs: ${fileCount} ${fileLabel}, ${commandCount} ${commandLabel}, ${timelineCount} ${timelineLabel}.`;
+  return `Pestañas de vistas de Agent Lens: ${countLabel(fileCount, "archivo", "archivos")}, ${countLabel(commandCount, "salida de comando", "salidas de comandos")}, ${countLabel(timelineCount, "evento de Timeline", "eventos de Timeline")}.`;
 }
 
 function agentLensScopeTitle(scope: AgentLensScope, focusedTurnIndex: number | null): string {
   if (scope === "focused") {
     return focusedTurnIndex
-      ? `Scope Agent Lens to focused turn ${focusedTurnIndex}.`
-      : "Focus a turn to scope Agent Lens to that turn.";
+      ? `Limitar Agent Lens al turno seleccionado ${focusedTurnIndex}.`
+      : "Selecciona un turno para limitar Agent Lens a ese turno.";
   }
-  return "Scope Agent Lens to the full session.";
+  return "Mostrar la sesión completa en Agent Lens.";
 }
 
 function agentLensScopeLabelTitle(
@@ -4647,10 +4711,9 @@ function agentLensScopeLabelTitle(
   turnCount: number,
 ): string {
   if (activeScope === "focused" && focusedTurnIndex) {
-    return `Agent Lens is showing focused turn ${focusedTurnIndex}.`;
+    return `Agent Lens muestra el turno seleccionado ${focusedTurnIndex}.`;
   }
-  const turnLabel = turnCount === 1 ? "turn" : "turns";
-  return `Agent Lens is showing the full session with ${turnCount} ${turnLabel}.`;
+  return `Agent Lens muestra la sesión completa con ${countLabel(turnCount, "turno", "turnos")}.`;
 }
 
 function agentLensScopeGroupTitle(
@@ -4658,9 +4721,9 @@ function agentLensScopeGroupTitle(
   focusedTurnIndex: number | null,
 ): string {
   if (activeScope === "focused" && focusedTurnIndex) {
-    return `Agent Lens scope controls are focused on turn ${focusedTurnIndex}.`;
+    return `Los controles de ámbito de Agent Lens están limitados al turno ${focusedTurnIndex}.`;
   }
-  return "Agent Lens scope controls switch between the focused turn and the full session.";
+  return "Los controles de ámbito de Agent Lens alternan entre el turno seleccionado y la sesión completa.";
 }
 
 function agentLensMetricsTitle(
@@ -4670,32 +4733,29 @@ function agentLensMetricsTitle(
   restorableCount: number,
   turnStatus: string,
 ): string {
-  const fileLabel = fileCount === 1 ? "file" : "files";
-  const checkpointLabel = turnCheckpointCount === 1 ? "turn checkpoint" : "turn checkpoints";
-  const scopeLabel = activeScope === "focused" ? "focused turn" : "current session";
-  return `Agent Lens metrics summarize ${turnStatusLabel(turnStatus)} state, ${fileCount} ${fileLabel}, and ${restorableCount} restorable ${checkpointLabel} for the ${scopeLabel}.`;
+  const checkpointLabel = turnCheckpointCount === 1 ? "punto de control" : "puntos de control";
+  const scopeLabel = activeScope === "focused" ? "turno seleccionado" : "sesión actual";
+  return `Las métricas de Agent Lens resumen el estado ${turnStatusLabel(turnStatus)}, ${countLabel(fileCount, "archivo", "archivos")} y ${restorableCount} ${checkpointLabel} restaurables para el ${scopeLabel}.`;
 }
 
 function agentLensTurnStateMetricTitle(turnStatus: string): string {
-  return `Current Agent Lens turn state: ${turnStatusLabel(turnStatus)}.`;
+  return `Estado actual del turno en Agent Lens: ${turnStatusLabel(turnStatus)}.`;
 }
 
 function agentLensTurnStateValueTitle(turnStatus: string): string {
-  return `Agent Lens turn state value: ${turnStatusLabel(turnStatus)}.`;
+  return `Valor del estado del turno en Agent Lens: ${turnStatusLabel(turnStatus)}.`;
 }
 
 function agentLensFileMetricTitle(activeScope: AgentLensScope, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
   if (activeScope === "focused") {
-    return `Agent Lens focused scope includes ${count} ${fileLabel}.`;
+    return `El ámbito del turno seleccionado de Agent Lens incluye ${countLabel(count, "archivo", "archivos")}.`;
   }
-  return `Agent Lens session scope includes ${count} ${fileLabel}.`;
+  return `El ámbito de sesión de Agent Lens incluye ${countLabel(count, "archivo", "archivos")}.`;
 }
 
 function agentLensFileMetricValueTitle(activeScope: AgentLensScope, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  const scopeLabel = activeScope === "focused" ? "focused scope" : "session scope";
-  return `Agent Lens ${scopeLabel} file count value: ${count} ${fileLabel}.`;
+  const scopeLabel = activeScope === "focused" ? "turno seleccionado" : "sesión";
+  return `Valor de archivos del ámbito ${scopeLabel} de Agent Lens: ${countLabel(count, "archivo", "archivos")}.`;
 }
 
 function agentLensRestoreMetricTitle(
@@ -4704,14 +4764,15 @@ function agentLensRestoreMetricTitle(
   latestRestorableTurnIndex: number | null,
 ): string {
   if (turnCheckpointCount === 0) {
-    return "Agent Lens restore-point metric: no completed turn checkpoints yet.";
+    return "Métrica de puntos de restauración de Agent Lens: aún no hay puntos de control de turno completados.";
   }
-  const checkpointLabel = turnCheckpointCount === 1 ? "turn checkpoint" : "turn checkpoints";
-  const restorableLabel = restorableCount === 1 ? "restore point" : "restore points";
+  const checkpointLabel = turnCheckpointCount === 1 ? "punto de control" : "puntos de control";
+  const restorableLabel =
+    restorableCount === 1 ? "punto de restauración" : "puntos de restauración";
   const latest = latestRestorableTurnIndex
-    ? ` Latest restorable turn is ${latestRestorableTurnIndex}.`
+    ? ` El último turno restaurable es el ${latestRestorableTurnIndex}.`
     : "";
-  return `Agent Lens restore-point metric: ${restorableCount} ${restorableLabel} from ${turnCheckpointCount} ${checkpointLabel}.${latest}`;
+  return `Métrica de puntos de restauración de Agent Lens: ${restorableCount} ${restorableLabel} de ${turnCheckpointCount} ${checkpointLabel}.${latest}`;
 }
 
 function agentLensRestoreMetricValueTitle(
@@ -4720,12 +4781,12 @@ function agentLensRestoreMetricValueTitle(
   latestRestorableTurnIndex: number | null,
 ): string {
   if (turnCheckpointCount === 0) {
-    return "Agent Lens restore-point value: 0 of 0 turn checkpoints are restorable.";
+    return "Valor de puntos de restauración de Agent Lens: 0 de 0 puntos de control son restaurables.";
   }
   const latest = latestRestorableTurnIndex
-    ? ` Latest restorable turn: ${latestRestorableTurnIndex}.`
+    ? ` Último turno restaurable: ${latestRestorableTurnIndex}.`
     : "";
-  return `Agent Lens restore-point value: ${restorableCount} of ${turnCheckpointCount} turn checkpoints are restorable.${latest}`;
+  return `Valor de puntos de restauración de Agent Lens: ${restorableCount} de ${turnCheckpointCount} puntos de control son restaurables.${latest}`;
 }
 
 function agentLensFileFilterStatusId(sessionId: string): string {
@@ -4733,13 +4794,12 @@ function agentLensFileFilterStatusId(sessionId: string): string {
 }
 
 function agentLensFileFilterTitle(count: number, hasQuery: boolean): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  const escapeHint = hasQuery ? " Press Escape to clear the filter." : "";
-  return `Filter ${count} Agent Lens touched ${fileLabel} by path, change type, status, or artifact category.${escapeHint}`;
+  const escapeHint = hasQuery ? " Pulsa Escape para borrar el filtro." : "";
+  return `Filtrar ${countLabel(count, "archivo modificado", "archivos modificados")} de Agent Lens por ruta, tipo de cambio, estado o categoría.${escapeHint}`;
 }
 
 function agentLensFileFilterLabelTitle(): string {
-  return "Agent Lens file filter label.";
+  return "Etiqueta del filtro de archivos de Agent Lens.";
 }
 
 function agentLensFileFilterWrapperTitle(
@@ -4747,12 +4807,10 @@ function agentLensFileFilterWrapperTitle(
   visibleCount: number,
   hasQuery: boolean,
 ): string {
-  const totalLabel = totalCount === 1 ? "file" : "files";
   if (hasQuery) {
-    const visibleLabel = visibleCount === 1 ? "file" : "files";
-    return `Agent Lens file filter is showing ${visibleCount} ${visibleLabel} from ${totalCount} touched ${totalLabel}.`;
+    return `El filtro de archivos de Agent Lens muestra ${visibleCount} de ${countLabel(totalCount, "archivo modificado", "archivos modificados")}.`;
   }
-  return `Agent Lens file filter controls ${totalCount} touched ${totalLabel}.`;
+  return `El filtro de archivos de Agent Lens controla ${countLabel(totalCount, "archivo modificado", "archivos modificados")}.`;
 }
 
 function agentLensFileFilterCountTitle(
@@ -4760,25 +4818,22 @@ function agentLensFileFilterCountTitle(
   totalCount: number,
   hasQuery: boolean,
 ): string {
-  const totalLabel = totalCount === 1 ? "file" : "files";
   if (hasQuery) {
-    return `Showing ${visibleCount} of ${totalCount} Agent Lens touched ${totalLabel} after filtering.`;
+    return `Se muestran ${visibleCount} de ${countLabel(totalCount, "archivo modificado", "archivos modificados")} de Agent Lens después de filtrar.`;
   }
-  return `Showing all ${totalCount} Agent Lens touched ${totalLabel}.`;
+  return `Se muestran los ${countLabel(totalCount, "archivo modificado", "archivos modificados")} de Agent Lens.`;
 }
 
 function agentLensClearFileFilterTitle(visibleCount: number, totalCount: number): string {
-  const visibleLabel = visibleCount === 1 ? "file" : "files";
-  const totalLabel = totalCount === 1 ? "file" : "files";
-  return `Clear Agent Lens file filter and show all ${totalCount} touched ${totalLabel}; currently showing ${visibleCount} ${visibleLabel}.`;
+  return `Borrar el filtro y mostrar los ${totalCount} archivos modificados; ahora se muestran ${visibleCount}.`;
 }
 
 function agentLensClearFileFilterLabelTitle(): string {
-  return "Agent Lens clear-file-filter label: Clear.";
+  return "Etiqueta para borrar el filtro de archivos de Agent Lens: Borrar.";
 }
 
 function agentLensPreviewLabelTitle(): string {
-  return "Selected-file preview area for the active Agent Lens file.";
+  return "Área de vista previa del archivo activo en Agent Lens.";
 }
 
 function agentLensPreviewContainerTitle(
@@ -4786,53 +4841,52 @@ function agentLensPreviewContainerTitle(
   position: number,
   count: number,
 ): string {
-  const keyboardHint = count > 1 ? " Use arrow keys to move between previewed files." : "";
+  const keyboardHint =
+    count > 1 ? " Usa las flechas para recorrer los archivos de la vista previa." : "";
   return path
-    ? `Selected Agent Lens file preview for ${path}; item ${position} of ${count}.${keyboardHint}`
-    : "Agent Lens selected-file preview placeholder is waiting for a touched file.";
+    ? `Vista previa del archivo seleccionado en Agent Lens: ${path}; elemento ${position} de ${count}.${keyboardHint}`
+    : "La vista previa del archivo seleccionado en Agent Lens espera un archivo modificado.";
 }
 
 function agentLensPreviewSelectionTitle(path: string | null): string {
   return path
-    ? `Agent Lens preview is showing ${path}.`
-    : "Agent Lens selected-file preview placeholder: no file selected.";
+    ? `La vista previa de Agent Lens muestra ${path}.`
+    : "Vista previa del archivo seleccionado en Agent Lens: no hay ningún archivo seleccionado.";
 }
 
 function agentLensPreviewPositionTitle(position: number, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  return `Agent Lens preview position: ${position} of ${count} visible ${fileLabel}.`;
+  return `Posición de la vista previa de Agent Lens: ${position} de ${countLabel(count, "archivo visible", "archivos visibles")}.`;
 }
 
 function agentLensPreviewNavigationTitle(path: string | null, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
   return path
-    ? `Agent Lens preview navigation for ${path}: move through ${count} visible ${fileLabel}.`
-    : `Agent Lens preview navigation: move through ${count} visible ${fileLabel}.`;
+    ? `Navegación de la vista previa de Agent Lens para ${path}: recorre ${countLabel(count, "archivo visible", "archivos visibles")}.`
+    : `Navegación de la vista previa de Agent Lens: recorre ${countLabel(count, "archivo visible", "archivos visibles")}.`;
 }
 
 function agentLensPreviewNavButtonTitle(
   direction: "previous" | "next",
   path: string | null,
 ): string {
-  const label = direction === "previous" ? "previous" : "next";
+  const label = direction === "previous" ? "anterior" : "siguiente";
   return path
-    ? `Show the ${label} Agent Lens preview file: ${path}.`
-    : `Show the ${label} Agent Lens preview file.`;
+    ? `Mostrar el archivo ${label} en la vista previa de Agent Lens: ${path}.`
+    : `Mostrar el archivo ${label} en la vista previa de Agent Lens.`;
 }
 
 function agentLensPreviewNavLabelTitle(label: string): string {
-  return `Agent Lens preview navigation label: ${label}.`;
+  return `Etiqueta de navegación de la vista previa de Agent Lens: ${label}.`;
 }
 
 function agentLensPreviewActionsTitle(path: string, canShowRevert: boolean): string {
   const controls = canShowRevert
-    ? "open, ask, and revert controls for the selected preview file"
-    : "open and ask controls for the selected preview file";
-  return `Agent Lens preview actions for ${path}: ${controls}.`;
+    ? "controles para abrir, preguntar y revertir el archivo seleccionado"
+    : "controles para abrir y preguntar por el archivo seleccionado";
+  return `Acciones de la vista previa de Agent Lens para ${path}: ${controls}.`;
 }
 
 function agentLensPreviewActionLabelTitle(label: string): string {
-  return `Agent Lens preview action label: ${label}.`;
+  return `Etiqueta de acción de la vista previa de Agent Lens: ${label}.`;
 }
 
 function agentLensPreviewRevertActionTitle(
@@ -4841,7 +4895,7 @@ function agentLensPreviewRevertActionTitle(
   canRevert: boolean,
   isReverting: boolean,
 ): string {
-  return `Selected preview file: ${agentLensRevertActionTitle(
+  return `Archivo seleccionado en la vista previa: ${agentLensRevertActionTitle(
     path,
     turnIndex,
     canRevert,
@@ -4850,32 +4904,32 @@ function agentLensPreviewRevertActionTitle(
 }
 
 function agentLensPreviewDetailGroupTitle(path: string): string {
-  return `Agent Lens preview details for ${path}: hunk summary and first-hunk location.`;
+  return `Detalles de la vista previa de Agent Lens para ${path}: resumen y ubicación del primer fragmento.`;
 }
 
 function agentLensNoLiveHunkTitle(path: string | null): string {
   return path
-    ? `Selected-file preview placeholder for ${path}: no live hunk data available.`
-    : "Selected-file preview placeholder: no live hunk data available because no file is selected.";
+    ? `Vista previa del archivo seleccionado ${path}: no hay datos de fragmentos en vivo.`
+    : "Vista previa del archivo seleccionado: no hay datos de fragmentos en vivo porque no se ha seleccionado ningún archivo.";
 }
 
 function agentLensNoFilesMatchTitle(query: string): string {
-  return `No Agent Lens files match "${query.trim()}". Clear or change the filter to show touched files.`;
+  return `Ningún archivo de Agent Lens coincide con "${query.trim()}". Borra o cambia el filtro para mostrar los archivos modificados.`;
 }
 
 function agentLensNoFilesMatchLabelTitle(query: string): string {
-  return `Agent Lens file filter empty result for "${query.trim()}".`;
+  return `Resultado vacío del filtro de archivos de Agent Lens para "${query.trim()}".`;
 }
 
 function agentLensNoFilesMatchClearTitle(query: string): string {
-  return `Clear Agent Lens file filter "${query.trim()}" and restore touched files.`;
+  return `Borrar el filtro de archivos "${query.trim()}" y volver a mostrar los archivos modificados.`;
 }
 
 function agentLensNoTouchedFilesTitle(activeScope: AgentLensScope): string {
   if (activeScope === "focused") {
-    return "Agent Lens has no touched files in the focused turn.";
+    return "Agent Lens no tiene archivos modificados en el turno seleccionado.";
   }
-  return "Agent Lens has no touched files in the current session.";
+  return "Agent Lens no tiene archivos modificados en la sesión actual.";
 }
 
 function agentLensTouchedFilesListTitle(
@@ -4883,10 +4937,9 @@ function agentLensTouchedFilesListTitle(
   count: number,
   hasQuery: boolean,
 ): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  const scope = activeScope === "focused" ? "focused turn" : "current session";
-  const filterPrefix = hasQuery ? "Filtered " : "";
-  return `${filterPrefix}Agent Lens touched files for the ${scope}: ${count} ${fileLabel}.`;
+  const scope = activeScope === "focused" ? "turno seleccionado" : "sesión actual";
+  const filterPrefix = hasQuery ? "Archivos filtrados" : "Archivos modificados";
+  return `${filterPrefix} de Agent Lens para el ${scope}: ${countLabel(count, "archivo", "archivos")}.`;
 }
 
 function agentLensCommandListTitle(
@@ -4894,10 +4947,9 @@ function agentLensCommandListTitle(
   count: number,
   hasQuery: boolean,
 ): string {
-  const commandLabel = count === 1 ? "command output" : "command outputs";
-  const scope = activeScope === "focused" ? "focused turn" : "current session";
-  const filterPrefix = hasQuery ? "Filtered " : "";
-  return `${filterPrefix}Agent Lens command output for the ${scope}: ${count} ${commandLabel}.`;
+  const scope = activeScope === "focused" ? "turno seleccionado" : "sesión actual";
+  const filterPrefix = hasQuery ? "Salidas filtradas" : "Salidas";
+  return `${filterPrefix} de comandos de Agent Lens para el ${scope}: ${countLabel(count, "salida", "salidas")}.`;
 }
 
 function agentLensTimelineListTitle(
@@ -4905,10 +4957,9 @@ function agentLensTimelineListTitle(
   count: number,
   hasQuery: boolean,
 ): string {
-  const itemLabel = count === 1 ? "timeline item" : "timeline items";
-  const scope = activeScope === "focused" ? "focused turn" : "current session";
-  const filterPrefix = hasQuery ? "Filtered " : "";
-  return `${filterPrefix}Agent Lens recent timeline for the ${scope}: ${count} ${itemLabel}.`;
+  const scope = activeScope === "focused" ? "turno seleccionado" : "sesión actual";
+  const filterPrefix = hasQuery ? "Timeline reciente filtrado" : "Timeline reciente";
+  return `${filterPrefix} de Agent Lens para el ${scope}: ${countLabel(count, "evento", "eventos")}.`;
 }
 
 function agentLensEventFilterStatusId(sessionId: string, kind: "commands" | "timeline"): string {
@@ -4920,15 +4971,15 @@ function agentLensEventFilterTitle(
   count: number,
   hasQuery: boolean,
 ): string {
-  const noun = kind === "commands" ? "command output" : "timeline events";
-  const escapeHint = hasQuery ? " Press Escape to clear the filter." : "";
-  return `Filter ${count} Agent Lens ${noun} by text${kind === "timeline" ? " or event type" : ""}.${escapeHint}`;
+  const noun = kind === "commands" ? "salidas de comandos" : "eventos de Timeline";
+  const escapeHint = hasQuery ? " Pulsa Escape para borrar el filtro." : "";
+  return `Filtrar ${count} ${noun} de Agent Lens por texto${kind === "timeline" ? " o tipo de evento" : ""}.${escapeHint}`;
 }
 
 function agentLensEventFilterLabelTitle(kind: "commands" | "timeline"): string {
   return kind === "commands"
-    ? "Agent Lens command filter label."
-    : "Agent Lens timeline filter label.";
+    ? "Etiqueta del filtro de comandos de Agent Lens."
+    : "Etiqueta del filtro de Timeline de Agent Lens.";
 }
 
 function agentLensEventFilterWrapperTitle(
@@ -4940,15 +4991,15 @@ function agentLensEventFilterWrapperTitle(
   const noun =
     kind === "commands"
       ? totalCount === 1
-        ? "command output"
-        : "command outputs"
+        ? "salida de comando"
+        : "salidas de comandos"
       : totalCount === 1
-        ? "timeline event"
-        : "timeline events";
+        ? "evento de Timeline"
+        : "eventos de Timeline";
   if (hasQuery) {
-    return `Agent Lens ${kind} filter is showing ${visibleCount} from ${totalCount} ${noun}.`;
+    return `El filtro de ${kind === "commands" ? "comandos" : "Timeline"} de Agent Lens muestra ${visibleCount} de ${totalCount} ${noun}.`;
   }
-  return `Agent Lens ${kind} filter controls ${totalCount} ${noun}.`;
+  return `El filtro de ${kind === "commands" ? "comandos" : "Timeline"} de Agent Lens controla ${totalCount} ${noun}.`;
 }
 
 function agentLensEventFilterCountTitle(
@@ -4960,15 +5011,15 @@ function agentLensEventFilterCountTitle(
   const noun =
     kind === "commands"
       ? totalCount === 1
-        ? "command output"
-        : "command outputs"
+        ? "salida de comando"
+        : "salidas de comandos"
       : totalCount === 1
-        ? "timeline event"
-        : "timeline events";
+        ? "evento de Timeline"
+        : "eventos de Timeline";
   if (hasQuery) {
-    return `Showing ${visibleCount} of ${totalCount} Agent Lens ${noun} after filtering.`;
+    return `Se muestran ${visibleCount} de ${totalCount} ${noun} de Agent Lens después de filtrar.`;
   }
-  return `Showing all ${totalCount} Agent Lens ${noun}.`;
+  return `Se muestran los ${totalCount} ${noun} de Agent Lens.`;
 }
 
 function agentLensEventFilterCountText(
@@ -4980,12 +5031,12 @@ function agentLensEventFilterCountText(
   const noun =
     kind === "commands"
       ? totalCount === 1
-        ? "command"
-        : "commands"
+        ? "comando"
+        : "comandos"
       : totalCount === 1
-        ? "event"
-        : "events";
-  return hasQuery ? `${visibleCount} of ${totalCount} ${noun}` : `${totalCount} ${noun}`;
+        ? "evento"
+        : "eventos";
+  return hasQuery ? `${visibleCount} de ${totalCount} ${noun}` : `${totalCount} ${noun}`;
 }
 
 function agentLensClearEventFilterTitle(
@@ -4993,39 +5044,33 @@ function agentLensClearEventFilterTitle(
   visibleCount: number,
   totalCount: number,
 ): string {
-  const noun =
-    kind === "commands"
-      ? totalCount === 1
-        ? "command output"
-        : "command outputs"
-      : totalCount === 1
-        ? "timeline event"
-        : "timeline events";
-  return `Clear Agent Lens ${kind} filter and show all ${totalCount} ${noun}; currently showing ${visibleCount}.`;
+  const filterName = kind === "commands" ? "comandos" : "Timeline";
+  return `Borrar el filtro de ${filterName} y mostrar los ${totalCount} elementos; ahora se muestran ${visibleCount}.`;
 }
 
 function agentLensClearEventFilterLabelTitle(kind: "commands" | "timeline"): string {
   return kind === "commands"
-    ? "Agent Lens clear-command-filter label: Clear."
-    : "Agent Lens clear-timeline-filter label: Clear.";
+    ? "Etiqueta para borrar el filtro de comandos de Agent Lens: Borrar."
+    : "Etiqueta para borrar el filtro de Timeline de Agent Lens: Borrar.";
 }
 
 function agentLensNoEventsMatchTitle(kind: "commands" | "timeline", query: string): string {
-  const noun = kind === "commands" ? "commands" : "timeline events";
-  return `No Agent Lens ${noun} match "${query.trim()}". Clear or change the filter to show captured items.`;
+  const noun = kind === "commands" ? "comando" : "evento de Timeline";
+  return `Ningún ${noun} de Agent Lens coincide con "${query.trim()}". Borra o cambia el filtro para mostrar los elementos registrados.`;
 }
 
 function agentLensNoEventsMatchLabelTitle(kind: "commands" | "timeline", query: string): string {
-  const noun = kind === "commands" ? "command output" : "timeline event";
-  return `Agent Lens ${noun} filter empty result for "${query.trim()}".`;
+  const noun = kind === "commands" ? "salidas de comandos" : "eventos de Timeline";
+  return `Resultado vacío del filtro de ${noun} de Agent Lens para "${query.trim()}".`;
 }
 
 function agentLensNoEventsMatchClearTitle(kind: "commands" | "timeline", query: string): string {
-  return `Clear Agent Lens ${kind} filter "${query.trim()}" and restore captured items.`;
+  const filterName = kind === "commands" ? "comandos" : "Timeline";
+  return `Borrar el filtro de ${filterName} "${query.trim()}" y volver a mostrar los elementos capturados.`;
 }
 
 function agentLensLiveContextTitle(path: string): string {
-  return `Live Agent Lens context for ${path}: repo status and diff chips.`;
+  return `Contexto en vivo de Agent Lens para ${path}: estado del repositorio e indicadores del diff.`;
 }
 
 function agentLensCommandEventTitle(item: {
@@ -5033,20 +5078,20 @@ function agentLensCommandEventTitle(item: {
   timeLabel: string | null;
   text: string;
 }): string {
-  const timing = item.timeLabel ? ` at ${item.timeLabel}` : "";
-  return `Command output captured in Agent Lens for turn ${item.turnIndex}${timing}: ${item.text}`;
+  const timing = item.timeLabel ? ` en ${item.timeLabel}` : "";
+  return `Salida de comando registrada en Agent Lens para el turno ${item.turnIndex}${timing}: ${item.text}`;
 }
 
 function agentLensCommandEventMetaTitle(item: {
   turnIndex: number;
   timeLabel: string | null;
 }): string {
-  const timing = item.timeLabel ? ` at ${item.timeLabel}` : "";
-  return `Agent Lens command event metadata: turn ${item.turnIndex} command${timing}.`;
+  const timing = item.timeLabel ? ` en ${item.timeLabel}` : "";
+  return `Metadatos del evento de comando de Agent Lens: comando del turno ${item.turnIndex}${timing}.`;
 }
 
 function agentLensCommandEventTextTitle(item: { turnIndex: number; text: string }): string {
-  return `Captured Agent Lens command output for turn ${item.turnIndex}: ${item.text}`;
+  return `Salida de comando registrada en Agent Lens para el turno ${item.turnIndex}: ${item.text}`;
 }
 
 function agentLensTimelineEventTitle(item: {
@@ -5055,8 +5100,8 @@ function agentLensTimelineEventTitle(item: {
   timeLabel: string | null;
   text: string;
 }): string {
-  const timing = item.timeLabel ? ` at ${item.timeLabel}` : "";
-  return `Timeline ${item.label.toLowerCase()} event captured in Agent Lens for turn ${item.turnIndex}${timing}: ${item.text}`;
+  const timing = item.timeLabel ? ` en ${item.timeLabel}` : "";
+  return `Evento ${item.label.toLowerCase()} de Timeline registrado en Agent Lens para el turno ${item.turnIndex}${timing}: ${item.text}`;
 }
 
 function agentLensTimelineEventMetaTitle(item: {
@@ -5064,8 +5109,8 @@ function agentLensTimelineEventMetaTitle(item: {
   label: string;
   timeLabel: string | null;
 }): string {
-  const timing = item.timeLabel ? ` at ${item.timeLabel}` : "";
-  return `Agent Lens timeline event metadata: turn ${item.turnIndex} ${item.label} event${timing}.`;
+  const timing = item.timeLabel ? ` en ${item.timeLabel}` : "";
+  return `Metadatos del evento de Timeline de Agent Lens: evento ${item.label} del turno ${item.turnIndex}${timing}.`;
 }
 
 function agentLensTimelineEventTextTitle(item: {
@@ -5073,21 +5118,21 @@ function agentLensTimelineEventTextTitle(item: {
   label: string;
   text: string;
 }): string {
-  return `Captured Agent Lens timeline text for turn ${item.turnIndex} ${item.label} event: ${item.text}`;
+  return `Texto de Timeline registrado en Agent Lens para el evento ${item.label} del turno ${item.turnIndex}: ${item.text}`;
 }
 
 function agentLensNoCommandsTitle(activeScope: AgentLensScope): string {
   if (activeScope === "focused") {
-    return "Agent Lens has no command output in the focused turn.";
+    return "Agent Lens no tiene salidas de comandos en el turno seleccionado.";
   }
-  return "Agent Lens has no command output in the current session.";
+  return "Agent Lens no tiene salidas de comandos en la sesión actual.";
 }
 
 function agentLensNoTimelineTitle(activeScope: AgentLensScope): string {
   if (activeScope === "focused") {
-    return "Agent Lens has no timeline events in the focused turn.";
+    return "Agent Lens no tiene eventos de Timeline en el turno seleccionado.";
   }
-  return "Agent Lens has no timeline events in the current session.";
+  return "Agent Lens no tiene eventos de Timeline en la sesión actual.";
 }
 
 function agentLensFileItems(
@@ -5128,7 +5173,13 @@ function agentLensFileItems(
   return [...checkpointItems, ...sessionItems];
 }
 
-const AGENT_LENS_ARTIFACT_ORDER = ["Code", "Tests", "Docs", "Config", "Other"] as const;
+const AGENT_LENS_ARTIFACT_ORDER = [
+  "Código",
+  "Pruebas",
+  "Documentación",
+  "Configuración",
+  "Otros",
+] as const;
 
 type AgentLensArtifactKind = (typeof AGENT_LENS_ARTIFACT_ORDER)[number];
 
@@ -5175,7 +5226,7 @@ function agentLensArtifactKind(path: string): AgentLensArtifactKind {
     normalized.includes("__tests__/") ||
     /\.(test|spec)\.[^.]+$/.test(basename)
   ) {
-    return "Tests";
+    return "Pruebas";
   }
   if (
     normalized.startsWith("docs/") ||
@@ -5183,7 +5234,7 @@ function agentLensArtifactKind(path: string): AgentLensArtifactKind {
     normalized.endsWith(".mdx") ||
     normalized.endsWith(".rst")
   ) {
-    return "Docs";
+    return "Documentación";
   }
   if (
     normalized.includes("/config/") ||
@@ -5194,16 +5245,16 @@ function agentLensArtifactKind(path: string): AgentLensArtifactKind {
     normalized.endsWith(".env") ||
     basename.startsWith(".")
   ) {
-    return "Config";
+    return "Configuración";
   }
   if (
     /\.(ts|tsx|js|jsx|rs|py|go|java|kt|swift|cs|c|cc|cpp|h|hpp|css|scss|html|svelte|vue)$/.test(
       basename,
     )
   ) {
-    return "Code";
+    return "Código";
   }
-  return "Other";
+  return "Otros";
 }
 
 function agentLensFileContext(
@@ -5216,15 +5267,15 @@ function agentLensFileContext(
   if (statusChips.length === 0 && !diff) return null;
   const diffSummary = diff
     ? fileDiffSummary(path, diff)
-    : { label: "No live diff", title: `No live diff is currently available for ${path}.` };
-  const renameLabel = diff?.old_path ? `from ${diff.old_path}` : null;
+    : { label: "Sin diff en vivo", title: `No hay ningún diff en vivo disponible para ${path}.` };
+  const renameLabel = diff?.old_path ? `desde ${diff.old_path}` : null;
   return {
     statusChips,
     diffLabel: diffSummary.label,
     diffTitle: diffSummary.title,
     renameLabel,
     renameTitle: diff?.old_path
-      ? `Live diff rename source for ${path}: ${diff.old_path}.`
+      ? `Origen del renombrado en el diff en vivo de ${path}: ${diff.old_path}.`
       : undefined,
     preview: diff ? fileDiffPreview(diff) : null,
     searchText: [
@@ -5248,7 +5299,46 @@ function fileStatusChips(
 }
 
 function fileStatusChip(path: string, label: string): { label: string; title: string } {
-  return { label, title: `Live repo status for ${path}: ${label}.` };
+  const translated = fileStatusLabel(label);
+  return {
+    label: translated,
+    title: `Estado en vivo del repositorio para ${path}: ${translated}.`,
+  };
+}
+
+function fileStatusLabel(label: string): string {
+  switch (label) {
+    case "staged":
+      return "preparado";
+    case "modified":
+      return "modificado";
+    case "untracked":
+      return "sin seguimiento";
+    default:
+      return label;
+  }
+}
+
+function changeKindLabel(kind: string): string {
+  switch (kind.toLocaleLowerCase()) {
+    case "added":
+      return "añadido";
+    case "created":
+      return "creado";
+    case "modified":
+      return "modificado";
+    case "removed":
+    case "deleted":
+      return "eliminado";
+    case "renamed":
+      return "renombrado";
+    default:
+      return kind;
+  }
+}
+
+function artifactKindLabel(kind: string): string {
+  return kind;
 }
 
 function pathListIncludes(paths: string[], path: string): boolean {
@@ -5273,7 +5363,10 @@ function findAgentLensDiff(
 
 function fileDiffSummary(path: string, diff: FileDiff): { label: string; title: string } {
   if (diff.is_binary) {
-    return { label: "Binary diff", title: `Live diff summary for ${path}: binary file diff.` };
+    return {
+      label: "Diff binario",
+      title: `Resumen del diff en vivo de ${path}: archivo binario.`,
+    };
   }
   const totals = diff.hunks.reduce(
     (acc, hunk) => {
@@ -5287,17 +5380,17 @@ function fileDiffSummary(path: string, diff: FileDiff): { label: string; title: 
   );
   return {
     label: `+${totals.added} / -${totals.removed}`,
-    title: `Live diff summary for ${path}: ${totals.added} added, ${totals.removed} removed.`,
+    title: `Resumen del diff en vivo de ${path}: ${totals.added} añadidas y ${totals.removed} eliminadas.`,
   };
 }
 
 function fileDiffPreview(diff: FileDiff): AgentLensFilePreview {
   if (diff.is_binary) {
     return {
-      summary: "Binary diff",
-      summaryTitle: `Selected-file preview summary for ${diff.path}: binary diff.`,
-      detail: "Binary file; hunk preview is unavailable.",
-      detailTitle: `Selected-file preview detail for ${diff.path}: binary file; hunk preview is unavailable.`,
+      summary: "Diff binario",
+      summaryTitle: `Resumen de la vista previa de ${diff.path}: diff binario.`,
+      detail: "Archivo binario; no se puede mostrar una vista previa de sus fragmentos.",
+      detailTitle: `Detalle de la vista previa de ${diff.path}: archivo binario sin vista previa de fragmentos.`,
     };
   }
   const totals = diff.hunks.reduce(
@@ -5311,17 +5404,17 @@ function fileDiffPreview(diff: FileDiff): AgentLensFilePreview {
     { added: 0, removed: 0 },
   );
   const firstHunk = diff.hunks[0];
-  const hunkLabel = diff.hunks.length === 1 ? "1 hunk" : `${diff.hunks.length} hunks`;
+  const hunkLabel = diff.hunks.length === 1 ? "1 fragmento" : `${diff.hunks.length} fragmentos`;
   const rangeLabel = firstHunk
-    ? `First hunk @@ -${firstHunk.old_start} +${firstHunk.new_start}`
-    : "No hunks";
+    ? `Primer fragmento @@ -${firstHunk.old_start} +${firstHunk.new_start}`
+    : "Sin fragmentos";
   return {
     summary: `${hunkLabel} - +${totals.added} / -${totals.removed}`,
-    summaryTitle: `Selected-file preview summary for ${diff.path}: ${hunkLabel}, ${totals.added} added, ${totals.removed} removed.`,
-    detail: diff.old_path ? `${rangeLabel}; renamed from ${diff.old_path}.` : `${rangeLabel}.`,
+    summaryTitle: `Resumen de la vista previa del archivo seleccionado ${diff.path}: ${hunkLabel}, ${totals.added} añadidas, ${totals.removed} eliminadas.`,
+    detail: diff.old_path ? `${rangeLabel}; renombrado desde ${diff.old_path}.` : `${rangeLabel}.`,
     detailTitle: diff.old_path
-      ? `Selected-file preview detail for ${diff.path}: ${rangeLabel}; renamed from ${diff.old_path}.`
-      : `Selected-file preview detail for ${diff.path}: ${rangeLabel}.`,
+      ? `Detalle de la vista previa del archivo seleccionado ${diff.path}: ${rangeLabel}; renombrado desde ${diff.old_path}.`
+      : `Detalle de la vista previa del archivo seleccionado ${diff.path}: ${rangeLabel}.`,
   };
 }
 
@@ -5402,7 +5495,7 @@ function agentLensTimelineItems(turns: AgentTurnView[], focusedTurnIndex: number
         items.push({
           id: `${turn.id}:user`,
           turnIndex: turn.index,
-          label: "You",
+          label: "Tú",
           timeLabel,
           text: compactActivityText(turn.userText),
         });
@@ -5420,7 +5513,7 @@ function agentLensTimelineItems(turns: AgentTurnView[], focusedTurnIndex: number
         items.push({
           id: `${turn.id}:command:${index}`,
           turnIndex: turn.index,
-          label: "Command",
+          label: "Comando",
           timeLabel,
           text: compactActivityText(text),
         });
@@ -5429,7 +5522,7 @@ function agentLensTimelineItems(turns: AgentTurnView[], focusedTurnIndex: number
         items.push({
           id: `${turn.id}:system:${index}`,
           turnIndex: turn.index,
-          label: "System",
+          label: "Sistema",
           timeLabel,
           text: compactActivityText(text),
         });
@@ -5474,33 +5567,35 @@ function agentSessionOverview(turns: AgentTurnView[]): AgentSessionOverviewView 
 }
 
 function turnMapTitle(turn: AgentSessionOverviewView["turnMap"][number]): string {
-  const parts = [`Turn ${turn.index}: ${turn.commands} commands, ${turn.files} files`];
-  if (turn.commandSummary) parts.push(`Recent command: ${turn.commandSummary}`);
+  const parts = [
+    `Turno ${turn.index}: ${countLabel(turn.commands, "comando", "comandos")}, ${countLabel(turn.files, "archivo", "archivos")}`,
+  ];
+  if (turn.commandSummary) parts.push(`Comando reciente: ${turn.commandSummary}`);
   return parts.join(" - ");
 }
 
 function turnMapIndexTitle(turnIndex: number): string {
-  return `Agent session overview turn-map label: turn ${turnIndex}.`;
+  return `Etiqueta del mapa de turnos del resumen de la sesión de Agent: turno ${turnIndex}.`;
 }
 
 function turnMapTimeTitle(turnIndex: number, timeLabel: string): string {
-  return `Agent session overview turn-map timing for turn ${turnIndex}: ${timeLabel}.`;
+  return `Tiempo del mapa de turnos del resumen de la sesión de Agent para el turno ${turnIndex}: ${timeLabel}.`;
 }
 
 function turnMapCommandCountTitle(turnIndex: number, commands: number): string {
-  return `Agent session overview turn-map command count for turn ${turnIndex}: ${overviewMetricCount(
-    "Commands",
+  return `Cantidad de comandos del mapa de turnos del resumen de la sesión de Agent para el turno ${turnIndex}: ${overviewMetricCount(
+    "Comandos",
     commands,
   )}.`;
 }
 
 function turnMapCommandSummaryTitle(turnIndex: number, commandSummary: string): string {
-  return `Agent session overview turn-map command summary for turn ${turnIndex}: ${commandSummary}.`;
+  return `Resumen de comandos del mapa de turnos de la sesión de Agent para el turno ${turnIndex}: ${commandSummary}.`;
 }
 
 function turnMapFileCountTitle(turnIndex: number, files: number): string {
-  return `Agent session overview turn-map file count for turn ${turnIndex}: ${overviewMetricCount(
-    "Files",
+  return `Cantidad de archivos del mapa de turnos del resumen de la sesión de Agent para el turno ${turnIndex}: ${overviewMetricCount(
+    "Archivos",
     files,
   )}.`;
 }
@@ -5517,10 +5612,10 @@ function agentActivitySummary(
 } {
   if (!session) {
     return {
-      title: "Loading agent session",
-      detail: "Connecting the workspace view to the agent runtime.",
-      checkpoint: "Checkpoint unknown",
-      throughput: "No stream yet",
+      title: "Cargando la sesión de Agent",
+      detail: "Conectando la vista del espacio de trabajo con la ejecución de Agent.",
+      checkpoint: "Punto de control desconocido",
+      throughput: "Sin transmisión aún",
       tone: "idle",
     };
   }
@@ -5529,15 +5624,15 @@ function agentActivitySummary(
   const changeCount = session.change_log?.length ?? 0;
   const checkpoint = session.checkpoint
     ? checkpointLabel(session.checkpoint.checkpoint_type)
-    : "No checkpoint";
+    : "Sin punto de control";
   const throughput =
     session.output_bytes_per_second != null
       ? `${Math.round(session.output_bytes_per_second)} B/s`
-      : "Stream quiet";
+      : "Transmisión en reposo";
   if (readOnly) {
     return {
-      title: "Archived transcript",
-      detail: `${changeCount} recorded changes. Session is read-only.`,
+      title: "Transcripción archivada",
+      detail: `${countLabel(changeCount, "cambio registrado", "cambios registrados")}. La sesión es de solo lectura.`,
       checkpoint,
       throughput,
       tone: "done",
@@ -5545,10 +5640,10 @@ function agentActivitySummary(
   }
   if (session.status === "failed" || session.status === "error") {
     return {
-      title: "Needs attention",
+      title: "Requiere atención",
       detail: session.error
         ? commandMessage(session.error)
-        : `${status}. Review the transcript and recent command output.`,
+        : `${status}. Revisa la transcripción y la salida de comandos reciente.`,
       checkpoint,
       throughput,
       tone: "failed",
@@ -5556,8 +5651,8 @@ function agentActivitySummary(
   }
   if (session.status === "completed" || session.status === "reverted") {
     return {
-      title: session.status === "reverted" ? "Changes reverted" : "Session complete",
-      detail: `${changeCount} changes tracked. ${turnState} turn state.`,
+      title: session.status === "reverted" ? "Cambios revertidos" : "Sesión completada",
+      detail: `${countLabel(changeCount, "cambio registrado", "cambios registrados")}. Estado del turno: ${turnState}.`,
       checkpoint,
       throughput,
       tone: "done",
@@ -5565,16 +5660,16 @@ function agentActivitySummary(
   }
   if (session.turn_status === "working" || session.status === "running") {
     return {
-      title: "Agent is working",
-      detail: `${turnState}. ${changeCount} changes tracked so far.`,
+      title: "Agent está trabajando",
+      detail: `${turnState}. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
       checkpoint,
       throughput,
       tone: "working",
     };
   }
   return {
-    title: "Ready for the next turn",
-    detail: `${turnState}. ${changeCount} changes tracked so far.`,
+    title: "Listo para el siguiente turno",
+    detail: `${turnState}. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
     checkpoint,
     throughput,
     tone: "idle",
@@ -5582,53 +5677,59 @@ function agentActivitySummary(
 }
 
 function agentActivityFactsTitle(): string {
-  return "Agent activity facts: turns, files, checkpoint, and stream throughput.";
+  return "Datos de actividad de Agent: turnos, archivos, punto de control y velocidad de transmisión.";
 }
 
 function agentActivityStripTitle(
   activity: ReturnType<typeof agentActivitySummary>,
   overview: AgentSessionOverviewView,
 ): string {
-  return `Agent activity strip: ${activity.title}; ${activity.detail}; ${overviewMetricCount(
-    "Turns",
+  return `Franja de actividad de Agent: ${activity.title}; ${activity.detail}; ${overviewMetricCount(
+    "Turnos",
     overview.turns,
-  )}, ${overviewMetricCount("Files", overview.files)}.`;
+  )}, ${overviewMetricCount("Archivos", overview.files)}.`;
 }
 
 function agentActivityMainTitle(activity: ReturnType<typeof agentActivitySummary>): string {
-  return `Agent activity main status: ${activity.title}.`;
+  return `Estado principal de actividad de Agent: ${activity.title}.`;
 }
 
 function agentActivityDotTitle(activity: ReturnType<typeof agentActivitySummary>): string {
-  return `Agent activity pulse: ${activity.tone} state.`;
+  const tone = {
+    idle: "en reposo",
+    working: "trabajando",
+    done: "completado",
+    failed: "fallido",
+  }[activity.tone];
+  return `Pulso de actividad de Agent: estado ${tone}.`;
 }
 
 function agentActivityTextGroupTitle(activity: ReturnType<typeof agentActivitySummary>): string {
-  return `Agent activity status text: ${activity.title}; ${activity.detail}`;
+  return `Texto de estado de actividad de Agent: ${activity.title}; ${activity.detail}`;
 }
 
 function agentActivityTitleLabelTitle(activity: ReturnType<typeof agentActivitySummary>): string {
-  return `Agent activity headline: ${activity.title}.`;
+  return `Titular de actividad de Agent: ${activity.title}.`;
 }
 
 function agentActivityDetailTitle(activity: ReturnType<typeof agentActivitySummary>): string {
-  return `Agent activity detail: ${activity.detail}`;
+  return `Detalle de actividad de Agent: ${activity.detail}`;
 }
 
 function agentActivityTurnsFactTitle(turns: number): string {
-  return `Agent activity turn count: ${turns} ${turns === 1 ? "turn" : "turns"}.`;
+  return `Cantidad de turnos de la actividad de Agent: ${countLabel(turns, "turno", "turnos")}.`;
 }
 
 function agentActivityFilesFactTitle(files: number): string {
-  return `Agent activity touched-file count: ${files} ${files === 1 ? "file" : "files"}.`;
+  return `Cantidad de archivos modificados por Agent: ${countLabel(files, "archivo", "archivos")}.`;
 }
 
 function agentActivityCheckpointFactTitle(checkpoint: string): string {
-  return `Agent activity checkpoint fact: ${checkpoint}.`;
+  return `Punto de control de la actividad de Agent: ${checkpoint}.`;
 }
 
 function agentActivityThroughputFactTitle(throughput: string): string {
-  return `Agent activity stream throughput fact: ${throughput}.`;
+  return `Velocidad de transmisión de la actividad de Agent: ${throughput}.`;
 }
 
 function latestActivityText(turn: AgentTurnView): string | null {
@@ -5677,7 +5778,7 @@ function scrollToAgentTurn(sessionId: string, turnIndex: number, block: ScrollLo
 
 async function writeClipboardText(text: string): Promise<void> {
   if (!navigator.clipboard?.writeText) {
-    throw new Error("Clipboard is not available in this window.");
+    throw new Error("El portapapeles no está disponible en esta ventana.");
   }
   await navigator.clipboard.writeText(text);
 }
@@ -5690,62 +5791,57 @@ function transcriptText(turns: AgentTurnView[]): string {
 function turnTranscriptText(turn: AgentTurnView, firstTurnAtMs: number | null): string {
   const timeLabel = turnTimeLabel(turn, firstTurnAtMs);
   const artifactSummary = turnArtifactSummaryText(turn.changes);
-  const parts: string[] = [`Turn ${turn.index}${timeLabel ? ` (${timeLabel})` : ""}`];
-  if (artifactSummary) parts.push(`Artifacts: ${artifactSummary}.`);
-  if (turn.userText) parts.push(`You:\n${turn.userText}`);
+  const parts: string[] = [`Turno ${turn.index}${timeLabel ? ` (${timeLabel})` : ""}`];
+  if (artifactSummary) parts.push(`Artefactos: ${artifactSummary}.`);
+  if (turn.userText) parts.push(`Tú:\n${turn.userText}`);
   turn.agentText.forEach((text) => parts.push(`Agent:\n${text}`));
-  turn.commandText.forEach((text) => parts.push(`Command:\n${text}`));
-  turn.systemText.forEach((text) => parts.push(`System:\n${text}`));
+  turn.commandText.forEach((text) => parts.push(`Comando:\n${text}`));
+  turn.systemText.forEach((text) => parts.push(`Sistema:\n${text}`));
   if (turn.changes.length > 0) {
     parts.push(
-      `Files:\n${turn.changes.map((change) => `- ${change.kind} ${change.path}`).join("\n")}`,
+      `Archivos:\n${turn.changes.map((change) => `- ${changeKindLabel(change.kind)} ${change.path}`).join("\n")}`,
     );
   }
   return parts.join("\n\n");
 }
 
 function focusedTurnHeadingLabelTitle(): string {
-  return "Focused turn heading label: Focused turn.";
+  return "Etiqueta de cabecera del turno seleccionado: Turno seleccionado.";
 }
 
 function focusedTurnIdleContainerTitle(): string {
-  return "Focused turn card container: no turn selected.";
+  return "Contenedor del turno seleccionado: no hay ningún turno seleccionado.";
 }
 
 function focusedTurnSelectedContainerTitle(turnIndex: number): string {
-  return `Focused turn card container: selected turn ${turnIndex}.`;
+  return `Contenedor del turno seleccionado: turno ${turnIndex}.`;
 }
 
 function focusedTurnIndexLabelTitle(turnIndex: number): string {
-  return `Focused turn index label: Turn ${turnIndex}.`;
+  return `Etiqueta de índice del turno seleccionado: Turno ${turnIndex}.`;
 }
 
 function focusedTurnIdleStatusLabelTitle(): string {
-  return "Focused turn idle status label: Idle.";
+  return "Etiqueta de estado del turno seleccionado: Inactivo.";
 }
 
 function focusedTurnEmptyStateLabelTitle(): string {
-  return "Focused turn empty-state label: No turn selected.";
-}
-
-function focusedTurnIdleHelperTitle(): string {
-  return "Focused turn idle helper text: the next agent response will appear as a navigable turn.";
+  return "Etiqueta del estado vacío del turno seleccionado: Ningún turno seleccionado.";
 }
 
 function focusedTurnFallbackTextTitle(turnIndex: number): string {
-  return `Focused turn selected fallback text: No text captured for turn ${turnIndex}.`;
+  return `Texto alternativo del turno seleccionado: no se registró texto para el turno ${turnIndex}.`;
 }
 
 function focusedTurnHiddenFileOverflowTitle(turnIndex: number, count: number): string {
-  const label = count === 1 ? "additional touched file" : "additional touched files";
-  return `Focused turn hidden file overflow: ${count} ${label} for turn ${turnIndex}.`;
+  return `Archivos adicionales ocultos del turno seleccionado: ${countLabel(count, "archivo modificado", "archivos modificados")} en el turno ${turnIndex}.`;
 }
 
 function focusedTurnFileRowTitle(
   turnIndex: number,
   change: { kind: string; path: string },
 ): string {
-  return `Focused turn touched file row for turn ${turnIndex}: ${change.kind} ${change.path}.`;
+  return `Fila de archivo modificado del turno seleccionado ${turnIndex}: ${changeKindLabel(change.kind)} ${change.path}.`;
 }
 
 function focusedTurnFilesContainerTitle(
@@ -5753,10 +5849,11 @@ function focusedTurnFilesContainerTitle(
   visibleCount: number,
   hiddenCount: number,
 ): string {
-  const visibleLabel = visibleCount === 1 ? "visible touched file" : "visible touched files";
-  const hiddenLabel = hiddenCount === 1 ? "hidden touched file" : "hidden touched files";
-  const hiddenText = hiddenCount > 0 ? `, plus ${hiddenCount} ${hiddenLabel}` : "";
-  return `Focused turn files container for turn ${turnIndex}: ${visibleCount} ${visibleLabel}${hiddenText}.`;
+  const hiddenText =
+    hiddenCount > 0
+      ? `, además de ${countLabel(hiddenCount, "archivo modificado oculto", "archivos modificados ocultos")}`
+      : "";
+  return `Contenedor de archivos del turno seleccionado ${turnIndex}: ${countLabel(visibleCount, "archivo modificado visible", "archivos modificados visibles")}${hiddenText}.`;
 }
 
 function focusedTurnRestoreContainerTitle(
@@ -5765,11 +5862,11 @@ function focusedTurnRestoreContainerTitle(
   restoreReady: boolean,
 ): string {
   if (!canRestore) {
-    return `Focused turn restore container for turn ${turnIndex}: stop the session before restoring.`;
+    return `Contenedor de restauración del turno seleccionado ${turnIndex}: detén la sesión antes de restaurar.`;
   }
   return restoreReady
-    ? `Focused turn restore container for turn ${turnIndex}: restore files and chat view to this turn.`
-    : `Focused turn restore container for turn ${turnIndex}: no completed restore checkpoint is available.`;
+    ? `Contenedor de restauración del turno seleccionado ${turnIndex}: restaura los archivos y la conversación a este turno.`
+    : `Contenedor de restauración del turno seleccionado ${turnIndex}: no hay ningún punto de restauración completado.`;
 }
 
 function focusedTurnRestoreButtonTitle(
@@ -5778,26 +5875,24 @@ function focusedTurnRestoreButtonTitle(
   restoreReady: boolean,
   restoring: boolean,
 ): string {
-  if (restoring) return `Restoring files and chat view to turn ${turnIndex}.`;
-  if (!canRestore) return `Restore turn ${turnIndex}: stop the session before restoring.`;
+  if (restoring) return `Restaurando los archivos y la conversación al turno ${turnIndex}.`;
+  if (!canRestore) return `Restaurar el turno ${turnIndex}: detén la sesión antes.`;
   if (!restoreReady) {
-    return `Restore turn ${turnIndex}: unavailable because this turn has no completed checkpoint.`;
+    return `No se puede restaurar el turno ${turnIndex} porque no tiene un punto de control completado.`;
   }
-  return `Restore turn ${turnIndex}: return files and chat view to this turn.`;
+  return `Restaurar los archivos y la conversación al turno ${turnIndex}.`;
 }
 
 function focusedTurnRestoreLabelTitle(restoring: boolean): string {
-  return restoring
-    ? "Focused turn restore label: Restoring."
-    : "Focused turn restore label: Restore here.";
+  return restoring ? "Restaurando el turno seleccionado." : "Restaurar en este turno.";
 }
 
 function focusedTurnTimeTitle(turnIndex: number, timeLabel: string): string {
-  return `Focused turn ${turnIndex} timing relative to the first turn: ${timeLabel}.`;
+  return `Tiempo del turno seleccionado ${turnIndex} respecto al primero: ${timeLabel}.`;
 }
 
 function turnTimeTitle(turnIndex: number, timeLabel: string): string {
-  return `Turn ${turnIndex} timing relative to the first turn: ${timeLabel}.`;
+  return `Tiempo del turno ${turnIndex} respecto al primero: ${timeLabel}.`;
 }
 
 function focusedTurnFactTitle(
@@ -5805,8 +5900,11 @@ function focusedTurnFactTitle(
   kind: "commands" | "files",
   count: number,
 ): string {
-  const label = count === 1 ? kind.slice(0, -1) : kind;
-  return `Focused turn ${turnIndex} has ${count} ${label}.`;
+  const label =
+    kind === "commands"
+      ? countLabel(count, "comando", "comandos")
+      : countLabel(count, "archivo", "archivos");
+  return `El turno seleccionado ${turnIndex} tiene ${label}.`;
 }
 
 function focusedTurnFactsContainerTitle(
@@ -5814,118 +5912,113 @@ function focusedTurnFactsContainerTitle(
   commandCount: number,
   fileCount: number,
 ): string {
-  const commandLabel = commandCount === 1 ? "command" : "commands";
-  const fileLabel = fileCount === 1 ? "file" : "files";
-  return `Focused turn facts container for turn ${turnIndex}: ${commandCount} ${commandLabel}, ${fileCount} ${fileLabel}.`;
+  return `Datos del turno seleccionado ${turnIndex}: ${countLabel(commandCount, "comando", "comandos")}, ${countLabel(fileCount, "archivo", "archivos")}.`;
 }
 
 function focusedTurnCommandSummaryContainerTitle(turnIndex: number): string {
-  return `Focused turn command-summary container for turn ${turnIndex}: 1 recent command summary.`;
+  return `Contenedor del resumen de comandos del turno seleccionado ${turnIndex}: 1 resumen de comando reciente.`;
 }
 
 function focusedTurnArtifactSummaryContainerTitle(
   turnIndex: number,
   categoryCount: number,
 ): string {
-  const categoryLabel = categoryCount === 1 ? "artifact category chip" : "artifact category chips";
-  return `Focused turn artifact-summary container for turn ${turnIndex}: ${categoryCount} ${categoryLabel}.`;
+  return `Contenedor del resumen de artefactos del turno seleccionado ${turnIndex}: ${countLabel(categoryCount, "categoría", "categorías")}.`;
 }
 
 function focusedTurnLatestActivityTitle(turnIndex: number, latest: string): string {
-  return `Most recent captured activity for focused turn ${turnIndex}: ${compactActivityText(latest)}`;
+  return `Actividad registrada más reciente del turno seleccionado ${turnIndex}: ${compactActivityText(latest)}`;
 }
 
 function focusedTurnSummaryTitle(turn: AgentTurnView): string {
-  return `Focused turn ${turn.index} transcript, command, and file counts: ${turnSummaryLabel(turn)}.`;
+  return `Cantidad de mensajes, comandos y archivos del turno seleccionado ${turn.index}: ${turnSummaryLabel(turn)}.`;
 }
 
 function turnSummaryTitle(turn: AgentTurnView): string {
-  return `Turn ${turn.index} transcript, command, and file counts: ${turnSummaryLabel(turn)}.`;
+  return `Cantidad de mensajes, comandos y archivos del turno ${turn.index}: ${turnSummaryLabel(turn)}.`;
 }
 
 function conversationTurnContainerTitle(turn: AgentTurnView, focused: boolean): string {
-  const focusState = focused ? "focused" : "not focused";
-  return `Conversation turn card container for turn ${turn.index}: ${focusState}; ${turnSummaryLabel(turn)}.`;
+  const focusState = focused ? "seleccionado" : "no seleccionado";
+  return `Contenedor del turno ${turn.index} de la conversación: ${focusState}; ${turnSummaryLabel(turn)}.`;
 }
 
 function conversationTurnHeaderContainerTitle(turnIndex: number): string {
-  return `Conversation turn header container for turn ${turnIndex}: title, metadata, and copy control.`;
+  return `Cabecera del turno ${turnIndex} de la conversación: título, metadatos y control para copiar.`;
 }
 
 function conversationTurnTitleContainerTitle(turnIndex: number): string {
-  return `Conversation turn title container for turn ${turnIndex}: Turn label and transcript summary.`;
+  return `Título del turno ${turnIndex} de la conversación: etiqueta del turno y resumen de la transcripción.`;
 }
 
 function conversationTurnMetadataContainerTitle(turnIndex: number): string {
-  return `Conversation turn metadata container for turn ${turnIndex}: timing, touched-file count, and copy control.`;
+  return `Metadatos del turno ${turnIndex} de la conversación: tiempo, cantidad de archivos modificados y control para copiar.`;
 }
 
 function turnIndexLabelTitle(turnIndex: number): string {
-  return `Conversation turn index label: Turn ${turnIndex}.`;
+  return `Etiqueta de índice del turno de la conversación: Turno ${turnIndex}.`;
 }
 
 function turnTouchedFilesTitle(turnIndex: number, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  return `Turn ${turnIndex} touched ${count} ${fileLabel}.`;
+  return `El turno ${turnIndex} modificó ${countLabel(count, "archivo", "archivos")}.`;
 }
 
 function conversationTurnTouchedFilesContainerTitle(turnIndex: number, count: number): string {
-  const fileLabel = count === 1 ? "touched-file chip" : "touched-file chips";
-  return `Conversation turn touched-files container for turn ${turnIndex}: ${count} ${fileLabel}.`;
+  return `Archivos modificados del turno ${turnIndex} de la conversación: ${countLabel(count, "indicador", "indicadores")}.`;
 }
 
 function turnTouchedFileTitle(turnIndex: number, kind: string, path: string): string {
-  return `Touched file in turn ${turnIndex}: ${kind} ${path}.`;
+  return `Archivo modificado en el turno ${turnIndex}: ${changeKindLabel(kind)} ${path}.`;
 }
 
 function agentLensFileTitle(turnIndex: number | null, kind: string, path: string): string {
-  const scope = turnIndex ? `turn ${turnIndex}` : "the session";
-  return `Agent Lens touched file for ${scope}: ${kind} ${path}.`;
+  const scope = turnIndex ? `el turno ${turnIndex}` : "la sesión";
+  return `Archivo modificado de Agent Lens para ${scope}: ${changeKindLabel(kind)} ${path}.`;
 }
 
 function agentLensFileScopeMetaTitle(turnIndex: number | null, timeLabel: string | null): string {
-  const timing = timeLabel ? ` at ${timeLabel}` : "";
+  const timing = timeLabel ? ` en ${timeLabel}` : "";
   if (turnIndex) {
-    return `Agent Lens file row timing: turn ${turnIndex}${timing}.`;
+    return `Tiempo de la fila de archivo de Agent Lens: turno ${turnIndex}${timing}.`;
   }
-  return `Agent Lens file row scope: session change log${timing}.`;
+  return `Ámbito de la fila de archivo de Agent Lens: registro de cambios de la sesión${timing}.`;
 }
 
 function agentLensFilePathMetaTitle(path: string): string {
-  return `Agent Lens file row path: ${path}.`;
+  return `Ruta de la fila de archivo de Agent Lens: ${path}.`;
 }
 
 function agentLensFileKindMetaTitle(kind: AgentLensArtifactKind, changeKind: string): string {
-  return `${kind} Agent Lens file row change type: ${changeKind}.`;
+  return `Tipo de cambio de la fila de archivo ${kind} de Agent Lens: ${changeKindLabel(changeKind)}.`;
 }
 
 function agentLensFileActionsTitle(path: string, canShowRevert: boolean): string {
   const controls = canShowRevert
-    ? "preview, open, ask, and revert controls"
-    : "preview, open, and ask controls";
-  return `Agent Lens file actions for ${path}: ${controls}.`;
+    ? "vista previa, abrir, preguntar y revertir"
+    : "vista previa, abrir y preguntar";
+  return `Acciones de Agent Lens para ${path}: ${controls}.`;
 }
 
 function agentLensFileActionLabelTitle(label: string): string {
-  return `Agent Lens file action label: ${label}.`;
+  return `Etiqueta de acción de archivo de Agent Lens: ${label}.`;
 }
 
 function agentLensPreviewActionTitle(path: string, isSelected: boolean): string {
   return isSelected
-    ? `Previewing Agent Lens details for ${path}.`
-    : `Preview Agent Lens details for ${path}.`;
+    ? `Se muestran los detalles de ${path} en Agent Lens.`
+    : `Mostrar los detalles de ${path} en Agent Lens.`;
 }
 
 function agentLensOpenActionTitle(path: string, hasRepo: boolean): string {
   return hasRepo
-    ? `Open ${path} from Agent Lens in the workspace.`
-    : `Cannot open ${path} because the session repo is unavailable.`;
+    ? `Abrir ${path} desde Agent Lens en el espacio de trabajo.`
+    : `No se puede abrir ${path} porque el repositorio de la sesión no está disponible.`;
 }
 
 function agentLensAskActionTitle(path: string, canPrompt: boolean): string {
   return canPrompt
-    ? `Draft an Agent Lens follow-up prompt for ${path}.`
-    : `Cannot draft an Agent Lens prompt for ${path} because the session is archived or inactive.`;
+    ? `Preparar un prompt de seguimiento de Agent Lens para ${path}.`
+    : `No se puede preparar un prompt para ${path} porque la sesión está archivada o inactiva.`;
 }
 
 function agentLensRevertActionTitle(
@@ -5934,51 +6027,46 @@ function agentLensRevertActionTitle(
   canRevert: boolean,
   isReverting: boolean,
 ): string {
-  const scope = turnIndex ? `turn ${turnIndex}` : "this turn";
-  if (isReverting) return `Reverting ${path} from ${scope}.`;
+  const scope = turnIndex ? `el turno ${turnIndex}` : "este turno";
+  if (isReverting) return `Revirtiendo ${path} desde ${scope}.`;
   return canRevert
-    ? `Revert ${path} from ${scope} checkpoint.`
-    : `Stop the session before reverting ${path}.`;
+    ? `Revertir ${path} al punto de control de ${scope}.`
+    : `Detén la sesión antes de revertir ${path}.`;
 }
 
 function agentLensFileGroupCountTitle(kind: AgentLensArtifactKind, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  return `${kind} artifact group contains ${count} ${fileLabel}.`;
+  return `El grupo de artefactos ${kind} contiene ${countLabel(count, "archivo", "archivos")}.`;
 }
 
 function agentLensFileGroupTitle(kind: AgentLensArtifactKind, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  return `Agent Lens ${kind} file group contains ${count} touched ${fileLabel}.`;
+  return `El grupo de archivos ${kind} de Agent Lens contiene ${countLabel(count, "archivo modificado", "archivos modificados")}.`;
 }
 
 function agentLensFileGroupHeaderTitle(kind: AgentLensArtifactKind, count: number): string {
-  const fileLabel = count === 1 ? "file" : "files";
-  return `${kind} Agent Lens group heading for ${count} touched ${fileLabel}.`;
+  return `Cabecera del grupo ${kind} de Agent Lens para ${countLabel(count, "archivo modificado", "archivos modificados")}.`;
 }
 
 function agentLensFileGroupKindLabelTitle(kind: AgentLensArtifactKind): string {
-  return `Agent Lens file group kind label: ${kind}.`;
+  return `Etiqueta del tipo de grupo de archivos de Agent Lens: ${kind}.`;
 }
 
 function turnCommandSummaryTitle(turnIndex: number, commandSummary: string): string {
-  return `Compact recent command output summary for turn ${turnIndex}: ${commandSummary}`;
+  return `Resumen compacto de la salida de comandos reciente del turno ${turnIndex}: ${commandSummary}`;
 }
 
 function turnCommandSummaryContainerTitle(turnIndex: number): string {
-  return `Conversation turn command-summary container for turn ${turnIndex}: 1 recent command summary.`;
+  return `Resumen de comandos del turno ${turnIndex} de la conversación: 1 resumen de comando reciente.`;
 }
 
 function turnArtifactSummaryContainerTitle(turnIndex: number, categoryCount: number): string {
-  const categoryLabel = categoryCount === 1 ? "artifact category chip" : "artifact category chips";
-  return `Conversation turn artifact-summary container for turn ${turnIndex}: ${categoryCount} ${categoryLabel}.`;
+  return `Resumen de artefactos del turno ${turnIndex} de la conversación: ${countLabel(categoryCount, "categoría", "categorías")}.`;
 }
 
 function turnArtifactSummaryChipTitle(
   turnIndex: number,
   item: { kind: AgentLensArtifactKind; count: number },
 ): string {
-  const fileLabel = item.count === 1 ? "file" : "files";
-  return `${item.kind} artifacts touched in turn ${turnIndex}: ${item.count} ${fileLabel}.`;
+  return `Artefactos ${item.kind} modificados en el turno ${turnIndex}: ${countLabel(item.count, "archivo", "archivos")}.`;
 }
 
 function fileActionPrompt({
@@ -5988,13 +6076,13 @@ function fileActionPrompt({
   artifactKind,
   hunkSummary,
 }: AgentLensFilePromptContext): string {
-  const scope = turnIndex ? `turn ${turnIndex}` : "this session";
+  const scope = turnIndex ? `turno ${turnIndex}` : "esta sesión";
   return [
-    `Focus on ${path}.`,
-    `It was ${kind} in ${scope}.`,
-    `Artifact category: ${artifactKind}.`,
-    ...(hunkSummary ? [`Diff summary: ${hunkSummary}.`] : []),
-    "Inspect the relevant file context, explain what still needs attention, and propose the next concrete edit or verification step.",
+    `Céntrate en ${path}.`,
+    `Este archivo figura como ${changeKindLabel(kind)} en ${scope}.`,
+    `Categoría del artefacto: ${artifactKind}.`,
+    ...(hunkSummary ? [`Resumen del diff: ${hunkSummary}.`] : []),
+    "Revisa el contexto relevante del archivo, explica qué necesita atención todavía y propón el siguiente cambio o paso de verificación concreto.",
   ].join("\n");
 }
 
@@ -6004,9 +6092,13 @@ function turnSummaryLabel(turn: AgentTurnView): string {
     turn.agentText.length +
     turn.systemText.length +
     turn.commandText.length;
-  const parts = [`${messages} messages`];
-  if (turn.commandText.length > 0) parts.push(`${turn.commandText.length} commands`);
-  if (turn.changes.length > 0) parts.push(`${turn.changes.length} files`);
+  const parts = [countLabel(messages, "mensaje", "mensajes")];
+  if (turn.commandText.length > 0) {
+    parts.push(countLabel(turn.commandText.length, "comando", "comandos"));
+  }
+  if (turn.changes.length > 0) {
+    parts.push(countLabel(turn.changes.length, "archivo", "archivos"));
+  }
   return parts.join(" / ");
 }
 
@@ -6045,7 +6137,7 @@ function filterAgentTurns(turns: AgentTurnView[], query: string): AgentTurnView[
 }
 
 function turnNoun(count: number): string {
-  return count === 1 ? "turn" : "turns";
+  return count === 1 ? "turno" : "turnos";
 }
 
 function transcriptSearchNavigationTitle(
@@ -6053,14 +6145,15 @@ function transcriptSearchNavigationTitle(
   hasQuery: boolean,
   matchCount: number,
 ): string {
-  const label = direction === "previous" ? "Previous" : "Next";
-  if (!hasQuery) return `Search transcript to enable ${label.toLowerCase()} result navigation.`;
-  if (matchCount < 2) return `${label} result navigation needs at least two matching turns.`;
-  return `${label} search result`;
+  const label = direction === "previous" ? "anterior" : "siguiente";
+  if (!hasQuery) return `Busca en la transcripción para navegar al resultado ${label}.`;
+  if (matchCount < 2)
+    return `Se necesitan al menos dos turnos coincidentes para ir al resultado ${label}.`;
+  return `Ir al resultado ${label}`;
 }
 
 function transcriptSearchNavigationLabelTitle(direction: "previous" | "next"): string {
-  return `Transcript search navigation label: ${direction} result.`;
+  return `Etiqueta de navegación de la búsqueda en la transcripción: resultado ${direction === "previous" ? "anterior" : "siguiente"}.`;
 }
 
 function transcriptCopyButtonTitle(
@@ -6068,11 +6161,11 @@ function transcriptCopyButtonTitle(
   visibleCount: number,
   totalCount: number,
 ): string {
-  if (visibleCount === 0) return "No visible transcript turns to copy.";
+  if (visibleCount === 0) return "No hay turnos visibles que copiar.";
   if (hasQuery) {
-    return `Copy ${visibleCount} filtered transcript ${turnNoun(visibleCount)} out of ${totalCount} total ${turnNoun(totalCount)}.`;
+    return `Copiar ${visibleCount} ${turnNoun(visibleCount)} filtrados de ${totalCount} en total.`;
   }
-  return `Copy all ${totalCount} transcript ${turnNoun(totalCount)}.`;
+  return `Copiar los ${totalCount} ${turnNoun(totalCount)} de la transcripción.`;
 }
 
 function latestTurnButtonTitle(
@@ -6080,19 +6173,21 @@ function latestTurnButtonTitle(
   visibleCount: number,
   totalCount: number,
 ): string {
-  if (visibleCount === 0) return "No visible transcript turns to jump to.";
+  if (visibleCount === 0) return "No hay turnos visibles a los que ir.";
   if (hasQuery) {
-    return `Jump to the latest filtered transcript turn out of ${totalCount} total ${turnNoun(totalCount)}.`;
+    return `Ir al último turno filtrado de ${totalCount} ${turnNoun(totalCount)} en total.`;
   }
-  return `Jump to the latest of ${totalCount} transcript ${turnNoun(totalCount)}.`;
+  return `Ir al último de los ${totalCount} ${turnNoun(totalCount)} de la transcripción.`;
 }
 
-function transcriptSecondaryActionLabelTitle(label: "Latest" | "Copy visible" | "Copied"): string {
-  return `Transcript secondary action label: ${label}.`;
+function transcriptSecondaryActionLabelTitle(
+  label: "Último" | "Copiar lo visible" | "Copiado",
+): string {
+  return `Acción secundaria de la transcripción: ${label}.`;
 }
 
 function transcriptClearSearchLabelTitle(): string {
-  return "Transcript clear-search label: Clear search.";
+  return "Borrar la búsqueda de la transcripción.";
 }
 
 function transcriptToolsContainerTitle(
@@ -6102,14 +6197,14 @@ function transcriptToolsContainerTitle(
 ): string {
   if (hasQuery) {
     if (visibleCount === 0) {
-      return `Agent transcript tools: search active with no matching turns out of ${totalCount} total ${turnNoun(totalCount)}.`;
+      return `Herramientas de la transcripción de Agent: búsqueda activa sin turnos coincidentes entre ${totalCount} ${turnNoun(totalCount)} en total.`;
     }
-    return `Agent transcript tools: search active with ${visibleCount} matching ${turnNoun(visibleCount)} out of ${totalCount} total ${turnNoun(totalCount)}.`;
+    return `Herramientas de la transcripción de Agent: búsqueda activa con ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
   }
   if (totalCount === 0) {
-    return "Agent transcript tools: search, result navigation, latest, and copy controls waiting for transcript turns.";
+    return "Herramientas de la transcripción de Agent: búsqueda, navegación por resultados y controles para ir al último turno y copiar, a la espera de turnos.";
   }
-  return `Agent transcript tools: search, result navigation, latest, and copy controls for all ${totalCount} transcript ${turnNoun(totalCount)}.`;
+  return `Herramientas de la transcripción de Agent: búsqueda, navegación por resultados y controles para ir al último turno y copiar los ${totalCount} ${turnNoun(totalCount)}.`;
 }
 
 function transcriptSecondaryActionsTitle(
@@ -6119,14 +6214,14 @@ function transcriptSecondaryActionsTitle(
 ): string {
   if (visibleCount === 0) {
     if (hasQuery) {
-      return `Transcript secondary actions: no matching transcript turns to jump to or copy out of ${totalCount} total ${turnNoun(totalCount)}.`;
+      return `Acciones secundarias de la transcripción: no hay turnos coincidentes a los que ir o que copiar entre ${totalCount} ${turnNoun(totalCount)} en total.`;
     }
-    return "Transcript secondary actions: latest-turn jump and copy-visible controls waiting for transcript turns.";
+    return "Acciones secundarias de la transcripción: controles para ir al último turno y copiar lo visible, a la espera de turnos.";
   }
   if (hasQuery) {
-    return `Transcript secondary actions: latest filtered-turn jump and copy ${visibleCount} filtered transcript ${turnNoun(visibleCount)} out of ${totalCount} total ${turnNoun(totalCount)}.`;
+    return `Acciones secundarias de la transcripción: ir al último turno filtrado y copiar ${visibleCount} ${turnNoun(visibleCount)} filtrados de ${totalCount} en total.`;
   }
-  return `Transcript secondary actions: latest-turn jump and copy all ${totalCount} transcript ${turnNoun(totalCount)}.`;
+  return `Acciones secundarias de la transcripción: ir al último turno y copiar los ${totalCount} ${turnNoun(totalCount)}.`;
 }
 
 function transcriptSearchContainerTitle(
@@ -6136,19 +6231,19 @@ function transcriptSearchContainerTitle(
 ): string {
   if (hasQuery) {
     if (visibleCount === 0) {
-      return `Transcript search: no matching turns out of ${totalCount} total ${turnNoun(totalCount)}.`;
+      return `Búsqueda en la transcripción: ningún turno coincide entre ${totalCount} ${turnNoun(totalCount)} en total.`;
     }
-    return `Transcript search: ${visibleCount} matching ${turnNoun(visibleCount)} out of ${totalCount} total ${turnNoun(totalCount)}.`;
+    return `Búsqueda en la transcripción: ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
   }
-  return `Transcript search: find messages, commands, and files across ${totalCount} transcript ${turnNoun(totalCount)}.`;
+  return `Búsqueda en la transcripción: encuentra mensajes, comandos y archivos entre ${totalCount} ${turnNoun(totalCount)}.`;
 }
 
 function transcriptSearchLabelTitle(): string {
-  return "Transcript search label: Search transcript.";
+  return "Buscar en la transcripción.";
 }
 
 function transcriptSearchInputTitle(): string {
-  return "Transcript search input placeholder: Find messages, commands, files. Press Escape to clear the search.";
+  return "Busca mensajes, comandos o archivos. Pulsa Escape para borrar la búsqueda.";
 }
 
 function transcriptSearchCountTitle(
@@ -6157,16 +6252,16 @@ function transcriptSearchCountTitle(
   totalCount: number,
 ): string {
   if (hasQuery) {
-    return `Transcript search count: ${visibleCount} matching ${turnNoun(visibleCount)} out of ${totalCount} total ${turnNoun(totalCount)}.`;
+    return `Cantidad de resultados de la búsqueda en la transcripción: ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
   }
-  return `Transcript search count: showing all ${totalCount} transcript ${turnNoun(totalCount)}.`;
+  return `Cantidad de resultados de la búsqueda en la transcripción: se muestran los ${totalCount} ${turnNoun(totalCount)}.`;
 }
 
 function activeSearchResultPositionTitle(activeIndex: number, matchCount: number): string {
   if (activeIndex >= 0) {
-    return `Active transcript search position: result ${activeIndex + 1} of ${matchCount} matching ${turnNoun(matchCount)}.`;
+    return `Posición activa de la búsqueda en la transcripción: resultado ${activeIndex + 1} de ${matchCount} ${turnNoun(matchCount)} coincidentes.`;
   }
-  return `Active transcript search position: no result selected out of ${matchCount} matching ${turnNoun(matchCount)}.`;
+  return `Posición activa de la búsqueda en la transcripción: ningún resultado seleccionado entre ${matchCount} ${turnNoun(matchCount)} coincidentes.`;
 }
 
 function conversationContainerTitle(
@@ -6177,36 +6272,36 @@ function conversationContainerTitle(
 ): string {
   if (visibleCount === 0) {
     if (hasQuery) {
-      return `Agent conversation transcript: no matching turns out of ${totalCount} total ${turnNoun(totalCount)}.`;
+      return `Transcripción de la conversación con Agent: ningún turno coincide entre ${totalCount} ${turnNoun(totalCount)} en total.`;
     }
     return readOnly
-      ? "Agent conversation transcript: no saved turns."
-      : "Agent conversation transcript: ready for the first turn.";
+      ? "Transcripción de la conversación con Agent: no hay turnos guardados."
+      : "Transcripción de la conversación con Agent: lista para el primer turno.";
   }
   if (hasQuery) {
-    return `Agent conversation transcript: ${visibleCount} matching ${turnNoun(visibleCount)} out of ${totalCount} total ${turnNoun(totalCount)}.`;
+    return `Transcripción de la conversación con Agent: ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
   }
-  return `Agent conversation transcript: showing all ${totalCount} ${turnNoun(totalCount)}.`;
+  return `Transcripción de la conversación con Agent: se muestran los ${totalCount} ${turnNoun(totalCount)}.`;
 }
 
 function turnCopyButtonTitle(turnIndex: number, copied: boolean): string {
   return copied
-    ? `Copied full transcript for turn ${turnIndex} to clipboard.`
-    : `Copy full transcript for turn ${turnIndex}, including messages, commands, and touched files.`;
+    ? `Transcripción completa del turno ${turnIndex} copiada al portapapeles.`
+    : `Copiar la transcripción completa del turno ${turnIndex}, incluidos mensajes, comandos y archivos modificados.`;
 }
 
-function turnCopyLabelTitle(label: "Copy turn" | "Copied"): string {
-  return `Conversation turn copy label: ${label}.`;
+function turnCopyLabelTitle(label: "Copiar turno" | "Copiado"): string {
+  return `Acción para copiar el turno de la conversación: ${label}.`;
 }
 
 function messageCopyButtonTitle(turnIndex: number, label: string, copied: boolean): string {
   return copied
-    ? `Copied ${label} message from turn ${turnIndex} to clipboard.`
-    : `Copy ${label} message from turn ${turnIndex}.`;
+    ? `Mensaje de ${label} del turno ${turnIndex} copiado al portapapeles.`
+    : `Copiar el mensaje de ${label} del turno ${turnIndex}.`;
 }
 
-function messageCopyLabelTitle(label: "Copy" | "Copied"): string {
-  return `Message block copy label: ${label}.`;
+function messageCopyLabelTitle(label: "Copiar" | "Copiado"): string {
+  return `Acción para copiar el mensaje: ${label}.`;
 }
 
 function agentTurnSearchText(turn: AgentTurnView): string {
@@ -6228,20 +6323,20 @@ function agentTurnSearchMatches(
   return [
     {
       key: "message",
-      label: "Message match",
-      title: "Search matched message text in this turn",
+      label: "Coincidencia en mensaje",
+      title: "La búsqueda coincide con el texto de un mensaje de este turno",
       text: agentTurnMessageSearchText(turn),
     },
     {
       key: "command",
-      label: "Command match",
-      title: "Search matched command output or its compact summary",
+      label: "Coincidencia en comando",
+      title: "La búsqueda coincide con la salida de un comando o su resumen",
       text: agentTurnCommandSearchText(turn),
     },
     {
       key: "file",
-      label: "File match",
-      title: "Search matched a touched file, file status, or artifact category",
+      label: "Coincidencia en archivo",
+      title: "La búsqueda coincide con un archivo modificado, su estado o su categoría",
       text: agentTurnFileSearchText(turn),
     },
   ].filter((match) => match.text.toLocaleLowerCase().includes(normalized));
@@ -6449,34 +6544,34 @@ function stripAnsi(text: string): string {
 
 function commandMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
-    return String((error as { message?: unknown }).message ?? "Agent command failed.");
+    return String((error as { message?: unknown }).message ?? "Falló el comando de Agent.");
   }
-  return String(error || "Agent command failed.");
+  return String(error || "Falló el comando de Agent.");
 }
 
 function turnStatusLabel(status: string): string {
   switch (status) {
     case "working":
-      return "Working";
+      return "Trabajando";
     case "settling":
-      return "Settling";
+      return "Finalizando";
     default:
-      return "Waiting";
+      return "En espera";
   }
 }
 
 function sessionStatusLabel(status: string): string {
   switch (status) {
     case "starting":
-      return "Starting";
+      return "Iniciando";
     case "running":
-      return "Running";
+      return "En ejecución";
     case "completed":
-      return "Done";
+      return "Completada";
     case "failed":
-      return "Failed";
+      return "Fallida";
     case "reverted":
-      return "Reverted";
+      return "Revertida";
     case "error":
       return "Error";
     default:
@@ -6485,7 +6580,9 @@ function sessionStatusLabel(status: string): string {
 }
 
 function checkpointLabel(type: string): string {
-  return type === "git_ref" ? "git checkpoint" : "filesystem checkpoint";
+  return type === "git_ref"
+    ? "punto de control de Git"
+    : "punto de control del sistema de archivos";
 }
 
 function agentLabel(agentType: string): string {
@@ -6538,43 +6635,42 @@ function repoName(repo: string): string {
 
 function auditTitle(session: AgentSession): string {
   const pieces = [
-    `Status: ${session.status}`,
+    `Estado: ${sessionStatusLabel(session.status)}`,
     session.checkpoint
-      ? `Checkpoint: ${checkpointLabel(session.checkpoint.checkpoint_type)}`
+      ? `Punto de control: ${checkpointLabel(session.checkpoint.checkpoint_type)}`
       : null,
     session.checkpoint?.git_hash ? `Git: ${session.checkpoint.git_hash.slice(0, 12)}` : null,
-    `Changes: ${session.change_log?.length ?? 0}`,
-    `Age: ${Math.round(session.age_ms / 1000)}s`,
-    `Active sessions: ${session.active_sessions}`,
+    `Cambios: ${session.change_log?.length ?? 0}`,
+    `Antigüedad: ${Math.round(session.age_ms / 1000)}s`,
+    `Sesiones activas: ${session.active_sessions}`,
   ];
   return pieces.filter(Boolean).join(" / ");
 }
 
 function sessionStatusFacetTitle(status: AgentSession["status"]): string {
-  return `Agent session status facet: ${sessionStatusLabel(status)}.`;
+  return `Indicador de estado de la sesión de Agent: ${sessionStatusLabel(status)}.`;
 }
 
 function turnStatusFacetTitle(turnStatus: string): string {
-  return `Agent turn status facet: ${turnStatusLabel(turnStatus)}.`;
+  return `Indicador de estado del turno de Agent: ${turnStatusLabel(turnStatus)}.`;
 }
 
 function checkpointStatusFacetTitle(checkpointType: string | null | undefined): string {
   return checkpointType
-    ? `Agent checkpoint status facet: ${checkpointLabel(checkpointType)}.`
-    : "Agent checkpoint status facet: no checkpoint.";
+    ? `Indicador de estado del punto de control de Agent: ${checkpointLabel(checkpointType)}.`
+    : "Indicador de estado del punto de control de Agent: sin punto de control.";
 }
 
 function changeLogStatusFacetTitle(count: number): string {
-  const changeLabel = count === 1 ? "change" : "changes";
-  return `Agent change-log status facet: ${count} ${changeLabel}.`;
+  return `Indicador del registro de cambios de Agent: ${countLabel(count, "cambio", "cambios")}.`;
 }
 
 function loadingSessionStatusTitle(): string {
-  return "Agent session status strip: loading session.";
+  return "Franja de estado de la sesión de Agent: cargando la sesión.";
 }
 
 function loadingSessionStatusLabelTitle(): string {
-  return "Agent session status-strip label: Loading session.";
+  return "Etiqueta de la franja de estado de la sesión de Agent: Cargando sesión.";
 }
 
 function cancelPanelCloseStop(sessionId: string) {
