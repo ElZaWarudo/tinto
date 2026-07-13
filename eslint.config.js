@@ -5,7 +5,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
-  { ignores: ["dist/", "src-tauri/target/", "node_modules/"] },
+  { ignores: [".ci-artifacts/", "dist/", "src-tauri/target/", "node_modules/"] },
   {
     files: ["src/**/*.{ts,tsx}", "vite.config.ts"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
