@@ -96,6 +96,9 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
     head: null,
     last_activity_ms: 1000,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -127,7 +130,7 @@ describe("FileView", () => {
     render(<FileView repo={REPO} path={PATH} />);
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
 
-    const body = screen.getByRole("region", { name: `${PATH} file contents` });
+    const body = screen.getByRole("region", { name: `Contenido del archivo ${PATH}` });
     expect(body).toHaveAttribute("tabindex", "0");
     body.focus();
     expect(document.activeElement).toBe(body);
@@ -166,10 +169,15 @@ describe("FileView", () => {
     worktree = { value: [fileDiff(PATH, "code")] };
     render(<FileView repo={REPO} path={PATH} />);
     expect(await screen.findByText("code")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Full file"));
+    const changesButton = screen.getByRole("button", { name: "Cambios" });
+    const fullFileButton = screen.getByRole("button", { name: "Archivo completo" });
+    expect(changesButton).toHaveAttribute("aria-pressed", "true");
+    expect(fullFileButton).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(fullFileButton);
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
-    expect(screen.getByText("Inline")).toBeDisabled();
-    fireEvent.click(screen.getByText("Hunks"));
+    expect(fullFileButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("En línea")).toBeDisabled();
+    fireEvent.click(changesButton);
     expect(await screen.findByText("code")).toBeInTheDocument();
   });
 
@@ -204,7 +212,10 @@ describe("FileView", () => {
 
     const labels = Array.from(container.querySelectorAll(".line-marker-label--hunk"));
     expect(labels).toHaveLength(2);
-    expect(labels.map((label) => label.textContent)).toEqual(["~Changed lines", "~Changed lines"]);
+    expect(labels.map((label) => label.textContent)).toEqual([
+      "~Líneas modificadas",
+      "~Líneas modificadas",
+    ]);
   });
 
   it("prefers backend secret findings for overview markers when present", async () => {
@@ -262,7 +273,14 @@ describe("FileView", () => {
     render(<FileView repo={REPO} path="README.md" />);
     expect(await screen.findByTestId("markdown-view")).toBeInTheDocument();
     expect(screen.getByTestId("md-rendered")).toHaveTextContent("# Title");
-    fireEvent.click(screen.getByText("Fuente"));
+    expect(screen.getByRole("button", { name: "Formateado" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const sourceButton = screen.getByRole("button", { name: "Fuente" });
+    expect(sourceButton).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(sourceButton);
+    expect(sourceButton).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
   });
 
@@ -275,9 +293,9 @@ describe("FileView", () => {
     render(<FileView repo={REPO} path="README.md" />);
 
     expect(await screen.findByTestId("md-error")).toHaveTextContent(
-      "Could not load file: child_exit: el agente WSL cerro stdout",
+      "No se pudo cargar el archivo: child_exit: el agente WSL cerro stdout",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
     expect(await screen.findByTestId("markdown-view")).toBeInTheDocument();
   });
 
@@ -292,8 +310,8 @@ describe("FileView", () => {
   it("renders visual media with the media preview surface", async () => {
     render(<FileView repo={REPO} path="brand/logo.png" />);
     expect(await screen.findByTestId("image-view")).toBeInTheDocument();
-    expect(screen.getByTestId("media-mode")).toHaveTextContent("Image preview");
-    expect(screen.queryByText("Hunks")).not.toBeInTheDocument();
+    expect(screen.getByTestId("media-mode")).toHaveTextContent("Vista previa de la imagen");
+    expect(screen.queryByText("Cambios")).not.toBeInTheDocument();
     expect(screen.queryByTestId("diff-paused")).not.toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("get_media_content", {
       repo: REPO,
@@ -306,7 +324,7 @@ describe("FileView", () => {
     mediaContent = { encoding: "base64", content: "JVBERi0x", truncated: false };
     render(<FileView repo={REPO} path="docs/spec.pdf" />);
     expect(await screen.findByTestId("pdf-view")).toBeInTheDocument();
-    expect(screen.getByTestId("media-mode")).toHaveTextContent("PDF preview");
+    expect(screen.getByTestId("media-mode")).toHaveTextContent("Vista previa del PDF");
   });
 
   it("a changed file loads the initial one-shot diff", async () => {
@@ -349,8 +367,9 @@ describe("FileView", () => {
     worktree = { value: [], reject: { category: "repo-not-allowed", message: "not allowed" } };
     render(<FileView repo={REPO} path={PATH} />);
     expect(await screen.findByTestId("diff-error")).toHaveTextContent(
-      "repo-not-allowed: not allowed",
+      "No se pudo cargar el diff (repo-not-allowed): not allowed",
     );
+    expect(screen.getByTestId("diff-error")).toHaveAttribute("role", "alert");
     worktree = { value: [fileDiff(PATH, "ok now")] };
     fireEvent.click(screen.getByTestId("diff-error-retry"));
     expect(await screen.findByText("ok now")).toBeInTheDocument();
@@ -366,7 +385,7 @@ describe("FileView", () => {
 
     render(<FileView repo={REPO} path={PATH} />);
     expect(await screen.findByTestId("diff-error")).toHaveTextContent(
-      "repo-not-allowed: not allowed",
+      "No se pudo cargar el diff (repo-not-allowed): not allowed",
     );
 
     worktree = { value: [] };

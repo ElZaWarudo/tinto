@@ -7,7 +7,9 @@ use std::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use super::{app_server::CodexAppServerHandle, AgentConsoleError};
-use crate::bus::contract::AgentSessionRuntimeOptions;
+use crate::{
+    bus::contract::AgentSessionRuntimeOptions, wsl_agent::shell_env::agent_console_script,
+};
 
 pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
 
@@ -234,7 +236,7 @@ pub(crate) fn build_wsl_agent_command(
     command.arg("--exec");
     command.arg("bash");
     command.arg("-lc");
-    command.arg(WSL_AGENT_CONSOLE_SCRIPT);
+    command.arg(agent_console_script());
     command.arg("tinto-agent-console");
     command.arg(working_dir.as_os_str());
     command.arg(agent_type);
@@ -244,70 +246,6 @@ pub(crate) fn build_wsl_agent_command(
     apply_terminal_env(&mut command);
     Ok(command)
 }
-
-const WSL_AGENT_CONSOLE_SCRIPT: &str = r#"set +u
-for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc"; do
-  if [ -r "$profile" ]; then
-    . "$profile" >/dev/null 2>&1 || true
-  fi
-done
-candidate_path="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-export TINTO_IADE=1
-export TINTO_IADE_NAME='Integrated Agentic Development Environment'
-export TINTO_TURN_DONE_MARKER='::tinto-turn-done::'
-native_path=
-old_ifs=$IFS
-IFS=':'
-for path_entry in $candidate_path; do
-  case "$path_entry" in
-    /mnt/[A-Za-z]/*) continue ;;
-  esac
-  if [ -n "$path_entry" ]; then
-    native_path="${native_path:+$native_path:}$path_entry"
-  fi
-done
-IFS=$old_ifs
-export PATH="$native_path"
-resolve_agent_binary() {
-  agent_name=$1
-  resolved=$(command -v -- "$agent_name" 2>/dev/null || true)
-  if [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]; then
-    printf '%s\n' "$resolved"
-    return 0
-  fi
-  if [ "$agent_name" = "codex" ]; then
-    link="$HOME/.local/bin/codex"
-    if [ -L "$link" ]; then
-      target=$(readlink "$link" || true)
-      root=${target%/*/*}
-      if [ -n "$root" ] && [ -d "$root" ]; then
-        candidate=$(find "$root" -mindepth 2 -maxdepth 2 -type f -name codex -perm -111 -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1s/^[^ ]* //p')
-        if [ -n "$candidate" ]; then
-          printf '%s\n' "$candidate"
-          return 0
-        fi
-      fi
-    fi
-  fi
-  return 1
-}
-cd "$1" || exit 127
-shift
-agent_name=$1
-shift
-attempts=20
-while [ "$attempts" -gt 0 ]; do
-  if resolved_agent=$(resolve_agent_binary "$agent_name"); then
-    exec "$resolved_agent" "$@"
-  fi
-  attempts=$((attempts - 1))
-  sleep 0.25
-done
-if ! resolved_agent=$(resolve_agent_binary "$agent_name"); then
-  printf 'Tinto: no se encontro un ejecutable nativo de %s en PATH dentro de WSL. Instala el agente en esta distro o crea un enlace ejecutable en ~/.local/bin.\n' "$agent_name" >&2
-  exit 127
-fi
-exec "$resolved_agent" "$@""#;
 
 fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
     if is_codex_binary(binary_path) {
@@ -452,7 +390,9 @@ mod tests {
             ]
         );
         assert!(argv[6].to_string_lossy().contains(".bashrc"));
-        assert!(argv[6].to_string_lossy().contains("command -v"));
+        assert!(argv[6].to_string_lossy().contains("$nvm_dir/nvm.sh"));
+        assert!(argv[6].to_string_lossy().contains("readlink -f"));
+        assert!(argv[6].to_string_lossy().contains("--version"));
         assert_eq!(
             &argv[7..],
             [

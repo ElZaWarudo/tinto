@@ -1,0 +1,17 @@
+{
+  "identifier": "dev.tinto.e2e",
+  "app": {
+    "windows": [],
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "e2e-wdio",
+          "description": "Test-only capability for the embedded WebDriver runner",
+          "windows": ["main"],
+          "permissions": ["core:default", "wdio-webdriver:default"]
+        }
+      ]
+    }
+  }
+}

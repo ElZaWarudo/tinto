@@ -28,6 +28,12 @@ function repoActivityMs(state: BusState, delta: RepoDelta): number {
   return state.activity[delta.repo] ?? delta.last_activity_ms;
 }
 
+function fsEventLabel(kind: FsEventKind): string {
+  if (kind === "created") return "creado";
+  if (kind === "removed") return "eliminado";
+  return "modificado";
+}
+
 export function buildTimelineEntries(
   state: BusState,
   displayName: (repo: string) => string,
@@ -42,8 +48,8 @@ export function buildTimelineEntries(
       repo: null,
       repoName: "Workbench",
       timestampMs: nowMs,
-      title: "Watching degraded",
-      detail: state.watching.reason ?? "Data is available on demand.",
+      title: "Supervisión degradada",
+      detail: state.watching.reason ?? "Los datos siguen disponibles bajo demanda.",
     });
   }
 
@@ -58,7 +64,7 @@ export function buildTimelineEntries(
         repo: delta.repo,
         repoName,
         timestampMs: activityMs,
-        title: `${delta.error.class} repo error`,
+        title: `Error ${delta.error.class} del repo`,
         detail: delta.error.message,
       });
     }
@@ -71,11 +77,11 @@ export function buildTimelineEntries(
         repo: delta.repo,
         repoName,
         timestampMs: activityMs,
-        title: "Working tree changed",
+        title: "Árbol de trabajo modificado",
         detail:
           signals.length > 0
-            ? `${statusSummary(delta.status)} · ${signals.length} passive signal${
-                signals.length === 1 ? "" : "s"
+            ? `${statusSummary(delta.status)} · ${signals.length} ${
+                signals.length === 1 ? "señal pasiva" : "señales pasivas"
               }`
             : statusSummary(delta.status),
       });
@@ -87,7 +93,7 @@ export function buildTimelineEntries(
           repo: delta.repo,
           repoName,
           timestampMs: activityMs,
-          title: "Dirty repo has gone quiet",
+          title: "Repo con cambios sin actividad reciente",
           detail: statusSummary(delta.status),
         });
       }
@@ -100,7 +106,7 @@ export function buildTimelineEntries(
         repo: delta.repo,
         repoName,
         timestampMs: event.timestamp_ms,
-        title: `Watched file ${event.kind}`,
+        title: `Archivo observado ${fsEventLabel(event.kind)}`,
         detail: event.path,
         path: event.path,
         fsKind: event.kind,

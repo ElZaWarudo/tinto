@@ -1,6 +1,6 @@
 ---
 title: Codex App Server Runtime Roadmap
-status: active
+status: delivered
 date: 2026-06-30
 source_docs:
   - docs/roadmaps/2026-06-27-006-agent-turn-checkpoints-roadmap.md

@@ -78,25 +78,25 @@ export function FullFileView({
 
   if (errorMessage) {
     return (
-      <div className="full-file full-file--error" data-testid="full-error">
-        <span>Could not load file: {errorMessage}</span>
+      <div className="full-file full-file--error" data-testid="full-error" role="alert">
+        <span>No se pudo cargar el archivo: {errorMessage}</span>
         <button type="button" onClick={() => setReloadToken((token) => token + 1)}>
-          Retry
+          Reintentar
         </button>
       </div>
     );
   }
   if (content === undefined) {
     return (
-      <div className="full-file full-file--loading" data-testid="full-loading">
-        Loading…
+      <div className="full-file full-file--loading" data-testid="full-loading" role="status">
+        Cargando…
       </div>
     );
   }
   if (content.encoding === "base64") {
     return (
       <div className="full-file full-file--binary" data-testid="full-binary">
-        Binary file — cannot show full content.
+        Archivo binario: no se puede mostrar el contenido completo.
       </div>
     );
   }
@@ -133,7 +133,7 @@ export function FullFileView({
       </pre>
       {content.truncated && (
         <div className="diff-view__notice" data-testid="full-truncated">
-          File truncated at the read limit — content beyond this point is not shown.
+          Archivo truncado en el límite de lectura; el contenido restante no se muestra.
         </div>
       )}
     </div>

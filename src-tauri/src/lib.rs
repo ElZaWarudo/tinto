@@ -3,6 +3,7 @@ pub mod bus;
 pub mod file_ops;
 pub mod git;
 pub mod paths;
+mod runtime_paths;
 pub mod ui_state;
 pub mod watcher;
 #[cfg(target_os = "windows")]
@@ -49,13 +50,27 @@ fn ping() -> PingResponse {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(feature = "e2e-wdio")]
+    {
+        let has_runner_marker = std::env::var("TINTO_E2E_WEBDRIVER").as_deref() == Ok("1");
+        let has_valid_port = std::env::var("TAURI_WEBDRIVER_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .is_some_and(|port| port > 0);
+        if !has_runner_marker || !has_valid_port {
+            eprintln!(
+                "tinto: refusing to start the E2E WebDriver build without its runner marker and port"
+            );
+            return;
+        }
+    }
+
     // Config corrupta o ilegible: la app arranca con config vacía en memoria
     // sin tocar el archivo (solo se sobreescribe si el usuario muta).
     let store = workbench::WorkbenchStore::open_default().unwrap_or_else(|e| {
         eprintln!("tinto: no se pudo cargar la config de workbenches: {e}");
-        let dir = dirs::config_dir()
-            .map(|d| d.join("tinto"))
-            .unwrap_or_else(std::env::temp_dir);
+        let dir = runtime_paths::tinto_config_dir()
+            .unwrap_or_else(|| std::env::temp_dir().join("tinto-unavailable-config"));
         workbench::WorkbenchStore::with_default_config(dir)
     });
 
@@ -70,9 +85,14 @@ pub fn run() {
     let agent_journal = agent_console::journal::AgentJournal::open_default()
         .expect("no se pudo abrir el diario SQLite de agentes");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+
+    #[cfg(feature = "e2e-wdio")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .manage(std::sync::Mutex::new(store))
         .manage(std::sync::Mutex::new(
             agent_console::AgentSessionRegistry::new(),
@@ -141,6 +161,25 @@ pub fn run() {
             ui_state::set_ui_state
         ])
         .setup(move |app| {
+            #[cfg(feature = "e2e-wdio")]
+            {
+                let data_dir = runtime_paths::e2e_webview_data_dir().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "TINTO_E2E_WEBVIEW_DATA_DIR is required for E2E builds",
+                    )
+                })?;
+                tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("Tinto")
+                .inner_size(800.0, 600.0)
+                .data_directory(data_dir)
+                .build()?;
+            }
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));

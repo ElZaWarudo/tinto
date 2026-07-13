@@ -12,6 +12,9 @@ function delta(repo: string, over: Partial<RepoDelta> = {}): RepoDelta {
     head: null,
     last_activity_ms: 1000,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -75,7 +78,7 @@ describe("timeline model", () => {
 
     const entries = buildTimelineEntries(store.getState(), () => "api", 5000);
 
-    expect(entries.find((e) => e.kind === "activity")?.detail).toContain("1 passive signal");
+    expect(entries.find((e) => e.kind === "activity")?.detail).toContain("1 señal pasiva");
   });
 
   it("includes Plane 2 file events without turning them into diffs", () => {

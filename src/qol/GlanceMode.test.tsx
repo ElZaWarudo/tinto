@@ -13,12 +13,16 @@ const delta = (repo: string, over: Partial<RepoDelta> = {}): RepoDelta => ({
   head: null,
   last_activity_ms: Date.now(),
   error: null,
+  metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+  gitleaks_configured: false,
+  agents_md_configured: false,
   ...over,
 });
 
 describe("GlanceMode", () => {
   beforeEach(() => {
     busStore.resetAll();
+    qualityStore.resetFilters();
   });
 
   it("summarizes visible repos, dirty repos, signals, and watcher state", () => {
@@ -48,9 +52,9 @@ describe("GlanceMode", () => {
 
     render(<GlanceMode />);
 
-    expect(screen.getByTestId("glance-mode")).toHaveTextContent("1 dirty repos");
-    expect(screen.getByText("Critical").parentElement).toHaveTextContent("1");
-    expect(screen.getByText("Watcher").parentElement).toHaveTextContent("degraded");
+    expect(screen.getByTestId("glance-mode")).toHaveTextContent("Con cambios1");
+    expect(screen.getByText("Críticas").parentElement).toHaveTextContent("1");
+    expect(screen.getByText("Supervisión").parentElement).toHaveTextContent("Degradado");
   });
 
   it("shows a no-match state for active filters", () => {
@@ -61,6 +65,8 @@ describe("GlanceMode", () => {
 
     render(<GlanceMode />);
 
-    expect(screen.getByTestId("glance-no-matches")).toHaveTextContent("No repos match");
+    expect(screen.getByTestId("glance-no-matches")).toHaveTextContent(
+      "Ningún repositorio coincide",
+    );
   });
 });

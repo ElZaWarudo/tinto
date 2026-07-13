@@ -73,7 +73,7 @@ export function DockWorkspace({
           api.addPanel({
             id: PANEL_DASHBOARD,
             component: PANEL_DASHBOARD,
-            title: "Dashboard",
+            title: "Resumen",
           });
         }
       });

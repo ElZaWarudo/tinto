@@ -75,13 +75,17 @@ function main() {
   const outPath = resolve(ROOT, OUT);
   if (process.argv.includes("--check")) {
     const existing = readFileSync(outPath, "utf8");
-    if (existing !== generated) {
+    if (normalizeLineEndings(existing) !== normalizeLineEndings(generated)) {
       console.error(`${OUT} is stale. Run: npm run contract:generate`);
       process.exit(1);
     }
     return;
   }
   writeFileSync(outPath, generated, "utf8");
+}
+
+function normalizeLineEndings(value) {
+  return value.replace(/\r\n/g, "\n");
 }
 
 function generate() {
@@ -111,11 +115,16 @@ function generate() {
     const item = parsed.get(name);
     chunks.push(renderItem(item), "");
   }
+  chunks.push(
+    "export interface GeneratedBusContractTypeMap {",
+    ...[...INCLUDE].map((name) => `  ${name}: ${name};`),
+    "}",
+  );
   return `${chunks.join("\n").trimEnd()}\n`;
 }
 
 function readSource(source) {
-  return readFileSync(resolve(ROOT, source), "utf8");
+  return normalizeLineEndings(readFileSync(resolve(ROOT, source), "utf8"));
 }
 
 function parseRustFile(source, text) {

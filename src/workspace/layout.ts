@@ -72,7 +72,7 @@ export async function saveUiState(layout: SerializedDockview): Promise<void> {
  * The repo/file explorer now lives in the fixed left sidebar, outside the dock. */
 export function buildDefaultLayout(api: DockviewApi): void {
   api.clear();
-  api.addPanel({ id: PANEL_DASHBOARD, component: PANEL_DASHBOARD, title: "Dashboard" });
+  api.addPanel({ id: PANEL_DASHBOARD, component: PANEL_DASHBOARD, title: "Resumen" });
 }
 
 /** Restore a persisted layout, falling back to the default if unusable or if it

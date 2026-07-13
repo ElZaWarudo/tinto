@@ -1,6 +1,6 @@
 ---
 title: Tinto - Complemento Windows-only para repos WSL
-status: active
+status: delivered
 date: 2026-06-23
 source_docs:
   - README.md

@@ -1,6 +1,6 @@
 ---
 title: Tinto — Roadmap de entrega
-status: active
+status: delivered
 date: 2026-06-10
 source_docs:
   - tinto-design.md

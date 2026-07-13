@@ -1,5 +1,5 @@
 import type { TerminalPanelParams } from "./TerminalPanel";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 const DETACHED_PARAM = "tintoDetachedTerminal";
 const DETACHED_CONSOLES_PARAM = "tintoDetachedConsoles";
@@ -193,7 +193,6 @@ export async function onDetachedConsolesOpenTerminal(
   callback: (params: TerminalPanelParams) => void,
 ): Promise<UnlistenFn> {
   try {
-    const { listen } = await import("@tauri-apps/api/event");
     return listen<TerminalPanelParams>(DETACHED_CONSOLES_OPEN_TERMINAL_EVENT, (event) => {
       callback(event.payload);
     });
@@ -207,7 +206,6 @@ export async function onDetachedConsolesOpenTerminal(
 
 export async function reattachDetachedConsoles(params: TerminalPanelParams[]): Promise<boolean> {
   try {
-    const { emit } = await import("@tauri-apps/api/event");
     await emit(DETACHED_CONSOLES_REATTACH_EVENT, params);
     return true;
   } catch (error) {
@@ -220,7 +218,6 @@ export async function onDetachedConsolesReattach(
   callback: (params: TerminalPanelParams[]) => void,
 ): Promise<UnlistenFn> {
   try {
-    const { listen } = await import("@tauri-apps/api/event");
     return listen<TerminalPanelParams[]>(DETACHED_CONSOLES_REATTACH_EVENT, (event) => {
       callback(event.payload);
     });

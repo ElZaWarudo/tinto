@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 
 // Avoid rendering dockview / hitting Tauri in jsdom.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -13,6 +13,10 @@ const detachedWindowMocks = vi.hoisted(() => ({
   openDetachedTerminalWindow: vi.fn<() => Promise<boolean>>(() => Promise.resolve(true)),
 }));
 
+const connectionMocks = vi.hoisted(() => ({
+  reloadActiveWorkbench: vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock("./panels/terminal/detachTerminalWindow", () => ({
   consumeTerminalDetachedMarker: vi.fn(() => false),
   markTerminalDetached: detachedWindowMocks.markTerminalDetached,
@@ -23,7 +27,7 @@ vi.mock("./panels/terminal/detachTerminalWindow", () => ({
 
 vi.mock("./bus/connection", () => ({
   useBusConnection: () => {},
-  reloadActiveWorkbench: vi.fn(),
+  reloadActiveWorkbench: connectionMocks.reloadActiveWorkbench,
 }));
 vi.mock("./panels/terminal/TerminalPanel", () => ({
   TerminalPanel: () => null,
@@ -44,7 +48,11 @@ vi.mock("./workspace/DockWorkspace", () => ({
   },
 }));
 
-import App, { detachConsolesPanel, detachConsolesPanelFromWorkspaceDrop } from "./App";
+import App from "./App";
+import {
+  detachConsolesPanel,
+  detachConsolesPanelFromWorkspaceDrop,
+} from "./workspace/detachConsoles";
 import { busStore } from "./bus/store";
 import { closePanelsForRemovedRepo } from "./workspace/closePanels";
 import { consoleDock } from "./workspace/consoleDock";
@@ -57,6 +65,8 @@ import {
   repoPanelId,
 } from "./workspace/panels";
 import type { WorkbenchConfig } from "./bus/contract";
+import { open } from "@tauri-apps/plugin-dialog";
+import { setWindowsHostOverrideForTests } from "./workbench/platform";
 
 describe("App", () => {
   beforeEach(() => {
@@ -68,20 +78,97 @@ describe("App", () => {
     detachedWindowMocks.onDetachedConsolesReattach.mockResolvedValue(() => {});
     detachedWindowMocks.openDetachedConsolesWindow.mockClear();
     detachedWindowMocks.openDetachedConsolesWindow.mockResolvedValue(true);
+    connectionMocks.reloadActiveWorkbench.mockClear();
+    setWindowsHostOverrideForTests(null);
+    vi.mocked(open).mockReset();
   });
 
-  it("shows the workspace shell before the snapshot loads", () => {
+  it("shows an explicit startup state before configuration and snapshot load", () => {
     render(<App />);
-    expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
-    expect(screen.getByAltText("Tinto")).toBeInTheDocument(); // top bar brand
+    expect(screen.getByTestId("startup-loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-stub")).not.toBeInTheDocument();
+    expect(screen.getByAltText("Tinto")).toBeInTheDocument();
   });
 
   // Covers AE1 (first-run gate) + R8
   it("shows first-run when loaded with no active workbench", () => {
-    act(() => busStore.loadSnapshot([], { available: true })); // loaded, no config.active
+    act(() => {
+      busStore.setConfig({ version: 1, active: null, workbenches: [] });
+      busStore.loadSnapshot([], { available: true });
+    });
     render(<App />);
     expect(screen.getByTestId("first-run")).toBeInTheDocument();
     expect(screen.queryByTestId("workspace-stub")).not.toBeInTheDocument();
+  });
+
+  it("shows a recoverable startup failure instead of first-run when config loading fails", () => {
+    act(() => {
+      busStore.setConfigError("backend offline");
+      busStore.loadSnapshot([], { available: false, reason: "backend offline" });
+    });
+    render(<App />);
+
+    expect(screen.getByTestId("startup-failure")).toHaveTextContent("backend offline");
+    expect(screen.queryByTestId("first-run")).not.toBeInTheDocument();
+
+    screen.getByRole("button", { name: /reintentar conexi/i }).click();
+    expect(connectionMocks.reloadActiveWorkbench).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an already usable workspace mounted during background reloads", () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      });
+      busStore.loadSnapshot([], { available: true });
+      busStore.beginConfigLoad();
+      busStore.beginSnapshotLoad();
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
+    expect(screen.queryByTestId("startup-loading")).not.toBeInTheDocument();
+  });
+
+  it("surfaces a background snapshot failure without discarding the workspace", () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      });
+      busStore.loadSnapshot([], { available: true });
+      busStore.setSnapshotError("snapshot offline");
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
+    expect(screen.getByTestId("app-shell-error")).toHaveTextContent("snapshot offline");
+  });
+
+  it("surfaces local-picker failures from the non-Windows add-repo action", async () => {
+    setWindowsHostOverrideForTests(false);
+    vi.mocked(open).mockRejectedValueOnce(new Error("selector no disponible"));
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      });
+      busStore.loadSnapshot([], { available: true });
+    });
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    fireEvent.click(screen.getByTestId("add-repo"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-shell-error")).toHaveTextContent("selector no disponible"),
+    );
   });
 
   it("shows the workspace with all panel types registered when a workbench is active", () => {

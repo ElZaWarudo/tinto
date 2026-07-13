@@ -35,6 +35,17 @@ export const tauriNotificationAdapter: NotificationAdapter = {
 };
 
 function label(value: string): string {
+  const labels: Record<string, string> = {
+    critical: "crítica",
+    warning: "advertencia",
+    info: "informativa",
+    sensitive_path: "archivo sensible",
+    possible_secret: "posible secreto",
+    large_delete: "borrado grande",
+    config_change: "cambio de configuración",
+    test_change: "cambio de pruebas",
+  };
+  if (labels[value]) return labels[value];
   return value.replace(/_/g, " ");
 }
 
@@ -62,7 +73,7 @@ export function collectRelevantNotifications(
     notifications.push({
       key: `watching:degraded:${state.watching.reason ?? "unknown"}`,
       title: "Tinto: Workbench",
-      body: "Watching degraded. Data remains available on demand.",
+      body: "Observación degradada. Los datos siguen disponibles bajo demanda.",
     });
   }
 
@@ -73,7 +84,7 @@ export function collectRelevantNotifications(
       notifications.push({
         key: `repo-error:${delta.repo}:${delta.revision}:${delta.error.category}`,
         title: repoTitle(name),
-        body: `Terminal repo error: ${label(delta.error.category)}.`,
+        body: `Error terminal del repositorio: ${label(delta.error.category)}.`,
       });
     }
 
@@ -81,7 +92,7 @@ export function collectRelevantNotifications(
       notifications.push({
         key: `signal:${delta.repo}:${delta.revision}:${signal.kind}:${signal.path ?? "repo"}`,
         title: repoTitle(name),
-        body: `Critical ${label(signal.kind)} signal detected.`,
+        body: `Se detectó una señal crítica: ${label(signal.kind)}.`,
       });
     }
 
@@ -90,7 +101,7 @@ export function collectRelevantNotifications(
         notifications.push({
           key: `fs-signal:${delta.repo}:${event.timestamp_ms}:${event.kind}:${event.path}:${signal.kind}`,
           title: repoTitle(name),
-          body: `${label(signal.severity)} watched-file signal detected.`,
+          body: `Se detectó una señal de archivo observado: ${label(signal.severity)}.`,
         });
       }
     }
@@ -110,14 +121,14 @@ export async function enableNotifications(adapter: NotificationAdapter = tauriNo
     qualityStore.setNotificationState({
       enabled: false,
       status: "denied",
-      message: "Notifications denied by the OS.",
+      message: "El sistema operativo denegó las notificaciones.",
     });
     return false;
   }
   qualityStore.setNotificationState({
     enabled: false,
     status: "unavailable",
-    message: "Notifications unavailable in this runtime.",
+    message: "Las notificaciones no están disponibles en este entorno.",
   });
   return false;
 }
@@ -148,7 +159,7 @@ export function NotificationWatcher({
         qualityStore.setNotificationState({
           enabled: false,
           status: "unavailable",
-          message: "Notifications failed in this runtime.",
+          message: "Las notificaciones fallaron en este entorno.",
         });
       }
     }

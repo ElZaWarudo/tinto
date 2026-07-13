@@ -184,8 +184,8 @@ pub struct WorkbenchStore {
 impl WorkbenchStore {
     /// Store de producción: config dir del SO (`<config>/tinto`).
     pub fn open_default() -> Result<Self, WorkbenchError> {
-        let base = dirs::config_dir().ok_or(WorkbenchError::NoConfigDir)?;
-        Self::open(base.join("tinto"))
+        let dir = crate::runtime_paths::tinto_config_dir().ok_or(WorkbenchError::NoConfigDir)?;
+        Self::open(dir)
     }
 
     /// Abre (o inicializa vacío) el store en un config dir concreto.

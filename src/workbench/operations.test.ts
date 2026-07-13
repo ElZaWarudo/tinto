@@ -44,6 +44,12 @@ import {
 import { busStore } from "../bus/store";
 import type { WorkbenchConfig } from "../bus/contract";
 
+function confirmReloadedActive(active: string): void {
+  const config = busStore.getState().config;
+  if (!config) throw new Error("Expected a loaded workbench config");
+  busStore.setConfig({ ...config, active });
+}
+
 describe("workbench operations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -76,17 +82,124 @@ describe("workbench operations", () => {
     reloadMock.mockResolvedValue(undefined);
   });
 
-  it("switchWorkbench activates, resets, and reloads; no-op on same/empty", async () => {
+  it("switchWorkbench activates, reloads, and no-ops once the active workbench is confirmed", async () => {
     const resetSpy = vi.spyOn(busStore, "reset");
+    busStore.setConfig({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        { name: "Work", repos: [] },
+        { name: "Other", repos: [] },
+      ],
+    });
+    reloadMock.mockImplementationOnce(async () => confirmReloadedActive("Other"));
     await switchWorkbench("Other", "Work");
     expect(client.setActiveWorkbench).toHaveBeenCalledWith("Other");
-    expect(resetSpy).toHaveBeenCalled();
+    expect(resetSpy).not.toHaveBeenCalled();
     expect(reloadMock).toHaveBeenCalled();
+    expect(busStore.getState().config?.active).toBe("Other");
 
     vi.clearAllMocks();
-    await switchWorkbench("Work", "Work"); // same
+    await switchWorkbench("Other", "Other"); // same
     await switchWorkbench("", "Work"); // empty
     expect(client.setActiveWorkbench).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent switches in request order", async () => {
+    busStore.setConfig({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        { name: "Work", repos: [] },
+        { name: "B", repos: [] },
+        { name: "C", repos: [] },
+      ],
+    });
+    let releaseFirst!: () => void;
+    const firstActivation = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    client.setActiveWorkbench
+      .mockImplementationOnce(() => firstActivation)
+      .mockResolvedValueOnce(undefined);
+    reloadMock
+      .mockImplementationOnce(async () => confirmReloadedActive("B"))
+      .mockImplementationOnce(async () => confirmReloadedActive("C"));
+
+    const switchToB = switchWorkbench("B", "Work");
+    const switchToC = switchWorkbench("C", "Work");
+    await Promise.resolve();
+
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenNthCalledWith(1, "B");
+    expect(reloadMock).not.toHaveBeenCalled();
+
+    releaseFirst();
+    await Promise.all([switchToB, switchToC]);
+
+    expect(client.setActiveWorkbench).toHaveBeenNthCalledWith(2, "C");
+    expect(reloadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the latest intent when switching away and immediately back", async () => {
+    busStore.setConfig({
+      version: 1,
+      active: "A",
+      workbenches: [
+        { name: "A", repos: [] },
+        { name: "B", repos: [] },
+      ],
+    });
+    let releaseFirst!: () => void;
+    client.setActiveWorkbench
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(undefined);
+    reloadMock
+      .mockImplementationOnce(async () => confirmReloadedActive("B"))
+      .mockImplementationOnce(async () => confirmReloadedActive("A"));
+
+    const switchToB = switchWorkbench("B", "A");
+    const switchBackToA = switchWorkbench("A", "A");
+    await Promise.resolve();
+
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenNthCalledWith(1, "B");
+
+    releaseFirst();
+    await Promise.all([switchToB, switchBackToA]);
+
+    expect(client.setActiveWorkbench).toHaveBeenNthCalledWith(2, "A");
+    expect(reloadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the return intent when a reload does not confirm the prior switch", async () => {
+    busStore.setConfig({
+      version: 1,
+      active: "A",
+      workbenches: [
+        { name: "A", repos: [] },
+        { name: "B", repos: [] },
+      ],
+    });
+    reloadMock
+      .mockImplementationOnce(async () => busStore.setConfigError("reload failed"))
+      .mockImplementationOnce(async () => confirmReloadedActive("A"));
+
+    await switchWorkbench("B", "A");
+    expect(busStore.getState().config?.active).toBe("A");
+    expect(busStore.getState().configStatus).toBe("error");
+
+    await switchWorkbench("A", "A");
+
+    expect(client.setActiveWorkbench).toHaveBeenNthCalledWith(1, "B");
+    expect(client.setActiveWorkbench).toHaveBeenNthCalledWith(2, "A");
+    expect(reloadMock).toHaveBeenCalledTimes(2);
+    expect(busStore.getState().configStatus).toBe("ready");
   });
 
   it("fetchRepoFlow previews, confirms host, fetches, and reloads", async () => {
@@ -95,8 +208,8 @@ describe("workbench operations", () => {
     expect(fetched).toBe(true);
     expect(client.getRepoFetchPreview).toHaveBeenCalledWith("/r/api");
     expect(dialogMock.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("Host to contact: github.com"),
-      { title: "Fetch remote refs", kind: "warning" },
+      expect.stringContaining("Host de destino: github.com"),
+      { title: "Actualizar referencias remotas", kind: "warning" },
     );
     expect(client.fetchRepo).toHaveBeenCalledWith("/r/api", "origin", "github.com", true);
     expect(reloadMock).toHaveBeenCalled();
@@ -112,7 +225,6 @@ describe("workbench operations", () => {
   });
 
   it("createAndActivate trims, creates, activates, reloads; ignores blank", async () => {
-    const resetSpy = vi.spyOn(busStore, "reset");
     busStore.setConfig({
       version: 1,
       active: "Work",
@@ -124,7 +236,6 @@ describe("workbench operations", () => {
     await createAndActivate("  Side  ");
     expect(client.createWorkbench).toHaveBeenCalledWith("Side");
     expect(client.setActiveWorkbench).toHaveBeenCalledWith("Side");
-    expect(resetSpy).toHaveBeenCalled();
     expect(reloadMock).toHaveBeenCalled();
     expect(busStore.getState().config).toEqual({
       version: 1,
@@ -145,6 +256,49 @@ describe("workbench operations", () => {
     expect(client.createWorkbench).not.toHaveBeenCalled();
   });
 
+  it("retries activation after a partial create without creating the workbench twice", async () => {
+    busStore.setConfig({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [] }],
+    });
+    client.setActiveWorkbench
+      .mockRejectedValueOnce(new Error("activation unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(createAndActivate("Side")).rejects.toThrow(/se cre/);
+    expect(client.createWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(1);
+    expect(reloadMock).toHaveBeenCalledTimes(1);
+
+    await expect(createAndActivate("Side")).resolves.toBeUndefined();
+
+    expect(client.createWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(2);
+    expect(client.setActiveWorkbench).toHaveBeenLastCalledWith("Side");
+    expect(reloadMock).toHaveBeenCalledTimes(2);
+    expect(busStore.getState().config?.active).toBe("Side");
+  });
+
+  it("retries the refresh after create and activation without creating twice", async () => {
+    busStore.setConfig({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [] }],
+    });
+    reloadMock
+      .mockRejectedValueOnce(new Error("snapshot unavailable"))
+      .mockResolvedValue(undefined);
+
+    await expect(createAndActivate("Draft")).rejects.toThrow(/actualizarse/);
+    await expect(createAndActivate("Draft")).resolves.toBeUndefined();
+
+    expect(client.createWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(2);
+    expect(reloadMock).toHaveBeenCalledTimes(2);
+    expect(busStore.getState().config?.active).toBe("Draft");
+  });
+
   it("addRepoFlow adds the picked folder and returns its canonical path; cancel is a no-op", async () => {
     dialogMock.open.mockResolvedValueOnce("/picked/repo");
     client.addRepo.mockResolvedValueOnce("/canon/picked/repo");
@@ -159,11 +313,11 @@ describe("workbench operations", () => {
     expect(reloadMock).not.toHaveBeenCalled();
   });
 
-  it("addRepoFlow swallows a failed add (resolves null) but still reloads", async () => {
+  it("addRepoFlow surfaces a failed add and does not pretend the reload succeeded", async () => {
     dialogMock.open.mockResolvedValueOnce("/dup");
     client.addRepo.mockRejectedValueOnce(new Error("duplicate"));
-    await expect(addRepoFlow("Work")).resolves.toBeNull();
-    expect(reloadMock).toHaveBeenCalled();
+    await expect(addRepoFlow("Work")).rejects.toThrow("duplicate");
+    expect(reloadMock).not.toHaveBeenCalled();
   });
 
   it("normalizes WSL Linux paths and rejects Windows/relative forms", () => {
@@ -220,10 +374,11 @@ describe("workbench operations", () => {
     expect(client.listWslDirectory).toHaveBeenCalledWith("Ubuntu-24.04", "/home/me");
   });
 
-  it("autodetectFlow adds every detected repo", async () => {
+  it("autodetectFlow reports added and skipped repos", async () => {
     dialogMock.open.mockResolvedValueOnce("/root");
     client.autodetectReposUnder.mockResolvedValueOnce(["/root/a", "/root/b"]);
-    await autodetectFlow("Work");
+    client.addRepo.mockResolvedValueOnce("/root/a").mockRejectedValueOnce(new Error("duplicate"));
+    await expect(autodetectFlow("Work")).resolves.toEqual({ found: 2, added: 1, failed: 1 });
     expect(client.addRepo).toHaveBeenCalledWith("Work", "/root/a");
     expect(client.addRepo).toHaveBeenCalledWith("Work", "/root/b");
     expect(reloadMock).toHaveBeenCalled();
@@ -402,17 +557,66 @@ describe("workbench operations", () => {
       "tinto:recent-workbenches:v1",
       JSON.stringify(["Work", "Side", "Client X"]),
     );
-    const resetSpy = vi.spyOn(busStore, "reset");
-
     await deleteWorkbenchFlow("Side");
 
     expect(client.deleteWorkbench).toHaveBeenCalledWith("Side");
     expect(client.setActiveWorkbench).toHaveBeenCalledWith("Work"); // first remaining
-    expect(resetSpy).toHaveBeenCalled();
     expect(reloadMock).toHaveBeenCalled();
 
     const mru = JSON.parse(localStorage.getItem("tinto:recent-workbenches:v1") ?? "[]");
     expect(mru).not.toContain("Side");
+  });
+
+  it("retries promotion after a partial delete without deleting the workbench twice", async () => {
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Side",
+        workbenches: [
+          { name: "Work", repos: [] },
+          { name: "Side", repos: [] },
+        ],
+      }),
+    );
+    client.setActiveWorkbench
+      .mockRejectedValueOnce(new Error("promotion unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(deleteWorkbenchFlow("Side")).rejects.toThrow(/se elimin/);
+    expect(client.deleteWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(1);
+    expect(reloadMock).toHaveBeenCalledTimes(1);
+
+    await expect(deleteWorkbenchFlow("Side")).resolves.toBeUndefined();
+
+    expect(client.deleteWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(2);
+    expect(client.setActiveWorkbench).toHaveBeenLastCalledWith("Work");
+    expect(reloadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries the refresh after delete and promotion without deleting twice", async () => {
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Temporary",
+        workbenches: [
+          { name: "Work", repos: [] },
+          { name: "Temporary", repos: [] },
+        ],
+      }),
+    );
+    reloadMock
+      .mockRejectedValueOnce(new Error("snapshot unavailable"))
+      .mockResolvedValue(undefined);
+
+    await expect(deleteWorkbenchFlow("Temporary")).rejects.toThrow(/actualizarse/);
+    await expect(deleteWorkbenchFlow("Temporary")).resolves.toBeUndefined();
+
+    expect(client.deleteWorkbench).toHaveBeenCalledTimes(1);
+    expect(client.setActiveWorkbench).toHaveBeenCalledTimes(2);
+    expect(client.setActiveWorkbench).toHaveBeenLastCalledWith("Work");
+    expect(reloadMock).toHaveBeenCalledTimes(2);
   });
 
   it("deleteWorkbenchFlow of a non-active workbench does not change the active", async () => {

@@ -1,8 +1,9 @@
 // Confirmation modal for destructive file operations (overwrite existing
 // files). Used by the explorer drag/drop + paste + move surfaces.
 
-import { useCallback, useEffect } from "react";
+import { useRef } from "react";
 import type { FileConflict } from "../../bus/contract";
+import { useAccessibleDialog } from "../../workbench/useAccessibleDialog";
 import { conflictDescription, type FileOpReport } from "./fileOps";
 
 interface OverwriteConfirmModalProps {
@@ -12,23 +13,11 @@ interface OverwriteConfirmModalProps {
 }
 
 export function OverwriteConfirmModal({ report, onConfirm, onCancel }: OverwriteConfirmModalProps) {
-  const handleKey = useCallback(
-    (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCancel();
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        onConfirm();
-      }
-    },
-    [onCancel, onConfirm],
-  );
-
-  useEffect(() => {
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [handleKey]);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useAccessibleDialog<HTMLDivElement>({
+    onClose: onCancel,
+    initialFocusRef: cancelRef,
+  });
 
   const conflicts: FileConflict[] = report.conflicts.filter(
     (c) => c.kind === "file_exists" || c.kind === "dir_exists",
@@ -36,6 +25,7 @@ export function OverwriteConfirmModal({ report, onConfirm, onCancel }: Overwrite
 
   return (
     <div
+      ref={dialogRef}
       className="file-op-modal-overlay"
       role="dialog"
       aria-label="Confirmar sobrescritura"
@@ -65,6 +55,7 @@ export function OverwriteConfirmModal({ report, onConfirm, onCancel }: Overwrite
         <p className="file-op-modal__warning">¿Sobrescribir?</p>
         <div className="file-op-modal__actions">
           <button
+            ref={cancelRef}
             type="button"
             className="file-op-modal__button file-op-modal__button--cancel"
             data-testid="overwrite-confirm-cancel"
@@ -81,7 +72,6 @@ export function OverwriteConfirmModal({ report, onConfirm, onCancel }: Overwrite
             Sobrescribir
           </button>
         </div>
-        <p className="file-op-modal__hint">Enter = Sobrescribir · Esc = Cancelar</p>
         {conflicts.some((c) => c.kind === "dir_exists") && (
           <p
             className="file-op-modal__warning file-op-modal__warning--dir"

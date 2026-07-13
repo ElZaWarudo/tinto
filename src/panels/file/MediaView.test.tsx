@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { FileContent } from "../../bus/contract";
 
 let content: FileContent = { encoding: "base64", content: "iVBORw0KGgo=", truncated: false };
@@ -54,7 +54,7 @@ describe("MediaView", () => {
     render(<MediaView repo="/r/a" path="large.pdf" kind="pdf" />);
 
     expect(await screen.findByTestId("media-unavailable")).toHaveTextContent(
-      "larger than the media read limit",
+      "supera el límite de lectura",
     );
   });
 
@@ -81,10 +81,19 @@ describe("MediaView", () => {
     expect(await screen.findByRole("img")).toHaveAttribute("src", "data:image/png;base64,bmV3");
   });
 
-  it("shows an error state when media cannot be loaded", async () => {
+  it("shows an error state and can retry media loading", async () => {
     reject = true;
     render(<MediaView repo="/r/a" path="missing.png" kind="image" />);
 
-    expect(await screen.findByTestId("media-error")).toHaveTextContent("Could not load preview.");
+    expect(await screen.findByTestId("media-error")).toHaveTextContent(
+      "No se pudo cargar la vista previa.",
+    );
+
+    reject = false;
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
+    expect(await screen.findByRole("img")).toHaveAttribute(
+      "src",
+      "data:image/png;base64,iVBORw0KGgo=",
+    );
   });
 });

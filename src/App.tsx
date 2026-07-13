@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type {
-  DockviewApi,
-  DockviewWillDropEvent,
-  IDockviewPanel,
-  TabDragEvent,
-} from "dockview-react";
+import type { DockviewApi } from "dockview-react";
 import { DockWorkspace, type PanelComponents, type TabComponents } from "./workspace/DockWorkspace";
 import {
   PANEL_AGENT_CONSOLES,
@@ -32,18 +27,18 @@ import { RepoTab } from "./panels/RepoTab";
 import { TimelinePanel } from "./panels/timeline/TimelinePanel";
 import { ConsoleDockPanel } from "./panels/terminal/ConsoleDockPanel";
 import { TerminalPanel } from "./panels/terminal/TerminalPanel";
+import { onDetachedConsolesReattach } from "./panels/terminal/detachTerminalWindow";
 import {
-  markTerminalDetached,
-  onDetachedConsolesReattach,
-  openDetachedConsolesWindow,
-} from "./panels/terminal/detachTerminalWindow";
-import { armExternalTabDetach } from "./workspace/externalTabDetach";
+  armConsolesExternalDetach,
+  detachConsolesPanel,
+  detachConsolesPanelFromWorkspaceDrop,
+} from "./workspace/detachConsoles";
 import { MenuBar } from "./workbench/MenuBar";
 import { AddRepoDialog } from "./workbench/AddRepoDialog";
-import { FirstRun } from "./workbench/firstRun";
+import { FirstRun, StartupFailure, StartupLoading } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
 import { isWindowsHost } from "./workbench/platform";
-import { useBusConnection } from "./bus/connection";
+import { reloadActiveWorkbench, useBusConnection } from "./bus/connection";
 import { busStore, useBusState } from "./bus/store";
 import type { WorkbenchConfig } from "./bus/contract";
 import { GlanceMode } from "./qol/GlanceMode";
@@ -65,8 +60,6 @@ const tabComponents: TabComponents = {
   [TAB_REPO]: RepoTab,
 };
 
-const detachingConsolesPanels = new Set<string>();
-
 function dropRepoUiState(path: string): void {
   fileDock.drop(path);
   repoTreeStore.drop(path);
@@ -81,69 +74,23 @@ function closeInactiveRepoPanels(
   }
 }
 
-export async function detachConsolesPanelFromWorkspaceDrop(
-  event: DockviewWillDropEvent,
-  api: DockviewApi,
-): Promise<boolean> {
-  if (event.kind !== "edge" || event.getData()?.panelId !== PANEL_AGENT_CONSOLES) {
-    return false;
-  }
-  const panel = api.getPanel(PANEL_AGENT_CONSOLES);
-  if (!panel) return false;
-
-  event.preventDefault();
-  return detachConsolesPanel(api, panel);
-}
-
-export async function detachConsolesPanel(
-  api: DockviewApi,
-  panel: IDockviewPanel | undefined = api.getPanel(PANEL_AGENT_CONSOLES),
-): Promise<boolean> {
-  if (!panel || detachingConsolesPanels.has(panel.id)) return false;
-
-  detachingConsolesPanels.add(panel.id);
-  const terminalParams = consoleDock.openTerminalParams();
-  consoleDock.prepareDetachedTransfer();
-  try {
-    const opened = await openDetachedConsolesWindow(terminalParams);
-    if (!opened) return false;
-
-    for (const sessionId of consoleDock.openTerminalSessionIds()) {
-      markTerminalDetached(sessionId);
-    }
-    const current = api.getPanel(panel.id);
-    if (current) {
-      api.removePanel(current);
-    }
-    return true;
-  } finally {
-    detachingConsolesPanels.delete(panel.id);
-  }
-}
-
-export function armConsolesExternalDetach(event: TabDragEvent, api: DockviewApi): boolean {
-  if (event.panel.id !== PANEL_AGENT_CONSOLES) return false;
-  armExternalTabDetach(event.nativeEvent, () => detachConsolesPanel(api, event.panel));
-  return true;
-}
-
 export default function App() {
   useBusConnection();
-  const { config, loaded } = useBusState();
+  const { config, loaded, configError, snapshotError } = useBusState();
   const { glanceMode } = useQualityState();
   const apiRef = useRef<DockviewApi | null>(null);
   const [showAddRepo, setShowAddRepo] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const addLocalRepoFromPicker = () => {
+  const addLocalRepoFromPicker = async () => {
     const active = busStore.getState().config?.active;
     if (!active) return;
-    void addRepoFlow(active).then((path) => {
-      if (!path) return;
-      setShowAddRepo(false);
-      if (apiRef.current) {
-        openRepoPanel(apiRef.current, path, busStore.displayName(path));
-      }
-    });
+    const path = await addRepoFlow(active);
+    if (!path) return;
+    setShowAddRepo(false);
+    if (apiRef.current) {
+      openRepoPanel(apiRef.current, path, busStore.displayName(path));
+    }
   };
 
   // Apply the persisted zoom and bind Ctrl/Cmd +/-/0 (browser-style text size).
@@ -163,11 +110,17 @@ export default function App() {
         const active = busStore.getState().config?.active;
         if (!active) return;
         if (isWindowsHost()) setShowAddRepo(true);
-        else addLocalRepoFromPicker();
+        else {
+          setActionError(null);
+          void addLocalRepoFromPicker().catch((error) => {
+            setActionError(commandErrorMessage(error, "No se pudo añadir el repositorio local."));
+          });
+        }
       },
       removeRepo: (path) => {
         const active = busStore.getState().config?.active;
         if (!active) return;
+        setActionError(null);
         void removeRepoFlow(active, path)
           .then((removed) => {
             if (!removed) return;
@@ -181,7 +134,7 @@ export default function App() {
             closePanelsForRemovedRepo(api, path);
           })
           .catch((e) => {
-            console.warn("tinto: remove repo action failed", e);
+            setActionError(commandErrorMessage(e, "No se pudo quitar el repositorio."));
           });
       },
       openFile: (path, filePath, pin = false) => {
@@ -260,8 +213,28 @@ export default function App() {
     closeInactiveRepoPanels(api, config);
   }, [config]);
 
-  // First-run: once loaded, no active workbench → the create flow.
-  if (loaded && !config?.active) {
+  const hasUsableShell = config !== null && loaded;
+  const startupError = !config ? configError : !loaded ? snapshotError : null;
+
+  // Only the initial boot owns the full-screen status. Background reloads keep
+  // the existing workspace mounted so dialogs, focus, and unsaved UI state survive.
+  if (!hasUsableShell && startupError) {
+    return (
+      <div className="app-shell">
+        <StartupFailure message={startupError} onRetry={() => void reloadActiveWorkbench()} />
+      </div>
+    );
+  }
+
+  if (!hasUsableShell) {
+    return (
+      <div className="app-shell">
+        <StartupLoading />
+      </div>
+    );
+  }
+
+  if (!config?.active) {
     return (
       <div className="app-shell">
         <FirstRun />
@@ -269,11 +242,28 @@ export default function App() {
     );
   }
 
+  const shellError = configError ?? snapshotError;
+
   return (
     <WorkspaceActionsContext.Provider value={actions}>
       <div className="app-shell">
         <NotificationWatcher />
         <MenuBar />
+        {(actionError || shellError) && (
+          <div className="app-shell__notice" role="alert" data-testid="app-shell-error">
+            <span>{actionError ?? shellError}</span>
+            {shellError && (
+              <button type="button" onClick={() => void reloadActiveWorkbench()}>
+                Reintentar
+              </button>
+            )}
+            {actionError && (
+              <button type="button" onClick={() => setActionError(null)}>
+                Cerrar
+              </button>
+            )}
+          </div>
+        )}
         {showAddRepo && config?.active && (
           <AddRepoDialog
             activeWorkbench={config.active}
@@ -313,4 +303,10 @@ export default function App() {
       </div>
     </WorkspaceActionsContext.Provider>
   );
+}
+
+function commandErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return fallback;
 }

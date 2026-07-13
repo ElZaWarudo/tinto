@@ -107,10 +107,10 @@ const SAMPLE_LINES: { line: number; text: string; isSecret: boolean }[] = [
 const MARKERS: FileOverviewMarker[] = SAMPLE_LINES.filter((line) => line.isSecret).map((line) => ({
   line: line.line,
   severity: "critical" as const,
-  label: "Possible secret",
+  label: "Posible secreto",
 }));
 
-function DemoFileView() {
+export function DemoFileView() {
   const bodyRef = useRef<HTMLDivElement>(null);
   const totalLines = SAMPLE_LINES.length;
   const { topLine, visibleLineCount, viewportHeight, scrollProgress } = useOverviewScrollSync(
@@ -143,14 +143,14 @@ function DemoFileView() {
   return (
     <div className="demo">
       <header className="demo__header">
-        <h1>RUL-001 file overview ruler - dev fixture</h1>
+        <h1>Minimapa de archivo RUL-001 — muestra de desarrollo</h1>
         <p>
-          Mock file: <code>src/handler.ts</code> - 80 lines - {MARKERS.length} possible-secret
-          flags. Open DevTools (F12) for the console.
+          Archivo de muestra: <code>src/handler.ts</code> — 80 líneas — {MARKERS.length} avisos de
+          posible secreto. Abre las herramientas de desarrollo (F12) para ver la consola.
         </p>
         <p className="demo__hints">
-          <strong>Try:</strong> scroll the body - click the rail - click a red chip - Tab + up/down
-          on the rail - Home / End
+          <strong>Prueba:</strong> desplaza el contenido — pulsa el minimapa — pulsa una marca roja
+          — usa Tab y las flechas — Inicio / Fin
         </p>
       </header>
       <div className="file-view" data-testid="demo-file-view">
@@ -158,7 +158,7 @@ function DemoFileView() {
           <span className="file-view__path" title="demo - src/handler.ts">
             src/handler.ts
           </span>
-          <span className="file-view__mode">Dev fixture</span>
+          <span className="file-view__mode">Muestra de desarrollo</span>
         </div>
         <div className="file-view__body" ref={bodyRef} data-testid="demo-body">
           <FileOverviewRuler
@@ -190,7 +190,7 @@ function DemoFileView() {
         </div>
       </div>
       <aside className="demo__aside">
-        <h2>State</h2>
+        <h2>Estado</h2>
         <ul>
           <li>
             <strong>topLine:</strong> {topLine}
@@ -203,8 +203,8 @@ function DemoFileView() {
           </li>
         </ul>
         <p className="demo__aside-note">
-          topLine updates as you scroll the body. activeLine updates when you click a marker or the
-          track.
+          topLine cambia al desplazar el contenido. activeLine cambia al pulsar una marca o el
+          minimapa.
         </p>
       </aside>
     </div>

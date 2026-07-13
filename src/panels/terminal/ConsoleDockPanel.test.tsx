@@ -44,11 +44,14 @@ const sessionStoreMocks = vi.hoisted(() => ({
 vi.mock("dockview-react", async () => {
   const React = await import("react");
   return {
-    DockviewReact: (props: {
+    DockviewReact: ({
+      onReady,
+    }: {
       onReady?: (event: { api: ReturnType<typeof nestedDockApi> }) => void;
     }) => {
+      const initialOnReady = React.useRef(onReady);
       React.useEffect(() => {
-        if (dockviewMocks.api) props.onReady?.({ api: dockviewMocks.api });
+        if (dockviewMocks.api) initialOnReady.current?.({ api: dockviewMocks.api });
       }, []);
       return <div data-testid="nested-console-dock" />;
     },
@@ -81,11 +84,8 @@ vi.mock("./detachTerminalWindow", () => ({
   openDetachedTerminalWindow: detachMocks.openDetachedTerminalWindow,
 }));
 
-import {
-  ConsoleDockPanel,
-  detachTerminalFromConsoleDrop,
-  detachTerminalPanel,
-} from "./ConsoleDockPanel";
+import { ConsoleDockPanel } from "./ConsoleDockPanel";
+import { detachTerminalFromConsoleDrop, detachTerminalPanel } from "./detachTerminalPanel";
 
 function nestedDockApi() {
   const panels: Record<string, IDockviewPanel> = {};
@@ -106,6 +106,7 @@ function nestedDockApi() {
     removePanel: vi.fn(),
     fromJSON: vi.fn(),
     toJSON: vi.fn(() => ({ panels: {} })),
+    layout: vi.fn(),
     onDidRemovePanel: vi.fn(() => ({ dispose: vi.fn() })),
     onDidLayoutChange: vi.fn(() => ({ dispose: vi.fn() })),
     onDidMovePanel: vi.fn(() => ({ dispose: vi.fn() })),
@@ -211,7 +212,7 @@ describe("ConsoleDockPanel detach drop", () => {
     const { unmount } = render(<ConsoleDockPanel />);
 
     expect(screen.getByTestId("console-empty")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /launch api with codex/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /iniciar api con codex/i })).toBeInTheDocument();
     unmount();
   });
 
@@ -220,7 +221,7 @@ describe("ConsoleDockPanel detach drop", () => {
     const openSpy = vi.spyOn(consoleDock, "openTerminal");
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /launch api with codex/i }));
+    fireEvent.click(screen.getByRole("button", { name: /iniciar api con codex/i }));
 
     await waitFor(() =>
       expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/api", "codex"),
@@ -249,7 +250,7 @@ describe("ConsoleDockPanel detach drop", () => {
     const openSpy = vi.spyOn(consoleDock, "openTerminal");
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /launch api with codex/i }));
+    fireEvent.click(screen.getByRole("button", { name: /iniciar api con codex/i }));
 
     await waitFor(() =>
       expect(openSpy).toHaveBeenCalledWith({
@@ -268,12 +269,12 @@ describe("ConsoleDockPanel detach drop", () => {
 
     const { unmount } = render(<ConsoleDockPanel />);
     fireEvent.click(
-      screen.getByRole("button", { name: /remove api with codex from quick launch/i }),
+      screen.getByRole("button", { name: /quitar api con codex del inicio rápido/i }),
     );
 
     expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
     expect(readRecentAgentLaunches()).toEqual([]);
-    expect(screen.queryByRole("button", { name: /launch api with codex/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /iniciar api con codex/i })).toBeNull();
     unmount();
   });
 
@@ -295,9 +296,25 @@ describe("ConsoleDockPanel detach drop", () => {
 
     const { unmount } = render(<ConsoleDockPanel />);
 
-    expect(await screen.findByText("Recent sessions")).toBeInTheDocument();
+    expect(await screen.findByText("Sesiones recientes")).toBeInTheDocument();
     expect(screen.getByText("Done with the refactor")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /open api codex transcript/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
+    ).toBeInTheDocument();
+    unmount();
+  });
+
+  it("shows a recoverable error when saved sessions cannot be loaded", async () => {
+    clientMocks.listAgentJournalSessions.mockRejectedValueOnce(new Error("offline"));
+
+    const { unmount } = render(<ConsoleDockPanel />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("No se pudieron cargar las sesiones guardadas");
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
+
+    await waitFor(() => expect(clientMocks.listAgentJournalSessions).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     unmount();
   });
 
@@ -341,7 +358,11 @@ describe("ConsoleDockPanel detach drop", () => {
     const openSpy = vi.spyOn(consoleDock, "openTerminal");
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /open api codex transcript/i }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /abrir la transcripción de api con codex/i,
+      }),
+    );
 
     await waitFor(() =>
       expect(clientMocks.getAgentJournalSession).toHaveBeenCalledWith("sess-old"),
@@ -401,10 +422,10 @@ describe("ConsoleDockPanel detach drop", () => {
     const { unmount } = render(<ConsoleDockPanel />);
 
     expect(
-      await screen.findByRole("complementary", { name: /agent sessions/i }),
+      await screen.findByRole("complementary", { name: /sesiones de agents/i }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /focus api codex/i })).toBeInTheDocument();
-    expect(screen.getByText(/codex \/ working/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /mostrar api codex/i })).toBeInTheDocument();
+    expect(screen.getByText(/codex \/ trabajando/i)).toBeInTheDocument();
     expect(screen.getByText("I am updating the parser")).toBeInTheDocument();
     expect(screen.queryByTestId("console-empty")).toBeNull();
     unmount();
@@ -415,10 +436,80 @@ describe("ConsoleDockPanel detach drop", () => {
     consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /focus api codex/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /mostrar api codex/i }));
 
     const panel = dockviewMocks.api?.getPanel(id);
     expect(panel?.api.setActive).toHaveBeenCalled();
+    unmount();
+  });
+
+  it("makes room for the terminal when its top-level Agents group is compact", async () => {
+    const id = agentTerminalPanelId("sess-live");
+    consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
+    const agentsGroup = {
+      id: "agents-group",
+      api: { location: { type: "grid" }, width: 176 },
+    };
+    const repoGroup = {
+      id: "repo-group",
+      api: { location: { type: "grid" }, width: 626 },
+    };
+    let maximized = false;
+    const agentsPanel = {
+      id: "agent-consoles",
+      group: agentsGroup,
+      api: {
+        location: { type: "grid" },
+        maximize: vi.fn(() => {
+          maximized = true;
+        }),
+        isMaximized: vi.fn(() => maximized),
+        exitMaximized: vi.fn(() => {
+          maximized = false;
+        }),
+        setActive: vi.fn(),
+      },
+    };
+    const repoPanel = {
+      id: "repo:/r/api",
+      group: repoGroup,
+      api: { location: { type: "grid" } },
+    };
+    const containerApi = {
+      width: 802,
+      activeGroup: agentsGroup,
+      activePanel: agentsPanel,
+      panels: [agentsPanel, repoPanel],
+      getPanel: vi.fn((panelId: string) =>
+        panelId === "agent-consoles" ? agentsPanel : undefined,
+      ),
+      onDidMaximizedGroupChange: vi.fn(() => ({ dispose: vi.fn() })),
+    };
+
+    const { unmount } = render(
+      <ConsoleDockPanel api={agentsPanel.api as never} containerApi={containerApi as never} />,
+    );
+    const dockHost = screen.getByTestId("nested-console-dock").parentElement;
+    expect(dockHost).not.toBeNull();
+    vi.spyOn(dockHost!, "getBoundingClientRect").mockReturnValue({
+      width: 626,
+      height: 540,
+      top: 0,
+      right: 626,
+      bottom: 540,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /mostrar api codex/i }));
+
+    expect(agentsPanel.api.maximize).toHaveBeenCalledOnce();
+    expect(agentsPanel.api.setActive).toHaveBeenCalled();
+    expect(dockviewMocks.api?.getPanel(id)?.api.setActive).toHaveBeenCalled();
+    await waitFor(() => expect(dockviewMocks.api?.layout).toHaveBeenCalledWith(626, 540, true));
+    fireEvent.click(screen.getByRole("button", { name: "Restaurar" }));
+    expect(agentsPanel.api.exitMaximized).toHaveBeenCalledOnce();
     unmount();
   });
 
@@ -462,7 +553,11 @@ describe("ConsoleDockPanel detach drop", () => {
     clientMocks.getAgentJournalSession.mockResolvedValueOnce(session);
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /open api codex transcript/i }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /abrir la transcripción de api con codex/i,
+      }),
+    );
 
     await waitFor(() =>
       expect(clientMocks.getAgentJournalSession).toHaveBeenCalledWith("sess-old"),

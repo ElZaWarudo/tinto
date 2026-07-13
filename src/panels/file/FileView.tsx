@@ -66,7 +66,7 @@ function secretOverviewMarkers(diff: FileDiff | null | undefined): FileOverviewM
         markers.push({
           line: line.new_lineno,
           severity: "critical",
-          label: "Possible secret",
+          label: "Posible secreto",
         });
       }
     }
@@ -83,7 +83,7 @@ function findingsOverviewMarkers(findings: SecretFinding[]): FileOverviewMarker[
     markers.push({
       line: finding.line,
       severity: "critical",
-      label: "Possible secret",
+      label: "Posible secreto",
     });
   }
   return markers;
@@ -111,7 +111,7 @@ function hunkOverviewMarkers(lines: Set<number>): FileOverviewMarker[] {
     return {
       line,
       severity: "info",
-      label: groupLength > 1 ? "Changed lines" : "Changed line",
+      label: groupLength > 1 ? "Líneas modificadas" : "Línea modificada",
       source: "hunk",
       showLabel: startsGroup,
     };
@@ -172,8 +172,13 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
           </span>
         </div>
         <div className="file-view__body">
-          <div className="file-view__loading" data-testid="file-repo-loading">
-            Loading...
+          <div
+            className="file-view__loading"
+            data-testid="file-repo-loading"
+            role="status"
+            aria-live="polite"
+          >
+            Cargando repo…
           </div>
         </div>
       </div>
@@ -189,8 +194,8 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
           </span>
         </div>
         <div className="file-view__body">
-          <div className="file-view__error" data-testid="file-repo-missing">
-            This repo is no longer available in the active workbench.
+          <div className="file-view__error" data-testid="file-repo-missing" role="alert">
+            Este repo ya no está disponible en el workbench activo.
           </div>
         </div>
       </div>
@@ -207,18 +212,22 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
       <div className="file-view__toolbar">
         {media ? (
           <span className="file-view__mode" data-testid="media-mode">
-            {media === "pdf" ? "PDF preview" : "Image preview"}
+            {media === "pdf" ? "Vista previa del PDF" : "Vista previa de la imagen"}
           </span>
         ) : markdown ? (
-          <div className="seg" role="group" aria-label="markdown view">
+          <div className="seg" role="group" aria-label="Vista del archivo Markdown">
             <button
+              type="button"
               className={mdView === "rendered" ? "seg__btn seg__btn--on" : "seg__btn"}
+              aria-pressed={mdView === "rendered"}
               onClick={() => setMdView("rendered")}
             >
               Formateado
             </button>
             <button
+              type="button"
               className={mdView === "source" ? "seg__btn seg__btn--on" : "seg__btn"}
+              aria-pressed={mdView === "source"}
               onClick={() => setMdView("source")}
             >
               Fuente
@@ -226,34 +235,42 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
           </div>
         ) : (
           <>
-            <div className="seg" role="group" aria-label="file view">
+            <div className="seg" role="group" aria-label="Contenido del archivo">
               <button
+                type="button"
                 className={viewKind === "hunks" ? "seg__btn seg__btn--on" : "seg__btn"}
+                aria-pressed={viewKind === "hunks"}
                 onClick={() => setManualKind("hunks")}
               >
-                Hunks
+                Cambios
               </button>
               <button
+                type="button"
                 className={viewKind === "full" ? "seg__btn seg__btn--on" : "seg__btn"}
+                aria-pressed={viewKind === "full"}
                 onClick={() => setManualKind("full")}
               >
-                Full file
+                Archivo completo
               </button>
             </div>
-            <div className="seg" role="group" aria-label="diff layout">
+            <div className="seg" role="group" aria-label="Disposición del diff">
               <button
+                type="button"
                 className={mode === "inline" ? "seg__btn seg__btn--on" : "seg__btn"}
+                aria-pressed={mode === "inline"}
                 disabled={viewKind === "full"}
                 onClick={() => setMode("inline")}
               >
-                Inline
+                En línea
               </button>
               <button
+                type="button"
                 className={mode === "side-by-side" ? "seg__btn seg__btn--on" : "seg__btn"}
+                aria-pressed={mode === "side-by-side"}
                 disabled={viewKind === "full"}
                 onClick={() => setMode("side-by-side")}
               >
-                Side by side
+                Lado a lado
               </button>
             </div>
           </>
@@ -265,10 +282,15 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
       </div>
 
       {!media && !isLive && (
-        <div className="file-view__paused" data-testid="diff-paused">
-          <span>Live updates paused (subscription limit reached).</span>
-          <button onClick={loadOneShot} data-testid="diff-paused-reload">
-            Reload
+        <div
+          className="file-view__paused"
+          data-testid="diff-paused"
+          role="status"
+          aria-live="polite"
+        >
+          <span>Actualizaciones en vivo pausadas: se alcanzó el límite de suscripciones.</span>
+          <button type="button" onClick={loadOneShot} data-testid="diff-paused-reload">
+            Recargar
           </button>
         </div>
       )}
@@ -277,7 +299,8 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
         className="file-view__body"
         ref={bodyRef}
         role="region"
-        aria-label={`${path} file contents`}
+        aria-label={`Contenido del archivo ${path}`}
+        aria-busy={!media && viewKind === "hunks" && !diff && (inStatus || settling)}
         tabIndex={0}
         onKeyDown={handleBodyKeyDown}
       >
@@ -306,12 +329,12 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
             bodyRef={bodyRef}
           />
         ) : loadError ? (
-          <div className="file-view__error" data-testid="diff-error">
+          <div className="file-view__error" data-testid="diff-error" role="alert">
             <span>
-              {loadError.category}: {loadError.message}
+              No se pudo cargar el diff ({loadError.category}): {loadError.message}
             </span>
-            <button onClick={loadOneShot} data-testid="diff-error-retry">
-              Retry
+            <button type="button" onClick={loadOneShot} data-testid="diff-error-retry">
+              Reintentar
             </button>
           </div>
         ) : diff ? (
@@ -323,22 +346,27 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
             bodyRef={bodyRef}
           />
         ) : renamedTo ? (
-          <div className="file-view__empty" data-testid="diff-renamed">
-            <span>This file was renamed to “{renamedTo}”. Reopen it from the tree.</span>
+          <div className="file-view__empty" data-testid="diff-renamed" role="status">
+            <span>Este archivo ahora se llama «{renamedTo}». Ábrelo de nuevo desde el árbol.</span>
           </div>
         ) : !isLive ? (
-          <div className="file-view__empty" data-testid="diff-paused-body">
-            <span>Live updates paused (subscription limit). Reload to load this diff.</span>
-            <button onClick={loadOneShot} data-testid="diff-paused-body-reload">
-              Reload
+          <div className="file-view__empty" data-testid="diff-paused-body" role="status">
+            <span>Las actualizaciones en vivo están pausadas. Recarga para obtener este diff.</span>
+            <button type="button" onClick={loadOneShot} data-testid="diff-paused-body-reload">
+              Recargar
             </button>
           </div>
         ) : inStatus || settling ? (
           // The file has changes (per status) but its diff hasn't arrived yet,
           // or the initial load is still in flight: show a spinner instead of a
           // premature "no changes" flash.
-          <div className="file-view__loading" data-testid="diff-loading">
-            Loading…
+          <div
+            className="file-view__loading"
+            data-testid="diff-loading"
+            role="status"
+            aria-live="polite"
+          >
+            Cargando diff…
           </div>
         ) : (
           // Settled with no diff and nothing in status: the file is clean, so

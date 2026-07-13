@@ -2,7 +2,7 @@
 artifact_kind: roadmap
 artifact_path: docs/roadmaps/2026-06-22-003-post-closeout-ux.md
 title: Tinto — Post-Closeout UX Iteration
-status: active
+status: delivered
 date: 2026-06-22
 source_docs:
   - docs/roadmaps/2026-06-10-001-tinto-roadmap.md

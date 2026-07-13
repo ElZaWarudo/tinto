@@ -32,9 +32,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: "Cerrar proyecto", keys: `${mod} Shift W`, group: "Cerrar" },
 
   // Vista
-  { action: "Glance mode", keys: `${mod} Shift G`, group: "Vista" },
-  { action: "Abrir Dashboard", keys: `${mod} Shift D`, group: "Vista" },
-  { action: "Abrir Timeline", keys: `${mod} Shift H`, group: "Vista" },
+  { action: "Vista rápida", keys: `${mod} Shift G`, group: "Vista" },
+  { action: "Abrir resumen", keys: `${mod} Shift D`, group: "Vista" },
+  { action: "Abrir cronología", keys: `${mod} Shift H`, group: "Vista" },
 
   // Proyecto
   { action: "Refrescar proyecto", keys: `${mod} R`, group: "Proyecto" },

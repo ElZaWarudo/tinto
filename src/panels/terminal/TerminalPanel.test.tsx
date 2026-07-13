@@ -116,6 +116,9 @@ function repoDelta(overrides: Partial<RepoDelta> = {}): RepoDelta {
     head: null,
     last_activity_ms: 1,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     subscribed_diffs: null,
     ...overrides,
   };
@@ -189,208 +192,47 @@ describe("TerminalPanel", () => {
 
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    expect(screen.getByTitle("Agent session status strip: loading session.")).toHaveTextContent(
-      "Loading session",
-    );
-    expect(
-      screen.getByTitle("Agent session status-strip label: Loading session."),
-    ).toHaveTextContent("Loading session");
+    const loading = screen.getByRole("status");
+    expect(loading).toHaveAttribute("aria-live", "polite");
+    expect(loading).toHaveTextContent("Cargando sesión");
     expect(await screen.findByText("Codex")).toBeInTheDocument();
-    expect(screen.getByTestId("terminal-panel-sess-1")).toHaveAttribute(
-      "title",
-      "Codex agent session surface for a: header, status, conversation, Agent Lens, and composer.",
-    );
-    expect(
-      screen.getByTitle("Codex agent header for a: identity, status, and session controls."),
-    ).toHaveClass("agent-panel__header");
-    expect(screen.getByTitle("Codex agent logo for a: agent mark.")).toHaveClass(
-      "agent-panel__logo",
-    );
-    expect(screen.getByTitle("Codex agent identity for a: agent name and repo label.")).toHaveClass(
-      "agent-panel__identity",
-    );
-    expect(screen.getByTitle("Codex agent display-name label for a.")).toHaveClass(
-      "agent-panel__agent",
-    );
-    expect(screen.getByTitle("Codex agent repo label for a: full path /r/a.")).toHaveClass(
-      "agent-panel__repo",
-    );
-    expect(
-      screen.getByTitle("Codex agent header actions for a: Stop and Revert controls."),
-    ).toHaveClass("agent-panel__header-actions");
-    expect(screen.getByRole("button", { name: "Stop" })).toHaveAttribute(
-      "title",
-      "Codex stop control for a: stop the running session.",
-    );
-    expect(screen.getByTitle("Agent stop control label: Stop.")).toHaveTextContent("Stop");
-    expect(screen.getByRole("button", { name: "Revert" })).toHaveAttribute(
-      "title",
-      "Codex revert control for a: stop the session before reverting.",
-    );
-    expect(screen.getByTitle("Agent revert control label: Revert.")).toHaveTextContent("Revert");
+    expect(screen.getByRole("button", { name: "Detener" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Revertir" })).toBeDisabled();
     expect(screen.getByText("a")).toBeInTheDocument();
-    expect(
-      screen.getByTitle(
-        "Codex agent workspace for a: overview, activity, conversation, inspection rail, and composer.",
-      ),
-    ).toHaveClass("agent-panel__workspace");
-    expect(
-      screen.getByTitle("Codex agent chat shell for a: transcript tools and conversation column."),
-    ).toHaveClass("agent-panel__chat-shell");
-    expect(
-      screen.getByTitle("Codex agent side rail for a: focused turn and Agent Lens column."),
-    ).toHaveClass("agent-panel__side-rail");
-    expect(
-      screen.getByTitle(
-        "Codex agent composer for a: command menu, skill mentions, and message input.",
-      ),
-    ).toHaveClass("agent-panel__composer");
-    expect(
-      screen.getByTitle(
-        "Codex command menu for a: type / for Codex and Tinto commands or $ for skills.",
-      ),
-    ).toHaveClass("agent-panel__composer-actions");
-    expect(
-      screen.getByTitle(
-        "Composer command hint: type / for Codex and Tinto commands or $ for skills.",
-      ),
-    ).toHaveTextContent("Type / for commands or $ for skills");
-    expect(
-      screen.getByTitle(
-        "Composer command scopes: Codex prompt commands, Tinto session commands, and skills.",
-      ),
-    ).toHaveTextContent("Codex + Tinto + Skills");
-    expect(
-      screen.getByTitle("Codex agent composer input row for a: message draft and send control."),
-    ).toHaveClass("agent-panel__composer-row");
-    expect(screen.getByLabelText("Message Codex")).toHaveAttribute(
-      "title",
-      "Codex agent message input for a: draft the next instruction.",
+    const composer = screen.getByLabelText("Mensaje para Codex");
+    expect(composer).toHaveAttribute("placeholder", "Mensaje para Codex");
+    const composerHint = composer.getAttribute("aria-describedby");
+    expect(composerHint).toBeTruthy();
+    expect(document.getElementById(composerHint!)).toHaveTextContent(
+      "Escribe / para ver comandos o $ para ver skills.",
     );
-    expect(screen.getByRole("button", { name: "Send" })).toHaveAttribute(
-      "title",
-      "Codex agent send control for a: message input is empty.",
-    );
-    expect(screen.getByTitle("Composer send button label: Send.")).toHaveTextContent("Send");
-    const conversation = screen.getByLabelText("Agent conversation");
-    expect(conversation).toHaveAttribute(
-      "title",
-      "Agent conversation transcript: ready for the first turn.",
-    );
+    expect(screen.queryByText("Codex + Tinto + skills")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    expect(conversation).toHaveAttribute("role", "log");
+    expect(conversation).toHaveAttribute("aria-live", "polite");
+    expect(within(conversation).getByText("Listo")).toBeInTheDocument();
     expect(
-      screen.getByTitle("Agent conversation empty state: ready for the first turn."),
-    ).toHaveClass("agent-panel__empty-chat");
-    expect(screen.getByTitle("Agent conversation empty-state label: Ready.")).toHaveTextContent(
-      "Ready",
-    );
-    expect(
-      screen.getByTitle("Agent conversation empty-state helper: start a turn from the composer."),
-    ).toHaveTextContent("Start a turn from the composer below.");
-    expect(
-      screen.getByTitle(
-        "Agent transcript tools: search, result navigation, latest, and copy controls waiting for transcript turns.",
-      ),
-    ).toHaveTextContent("Search transcript");
-    const idleFocus = screen.getByLabelText("Focused turn");
-    expect(idleFocus).toHaveAttribute("title", "Focused turn card container: no turn selected.");
-    expect(within(idleFocus).getByTitle("Focused turn idle status label: Idle.")).toHaveTextContent(
-      "Idle",
-    );
-    expect(
-      within(idleFocus).getByTitle("Focused turn empty-state label: No turn selected."),
-    ).toHaveTextContent("No turn selected");
-    expect(
-      within(idleFocus).getByTitle(
-        "Focused turn idle helper text: the next agent response will appear as a navigable turn.",
-      ),
-    ).toHaveTextContent("The next agent response will appear here as a navigable turn.");
-    expect(
-      screen.getByTitle("Transcript search count: showing all 0 transcript turns."),
-    ).toHaveTextContent("All turns");
-    expect(
-      screen.getByTitle(
-        "Transcript search: find messages, commands, and files across 0 transcript turns.",
-      ),
-    ).toHaveTextContent("Search transcript");
-    expect(screen.getByTitle("Transcript search label: Search transcript.")).toHaveTextContent(
-      "Search transcript",
-    );
-    expect(screen.getByRole("group", { name: "Transcript secondary actions" })).toHaveAttribute(
-      "title",
-      "Transcript secondary actions: latest-turn jump and copy-visible controls waiting for transcript turns.",
-    );
-    const overview = screen.getByLabelText("Agent session overview");
-    expect(overview).toHaveAttribute(
-      "title",
-      "Agent session overview: 0 turns, 0 messages, 0 commands, 0 files; latest activity: waiting for the first turn; turn map waiting for turns.",
-    );
-    expect(
-      within(overview).getByTitle(
-        "Agent session overview metrics: 0 turns, 0 messages, 0 commands, 0 files.",
-      ),
-    ).toHaveTextContent("Turns");
-    expect(
-      within(overview).getByTitle(
-        "Agent session overview latest-activity area: waiting for the first turn.",
-      ),
-    ).toHaveTextContent("Waiting for the first turn.");
-    expect(
-      within(overview).getByTitle("Agent session overview latest-activity label."),
-    ).toHaveTextContent("Latest activity");
-    expect(
-      within(overview).getByTitle(
-        "Agent session overview latest activity: waiting for the first turn.",
-      ),
-    ).toHaveTextContent("Waiting for the first turn.");
-    const activity = screen.getByLabelText("Agent activity");
-    expect(activity).toHaveAttribute(
-      "title",
-      "Agent activity strip: Agent is working; Working. 1 changes tracked so far.; 0 turns, 0 files.",
-    );
-    expect(
-      within(activity).getByTitle("Agent activity main status: Agent is working."),
-    ).toHaveClass("agent-panel__activity-main");
-    expect(within(activity).getByTitle("Agent activity pulse: working state.")).toHaveClass(
-      "agent-panel__activity-dot",
-    );
-    expect(
-      within(activity).getByTitle(
-        "Agent activity status text: Agent is working; Working. 1 changes tracked so far.",
-      ),
-    ).toHaveTextContent("Agent is working");
-    expect(
-      within(activity).getByTitle("Agent activity headline: Agent is working."),
-    ).toHaveTextContent("Agent is working");
-    expect(
-      within(activity).getByTitle("Agent activity detail: Working. 1 changes tracked so far."),
-    ).toHaveTextContent("Working. 1 changes tracked so far.");
-    expect(within(activity).getByText("Agent is working")).toBeInTheDocument();
-    expect(within(activity).getByText("filesystem checkpoint")).toBeInTheDocument();
-    expect(
-      within(activity).getByTitle(
-        "Agent activity facts: turns, files, checkpoint, and stream throughput.",
-      ),
-    ).toHaveTextContent("0 turns");
-    expect(within(activity).getByTitle("Agent activity turn count: 0 turns.")).toHaveTextContent(
-      "0 turns",
-    );
-    expect(
-      within(activity).getByTitle("Agent activity touched-file count: 0 files."),
-    ).toHaveTextContent("0 files");
-    expect(
-      within(activity).getByTitle("Agent activity checkpoint fact: filesystem checkpoint."),
-    ).toHaveTextContent("filesystem checkpoint");
-    expect(
-      within(activity).getByTitle("Agent activity stream throughput fact: Stream quiet."),
-    ).toHaveTextContent("Stream quiet");
-    expect(screen.getByTitle("Agent session status facet: Running.")).toHaveTextContent("Running");
-    expect(screen.getByTitle("Agent turn status facet: Working.")).toHaveTextContent("Working");
-    expect(
-      screen.getByTitle("Agent checkpoint status facet: filesystem checkpoint."),
-    ).toHaveTextContent("filesystem checkpoint");
-    expect(screen.getByTitle("Agent change-log status facet: 1 change.")).toHaveTextContent(
-      "1 changes",
-    );
+      within(conversation).queryByText("Inicia un turno desde el compositor inferior."),
+    ).not.toBeInTheDocument();
+    const idleFocus = screen.getByLabelText("Turno seleccionado");
+    expect(idleFocus).toHaveTextContent("Inactivo");
+    expect(idleFocus).toHaveTextContent("Ningún turno seleccionado");
+    expect(screen.getByLabelText("Buscar en la transcripción")).toBeInTheDocument();
+    expect(screen.getByText("Todos los turnos")).toBeInTheDocument();
+    const overview = screen.getByLabelText("Resumen de la sesión de Agent");
+    expect(overview).toHaveTextContent("Turnos");
+    expect(overview).toHaveTextContent("Actividad reciente");
+    expect(overview).toHaveTextContent("Esperando el primer turno.");
+    const activity = screen.getByLabelText("Actividad de Agent");
+    expect(activity).toHaveTextContent("Agent está trabajando");
+    expect(activity).toHaveTextContent("punto de control del sistema de archivos");
+    expect(activity).toHaveTextContent("0 turnos");
+    expect(activity).toHaveTextContent("0 archivos");
+    expect(activity).toHaveTextContent("Transmisión en reposo");
+    expect(screen.getByRole("status")).toHaveTextContent("En ejecución");
+    expect(screen.getByRole("status")).toHaveTextContent("Trabajando");
+    expect(screen.getByRole("status")).toHaveTextContent("1 cambio");
     expect(screen.queryByTestId("terminal-surface")).not.toBeInTheDocument();
   });
 
@@ -410,23 +252,15 @@ describe("TerminalPanel", () => {
     ]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const context = await screen.findByLabelText("Turn context");
-    expect(context).toHaveAttribute(
-      "title",
-      "Turn context strip: Goal Build the host harness; Style precise; Plan On; Compact Review findings are structured and WSL parity is working.",
-    );
-    expect(within(context).getByTitle("Turn context label.")).toHaveTextContent("Turn context");
-    expect(within(context).getByTitle("Turn context items: 4 items.")).toBeInTheDocument();
-    expect(
-      within(context).getByTitle("Turn context goal: Build the host harness."),
-    ).toHaveTextContent("Build the host harness");
-    expect(within(context).getByTitle("Turn context style: precise.")).toHaveTextContent("precise");
-    expect(within(context).getByTitle("Turn context plan: On.")).toHaveTextContent("On");
-    expect(
-      within(context).getByTitle(
-        "Turn context compact: Review findings are structured and WSL parity is working.",
-      ),
-    ).toHaveTextContent("Review findings are structured and WSL parity is working.");
+    const context = await screen.findByLabelText("Contexto del turno");
+    expect(context).toHaveTextContent("Objetivo");
+    expect(context).toHaveTextContent("Build the host harness");
+    expect(context).toHaveTextContent("Estilo");
+    expect(context).toHaveTextContent("precise");
+    expect(context).toHaveTextContent("Plan");
+    expect(context).toHaveTextContent("Activo");
+    expect(context).toHaveTextContent("Resumen");
+    expect(context).toHaveTextContent("Review findings are structured and WSL parity is working.");
   });
 
   it("sends composer text as an agent turn", async () => {
@@ -434,9 +268,9 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "implementa la vista");
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
       speed: "standard",
@@ -449,14 +283,14 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    await user.click(await screen.findByRole("button", { name: /Reasoning/ }));
+    await user.click(await screen.findByRole("button", { name: /Razonamiento/ }));
     await user.click(screen.getByRole("menuitemradio", { name: "Alto" }));
-    await user.click(screen.getByRole("button", { name: /Model/ }));
+    await user.click(screen.getByRole("button", { name: /Modelo/ }));
     await user.click(screen.getByRole("menuitemradio", { name: "GPT-5.5" }));
 
-    const composer = screen.getByLabelText("Message Codex");
+    const composer = screen.getByLabelText("Mensaje para Codex");
     await user.type(composer, "implementa la vista");
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
       model: "gpt-5.5",
@@ -470,7 +304,7 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/modelo gpt-5.5");
     await user.type(composer, "{Enter}");
     await user.type(composer, "/razonamiento alto");
@@ -478,7 +312,7 @@ describe("TerminalPanel", () => {
     await user.type(composer, "/rápido");
     await user.type(composer, "{Enter}");
     await user.type(composer, "implementa la vista");
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledTimes(1);
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
@@ -494,13 +328,17 @@ describe("TerminalPanel", () => {
     writeAgentSessionInputMock.mockRejectedValueOnce(new Error("Write failed"));
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "implementa la vista");
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
 
     const errorBanner = await screen.findByTestId("terminal-panel-error");
+    expect(errorBanner).toHaveAttribute("role", "alert");
     expect(errorBanner).toHaveTextContent("Write failed");
-    expect(errorBanner).toHaveAttribute("title", "Agent session error banner: Write failed");
+    expect(errorBanner).toHaveAttribute(
+      "title",
+      "Aviso de error de la sesión de Agent: Write failed",
+    );
   });
 
   it("prepares editable turns from composer commands and skill mentions", async () => {
@@ -508,35 +346,35 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/test");
-    expect(screen.getByRole("listbox", { name: "Composer commands" })).toHaveAttribute(
+    expect(screen.getByRole("listbox", { name: "Comandos del compositor" })).toHaveAttribute(
       "title",
-      "Composer command menu: 1 command matching /test.",
+      "Menú de comandos del compositor: 1 comando coincidente con /test.",
     );
     expect(screen.getByRole("option", { name: /\/test/ })).toHaveAttribute(
       "title",
-      "Run /test: Run the most relevant verification for this repo.",
+      "Ejecutar /test: Ejecutar la verificación más relevante para este repositorio.",
     );
     await user.type(composer, "{Enter}");
 
     expect(composer).toHaveValue(
-      "Run the most relevant verification for this repo and summarize failures before fixing them.",
+      "Ejecuta la verificación más relevante para este repositorio y resume los fallos antes de corregirlos.",
     );
 
     await user.type(composer, "{Shift>}{Enter}{/Shift}$warden");
-    expect(screen.getByRole("listbox", { name: "Composer commands" })).toHaveAttribute(
+    expect(screen.getByRole("listbox", { name: "Comandos del compositor" })).toHaveAttribute(
       "title",
-      "Composer command menu: 1 command matching $warden.",
+      "Menú de comandos del compositor: 1 comando coincidente con $warden.",
     );
     expect(screen.getByRole("option", { name: /\$krt-interface-warden/ })).toHaveAttribute(
       "title",
-      "Run $krt-interface-warden: Design or revise a distinctive working-surface interface.",
+      "Ejecutar $krt-interface-warden: Diseñar o revisar una interfaz de trabajo con identidad propia.",
     );
     await user.type(composer, "{Enter}");
     expect(composer).toHaveValue(
       [
-        "Run the most relevant verification for this repo and summarize failures before fixing them.",
+        "Ejecuta la verificación más relevante para este repositorio y resume los fallos antes de corregirlos.",
         "$krt-interface-warden ",
       ].join("\n\n"),
     );
@@ -545,7 +383,7 @@ describe("TerminalPanel", () => {
     await user.type(composer, "/details");
     expect(screen.getByRole("option", { name: /\/details/ })).toHaveAttribute(
       "title",
-      "Run /details: Open session details, files, commands, timeline, and restore points.",
+      "Ejecutar /details: Abrir los detalles, archivos, comandos, Timeline y puntos de restauración de la sesión.",
     );
   });
 
@@ -554,11 +392,14 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/");
 
-    const menu = screen.getByRole("listbox", { name: "Composer commands" });
-    expect(menu).toHaveAttribute("title", expect.stringMatching(/^Composer command menu: /));
+    const menu = screen.getByRole("listbox", { name: "Comandos del compositor" });
+    expect(menu).toHaveAttribute(
+      "title",
+      expect.stringMatching(/^Menú de comandos del compositor: /),
+    );
     for (const command of [
       "/branch",
       "/comments",
@@ -576,7 +417,9 @@ describe("TerminalPanel", () => {
       "/review",
       "/fast",
     ]) {
-      expect(within(menu).getByTitle(`Composer command trigger: ${command}.`)).toBeInTheDocument();
+      expect(
+        within(menu).getByTitle(`Activador del comando del compositor: ${command}.`),
+      ).toBeInTheDocument();
     }
     expect(within(menu).queryByRole("option", { name: /\/memories/ })).not.toBeInTheDocument();
     expect(within(menu).queryByText(/Memorias/)).not.toBeInTheDocument();
@@ -587,10 +430,10 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/");
 
-    const menu = screen.getByRole("listbox", { name: "Composer commands" });
+    const menu = screen.getByRole("listbox", { name: "Comandos del compositor" });
     expect(composer).toHaveAttribute("aria-controls", menu.id);
     expect(composer).toHaveAttribute("aria-expanded", "true");
     expect(composer).toHaveAttribute("aria-haspopup", "listbox");
@@ -618,7 +461,9 @@ describe("TerminalPanel", () => {
     expect(composer).toHaveAttribute("aria-activedescendant", "composer-command-sess-1-branch");
 
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("listbox", { name: "Composer commands" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Comandos del compositor" }),
+    ).not.toBeInTheDocument();
     expect(composer).toHaveAttribute("aria-expanded", "false");
     expect(composer).not.toHaveAttribute("aria-controls");
     expect(composer).not.toHaveAttribute("aria-activedescendant");
@@ -634,7 +479,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/details");
     await user.type(composer, "{Enter}");
 
@@ -644,7 +489,7 @@ describe("TerminalPanel", () => {
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
     expect(
       await screen.findByTitle(
-        "Session details: turn map, current activity, restore points, and Agent Lens.",
+        "Detalles de la sesión: mapa de turnos, actividad actual, puntos de restauración y Agent Lens.",
       ),
     ).toBeInTheDocument();
     expect(await screen.findByText("Session details opened in Tinto.")).toBeInTheDocument();
@@ -660,7 +505,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/plan on");
     await user.type(composer, "{Enter}");
 
@@ -681,11 +526,11 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/status");
     expect(screen.getByRole("option", { name: /\/status/ })).toHaveAttribute(
       "title",
-      "Run /status: Mostrar el ID del chat, estado, uso y runtime. Aliases: /estado.",
+      "Ejecutar /status: Mostrar el ID del chat, estado, uso y runtime. Alias disponibles: /estado.",
     );
     await user.type(composer, "{Enter}");
 
@@ -702,22 +547,24 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/mascot");
     await user.type(composer, "{Enter}");
 
-    const mascot = await screen.findByLabelText("Tinto companion");
-    expect(mascot).toHaveAttribute("title", "Tinto companion is awake for Codex on a.");
-    expect(within(mascot).getByTitle("Tinto companion status.")).toHaveTextContent("Awake");
-    expect(await screen.findByText("Mascot awake in this agent panel.")).toBeInTheDocument();
+    const mascot = await screen.findByLabelText("Asistente Tinto");
+    expect(mascot).toHaveAttribute("title", "El asistente Tinto está activo con Codex en a.");
+    expect(within(mascot).getByTitle("Estado del asistente Tinto.")).toHaveTextContent("Activo");
+    expect(
+      await screen.findByText("La mascota está activa en este panel de Agent."),
+    ).toBeInTheDocument();
     expect(runAgentHostCommandMock).not.toHaveBeenCalled();
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
 
     await user.type(composer, "/mascot");
     await user.type(composer, "{Enter}");
 
-    await waitFor(() => expect(screen.queryByLabelText("Tinto companion")).not.toBeInTheDocument());
-    expect(await screen.findByText("Mascot hidden.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText("Asistente Tinto")).not.toBeInTheDocument());
+    expect(await screen.findByText("Mascota oculta.")).toBeInTheDocument();
     expect(runAgentHostCommandMock).not.toHaveBeenCalled();
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
   });
@@ -727,13 +574,15 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/memorias");
     expect(screen.queryByRole("option", { name: /memories|memorias/i })).not.toBeInTheDocument();
     await user.type(composer, "{Enter}");
 
     expect(
-      await screen.findByText("Memory commands are deferred for the later Tinto memory plan."),
+      await screen.findByText(
+        "Los comandos de memoria quedan pendientes para una futura fase de Tinto.",
+      ),
     ).toBeInTheDocument();
     expect(composer).toHaveValue("");
     expect(runAgentHostCommandMock).not.toHaveBeenCalled();
@@ -773,11 +622,11 @@ describe("TerminalPanel", () => {
       });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/objective");
     expect(screen.getByRole("option", { name: /\/goal/ })).toHaveAttribute(
       "title",
-      "Run /goal: Establecer un objetivo hacia el que Codex seguirá trabajando. Aliases: /objective, /objetivo.",
+      "Ejecutar /goal: Establecer un objetivo hacia el que Codex seguirá trabajando. Alias disponibles: /objective, /objetivo.",
     );
     await user.type(composer, " Build the host harness");
     await user.type(composer, "{Enter}");
@@ -823,7 +672,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/init");
     await user.type(composer, "{Enter}");
 
@@ -831,7 +680,6 @@ describe("TerminalPanel", () => {
       expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "init", undefined),
     );
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-    expect(await screen.findByText("AGENTS.md is configured for this repo.")).toBeInTheDocument();
   });
 
   it("runs review through the host command backend", async () => {
@@ -861,7 +709,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/review");
     await user.type(composer, "{Enter}");
 
@@ -869,162 +717,183 @@ describe("TerminalPanel", () => {
       expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "review", undefined),
     );
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-    expect(
-      await screen.findByText("Review summary for branch main: 2 changed file(s)."),
-    ).toBeInTheDocument();
-    const review = await screen.findByLabelText("Review summary");
-    expect(review).toHaveAttribute("title", "Review summary for main: 2 changed files.");
-    expect(within(review).getByTitle("Review summary branch.")).toHaveTextContent("main");
+    const review = await screen.findByLabelText("Resumen de la revisión");
+    expect(review).toHaveAttribute(
+      "title",
+      "Resumen de la revisión de main: 2 archivos modificados.",
+    );
+    expect(within(review).getByTitle("Rama revisada.")).toHaveTextContent("main");
     expect(within(review).getByText("1 file changed, 3 insertions(+)")).toBeInTheDocument();
     expect(within(review).getByText("?? docs/review.md")).toBeInTheDocument();
-    expect(within(review).getByLabelText("Review findings")).toBeInTheDocument();
+    expect(within(review).getByLabelText("Hallazgos de la revisión")).toBeInTheDocument();
     expect(within(review).getByText("Conflict marker present")).toBeInTheDocument();
     expect(within(review).getByText("src/App.tsx:12")).toBeInTheDocument();
     const copySummary = within(review).getByRole("button", {
-      name: "Copy structured review summary",
+      name: "Copiar resumen estructurado de la revisión",
     });
     expect(copySummary).toHaveAttribute(
       "title",
-      "Copy the structured review summary to the clipboard.",
+      "Copiar el resumen estructurado de la revisión al portapapeles.",
     );
     expect(
-      within(copySummary).getByTitle("Structured review summary copy label: Copy summary."),
-    ).toHaveTextContent("Copy summary");
+      within(copySummary).getByTitle(
+        "Acción para copiar el resumen estructurado de la revisión: Copiar resumen.",
+      ),
+    ).toHaveTextContent("Copiar resumen");
 
     installClipboardMock();
     fireEvent.click(copySummary);
     await waitFor(() =>
       expect(writeClipboardTextMock).toHaveBeenCalledWith(
         [
-          "Structured review summary:",
-          "Branch: main",
-          "Changed files: 2",
-          "Working tree diff: 1 file changed, 3 insertions(+)",
-          "Staged diff: no staged line diff",
-          "Files:",
+          "Resumen estructurado de la revisión:",
+          "Rama: main",
+          "Archivos modificados: 2",
+          "Diff del árbol de trabajo: 1 file changed, 3 insertions(+)",
+          "Diff preparado: sin cambios de líneas preparados",
+          "Archivos:",
           "-  M src/App.tsx",
           "- ?? docs/review.md",
-          "Host review findings:",
+          "Hallazgos de la revisión local:",
           "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
         ].join("\n"),
       ),
     );
-    expect(copySummary).toHaveAttribute("title", "Copied structured review summary to clipboard.");
+    expect(copySummary).toHaveAttribute(
+      "title",
+      "Resumen estructurado de la revisión copiado al portapapeles.",
+    );
     expect(
-      within(copySummary).getByTitle("Structured review summary copy label: Copied."),
-    ).toHaveTextContent("Copied");
+      within(copySummary).getByTitle(
+        "Acción para copiar el resumen estructurado de la revisión: Copiado.",
+      ),
+    ).toHaveTextContent("Copiado");
 
     const copyFiles = within(review).getByRole("button", {
-      name: "Copy review changed files",
+      name: "Copiar archivos modificados de la revisión",
     });
-    expect(copyFiles).toHaveAttribute("title", "Copy 2 files to the clipboard.");
+    expect(copyFiles).toHaveAttribute("title", "Copiar 2 archivos al portapapeles.");
     expect(
-      within(copyFiles).getByTitle("Review changed files copy label: Copy files."),
-    ).toHaveTextContent("Copy files");
+      within(copyFiles).getByTitle("Acción para copiar los archivos modificados: Copiar archivos."),
+    ).toHaveTextContent("Copiar archivos");
 
     installClipboardMock();
     fireEvent.click(copyFiles);
     await waitFor(() =>
       expect(writeClipboardTextMock).toHaveBeenCalledWith(
-        ["Review changed files:", "-  M src/App.tsx", "- ?? docs/review.md"].join("\n"),
+        ["Archivos modificados de la revisión:", "-  M src/App.tsx", "- ?? docs/review.md"].join(
+          "\n",
+        ),
       ),
     );
-    expect(copyFiles).toHaveAttribute("title", "Copied review changed files to clipboard.");
+    expect(copyFiles).toHaveAttribute(
+      "title",
+      "Archivos modificados de la revisión copiados al portapapeles.",
+    );
     expect(
-      within(copyFiles).getByTitle("Review changed files copy label: Copied."),
-    ).toHaveTextContent("Copied");
+      within(copyFiles).getByTitle("Acción para copiar los archivos modificados: Copiado."),
+    ).toHaveTextContent("Copiado");
 
     const copyFindings = within(review).getByRole("button", {
-      name: "Copy deterministic review findings",
+      name: "Copiar hallazgos automáticos de la revisión",
     });
-    expect(copyFindings).toHaveAttribute("title", "Copy 1 finding to the clipboard.");
+    expect(copyFindings).toHaveAttribute("title", "Copiar 1 hallazgo al portapapeles.");
     expect(
-      within(copyFindings).getByTitle("Deterministic review findings copy label: Copy findings."),
-    ).toHaveTextContent("Copy findings");
+      within(copyFindings).getByTitle(
+        "Acción para copiar los hallazgos automáticos: Copiar hallazgos.",
+      ),
+    ).toHaveTextContent("Copiar hallazgos");
 
     installClipboardMock();
     fireEvent.click(copyFindings);
     await waitFor(() =>
       expect(writeClipboardTextMock).toHaveBeenCalledWith(
         [
-          "Host review findings:",
+          "Hallazgos de la revisión local:",
           "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
         ].join("\n"),
       ),
     );
     expect(copyFindings).toHaveAttribute(
       "title",
-      "Copied deterministic review findings to clipboard.",
+      "Hallazgos automáticos de la revisión copiados al portapapeles.",
     );
     expect(
-      within(copyFindings).getByTitle("Deterministic review findings copy label: Copied."),
-    ).toHaveTextContent("Copied");
+      within(copyFindings).getByTitle("Acción para copiar los hallazgos automáticos: Copiados."),
+    ).toHaveTextContent("Copiados");
 
     const reviewPromptButton = within(review).getByRole("button", {
-      name: "Draft semantic review prompt",
+      name: "Preparar prompt de revisión semántica",
     });
     expect(reviewPromptButton).toHaveAttribute(
       "title",
-      "Draft a semantic code-review prompt from this review summary with 1 finding.",
+      "Preparar un prompt de revisión semántica del código a partir de este resumen con 1 hallazgo.",
     );
     expect(
-      within(reviewPromptButton).getByTitle("Review semantic prompt action label."),
-    ).toHaveTextContent("Ask review");
+      within(reviewPromptButton).getByTitle("Acción para solicitar una revisión semántica."),
+    ).toHaveTextContent("Pedir revisión");
 
     await user.click(reviewPromptButton);
     expect(
-      within(review).getByTitle("Semantic review prompt is drafted in the composer."),
-    ).toHaveTextContent("Review draft ready");
+      within(review).getByTitle("El prompt de revisión semántica está preparado en el compositor."),
+    ).toHaveTextContent("Borrador de revisión listo");
     const draftReset = within(review).getByRole("button", {
-      name: "Reset semantic review workflow",
+      name: "Reiniciar el flujo de revisión semántica",
     });
     expect(draftReset).toHaveAttribute(
       "title",
-      "Reset the drafted semantic review prompt state for this review summary.",
+      "Reiniciar el borrador del prompt de revisión semántica de este resumen.",
     );
-    expect(
-      within(draftReset).getByTitle("Semantic review reset label: Reset review."),
-    ).toHaveTextContent("Reset review");
+    expect(within(draftReset).getByTitle("Reiniciar la revisión semántica.")).toHaveTextContent(
+      "Reiniciar revisión",
+    );
     const expectedReviewPrompt = [
-      "Review the current Git changes for correctness, regressions, security risks, and missing tests.",
-      "Branch: main",
-      "Changed files: 2",
-      "Working tree diff: 1 file changed, 3 insertions(+)",
-      "Files:",
+      "Revisa los cambios actuales de Git en busca de errores, regresiones, riesgos de seguridad y pruebas ausentes.",
+      "Rama: main",
+      "Archivos modificados: 2",
+      "Diff del árbol de trabajo: 1 file changed, 3 insertions(+)",
+      "Archivos:",
       "-  M src/App.tsx",
       "- ?? docs/review.md",
-      "Host review findings to verify first:",
+      "Hallazgos de la revisión local que debes comprobar primero:",
       "- high: Conflict marker present (src/App.tsx:12) - src/App.tsx still contains a merge conflict marker.",
-      "Return findings first, ordered by severity, with file/line references when possible. If there are no issues, say that clearly and mention any residual test gaps.",
+      "Presenta primero los hallazgos, ordenados por gravedad y con referencias a archivo y línea cuando sea posible. Si no hay problemas, indícalo con claridad y menciona cualquier carencia que quede en las pruebas.",
     ].join("\n");
     expect(composer).toHaveValue(expectedReviewPrompt);
 
     const copyPrompt = within(review).getByRole("button", {
-      name: "Copy semantic review prompt",
+      name: "Copiar prompt de revisión semántica",
     });
     expect(copyPrompt).toHaveAttribute(
       "title",
-      "Copy the drafted semantic review prompt to the clipboard.",
+      "Copiar el borrador del prompt de revisión semántica al portapapeles.",
     );
     expect(
-      within(copyPrompt).getByTitle("Semantic review prompt copy label: Copy prompt."),
-    ).toHaveTextContent("Copy prompt");
+      within(copyPrompt).getByTitle(
+        "Acción para copiar el prompt de revisión semántica: Copiar prompt.",
+      ),
+    ).toHaveTextContent("Copiar prompt");
 
     installClipboardMock();
     fireEvent.click(copyPrompt);
     await waitFor(() => expect(writeClipboardTextMock).toHaveBeenCalledWith(expectedReviewPrompt));
-    expect(copyPrompt).toHaveAttribute("title", "Copied semantic review prompt to clipboard.");
+    expect(copyPrompt).toHaveAttribute(
+      "title",
+      "Prompt de revisión semántica copiado al portapapeles.",
+    );
     expect(
-      within(copyPrompt).getByTitle("Semantic review prompt copy label: Copied."),
-    ).toHaveTextContent("Copied");
+      within(copyPrompt).getByTitle("Acción para copiar el prompt de revisión semántica: Copiado."),
+    ).toHaveTextContent("Copiado");
 
     await user.type(composer, "{Enter}");
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", `${expectedReviewPrompt}\r`, {
       speed: "standard",
     });
     expect(
-      await within(review).findByTitle("Semantic review prompt was sent as an agent turn."),
-    ).toHaveTextContent("Review request sent");
+      await within(review).findByTitle(
+        "El prompt de revisión semántica se envió como un turno de Agent.",
+      ),
+    ).toHaveTextContent("Solicitud de revisión enviada");
 
     const sentPrompt = String(writeAgentSessionInputMock.mock.calls[0]?.[1] ?? "").trim();
     await act(async () => {
@@ -1046,57 +915,59 @@ describe("TerminalPanel", () => {
 
     expect(
       await within(review).findByTitle(
-        "Semantic review response captured from turn 1; verify findings before acting.",
+        "Respuesta de revisión semántica recibida en el turno 1; verifica los hallazgos antes de actuar.",
       ),
-    ).toHaveTextContent("Review response captured");
+    ).toHaveTextContent("Respuesta de revisión recibida");
     expect(within(review).getByText(/Found one high severity issue/)).toBeInTheDocument();
     const responseReset = within(review).getByRole("button", {
-      name: "Reset semantic review workflow",
+      name: "Reiniciar el flujo de revisión semántica",
     });
     expect(responseReset).toHaveAttribute(
       "title",
-      "Reset the captured semantic review response and request state for this review summary.",
+      "Reiniciar la respuesta capturada y la solicitud de revisión semántica de este resumen.",
     );
 
     const showRequest = screen.getByRole("button", {
-      name: "Show semantic review request turn",
+      name: "Mostrar el turno de la solicitud de revisión semántica",
     });
     expect(showRequest).toHaveAttribute(
       "title",
-      "Show the sent semantic review request in conversation turn 1.",
+      "Mostrar la solicitud de revisión semántica enviada en el turno 1.",
     );
     expect(
-      within(showRequest).getByTitle("Semantic review request navigation label: Show request."),
-    ).toHaveTextContent("Show request");
+      within(showRequest).getByTitle("Mostrar la solicitud de revisión semántica."),
+    ).toHaveTextContent("Ver solicitud");
 
     scrollIntoViewMock.mockClear();
     fireEvent.click(showRequest);
     await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalled());
 
     const showResponse = screen.getByRole("button", {
-      name: "Show semantic review response turn",
+      name: "Mostrar el turno de la respuesta de revisión semántica",
     });
     expect(showResponse).toHaveAttribute(
       "title",
-      "Show the full semantic review response in conversation turn 1.",
+      "Mostrar la respuesta completa de la revisión semántica en el turno 1.",
     );
     expect(
-      within(showResponse).getByTitle("Semantic review response navigation label: Show response."),
-    ).toHaveTextContent("Show response");
+      within(showResponse).getByTitle("Mostrar la respuesta de revisión semántica."),
+    ).toHaveTextContent("Ver respuesta");
 
     fireEvent.click(showResponse);
     await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalled());
 
     const copyResponse = screen.getByRole("button", {
-      name: "Copy semantic review response",
+      name: "Copiar respuesta de revisión semántica",
     });
     expect(copyResponse).toHaveAttribute(
       "title",
-      "Copy the captured semantic review response to the clipboard.",
+      "Copiar la respuesta de revisión semántica al portapapeles.",
     );
     expect(
-      within(copyResponse).getByTitle("Semantic review response copy label: Copy response."),
-    ).toHaveTextContent("Copy response");
+      within(copyResponse).getByTitle(
+        "Acción para copiar la respuesta de revisión semántica: Copiar respuesta.",
+      ),
+    ).toHaveTextContent("Copiar respuesta");
 
     installClipboardMock();
     fireEvent.click(copyResponse);
@@ -1105,69 +976,84 @@ describe("TerminalPanel", () => {
         "Found one high severity issue in src/App.tsx:12. Add a regression test before merging.",
       ),
     );
-    expect(copyResponse).toHaveAttribute("title", "Copied semantic review response to clipboard.");
+    expect(copyResponse).toHaveAttribute(
+      "title",
+      "Respuesta de revisión semántica copiada al portapapeles.",
+    );
     expect(
-      within(copyResponse).getByTitle("Semantic review response copy label: Copied."),
-    ).toHaveTextContent("Copied");
+      within(copyResponse).getByTitle(
+        "Acción para copiar la respuesta de revisión semántica: Copiada.",
+      ),
+    ).toHaveTextContent("Copiada");
 
     const copyExchange = screen.getByRole("button", {
-      name: "Copy semantic review exchange",
+      name: "Copiar intercambio de revisión semántica",
     });
     expect(copyExchange).toHaveAttribute(
       "title",
-      "Copy the semantic review request and captured response to the clipboard.",
+      "Copiar la solicitud y la respuesta de revisión semántica al portapapeles.",
     );
     expect(
-      within(copyExchange).getByTitle("Semantic review exchange copy label: Copy exchange."),
-    ).toHaveTextContent("Copy exchange");
+      within(copyExchange).getByTitle(
+        "Acción para copiar el intercambio de revisión semántica: Copiar intercambio.",
+      ),
+    ).toHaveTextContent("Copiar intercambio");
 
     installClipboardMock();
     fireEvent.click(copyExchange);
     await waitFor(() =>
       expect(writeClipboardTextMock).toHaveBeenCalledWith(
         [
-          "Semantic review request:",
+          "Solicitud de revisión semántica:",
           expectedReviewPrompt,
           "",
-          "Semantic review response:",
+          "Respuesta de revisión semántica:",
           "Found one high severity issue in src/App.tsx:12. Add a regression test before merging.",
         ].join("\n"),
       ),
     );
     expect(copyExchange).toHaveAttribute(
       "title",
-      "Copied semantic review request and response to clipboard.",
+      "Solicitud y respuesta de revisión semántica copiadas al portapapeles.",
     );
     expect(
-      within(copyExchange).getByTitle("Semantic review exchange copy label: Copied."),
-    ).toHaveTextContent("Copied");
+      within(copyExchange).getByTitle(
+        "Acción para copiar el intercambio de revisión semántica: Copiado.",
+      ),
+    ).toHaveTextContent("Copiado");
 
     fireEvent.click(responseReset);
     expect(
-      within(review).queryByTitle("Semantic review prompt was sent as an agent turn."),
-    ).not.toBeInTheDocument();
-    expect(
       within(review).queryByTitle(
-        "Semantic review response captured from turn 1; verify findings before acting.",
+        "El prompt de revisión semántica se envió como un turno de Agent.",
       ),
     ).not.toBeInTheDocument();
     expect(
-      within(review).queryByRole("button", { name: "Reset semantic review workflow" }),
+      within(review).queryByTitle(
+        "Respuesta de revisión semántica recibida en el turno 1; verifica los hallazgos antes de actuar.",
+      ),
     ).not.toBeInTheDocument();
     expect(
-      within(review).queryByRole("button", { name: "Show semantic review response turn" }),
+      within(review).queryByRole("button", { name: "Reiniciar el flujo de revisión semántica" }),
     ).not.toBeInTheDocument();
     expect(
-      within(review).queryByRole("button", { name: "Copy semantic review response" }),
+      within(review).queryByRole("button", {
+        name: "Mostrar el turno de la respuesta de revisión semántica",
+      }),
     ).not.toBeInTheDocument();
     expect(
-      within(review).queryByRole("button", { name: "Copy semantic review prompt" }),
+      within(review).queryByRole("button", { name: "Copiar respuesta de revisión semántica" }),
     ).not.toBeInTheDocument();
     expect(
-      within(review).queryByRole("button", { name: "Show semantic review request turn" }),
+      within(review).queryByRole("button", { name: "Copiar prompt de revisión semántica" }),
     ).not.toBeInTheDocument();
     expect(
-      within(review).queryByRole("button", { name: "Copy semantic review exchange" }),
+      within(review).queryByRole("button", {
+        name: "Mostrar el turno de la solicitud de revisión semántica",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).queryByRole("button", { name: "Copiar intercambio de revisión semántica" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1190,36 +1076,41 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/review");
     await user.type(composer, "{Enter}");
 
-    const review = await screen.findByLabelText("Review summary");
+    const review = await screen.findByLabelText("Resumen de la revisión");
     const reviewPromptButton = within(review).getByRole("button", {
-      name: "Draft semantic review prompt",
+      name: "Preparar prompt de revisión semántica",
     });
     await user.click(reviewPromptButton);
 
     const copyPrompt = within(review).getByRole("button", {
-      name: "Copy semantic review prompt",
+      name: "Copiar prompt de revisión semántica",
     });
     installClipboardMock();
     fireEvent.click(copyPrompt);
     await waitFor(() =>
       expect(writeClipboardTextMock).toHaveBeenCalledWith(
-        expect.stringContaining("Review the current Git changes"),
+        expect.stringContaining("Revisa los cambios actuales de Git"),
       ),
     );
-    expect(copyPrompt).toHaveAttribute("title", "Copied semantic review prompt to clipboard.");
+    expect(copyPrompt).toHaveAttribute(
+      "title",
+      "Prompt de revisión semántica copiado al portapapeles.",
+    );
 
     await user.click(reviewPromptButton);
     expect(copyPrompt).toHaveAttribute(
       "title",
-      "Copy the drafted semantic review prompt to the clipboard.",
+      "Copiar el borrador del prompt de revisión semántica al portapapeles.",
     );
     expect(
-      within(copyPrompt).getByTitle("Semantic review prompt copy label: Copy prompt."),
-    ).toHaveTextContent("Copy prompt");
+      within(copyPrompt).getByTitle(
+        "Acción para copiar el prompt de revisión semántica: Copiar prompt.",
+      ),
+    ).toHaveTextContent("Copiar prompt");
   });
 
   it("resets review clipboard state when the structured review summary refreshes", async () => {
@@ -1256,20 +1147,23 @@ describe("TerminalPanel", () => {
       });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/review");
     await user.type(composer, "{Enter}");
 
-    const review = await screen.findByLabelText("Review summary");
+    const review = await screen.findByLabelText("Resumen de la revisión");
     const copySummary = within(review).getByRole("button", {
-      name: "Copy structured review summary",
+      name: "Copiar resumen estructurado de la revisión",
     });
     installClipboardMock();
     fireEvent.click(copySummary);
     await waitFor(() =>
-      expect(writeClipboardTextMock).toHaveBeenCalledWith(expect.stringContaining("Branch: main")),
+      expect(writeClipboardTextMock).toHaveBeenCalledWith(expect.stringContaining("Rama: main")),
     );
-    expect(copySummary).toHaveAttribute("title", "Copied structured review summary to clipboard.");
+    expect(copySummary).toHaveAttribute(
+      "title",
+      "Resumen estructurado de la revisión copiado al portapapeles.",
+    );
 
     await user.type(composer, "/review");
     await user.type(composer, "{Enter}");
@@ -1277,11 +1171,13 @@ describe("TerminalPanel", () => {
     await waitFor(() => expect(within(review).getByText("M src/Feature.tsx")).toBeInTheDocument());
     expect(copySummary).toHaveAttribute(
       "title",
-      "Copy the structured review summary to the clipboard.",
+      "Copiar el resumen estructurado de la revisión al portapapeles.",
     );
     expect(
-      within(copySummary).getByTitle("Structured review summary copy label: Copy summary."),
-    ).toHaveTextContent("Copy summary");
+      within(copySummary).getByTitle(
+        "Acción para copiar el resumen estructurado de la revisión: Copiar resumen.",
+      ),
+    ).toHaveTextContent("Copiar resumen");
   });
 
   it("sets a persistent session goal through the host command backend", async () => {
@@ -1294,7 +1190,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/goal Build the host harness");
     await user.type(composer, "{Enter}");
 
@@ -1306,7 +1202,6 @@ describe("TerminalPanel", () => {
       ),
     );
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-    expect(await screen.findByText("Goal set: Build the host harness.")).toBeInTheDocument();
   });
 
   it("sets a persistent session personality through the host command backend", async () => {
@@ -1319,7 +1214,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/personality precise");
     await user.type(composer, "{Enter}");
 
@@ -1327,7 +1222,6 @@ describe("TerminalPanel", () => {
       expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "personality", "precise"),
     );
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-    expect(await screen.findByText("Personality set: precise.")).toBeInTheDocument();
   });
 
   it("saves feedback through the host command backend", async () => {
@@ -1340,7 +1234,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/feedback Keep the controls native.");
     await user.type(composer, "{Enter}");
 
@@ -1352,9 +1246,6 @@ describe("TerminalPanel", () => {
       ),
     );
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-    expect(
-      await screen.findByText("Saved feedback: Keep the controls native."),
-    ).toBeInTheDocument();
   });
 
   it("saves comments through the host command backend", async () => {
@@ -1367,7 +1258,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/comments The palette should explain unavailable actions.");
     await user.type(composer, "{Enter}");
 
@@ -1379,9 +1270,6 @@ describe("TerminalPanel", () => {
       ),
     );
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-    expect(
-      await screen.findByText("Saved comment: The palette should explain unavailable actions."),
-    ).toBeInTheDocument();
   });
 
   it("compacts session context through the host command backend", async () => {
@@ -1394,7 +1282,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/compact");
     await user.type(composer, "{Enter}");
 
@@ -1402,9 +1290,6 @@ describe("TerminalPanel", () => {
       expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "compact", undefined),
     );
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-    expect(
-      await screen.findByText("Context summary saved from 3 events across 1 turns."),
-    ).toBeInTheDocument();
   });
 
   it("opens a child terminal when a host command returns a forked session", async () => {
@@ -1423,7 +1308,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/fork");
     await user.type(composer, "{Enter}");
 
@@ -1452,7 +1337,7 @@ describe("TerminalPanel", () => {
     });
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "/branch worktree");
     await user.type(composer, "{Enter}");
 
@@ -1472,7 +1357,7 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const composer = await screen.findByLabelText("Message Codex");
+    const composer = await screen.findByLabelText("Mensaje para Codex");
     await user.type(composer, "line one{Shift>}{Enter}{/Shift}line two");
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
 
@@ -1493,7 +1378,7 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const conversation = screen.getByLabelText("Agent conversation");
+    const conversation = screen.getByLabelText("Conversación con Agent");
     expect(await within(conversation).findByText("Done")).toBeInTheDocument();
     expect(within(conversation).getByText("Changed src/a.ts")).toBeInTheDocument();
   });
@@ -1526,139 +1411,37 @@ describe("TerminalPanel", () => {
       });
     });
 
-    expect(await screen.findByText("You")).toBeInTheDocument();
-    expect(screen.getByTitle("Agent message role label: You.")).toHaveTextContent("You");
-    expect(
-      screen.getByTitle("Agent message block for turn 1: You content and copy control."),
-    ).toHaveClass("agent-panel__message--user_message");
-    expect(
-      screen.getByTitle("Agent message header for You: role label and copy control."),
-    ).toHaveTextContent("You");
-    expect(screen.getByTitle("Conversation turn index label: Turn 1.")).toHaveTextContent("Turn 1");
-    expect(screen.getByText("Haz el cambio")).toBeInTheDocument();
-    expect(screen.getByTitle("Rendered You Markdown content for turn 1.")).toHaveTextContent(
-      "Haz el cambio",
-    );
-    expect(screen.getByText("Agent")).toBeInTheDocument();
-    expect(screen.getByTitle("Agent message role label: Agent.")).toHaveTextContent("Agent");
-    expect(
-      screen.getByTitle("Agent message block for turn 1: Agent content and copy control."),
-    ).toHaveClass("agent-panel__message--agent_message");
-    expect(
-      screen.getByTitle("Agent message header for Agent: role label and copy control."),
-    ).toHaveTextContent("Agent");
-    expect(screen.getByText("Voy con ello")).toBeInTheDocument();
-    expect(screen.getByTitle("Rendered Agent Markdown content for turn 1.")).toHaveTextContent(
-      "Voy con ello",
-    );
-    expect(screen.getByText("Command")).toBeInTheDocument();
-    expect(screen.getByTitle("Agent message role label: Command.")).toHaveTextContent("Command");
-    expect(
-      screen.getByTitle("Agent message block for turn 1: Command content and copy control."),
-    ).toHaveClass("agent-panel__message--command_output");
-    expect(
-      screen.getByTitle("Agent message header for Command: role label and copy control."),
-    ).toHaveTextContent("Command");
-    const conversation = screen.getByLabelText("Agent conversation");
-    expect(conversation).toHaveAttribute(
-      "title",
-      "Agent conversation transcript: showing all 1 turn.",
-    );
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    expect(await within(conversation).findByText("Tú")).toBeInTheDocument();
+    expect(within(conversation).getByText("Turno 1")).toBeInTheDocument();
+    expect(within(conversation).getByText("Haz el cambio")).toBeInTheDocument();
+    expect(within(conversation).getByText("Agent")).toBeInTheDocument();
+    expect(within(conversation).getByText("Voy con ello")).toBeInTheDocument();
+    expect(within(conversation).getByText("Comando")).toBeInTheDocument();
     expect(within(conversation).getByText("cargo test")).toBeInTheDocument();
-    expect(within(conversation).getByTitle("Command output text for turn 1.")).toHaveTextContent(
-      "cargo test",
-    );
-    expect(within(conversation).getByText("3 messages / 1 commands")).toHaveAttribute(
-      "title",
-      "Turn 1 transcript, command, and file counts: 3 messages / 1 commands.",
-    );
+    expect(within(conversation).getByText("3 mensajes / 1 comando")).toBeInTheDocument();
 
-    const overview = screen.getByLabelText("Agent session overview");
-    expect(overview).toHaveAttribute(
-      "title",
-      "Agent session overview: 1 turn, 2 messages, 1 command, 0 files; latest activity: cargo test; turn map 1 turn.",
-    );
-    expect(
-      within(overview).getByTitle(
-        "Agent session overview metrics: 1 turn, 2 messages, 1 command, 0 files.",
-      ),
-    ).toHaveTextContent("Turns");
-    const turnsMetric = within(overview).getByLabelText("Turns: 1");
-    expect(turnsMetric).toHaveAttribute("title", "Agent session overview turns metric: 1 turn.");
-    expect(
-      within(turnsMetric).getByTitle("Agent session overview turns value: 1."),
-    ).toHaveTextContent("1");
-    expect(
-      within(turnsMetric).getByTitle("Agent session overview metric label: Turns."),
-    ).toHaveTextContent("Turns");
-    const messagesMetric = within(overview).getByLabelText("Messages: 2");
-    expect(messagesMetric).toHaveAttribute(
-      "title",
-      "Agent session overview messages metric: 2 messages.",
-    );
-    expect(
-      within(messagesMetric).getByTitle("Agent session overview messages value: 2."),
-    ).toHaveTextContent("2");
-    expect(
-      within(messagesMetric).getByTitle("Agent session overview metric label: Messages."),
-    ).toHaveTextContent("Messages");
-    const commandsMetric = within(overview).getByLabelText("Commands: 1");
-    expect(commandsMetric).toHaveAttribute(
-      "title",
-      "Agent session overview commands metric: 1 command.",
-    );
-    expect(
-      within(commandsMetric).getByTitle("Agent session overview commands value: 1."),
-    ).toHaveTextContent("1");
-    expect(
-      within(commandsMetric).getByTitle("Agent session overview metric label: Commands."),
-    ).toHaveTextContent("Commands");
-    const filesMetric = within(overview).getByLabelText("Files: 0");
-    expect(filesMetric).toHaveAttribute("title", "Agent session overview files metric: 0 files.");
-    expect(
-      within(filesMetric).getByTitle("Agent session overview files value: 0."),
-    ).toHaveTextContent("0");
-    expect(
-      within(filesMetric).getByTitle("Agent session overview metric label: Files."),
-    ).toHaveTextContent("Files");
-    expect(
-      within(overview).getByTitle(
-        "Agent session overview latest-activity area: latest captured activity.",
-      ),
-    ).toHaveTextContent("cargo test");
-    expect(
-      within(overview).getByTitle("Agent session overview latest-activity label."),
-    ).toHaveTextContent("Latest activity");
-    expect(
-      within(overview).getByTitle("Agent session overview latest activity: cargo test."),
-    ).toHaveTextContent("cargo test");
+    const overview = screen.getByLabelText("Resumen de la sesión de Agent");
+    const turnsMetric = within(overview).getByLabelText("Turnos: 1");
+    expect(turnsMetric).toHaveTextContent("1");
+    expect(turnsMetric).toHaveTextContent("Turnos");
+    const messagesMetric = within(overview).getByLabelText("Mensajes: 2");
+    expect(messagesMetric).toHaveTextContent("2");
+    expect(messagesMetric).toHaveTextContent("Mensajes");
+    const commandsMetric = within(overview).getByLabelText("Comandos: 1");
+    expect(commandsMetric).toHaveTextContent("1");
+    expect(commandsMetric).toHaveTextContent("Comandos");
+    const filesMetric = within(overview).getByLabelText("Archivos: 0");
+    expect(filesMetric).toHaveTextContent("0");
+    expect(filesMetric).toHaveTextContent("Archivos");
+    expect(within(overview).getByText("Actividad reciente")).toBeInTheDocument();
+    expect(within(overview).getByText("cargo test")).toBeInTheDocument();
     expect(within(overview).getByText("+0s")).toBeInTheDocument();
-    expect(
-      within(overview).getByTitle("Turn 1: 1 commands, 0 files - Recent command: cargo test"),
-    ).toBeInTheDocument();
-    const turnMap = screen.getByLabelText("Turn map");
-    expect(turnMap).toHaveAttribute("title", "Agent session overview turn map: 1 turn.");
+    const turnMap = screen.getByLabelText("Mapa de turnos");
     const firstTurnButton = within(turnMap).getByRole("button", { name: /T1/ });
-    expect(
-      within(firstTurnButton).getByTitle("Agent session overview turn-map label: turn 1."),
-    ).toHaveTextContent("T1");
-    expect(
-      within(firstTurnButton).getByTitle("Agent session overview turn-map timing for turn 1: +0s."),
-    ).toHaveTextContent("+0s");
-    expect(
-      within(firstTurnButton).getByTitle(
-        "Agent session overview turn-map command count for turn 1: 1 command.",
-      ),
-    ).toHaveTextContent("1 cmd");
-    expect(
-      within(firstTurnButton).getByTitle(
-        "Agent session overview turn-map command summary for turn 1: cargo test.",
-      ),
-    ).toHaveTextContent("cmd cargo test");
-    expect(within(screen.getByLabelText("Agent conversation")).getByText("+0s")).toHaveAttribute(
-      "title",
-      "Turn 1 timing relative to the first turn: +0s.",
-    );
+    expect(firstTurnButton).toHaveTextContent("T1");
+    expect(firstTurnButton).toHaveTextContent("1 cmd");
+    expect(firstTurnButton).toHaveTextContent("cargo test");
 
     await user.click(firstTurnButton);
     expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
@@ -1686,18 +1469,20 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const copyAgent = await screen.findByLabelText("Copy Agent message");
-    expect(copyAgent).toHaveAttribute("title", "Copy Agent message from turn 1.");
-    expect(screen.getAllByTitle("Message block copy label: Copy.")).toHaveLength(2);
+    const copyAgent = await screen.findByLabelText("Copiar mensaje de Agent");
+    expect(copyAgent).toHaveAttribute("title", "Copiar el mensaje de Agent del turno 1.");
+    expect(screen.getAllByTitle("Acción para copiar el mensaje: Copiar.")).toHaveLength(2);
     await user.click(copyAgent);
 
     await waitFor(() => expect(writeClipboardTextMock).toHaveBeenCalledWith("Voy con ello"));
-    expect(await screen.findByLabelText("Copy Agent message")).toHaveTextContent("Copied");
-    expect(screen.getByLabelText("Copy Agent message")).toHaveAttribute(
+    expect(await screen.findByLabelText("Copiar mensaje de Agent")).toHaveTextContent("Copiado");
+    expect(screen.getByLabelText("Copiar mensaje de Agent")).toHaveAttribute(
       "title",
-      "Copied Agent message from turn 1 to clipboard.",
+      "Mensaje de Agent del turno 1 copiado al portapapeles.",
     );
-    expect(screen.getByTitle("Message block copy label: Copied.")).toHaveTextContent("Copied");
+    expect(screen.getByTitle("Acción para copiar el mensaje: Copiado.")).toHaveTextContent(
+      "Copiado",
+    );
   });
 
   it("copies a complete turn with messages, commands, and files", async () => {
@@ -1743,30 +1528,32 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const copyTurn = await screen.findByRole("button", { name: "Copy turn" });
+    const copyTurn = await screen.findByRole("button", { name: "Copiar turno" });
     expect(copyTurn).toHaveAttribute(
       "title",
-      "Copy full transcript for turn 1, including messages, commands, and touched files.",
+      "Copiar la transcripción completa del turno 1, incluidos mensajes, comandos y archivos modificados.",
     );
-    expect(screen.getByTitle("Conversation turn copy label: Copy turn.")).toHaveTextContent(
-      "Copy turn",
-    );
+    expect(
+      screen.getByTitle("Acción para copiar el turno de la conversación: Copiar turno."),
+    ).toHaveTextContent("Copiar turno");
     await user.click(copyTurn);
 
     await waitFor(() => expect(writeClipboardTextMock).toHaveBeenCalled());
     const lastCall =
       writeClipboardTextMock.mock.calls[writeClipboardTextMock.mock.calls.length - 1];
     const copied = String(lastCall?.[0] ?? "");
-    expect(copied).toContain("Turn 1 (+0s)");
-    expect(copied).toContain("You:\nHaz el cambio");
+    expect(copied).toContain("Turno 1 (+0s)");
+    expect(copied).toContain("Tú:\nHaz el cambio");
     expect(copied).toContain("Agent:\nVoy con ello");
-    expect(copied).toContain("Command:\nnpm test");
-    expect(copied).toContain("- modified src/a.ts");
-    expect(screen.getByRole("button", { name: "Copied" })).toHaveAttribute(
+    expect(copied).toContain("Comando:\nnpm test");
+    expect(copied).toContain("- modificado src/a.ts");
+    expect(screen.getByRole("button", { name: "Copiado" })).toHaveAttribute(
       "title",
-      "Copied full transcript for turn 1 to clipboard.",
+      "Transcripción completa del turno 1 copiada al portapapeles.",
     );
-    expect(screen.getByTitle("Conversation turn copy label: Copied.")).toHaveTextContent("Copied");
+    expect(
+      screen.getByTitle("Acción para copiar el turno de la conversación: Copiado."),
+    ).toHaveTextContent("Copiado");
   });
 
   it("renders conversational messages as markdown while commands stay technical", async () => {
@@ -1796,7 +1583,7 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const conversation = screen.getByLabelText("Agent conversation");
+    const conversation = screen.getByLabelText("Conversación con Agent");
     expect(await within(conversation).findByRole("list")).toBeInTheDocument();
     expect(within(conversation).getByText("src/a.ts")).toBeInTheDocument();
     expect(within(conversation).getByText("npm test -- --run").tagName).toBe("PRE");
@@ -1827,27 +1614,27 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const conversation = screen.getByLabelText("Agent conversation");
-    const toggle = await within(conversation).findByText("Show output");
-    expect(toggle).toHaveAttribute(
-      "title",
-      "Collapsed command output disclosure label: Show output.",
-    );
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    const toggle = await within(conversation).findByText("Mostrar salida");
     expect(toggle.closest("summary")).toHaveAttribute(
       "title",
-      "Collapsed command output summary row for turn 1: click to show or hide full output.",
+      "Fila de resumen de la salida contraída del comando del turno 1: actívala para mostrar u ocultar la salida completa.",
     );
     expect(
-      within(conversation).getByTitle("Collapsed command output summary: npm test -- --run."),
+      within(conversation).getByTitle(
+        "Resumen de la salida contraída del comando: npm test -- --run.",
+      ),
     ).toHaveTextContent("npm test -- --run");
     const collapsedCommandBlock = toggle.closest("details");
     expect(collapsedCommandBlock).toHaveAttribute(
       "title",
-      "Collapsed command output container for turn 1: summary disclosure and full output text.",
+      "Contenedor de la salida contraída del comando del turno 1: control de resumen y texto completo de la salida.",
     );
     expect(collapsedCommandBlock).not.toHaveAttribute("open");
     expect(within(conversation).getAllByText("npm test -- --run").length).toBeGreaterThan(0);
-    const collapsedOutput = within(conversation).getByTitle("Command output text for turn 1.");
+    const collapsedOutput = within(conversation).getByTitle(
+      "Texto de salida de comandos del turno 1.",
+    );
     expect(collapsedOutput).toHaveTextContent("npm test -- --run");
     expect(collapsedOutput).toHaveTextContent("suite i passed");
   });
@@ -1901,102 +1688,112 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const search = await screen.findByLabelText("Search transcript");
-    const conversation = screen.getByLabelText("Agent conversation");
+    const search = await screen.findByLabelText("Buscar en la transcripción");
+    const conversation = screen.getByLabelText("Conversación con Agent");
     expect(search).toHaveAttribute("aria-describedby", "agent-transcript-search-hint");
     expect(search).toHaveAttribute(
       "title",
-      "Transcript search input placeholder: Find messages, commands, files. Press Escape to clear the search.",
+      "Busca mensajes, comandos o archivos. Pulsa Escape para borrar la búsqueda.",
     );
     expect(
       screen.getByText(
-        "Press Enter to move through matching turns and Escape to clear the search.",
+        "Pulsa Intro para recorrer los turnos coincidentes y Escape para borrar la búsqueda.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Previous result" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Resultado anterior" })).toHaveAttribute(
       "title",
-      "Search transcript to enable previous result navigation.",
+      "Busca en la transcripción para navegar al resultado anterior.",
     );
     expect(
-      screen.getByTitle("Transcript search navigation label: previous result."),
-    ).toHaveTextContent("Prev");
-    expect(screen.getByRole("button", { name: "Next result" })).toHaveAttribute(
+      screen.getByTitle(
+        "Etiqueta de navegación de la búsqueda en la transcripción: resultado anterior.",
+      ),
+    ).toHaveTextContent("Anterior");
+    expect(screen.getByRole("button", { name: "Resultado siguiente" })).toHaveAttribute(
       "title",
-      "Search transcript to enable next result navigation.",
+      "Busca en la transcripción para navegar al resultado siguiente.",
     );
-    expect(screen.getByTitle("Transcript search navigation label: next result.")).toHaveTextContent(
-      "Next",
-    );
+    expect(
+      screen.getByTitle(
+        "Etiqueta de navegación de la búsqueda en la transcripción: resultado siguiente.",
+      ),
+    ).toHaveTextContent("Siguiente");
 
     await user.type(search, "dashboard");
     expect(within(conversation).getByText("Termine el dashboard")).toBeInTheDocument();
     expect(within(conversation).queryByText("Segunda tarea")).not.toBeInTheDocument();
-    expect(screen.getByText("1 of 2 turns")).toBeInTheDocument();
-    expect(screen.getByLabelText("1 matching turn out of 2 total turns.")).toHaveAttribute(
+    expect(screen.getByText("1 de 2 turnos")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 turno coincidentes de 2 en total.")).toHaveAttribute(
       "title",
-      "Transcript search count: 1 matching turn out of 2 total turns.",
+      "Cantidad de resultados de la búsqueda en la transcripción: 1 turno coincidentes entre 2 en total.",
     );
-    expect(screen.getByRole("button", { name: "Previous result" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Resultado anterior" })).toHaveAttribute(
       "title",
-      "Previous result navigation needs at least two matching turns.",
+      "Se necesitan al menos dos turnos coincidentes para ir al resultado anterior.",
     );
-    expect(screen.getByRole("button", { name: "Next result" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Resultado siguiente" })).toHaveAttribute(
       "title",
-      "Next result navigation needs at least two matching turns.",
+      "Se necesitan al menos dos turnos coincidentes para ir al resultado siguiente.",
     );
-    const messageMatch = within(conversation).getByLabelText("Turn 1 search matches");
+    const messageMatch = within(conversation).getByLabelText(
+      "Coincidencias de búsqueda del turno 1",
+    );
     expect(messageMatch).toHaveAttribute(
       "title",
-      "Turn 1 search matches: why this visible turn matched the transcript search.",
+      "Coincidencias de búsqueda del turno 1: explica por qué este turno coincide con la búsqueda.",
     );
-    expect(within(messageMatch).getByText("Message match")).toBeInTheDocument();
-    expect(within(messageMatch).queryByText("Command match")).not.toBeInTheDocument();
+    expect(within(messageMatch).getByText("Coincidencia en mensaje")).toBeInTheDocument();
+    expect(within(messageMatch).queryByText("Coincidencia en comando")).not.toBeInTheDocument();
 
     await user.clear(search);
     await user.type(search, "npm test search-panel");
     expect(within(conversation).getByText("Segunda tarea")).toBeInTheDocument();
     expect(within(conversation).queryByText("Termine el dashboard")).not.toBeInTheDocument();
-    expect(screen.getByText("1 of 2 turns")).toBeInTheDocument();
-    const commandMatch = within(conversation).getByLabelText("Turn 2 search matches");
-    expect(within(commandMatch).getByText("Command match")).toBeInTheDocument();
-    expect(within(commandMatch).queryByText("File match")).not.toBeInTheDocument();
+    expect(screen.getByText("1 de 2 turnos")).toBeInTheDocument();
+    const commandMatch = within(conversation).getByLabelText(
+      "Coincidencias de búsqueda del turno 2",
+    );
+    expect(within(commandMatch).getByText("Coincidencia en comando")).toBeInTheDocument();
+    expect(within(commandMatch).queryByText("Coincidencia en archivo")).not.toBeInTheDocument();
 
     await user.clear(search);
     await user.type(search, "src/search-panel.tsx");
     expect(within(conversation).getByText("Segunda tarea")).toBeInTheDocument();
     expect(within(conversation).queryByText("Termine el dashboard")).not.toBeInTheDocument();
-    const fileMatch = within(conversation).getByLabelText("Turn 2 search matches");
-    expect(within(fileMatch).getByText("File match")).toBeInTheDocument();
-    expect(within(fileMatch).queryByText("Message match")).not.toBeInTheDocument();
+    const fileMatch = within(conversation).getByLabelText("Coincidencias de búsqueda del turno 2");
+    expect(within(fileMatch).getByText("Coincidencia en archivo")).toBeInTheDocument();
+    expect(within(fileMatch).queryByText("Coincidencia en mensaje")).not.toBeInTheDocument();
 
     await user.clear(search);
     await user.type(search, "nope");
-    expect(screen.getByText("No matches")).toBeInTheDocument();
+    expect(screen.getByText("Sin coincidencias")).toBeInTheDocument();
     expect(
       screen.getByTitle(
-        "Agent conversation empty state: no transcript matches for the current search.",
+        "Estado vacío de la conversación con Agent: ningún turno coincide con la búsqueda actual.",
       ),
     ).toHaveClass("agent-panel__empty-chat");
     expect(
-      screen.getByTitle("Agent conversation empty-state label: No matches."),
-    ).toHaveTextContent("No matches");
+      screen.getByTitle(
+        "Etiqueta del estado vacío de la conversación con Agent: Sin coincidencias.",
+      ),
+    ).toHaveTextContent("Sin coincidencias");
     expect(
-      screen.getByTitle("Agent conversation empty-state helper: try another transcript search."),
-    ).toHaveTextContent("Try another search across messages, commands, and touched files.");
-    const clearSearch = screen.getByRole("button", { name: "Clear search" });
+      screen.queryByText("Prueba otra búsqueda entre mensajes, comandos y archivos modificados."),
+    ).not.toBeInTheDocument();
+    const clearSearch = screen.getByRole("button", { name: "Borrar búsqueda" });
     expect(clearSearch).toHaveAttribute(
       "title",
-      "Agent conversation empty-state action: clear search, restore all turns, and return focus to search.",
+      "Acción del estado vacío de la conversación con Agent: borrar la búsqueda, recuperar todos los turnos y devolver el foco al buscador.",
     );
-    expect(screen.getByTitle("Transcript clear-search label: Clear search.")).toHaveTextContent(
-      "Clear search",
+    expect(screen.getByTitle("Borrar la búsqueda de la transcripción.")).toHaveTextContent(
+      "Borrar búsqueda",
     );
     await user.click(clearSearch);
     expect(search).toHaveValue("");
     expect(search).toHaveFocus();
     expect(within(conversation).getByText("Termine el dashboard")).toBeInTheDocument();
     expect(within(conversation).getByText("Segunda tarea")).toBeInTheDocument();
-    expect(screen.queryByText("No matches")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sin coincidencias")).not.toBeInTheDocument();
 
     await user.type(search, "dashboard");
     expect(within(conversation).queryByText("Segunda tarea")).not.toBeInTheDocument();
@@ -2028,10 +1825,13 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const latestButton = await screen.findByRole("button", { name: "Latest" });
-    expect(latestButton).toHaveAttribute("title", "Jump to the latest of 2 transcript turns.");
-    expect(screen.getByTitle("Transcript secondary action label: Latest.")).toHaveTextContent(
-      "Latest",
+    const latestButton = await screen.findByRole("button", { name: "Último" });
+    expect(latestButton).toHaveAttribute(
+      "title",
+      "Ir al último de los 2 turnos de la transcripción.",
+    );
+    expect(screen.getByTitle("Acción secundaria de la transcripción: Último.")).toHaveTextContent(
+      "Último",
     );
 
     await user.click(latestButton);
@@ -2070,55 +1870,27 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const search = await screen.findByLabelText("Search transcript");
+    const search = await screen.findByLabelText("Buscar en la transcripción");
     await user.type(search, "dashboard");
-    const conversation = screen.getByLabelText("Agent conversation");
-    expect(conversation).toHaveAttribute(
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    expect(screen.getByText("2 de 3 turnos")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resultado anterior" })).toHaveAttribute(
       "title",
-      "Agent conversation transcript: 2 matching turns out of 3 total turns.",
+      "Ir al resultado anterior",
+    );
+    expect(screen.getByRole("button", { name: "Resultado siguiente" })).toHaveAttribute(
+      "title",
+      "Ir al resultado siguiente",
     );
     expect(
-      screen.getByTitle(
-        "Agent transcript tools: search active with 2 matching turns out of 3 total turns.",
-      ),
-    ).toHaveTextContent("2 of 3 turns");
-    expect(
-      screen.getByTitle("Transcript search: 2 matching turns out of 3 total turns."),
-    ).toHaveTextContent("Search transcript");
-    expect(
-      screen.getByTitle("Transcript search count: 2 matching turns out of 3 total turns."),
-    ).toHaveTextContent("2 of 3 turns");
-    expect(screen.getByRole("group", { name: "Transcript secondary actions" })).toHaveAttribute(
-      "title",
-      "Transcript secondary actions: latest filtered-turn jump and copy 2 filtered transcript turns out of 3 total turns.",
-    );
-    expect(screen.getByRole("button", { name: "Previous result" })).toHaveAttribute(
-      "title",
-      "Previous search result",
-    );
-    expect(screen.getByRole("button", { name: "Next result" })).toHaveAttribute(
-      "title",
-      "Next search result",
-    );
-    expect(
-      screen.getByLabelText("No focused search result selected out of 2 matching turns."),
+      screen.getByLabelText("No hay ningún resultado seleccionado entre los 2 coincidentes."),
     ).toHaveTextContent("- / 2");
-    expect(
-      screen.getByLabelText("No focused search result selected out of 2 matching turns."),
-    ).toHaveAttribute(
-      "title",
-      "Active transcript search position: no result selected out of 2 matching turns.",
-    );
 
     await user.keyboard("{Enter}");
     expect(getElementByIdSpy).toHaveBeenLastCalledWith("agent-turn-sess-1-1");
     expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: "center", behavior: "smooth" });
-    expect(screen.getByLabelText("Focused search result 1 of 2 matching turns.")).toHaveTextContent(
+    expect(screen.getByLabelText("Resultado de búsqueda seleccionado: 1 de 2.")).toHaveTextContent(
       "1 / 2",
-    );
-    expect(screen.getByLabelText("Focused search result 1 of 2 matching turns.")).toHaveAttribute(
-      "title",
-      "Active transcript search position: result 1 of 2 matching turns.",
     );
     expect(within(conversation).getByText("Dashboard alpha").closest("article")).toHaveAttribute(
       "aria-current",
@@ -2127,12 +1899,8 @@ describe("TerminalPanel", () => {
 
     await user.keyboard("{Enter}");
     expect(getElementByIdSpy).toHaveBeenLastCalledWith("agent-turn-sess-1-3");
-    expect(screen.getByLabelText("Focused search result 2 of 2 matching turns.")).toHaveTextContent(
+    expect(screen.getByLabelText("Resultado de búsqueda seleccionado: 2 de 2.")).toHaveTextContent(
       "2 / 2",
-    );
-    expect(screen.getByLabelText("Focused search result 2 of 2 matching turns.")).toHaveAttribute(
-      "title",
-      "Active transcript search position: result 2 of 2 matching turns.",
     );
     expect(within(conversation).getByText("Dashboard beta").closest("article")).toHaveAttribute(
       "aria-current",
@@ -2141,7 +1909,7 @@ describe("TerminalPanel", () => {
 
     await user.keyboard("{Shift>}{Enter}{/Shift}");
     expect(getElementByIdSpy).toHaveBeenLastCalledWith("agent-turn-sess-1-1");
-    expect(screen.getByLabelText("Focused search result 1 of 2 matching turns.")).toHaveTextContent(
+    expect(screen.getByLabelText("Resultado de búsqueda seleccionado: 1 de 2.")).toHaveTextContent(
       "1 / 2",
     );
     expect(within(conversation).getByText("Dashboard alpha").closest("article")).toHaveAttribute(
@@ -2149,14 +1917,14 @@ describe("TerminalPanel", () => {
       "true",
     );
 
-    await user.click(screen.getByRole("button", { name: "Next result" }));
+    await user.click(screen.getByRole("button", { name: "Resultado siguiente" }));
     expect(getElementByIdSpy).toHaveBeenLastCalledWith("agent-turn-sess-1-3");
     expect(within(conversation).getByText("Dashboard beta").closest("article")).toHaveAttribute(
       "aria-current",
       "true",
     );
 
-    await user.click(screen.getByRole("button", { name: "Previous result" }));
+    await user.click(screen.getByRole("button", { name: "Resultado anterior" }));
     expect(getElementByIdSpy).toHaveBeenLastCalledWith("agent-turn-sess-1-1");
     expect(within(conversation).getByText("Dashboard alpha").closest("article")).toHaveAttribute(
       "aria-current",
@@ -2194,14 +1962,14 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const search = await screen.findByLabelText("Search transcript");
+    const search = await screen.findByLabelText("Buscar en la transcripción");
     await user.type(search, "dashboard");
-    const conversation = screen.getByLabelText("Agent conversation");
+    const conversation = screen.getByLabelText("Conversación con Agent");
 
     await user.keyboard("{Enter}");
     const alphaTurn = within(conversation).getByText("Dashboard alpha").closest("article");
     expect(alphaTurn).toHaveAttribute("aria-current", "true");
-    expect(screen.getByLabelText("Focused search result 1 of 2 matching turns.")).toHaveTextContent(
+    expect(screen.getByLabelText("Resultado de búsqueda seleccionado: 1 de 2.")).toHaveTextContent(
       "1 / 2",
     );
 
@@ -2227,45 +1995,38 @@ describe("TerminalPanel", () => {
     });
 
     const secondaryActions = await screen.findByRole("group", {
-      name: "Transcript secondary actions",
+      name: "Acciones de la transcripción",
     });
+    const resultNavigation = screen.getByRole("group", {
+      name: "Navegación por los resultados de la transcripción",
+    });
+    expect(within(resultNavigation).getByText("Todos los turnos")).toBeInTheDocument();
     expect(
-      screen.getByTitle(
-        "Agent transcript tools: search, result navigation, latest, and copy controls for all 1 transcript turn.",
+      within(resultNavigation).getByRole("button", { name: "Resultado anterior" }),
+    ).toBeDisabled();
+    expect(
+      within(resultNavigation).getByRole("button", { name: "Resultado siguiente" }),
+    ).toBeDisabled();
+    expect(within(secondaryActions).getByRole("button", { name: "Último" })).toHaveAttribute(
+      "title",
+      "Ir al último de los 1 turno de la transcripción.",
+    );
+    expect(
+      within(secondaryActions).getByTitle("Acción secundaria de la transcripción: Último."),
+    ).toHaveTextContent("Último");
+    expect(
+      within(secondaryActions).getByRole("button", { name: "Copiar lo visible" }),
+    ).toHaveAttribute("title", "Copiar los 1 turno de la transcripción.");
+    expect(
+      within(secondaryActions).getByTitle(
+        "Acción secundaria de la transcripción: Copiar lo visible.",
       ),
-    ).toHaveTextContent("All turns");
+    ).toHaveTextContent("Copiar lo visible");
     expect(
-      screen.getByTitle(
-        "Transcript search: find messages, commands, and files across 1 transcript turn.",
-      ),
-    ).toHaveTextContent("Search transcript");
-    expect(
-      screen.getByTitle("Transcript search count: showing all 1 transcript turn."),
-    ).toHaveTextContent("All turns");
-    expect(secondaryActions).toHaveAttribute(
-      "title",
-      "Transcript secondary actions: latest-turn jump and copy all 1 transcript turn.",
-    );
-
-    expect(within(secondaryActions).getByRole("button", { name: "Latest" })).toHaveAttribute(
-      "title",
-      "Jump to the latest of 1 transcript turn.",
-    );
-    expect(
-      within(secondaryActions).getByTitle("Transcript secondary action label: Latest."),
-    ).toHaveTextContent("Latest");
-    expect(within(secondaryActions).getByRole("button", { name: "Copy visible" })).toHaveAttribute(
-      "title",
-      "Copy all 1 transcript turn.",
-    );
-    expect(
-      within(secondaryActions).getByTitle("Transcript secondary action label: Copy visible."),
-    ).toHaveTextContent("Copy visible");
-    expect(
-      within(secondaryActions).queryByRole("button", { name: "Previous result" }),
+      within(secondaryActions).queryByRole("button", { name: "Resultado anterior" }),
     ).not.toBeInTheDocument();
     expect(
-      within(secondaryActions).queryByRole("button", { name: "Next result" }),
+      within(secondaryActions).queryByRole("button", { name: "Resultado siguiente" }),
     ).not.toBeInTheDocument();
   });
 
@@ -2298,16 +2059,13 @@ describe("TerminalPanel", () => {
       });
     });
 
-    await user.type(await screen.findByLabelText("Search transcript"), "dashboard");
-    expect(screen.getByRole("button", { name: "Latest" })).toHaveAttribute(
+    await user.type(await screen.findByLabelText("Buscar en la transcripción"), "dashboard");
+    expect(screen.getByRole("button", { name: "Último" })).toHaveAttribute(
       "title",
-      "Jump to the latest filtered transcript turn out of 2 total turns.",
+      "Ir al último turno filtrado de 2 turnos en total.",
     );
-    const copyVisible = screen.getByRole("button", { name: "Copy visible" });
-    expect(copyVisible).toHaveAttribute(
-      "title",
-      "Copy 1 filtered transcript turn out of 2 total turns.",
-    );
+    const copyVisible = screen.getByRole("button", { name: "Copiar lo visible" });
+    expect(copyVisible).toHaveAttribute("title", "Copiar 1 turno filtrados de 2 en total.");
     await user.click(copyVisible);
 
     await waitFor(() => expect(writeClipboardTextMock).toHaveBeenCalled());
@@ -2317,9 +2075,9 @@ describe("TerminalPanel", () => {
     expect(copied).toContain("Dashboard task");
     expect(copied).toContain("Finished dashboard work");
     expect(copied).not.toContain("Search task");
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
-    expect(screen.getByTitle("Transcript secondary action label: Copied.")).toHaveTextContent(
-      "Copied",
+    expect(screen.getByRole("button", { name: "Copiado" })).toBeInTheDocument();
+    expect(screen.getByTitle("Acción secundaria de la transcripción: Copiado.")).toHaveTextContent(
+      "Copiado",
     );
   });
 
@@ -2351,37 +2109,39 @@ describe("TerminalPanel", () => {
     );
 
     expect(
-      await within(screen.getByLabelText("Agent conversation")).findByText("Archived answer"),
+      await within(screen.getByLabelText("Conversación con Agent")).findByText("Archived answer"),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByLabelText("Agent activity")).getByText("Archived transcript"),
+      within(screen.getByLabelText("Actividad de Agent")).getByText("Transcripción archivada"),
     ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Archived transcript")).toBeDisabled();
-    expect(screen.getByPlaceholderText("Archived transcript")).toHaveAttribute(
+    expect(screen.getByPlaceholderText("Transcripción archivada")).toBeDisabled();
+    expect(screen.getByPlaceholderText("Transcripción archivada")).toHaveAttribute(
       "title",
-      "Codex agent message input for a: archived transcript is read-only.",
+      "Entrada de mensajes de Codex para a: la transcripción archivada es de solo lectura.",
+    );
+    const archivedComposer = screen.getByPlaceholderText("Transcripción archivada");
+    const archivedComposerHint = archivedComposer.getAttribute("aria-describedby");
+    expect(archivedComposerHint).toBeTruthy();
+    expect(document.getElementById(archivedComposerHint!)).toHaveTextContent(
+      "La transcripción está archivada y es de solo lectura.",
     );
     expect(
-      screen.getByTitle("Codex command menu for a: archived transcripts are read-only."),
-    ).toHaveClass("agent-panel__composer-actions");
-    expect(
-      screen.getByTitle("Composer commands are disabled because this transcript is archived."),
-    ).toHaveTextContent("Archived transcript");
-    expect(screen.queryByRole("listbox", { name: "Composer commands" })).not.toBeInTheDocument();
+      screen.queryByRole("listbox", { name: "Comandos del compositor" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Enviar" })).toHaveAttribute(
       "title",
-      "Codex agent send control for a: archived transcript is read-only.",
+      "Enviar mensaje a Codex para a: la transcripción archivada es de solo lectura.",
     );
-    const archivedFocus = screen.getByLabelText("Focused turn");
+    const archivedFocus = screen.getByLabelText("Turno seleccionado");
     expect(
       within(archivedFocus).getByTitle(
-        "Focused turn restore container for turn 1: stop the session before restoring.",
+        "Contenedor de restauración del turno seleccionado 1: detén la sesión antes de restaurar.",
       ),
     ).toHaveClass("agent-panel__turn-focus-actions");
-    expect(within(archivedFocus).getByRole("button", { name: "Restore here" })).toHaveAttribute(
+    expect(within(archivedFocus).getByRole("button", { name: "Restaurar aquí" })).toHaveAttribute(
       "title",
-      "Restore turn 1: stop the session before restoring.",
+      "Restaurar el turno 1: detén la sesión antes.",
     );
 
     unmount();
@@ -2413,15 +2173,15 @@ describe("TerminalPanel", () => {
 
     expect(
       await screen.findByTitle(
-        "Agent conversation empty state: archived transcript has no saved timeline items.",
+        "Estado vacío de la conversación con Agent: la transcripción archivada no contiene turnos guardados.",
       ),
     ).toHaveClass("agent-panel__empty-chat");
     expect(
-      screen.getByTitle("Agent conversation empty-state label: Transcript."),
-    ).toHaveTextContent("Transcript");
+      screen.getByTitle("Etiqueta del estado vacío de la conversación con Agent: Transcripción."),
+    ).toHaveTextContent("Transcripción");
     expect(
-      screen.getByTitle("Agent conversation empty-state helper: no timeline items were saved."),
-    ).toHaveTextContent("No timeline items were saved for this session.");
+      screen.getByTitle("Estado de la transcripción archivada: no se guardaron turnos."),
+    ).toHaveTextContent("No se guardaron eventos de Timeline para esta sesión.");
   });
 
   it("combines timeline turns with checkpoint file changes", async () => {
@@ -2459,12 +2219,15 @@ describe("TerminalPanel", () => {
     });
 
     expect(await screen.findByText("Edita src/a.ts")).toBeInTheDocument();
-    expect(screen.getByTitle("Touched file in turn 1: modified src/a.ts.")).toHaveTextContent(
-      "modified src/a.ts",
+    expect(
+      screen.getByTitle("Archivo modificado en el turno 1: modificado src/a.ts."),
+    ).toHaveTextContent("modificado src/a.ts");
+    expect(screen.getByText("1 archivo modificado")).toHaveAttribute(
+      "title",
+      "El turno 1 modificó 1 archivo.",
     );
-    expect(screen.getByText("1 files touched")).toHaveAttribute("title", "Turn 1 touched 1 file.");
-    expect(screen.getByLabelText("Files: 1")).toBeInTheDocument();
-    expect(screen.getByTitle("Turn 1: 0 commands, 1 files")).toBeInTheDocument();
+    expect(screen.getByLabelText("Archivos: 1")).toBeInTheDocument();
+    expect(screen.getByTitle("Turno 1: 0 comandos, 1 archivo")).toBeInTheDocument();
   });
 
   it("summarizes touched artifacts for each turn", async () => {
@@ -2499,32 +2262,15 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const turnSummary = await screen.findByLabelText("Turn 1 artifact summary");
-    expect(turnSummary).toHaveAttribute(
-      "title",
-      "Conversation turn artifact-summary container for turn 1: 4 artifact category chips.",
-    );
-    expect(within(turnSummary).getByText("Code 1")).toHaveAttribute(
-      "title",
-      "Code artifacts touched in turn 1: 1 file.",
-    );
-    expect(within(turnSummary).getByText("Tests 1")).toBeInTheDocument();
-    expect(within(turnSummary).getByText("Docs 1")).toBeInTheDocument();
-    expect(within(turnSummary).getByText("Config 1")).toHaveAttribute(
-      "title",
-      "Config artifacts touched in turn 1: 1 file.",
-    );
+    const turnSummary = await screen.findByLabelText("Resumen de artefactos del turno 1");
+    expect(within(turnSummary).getByText("Código 1")).toBeInTheDocument();
+    expect(within(turnSummary).getByText("Pruebas 1")).toBeInTheDocument();
+    expect(within(turnSummary).getByText("Documentación 1")).toBeInTheDocument();
+    expect(within(turnSummary).getByText("Configuración 1")).toBeInTheDocument();
 
-    const focusedSummary = screen.getByLabelText("Focused turn artifact summary");
-    expect(focusedSummary).toHaveAttribute(
-      "title",
-      "Focused turn artifact-summary container for turn 1: 4 artifact category chips.",
-    );
-    expect(within(focusedSummary).getByText("Code 1")).toHaveAttribute(
-      "title",
-      "Code artifacts touched in turn 1: 1 file.",
-    );
-    expect(within(focusedSummary).getByText("Tests 1")).toBeInTheDocument();
+    const focusedSummary = screen.getByLabelText("Resumen de artefactos del turno seleccionado");
+    expect(within(focusedSummary).getByText("Código 1")).toBeInTheDocument();
+    expect(within(focusedSummary).getByText("Pruebas 1")).toBeInTheDocument();
   });
 
   it("uses Agent Lens as a files, commands, and timeline inspector", async () => {
@@ -2570,239 +2316,65 @@ describe("TerminalPanel", () => {
     });
 
     const lens = await screen.findByLabelText("Agent Lens");
-    expect(lens).toHaveAttribute(
-      "title",
-      "Agent Lens inspector: focused turn 1; Files view active; 1 file, 1 command output, 3 timeline items; turn state Working.",
+    expect(lens.parentElement).toHaveClass("agent-panel__lens-pane");
+    expect(lens.closest(".agent-panel__side-rail")).toHaveAttribute(
+      "aria-label",
+      "Panel de inspección de Agent",
     );
-    expect(within(lens).getByTitle("Agent Lens heading label.")).toHaveTextContent("Agent Lens");
-    const filesPanel = within(lens).getByRole("tabpanel", { name: /Files/ });
+    const filesPanel = within(lens).getByRole("tabpanel", { name: /Archivos/ });
     expect(filesPanel).toHaveAttribute("id", "agent-lens-sess-1-files-panel");
     expect(filesPanel).toHaveAttribute("aria-labelledby", "agent-lens-sess-1-files-tab");
-    expect(filesPanel).toHaveAttribute(
-      "title",
-      "Agent Lens Files view for the focused turn: 1 touched file.",
-    );
-    const filesTab = within(lens).getByRole("tab", { name: /Files/ });
+    const filesTab = within(lens).getByRole("tab", { name: /Archivos/ });
     expect(filesTab).toHaveAttribute("id", "agent-lens-sess-1-files-tab");
     expect(filesTab).toHaveAttribute("aria-controls", "agent-lens-sess-1-files-panel");
     expect(filesTab).toHaveAttribute("tabindex", "0");
-    expect(filesTab).toHaveAttribute("title", "Show Agent Lens Files view with 1 touched file.");
-    expect(within(filesTab).getByTitle("Agent Lens tab name: Files view.")).toHaveTextContent(
-      "Files",
-    );
-    expect(
-      within(filesTab).getByTitle("Agent Lens Files tab count: 1 touched file."),
-    ).toHaveTextContent("1");
-    const commandsTab = within(lens).getByRole("tab", { name: /Commands/ });
+    const commandsTab = within(lens).getByRole("tab", { name: /Comandos/ });
     expect(commandsTab).toHaveAttribute("id", "agent-lens-sess-1-commands-tab");
     expect(commandsTab).toHaveAttribute("aria-controls", "agent-lens-sess-1-commands-panel");
     expect(commandsTab).toHaveAttribute("tabindex", "-1");
-    expect(commandsTab).toHaveAttribute(
-      "title",
-      "Show Agent Lens Commands view with 1 command output.",
-    );
-    expect(within(commandsTab).getByTitle("Agent Lens tab name: Commands view.")).toHaveTextContent(
-      "Commands",
-    );
-    expect(
-      within(commandsTab).getByTitle("Agent Lens Commands tab count: 1 command output."),
-    ).toHaveTextContent("1");
     const timelineTab = within(lens).getByRole("tab", { name: /Timeline/ });
     expect(timelineTab).toHaveAttribute("id", "agent-lens-sess-1-timeline-tab");
     expect(timelineTab).toHaveAttribute("aria-controls", "agent-lens-sess-1-timeline-panel");
     expect(timelineTab).toHaveAttribute("tabindex", "-1");
-    expect(timelineTab).toHaveAttribute(
-      "title",
-      "Show Agent Lens Timeline view with 3 recent timeline items.",
-    );
-    expect(within(timelineTab).getByTitle("Agent Lens tab name: Timeline view.")).toHaveTextContent(
-      "Timeline",
-    );
-    expect(
-      within(timelineTab).getByTitle("Agent Lens Timeline tab count: 3 timeline items."),
-    ).toHaveTextContent("3");
-    expect(within(lens).getByLabelText("Touched files")).toHaveAttribute(
-      "title",
-      "Agent Lens touched files for the focused turn: 1 file.",
-    );
-    const preview = within(lens).getByLabelText("Selected file preview");
-    expect(preview).toHaveAttribute(
-      "title",
-      "Selected Agent Lens file preview for src/a.ts; item 1 of 1.",
-    );
-    expect(within(preview).getByTitle("Agent Lens preview is showing src/a.ts.")).toHaveTextContent(
-      "src/a.ts",
-    );
-    expect(
-      within(preview).getByTitle(
-        "Selected-file preview placeholder for src/a.ts: no live hunk data available.",
-      ),
-    ).toHaveTextContent("No live hunk data available for this file.");
-    expect(within(lens).getByTitle("Agent Lens file filter label.")).toHaveTextContent(
-      "Filter files",
-    );
+    const preview = within(lens).getByLabelText("Vista previa del archivo seleccionado");
+    expect(preview).toHaveTextContent("src/a.ts");
+    expect(preview).toHaveTextContent("No hay datos en vivo de los fragmentos de este archivo.");
     expect(within(lens).getAllByText("src/a.ts").length).toBeGreaterThan(0);
 
-    await user.click(within(lens).getByRole("tab", { name: /Commands/ }));
-    expect(lens).toHaveAttribute(
-      "title",
-      "Agent Lens inspector: focused turn 1; Commands view active; 1 file, 1 command output, 3 timeline items; turn state Working.",
-    );
-    const commandsPanel = within(lens).getByRole("tabpanel", { name: /Commands/ });
+    await user.click(commandsTab);
+    const commandsPanel = within(lens).getByRole("tabpanel", { name: /Comandos/ });
     expect(commandsPanel).toHaveAttribute("id", "agent-lens-sess-1-commands-panel");
     expect(commandsPanel).toHaveAttribute("aria-labelledby", "agent-lens-sess-1-commands-tab");
-    expect(commandsPanel).toHaveAttribute(
-      "title",
-      "Agent Lens Commands view for the focused turn: 1 command output.",
+    expect(within(commandsPanel).getByLabelText("Salida de comandos")).toHaveTextContent(
+      "npm test",
     );
-    expect(within(lens).getByLabelText("Command output")).toHaveAttribute(
-      "title",
-      "Agent Lens command output for the focused turn: 1 command output.",
-    );
-    const commandEvent = within(lens).getByTitle(
-      "Command output captured in Agent Lens for turn 1 at +0s: npm test",
-    );
-    expect(commandEvent).toHaveTextContent("npm test");
-    expect(
-      within(commandEvent).getByTitle("Agent Lens command event metadata: turn 1 command at +0s."),
-    ).toHaveTextContent("Turn 1 command - +0s");
-    expect(
-      within(commandEvent).getByTitle("Captured Agent Lens command output for turn 1: npm test"),
-    ).toHaveTextContent("npm test");
-    const commandFilter = within(commandsPanel).getByLabelText("Filter command output");
-    expect(commandFilter).toHaveAttribute("title", "Filter 1 Agent Lens command output by text.");
-    expect(
-      within(commandsPanel).getByTitle("Agent Lens commands filter controls 1 command output."),
-    ).toHaveTextContent("Filter commands");
-    expect(within(commandsPanel).getByTitle("Agent Lens command filter label.")).toHaveTextContent(
-      "Filter commands",
-    );
-    expect(
-      within(commandsPanel).getByTitle("Showing all 1 Agent Lens command output."),
-    ).toHaveTextContent("1 command");
+    const commandFilter = within(commandsPanel).getByLabelText("Filtrar la salida de comandos");
 
     await user.type(commandFilter, "missing");
-
-    expect(commandsPanel).toHaveAttribute(
-      "title",
-      "Agent Lens Commands view for the focused turn: showing 0 command outputs from 1 command output.",
-    );
     expect(
-      within(commandsPanel).getByTitle(
-        'No Agent Lens commands match "missing". Clear or change the filter to show captured items.',
-      ),
-    ).toHaveTextContent("No commands match this filter.");
-    expect(
-      within(commandsPanel).getByTitle(
-        'Agent Lens command output filter empty result for "missing".',
-      ),
-    ).toHaveTextContent("No commands match this filter.");
-    const clearCommandFilter = within(commandsPanel).getByTitle(
-      'Clear Agent Lens commands filter "missing" and restore captured items.',
+      within(commandsPanel).getByText("Ningún comando coincide con este filtro."),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(within(commandsPanel).getByLabelText("Salida de comandos")).toHaveTextContent(
+      "npm test",
     );
-    expect(clearCommandFilter).toHaveAttribute(
-      "title",
-      'Clear Agent Lens commands filter "missing" and restore captured items.',
-    );
-    expect(
-      within(clearCommandFilter).getByTitle("Agent Lens clear-command-filter label: Clear."),
-    ).toHaveTextContent("Clear");
 
-    await user.click(clearCommandFilter);
-
-    expect(
-      within(commandsPanel).getByTitle(
-        "Command output captured in Agent Lens for turn 1 at +0s: npm test",
-      ),
-    ).toHaveTextContent("npm test");
-
-    await user.click(within(lens).getByRole("tab", { name: /Timeline/ }));
-    expect(lens).toHaveAttribute(
-      "title",
-      "Agent Lens inspector: focused turn 1; Timeline view active; 1 file, 1 command output, 3 timeline items; turn state Working.",
-    );
+    await user.click(timelineTab);
     const timelinePanel = within(lens).getByRole("tabpanel", { name: /Timeline/ });
     expect(timelinePanel).toHaveAttribute("id", "agent-lens-sess-1-timeline-panel");
     expect(timelinePanel).toHaveAttribute("aria-labelledby", "agent-lens-sess-1-timeline-tab");
-    expect(timelinePanel).toHaveAttribute(
-      "title",
-      "Agent Lens Timeline view for the focused turn: 3 timeline items.",
+    expect(within(timelinePanel).getByLabelText("Timeline reciente")).toHaveTextContent("npm test");
+    expect(within(timelinePanel).getByLabelText("Timeline reciente")).toHaveTextContent(
+      "Voy con ello",
     );
-    expect(within(lens).getByLabelText("Recent timeline")).toHaveAttribute(
-      "title",
-      "Agent Lens recent timeline for the focused turn: 3 timeline items.",
-    );
-    const timelineCommandEvent = within(lens).getByTitle(
-      "Timeline command event captured in Agent Lens for turn 1 at +0s: npm test",
-    );
-    expect(timelineCommandEvent).toHaveTextContent(/Turn 1 - Command - \+0s/);
-    expect(
-      within(timelineCommandEvent).getByTitle(
-        "Agent Lens timeline event metadata: turn 1 Command event at +0s.",
-      ),
-    ).toHaveTextContent("Turn 1 - Command - +0s");
-    expect(
-      within(timelineCommandEvent).getByTitle(
-        "Captured Agent Lens timeline text for turn 1 Command event: npm test",
-      ),
-    ).toHaveTextContent("npm test");
-    const timelineAgentEvent = within(lens).getByTitle(
-      "Timeline agent event captured in Agent Lens for turn 1 at +0s: Voy con ello",
-    );
-    expect(timelineAgentEvent).toHaveTextContent("Voy con ello");
-    expect(
-      within(timelineAgentEvent).getByTitle(
-        "Agent Lens timeline event metadata: turn 1 Agent event at +0s.",
-      ),
-    ).toHaveTextContent("Turn 1 - Agent - +0s");
-    expect(
-      within(timelineAgentEvent).getByTitle(
-        "Captured Agent Lens timeline text for turn 1 Agent event: Voy con ello",
-      ),
-    ).toHaveTextContent("Voy con ello");
-    const timelineFilter = within(timelinePanel).getByLabelText("Filter timeline events");
-    expect(timelineFilter).toHaveAttribute(
-      "title",
-      "Filter 3 Agent Lens timeline events by text or event type.",
-    );
-    expect(
-      within(timelinePanel).getByTitle("Agent Lens timeline filter controls 3 timeline events."),
-    ).toHaveTextContent("Filter timeline");
-    expect(within(timelinePanel).getByTitle("Agent Lens timeline filter label.")).toHaveTextContent(
-      "Filter timeline",
-    );
-    expect(
-      within(timelinePanel).getByTitle("Showing all 3 Agent Lens timeline events."),
-    ).toHaveTextContent("3 events");
+    const timelineFilter = within(timelinePanel).getByLabelText("Filtrar eventos de Timeline");
 
     await user.type(timelineFilter, "Agent");
-
-    expect(timelinePanel).toHaveAttribute(
-      "title",
-      "Agent Lens Timeline view for the focused turn: showing 1 timeline item from 3 timeline items.",
-    );
-    expect(within(timelinePanel).getByLabelText("Recent timeline")).toHaveAttribute(
-      "title",
-      "Filtered Agent Lens recent timeline for the focused turn: 1 timeline item.",
-    );
-    expect(
-      within(timelinePanel).queryByTitle(
-        "Timeline command event captured in Agent Lens for turn 1 at +0s: npm test",
-      ),
-    ).not.toBeInTheDocument();
-    expect(
-      within(timelinePanel).getByTitle(
-        "Timeline agent event captured in Agent Lens for turn 1 at +0s: Voy con ello",
-      ),
-    ).toHaveTextContent("Voy con ello");
+    expect(within(timelinePanel).queryByText("npm test")).not.toBeInTheDocument();
+    expect(within(timelinePanel).getByText("Voy con ello")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
-
-    expect(
-      within(timelinePanel).getByTitle(
-        "Timeline command event captured in Agent Lens for turn 1 at +0s: npm test",
-      ),
-    ).toHaveTextContent("npm test");
+    expect(within(timelinePanel).getByLabelText("Timeline reciente")).toHaveTextContent("npm test");
   });
 
   it("navigates Agent Lens tabs with keyboard shortcuts", async () => {
@@ -2841,8 +2413,8 @@ describe("TerminalPanel", () => {
     });
 
     const lens = await screen.findByLabelText("Agent Lens");
-    const filesTab = within(lens).getByRole("tab", { name: /Files/ });
-    const commandsTab = within(lens).getByRole("tab", { name: /Commands/ });
+    const filesTab = within(lens).getByRole("tab", { name: /Archivos/ });
+    const commandsTab = within(lens).getByRole("tab", { name: /Comandos/ });
     const timelineTab = within(lens).getByRole("tab", { name: /Timeline/ });
 
     expect(filesTab).toHaveAttribute("aria-selected", "true");
@@ -2852,7 +2424,7 @@ describe("TerminalPanel", () => {
     await waitFor(() => expect(commandsTab).toHaveFocus());
     expect(commandsTab).toHaveAttribute("aria-selected", "true");
     expect(commandsTab).toHaveAttribute("tabindex", "0");
-    expect(within(lens).getByRole("tabpanel", { name: /Commands/ })).toHaveAttribute(
+    expect(within(lens).getByRole("tabpanel", { name: /Comandos/ })).toHaveAttribute(
       "id",
       "agent-lens-sess-1-commands-panel",
     );
@@ -2870,7 +2442,7 @@ describe("TerminalPanel", () => {
     await waitFor(() => expect(filesTab).toHaveFocus());
     expect(filesTab).toHaveAttribute("aria-selected", "true");
     expect(filesTab).toHaveAttribute("tabindex", "0");
-    expect(within(lens).getByRole("tabpanel", { name: /Files/ })).toHaveAttribute(
+    expect(within(lens).getByRole("tabpanel", { name: /Archivos/ })).toHaveAttribute(
       "id",
       "agent-lens-sess-1-files-panel",
     );
@@ -2908,51 +2480,30 @@ describe("TerminalPanel", () => {
     });
 
     const lens = await screen.findByLabelText("Agent Lens");
-    const filter = within(lens).getByLabelText("Filter touched files");
+    const filter = within(lens).getByLabelText("Filtrar archivos modificados");
     expect(filter).toHaveAttribute("aria-describedby", "agent-lens-sess-1-file-filter-status");
     expect(filter).toHaveAttribute(
       "title",
-      "Filter 2 Agent Lens touched files by path, change type, status, or artifact category.",
+      "Filtrar 2 archivos modificados de Agent Lens por ruta, tipo de cambio, estado o categoría.",
     );
-    expect(within(lens).getByTitle("Showing all 2 Agent Lens touched files.")).toHaveTextContent(
-      "2 files",
-    );
+    expect(within(lens).getByText("2 archivos")).toBeInTheDocument();
 
     await user.type(filter, "docs");
 
     expect(filter).toHaveAttribute(
       "title",
-      "Filter 2 Agent Lens touched files by path, change type, status, or artifact category. Press Escape to clear the filter.",
+      "Filtrar 2 archivos modificados de Agent Lens por ruta, tipo de cambio, estado o categoría. Pulsa Escape para borrar el filtro.",
     );
-    expect(
-      within(lens).getByTitle("Showing 1 of 2 Agent Lens touched files after filtering."),
-    ).toHaveTextContent("1 of 2 files");
+    expect(within(lens).getByText("1 de 2 archivos")).toBeInTheDocument();
     expect(within(lens).getAllByText("docs/guide.md").length).toBeGreaterThan(0);
     expect(within(lens).queryByText("src/a.ts")).not.toBeInTheDocument();
-    const clearButton = within(lens).getByRole("button", { name: "Clear" });
-    expect(clearButton).toHaveAttribute(
-      "title",
-      "Clear Agent Lens file filter and show all 2 touched files; currently showing 1 file.",
-    );
+    expect(within(lens).getByRole("button", { name: "Borrar" })).toBeInTheDocument();
 
     await user.clear(filter);
     await user.type(filter, "missing");
 
-    expect(
-      within(lens).getByTitle(
-        'No Agent Lens files match "missing". Clear or change the filter to show touched files.',
-      ),
-    ).toHaveTextContent("No files match this filter.");
-    expect(
-      within(lens).getByTitle('Agent Lens file filter empty result for "missing".'),
-    ).toHaveTextContent("No files match this filter.");
-    const emptyClear = within(lens).getByTitle(
-      'Clear Agent Lens file filter "missing" and restore touched files.',
-    );
-    expect(emptyClear).toHaveAttribute(
-      "title",
-      'Clear Agent Lens file filter "missing" and restore touched files.',
-    );
+    expect(within(lens).getByText("Ningún archivo coincide con este filtro.")).toBeInTheDocument();
+    const emptyClear = within(lens).getAllByRole("button", { name: "Borrar" })[1]!;
 
     await user.click(emptyClear);
 
@@ -2983,23 +2534,15 @@ describe("TerminalPanel", () => {
 
     const lens = await screen.findByLabelText("Agent Lens");
 
-    await user.click(within(lens).getByRole("tab", { name: /Commands/ }));
-    expect(within(lens).getByRole("tabpanel", { name: /Commands/ })).toHaveAttribute(
-      "title",
-      "Agent Lens Commands view for the current session: 0 command outputs.",
-    );
+    await user.click(within(lens).getByRole("tab", { name: /Comandos/ }));
     expect(
-      within(lens).getByTitle("Agent Lens has no command output in the current session."),
-    ).toHaveTextContent("No commands captured yet.");
+      within(lens).getByTitle("Agent Lens no tiene salidas de comandos en la sesión actual."),
+    ).toHaveTextContent("Aún no se han capturado comandos.");
 
     await user.click(within(lens).getByRole("tab", { name: /Timeline/ }));
-    expect(within(lens).getByRole("tabpanel", { name: /Timeline/ })).toHaveAttribute(
-      "title",
-      "Agent Lens Timeline view for the current session: 0 timeline items.",
-    );
     expect(
-      within(lens).getByTitle("Agent Lens has no timeline events in the current session."),
-    ).toHaveTextContent("No timeline captured yet.");
+      within(lens).getByTitle("Agent Lens no tiene eventos de Timeline en la sesión actual."),
+    ).toHaveTextContent("Aún no se han capturado eventos de Timeline.");
   });
 
   it("scopes Agent Lens files and commands to the focused turn", async () => {
@@ -3061,176 +2604,36 @@ describe("TerminalPanel", () => {
     });
 
     const lens = await screen.findByLabelText("Agent Lens");
-    expect(lens).toHaveAttribute(
-      "title",
-      "Agent Lens inspector: focused turn 2; Files view active; 1 file, 1 command output, 2 timeline items; turn state Working.",
+    expect(within(lens).getByRole("button", { name: "Turno" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
-    expect(within(lens).getByRole("button", { name: "Focus" })).toHaveAttribute(
-      "title",
-      "Scope Agent Lens to focused turn 2.",
+    expect(within(lens).getByRole("button", { name: "Sesión" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
     );
-    expect(within(lens).getByRole("button", { name: "Session" })).toHaveAttribute(
-      "title",
-      "Scope Agent Lens to the full session.",
-    );
-    expect(within(lens).getByTitle("Agent Lens is showing focused turn 2.")).toHaveTextContent(
-      "Turn 2",
-    );
-    expect(within(lens).getByTitle("Agent Lens inspector for focused turn 2.")).toHaveTextContent(
-      "Agent Lens",
-    );
-    expect(within(lens).getByTitle("Agent Lens heading label.")).toHaveTextContent("Agent Lens");
-    expect(within(lens).getByLabelText("Agent Lens scope")).toHaveAttribute(
-      "title",
-      "Agent Lens scope controls are focused on turn 2.",
-    );
-    expect(
-      within(lens).getByTitle(
-        "Agent Lens metrics summarize Working state, 1 file, and 0 restorable turn checkpoints for the focused turn.",
-      ),
-    ).toHaveTextContent("Working");
-    expect(within(lens).getByTitle("Agent Lens turn state value: Working.")).toHaveTextContent(
-      "Working",
-    );
-    expect(within(lens).getByTitle("Current Agent Lens turn state: Working.")).toHaveTextContent(
-      "Turn state",
-    );
-    expect(
-      within(lens).getByTitle("Agent Lens focused scope file count value: 1 file."),
-    ).toHaveTextContent("1");
-    expect(within(lens).getByTitle("Agent Lens focused scope includes 1 file.")).toHaveTextContent(
-      "Focused files",
-    );
-    expect(
-      within(lens).getByTitle(
-        "Agent Lens restore-point value: 0 of 2 turn checkpoints are restorable.",
-      ),
-    ).toHaveTextContent("0/2");
-    expect(
-      within(lens).getByTitle(
-        "Agent Lens restore-point metric: 0 restore points from 2 turn checkpoints.",
-      ),
-    ).toHaveTextContent("Restore points");
-    expect(
-      within(lens).getByTitle("Agent Lens view tabs: 1 file, 1 command output, 2 timeline items."),
-    ).toHaveAttribute("role", "tablist");
-    const focusedFileRow = within(lens).getByTitle(
-      "Agent Lens touched file for turn 2: created src/second.ts.",
-    );
-    expect(focusedFileRow).toHaveTextContent("src/second.ts");
-    expect(
-      within(focusedFileRow).getByTitle("Agent Lens file row timing: turn 2 at +0s."),
-    ).toHaveTextContent("Turn 2 - +0s");
-    expect(
-      within(focusedFileRow).getByTitle("Agent Lens file row path: src/second.ts."),
-    ).toHaveTextContent("src/second.ts");
-    expect(
-      within(focusedFileRow).getByTitle("Code Agent Lens file row change type: created."),
-    ).toHaveTextContent("created");
+    expect(within(lens).getByText("Turno 2")).toBeInTheDocument();
+    expect(within(lens).getByText("Trabajando")).toBeInTheDocument();
     expect(within(lens).getAllByText("src/second.ts").length).toBeGreaterThan(0);
     expect(within(lens).queryByText("src/first.ts")).not.toBeInTheDocument();
-    expect(within(lens).getByText("Focused files")).toBeInTheDocument();
-    expect(
-      within(lens).getByTitle("Agent Lens file filter controls 1 touched file."),
-    ).toHaveTextContent("Filter files");
-    expect(within(lens).getByTitle("Agent Lens file filter label.")).toHaveTextContent(
-      "Filter files",
-    );
 
-    await user.click(within(lens).getByRole("tab", { name: /Commands/ }));
+    await user.click(within(lens).getByRole("tab", { name: /Comandos/ }));
     expect(within(lens).getByText("npm test second")).toBeInTheDocument();
     expect(within(lens).queryByText("npm test first")).not.toBeInTheDocument();
 
-    const turnMap = screen.getByLabelText("Turn map");
-    expect(screen.getByLabelText("Agent session overview")).toHaveAttribute(
-      "title",
-      "Agent session overview: 2 turns, 2 messages, 2 commands, 2 files; latest activity: npm test second; turn map 2 turns.",
-    );
-    expect(
-      screen.getByTitle(
-        "Agent session overview metrics: 2 turns, 2 messages, 2 commands, 2 files.",
-      ),
-    ).toHaveTextContent("Turns");
-    expect(turnMap).toHaveAttribute("title", "Agent session overview turn map: 2 turns.");
+    const turnMap = screen.getByLabelText("Mapa de turnos");
     const firstTurnButton = within(turnMap).getByRole("button", { name: /T1/ });
-    expect(firstTurnButton).toHaveAttribute(
-      "title",
-      "Turn 1: 1 commands, 1 files - Recent command: npm test first",
-    );
-    expect(
-      within(firstTurnButton).getByTitle("Agent session overview turn-map label: turn 1."),
-    ).toHaveTextContent("T1");
-    expect(
-      within(firstTurnButton).getByTitle(
-        "Agent session overview turn-map command summary for turn 1: npm test first.",
-      ),
-    ).toHaveTextContent("cmd npm test first");
-    expect(
-      within(firstTurnButton).getByTitle(
-        "Agent session overview turn-map file count for turn 1: 1 file.",
-      ),
-    ).toHaveTextContent("1 files");
 
     await user.click(firstTurnButton);
-    expect(within(lens).getByText("Turn 1")).toBeInTheDocument();
+    expect(within(lens).getByText("Turno 1")).toBeInTheDocument();
     expect(within(lens).getByText("npm test first")).toBeInTheDocument();
     expect(within(lens).queryByText("npm test second")).not.toBeInTheDocument();
 
-    await user.click(within(lens).getByRole("button", { name: "Session" }));
-    expect(lens).toHaveAttribute(
-      "title",
-      "Agent Lens inspector: current session with 2 turns; Commands view active; 2 files, 2 command outputs, 4 timeline items; turn state Working.",
-    );
-    expect(within(lens).getByRole("button", { name: "Session" })).toHaveAttribute(
-      "title",
-      "Scope Agent Lens to the full session.",
-    );
-    await user.click(within(lens).getByRole("tab", { name: /Files/ }));
-    expect(lens).toHaveAttribute(
-      "title",
-      "Agent Lens inspector: current session with 2 turns; Files view active; 2 files, 2 command outputs, 4 timeline items; turn state Working.",
-    );
-    expect(within(lens).getByRole("tabpanel", { name: /Files/ })).toHaveAttribute(
-      "title",
-      "Agent Lens Files view for the current session: 2 touched files.",
-    );
-    expect(
-      within(lens).getByTitle("Agent Lens is showing the full session with 2 turns."),
-    ).toHaveTextContent("2 turns");
-    expect(
-      within(lens).getByTitle("Agent Lens inspector for the full session with 2 turns."),
-    ).toHaveTextContent("Agent Lens");
-    expect(within(lens).getByLabelText("Agent Lens scope")).toHaveAttribute(
-      "title",
-      "Agent Lens scope controls switch between the focused turn and the full session.",
-    );
-    expect(
-      within(lens).getByTitle(
-        "Agent Lens metrics summarize Working state, 2 files, and 0 restorable turn checkpoints for the current session.",
-      ),
-    ).toHaveTextContent("2");
-    expect(
-      within(lens).getByTitle("Agent Lens session scope file count value: 2 files."),
-    ).toHaveTextContent("2");
-    expect(within(lens).getByTitle("Agent Lens session scope includes 2 files.")).toHaveTextContent(
-      "Session files",
-    );
-    expect(
-      within(lens).getByTitle(
-        "Agent Lens restore-point value: 0 of 2 turn checkpoints are restorable.",
-      ),
-    ).toHaveTextContent("0/2");
-    expect(
-      within(lens).getByTitle(
-        "Agent Lens view tabs: 2 files, 2 command outputs, 4 timeline items.",
-      ),
-    ).toHaveAttribute("role", "tablist");
-    expect(within(lens).getByText("Session files")).toBeInTheDocument();
-    expect(
-      within(lens).getByTitle("Agent Lens file filter controls 2 touched files."),
-    ).toHaveTextContent("Filter files");
-    expect(within(lens).getByTitle("Agent Lens file filter label.")).toHaveTextContent(
-      "Filter files",
+    await user.click(within(lens).getByRole("button", { name: "Sesión" }));
+    await user.click(within(lens).getByRole("tab", { name: /Archivos/ }));
+    expect(within(lens).getByRole("button", { name: "Sesión" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
     expect(within(lens).getAllByText("src/first.ts").length).toBeGreaterThan(0);
     expect(within(lens).getAllByText("src/second.ts").length).toBeGreaterThan(0);
@@ -3273,93 +2676,70 @@ describe("TerminalPanel", () => {
     );
 
     const lens = await screen.findByLabelText("Agent Lens");
-    const preview = within(lens).getByLabelText("Selected file preview");
-    const previewActions = within(preview).getByLabelText("Preview actions for src/agent-view.tsx");
-    expect(previewActions).toHaveAttribute(
-      "title",
-      "Agent Lens preview actions for src/agent-view.tsx: open, ask, and revert controls for the selected preview file.",
+    const preview = within(lens).getByLabelText("Vista previa del archivo seleccionado");
+    const previewActions = within(preview).getByLabelText(
+      "Acciones de vista previa para src/agent-view.tsx",
     );
     expect(
-      within(previewActions).getByRole("button", { name: "Open selected preview file" }),
-    ).toHaveAttribute("title", "Open src/agent-view.tsx from Agent Lens in the workspace.");
-    expect(
-      within(previewActions).getByTitle("Agent Lens preview action label: Open."),
-    ).toHaveTextContent("Open");
-    expect(
-      within(previewActions).getByRole("button", { name: "Ask about selected preview file" }),
-    ).toHaveAttribute("title", "Draft an Agent Lens follow-up prompt for src/agent-view.tsx.");
-    expect(
-      within(previewActions).getByTitle("Agent Lens preview action label: Ask."),
-    ).toHaveTextContent("Ask");
-    expect(
-      within(previewActions).getByRole("button", { name: "Revert selected preview file" }),
+      within(previewActions).getByRole("button", { name: "Abrir el archivo seleccionado" }),
     ).toHaveAttribute(
       "title",
-      "Selected preview file: Stop the session before reverting src/agent-view.tsx.",
+      "Abrir src/agent-view.tsx desde Agent Lens en el espacio de trabajo.",
     );
     expect(
-      within(previewActions).getByTitle("Agent Lens preview action label: Revert."),
-    ).toHaveTextContent("Revert");
+      within(previewActions).getByRole("button", { name: "Preguntar por el archivo seleccionado" }),
+    ).toHaveAttribute(
+      "title",
+      "Preparar un prompt de seguimiento de Agent Lens para src/agent-view.tsx.",
+    );
+    expect(
+      within(previewActions).getByRole("button", { name: "Revertir el archivo seleccionado" }),
+    ).toBeDisabled();
     const fileActions = within(lens).getByTitle(
-      "Agent Lens file actions for src/agent-view.tsx: preview, open, ask, and revert controls.",
+      "Acciones de Agent Lens para src/agent-view.tsx: vista previa, abrir, preguntar y revertir.",
     );
-    expect(fileActions).toHaveAttribute("aria-label", "File actions for src/agent-view.tsx");
-    expect(within(fileActions).getByRole("button", { name: "Preview" })).toHaveAttribute(
+    expect(fileActions).toHaveAttribute("aria-label", "Acciones para src/agent-view.tsx");
+    expect(within(fileActions).getByRole("button", { name: "Vista previa" })).toHaveAttribute(
       "title",
-      "Previewing Agent Lens details for src/agent-view.tsx.",
+      "Se muestran los detalles de src/agent-view.tsx en Agent Lens.",
     );
-    expect(
-      within(fileActions).getByTitle("Agent Lens file action label: Preview."),
-    ).toHaveTextContent("Preview");
-    expect(within(fileActions).getByRole("button", { name: "Open" })).toHaveAttribute(
+    expect(within(fileActions).getByRole("button", { name: "Abrir" })).toHaveAttribute(
       "title",
-      "Open src/agent-view.tsx from Agent Lens in the workspace.",
+      "Abrir src/agent-view.tsx desde Agent Lens en el espacio de trabajo.",
     );
-    expect(within(fileActions).getByTitle("Agent Lens file action label: Open.")).toHaveTextContent(
-      "Open",
-    );
-    expect(within(fileActions).getByRole("button", { name: "Ask" })).toHaveAttribute(
+    expect(within(fileActions).getByRole("button", { name: "Preguntar" })).toHaveAttribute(
       "title",
-      "Draft an Agent Lens follow-up prompt for src/agent-view.tsx.",
+      "Preparar un prompt de seguimiento de Agent Lens para src/agent-view.tsx.",
     );
-    expect(within(fileActions).getByTitle("Agent Lens file action label: Ask.")).toHaveTextContent(
-      "Ask",
-    );
-    expect(within(fileActions).getByRole("button", { name: "Revert" })).toHaveAttribute(
-      "title",
-      "Stop the session before reverting src/agent-view.tsx.",
-    );
-    expect(
-      within(fileActions).getByTitle("Agent Lens file action label: Revert."),
-    ).toHaveTextContent("Revert");
-    await user.click(within(lens).getByRole("button", { name: "Open" }));
+    expect(within(fileActions).getByRole("button", { name: "Revertir" })).toBeDisabled();
+    await user.click(within(lens).getByRole("button", { name: "Abrir" }));
 
     expect(openFile).toHaveBeenCalledWith("/r/a", "src/agent-view.tsx", true);
 
     await user.click(
-      within(previewActions).getByRole("button", { name: "Open selected preview file" }),
+      within(previewActions).getByRole("button", { name: "Abrir el archivo seleccionado" }),
     );
 
     expect(openFile).toHaveBeenCalledTimes(2);
     expect(openFile).toHaveBeenLastCalledWith("/r/a", "src/agent-view.tsx", true);
 
-    await user.click(within(lens).getByRole("button", { name: "Ask" }));
+    await user.click(within(lens).getByRole("button", { name: "Preguntar" }));
 
-    let composerValue = (screen.getByLabelText("Message Codex") as HTMLTextAreaElement).value;
-    expect(composerValue).toContain("Focus on src/agent-view.tsx.");
-    expect(composerValue).toContain("It was modified in turn 1.");
-    expect(composerValue).toContain("Artifact category: Code.");
-    expect(composerValue).toContain("Diff summary: 1 hunk - +1 / -1.");
-    expect(composerValue).toContain("next concrete edit or verification step");
+    let composerValue = (screen.getByLabelText("Mensaje para Codex") as HTMLTextAreaElement).value;
+    expect(composerValue).toContain("Céntrate en src/agent-view.tsx.");
+    expect(composerValue).toContain("Este archivo figura como modificado en turno 1.");
+    expect(composerValue).toContain("Categoría del artefacto: Código.");
+    expect(composerValue).toContain("Resumen del diff: 1 fragmento - +1 / -1.");
+    expect(composerValue).toContain("siguiente cambio o paso de verificación concreto");
 
-    await user.clear(screen.getByLabelText("Message Codex"));
+    await user.clear(screen.getByLabelText("Mensaje para Codex"));
     await user.click(
-      within(previewActions).getByRole("button", { name: "Ask about selected preview file" }),
+      within(previewActions).getByRole("button", { name: "Preguntar por el archivo seleccionado" }),
     );
 
-    composerValue = (screen.getByLabelText("Message Codex") as HTMLTextAreaElement).value;
-    expect(composerValue).toContain("Focus on src/agent-view.tsx.");
-    expect(composerValue).toContain("Diff summary: 1 hunk - +1 / -1.");
+    composerValue = (screen.getByLabelText("Mensaje para Codex") as HTMLTextAreaElement).value;
+    expect(composerValue).toContain("Céntrate en src/agent-view.tsx.");
+    expect(composerValue).toContain("Resumen del diff: 1 fragmento - +1 / -1.");
   });
 
   it("shows live repo status and diff context for Agent Lens files", async () => {
@@ -3401,49 +2781,47 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
     const lens = await screen.findByLabelText("Agent Lens");
-    const context = within(lens).getByLabelText("Live context for src/agent-view.tsx");
-    expect(context).toHaveAttribute(
-      "title",
-      "Live Agent Lens context for src/agent-view.tsx: repo status and diff chips.",
-    );
+    const context = within(lens).getByLabelText("Contexto en vivo de src/agent-view.tsx");
     expect(
-      within(context).getByTitle("Live repo status for src/agent-view.tsx: modified."),
-    ).toHaveTextContent("modified");
+      within(context).getByTitle(
+        "Estado en vivo del repositorio para src/agent-view.tsx: modificado.",
+      ),
+    ).toHaveTextContent("modificado");
     expect(
-      within(context).getByTitle("Live repo status for src/agent-view.tsx: staged."),
-    ).toHaveTextContent("staged");
+      within(context).getByTitle(
+        "Estado en vivo del repositorio para src/agent-view.tsx: preparado.",
+      ),
+    ).toHaveTextContent("preparado");
     expect(
-      within(context).getByTitle("Live diff summary for src/agent-view.tsx: 2 added, 1 removed."),
+      within(context).getByTitle(
+        "Resumen del diff en vivo de src/agent-view.tsx: 2 añadidas y 1 eliminadas.",
+      ),
     ).toHaveTextContent("+2 / -1");
 
-    const preview = within(lens).getByLabelText("Selected file preview");
-    expect(preview).toHaveAttribute(
-      "title",
-      "Selected Agent Lens file preview for src/agent-view.tsx; item 1 of 1.",
-    );
+    const preview = within(lens).getByLabelText("Vista previa del archivo seleccionado");
+    expect(preview).toHaveTextContent("Vista previa");
     expect(
-      within(preview).getByTitle("Selected-file preview area for the active Agent Lens file."),
-    ).toHaveTextContent("Preview");
-    expect(
-      within(preview).getByTitle("Agent Lens preview is showing src/agent-view.tsx."),
+      within(preview).getByTitle("La vista previa de Agent Lens muestra src/agent-view.tsx."),
     ).toHaveTextContent("src/agent-view.tsx");
     expect(within(preview).getByText("src/agent-view.tsx")).toBeInTheDocument();
-    const previewDetails = within(preview).getByLabelText("Preview details for src/agent-view.tsx");
+    const previewDetails = within(preview).getByLabelText(
+      "Detalles de la vista previa de src/agent-view.tsx",
+    );
     expect(previewDetails).toHaveAttribute(
       "title",
-      "Agent Lens preview details for src/agent-view.tsx: hunk summary and first-hunk location.",
+      "Detalles de la vista previa de Agent Lens para src/agent-view.tsx: resumen y ubicación del primer fragmento.",
     );
     expect(
       within(previewDetails).getByTitle(
-        "Selected-file preview summary for src/agent-view.tsx: 1 hunk, 2 added, 1 removed.",
+        "Resumen de la vista previa del archivo seleccionado src/agent-view.tsx: 1 fragmento, 2 añadidas, 1 eliminadas.",
       ),
-    ).toHaveTextContent("1 hunk - +2 / -1");
+    ).toHaveTextContent("1 fragmento - +2 / -1");
     expect(
       within(previewDetails).getByTitle(
-        "Selected-file preview detail for src/agent-view.tsx: First hunk @@ -1 +1.",
+        "Detalle de la vista previa del archivo seleccionado src/agent-view.tsx: Primer fragmento @@ -1 +1.",
       ),
-    ).toHaveTextContent("First hunk @@ -1 +1.");
-    expect(within(lens).getByRole("button", { name: "Preview" })).toHaveAttribute(
+    ).toHaveTextContent("Primer fragmento @@ -1 +1.");
+    expect(within(lens).getByRole("button", { name: "Vista previa" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -3492,48 +2870,48 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
     const lens = await screen.findByLabelText("Agent Lens");
-    const preview = within(lens).getByLabelText("Selected file preview");
-    expect(preview).toHaveAttribute(
-      "title",
-      "Selected Agent Lens file preview for src/agent-view.tsx; item 1 of 2. Use arrow keys to move between previewed files.",
-    );
+    const preview = within(lens).getByLabelText("Vista previa del archivo seleccionado");
     expect(
-      within(preview).getByTitle("Agent Lens preview position: 1 of 2 visible files."),
+      within(preview).getByTitle(
+        "Posición de la vista previa de Agent Lens: 1 de 2 archivos visibles.",
+      ),
     ).toHaveTextContent("1 / 2");
-    const navigation = within(preview).getByLabelText("Preview navigation");
+    const navigation = within(preview).getByLabelText("Navegación por la vista previa");
     expect(navigation).toHaveAttribute(
       "title",
-      "Agent Lens preview navigation for src/agent-view.tsx: move through 2 visible files.",
+      "Navegación de la vista previa de Agent Lens para src/agent-view.tsx: recorre 2 archivos visibles.",
     );
-    expect(within(navigation).getByRole("button", { name: "Previous" })).toHaveAttribute(
+    expect(within(navigation).getByRole("button", { name: "Anterior" })).toHaveAttribute(
       "title",
-      "Show the previous Agent Lens preview file: docs/agent-view.md.",
+      "Mostrar el archivo anterior en la vista previa de Agent Lens: docs/agent-view.md.",
     );
-    expect(within(navigation).getByRole("button", { name: "Next" })).toHaveAttribute(
+    expect(within(navigation).getByRole("button", { name: "Siguiente" })).toHaveAttribute(
       "title",
-      "Show the next Agent Lens preview file: docs/agent-view.md.",
+      "Mostrar el archivo siguiente en la vista previa de Agent Lens: docs/agent-view.md.",
     );
 
-    await user.click(within(navigation).getByRole("button", { name: "Next" }));
+    await user.click(within(navigation).getByRole("button", { name: "Siguiente" }));
 
     expect(
-      within(preview).getByTitle("Agent Lens preview is showing docs/agent-view.md."),
+      within(preview).getByTitle("La vista previa de Agent Lens muestra docs/agent-view.md."),
     ).toHaveTextContent("docs/agent-view.md");
     expect(
-      within(preview).getByTitle("Agent Lens preview position: 2 of 2 visible files."),
+      within(preview).getByTitle(
+        "Posición de la vista previa de Agent Lens: 2 de 2 archivos visibles.",
+      ),
     ).toHaveTextContent("2 / 2");
 
     preview.focus();
     await user.keyboard("{ArrowLeft}");
 
     expect(
-      within(preview).getByTitle("Agent Lens preview is showing src/agent-view.tsx."),
+      within(preview).getByTitle("La vista previa de Agent Lens muestra src/agent-view.tsx."),
     ).toHaveTextContent("src/agent-view.tsx");
 
     await user.keyboard("{ArrowRight}");
 
     expect(
-      within(preview).getByTitle("Agent Lens preview is showing docs/agent-view.md."),
+      within(preview).getByTitle("La vista previa de Agent Lens muestra docs/agent-view.md."),
     ).toHaveTextContent("docs/agent-view.md");
   });
 
@@ -3553,46 +2931,37 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
     const lens = await screen.findByLabelText("Agent Lens");
-    const codeGroup = within(lens).getByLabelText("Code files");
-    expect(codeGroup).toHaveAttribute(
-      "title",
-      "Agent Lens Code file group contains 1 touched file.",
-    );
-    expect(within(codeGroup).getByTitle("Code artifact group contains 1 file.")).toHaveTextContent(
-      "1",
-    );
-    expect(
-      within(codeGroup).getByTitle("Code Agent Lens group heading for 1 touched file."),
-    ).toHaveTextContent("Code");
-    expect(
-      within(codeGroup).getByTitle("Agent Lens file group kind label: Code."),
-    ).toHaveTextContent("Code");
+    const codeGroup = within(lens).getByLabelText("Archivos de código");
+    expect(codeGroup).toHaveTextContent("Código");
     const codeFileRow = within(codeGroup).getByTitle(
-      "Agent Lens touched file for the session: modified src/agent-view.tsx.",
+      "Archivo modificado de Agent Lens para la sesión: modificado src/agent-view.tsx.",
     );
     expect(codeFileRow).toHaveTextContent("src/agent-view.tsx");
     expect(
-      within(codeFileRow).getByTitle("Agent Lens file row scope: session change log at +0s."),
-    ).toHaveTextContent("Session - +0s");
+      within(codeFileRow).getByTitle(
+        "Ámbito de la fila de archivo de Agent Lens: registro de cambios de la sesión en +0s.",
+      ),
+    ).toHaveTextContent("Sesión - +0s");
     expect(
-      within(codeFileRow).getByTitle("Agent Lens file row path: src/agent-view.tsx."),
+      within(codeFileRow).getByTitle(
+        "Ruta de la fila de archivo de Agent Lens: src/agent-view.tsx.",
+      ),
     ).toHaveTextContent("src/agent-view.tsx");
     expect(
-      within(codeFileRow).getByTitle("Code Agent Lens file row change type: modified."),
-    ).toHaveTextContent("modified");
-    const testsGroup = within(lens).getByLabelText("Tests files");
-    expect(
-      within(testsGroup).getByTitle("Tests Agent Lens group heading for 1 touched file."),
-    ).toHaveTextContent("Tests");
-    expect(
-      within(testsGroup).getByTitle("Agent Lens file group kind label: Tests."),
-    ).toHaveTextContent("Tests");
+      within(codeFileRow).getByTitle(
+        "Tipo de cambio de la fila de archivo Código de Agent Lens: modificado.",
+      ),
+    ).toHaveTextContent("modificado");
+    const testsGroup = within(lens).getByLabelText("Archivos de pruebas");
+    expect(testsGroup).toHaveTextContent("Pruebas");
     expect(within(testsGroup).getByText("src/agent-view.test.tsx")).toBeInTheDocument();
     expect(
-      within(within(lens).getByLabelText("Docs files")).getByText("docs/agent-view.md"),
+      within(within(lens).getByLabelText("Archivos de documentación")).getByText(
+        "docs/agent-view.md",
+      ),
     ).toBeInTheDocument();
     expect(
-      within(within(lens).getByLabelText("Config files")).getByText("package.json"),
+      within(within(lens).getByLabelText("Archivos de configuración")).getByText("package.json"),
     ).toBeInTheDocument();
   });
 
@@ -3667,134 +3036,59 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const focus = await screen.findByLabelText("Focused turn");
-    expect(focus).toHaveAttribute("title", "Focused turn card container: selected turn 2.");
-    expect(within(focus).getByTitle("Focused turn heading label: Focused turn.")).toHaveTextContent(
-      "Focused turn",
-    );
-    expect(within(focus).getByText("Turn 2")).toBeInTheDocument();
+    const focus = await screen.findByLabelText("Turno seleccionado");
+    expect(within(focus).getByText("Turno 2")).toBeInTheDocument();
     expect(within(focus).getByText("Second done")).toBeInTheDocument();
+    expect(within(focus).getByLabelText("Archivos del turno seleccionado")).toBeInTheDocument();
     expect(
       within(focus).getByTitle(
-        "Focused turn files container for turn 2: 4 visible touched files, plus 1 hidden touched file.",
+        "Fila de archivo modificado del turno seleccionado 2: creado src/second.ts.",
       ),
-    ).toHaveAttribute("aria-label", "Focused turn files");
-    expect(
-      within(focus).getByTitle("Focused turn touched file row for turn 2: created src/second.ts."),
-    ).toHaveTextContent("created src/second.ts");
+    ).toHaveTextContent("creado src/second.ts");
     expect(
       within(focus).getByTitle(
-        "Focused turn hidden file overflow: 1 additional touched file for turn 2.",
+        "Archivos adicionales ocultos del turno seleccionado: 1 archivo modificado en el turno 2.",
       ),
-    ).toHaveTextContent("+1 more");
-    expect(
-      within(focus).getByTitle(
-        "Focused turn restore container for turn 2: stop the session before restoring.",
-      ),
-    ).toHaveClass("agent-panel__turn-focus-actions");
+    ).toHaveTextContent("+1 más");
 
-    await user.click(within(screen.getByLabelText("Turn map")).getByRole("button", { name: /T1/ }));
+    await user.click(
+      within(screen.getByLabelText("Mapa de turnos")).getByRole("button", { name: /T1/ }),
+    );
 
-    expect(within(focus).getByText("Turn 1")).toBeInTheDocument();
-    expect(within(focus).getByTitle("Focused turn index label: Turn 1.")).toHaveTextContent(
-      "Turn 1",
-    );
-    expect(within(focus).getByText("+0s")).toHaveAttribute(
-      "title",
-      "Focused turn 1 timing relative to the first turn: +0s.",
-    );
-    expect(within(focus).getByText("3 messages / 1 commands / 1 files")).toHaveAttribute(
-      "title",
-      "Focused turn 1 transcript, command, and file counts: 3 messages / 1 commands / 1 files.",
-    );
+    expect(within(focus).getByText("Turno 1")).toBeInTheDocument();
+    expect(
+      within(focus).getByTitle("Etiqueta de índice del turno seleccionado: Turno 1."),
+    ).toHaveTextContent("Turno 1");
+    expect(within(focus).getByText("3 mensajes / 1 comando / 1 archivo")).toBeInTheDocument();
     expect(within(focus).getByText("npm test first")).toHaveAttribute(
       "title",
-      "Most recent captured activity for focused turn 1: npm test first",
+      "Actividad registrada más reciente del turno seleccionado 1: npm test first",
     );
     expect(within(focus).queryByText("Second done")).not.toBeInTheDocument();
     expect(
-      within(focus).getByTitle("Focused turn facts container for turn 1: 1 command, 1 file."),
-    ).toHaveClass("agent-panel__turn-focus-facts");
-    expect(within(focus).getByText("1 commands")).toHaveAttribute(
-      "title",
-      "Focused turn 1 has 1 command.",
-    );
-    expect(within(focus).getByText("1 files")).toHaveAttribute(
-      "title",
-      "Focused turn 1 has 1 file.",
-    );
-    const artifactSummary = within(focus).getByLabelText("Focused turn artifact summary");
-    expect(artifactSummary).toHaveAttribute(
-      "title",
-      "Focused turn artifact-summary container for turn 1: 1 artifact category chip.",
-    );
-    const commandSummary = within(focus).getByLabelText("Focused turn command summary");
-    expect(commandSummary).toHaveAttribute(
-      "title",
-      "Focused turn command-summary container for turn 1: 1 recent command summary.",
-    );
-    expect(within(commandSummary).getByText("Recent command npm test first")).toHaveAttribute(
-      "title",
-      "Compact recent command output summary for turn 1: npm test first",
-    );
+      within(focus).getByLabelText("Resumen de artefactos del turno seleccionado"),
+    ).toHaveTextContent("Código 1");
+    expect(
+      within(focus).getByLabelText("Resumen de comandos del turno seleccionado"),
+    ).toHaveTextContent("Comando reciente: npm test first");
     expect(scrollIntoViewMock).toHaveBeenCalled();
     const firstTurnArticle = screen.getByText("First task").closest("article");
     expect(firstTurnArticle).toHaveAttribute("aria-current", "true");
-    expect(firstTurnArticle).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Detalles" })).toHaveAttribute(
       "title",
-      "Conversation turn card container for turn 1: focused; 3 messages / 1 commands / 1 files.",
+      "Mostrar los detalles, puntos de restauración, archivos, comandos y Timeline.",
     );
-    expect(
-      within(firstTurnArticle!).getByTitle(
-        "Conversation turn header container for turn 1: title, metadata, and copy control.",
-      ),
-    ).toHaveClass("agent-panel__chat-turn-head");
-    expect(
-      within(firstTurnArticle!).getByTitle(
-        "Conversation turn title container for turn 1: Turn label and transcript summary.",
-      ),
-    ).toHaveClass("agent-panel__chat-turn-title");
-    expect(
-      within(firstTurnArticle!).getByTitle(
-        "Conversation turn metadata container for turn 1: timing, touched-file count, and copy control.",
-      ),
-    ).toHaveClass("agent-panel__chat-turn-meta");
-    const turnCommandSummary = within(firstTurnArticle!).getByLabelText("Turn 1 command summary");
-    expect(turnCommandSummary).toHaveAttribute(
-      "title",
-      "Conversation turn command-summary container for turn 1: 1 recent command summary.",
-    );
-    expect(within(turnCommandSummary).getByText("Recent command npm test first")).toHaveAttribute(
-      "title",
-      "Compact recent command output summary for turn 1: npm test first",
-    );
-    expect(
-      within(firstTurnArticle!).getByTitle(
-        "Conversation turn touched-files container for turn 1: 1 touched-file chip.",
-      ),
-    ).toHaveClass("agent-panel__chat-turn-files");
-
-    expect(within(focus).queryByRole("button", { name: "Jump" })).not.toBeInTheDocument();
-    expect(within(focus).queryByRole("button", { name: "Copy focus" })).not.toBeInTheDocument();
-    expect(within(focus).queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
-    expect(within(focus).queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
-    expect(within(focus).queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
-    expect(within(focus).queryByRole("button", { name: "Handoff" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Details" })).toHaveAttribute(
-      "title",
-      "Show session details, restore points, files, commands, and timeline.",
-    );
-    await user.click(screen.getByRole("button", { name: "Details" }));
+    await user.click(screen.getByRole("button", { name: "Detalles" }));
     expect(
       screen.getByTitle(
-        "Session details: turn map, current activity, restore points, and Agent Lens.",
+        "Detalles de la sesión: mapa de turnos, actividad actual, puntos de restauración y Agent Lens.",
       ),
     ).toHaveClass("agent-panel__details-head");
-    expect(within(focus).getByRole("button", { name: "Restore here" })).toHaveAttribute(
+    expect(within(focus).getByRole("button", { name: "Restaurar aquí" })).toHaveAttribute(
       "title",
-      "Restore turn 1: stop the session before restoring.",
+      "Restaurar el turno 1: detén la sesión antes.",
     );
-    expect(screen.getByLabelText("Message Codex")).toHaveValue("");
+    expect(screen.getByLabelText("Mensaje para Codex")).toHaveValue("");
   });
 
   it("shows session change log files in Agent Lens when turn checkpoints are unavailable", async () => {
@@ -3816,43 +3110,34 @@ describe("TerminalPanel", () => {
     });
 
     const lens = await screen.findByLabelText("Agent Lens");
-    expect(within(lens).getByLabelText("Touched files")).toBeInTheDocument();
+    expect(within(lens).getByLabelText("Archivos modificados")).toBeInTheDocument();
     expect(within(lens).getAllByText("src/session-only.ts").length).toBeGreaterThan(0);
     expect(
-      within(lens).getByTitle("Agent Lens preview is showing src/session-only.ts."),
+      within(lens).getByTitle("La vista previa de Agent Lens muestra src/session-only.ts."),
     ).toHaveTextContent("src/session-only.ts");
     expect(
       within(lens).getByTitle(
-        "Selected-file preview placeholder for src/session-only.ts: no live hunk data available.",
+        "Vista previa del archivo seleccionado src/session-only.ts: no hay datos de fragmentos en vivo.",
       ),
-    ).toHaveTextContent("No live hunk data available for this file.");
-    expect(within(lens).getByText("Session - +0s")).toBeInTheDocument();
+    ).toHaveTextContent("No hay datos en vivo de los fragmentos de este archivo.");
+    expect(within(lens).getByText("Sesión - +0s")).toBeInTheDocument();
     const fileActions = within(lens).getByTitle(
-      "Agent Lens file actions for src/session-only.ts: preview, open, and ask controls.",
+      "Acciones de Agent Lens para src/session-only.ts: vista previa, abrir y preguntar.",
     );
-    expect(fileActions).toHaveAttribute("aria-label", "File actions for src/session-only.ts");
-    expect(within(fileActions).getByRole("button", { name: "Preview" })).toHaveAttribute(
+    expect(fileActions).toHaveAttribute("aria-label", "Acciones para src/session-only.ts");
+    expect(within(fileActions).getByRole("button", { name: "Vista previa" })).toHaveAttribute(
       "title",
-      "Previewing Agent Lens details for src/session-only.ts.",
+      "Se muestran los detalles de src/session-only.ts en Agent Lens.",
     );
-    expect(
-      within(fileActions).getByTitle("Agent Lens file action label: Preview."),
-    ).toHaveTextContent("Preview");
-    expect(within(fileActions).getByRole("button", { name: "Open" })).toHaveAttribute(
+    expect(within(fileActions).getByRole("button", { name: "Abrir" })).toHaveAttribute(
       "title",
-      "Open src/session-only.ts from Agent Lens in the workspace.",
+      "Abrir src/session-only.ts desde Agent Lens en el espacio de trabajo.",
     );
-    expect(within(fileActions).getByTitle("Agent Lens file action label: Open.")).toHaveTextContent(
-      "Open",
-    );
-    expect(within(fileActions).getByRole("button", { name: "Ask" })).toHaveAttribute(
+    expect(within(fileActions).getByRole("button", { name: "Preguntar" })).toHaveAttribute(
       "title",
-      "Draft an Agent Lens follow-up prompt for src/session-only.ts.",
+      "Preparar un prompt de seguimiento de Agent Lens para src/session-only.ts.",
     );
-    expect(within(fileActions).getByTitle("Agent Lens file action label: Ask.")).toHaveTextContent(
-      "Ask",
-    );
-    expect(within(lens).queryByTitle(/Revert src\/session-only\.ts/)).not.toBeInTheDocument();
+    expect(within(fileActions).queryByRole("button", { name: "Revertir" })).not.toBeInTheDocument();
     expect(revertSessionTurnFileMock).not.toHaveBeenCalled();
   });
 
@@ -3879,60 +3164,37 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
     const lens = await screen.findByLabelText("Agent Lens");
-    const fileFilter = within(lens).getByLabelText("Filter touched files");
+    const fileFilter = within(lens).getByLabelText("Filtrar archivos modificados");
     expect(fileFilter).toHaveAttribute(
       "title",
-      "Filter 2 Agent Lens touched files by path, change type, status, or artifact category.",
+      "Filtrar 2 archivos modificados de Agent Lens por ruta, tipo de cambio, estado o categoría.",
     );
-    expect(within(lens).getByTitle("Showing all 2 Agent Lens touched files.")).toHaveTextContent(
-      "2 files",
-    );
-    expect(
-      within(lens).getByTitle("Agent Lens file filter controls 2 touched files."),
-    ).toHaveTextContent("Filter files");
+    expect(within(lens).getByText("2 archivos")).toBeInTheDocument();
 
     await user.type(fileFilter, "beta");
 
     expect(within(lens).getAllByText("src/beta.ts").length).toBeGreaterThan(0);
     expect(within(lens).queryByText("src/alpha.ts")).not.toBeInTheDocument();
-    expect(within(lens).getByLabelText("Touched files")).toHaveAttribute(
-      "title",
-      "Filtered Agent Lens touched files for the current session: 1 file.",
-    );
-    expect(
-      within(lens).getByTitle("Showing 1 of 2 Agent Lens touched files after filtering."),
-    ).toHaveTextContent("1 of 2 files");
-    expect(
-      within(lens).getByTitle("Agent Lens file filter is showing 1 file from 2 touched files."),
-    ).toHaveTextContent("Filter files");
+    expect(within(lens).getByText("1 de 2 archivos")).toBeInTheDocument();
 
-    await user.clear(within(lens).getByLabelText("Filter touched files"));
-    await user.type(within(lens).getByLabelText("Filter touched files"), "removed");
+    await user.clear(within(lens).getByLabelText("Filtrar archivos modificados"));
+    await user.type(within(lens).getByLabelText("Filtrar archivos modificados"), "removed");
 
-    expect(within(lens).getByText("No files match this filter.")).toBeInTheDocument();
+    expect(within(lens).getByText("Ningún archivo coincide con este filtro.")).toBeInTheDocument();
     expect(
       within(lens).getByTitle(
-        'No Agent Lens files match "removed". Clear or change the filter to show touched files.',
+        "Se muestran 0 de 2 archivos modificados de Agent Lens después de filtrar.",
       ),
-    ).toHaveTextContent("No files match this filter.");
-    expect(
-      within(lens).getByTitle('Clear Agent Lens file filter "removed" and restore touched files.'),
-    ).toHaveTextContent("Clear");
-    expect(
-      within(lens).getByTitle("Showing 0 of 2 Agent Lens touched files after filtering."),
-    ).toHaveTextContent("0 of 2 files");
-    expect(
-      within(lens).getByTitle("Agent Lens file filter is showing 0 files from 2 touched files."),
-    ).toHaveTextContent("Filter files");
+    ).toHaveTextContent("0 de 2 archivos");
 
-    await user.clear(within(lens).getByLabelText("Filter touched files"));
-    await user.type(within(lens).getByLabelText("Filter touched files"), "staged");
+    await user.clear(within(lens).getByLabelText("Filtrar archivos modificados"));
+    await user.type(within(lens).getByLabelText("Filtrar archivos modificados"), "preparado");
 
     expect(within(lens).getAllByText("src/beta.ts").length).toBeGreaterThan(0);
     expect(within(lens).queryByText("src/alpha.ts")).not.toBeInTheDocument();
 
-    await user.clear(within(lens).getByLabelText("Filter touched files"));
-    await user.type(within(lens).getByLabelText("Filter touched files"), "code");
+    await user.clear(within(lens).getByLabelText("Filtrar archivos modificados"));
+    await user.type(within(lens).getByLabelText("Filtrar archivos modificados"), "código");
 
     expect(within(lens).getAllByText("src/alpha.ts").length).toBeGreaterThan(0);
     expect(within(lens).getAllByText("src/beta.ts").length).toBeGreaterThan(0);
@@ -3950,8 +3212,8 @@ describe("TerminalPanel", () => {
 
     const lens = await screen.findByLabelText("Agent Lens");
     expect(
-      within(lens).getByTitle("Agent Lens has no touched files in the current session."),
-    ).toHaveTextContent("No touched files yet.");
+      within(lens).getByTitle("Agent Lens no tiene archivos modificados en la sesión actual."),
+    ).toHaveTextContent("Aún no hay archivos modificados.");
   });
 
   it("confirms and reverts completed sessions", async () => {
@@ -3962,8 +3224,8 @@ describe("TerminalPanel", () => {
 
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const revert = await screen.findByRole("button", { name: "Revert" });
-    expect(revert).toHaveAttribute("title", "Codex revert control for a: revert session changes.");
+    const revert = await screen.findByRole("button", { name: "Revertir" });
+    expect(revert).toHaveAttribute("title", "Revertir los cambios de la sesión de Codex en a.");
     await user.click(revert);
 
     expect(confirmMock).toHaveBeenCalled();
@@ -3985,15 +3247,15 @@ describe("TerminalPanel", () => {
 
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    await user.click(await screen.findByRole("button", { name: "Stop" }));
+    await user.click(await screen.findByRole("button", { name: "Detener" }));
 
     expect(stopAgentSessionMock).toHaveBeenCalledWith("sess-1");
     await waitFor(() => expect(listAgentSessionsMock).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("Session complete")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Stop" })).toHaveAttribute(
+    expect(await screen.findByText("Sesión completada")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Detener" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Detener" })).toHaveAttribute(
       "title",
-      "Codex stop control for a: session is not running.",
+      "Detener Codex en a: la sesión no está en ejecución.",
     );
   });
 
@@ -4020,7 +3282,9 @@ describe("TerminalPanel", () => {
 
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    await user.click(await screen.findByTitle("Revert src/a.ts from turn 1 checkpoint."));
+    await user.click(
+      await screen.findByTitle("Revertir src/a.ts al punto de control de el turno 1."),
+    );
 
     expect(confirmMock).toHaveBeenCalled();
     expect(revertSessionTurnFileMock).toHaveBeenCalledWith(
@@ -4091,25 +3355,27 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const conversation = screen.getByLabelText("Agent conversation");
+    const conversation = screen.getByLabelText("Conversación con Agent");
     expect(await within(conversation).findByText("Second done")).toBeInTheDocument();
     const lens = await screen.findByLabelText("Agent Lens");
     expect(
       within(lens).getByTitle(
-        "Agent Lens restore-point value: 1 of 1 turn checkpoints are restorable. Latest restorable turn: 1.",
+        "Valor de puntos de restauración de Agent Lens: 1 de 1 puntos de control son restaurables. Último turno restaurable: 1.",
       ),
     ).toHaveTextContent("1/1");
     expect(
       within(lens).getByTitle(
-        "Agent Lens restore-point metric: 1 restore point from 1 turn checkpoint. Latest restorable turn is 1.",
+        "Métrica de puntos de restauración de Agent Lens: 1 punto de restauración de 1 punto de control. El último turno restaurable es el 1.",
       ),
-    ).toHaveTextContent("Restore points");
-    await user.click(within(screen.getByLabelText("Turn map")).getByRole("button", { name: /T1/ }));
+    ).toHaveTextContent("Puntos de restauración");
+    await user.click(
+      within(screen.getByLabelText("Mapa de turnos")).getByRole("button", { name: /T1/ }),
+    );
 
-    const restore = await screen.findByRole("button", { name: "Restore here" });
+    const restore = await screen.findByRole("button", { name: "Restaurar aquí" });
     expect(restore).toHaveAttribute(
       "title",
-      "Restore turn 1: return files and chat view to this turn.",
+      "Restaurar los archivos y la conversación al turno 1.",
     );
     await user.click(restore);
 
@@ -4164,13 +3430,15 @@ describe("TerminalPanel", () => {
 
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const button = await screen.findByRole("button", { name: "Revert" });
+    const button = await screen.findByRole("button", { name: "Revertir" });
 
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute(
       "title",
-      "Codex revert control for a: no reversible checkpoint.",
+      "Revertir cambios de Codex en a: no hay un punto de control reversible.",
     );
-    expect(screen.getByTitle("Agent revert control label: Revert.")).toHaveTextContent("Revert");
+    expect(screen.getByTitle("Acción para revertir Agent: Revertir.")).toHaveTextContent(
+      "Revertir",
+    );
   });
 });

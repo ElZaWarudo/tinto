@@ -54,6 +54,9 @@ function delta(repo: string, over: Partial<RepoDelta> = {}): RepoDelta {
     head: null,
     last_activity_ms: 1000,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -259,9 +262,12 @@ describe("RepoPanel", () => {
       ),
     );
     render(<RepoPanel {...panelProps("/r/api")} />);
-    expect(screen.getByTestId("repo-signals")).toHaveTextContent("2 files · +12 -3");
+    expect(screen.getByTestId("repo-signals")).toHaveTextContent("2 archivos · +12 -3");
     expect(screen.getByTestId("repo-signals")).toHaveTextContent("Configuration file changed");
-    expect(screen.getByTestId("status-file-src/a.rs")).toHaveTextContent("Config");
+    expect(screen.getByTestId("repo-signals")).toHaveTextContent("Advertencia");
+    expect(screen.getByTestId("status-file-src/a.rs")).toHaveTextContent(
+      "AdvertenciaConfiguración",
+    );
   });
 
   it("configures repo-specific files from the overview configuration section", async () => {
@@ -318,6 +324,7 @@ describe("RepoPanel", () => {
     );
     render(<RepoPanel {...panelProps("/r/api")} />);
     expect(screen.getByTestId("repo-panel-error")).toHaveTextContent("gone");
+    expect(screen.getByTestId("repo-panel-error")).toHaveAttribute("role", "alert");
     screen.getByTestId("repo-panel-retry").click();
     expect(retryRepoMock).toHaveBeenCalledWith("/r/api");
   });
@@ -326,7 +333,8 @@ describe("RepoPanel", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() => busStore.loadSnapshot([], { available: true }));
     render(<RepoPanel {...panelProps("/r/gone")} />);
-    expect(screen.getByText(/no longer accessible/i)).toBeInTheDocument();
+    expect(screen.getByText(/ya no está disponible/i)).toBeInTheDocument();
+    expect(screen.getByTestId("repo-overview-missing")).toHaveAttribute("role", "alert");
     expect(screen.getByTestId("repo-panel-remove")).toBeInTheDocument();
   });
 
@@ -406,10 +414,10 @@ describe("RepoPanel", () => {
 
     expect(screen.getByTestId("watched-files")).toHaveTextContent(".env");
     expect(screen.getByTestId("watch-events")).toHaveTextContent("20 B (+4 B)");
-    fireEvent.change(screen.getByLabelText("watch pattern 1"), {
+    fireEvent.change(screen.getByLabelText("Patrón 1"), {
       target: { value: "secrets/*.json" },
     });
-    fireEvent.click(screen.getByText("Save patterns"));
+    fireEvent.click(screen.getByText("Guardar patrones"));
     await waitFor(() =>
       expect(updateRepoFsWatchMock).toHaveBeenCalledWith("Work", "/r/api", ["secrets/*.json"]),
     );

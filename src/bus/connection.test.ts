@@ -79,6 +79,9 @@ function makeDelta(repo: string, revision = 1): RepoDelta {
     head: null,
     last_activity_ms: 1,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
   };
 }
 
@@ -130,7 +133,13 @@ describe("useBusConnection", () => {
     await waitFor(() => expect(busStore.getState().loaded).toBe(true));
     expect(busStore.getState().watching).toEqual({
       available: false,
-      reason: "Tauri bridge unavailable; run inside the Tauri shell for live repo data.",
+      reason:
+        "El puente de Tauri no está disponible; abre Tinto como aplicación de escritorio para cargar los datos de los repositorios.",
+    });
+    expect(busStore.getState()).toMatchObject({
+      snapshotStatus: "error",
+      snapshotError:
+        "El puente de Tauri no está disponible; abre Tinto como aplicación de escritorio para cargar los datos de los repositorios.",
     });
   });
 
@@ -255,11 +264,81 @@ describe("useBusConnection", () => {
     expect(agentSessionStore.getState().timeline["sess-1"]?.[0]?.text).toBe("Snapshot restored");
   });
 
-  it("swallows a failed config load without throwing", async () => {
+  it("publishes a retryable error when the config load fails", async () => {
     h.listWb.mockRejectedValueOnce(new Error("boom"));
     render(createElement(Probe));
-    await waitFor(() => expect(h.getSnapshot).toHaveBeenCalled());
-    expect(busStore.getState().config).toBeNull(); // not set, no crash
+    await waitFor(() => expect(busStore.getState().configStatus).toBe("error"));
+    expect(busStore.getState()).toMatchObject({
+      config: null,
+      configStatus: "error",
+      configError: "boom",
+      snapshotStatus: "error",
+    });
+    expect(h.getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not combine an old config with a new snapshot when a later config reload fails", async () => {
+    act(() => {
+      busStore.setConfig({ version: 1, active: "Work", workbenches: [] });
+      busStore.loadSnapshot([makeDelta("/r/work", 2)], { available: true });
+    });
+    h.listWb.mockRejectedValueOnce(new Error("config offline"));
+
+    await reloadActiveWorkbench();
+
+    expect(busStore.getState().config?.active).toBe("Work");
+    expect(Object.keys(busStore.getState().repos)).toEqual(["/r/work"]);
+    expect(busStore.getState()).toMatchObject({
+      configStatus: "error",
+      configError: "config offline",
+      snapshotStatus: "error",
+    });
+    expect(h.getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("preserves a usable snapshot and publishes an error when a later snapshot reload fails", async () => {
+    act(() => {
+      busStore.setConfig({ version: 1, active: "Original", workbenches: [] });
+      busStore.loadSnapshot([makeDelta("/r/existing", 3)], { available: true });
+    });
+    h.getSnapshot.mockRejectedValueOnce(new Error("snapshot offline"));
+
+    await reloadActiveWorkbench();
+
+    expect(busStore.getState().repos["/r/existing"]?.revision).toBe(3);
+    expect(busStore.getState().config?.active).toBe("Original");
+    expect(busStore.getState()).toMatchObject({
+      loaded: true,
+      snapshotStatus: "error",
+      snapshotError: "snapshot offline",
+    });
+  });
+
+  it("never publishes a staged config when a newer reload fails", async () => {
+    const staleSnapshot = deferred<{
+      watching: { available: boolean };
+      repos: RepoDelta[];
+    }>();
+    act(() => {
+      busStore.setConfig({ version: 1, active: "Original", workbenches: [] });
+      busStore.loadSnapshot([makeDelta("/r/original", 3)], { available: true });
+    });
+    h.listWb
+      .mockResolvedValueOnce({ version: 1, active: "Staged", workbenches: [] })
+      .mockRejectedValueOnce(new Error("newer config failed"));
+    h.getSnapshot.mockReturnValueOnce(staleSnapshot.promise);
+
+    const firstReload = reloadActiveWorkbench();
+    await waitFor(() => expect(h.getSnapshot).toHaveBeenCalledOnce());
+    await reloadActiveWorkbench();
+
+    expect(busStore.getState().config?.active).toBe("Original");
+    expect(Object.keys(busStore.getState().repos)).toEqual(["/r/original"]);
+
+    staleSnapshot.resolve({ watching: { available: true }, repos: [makeDelta("/r/staged", 4)] });
+    await firstReload;
+    expect(busStore.getState().config?.active).toBe("Original");
+    expect(Object.keys(busStore.getState().repos)).toEqual(["/r/original"]);
   });
 
   it("ignores a stale workbench reload snapshot after a newer reload starts", async () => {

@@ -30,9 +30,8 @@ pub enum AgentJournalError {
 
 impl AgentJournal {
     pub fn open_default() -> Result<Self, AgentJournalError> {
-        let dir = dirs::config_dir()
-            .ok_or(AgentJournalError::ConfigDirUnavailable)?
-            .join("tinto");
+        let dir = crate::runtime_paths::tinto_config_dir()
+            .ok_or(AgentJournalError::ConfigDirUnavailable)?;
         Self::open(dir.join("agent-journal.sqlite"))
     }
 

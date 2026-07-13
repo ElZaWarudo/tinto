@@ -43,6 +43,9 @@ function delta(repo: string, revision: number, over: Partial<RepoDelta> = {}): R
     head: null,
     last_activity_ms: revision * 1000,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -82,6 +85,7 @@ describe("DashboardPanel", () => {
   it("shows skeletons until the snapshot is loaded", () => {
     renderDash();
     expect(screen.getByTestId("skeletons")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Cargando repos");
   });
 
   // Covers AE12: zero-repos state with an Add action
@@ -101,7 +105,7 @@ describe("DashboardPanel", () => {
     fireEvent.click(screen.getByTestId("dashboard-add-repo"));
 
     expect(addRepo).toHaveBeenCalledOnce();
-    expect(screen.getAllByRole("button", { name: /add repo/i })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /añadir repo/i })).toHaveLength(1);
   });
 
   it("opens the agents panel from the dashboard action bar", () => {
@@ -121,7 +125,7 @@ describe("DashboardPanel", () => {
     expect(screen.getByTestId("card-/r/b")).toBeInTheDocument();
   });
 
-  it("keeps configured WSL repos visible while their live snapshot is pending", async () => {
+  it("keeps configured WSL repos visible as loading while their live snapshot is pending", () => {
     act(() => {
       busStore.setConfig({
         version: 1,
@@ -149,13 +153,13 @@ describe("DashboardPanel", () => {
     expect(screen.getByTestId("card-/home/me/chat-n-food")).toBeInTheDocument();
     expect(screen.getByTestId("repo-source-badge")).toHaveTextContent("WSL");
     expect(screen.getByTestId("repo-source-badge")).toHaveAttribute("title", "WSL · Ubuntu");
-    expect(screen.getByTestId("error-detail")).toHaveTextContent("Waiting for repo snapshot");
-    await waitFor(() =>
-      expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith(
-        "/home/me/chat-n-food",
-        "codex",
-      ),
+    expect(screen.getByTestId("repo-pending")).toHaveTextContent(
+      "Esperando la primera instantánea del repo",
     );
+    expect(screen.getByTestId("repo-pending")).toHaveAttribute("role", "status");
+    expect(screen.queryByTestId("error-detail")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("error-badge")).not.toBeInTheDocument();
+    expect(clientMocks.agentBinaryAvailableForRepo).not.toHaveBeenCalled();
   });
 
   // Covers AE2: a status change updates that card live

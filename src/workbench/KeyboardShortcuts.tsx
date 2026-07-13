@@ -1,8 +1,9 @@
 // Modal overlay that lists every keyboard shortcut in the app. Opened from the
 // "Ayuda" menu. Close on backdrop click, Escape key, or the × button.
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { SHORTCUTS } from "../qol/shortcuts";
+import { useAccessibleDialog } from "./useAccessibleDialog";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 const mod = isMac ? "⌘" : "Ctrl";
@@ -13,13 +14,7 @@ interface ShortcutGroup {
 }
 
 export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const dialogRef = useAccessibleDialog<HTMLDivElement>({ onClose });
 
   const groups = useMemo<ShortcutGroup[]>(() => {
     // Group shortcuts by their group property
@@ -39,7 +34,7 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
     byGroup.set("Texto", zoomItems);
 
     // Convert to array, ordered by group appearance in SHORTCUTS
-    const groupOrder = ["Navegación", "Cerrar", "Vista", "Proyecto", "Texto"];
+    const groupOrder = ["Navegación", "Cerrar", "Vista", "Proyecto", "Archivos", "Texto"];
     return groupOrder
       .filter((g) => byGroup.has(g))
       .map((title) => ({ title, items: byGroup.get(title)! }));
@@ -48,6 +43,7 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
   return (
     <div className="shortcuts-backdrop" data-testid="shortcuts-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="shortcuts-modal"
         role="dialog"
         aria-modal="true"

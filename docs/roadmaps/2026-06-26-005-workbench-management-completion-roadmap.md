@@ -1,6 +1,6 @@
 ---
 title: Workbench management completion roadmap
-status: active
+status: delivered
 date: 2026-06-26
 source_docs:
   - docs/brainstorms/2026-06-11-rdm-005-workbench-manager-requirements.md

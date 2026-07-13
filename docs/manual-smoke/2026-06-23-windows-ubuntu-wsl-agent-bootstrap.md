@@ -1,7 +1,8 @@
 ---
 title: Windows Ubuntu WSL agent bootstrap manual smoke
-status: passed-with-ui-agent-console-gap
+status: passed-with-post-fix-native-retest-deferred
 date: 2026-06-24
+updated: 2026-07-13
 roadmap_item: RDM-002/RDM-006
 ---
 
@@ -320,12 +321,54 @@ Latest resume smoke on 2026-06-25:
   because an isolated-profile launch attempt surfaced a real user workbench instead of the intended
   smoke workbench. The launched `tinto.exe` process was stopped, and the UI-only gap remains manual.
 
-Post-release terminal-input regression note on 2026-06-25:
+Post-release terminal-output regression resolution on 2026-06-25:
 
-- Subsequent local investigation moved from "remaining UI-only gap" into an active frontend
-  regression: the embedded Agent Console can stop accepting typed text and paste after Codex
-  startup completes, even while the backend process remains alive.
-- The regression is being tracked in
-  `docs/orchestration/2026-06-25-terminal-input-regression-handoff.md`.
-- Until that input path is fixed, packaged native UI Agent Console start/stop/change-log/revert
-  cannot be treated as a clean manual-smoke closeout on the current local head.
+- Subsequent local investigation initially treated the symptom as an Agent Console input
+  regression. The input path was healthy; the terminal stopped rendering new output after its
+  sliding chunk buffer filled, which also hid the echo of typed characters.
+- The resolved root cause, fix, focused verification, and user-confirmed native `tauri dev` smoke
+  are recorded in `docs/orchestration/2026-06-25-terminal-input-regression-handoff.md`.
+- That regression is no longer a blocker. It did not, however, re-run the full packaged native UI
+  start/stop/change-log/revert sequence above, so the current-head UI-only gap remains until a new
+  smoke result is appended here.
+
+Current-head native follow-up on 2026-07-13:
+
+- A pre-fix `npm run tauri:dev:wsl` smoke against a temporary Ubuntu WSL repository verified repo
+  add/read, the file tree, Markdown rendering, live Git watcher updates, and Agent Console session
+  creation. It then exposed two current-head defects before the end-to-end Agent Console sequence
+  could close:
+  - At an approximately `802x632` window size, the Agent session existed in the accessibility tree
+    but remained visually hidden in the compact persisted Dockview split.
+  - WSL Codex resolution did not launch the distro-native child process. In the non-interactive
+    shell, `.bashrc` returned before loading NVM, while a broken `~/.local/bin/codex` symlink pointed
+    into `/mnt/c`; the previous fallback could therefore select a Windows-side Codex candidate and
+    leave the session without child output.
+- Both defects have implementation fixes and focused automated verification on the current working
+  tree:
+  - The compact Agent Console now maximizes its top-level Dockview panel at compact widths, exposes
+    an explicit restore action, and forces nested Dockview layout after the hidden host becomes
+    visible. The focused `openAgentTerminal` and `ConsoleDockPanel` suites passed `23/23`, together
+    with their TypeScript, ESLint, Prettier, and focal diff checks.
+  - WSL preflight and PTY launch now share `src-tauri/src/wsl_agent/shell_env.rs`: it loads NVM
+    explicitly, sanitizes `PATH`, rejects `/mnt/<drive>` entries and canonical targets, resolves a
+    Linux executable, validates `--version`, and reports non-zero process exits. Focused Rust
+    verification passed for `shell_env` (`2/2`), availability (`4/4`), and `agent_console` (`80/80`),
+    plus `cargo fmt`, library Clippy with warnings denied, and a focal diff check. A direct resolver
+    check selected the distro installation and reported `codex-cli 0.144.2`.
+- These results verify the fixes at code, test, and resolver level; they are not a post-fix native UI
+  PASS. The post-fix `tauri dev` smoke was deferred when the user chose to continue with isolated
+  web QA. The remaining native evidence is a fresh compact Agent Console session with real Codex
+  input/output, followed by stop, change-log/checkpoint, and revert coverage.
+- Browser QA in this batch uses the local `demo.html`, `agent-lens-restorable.html`, and
+  `dashboard-review.html` fixtures. Those fixtures do not exercise Tauri IPC or WSL process launch.
+- The main application shell now also has an embedded-WebDriver smoke through
+  `npm run test:e2e:tauri`. On Windows on 2026-07-13 it passed with real Tauri IPC: `ping` returned
+  `pong desde el backend de Tinto`, the first-run flow created the isolated `E2E aislado`
+  workbench, and the native Dashboard rendered. The WebdriverIO spec completed in 260 ms after
+  session startup and produced `artifacts/tauri-e2e/native-shell.png`.
+- The WebDriver run uses disposable config, home, Codex, local-data, temp, and WebView paths. A
+  before/after snapshot of the real `dev.tinto.app/EBWebView` profile reported zero changed files;
+  the test-only executable, Tinto process, port 4445 listener, and temporary profile were absent
+  after cleanup. This closes the generic native-shell/IPC automation gap, but it does not close the
+  deferred real WSL Codex input/output, stop, checkpoint/change-log, and revert follow-up above.

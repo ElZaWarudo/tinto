@@ -13,6 +13,7 @@ export function MediaView({ repo, path, kind }: { repo: string; path: string; ki
     { repo: string; path: string; content: FileContent } | undefined
   >(undefined);
   const [failed, setFailed] = useState<{ repo: string; path: string } | undefined>(undefined);
+  const [requestVersion, setRequestVersion] = useState(0);
   const mime = mimeFor(path, kind);
   const content = loaded?.repo === repo && loaded.path === path ? loaded.content : undefined;
   const error = failed?.repo === repo && failed.path === path;
@@ -31,19 +32,29 @@ export function MediaView({ repo, path, kind }: { repo: string; path: string; ki
     return () => {
       active = false;
     };
-  }, [repo, path]);
+  }, [repo, path, requestVersion]);
 
   if (error) {
     return (
-      <div className="media-view media-view--state" data-testid="media-error">
-        Could not load preview.
+      <div className="media-view media-view--state" data-testid="media-error" role="alert">
+        <span>No se pudo cargar la vista previa.</span>
+        <button
+          type="button"
+          onClick={() => {
+            setLoaded(undefined);
+            setFailed(undefined);
+            setRequestVersion((version) => version + 1);
+          }}
+        >
+          Reintentar
+        </button>
       </div>
     );
   }
   if (content === undefined) {
     return (
-      <div className="media-view media-view--state" data-testid="media-loading">
-        Loading preview...
+      <div className="media-view media-view--state" data-testid="media-loading" role="status">
+        Cargando vista previa…
       </div>
     );
   }
@@ -51,8 +62,8 @@ export function MediaView({ repo, path, kind }: { repo: string; path: string; ki
     return (
       <div className="media-view media-view--state" data-testid="media-unavailable">
         {content.truncated
-          ? "Preview is unavailable because the file is larger than the media read limit."
-          : "Preview is unavailable for this file encoding."}
+          ? "La vista previa no está disponible porque el archivo supera el límite de lectura."
+          : "La vista previa no está disponible para esta codificación."}
       </div>
     );
   }

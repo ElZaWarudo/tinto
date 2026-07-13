@@ -1,5 +1,4 @@
 import { useState } from "react";
-import type { ReactNode } from "react";
 import { createRepoAgentsMdConfig, createRepoGitleaksConfig } from "../bus/client";
 
 function commandMessage(error: unknown, fallback: string): string {
@@ -16,14 +15,12 @@ function commandMessage(error: unknown, fallback: string): string {
 
 function RepoConfigItem({
   title,
-  detail,
   configured,
   configureLabel,
   configuredLabel = "Configurado",
   onConfigure,
 }: {
   title: string;
-  detail: ReactNode;
   configured: boolean;
   configureLabel: string;
   configuredLabel?: string;
@@ -42,7 +39,7 @@ function RepoConfigItem({
       await onConfigure();
       setConfiguredLocally(true);
     } catch (cause) {
-      setError(commandMessage(cause, "No se pudo aplicar la configuracion."));
+      setError(commandMessage(cause, "No se pudo aplicar la configuración."));
     } finally {
       setIsConfiguring(false);
     }
@@ -58,11 +55,16 @@ function RepoConfigItem({
     >
       <div className="repo-config-section__body">
         <strong>{title}</strong>
-        {(!isConfigured || error) && <span>{detail}</span>}
-        {error && <span className="repo-config-section__error">{error}</span>}
+        {error && (
+          <span className="repo-config-section__error" role="alert">
+            Error: {error}
+          </span>
+        )}
       </div>
       {isConfigured ? (
-        <span className="repo-config-section__status">{configuredLabel}</span>
+        <span className="repo-config-section__status" role="status" aria-live="polite">
+          {configuredLabel}
+        </span>
       ) : (
         <button
           type="button"
@@ -89,16 +91,11 @@ export function RepoConfigSection({
   return (
     <section className="repo-config-section" data-testid="repo-config-section">
       <div className="repo-config-section__head">
-        <h3>Repo configuration</h3>
+        <h3>Configuración del repo</h3>
       </div>
       <RepoConfigItem
         key={`gitleaks-${repo}`}
         title="Gitleaks"
-        detail={
-          <>
-            Crea <code>.gitleaks.toml</code> para ajustar falsos positivos del escaneo local.
-          </>
-        }
         configured={gitleaksConfigured}
         configureLabel="Configurar"
         onConfigure={() => createRepoGitleaksConfig(repo)}
@@ -106,11 +103,6 @@ export function RepoConfigSection({
       <RepoConfigItem
         key={`agents-md-${repo}`}
         title="AGENTS.md"
-        detail={
-          <>
-            Anade la seccion IADE para que los agentes notifiquen a Tinto cuando termina un turno.
-          </>
-        }
         configured={agentsMdConfigured}
         configureLabel="Configurar"
         onConfigure={() => createRepoAgentsMdConfig(repo)}

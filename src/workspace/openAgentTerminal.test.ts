@@ -118,6 +118,109 @@ describe("agent terminal panel helpers", () => {
     expect(created.api.setActive).toHaveBeenCalledOnce();
   });
 
+  it("maximizes a split Agents group in a compact workspace", () => {
+    const agentsGroup = {
+      id: "agents-group",
+      api: { location: { type: "grid" } },
+    };
+    const repoGroup = { id: "repo-group", api: { location: { type: "grid" } } };
+    let maximized = false;
+    const existing = {
+      id: PANEL_AGENT_CONSOLES,
+      group: agentsGroup,
+      api: {
+        location: { type: "grid" },
+        maximize: vi.fn(() => {
+          maximized = true;
+        }),
+        isMaximized: vi.fn(() => maximized),
+        setActive: vi.fn(),
+      },
+    };
+    const repo = {
+      id: "repo:/r/api",
+      group: repoGroup,
+      api: { location: { type: "grid" } },
+    };
+    const api = {
+      width: 802,
+      activeGroup: agentsGroup,
+      panels: [existing, repo],
+      getPanel: vi.fn(() => existing),
+    };
+
+    openAgentConsolesPanel(api as never);
+
+    expect(existing.api.maximize).toHaveBeenCalledOnce();
+    expect(existing.api.isMaximized()).toBe(true);
+    expect(existing.api.setActive).toHaveBeenCalledOnce();
+  });
+
+  it("preserves an intentionally split Agents panel in a wide workspace", () => {
+    const existing = {
+      id: PANEL_AGENT_CONSOLES,
+      group: { id: "agents-group" },
+      api: {
+        location: { type: "grid" },
+        maximize: vi.fn(),
+        isMaximized: vi.fn(() => false),
+        setActive: vi.fn(),
+      },
+    };
+    const api = {
+      width: 1440,
+      getPanel: vi.fn(() => existing),
+    };
+
+    openAgentConsolesPanel(api as never);
+
+    expect(existing.api.maximize).not.toHaveBeenCalled();
+    expect(existing.api.setActive).toHaveBeenCalledOnce();
+  });
+
+  it("does not maximize a compact workspace that already has a single grid group", () => {
+    const agentsGroup = {
+      id: "agents-group",
+      api: { location: { type: "grid" } },
+    };
+    const existing = {
+      id: PANEL_AGENT_CONSOLES,
+      group: agentsGroup,
+      api: {
+        location: { type: "grid" },
+        maximize: vi.fn(),
+        isMaximized: vi.fn(() => false),
+        setActive: vi.fn(),
+      },
+    };
+    const api = {
+      width: 802,
+      activeGroup: agentsGroup,
+      panels: [existing],
+      getPanel: vi.fn(() => existing),
+    };
+
+    openAgentConsolesPanel(api as never);
+
+    expect(existing.api.maximize).not.toHaveBeenCalled();
+    expect(existing.api.setActive).toHaveBeenCalledOnce();
+  });
+
+  it("adds Agents as a tab in the current workspace group", () => {
+    const api = fakeApi();
+    api.addPanel({ id: "repo:/r/api" });
+    const referencePanel = api._panels["repo:/r/api"];
+
+    openAgentConsolesPanel(api as never);
+
+    expect(api.addPanel).toHaveBeenLastCalledWith({
+      id: PANEL_AGENT_CONSOLES,
+      component: PANEL_AGENT_CONSOLES,
+      title: "Agents",
+      position: { referencePanel, direction: "within" },
+    });
+  });
+
   it("keeps terminal panel ids available for the nested console dock", () => {
     const api = fakeApi();
     api.addPanel({

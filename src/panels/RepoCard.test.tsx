@@ -34,6 +34,9 @@ function makeDelta(over: Partial<RepoDelta> = {}): RepoDelta {
     head: { id: "abc1234def", summary: "fix parser", author: "me", timestamp: 1_699_999_000 },
     last_activity_ms: NOW,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -77,14 +80,17 @@ describe("RepoCard", () => {
     expect(screen.getByTestId("counts")).toHaveTextContent("2M");
     expect(screen.getByTestId("counts")).toHaveTextContent("1S");
     expect(screen.getByTestId("counts")).toHaveTextContent("3U");
-    expect(screen.getByTitle("Modified files: 2")).toHaveAttribute(
+    expect(screen.getByTitle("Archivos modificados: 2")).toHaveAttribute(
       "aria-label",
-      "2 modified files",
+      "2 archivos modificados",
     );
-    expect(screen.getByTitle("Staged files: 1")).toHaveAttribute("aria-label", "1 staged file");
-    expect(screen.getByTitle("Untracked files: 3")).toHaveAttribute(
+    expect(screen.getByTitle("Archivo preparado: 1")).toHaveAttribute(
       "aria-label",
-      "3 untracked files",
+      "1 archivo preparado",
+    );
+    expect(screen.getByTitle("Archivos sin seguimiento: 3")).toHaveAttribute(
+      "aria-label",
+      "3 archivos sin seguimiento",
     );
     expect(screen.getByTestId("branch")).toHaveTextContent("main");
     // Everything is visible without an expand toggle.
@@ -104,9 +110,12 @@ describe("RepoCard", () => {
         },
       ],
     });
-    expect(screen.getByTestId("repo-metrics")).toHaveTextContent("2files+10added-5removed");
-    expect(screen.getByTestId("signal-count")).toHaveTextContent("1 signal");
-    expect(screen.getByText(/Possible secret/)).toBeInTheDocument();
+    expect(screen.getByTestId("repo-metrics")).toHaveTextContent(
+      "2archivos+10añadidas-5eliminadas",
+    );
+    expect(screen.getByTestId("signal-count")).toHaveTextContent("1 señal crítica");
+    expect(screen.getByText("Posible secreto")).toBeInTheDocument();
+    expect(screen.getByText("Crítica")).toBeInTheDocument();
   });
 
   it("marks WSL repos with their distro", () => {
@@ -152,22 +161,22 @@ describe("RepoCard", () => {
       branch: { name: null, detached: false, unborn: true, ahead: null, behind: null },
       head: null,
     });
-    expect(screen.getByTestId("branch")).toHaveTextContent("no commits yet");
-    expect(screen.queryByText(/no upstream/)).not.toBeInTheDocument(); // suppressed for unborn
+    expect(screen.getByTestId("branch")).toHaveTextContent("sin commits");
+    expect(screen.queryByText(/sin rama remota/)).not.toBeInTheDocument(); // suppressed for unborn
   });
 
   it("renders detached HEAD with a short SHA", () => {
     renderCard({
       branch: { name: null, detached: true, unborn: false, ahead: null, behind: null },
     });
-    expect(screen.getByTestId("branch")).toHaveTextContent("(detached) abc1234");
+    expect(screen.getByTestId("branch")).toHaveTextContent("(HEAD separado) abc1234");
   });
 
   it("renders a no-upstream branch", () => {
     renderCard({
       branch: { name: "feat", detached: false, unborn: false, ahead: null, behind: null },
     });
-    expect(screen.getByText(/no upstream/)).toBeInTheDocument();
+    expect(screen.getByText(/sin rama remota/)).toBeInTheDocument();
   });
 
   it("shows opt-in fetch for local repos with an upstream and stops row activation", () => {
@@ -188,7 +197,7 @@ describe("RepoCard", () => {
       { branch: { name: "feat", detached: false, unborn: false, ahead: null, behind: null } },
       { source: "local", onFetch: vi.fn() },
     );
-    expect(screen.getAllByTestId("branch")[1]).toHaveTextContent("no upstream");
+    expect(screen.getAllByTestId("branch")[1]).toHaveTextContent("sin rama remota");
     expect(screen.queryAllByTestId("repo-card-fetch")).toHaveLength(0);
   });
 
@@ -227,16 +236,17 @@ describe("RepoCard", () => {
     const { onOpen, onRetry } = renderCard({
       error: { class: "terminal", category: "repo-removed", message: "gone" },
     });
-    expect(screen.getByTestId("error-badge")).toHaveTextContent("terminal");
+    expect(screen.getByTestId("error-badge")).toHaveTextContent("bloqueado");
     expect(screen.getByTestId("error-detail")).toHaveTextContent("gone");
+    expect(screen.getByTestId("error-detail")).toHaveAttribute("role", "alert");
     fireEvent.click(screen.getByTestId("retry"));
     expect(onRetry).toHaveBeenCalledOnce();
     expect(onOpen).not.toHaveBeenCalled(); // retry click does not open the card
 
     renderCard({ error: { class: "transient", category: "internal", message: "blip" } });
-    expect(screen.getAllByTestId("error-badge").some((e) => e.textContent === "transient")).toBe(
-      true,
-    );
+    expect(
+      screen.getAllByTestId("error-badge").some((e) => e.textContent === "error temporal"),
+    ).toBe(true);
     // transient: no retry button rendered for that card
   });
 
@@ -250,7 +260,9 @@ describe("RepoCard", () => {
     clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(false);
     const { onLaunch } = renderCard();
 
-    expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent("Codex not found");
+    expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent(
+      "No se encontró Codex",
+    );
     expect(screen.getByTestId("agent-launch")).toBeDisabled();
     fireEvent.click(screen.getByTestId("agent-launch"));
     expect(onLaunch).not.toHaveBeenCalled();
@@ -285,7 +297,7 @@ describe("RepoCard", () => {
   it("checks availability when the selected agent changes", async () => {
     renderCard();
 
-    fireEvent.change(screen.getByLabelText("agent type"), { target: { value: "claude" } });
+    fireEvent.change(screen.getByLabelText("Tipo de Agent"), { target: { value: "claude" } });
 
     expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/api", "claude");
   });

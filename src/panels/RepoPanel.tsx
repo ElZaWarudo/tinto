@@ -49,6 +49,38 @@ function configuredRepoEntry(
   );
 }
 
+function repoErrorClassLabel(errorClass: string): string {
+  return errorClass === "terminal" ? "Error permanente" : "Error temporal";
+}
+
+function signalKindLabel(kind: string): string {
+  switch (kind) {
+    case "possible_secret":
+      return "Posible secreto";
+    case "large_change":
+      return "Cambio extenso";
+    case "hot_file":
+      return "Archivo con mucha actividad";
+    case "binary_change":
+      return "Cambio binario";
+    default:
+      return kind.replace(/_/g, " ");
+  }
+}
+
+function signalSeverityLabel(severity: string): string {
+  switch (severity) {
+    case "critical":
+      return "Crítica";
+    case "warning":
+      return "Advertencia";
+    case "info":
+      return "Informativa";
+    default:
+      return severity;
+  }
+}
+
 function RepoPanelHeader({
   repo,
   repoEntry,
@@ -75,10 +107,10 @@ function RepoPanelHeader({
           type="button"
           className="repo-panel__remove"
           data-testid="repo-panel-remove"
-          title="Remove from workbench"
+          title="Quitar del workbench"
           onClick={onRemove}
         >
-          Remove
+          Quitar
         </button>
       )}
     </header>
@@ -120,9 +152,9 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
       <div className="repo-panel" data-testid={`repo-panel-${repo}`}>
         <div className="repo-panel__main">
           <div className="repo-panel__overview-wrap" data-testid={`repo-loading-${repo}`}>
-            <div className="repo-overview repo-overview--missing">
+            <div className="repo-overview repo-overview--missing" role="status" aria-live="polite">
               <RepoPanelHeader repo={repo} repoEntry={repoEntry} />
-              <p>Loading...</p>
+              <p>Cargando repo…</p>
             </div>
           </div>
         </div>
@@ -210,14 +242,18 @@ function RepoOverview({ repo }: { repo: string }) {
 
   if (!delta) {
     return (
-      <div className="repo-overview repo-overview--missing" data-testid="repo-overview-missing">
+      <div
+        className="repo-overview repo-overview--missing"
+        data-testid="repo-overview-missing"
+        role="alert"
+      >
         <RepoPanelHeader
           repo={repo}
           repoEntry={repoEntry}
           removable
           onRemove={() => removeRepo(repo)}
         />
-        <p>This repo is no longer accessible or is not in the active workbench.</p>
+        <p>Este repo ya no está disponible o no pertenece al workbench activo.</p>
       </div>
     );
   }
@@ -246,13 +282,13 @@ function RepoOverview({ repo }: { repo: string }) {
       />
 
       {error && (
-        <div className="repo-panel__error" data-testid="repo-panel-error">
+        <div className="repo-panel__error" data-testid="repo-panel-error" role="alert">
           <span>
-            {error.class}: {error.message}
+            {repoErrorClassLabel(error.class)}: {error.message}
           </span>
           {error.class === "terminal" && (
             <button data-testid="repo-panel-retry" onClick={() => void retryRepo(repo)}>
-              Retry
+              Reintentar
             </button>
           )}
         </div>
@@ -265,10 +301,10 @@ function RepoOverview({ repo }: { repo: string }) {
       />
 
       <section className="repo-panel__signals" data-testid="repo-signals">
-        <h3>Passive signals</h3>
+        <h3>Señales pasivas</h3>
         <MetricsPill metrics={metrics} />
         {signals.length === 0 ? (
-          <p className="repo-panel__muted">No passive signals.</p>
+          <p className="repo-panel__muted">No hay señales pasivas.</p>
         ) : (
           <ul className="signal-list">
             {sortSignals(signals).map((signal, index) => (
@@ -276,7 +312,10 @@ function RepoOverview({ repo }: { repo: string }) {
                 key={`${signal.kind}:${signal.path ?? "repo"}:${index}`}
                 className={`signal-list__item signal-list__item--${signal.severity}`}
               >
-                <span className="signal-list__kind">{signal.kind.replace(/_/g, " ")}</span>
+                <span className="signal-list__kind">{signalKindLabel(signal.kind)}</span>
+                <span className="signal-list__severity">
+                  {signalSeverityLabel(signal.severity)}
+                </span>
                 <span className="signal-list__message">{signal.message}</span>
                 {signal.path && <span className="signal-list__path">{signal.path}</span>}
               </li>
@@ -287,19 +326,19 @@ function RepoOverview({ repo }: { repo: string }) {
 
       <section className="repo-panel__status" data-testid="status-lists">
         <StatusList
-          label="Modified"
+          label="Modificados"
           files={filteredModified}
           delta={delta}
           onOpen={(f, pin) => openFile(repo, f, pin)}
         />
         <StatusList
-          label="Staged"
+          label="Preparados"
           files={filteredStaged}
           delta={delta}
           onOpen={(f, pin) => openFile(repo, f, pin)}
         />
         <StatusList
-          label="Untracked"
+          label="Sin seguimiento"
           files={filteredUntracked}
           delta={delta}
           onOpen={(f, pin) => openFile(repo, f, pin)}
@@ -307,13 +346,12 @@ function RepoOverview({ repo }: { repo: string }) {
         {status.modified.length + status.staged.length + status.untracked.length > 0 &&
           filteredModified.length + filteredStaged.length + filteredUntracked.length === 0 && (
             <p className="repo-panel__muted" data-testid="status-no-matches">
-              No status files match the current filters.
+              Ningún archivo con cambios coincide con los filtros actuales.
             </p>
           )}
       </section>
 
       <WatchedFilesSection
-        key={`${repo}:${(repoEntry?.fs_watch ?? []).join("\0")}`}
         repo={repo}
         activeWorkbench={activeWorkbench}
         patterns={repoEntry?.fs_watch ?? []}
@@ -323,18 +361,22 @@ function RepoOverview({ repo }: { repo: string }) {
         onSave={(patterns) =>
           activeWorkbench
             ? updateRepoFsWatch(activeWorkbench, repo, patterns)
-            : Promise.reject(new Error("No active workbench."))
+            : Promise.reject(new Error("No hay un workbench activo."))
         }
       />
 
       <section className="repo-panel__log" data-testid="commit-log">
-        <h3>Commits</h3>
+        <h3>Historial de commits</h3>
         {logError ? (
-          <p className="repo-panel__muted">Could not load commits.</p>
+          <p className="repo-panel__muted" role="alert">
+            No se pudo cargar el historial de commits.
+          </p>
         ) : commits === null ? (
-          <p className="repo-panel__muted">Loading…</p>
+          <p className="repo-panel__muted" role="status" aria-live="polite">
+            Cargando commits…
+          </p>
         ) : commits.length === 0 ? (
-          <p className="repo-panel__muted">No commits yet</p>
+          <p className="repo-panel__muted">Todavía no hay commits.</p>
         ) : (
           <ul>
             {commits.map((c) => (
@@ -378,7 +420,7 @@ function StatusList({
             key={f}
             role="button"
             tabIndex={0}
-            title={`Preview (click) / open (double-click): ${f}`}
+            title={`Vista previa (clic) / abrir (doble clic): ${f}`}
             data-testid={`status-file-${f}`}
             onClick={() => onOpen(f, false)}
             onDoubleClick={() => onOpen(f, true)}

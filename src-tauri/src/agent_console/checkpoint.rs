@@ -793,7 +793,7 @@ fn checkpoint_dirs(
 }
 
 fn checkpoints_repo_dir(repo: &Path) -> Result<PathBuf, AgentConsoleError> {
-    let home = dirs::home_dir().ok_or_else(|| {
+    let home = crate::runtime_paths::user_home_dir().ok_or_else(|| {
         AgentConsoleError::new("checkpoint_home_unavailable", "home directory unavailable")
     })?;
     Ok(home

@@ -15,6 +15,25 @@ export default defineConfig(async () => ({
     globals: false,
   },
 
+  build: {
+    // Shiki's oniguruma runtime is already loaded on demand, but its generated
+    // WASM wrapper is ~622 kB before gzip. Keep the warning focused on chunks
+    // that would represent a real regression in the initial application shell.
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        // Keep the large, stable UI runtimes out of the application chunk.
+        // Besides avoiding a monolithic entry bundle, this lets WebView reuse
+        // vendor chunks when Tinto's own code changes between releases.
+        manualChunks: {
+          "vendor-dockview": ["dockview-react"],
+          "vendor-markdown": ["react-markdown", "remark-gfm"],
+          "vendor-shiki": ["shiki/core", "shiki/engine/oniguruma"],
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
