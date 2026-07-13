@@ -26,7 +26,7 @@ checks, and brand asset generation. It reflects the same workflow used by CI
 
 Tinto is a Tauri 2 app: a Rust shell hosting a React 19 + Vite webview.
 
-- **Node.js** — current LTS (CI uses Node 24).
+- **Node.js 24** — required by `package.json`; CI uses the same major.
 - **Rust** — stable toolchain (CI uses `dtolnay/rust-toolchain@stable`).
   - **Windows**: install the **MSVC** target (`rustup default stable-msvc`).
   - **Linux**: install the build deps below.
@@ -93,9 +93,9 @@ from `src-tauri/resources/` into the installer for WSL scenarios.
 npm install
 ```
 
-This installs the frontend toolchain (Vite, React, Tauri JS API, etc.). It
-also runs `npm install` for the Rust side via the Tauri CLI, but Rust
-dependencies are downloaded by Cargo on first build.
+This installs the frontend toolchain (Vite, React, Tauri JS API, etc.). Rust
+dependencies are downloaded separately by Cargo on the first Rust or Tauri
+build.
 
 To install with the lockfile (reproducible / CI mode):
 
@@ -107,16 +107,18 @@ npm ci
 
 ## Quality checks
 
-Run these before opening a PR. CI runs the same commands.
+Run these before opening a PR. They match the read-only quality gates in CI.
 
 ### Frontend
 
 ```bash
+npm run contract:check  # Generated Rust/TypeScript bus contract drift
 npm run lint            # ESLint
 npm run format:check    # Prettier (read-only)
-npm run format          # Prettier (write)
 npm test                # Vitest, jsdom + Tauri mocks
 ```
+
+To auto-fix frontend formatting, run `npm run format` separately.
 
 ### Rust
 
@@ -331,13 +333,14 @@ frontend and incremental Rust rebuilds.
 npm run tauri dev
 ```
 
-On Windows + WSL setups where WebKit compositing is unstable:
+For Windows development that needs repos inside WSL, start Tinto from
+Windows PowerShell with the WSL-aware wrapper:
 
 ```bash
 npm run tauri:dev:wsl
 ```
 
-On Windows, `npm run tauri:dev:wsl` also looks for a downloaded
+`npm run tauri:dev:wsl` looks for a downloaded
 `tinto-agent-linux-x86_64` under `.ci-artifacts/` or `src-tauri/resources/`
 and passes it to the app through `TINTO_WSL_AGENT_LINUX_BIN`. This avoids
 compiling the Linux agent from source inside WSL during `tauri dev`.
@@ -362,6 +365,39 @@ To run the Vite dev server without the Tauri shell (browser-only preview):
 ```bash
 npm run dev
 ```
+
+### Native Tauri E2E without desktop input control
+
+Use the embedded WebDriver smoke when the frontend must exercise real Tauri
+commands without taking over the machine's mouse or keyboard:
+
+```bash
+npm run test:e2e:tauri
+```
+
+The runner builds a test-only Tauri binary with the `e2e-wdio` feature,
+starts its loopback WebDriver server, executes the smoke through WebdriverIO,
+and captures `artifacts/tauri-e2e/native-shell.png`. The current smoke calls
+the real Rust `ping` command, creates and activates an isolated workbench, and
+waits for the native dashboard.
+
+The E2E process is isolated from the normal Tinto profile: config, home,
+Codex home, local data, temporary files, and the WebView profile all live
+under a disposable `tinto-e2e-*` directory. The feature build uses a separate
+Cargo target, requires an explicit runner marker and WebDriver port, and its
+top-level executable is removed after the run. The runner also verifies that
+the workbench and WebView writes landed under the disposable profile.
+
+On Windows, the controlled Tauri window can still become visible while the
+test runs; WebView2 does not provide a true invisible headless mode here. It
+does not use global desktop input. The first run may download the matching
+`msedgedriver`, so network access is required unless that driver is already
+available.
+
+`npm run dev` and `npm run preview` remain browser-only surfaces. They do not
+execute Rust commands; use them for responsive visual QA and fixtures, and
+use `npm run test:e2e:tauri` when native IPC is part of the scenario. The
+current E2E smoke does not cover WSL or Agent Console process execution.
 
 ---
 
@@ -430,7 +466,7 @@ sparingly — a full Rust rebuild can take several minutes the first time.
 | Goal                              | Command                                                                 |
 | --------------------------------- | ----------------------------------------------------------------------- |
 | Install JS deps                   | `npm install` (or `npm ci`)                                             |
-| Lint / format / test (frontend)   | `npm run lint` / `npm run format:check` / `npm test`                    |
+| Contract / lint / format / test   | `npm run contract:check` / `npm run lint` / `npm run format:check` / `npm test` |
 | Frontend production bundle        | `npm run build`                                                         |
 | Desktop app debug build           | `cd src-tauri && cargo build`                                           |
 | `tinto-agent` release build       | `cd src-tauri && cargo build --release --bin tinto-agent`               |
@@ -439,6 +475,7 @@ sparingly — a full Rust rebuild can take several minutes the first time.
 | Single-target installer (example) | `npm run tauri build -- --bundles msi`                                   |
 | Dev mode (Tauri + Vite)           | `npm run tauri dev`                                                     |
 | WSL-safe dev mode                 | `npm run tauri:dev:wsl`                                                 |
+| Isolated native Tauri E2E         | `npm run test:e2e:tauri`                                                |
 | Rust checks                       | `cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` |
 | Regenerate brand assets           | `npm run brand:generate`                                                |
 | Clean everything                  | `rm -rf dist node_modules && cd src-tauri && cargo clean`               |

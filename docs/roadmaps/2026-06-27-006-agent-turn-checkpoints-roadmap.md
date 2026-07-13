@@ -1,6 +1,6 @@
 ---
 title: Agent Turn Checkpoints Roadmap
-status: active
+status: delivered
 date: 2026-06-27
 source_docs:
   - docs/contracts/bus-contract.md
