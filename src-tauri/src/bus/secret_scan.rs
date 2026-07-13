@@ -366,7 +366,7 @@ fn managed_gitleaks_binary_path() -> Option<PathBuf> {
 }
 
 fn managed_gitleaks_root() -> PathBuf {
-    if let Some(base) = dirs::data_local_dir() {
+    if let Some(base) = crate::runtime_paths::data_local_dir() {
         return base.join("tinto").join("addons").join("gitleaks");
     }
     if let Some(home) = env::var_os("HOME") {

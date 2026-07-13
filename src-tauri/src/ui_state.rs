@@ -11,7 +11,7 @@ use std::path::PathBuf;
 const UI_STATE_FILE: &str = "ui-state.json";
 
 fn ui_state_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("tinto"))
+    crate::runtime_paths::tinto_config_dir()
 }
 
 /// Read the persisted UI state, or `None` when absent/unreadable.

@@ -897,7 +897,7 @@ fn codex_mcp_status_message() -> Result<String, CommandError> {
 fn codex_config_path() -> Option<PathBuf> {
     let home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
+        .or_else(|| crate::runtime_paths::user_home_dir().map(|home| home.join(".codex")))?;
     Some(home.join("config.toml"))
 }
 
@@ -1789,7 +1789,7 @@ fn git_command(repo: &Path) -> Command {
 }
 
 fn local_fork_worktree_path(source_repo: &Path, session_id: &str) -> Result<PathBuf, CommandError> {
-    let home = dirs::home_dir().ok_or_else(|| {
+    let home = crate::runtime_paths::user_home_dir().ok_or_else(|| {
         CommandError::new("worktree_home_unavailable", "home directory unavailable")
     })?;
     Ok(home

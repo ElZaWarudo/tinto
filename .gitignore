@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 .ci-artifacts/
+artifacts/
 src-tauri/resources/tinto-agent-linux-x86_64
 
 # Editor directories and files
