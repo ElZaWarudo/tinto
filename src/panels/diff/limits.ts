@@ -1,0 +1,2 @@
+export const MAX_RENDERED_DIFF_LINES = 2_500;
+export const MAX_RENDERED_DIFF_LINE_CHARS = 8_000;

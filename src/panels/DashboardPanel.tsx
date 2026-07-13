@@ -41,12 +41,10 @@ function pendingRepoDelta(repo: string): RepoDelta {
     branch: null,
     head: null,
     last_activity_ms: 0,
-    error: {
-      class: "transient",
-      category: "loading",
-      message: "Waiting for repo snapshot...",
-    },
+    error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     signals: [],
     secret_findings: [],
     subscribed_diffs: null,
@@ -70,11 +68,14 @@ export function DashboardPanel() {
 
   if (!loaded) {
     return (
-      <div className="dashboard">
-        <div className="dashboard__status-band dashboard__status-band--loading">
-          <span className="dashboard__status-label">Workbench ledger</span>
-          <strong>Loading repo snapshots</strong>
-          <small>Waiting for the local watcher plane</small>
+      <div className="dashboard" aria-busy="true">
+        <div
+          className="dashboard__status-band dashboard__status-band--loading"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="dashboard__status-label">Bitácora del workbench</span>
+          <strong>Cargando repos</strong>
         </div>
         <div className="repo-ledger repo-ledger--loading" data-testid="skeletons">
           {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
@@ -119,11 +120,11 @@ export function DashboardPanel() {
 
   return (
     <div className="dashboard">
-      <div className="dashboard__status-band" aria-label="Workbench status">
+      <div className="dashboard__status-band" aria-label="Estado del workbench">
         <div className="dashboard__status-title">
-          <span className="dashboard__status-label">Workbench ledger</span>
-          <strong>{state.config?.active ?? "Active workbench"}</strong>
-          <small>{watching.available ? "Watcher plane online" : "Watcher plane degraded"}</small>
+          <span className="dashboard__status-label">Bitácora del workbench</span>
+          <strong>{state.config?.active ?? "Workbench activo"}</strong>
+          {!watching.available && <small>Supervisión local degradada</small>}
         </div>
         <dl className="dashboard__counters">
           <div>
@@ -131,28 +132,28 @@ export function DashboardPanel() {
             <dd>{allPaths.length}</dd>
           </div>
           <div>
-            <dt>Live</dt>
+            <dt>Activos</dt>
             <dd>{activeCount}</dd>
           </div>
           <div>
-            <dt>Files</dt>
+            <dt>Archivos</dt>
             <dd>{changedFileCount}</dd>
           </div>
           <div>
-            <dt>Signals</dt>
+            <dt>Señales</dt>
             <dd>{signalCount}</dd>
           </div>
           <div className={blockedCount > 0 ? "dashboard__counter--warn" : undefined}>
-            <dt>Blocked</dt>
+            <dt>Bloqueados</dt>
             <dd>{blockedCount}</dd>
           </div>
         </dl>
-        <div className="dashboard__actions" aria-label="repo actions">
+        <div className="dashboard__actions" aria-label="Acciones de repos">
           <button type="button" onClick={addRepo} data-testid="dashboard-add-repo">
-            Add repo
+            Añadir repo
           </button>
           <button type="button" onClick={openAgents} data-testid="dashboard-open-agents">
-            Agents
+            Abrir Agents
           </button>
         </div>
       </div>
@@ -160,31 +161,37 @@ export function DashboardPanel() {
       <DashboardFilters />
 
       {!watching.available && (
-        <div className="banner banner--warn" data-testid="degraded-banner">
-          Watching unavailable
-          {watching.reason ? `: ${watching.reason}` : ""}. Data still loads on demand.
+        <div
+          className="banner banner--warn"
+          data-testid="degraded-banner"
+          role="status"
+          aria-live="polite"
+        >
+          La supervisión en vivo no está disponible
+          {watching.reason ? `: ${watching.reason}` : ""}. Los datos siguen disponibles bajo
+          demanda.
         </div>
       )}
 
       {allPaths.length === 0 ? (
         <div className="empty-state" data-testid="zero-repos">
-          <p>No repos in this workbench.</p>
+          <p>Este workbench todavía no tiene repos.</p>
           <div className="empty-state__actions">
-            <button onClick={addRepo}>Add repo</button>
+            <button onClick={addRepo}>Añadir repo</button>
           </div>
         </div>
       ) : paths.length === 0 && hasActiveFilters(filters) ? (
         <div className="empty-state" data-testid="dashboard-no-matches">
-          <p>No repos match the current filters.</p>
+          <p>Ningún repo coincide con los filtros actuales.</p>
         </div>
       ) : (
         <>
           <div className="dashboard__ledger-ruler" aria-hidden="true">
-            <span>Repo / branch</span>
-            <span>Git state</span>
-            <span>Change volume</span>
-            <span>Signals</span>
-            <span>Agent launch</span>
+            <span>Repo / rama</span>
+            <span>Estado de Git</span>
+            <span>Volumen de cambios</span>
+            <span>Señales</span>
+            <span>Inicio de Agent</span>
           </div>
           <div className="repo-ledger">
             {paths.map((p) => {
@@ -193,6 +200,7 @@ export function DashboardPanel() {
                 <RepoCard
                   key={p}
                   delta={effectiveRepos[p]}
+                  pending={!repos[p]}
                   name={busStore.displayName(p)}
                   source={entry?.source}
                   distro={entry?.distro ?? null}

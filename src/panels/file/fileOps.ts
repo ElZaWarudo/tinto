@@ -32,14 +32,14 @@ export class FatalFileOpError extends Error {}
 /** Llama al comando backend y normaliza el resultado. */
 async function runWithConflictSurface(
   promise: Promise<CopyResult>,
-  fatalCategory: string,
+  failureMessage: string,
 ): Promise<FileOpReport> {
   try {
     const result = await promise;
     return { copied: result.copied, conflicts: result.conflicts };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return { copied: [], conflicts: [], fatalError: `${fatalCategory}: ${message}` };
+    return { copied: [], conflicts: [], fatalError: `${failureMessage}: ${message}` };
   }
 }
 
@@ -59,14 +59,14 @@ export async function sendFromOs(params: {
   if (params.strategy === "copy") {
     return runWithConflictSurface(
       copyToRepo(params.repo, params.destDir, params.sources, params.overwrite),
-      "copy_to_repo",
+      "No se pudo copiar al repositorio",
     );
   }
   // Si el caller pidió move pero es OS->repo, hacemos copy siempre; no
   // removemos archivos del filesystem del usuario sin consentimiento explícito.
   return runWithConflictSurface(
     copyToRepo(params.repo, params.destDir, params.sources, params.overwrite),
-    "copy_to_repo",
+    "No se pudo copiar al repositorio",
   );
 }
 
@@ -82,7 +82,12 @@ export async function sendWithinRepo(params: {
     params.strategy === "move"
       ? moveWithinRepo(params.repo, params.sources, params.destDir, params.overwrite)
       : copyWithinRepo(params.repo, params.sources, params.destDir, params.overwrite);
-  return runWithConflictSurface(promise, `${params.strategy}_within_repo`);
+  return runWithConflictSurface(
+    promise,
+    params.strategy === "move"
+      ? "No se pudo mover dentro del repositorio"
+      : "No se pudo copiar dentro del repositorio",
+  );
 }
 
 /** Exporta archivos del repo hacia un directorio del OS. */
@@ -96,7 +101,11 @@ export async function sendToOs(params: {
     return { copied: [], conflicts: [] };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return { copied: [], conflicts: [], fatalError: `export_from_repo: ${message}` };
+    return {
+      copied: [],
+      conflicts: [],
+      fatalError: `No se pudo exportar desde el repositorio: ${message}`,
+    };
   }
 }
 
@@ -110,7 +119,11 @@ export async function deleteWithinRepo(params: {
     return { copied: [], conflicts: [], deleteResult };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return { copied: [], conflicts: [], fatalError: `delete_from_repo: ${message}` };
+    return {
+      copied: [],
+      conflicts: [],
+      fatalError: `No se pudo eliminar del repositorio: ${message}`,
+    };
   }
 }
 
@@ -123,7 +136,11 @@ export async function restoreDeletedWithinRepo(params: {
     return { copied: [], conflicts: [] };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return { copied: [], conflicts: [], fatalError: `restore_deleted_from_repo: ${message}` };
+    return {
+      copied: [],
+      conflicts: [],
+      fatalError: `No se pudo restaurar el elemento eliminado: ${message}`,
+    };
   }
 }
 
@@ -136,7 +153,11 @@ export async function redoDeletedWithinRepo(params: {
     return { copied: [], conflicts: [] };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return { copied: [], conflicts: [], fatalError: `redo_deleted_from_repo: ${message}` };
+    return {
+      copied: [],
+      conflicts: [],
+      fatalError: `No se pudo rehacer la eliminación: ${message}`,
+    };
   }
 }
 

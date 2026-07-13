@@ -27,33 +27,115 @@ import { busStore } from "../bus/store";
 import type { WorkbenchConfig } from "../bus/contract";
 import { forgetRecentWorkbench, markRecentWorkbench } from "./recentWorkbenches";
 
+let workbenchMutationTail: Promise<void> = Promise.resolve();
+let queuedWorkbenchMutations = 0;
+let activeWorkbenchMayDiffer = false;
+const createdAwaitingActivation = new Set<string>();
+const deletedAwaitingPromotion = new Map<
+  string,
+  {
+    currentActive: string | null;
+    nextActive: string | null;
+  }
+>();
+
+function enqueueWorkbenchMutation<T>(operation: () => Promise<T>): Promise<T> {
+  queuedWorkbenchMutations += 1;
+  const next = workbenchMutationTail.then(operation, operation);
+  workbenchMutationTail = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next.finally(() => {
+    queuedWorkbenchMutations = Math.max(0, queuedWorkbenchMutations - 1);
+  });
+}
+
+function partialMutationError(summary: string, cause: unknown): Error {
+  const detail =
+    cause instanceof Error && cause.message.trim()
+      ? cause.message
+      : typeof cause === "string" && cause.trim()
+        ? cause
+        : "Error desconocido.";
+  return new Error(`${summary} ${detail} Reintenta para completar la operación.`);
+}
+
+async function recoverWorkbenchState(): Promise<void> {
+  try {
+    await reloadActiveWorkbench();
+    activeWorkbenchMayDiffer = false;
+  } catch {
+    // The original partial-mutation error remains the actionable result.
+  }
+}
+
 export async function switchWorkbench(name: string, current: string | null): Promise<void> {
-  if (!name || name === current) return;
-  await setActiveWorkbench(name);
-  busStore.reset(); // clear stale repos before the new snapshot lands
-  await reloadActiveWorkbench();
-  markRecentWorkbench(name);
+  if (!name) return;
+  const mustHonorQueuedIntent = queuedWorkbenchMutations > 0 || activeWorkbenchMayDiffer;
+  await enqueueWorkbenchMutation(async () => {
+    const liveCurrent = busStore.getState().config?.active ?? current;
+    if (!mustHonorQueuedIntent && name === liveCurrent) return;
+    await setActiveWorkbench(name);
+    activeWorkbenchMayDiffer = true;
+    await reloadActiveWorkbench();
+    activeWorkbenchMayDiffer = busStore.getState().config?.active !== name;
+    markRecentWorkbench(name);
+  });
 }
 
 export async function createAndActivate(name: string): Promise<void> {
   const n = name.trim();
   if (!n) return;
-  const previousConfig = busStore.getState().config;
-  const previous = previousConfig?.active;
-  if (previous) markRecentWorkbench(previous);
-  await createWorkbench(n);
-  await setActiveWorkbench(n);
-  busStore.reset(); // clear stale repos before the empty/new workbench snapshot lands
-  await reloadActiveWorkbench();
-  ensureCreatedWorkbenchVisible(previousConfig, n);
-  markRecentWorkbench(n);
+  await enqueueWorkbenchMutation(async () => {
+    const previousConfig = busStore.getState().config;
+    const previous = previousConfig?.active;
+    if (previous) markRecentWorkbench(previous);
+
+    const alreadyKnown = Boolean(
+      previousConfig?.workbenches?.some((workbench) => workbench.name === n),
+    );
+    let createdByThisFlow = createdAwaitingActivation.has(n);
+    if (!alreadyKnown && !createdByThisFlow) {
+      await createWorkbench(n);
+      createdAwaitingActivation.add(n);
+      createdByThisFlow = true;
+    }
+
+    try {
+      await setActiveWorkbench(n);
+      activeWorkbenchMayDiffer = true;
+    } catch (error) {
+      await recoverWorkbenchState();
+      throw partialMutationError(
+        createdByThisFlow
+          ? `La workbench "${n}" se creó, pero no pudo activarse.`
+          : `La workbench "${n}" existe, pero no pudo activarse.`,
+        error,
+      );
+    }
+
+    try {
+      await reloadActiveWorkbench();
+      activeWorkbenchMayDiffer = false;
+    } catch (error) {
+      throw partialMutationError(
+        `La workbench "${n}" se creó y se activó, pero no pudo actualizarse la interfaz.`,
+        error,
+      );
+    }
+    if (createdByThisFlow) ensureCreatedWorkbenchVisible(previousConfig, n);
+    createdAwaitingActivation.delete(n);
+    markRecentWorkbench(n);
+  });
 }
 
 function ensureCreatedWorkbenchVisible(
   previousConfig: WorkbenchConfig | null | undefined,
   createdName: string,
 ): void {
-  const current = busStore.getState().config;
+  const state = busStore.getState();
+  const current = state.config;
   const currentNames = new Set((current?.workbenches ?? []).map((w) => w.name));
   const previousNames = (previousConfig?.workbenches ?? []).map((w) => w.name);
   const hasCreated = currentNames.has(createdName);
@@ -65,24 +147,24 @@ function ensureCreatedWorkbenchVisible(
   for (const wb of current?.workbenches ?? []) byName.set(wb.name, wb);
   if (!byName.has(createdName)) byName.set(createdName, { name: createdName, repos: [] });
 
-  busStore.setConfig({
-    version: current?.version ?? previousConfig?.version ?? 1,
-    active: createdName,
-    workbenches: Array.from(byName.values()),
-  });
+  busStore.loadWorkbench(
+    {
+      version: current?.version ?? previousConfig?.version ?? 1,
+      active: createdName,
+      workbenches: Array.from(byName.values()),
+    },
+    [],
+    state.watching,
+  );
 }
 
 /** Pick a folder and add it as a repo. Resolves to the stored canonical path so
- * the caller can open the new project's tab, or null if cancelled / failed. */
+ * the caller can open the new project's tab, or null when the picker is cancelled.
+ * Backend failures are surfaced so the caller can explain them. */
 export async function addRepoFlow(active: string): Promise<string | null> {
-  const picked = await open({ directory: true, title: "Add a repo" });
-  if (typeof picked !== "string") return null; // cancelled
-  let canonical: string | null = null;
-  try {
-    canonical = await addRepo(active, picked);
-  } catch (e) {
-    console.warn("tinto: add repo failed", e); // e.g. duplicate / not a git repo
-  }
+  const picked = await open({ directory: true, title: "Añadir repositorio" });
+  if (typeof picked !== "string") return null;
+  const canonical = await addRepo(active, picked);
   await reloadActiveWorkbench();
   return canonical;
 }
@@ -120,8 +202,8 @@ export async function addWslRepoFlow(
 export async function fetchRepoFlow(repo: string): Promise<boolean> {
   const preview = await getRepoFetchPreview(repo);
   const ok = await confirm(
-    `Fetch ${preview.remote} from ${preview.sanitized_url}?\n\nHost to contact: ${preview.host}\n\nThis only refreshes remote-tracking refs and will not touch your working tree or index.`,
-    { title: "Fetch remote refs", kind: "warning" },
+    `¿Actualizar ${preview.remote} desde ${preview.sanitized_url}?\n\nHost de destino: ${preview.host}\n\nEsta acción sólo actualiza las referencias remotas; no modifica el árbol de trabajo ni el índice.`,
+    { title: "Actualizar referencias remotas", kind: "warning" },
   );
   if (!ok) return false;
   await fetchRepo(repo, preview.remote, preview.host, true);
@@ -150,29 +232,39 @@ export async function listWslDirectoryFlow(
   }
 }
 
-export async function autodetectFlow(active: string): Promise<void> {
-  const root = await open({ directory: true, title: "Auto-detect repos under…" });
-  if (typeof root !== "string") return; // cancelled
+export interface AutodetectResult {
+  found: number;
+  added: number;
+  failed: number;
+}
+
+export async function autodetectFlow(active: string): Promise<AutodetectResult | null> {
+  const root = await open({ directory: true, title: "Detectar repositorios automáticamente…" });
+  if (typeof root !== "string") return null; // cancelled
   const found = await autodetectReposUnder(root);
+  let added = 0;
+  let failed = 0;
   for (const p of found) {
     try {
       await addRepo(active, p);
+      added += 1;
     } catch {
-      /* skip duplicates / invalid */
+      failed += 1;
     }
   }
   await reloadActiveWorkbench();
+  return { found: found.length, added, failed };
 }
 
 export async function removeRepoFlow(active: string, path: string): Promise<boolean> {
-  const message = `Remove ${path} from this workbench?\nFiles are not deleted.`;
+  const message = `¿Quitar ${path} de esta workbench?\nLos archivos no se eliminarán.`;
   let ok: boolean;
   try {
     ok = await confirm(message, {
-      title: "Remove repo",
+      title: "Quitar repositorio",
       kind: "warning",
-      okLabel: "Remove",
-      cancelLabel: "Cancel",
+      okLabel: "Quitar",
+      cancelLabel: "Cancelar",
     });
   } catch {
     // If the Tauri dialog is unavailable (e.g. permission/capability mismatch),
@@ -188,13 +280,9 @@ export async function removeRepoFlow(active: string, path: string): Promise<bool
   if (!entry) {
     try {
       await forgetRepo(path);
-    } catch (e) {
-      console.warn("tinto: forget repo failed", e);
-    }
-    try {
       await reloadActiveWorkbench();
     } catch (e) {
-      console.warn("tinto: reload after forget failed", e);
+      throw commandFlowError(e, "No se pudo quitar el repositorio huérfano.");
     }
     return true;
   }
@@ -210,11 +298,16 @@ export async function removeRepoFlow(active: string, path: string): Promise<bool
       await removeRepo(active, storedPath);
     }
   } catch (e) {
-    console.warn("tinto: remove repo failed", e); // e.g. workbench changed mid-flight
-    return false;
+    throw commandFlowError(e, "No se pudo quitar el repositorio de la workbench.");
   }
   await reloadActiveWorkbench();
   return true;
+}
+
+function commandFlowError(error: unknown, fallback: string): Error {
+  if (error instanceof Error && error.message.trim()) return error;
+  if (typeof error === "string" && error.trim()) return new Error(error);
+  return new Error(fallback);
 }
 
 function findRepoEntry(
@@ -268,6 +361,24 @@ export async function updateRepoFsWatch(
   patterns: string[],
 ): Promise<void> {
   await updateRepo(active, path, { fsWatch: patterns });
+  const config = busStore.getState().config;
+  if (config) {
+    busStore.setConfig({
+      ...config,
+      workbenches: (config.workbenches ?? []).map((workbench) =>
+        workbench.name !== active
+          ? workbench
+          : {
+              ...workbench,
+              repos: workbench.repos.map((repo) =>
+                normalizeRepoPath(repo.path) === normalizeRepoPath(path)
+                  ? { ...repo, fs_watch: patterns }
+                  : repo,
+              ),
+            },
+      ),
+    });
+  }
   await reloadActiveWorkbench();
 }
 
@@ -276,11 +387,26 @@ export async function updateRepoFsWatch(
 export async function renameWorkbenchFlow(from: string, to: string): Promise<void> {
   const next = to.trim();
   if (!next || next === from) return;
-  await renameWorkbench(from, next);
-  await reloadActiveWorkbench();
-  // The MRU entry moves under the new name; drop the old one.
-  forgetRecentWorkbench(from);
-  markRecentWorkbench(next);
+  await enqueueWorkbenchMutation(async () => {
+    const activeBeforeRename = busStore.getState().config?.active;
+    await renameWorkbench(from, next);
+    if (activeBeforeRename === from) activeWorkbenchMayDiffer = true;
+    const config = busStore.getState().config;
+    if (config) {
+      busStore.setConfig({
+        ...config,
+        active: config.active === from ? next : config.active,
+        workbenches: (config.workbenches ?? []).map((workbench) =>
+          workbench.name === from ? { ...workbench, name: next } : workbench,
+        ),
+      });
+    }
+    await reloadActiveWorkbench();
+    activeWorkbenchMayDiffer = false;
+    // The MRU entry moves under the new name; drop the old one.
+    forgetRecentWorkbench(from);
+    markRecentWorkbench(next);
+  });
 }
 
 /** Pick the next active workbench after `name` is removed. If `name` was not
@@ -301,22 +427,53 @@ export function pickNextActiveAfterRemove(
  *  also live in other workbenches are NOT touched. The deleted name is
  *  removed from the MRU list. */
 export async function deleteWorkbenchFlow(name: string): Promise<void> {
-  const config = busStore.getState().config;
-  const currentActive = config?.active ?? null;
-  const remaining = (config?.workbenches ?? [])
-    .map((w) => w.name)
-    .filter((existing) => existing !== name);
-  const nextActive = pickNextActiveAfterRemove(currentActive, name, remaining);
+  await enqueueWorkbenchMutation(async () => {
+    let pending = deletedAwaitingPromotion.get(name);
+    if (!pending) {
+      const config = busStore.getState().config;
+      const currentActive = config?.active ?? null;
+      const remaining = (config?.workbenches ?? [])
+        .map((workbench) => workbench.name)
+        .filter((existing) => existing !== name);
+      pending = {
+        currentActive,
+        nextActive: pickNextActiveAfterRemove(currentActive, name, remaining),
+      };
+      await deleteWorkbench(name);
+      if (pending.currentActive === name) activeWorkbenchMayDiffer = true;
+      deletedAwaitingPromotion.set(name, pending);
+    }
 
-  await deleteWorkbench(name);
-  // The Rust config mutation does not auto-promote another workbench to
-  // active, so we do it explicitly — but only when the active actually
-  // changes. Re-asserting the same active is a wasted IPC round-trip and a
-  // trigger for the bus reseed path on some platforms.
-  if (nextActive !== null && nextActive !== currentActive) {
-    await setActiveWorkbench(nextActive);
-  }
-  busStore.reset();
-  await reloadActiveWorkbench();
-  forgetRecentWorkbench(name);
+    try {
+      if (pending.nextActive !== null && pending.nextActive !== pending.currentActive) {
+        await setActiveWorkbench(pending.nextActive);
+        activeWorkbenchMayDiffer = true;
+      }
+    } catch (error) {
+      await recoverWorkbenchState();
+      const recoveredConfig = busStore.getState().config;
+      const recovered =
+        recoveredConfig !== null &&
+        recoveredConfig.active === pending.nextActive &&
+        !(recoveredConfig.workbenches ?? []).some((workbench) => workbench.name === name);
+      if (!recovered) {
+        throw partialMutationError(
+          `La workbench "${name}" se eliminó, pero no pudo activarse la siguiente.`,
+          error,
+        );
+      }
+    }
+
+    try {
+      await reloadActiveWorkbench();
+      activeWorkbenchMayDiffer = false;
+    } catch (error) {
+      throw partialMutationError(
+        `La workbench "${name}" se eliminó, pero no pudo actualizarse la interfaz.`,
+        error,
+      );
+    }
+    deletedAwaitingPromotion.delete(name);
+    forgetRecentWorkbench(name);
+  });
 }

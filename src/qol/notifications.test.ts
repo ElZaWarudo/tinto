@@ -16,6 +16,9 @@ const delta = (repo: string, over: Partial<RepoDelta> = {}): RepoDelta => ({
   head: null,
   last_activity_ms: 1_700_000_000_000,
   error: null,
+  metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+  gitleaks_configured: false,
+  agents_md_configured: false,
   ...over,
 });
 
@@ -57,6 +60,10 @@ describe("quality notifications", () => {
       activity: {},
       diffs: {},
       config: null,
+      configStatus: "ready",
+      configError: null,
+      snapshotStatus: "ready",
+      snapshotError: null,
       loaded: true,
       watching: { available: false, reason: "inotify" },
     };
@@ -70,6 +77,13 @@ describe("quality notifications", () => {
         "repo-error:/secret/root:7:repo-removed",
         "signal:/secret/root:7:possible_secret:private/.env",
         "fs-signal:/secret/root:1700000000000:modified:private/.env:sensitive_path",
+      ]),
+    );
+    expect(notifications.map((item) => item.body)).toEqual(
+      expect.arrayContaining([
+        "Observación degradada. Los datos siguen disponibles bajo demanda.",
+        "Se detectó una señal crítica: posible secreto.",
+        "Se detectó una señal de archivo observado: advertencia.",
       ]),
     );
     for (const notification of notifications) {

@@ -31,6 +31,9 @@ const delta = (repo: string, over: Partial<RepoDelta> = {}): RepoDelta => ({
   head: null,
   last_activity_ms: 1_700_000_000_000,
   error: null,
+  metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+  gitleaks_configured: false,
+  agents_md_configured: false,
   ...over,
 });
 
@@ -64,6 +67,10 @@ describe("quality filters", () => {
       fsEventsByRepo: {},
       watching: { available: true },
       config: null,
+      configStatus: "ready",
+      configError: null,
+      snapshotStatus: "ready",
+      snapshotError: null,
       loaded: true,
     };
 

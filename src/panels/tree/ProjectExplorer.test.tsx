@@ -12,11 +12,36 @@ const restoreDeletedFromRepoMock = vi.fn<(_repo: string, _token: string) => Prom
 const redoDeletedFromRepoMock = vi.fn<(_repo: string, _token: string) => Promise<void>>(() =>
   Promise.resolve(),
 );
+const copyToRepoMock = vi.fn<
+  (_repo: string, _destDir: string, _sources: string[], _overwrite: boolean) => Promise<unknown>
+>(() => Promise.resolve({ copied: [], conflicts: [] }));
+const copyWithinRepoMock = vi.fn<
+  (_repo: string, _sources: string[], _destDir: string, _overwrite: boolean) => Promise<unknown>
+>(() => Promise.resolve({ copied: [], conflicts: [] }));
+const moveWithinRepoMock = vi.fn<
+  (_repo: string, _sources: string[], _destDir: string, _overwrite: boolean) => Promise<unknown>
+>(() => Promise.resolve({ copied: [], conflicts: [] }));
+const tauriDrag = vi.hoisted(() => ({
+  handler: null as ((event: { payload: { type: string; paths: string[] } }) => void) | null,
+  onDragDropEvent: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: (handler: typeof tauriDrag.handler) => {
+      tauriDrag.handler = handler;
+      tauriDrag.onDragDropEvent(handler);
+      return Promise.resolve(() => {});
+    },
+  }),
+}));
 vi.mock("../../bus/client", () => ({
   listRepoTree: () => listRepoTreeMock(),
-  copyToRepo: vi.fn(),
-  copyWithinRepo: vi.fn(),
-  moveWithinRepo: vi.fn(),
+  copyToRepo: (repo: string, destDir: string, sources: string[], overwrite: boolean) =>
+    copyToRepoMock(repo, destDir, sources, overwrite),
+  copyWithinRepo: (repo: string, sources: string[], destDir: string, overwrite: boolean) =>
+    copyWithinRepoMock(repo, sources, destDir, overwrite),
+  moveWithinRepo: (repo: string, sources: string[], destDir: string, overwrite: boolean) =>
+    moveWithinRepoMock(repo, sources, destDir, overwrite),
   exportFromRepo: vi.fn(),
   deleteFromRepo: (repo: string, sources: string[]) => deleteFromRepoMock(repo, sources),
   restoreDeletedFromRepo: (repo: string, token: string) => restoreDeletedFromRepoMock(repo, token),
@@ -29,6 +54,7 @@ import { qualityStore } from "../../qol/state";
 import { fileDock } from "../../workspace/fileDock";
 import { repoTreeStore } from "../../workspace/repoTreeStore";
 import { deleteUndoManager } from "../file/deleteUndo";
+import { treeClipboard } from "./treeClipboard";
 import type { RepoDelta } from "../../bus/contract";
 
 const REPO = "/r/api";
@@ -42,6 +68,9 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
     head: null,
     last_activity_ms: 1000,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -58,6 +87,16 @@ describe("ProjectExplorer", () => {
     deleteFromRepoMock.mockClear();
     restoreDeletedFromRepoMock.mockClear();
     redoDeletedFromRepoMock.mockClear();
+    copyToRepoMock.mockReset();
+    copyToRepoMock.mockResolvedValue({ copied: [], conflicts: [] });
+    copyWithinRepoMock.mockClear();
+    moveWithinRepoMock.mockReset();
+    moveWithinRepoMock.mockResolvedValue({ copied: [], conflicts: [] });
+    tauriDrag.handler = null;
+    tauriDrag.onDragDropEvent.mockClear();
+    treeClipboard.clear();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
     Object.defineProperty(window, "confirm", {
       configurable: true,
       value: vi.fn(() => true),
@@ -185,6 +224,125 @@ describe("ProjectExplorer", () => {
     expect(explorer).toHaveStyle({ width: "340px" });
   });
 
+  it("exposes an adjustable splitter and resizes it with the keyboard", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const explorer = await screen.findByTestId(`project-explorer-${REPO}`);
+    const handle = screen.getByRole("separator", { name: "Redimensionar árbol de archivos" });
+    const maxWidth = Math.round(Math.max(160, Math.min(520, window.innerWidth * 0.55)));
+
+    expect(handle).toHaveAttribute("tabindex", "0");
+    expect(handle).toHaveAttribute("aria-valuemin", "160");
+    expect(handle).toHaveAttribute("aria-valuemax", String(maxWidth));
+    expect(handle).toHaveAttribute("aria-valuenow", "240");
+
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(explorer).toHaveStyle({ width: "256px" });
+    expect(handle).toHaveAttribute("aria-valuenow", "256");
+
+    fireEvent.keyDown(handle, { key: "ArrowRight", shiftKey: true });
+    expect(explorer).toHaveStyle({ width: "304px" });
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(explorer).toHaveStyle({ width: "160px" });
+    fireEvent.keyDown(handle, { key: "End" });
+    expect(explorer).toHaveStyle({ width: `${maxWidth}px` });
+    expect(handle).toHaveAttribute("aria-valuetext", `${maxWidth} píxeles`);
+  });
+
+  it("uses tree semantics, roving tabindex, and hierarchical arrow navigation", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const treeWidget = await screen.findByRole("tree", { name: "Archivos de api" });
+    const src = screen.getByRole("treeitem", { name: "src" });
+    expect(treeWidget).toContainElement(src);
+    expect(src).toHaveAttribute("aria-level", "1");
+    expect(src).toHaveAttribute("aria-expanded", "false");
+    expect(treeWidget.querySelectorAll('[role="treeitem"][tabindex="0"]')).toHaveLength(1);
+
+    src.focus();
+    fireEvent.keyDown(src, { key: "ArrowRight" });
+    expect(src).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.keyDown(src, { key: "ArrowRight" });
+    const focusedChild = document.activeElement as HTMLElement;
+    expect(focusedChild).toHaveAttribute("role", "treeitem");
+    expect(focusedChild).toHaveAttribute("aria-level", "2");
+    expect(treeWidget.querySelectorAll('[role="treeitem"][tabindex="0"]')).toHaveLength(1);
+
+    fireEvent.keyDown(focusedChild, { key: "ArrowLeft" });
+    expect(src).toHaveFocus();
+    fireEvent.keyDown(src, { key: "End" });
+    expect(screen.getByRole("treeitem", { name: "README.md" })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Home" });
+    expect(src).toHaveFocus();
+  });
+
+  it("pastes the internal clipboard into the focused subfolder", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const src = await screen.findByRole("treeitem", { name: "src" });
+    treeClipboard.copy(REPO, ["README.md"]);
+
+    src.focus();
+    fireEvent.keyDown(src, { key: "v", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(copyWithinRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], "src", false),
+    );
+  });
+
+  it("blocks an internal clipboard paste from a different repository", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const src = await screen.findByRole("treeitem", { name: "src" });
+    treeClipboard.cut("/r/other", ["README.md"]);
+
+    src.focus();
+    fireEvent.keyDown(src, { key: "v", ctrlKey: true });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No se puede pegar entre repositorios todavía",
+    );
+    expect(copyWithinRepoMock).not.toHaveBeenCalled();
+    expect(moveWithinRepoMock).not.toHaveBeenCalled();
+    expect(treeClipboard.get()?.repo).toBe("/r/other");
+  });
+
+  it("clears a cut clipboard after the initial move succeeds", async () => {
+    moveWithinRepoMock.mockResolvedValueOnce({ copied: ["src/README.md"], conflicts: [] });
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const src = await screen.findByRole("treeitem", { name: "src" });
+    treeClipboard.cut(REPO, ["README.md"]);
+
+    src.focus();
+    fireEvent.keyDown(src, { key: "v", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(moveWithinRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], "src", false),
+    );
+    await waitFor(() => expect(treeClipboard.get()).toBeNull());
+  });
+
+  it("surfaces unresolved paste conflicts and keeps the cut clipboard", async () => {
+    moveWithinRepoMock.mockResolvedValueOnce({
+      copied: [],
+      conflicts: [{ dest_rel: "README.md", kind: "source_missing" }],
+    });
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const src = await screen.findByRole("treeitem", { name: "src" });
+    treeClipboard.cut(REPO, ["README.md"]);
+
+    src.focus();
+    fireEvent.keyDown(src, { key: "v", ctrlKey: true });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se encuentra README.md");
+    expect(treeClipboard.get()).toEqual({ repo: REPO, paths: ["README.md"], mode: "cut" });
+  });
+
   it("opens the file context menu actions", async () => {
     const openSpy = vi.spyOn(fileDock, "openFile").mockImplementation(() => {});
     act(() =>
@@ -216,13 +374,36 @@ describe("ProjectExplorer", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("README.md");
 
     fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
-    fireEvent.click(screen.getByText("Abrir preview"));
+    fireEvent.click(screen.getByText("Abrir vista previa"));
     expect(openSpy).toHaveBeenLastCalledWith(REPO, "README.md", false);
 
     fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
     fireEvent.click(screen.getByText("Abrir fijo"));
     expect(openSpy).toHaveBeenLastCalledWith(REPO, "README.md", true);
     openSpy.mockRestore();
+  });
+
+  it("moves focus into the context menu, navigates it, and restores the tree item on Escape", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const readme = await screen.findByRole("treeitem", { name: "README.md" });
+    readme.focus();
+    fireEvent.keyDown(readme, { key: "F10", shiftKey: true });
+
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Abrir vista previa" })).toHaveFocus(),
+    );
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Abrir vista previa" }), {
+      key: "ArrowDown",
+    });
+    expect(screen.getByRole("menuitem", { name: "Abrir fijo" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Abrir fijo" }), { key: "End" });
+    expect(screen.getByRole("menuitem", { name: "Eliminar" })).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Eliminar" }), { key: "Escape" });
+    expect(screen.queryByTestId("tree-context-menu")).not.toBeInTheDocument();
+    expect(readme).toHaveFocus();
   });
 
   it("deletes a file from the context menu after confirmation", async () => {
@@ -352,5 +533,30 @@ describe("ProjectExplorer", () => {
       expect(menu).toHaveStyle({ left: "572px", top: "412px" });
     });
     rectSpy.mockRestore();
+  });
+
+  it("retries an OS drop with overwrite enabled after confirmation", async () => {
+    copyToRepoMock
+      .mockResolvedValueOnce({
+        copied: [],
+        conflicts: [{ dest_rel: "README.md", kind: "file_exists" }],
+      })
+      .mockResolvedValueOnce({ copied: ["README.md"], conflicts: [] });
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    await screen.findByTestId(`project-explorer-${REPO}`);
+    await waitFor(() => expect(tauriDrag.handler).not.toBeNull());
+
+    act(() => {
+      tauriDrag.handler?.({ payload: { type: "drop", paths: ["C:/tmp/README.md"] } });
+    });
+    fireEvent.click(await screen.findByTestId("overwrite-confirm-ok"));
+
+    await waitFor(() => expect(copyToRepoMock).toHaveBeenCalledTimes(2));
+    expect(copyToRepoMock).toHaveBeenNthCalledWith(1, REPO, "", ["C:/tmp/README.md"], false);
+    expect(copyToRepoMock).toHaveBeenNthCalledWith(2, REPO, "", ["C:/tmp/README.md"], true);
+    await waitFor(() =>
+      expect(screen.queryByTestId("overwrite-confirm-modal")).not.toBeInTheDocument(),
+    );
   });
 });

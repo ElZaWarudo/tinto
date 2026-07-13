@@ -44,7 +44,7 @@ describe("resetToDashboardPanel", () => {
     expect(api.addPanel).toHaveBeenCalledWith({
       id: PANEL_DASHBOARD,
       component: PANEL_DASHBOARD,
-      title: "Dashboard",
+      title: "Resumen",
     });
     expect(repo.api.close).toHaveBeenCalledOnce();
     expect(api.getPanel(PANEL_DASHBOARD)?.api.setActive).toHaveBeenCalledOnce();

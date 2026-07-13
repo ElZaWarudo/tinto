@@ -118,7 +118,7 @@ export interface AgentSession {
   error: AgentSessionError | null;
   checkpoint?: AgentSessionCheckpoint | null;
   change_log?: AgentSessionChange[];
-  turn_status?: AgentSessionTurnStatus;
+  turn_status: AgentSessionTurnStatus;
   turn_checkpoints?: AgentSessionTurnCheckpoint[];
   timeline?: AgentSessionTimelineItem[];
   runtime_options?: AgentSessionRuntimeOptions;
@@ -197,6 +197,11 @@ export interface AgentHostCommandResult {
   agent_type?: string | null;
   review_summary?: AgentReviewSummary | null;
   review_findings?: AgentReviewFinding[] | null;
+}
+
+export interface CommandError {
+  category: string;
+  message: string;
 }
 
 // ---- Git value types ----
@@ -318,9 +323,9 @@ export interface RepoDelta {
   head: CommitInfo | null;
   last_activity_ms: number; // epoch ms
   error: RepoErrorState | null;
-  metrics?: RepoMetrics; // RDM-011 additive
-  gitleaks_configured?: boolean; // additive
-  agents_md_configured?: boolean; // additive
+  metrics: RepoMetrics;
+  gitleaks_configured: boolean;
+  agents_md_configured: boolean;
   signals?: PassiveSignal[]; // RDM-011 additive
   secret_findings?: SecretFinding[]; // additive
   subscribed_diffs?: FileDiff[] | null; // RDM-008
@@ -365,10 +370,11 @@ export interface RepoTree {
   truncated: boolean; // true when the 20k-entry cap was hit
 }
 
-export type FileEncoding = "utf8" | "base64";
+export type ContentEncoding = "utf8" | "base64";
+export type FileEncoding = ContentEncoding;
 
 export interface FileContent {
-  encoding: FileEncoding;
+  encoding: ContentEncoding;
   content: string;
   truncated: boolean; // true when the command-specific read guard cut the content
 }
@@ -425,4 +431,64 @@ export interface DeletedEntry {
 export interface DeleteResult {
   token: string;
   entries: DeletedEntry[];
+}
+
+// The generated Rust mirror exposes the same map. contract.parity.ts checks
+// both key coverage and bidirectional assignability during every TypeScript build.
+export interface CuratedBusContractTypeMap {
+  RepoStatus: RepoStatus;
+  BranchInfo: BranchInfo;
+  CommitInfo: CommitInfo;
+  DiffLineKind: DiffLineKind;
+  DiffLine: DiffLine;
+  DiffHunk: DiffHunk;
+  FileDiff: FileDiff;
+  AgentSessionStatus: AgentSessionStatus;
+  AgentSessionError: AgentSessionError;
+  AgentSessionCheckpointType: AgentSessionCheckpointType;
+  AgentSessionCheckpoint: AgentSessionCheckpoint;
+  AgentSessionChangeKind: AgentSessionChangeKind;
+  AgentSessionChange: AgentSessionChange;
+  AgentSessionChangeLog: AgentSessionChangeLog;
+  AgentSessionTurnStatus: AgentSessionTurnStatus;
+  AgentSessionTurnCheckpoint: AgentSessionTurnCheckpoint;
+  AgentSessionLimits: AgentSessionLimits;
+  AgentSessionRuntimeOptions: AgentSessionRuntimeOptions;
+  AgentSessionGoal: AgentSessionGoal;
+  AgentSessionPersonality: AgentSessionPersonality;
+  AgentSessionPlanMode: AgentSessionPlanMode;
+  AgentSessionFeedback: AgentSessionFeedback;
+  AgentSessionContextSummary: AgentSessionContextSummary;
+  AgentSession: AgentSession;
+  AgentSessionOutput: AgentSessionOutput;
+  AgentSessionTimelineKind: AgentSessionTimelineKind;
+  AgentSessionTimelineItem: AgentSessionTimelineItem;
+  AgentJournalSessionSummary: AgentJournalSessionSummary;
+  AgentHostCommandStatus: AgentHostCommandStatus;
+  AgentReviewSummary: AgentReviewSummary;
+  AgentReviewFinding: AgentReviewFinding;
+  AgentHostCommandResult: AgentHostCommandResult;
+  GitleaksSetupStatus: GitleaksSetupStatus;
+  GitleaksInstallResult: GitleaksInstallResult;
+  RepoFetchPreview: RepoFetchPreview;
+  RepoFetchResult: RepoFetchResult;
+  CommandError: CommandError;
+  RepoErrorClass: RepoErrorClass;
+  RepoErrorState: RepoErrorState;
+  SignalSeverity: SignalSeverity;
+  PassiveSignalKind: PassiveSignalKind;
+  PassiveSignal: PassiveSignal;
+  RepoMetrics: RepoMetrics;
+  SecretFinding: SecretFinding;
+  RepoDelta: RepoDelta;
+  FsEventKind: FsEventKind;
+  FsEvent: FsEvent;
+  FsEventBatch: FsEventBatch;
+  WatchingState: WatchingState;
+  SubscriptionTarget: SubscriptionTarget;
+  TreeEntry: TreeEntry;
+  RepoTree: RepoTree;
+  FileContent: FileContent;
+  ContentEncoding: ContentEncoding;
+  WorkbenchSnapshot: WorkbenchSnapshot;
 }

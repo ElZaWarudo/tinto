@@ -30,10 +30,21 @@ function duplicatePattern(patterns: string[]): string | null {
 }
 
 function formatSize(event: FsEvent): string {
-  const size = event.size == null ? "size unknown" : `${event.size} B`;
+  const size = event.size == null ? "tamaño desconocido" : `${event.size} B`;
   if (event.size_delta == null || event.size_delta === 0) return size;
   const sign = event.size_delta > 0 ? "+" : "";
   return `${size} (${sign}${event.size_delta} B)`;
+}
+
+function eventKindLabel(kind: FsEvent["kind"]): string {
+  switch (kind) {
+    case "created":
+      return "Creado";
+    case "modified":
+      return "Modificado";
+    case "removed":
+      return "Eliminado";
+  }
 }
 
 export function WatchedFilesSection({
@@ -44,60 +55,78 @@ export function WatchedFilesSection({
   watching,
   onSave,
 }: Props) {
-  const [rows, setRows] = useState<string[]>(rowsFromPatterns(patterns));
+  const patternsKey = patterns.join("\0");
+  const [editor, setEditor] = useState(() => ({
+    sourceKey: patternsKey,
+    rows: rowsFromPatterns(patterns),
+    dirty: false,
+  }));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
 
+  const rows =
+    !editor.dirty && editor.sourceKey !== patternsKey ? rowsFromPatterns(patterns) : editor.rows;
+  const dirty = editor.dirty;
   const normalized = useMemo(() => normalizePatterns(rows), [rows]);
 
   const updateRow = (index: number, value: string) => {
-    setRows((current) => current.map((row, i) => (i === index ? value : row)));
-    setDirty(true);
+    if (saving) return;
+    setEditor({
+      sourceKey: patternsKey,
+      rows: rows.map((row, i) => (i === index ? value : row)),
+      dirty: true,
+    });
     setError(null);
+    setSaved(false);
   };
 
   const addRow = () => {
-    setRows((current) => [...current, ""]);
-    setDirty(true);
+    if (saving) return;
+    setEditor({ sourceKey: patternsKey, rows: [...rows, ""], dirty: true });
     setError(null);
+    setSaved(false);
   };
 
   const removeRow = (index: number) => {
-    setRows((current) => {
-      const next = current.filter((_, i) => i !== index);
-      return next.length ? next : [""];
-    });
-    setDirty(true);
+    if (saving) return;
+    const next = rows.filter((_, i) => i !== index);
+    setEditor({ sourceKey: patternsKey, rows: next.length ? next : [""], dirty: true });
     setError(null);
+    setSaved(false);
   };
 
   const cancel = () => {
-    setRows(rowsFromPatterns(patterns));
-    setDirty(false);
+    setEditor({ sourceKey: patternsKey, rows: rowsFromPatterns(patterns), dirty: false });
     setError(null);
+    setSaved(false);
   };
 
   const save = async () => {
     if (!activeWorkbench) {
-      setError("No active workbench.");
+      setError("No hay una workbench activa.");
       return;
     }
     if (rows.some((row) => row.trim() === "") && normalized.length > 0) {
-      setError("Remove blank patterns before saving.");
+      setError("Quita los patrones vacíos antes de guardar.");
       return;
     }
     const dup = duplicatePattern(normalized);
     if (dup) {
-      setError(`Duplicate pattern: ${dup}`);
+      setError(`Patrón duplicado: ${dup}`);
       return;
     }
     setSaving(true);
     setError(null);
+    setSaved(false);
     try {
       await onSave(normalized);
-      setRows(normalized.length ? normalized : [""]);
-      setDirty(false);
+      setEditor({
+        sourceKey: patternsKey,
+        rows: normalized.length ? normalized : [""],
+        dirty: false,
+      });
+      setSaved(true);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
@@ -107,68 +136,81 @@ export function WatchedFilesSection({
   };
 
   return (
-    <section className="watched-files" data-testid="watched-files">
+    <section className="watched-files" data-testid="watched-files" aria-busy={saving}>
       <header className="watched-files__head">
-        <h3>Watched files</h3>
+        <h3>Archivos observados</h3>
         {!watching.available && (
           <span className="watched-files__degraded" data-testid="watched-degraded">
-            watcher degraded: {watching.reason ?? "unknown reason"}
+            supervisión degradada: {watching.reason ?? "motivo desconocido"}
           </span>
         )}
       </header>
 
       <div className="watch-patterns" data-testid="watch-patterns">
-        <h4>Patterns</h4>
+        <h4>Patrones</h4>
         {rows.map((row, index) => (
           <div className="watch-patterns__row" key={index}>
-            <input
-              aria-label={`watch pattern ${index + 1}`}
-              value={row}
-              placeholder=".env"
-              onChange={(e) => updateRow(index, e.target.value)}
-            />
-            <button type="button" onClick={() => removeRow(index)}>
-              Remove
+            <label className="watch-patterns__field">
+              <span>Patrón {index + 1}</span>
+              <input
+                value={row}
+                disabled={saving}
+                placeholder=".env"
+                aria-invalid={Boolean(error)}
+                aria-describedby={error ? "watch-pattern-error" : undefined}
+                onChange={(e) => updateRow(index, e.target.value)}
+              />
+            </label>
+            <button type="button" disabled={saving} onClick={() => removeRow(index)}>
+              Quitar
             </button>
           </div>
         ))}
         <div className="watch-patterns__actions">
-          <button type="button" onClick={addRow}>
-            Add pattern
+          <button type="button" disabled={saving} onClick={addRow}>
+            Añadir patrón
           </button>
           <button type="button" disabled={!dirty || saving} onClick={cancel}>
-            Cancel
+            Cancelar
           </button>
           <button type="button" disabled={!dirty || saving} onClick={() => void save()}>
-            {saving ? "Saving…" : "Save patterns"}
+            {saving ? "Guardando…" : "Guardar patrones"}
           </button>
         </div>
+        <span className="watch-patterns__status" role="status" aria-live="polite">
+          {saving ? "Guardando patrones." : saved ? "Patrones guardados." : ""}
+        </span>
         {patterns.length === 0 && !dirty && (
           <p className="repo-panel__muted" data-testid="watch-no-patterns">
-            No watched patterns configured.
+            No hay patrones configurados.
           </p>
         )}
         {error && (
-          <p className="watched-files__error" data-testid="watch-error">
+          <p
+            id="watch-pattern-error"
+            className="watched-files__error"
+            data-testid="watch-error"
+            role="alert"
+          >
             {error}
           </p>
         )}
       </div>
 
       <div className="watch-events" data-testid="watch-events">
-        <h4>Recent events</h4>
+        <h4>Eventos recientes</h4>
         {events.length === 0 ? (
           <p className="repo-panel__muted" data-testid="watch-no-events">
             {filtersActive
-              ? "No watched file events match the current filters."
-              : "No watched file events yet."}
+              ? "Ningún evento coincide con los filtros actuales."
+              : "Todavía no hay eventos de archivos observados."}
           </p>
         ) : (
           <ul>
             {events.map((event, index) => (
               <li className="watch-event" key={`${event.timestamp_ms}:${event.path}:${index}`}>
                 <span className={`watch-event__kind watch-event__kind--${event.kind}`}>
-                  {event.kind}
+                  {eventKindLabel(event.kind)}
                 </span>
                 <span className="watch-event__path">{event.path}</span>
                 <SignalBadges signals={event.signals ?? []} limit={2} compact />

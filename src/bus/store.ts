@@ -40,6 +40,14 @@ export interface BusState {
   watching: WatchingState;
   /** Workbench config (names/aliases/active); null until loaded. */
   config: WorkbenchConfig | null;
+  /** Lifecycle of the authoritative workbench configuration request. */
+  configStatus: "loading" | "ready" | "error";
+  /** Recoverable configuration error. Existing config remains usable when present. */
+  configError: string | null;
+  /** Lifecycle of the authoritative repo snapshot request. */
+  snapshotStatus: "loading" | "ready" | "error";
+  /** Recoverable snapshot error. Existing repo data remains usable when present. */
+  snapshotError: string | null;
   /** True once the first snapshot has been applied (distinguishes loading). */
   loaded: boolean;
 }
@@ -51,6 +59,10 @@ const EMPTY: BusState = {
   fsEventsByRepo: {},
   watching: { available: true },
   config: null,
+  configStatus: "loading",
+  configError: null,
+  snapshotStatus: "loading",
+  snapshotError: null,
   loaded: false,
 };
 
@@ -92,7 +104,7 @@ export class BusStore {
    * revision delta that arrived while the snapshot IPC was in flight is kept
    * rather than clobbered by the older snapshot. Activity is preserved as the
    * max of any prior (e.g. fs-event) activity and the snapshot's. */
-  loadSnapshot(repos: RepoDelta[], watching: WatchingState) {
+  private snapshotState(repos: RepoDelta[], watching: WatchingState): BusState {
     const repoMap: Record<string, RepoDelta> = {};
     const activity: Record<string, number> = {};
     const diffs: Record<string, Record<string, FileDiff>> = {};
@@ -112,14 +124,30 @@ export class BusStore {
         fsEventsByRepo[d.repo] = this.state.fsEventsByRepo[d.repo];
       }
     }
-    this.set({
+    return {
       ...this.state,
       repos: repoMap,
       activity,
       diffs,
       fsEventsByRepo,
       watching,
+      snapshotStatus: "ready",
+      snapshotError: null,
       loaded: true,
+    };
+  }
+
+  loadSnapshot(repos: RepoDelta[], watching: WatchingState) {
+    this.set(this.snapshotState(repos, watching));
+  }
+
+  /** Apply configuration and its corresponding snapshot as one coherent pair. */
+  loadWorkbench(config: WorkbenchConfig, repos: RepoDelta[], watching: WatchingState) {
+    this.set({
+      ...this.snapshotState(repos, watching),
+      config,
+      configStatus: "ready",
+      configError: null,
     });
   }
 
@@ -181,7 +209,27 @@ export class BusStore {
   }
 
   setConfig(config: WorkbenchConfig) {
-    this.set({ ...this.state, config });
+    this.set({ ...this.state, config, configStatus: "ready", configError: null });
+  }
+
+  beginConfigLoad() {
+    this.set({ ...this.state, configStatus: "loading", configError: null });
+  }
+
+  finishConfigLoad() {
+    this.set({ ...this.state, configStatus: "ready", configError: null });
+  }
+
+  setConfigError(message: string) {
+    this.set({ ...this.state, configStatus: "error", configError: message });
+  }
+
+  beginSnapshotLoad() {
+    this.set({ ...this.state, snapshotStatus: "loading", snapshotError: null });
+  }
+
+  setSnapshotError(message: string) {
+    this.set({ ...this.state, snapshotStatus: "error", snapshotError: message });
   }
 
   /** Clear live repo state (on workbench switch); config is reloaded separately. */
@@ -230,14 +278,14 @@ export function sortedRepoPaths(store: BusStore, state: BusState): string[] {
   );
 }
 
-/** Compact status summary: "clean" or "{m}M {s}S {u}U". */
+/** Compact status summary: "limpio" or "{m}M {s}S {u}U". */
 export function statusSummary(status: {
   modified: string[];
   staged: string[];
   untracked: string[];
 }): string {
   const { modified, staged, untracked } = status;
-  if (!modified.length && !staged.length && !untracked.length) return "clean";
+  if (!modified.length && !staged.length && !untracked.length) return "limpio";
   return `${modified.length}M ${staged.length}S ${untracked.length}U`;
 }
 

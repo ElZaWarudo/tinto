@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getGitleaksSetupStatus, installGitleaks } from "../bus/client";
 import type { GitleaksInstallResult, GitleaksSetupStatus } from "../bus/contract";
+import { useAccessibleDialog } from "./useAccessibleDialog";
 
 function detectStatusClass(status: GitleaksSetupStatus | null): string {
   if (!status) return "addons-status--loading";
@@ -52,6 +53,7 @@ export function AddonsManager({ onClose }: { onClose: () => void }) {
   const [isInstalling, setIsInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState<string>("");
   const [installError, setInstallError] = useState(false);
+  const dialogRef = useAccessibleDialog<HTMLDivElement>({ onClose });
 
   const refresh = async () => {
     setError(false);
@@ -84,14 +86,6 @@ export function AddonsManager({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const runInstall = async () => {
     setIsInstalling(true);
     setInstallError(false);
@@ -114,6 +108,7 @@ export function AddonsManager({ onClose }: { onClose: () => void }) {
   return (
     <div className="addons-backdrop" data-testid="addons-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="addons-modal"
         role="dialog"
         aria-label="Gestión de complementos"
@@ -135,29 +130,21 @@ export function AddonsManager({ onClose }: { onClose: () => void }) {
         </header>
 
         <div className="addons-modal__body">
-          <p className="addons-modal__intro">
-            En esta sección puedes habilitar herramientas opcionales que apoyan el monitoreo de
-            Tinto.
-          </p>
-
           <section className="addons-card">
             <div className="addons-card__head">
               <h3 className="addons-card__title">Gitleaks</h3>
               <span
                 className={`addons-status ${detectStatusClass(status)}`}
                 data-testid="gitleaks-status"
+                role="status"
+                aria-live="polite"
               >
                 {detectStatusText(status)}
               </span>
             </div>
 
-            <p className="addons-card__text">
-              Detección avanzada de secretos y reglas de calidad, integrada de forma opcional en
-              Tinto. Si no está instalado, puedes dejar que Tinto lo instale.
-            </p>
-
             {error ? (
-              <p className="addons-card__error">
+              <p className="addons-card__error" role="alert">
                 No se pudo consultar el estado del sistema desde Tinto. Reintenta en unos segundos.
               </p>
             ) : (
@@ -168,7 +155,11 @@ export function AddonsManager({ onClose }: { onClose: () => void }) {
                 </p>
 
                 {installMessage && (
-                  <p className={installError ? "addons-card__error" : "addons-card__text"}>
+                  <p
+                    className={installError ? "addons-card__error" : "addons-card__text"}
+                    role={installError ? "alert" : "status"}
+                    aria-live={installError ? "assertive" : "polite"}
+                  >
                     {installMessage}
                   </p>
                 )}

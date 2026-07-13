@@ -9,6 +9,7 @@ describe("KeyboardShortcuts", () => {
 
     expect(screen.getByTestId("shortcuts-modal")).toBeInTheDocument();
     expect(screen.getByText("Atajos de teclado")).toBeInTheDocument();
+    expect(screen.getByTestId("shortcuts-close")).toHaveFocus();
   });
 
   it("displays zoom shortcuts in the Texto group", () => {
@@ -43,9 +44,9 @@ describe("KeyboardShortcuts", () => {
     const onClose = vi.fn();
     render(<KeyboardShortcuts onClose={onClose} />);
 
-    expect(screen.getByText("Glance mode")).toBeInTheDocument();
-    expect(screen.getByText("Abrir Dashboard")).toBeInTheDocument();
-    expect(screen.getByText("Abrir Timeline")).toBeInTheDocument();
+    expect(screen.getByText("Vista rápida")).toBeInTheDocument();
+    expect(screen.getByText("Abrir resumen")).toBeInTheDocument();
+    expect(screen.getByText("Abrir cronología")).toBeInTheDocument();
   });
 
   it("displays project shortcuts", () => {

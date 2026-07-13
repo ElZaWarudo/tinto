@@ -4,16 +4,22 @@ import { sortSignals } from "../bus/store";
 function signalKindLabel(kind: PassiveSignal["kind"]): string {
   switch (kind) {
     case "sensitive_path":
-      return "Sensitive file";
+      return "Archivo sensible";
     case "possible_secret":
-      return "Possible secret";
+      return "Posible secreto";
     case "large_delete":
-      return "Large delete";
+      return "Borrado grande";
     case "config_change":
-      return "Config";
+      return "Configuración";
     case "test_change":
-      return "Tests";
+      return "Pruebas";
   }
+}
+
+function severityLabel(severity: PassiveSignal["severity"]): string {
+  if (severity === "critical") return "Crítica";
+  if (severity === "warning") return "Advertencia";
+  return "Información";
 }
 
 export function SignalBadges({
@@ -34,14 +40,18 @@ export function SignalBadges({
         <span
           key={`${signal.kind}:${signal.path ?? "repo"}:${index}`}
           className={`signal-chip signal-chip--${signal.severity}`}
-          title={[signal.message, signal.path].filter(Boolean).join(": ")}
+          title={[severityLabel(signal.severity), signal.message, signal.path]
+            .filter(Boolean)
+            .join(": ")}
+          aria-label={`${severityLabel(signal.severity)}: ${signalKindLabel(signal.kind)}`}
           data-testid={`signal-${signal.kind}`}
         >
-          {signalKindLabel(signal.kind)}
+          <span className="signal-chip__severity">{severityLabel(signal.severity)}</span>
+          <span>{signalKindLabel(signal.kind)}</span>
         </span>
       ))}
       {hidden > 0 && (
-        <span className="signal-chip signal-chip--more" title={`${hidden} more signal(s)`}>
+        <span className="signal-chip signal-chip--more" title={`${hidden} señales más`}>
           +{hidden}
         </span>
       )}
@@ -52,7 +62,7 @@ export function SignalBadges({
 export function MetricsPill({ metrics }: { metrics: RepoMetrics }) {
   return (
     <span className="metrics-pill" data-testid="repo-metrics">
-      {metrics.changed_files} files · +{metrics.lines_added} -{metrics.lines_removed}
+      {metrics.changed_files} archivos · +{metrics.lines_added} -{metrics.lines_removed}
     </span>
   );
 }

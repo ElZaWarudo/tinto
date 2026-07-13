@@ -3,11 +3,10 @@ import type { DiffHunk, DiffLine, FileDiff } from "../../bus/contract";
 import { FileOverviewRuler, type FileOverviewMarker } from "../file/FileOverviewRuler";
 import { useOverviewScrollSync } from "../file/useOverviewScrollSync";
 import { MAX_HIGHLIGHT_BYTES, languageFromPath } from "./highlight";
+import { MAX_RENDERED_DIFF_LINE_CHARS, MAX_RENDERED_DIFF_LINES } from "./limits";
 import { useLineHighlighter, type RenderLine } from "./lineHighlighter";
 
 export type DiffMode = "inline" | "side-by-side";
-export const MAX_RENDERED_DIFF_LINES = 2_500;
-export const MAX_RENDERED_DIFF_LINE_CHARS = 8_000;
 
 function diffStats(diff: FileDiff): { bytes: number; lines: number; longLines: number } {
   let bytes = 0;
@@ -70,7 +69,7 @@ function renderContent(content: string, render: RenderLine): ReactNode {
       {render(content.slice(0, MAX_RENDERED_DIFF_LINE_CHARS))}
       <span className="diff-content__truncated" data-testid="diff-line-truncated">
         {" "}
-        ... {hidden.toLocaleString()} chars hidden
+        … {hidden.toLocaleString()} caracteres ocultos
       </span>
     </>
   );
@@ -116,7 +115,7 @@ export function DiffView({
   if (diff.is_binary) {
     return (
       <div className="diff-view diff-view--binary" data-testid="diff-binary">
-        Binary file - no text diff.
+        Archivo binario: no hay una comparación de texto disponible.
       </div>
     );
   }
@@ -130,25 +129,25 @@ export function DiffView({
       <div className="diff-view__content">
         {oversized && (
           <div className="diff-view__notice" data-testid="diff-large">
-            Large diff - syntax highlighting disabled.
+            Comparación extensa: se desactivó el resaltado de sintaxis.
           </div>
         )}
         {stats.longLines > 0 && (
           <div className="diff-view__notice" data-testid="diff-long-lines">
-            {stats.longLines.toLocaleString()} long diff{" "}
-            {stats.longLines === 1 ? "line was" : "lines were"} shortened to keep the view
-            responsive.
+            {stats.longLines.toLocaleString()}{" "}
+            {stats.longLines === 1 ? "línea extensa" : "líneas extensas"} de la comparación se{" "}
+            {stats.longLines === 1 ? "acortó" : "acortaron"} para mantener la vista fluida.
           </div>
         )}
         {visible.hiddenLines > 0 && (
           <div className="diff-view__notice" data-testid="diff-render-capped">
-            Large diff - showing the first {visible.renderedLines.toLocaleString()} of{" "}
-            {stats.lines.toLocaleString()} lines to keep the view responsive.
+            Comparación extensa: se muestran las primeras {visible.renderedLines.toLocaleString()}{" "}
+            de {stats.lines.toLocaleString()} líneas para mantener la vista fluida.
           </div>
         )}
         {diff.hunks.length === 0 ? (
           <div className="diff-view__notice" data-testid="diff-no-hunks">
-            No textual changes.
+            No hay cambios de texto.
           </div>
         ) : mode === "inline" ? (
           visible.hunks.map((h, i) => (

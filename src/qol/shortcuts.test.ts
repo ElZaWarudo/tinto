@@ -16,9 +16,9 @@ describe("shortcuts", () => {
       expect(actions).toContain("Archivo anterior");
       expect(actions).toContain("Cerrar archivo");
       expect(actions).toContain("Cerrar proyecto");
-      expect(actions).toContain("Glance mode");
-      expect(actions).toContain("Abrir Dashboard");
-      expect(actions).toContain("Abrir Timeline");
+      expect(actions).toContain("Vista rápida");
+      expect(actions).toContain("Abrir resumen");
+      expect(actions).toContain("Abrir cronología");
       expect(actions).toContain("Refrescar proyecto");
       expect(actions).toContain("Añadir proyecto");
       expect(actions).toContain("Restaurar archivo eliminado");

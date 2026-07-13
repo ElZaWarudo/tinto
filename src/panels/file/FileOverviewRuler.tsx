@@ -219,39 +219,40 @@ export function FileOverviewRuler({
             />
           </>
         )}
-        {sorted.map((marker, index) => {
-          const top = hasLines
-            ? Math.min(100, Math.max(0, ((marker.line - 1) / Math.max(totalLines - 1, 1)) * 100))
-            : 0;
-          const source = marker.source ?? "alert";
-          const markerText = `${marker.label} · L${marker.line}`;
-          const isActive = activeLine === marker.line;
-          return (
-            <button
-              key={`${source}:${marker.severity}:${marker.line}:${index}`}
-              type="button"
-              className={`file-overview-ruler__mark file-overview-ruler__mark--${marker.severity} file-overview-ruler__mark--${source}${
-                isActive ? " file-overview-ruler__mark--active" : ""
-              }`}
-              style={{ top: `${top}%` }}
-              title={`${marker.label} · línea ${marker.line}`}
-              aria-label={`${marker.label}, línea ${marker.line}`}
-              data-testid={`overview-marker-${marker.line}-${index}`}
-              data-marker-line={marker.line}
-              data-source={source}
-              onClick={(event) => {
-                event.stopPropagation();
-                jumpToLine(marker.line);
-              }}
-            >
-              <span className="file-overview-ruler__mark-icon" aria-hidden="true">
-                {sourceIcon(source)}
-              </span>
-              <span className="file-overview-ruler__mark-label">{markerText}</span>
-            </button>
-          );
-        })}
       </div>
+      {sorted.length > 0 && (
+        <div className="file-overview-ruler__markers" aria-label="Marcas navegables">
+          {sorted.map((marker, index) => {
+            const top = hasLines
+              ? Math.min(100, Math.max(0, ((marker.line - 1) / Math.max(totalLines - 1, 1)) * 100))
+              : 0;
+            const source = marker.source ?? "alert";
+            const markerText = `${marker.label} · L${marker.line}`;
+            const isActive = activeLine === marker.line;
+            return (
+              <button
+                key={`${source}:${marker.severity}:${marker.line}:${index}`}
+                type="button"
+                className={`file-overview-ruler__mark file-overview-ruler__mark--${marker.severity} file-overview-ruler__mark--${source}${
+                  isActive ? " file-overview-ruler__mark--active" : ""
+                }`}
+                style={{ top: `${top}%` }}
+                title={`${marker.label} · línea ${marker.line}`}
+                aria-label={`${marker.label}, línea ${marker.line}`}
+                data-testid={`overview-marker-${marker.line}-${index}`}
+                data-marker-line={marker.line}
+                data-source={source}
+                onClick={() => jumpToLine(marker.line)}
+              >
+                <span className="file-overview-ruler__mark-icon" aria-hidden="true">
+                  {sourceIcon(source)}
+                </span>
+                <span className="file-overview-ruler__mark-label">{markerText}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -290,11 +291,11 @@ function buildMarkerGroups(markers: FileOverviewMarker[]): Array<{
             : `${count} posibles secretos`
           : source === "hunk"
             ? count === 1
-              ? "1 hunk"
-              : `${count} hunks`
+              ? "1 fragmento"
+              : `${count} fragmentos`
             : count === 1
-              ? "1 resultado de busqueda"
-              : `${count} resultados de busqueda`;
+              ? "1 resultado de búsqueda"
+              : `${count} resultados de búsqueda`;
       return {
         key: source,
         source,

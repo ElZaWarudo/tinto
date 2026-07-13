@@ -14,6 +14,7 @@ import {
   switchWorkbench,
 } from "./operations";
 import { visibleWorkbenchNames } from "./recentWorkbenches";
+import { useAccessibleDialog } from "./useAccessibleDialog";
 
 interface ManageWorkbenchesDialogProps {
   config: WorkbenchConfig;
@@ -49,7 +50,7 @@ export function ManageWorkbenchesDialog({
   // paths (partial snapshot recovery, first-run races). Default to empty
   // lists so the modal never crashes on a stale render — same defensive
   // shape MenuBar uses for the workbenches switcher.
-  const workbenches = config.workbenches ?? [];
+  const workbenches = useMemo(() => config.workbenches ?? [], [config.workbenches]);
   const active = config.active ?? null;
   const ordered = useMemo(() => {
     const names = workbenches.map((w) => w.name);
@@ -67,7 +68,23 @@ export function ManageWorkbenchesDialog({
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const isAnyBusy = busy !== null;
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const requestClose = () => {
+    if (!isAnyBusy) onClose();
+  };
+  const dialogRef = useAccessibleDialog<HTMLDivElement>({
+    onClose: requestClose,
+    onEscape: () => {
+      if (isAnyBusy) return;
+      if (renaming) {
+        setRenaming(null);
+        setRenameValue("");
+      } else {
+        requestClose();
+      }
+    },
+  });
 
   useEffect(() => {
     if (renaming && renameInputRef.current) {
@@ -75,21 +92,6 @@ export function ManageWorkbenchesDialog({
       renameInputRef.current.select();
     }
   }, [renaming]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        if (renaming) {
-          setRenaming(null);
-          setRenameValue("");
-        } else {
-          onClose();
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, renaming]);
 
   const toggle = (name: string) => {
     setExpanded((cur) => {
@@ -101,13 +103,14 @@ export function ManageWorkbenchesDialog({
   };
 
   const startRename = (name: string) => {
+    if (isAnyBusy) return;
     setRenaming(name);
     setRenameValue(name);
     setExpanded((cur) => new Set(cur).add(name));
   };
 
   const commitRename = async () => {
-    if (!renaming) return;
+    if (!renaming || isAnyBusy) return;
     const target = renaming;
     const next = renameValue.trim();
     setRenaming(null);
@@ -125,6 +128,7 @@ export function ManageWorkbenchesDialog({
   };
 
   const handleActivate = async (name: string) => {
+    if (isAnyBusy) return;
     setBusy(name);
     setError(null);
     try {
@@ -137,19 +141,20 @@ export function ManageWorkbenchesDialog({
   };
 
   const handleDelete = async (name: string) => {
-    const ok = await safeConfirm(
-      `¿Eliminar la workbench "${name}"?\nLos repos en disco no se tocan. Las workbenches que comparten repos con esta no se ven afectadas.`,
-      {
-        title: "Eliminar workbench",
-        kind: "warning",
-        okLabel: "Eliminar",
-        cancelLabel: "Cancelar",
-      },
-    );
-    if (!ok) return;
+    if (isAnyBusy) return;
     setBusy(name);
     setError(null);
     try {
+      const ok = await safeConfirm(
+        `¿Eliminar la workbench "${name}"?\nLos repos en disco no se tocan. Las workbenches que comparten repos con esta no se ven afectadas.`,
+        {
+          title: "Eliminar workbench",
+          kind: "warning",
+          okLabel: "Eliminar",
+          cancelLabel: "Cancelar",
+        },
+      );
+      if (!ok) return;
       await deleteWorkbenchFlow(name);
     } catch (e) {
       setError(extractErrorMessage(e, "No se pudo eliminar la workbench."));
@@ -160,6 +165,7 @@ export function ManageWorkbenchesDialog({
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
+    if (isAnyBusy) return;
     const trimmed = newName.trim();
     if (!trimmed) return;
     setBusy("__new__");
@@ -180,14 +186,16 @@ export function ManageWorkbenchesDialog({
     <div
       className="addons-backdrop"
       data-testid="manage-workbenches-backdrop"
-      onClick={onClose}
+      onClick={requestClose}
       role="presentation"
     >
       <div
+        ref={dialogRef}
         className="addons-modal manage-workbenches-modal"
         role="dialog"
         aria-label="Gestionar workbenches"
         aria-modal="true"
+        aria-busy={isAnyBusy}
         data-testid="manage-workbenches-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -198,18 +206,14 @@ export function ManageWorkbenchesDialog({
             className="addons-modal__close"
             aria-label="Cerrar"
             data-testid="manage-workbenches-close"
-            onClick={onClose}
+            disabled={isAnyBusy}
+            onClick={requestClose}
           >
             ×
           </button>
         </header>
 
         <div className="addons-modal__body manage-workbenches-modal__body">
-          <p className="addons-modal__intro">
-            Activá, renombrá o eliminá workbenches. Los repos compartidos entre varias no se tocan
-            al eliminar una.
-          </p>
-
           <section
             className="manage-workbenches-modal__summary"
             aria-label="Workbench activa"
@@ -220,13 +224,11 @@ export function ManageWorkbenchesDialog({
               <strong className="manage-workbenches-modal__summary-name">
                 {activeName ?? "Sin workbench activa"}
               </strong>
-              <span className="manage-workbenches-modal__summary-detail">
-                {activeWorkbench
-                  ? repoCountLabel(activeRepoCount)
-                  : active
-                    ? "Esperando lista de repos"
-                    : "Crea una para empezar"}
-              </span>
+              {active && (
+                <span className="manage-workbenches-modal__summary-detail">
+                  {activeWorkbench ? repoCountLabel(activeRepoCount) : "Esperando lista de repos"}
+                </span>
+              )}
             </div>
             <div className="manage-workbenches-modal__summary-meta">
               <span>
@@ -241,7 +243,7 @@ export function ManageWorkbenchesDialog({
           </section>
 
           {error && (
-            <p className="addons-card__error" data-testid="manage-workbenches-error">
+            <p className="addons-card__error" data-testid="manage-workbenches-error" role="alert">
               {error}
             </p>
           )}
@@ -258,7 +260,6 @@ export function ManageWorkbenchesDialog({
               const isActive = name === active;
               const isOpen = expanded.has(name);
               const isRenaming = renaming === name;
-              const isBusy = busy === name;
               return (
                 <li
                   key={name}
@@ -277,6 +278,7 @@ export function ManageWorkbenchesDialog({
                         <input
                           ref={renameInputRef}
                           type="text"
+                          aria-label={`Nuevo nombre para ${name}`}
                           className="manage-workbench__rename-input"
                           data-testid={`manage-workbench-rename-input-${name}`}
                           value={renameValue}
@@ -337,7 +339,7 @@ export function ManageWorkbenchesDialog({
                       <button
                         type="button"
                         className="addons-refresh"
-                        disabled={isActive || isBusy}
+                        disabled={isActive || isAnyBusy}
                         data-testid={`manage-workbench-activate-${name}`}
                         onClick={() => void handleActivate(name)}
                       >
@@ -346,7 +348,7 @@ export function ManageWorkbenchesDialog({
                       <button
                         type="button"
                         className="addons-refresh"
-                        disabled={isBusy || isRenaming}
+                        disabled={isAnyBusy || isRenaming}
                         data-testid={`manage-workbench-rename-${name}`}
                         onClick={() => startRename(name)}
                       >
@@ -355,7 +357,7 @@ export function ManageWorkbenchesDialog({
                       <button
                         type="button"
                         className="addons-refresh manage-workbench__delete"
-                        disabled={isBusy}
+                        disabled={isAnyBusy}
                         data-testid={`manage-workbench-delete-${name}`}
                         onClick={() => void handleDelete(name)}
                       >
@@ -365,6 +367,7 @@ export function ManageWorkbenchesDialog({
                         <button
                           type="button"
                           className="addons-refresh manage-workbench__rename-confirm"
+                          disabled={isAnyBusy}
                           data-testid={`manage-workbench-rename-confirm-${name}`}
                           onClick={() => void commitRename()}
                         >
@@ -418,7 +421,6 @@ export function ManageWorkbenchesDialog({
               <label className="manage-workbenches-modal__new-label" htmlFor="new-workbench-name">
                 Nueva workbench
               </label>
-              <span>Se activará al crearla</span>
             </div>
             <div className="manage-workbenches-modal__new-row">
               <input
@@ -428,13 +430,13 @@ export function ManageWorkbenchesDialog({
                 placeholder="Ej. Cliente X"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                disabled={busy === "__new__"}
+                disabled={isAnyBusy}
                 data-testid="manage-workbench-new-input"
               />
               <button
                 type="submit"
                 className="addons-refresh"
-                disabled={busy === "__new__" || !newName.trim()}
+                disabled={isAnyBusy || !newName.trim()}
                 data-testid="manage-workbench-new-submit"
               >
                 Crear y activar

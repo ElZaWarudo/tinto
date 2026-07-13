@@ -16,6 +16,7 @@ import { REPO_STATUS_MARKS } from "./statusMarks";
 export interface RepoCardProps {
   delta: RepoDelta;
   name: string;
+  pending?: boolean;
   source?: "local" | "wsl";
   distro?: string | null;
   activityMs: number;
@@ -36,23 +37,42 @@ const AGENT_OPTIONS = [
 
 function branchLabel(branch: BranchInfo | null, head: RepoDelta["head"]): string {
   if (!branch) return "…";
-  if (branch.unborn) return "no commits yet";
+  if (branch.unborn) return "sin commits";
   if (branch.detached) {
     const short = head ? head.id.slice(0, 7) : "";
-    return short ? `(detached) ${short}` : "(detached)";
+    return short ? `(HEAD separado) ${short}` : "(HEAD separado)";
   }
-  return branch.name ?? "(unknown)";
+  return branch.name ?? "(rama desconocida)";
 }
 
 function upstreamLabel(branch: BranchInfo | null): string | null {
   if (!branch || branch.unborn) return null;
-  if (branch.ahead == null || branch.behind == null) return "no upstream";
+  if (branch.ahead == null || branch.behind == null) return "sin rama remota";
   return `↑${branch.ahead} ↓${branch.behind}`;
+}
+
+function statusMarkLabel(kind: string, count: number): string {
+  const plural = count !== 1;
+  switch (kind) {
+    case "modified":
+      return plural ? "modificados" : "modificado";
+    case "staged":
+      return plural ? "preparados" : "preparado";
+    case "untracked":
+      return "sin seguimiento";
+    default:
+      return kind;
+  }
+}
+
+function repoErrorLabel(errorClass: string): string {
+  return errorClass === "terminal" ? "bloqueado" : "error temporal";
 }
 
 function RepoCardImpl({
   delta,
   name,
+  pending = false,
   source,
   distro,
   activityMs,
@@ -82,12 +102,13 @@ function RepoCardImpl({
   const missingGitleaksConfig = delta.gitleaks_configured === false;
 
   useEffect(() => {
+    if (pending) return;
     let alive = true;
     checkAgentAvailabilityForRepo(delta.repo, availabilityKey, agentType)
       .then((ok) => {
         if (!alive) return;
         setAvailable(ok);
-        setAvailabilityMessage(ok ? null : `${selectedAgent.label} not found`);
+        setAvailabilityMessage(ok ? null : `No se encontró ${selectedAgent.label}`);
       })
       .catch((e) => {
         if (!alive) return;
@@ -97,15 +118,21 @@ function RepoCardImpl({
     return () => {
       alive = false;
     };
-  }, [agentType, selectedAgent.label, delta.repo, availabilityKey]);
+  }, [agentType, selectedAgent.label, delta.repo, availabilityKey, pending]);
 
   const cls = ["repo-card", error ? "repo-card--error" : active ? "repo-card--active" : ""]
     .filter(Boolean)
     .join(" ");
-  const stateLabel = error ? error.class : active ? "live" : "idle";
+  const stateLabel = pending
+    ? "cargando"
+    : error
+      ? repoErrorLabel(error.class)
+      : active
+        ? "activo"
+        : "en reposo";
 
   const launch = () => {
-    if (available === false || launching) return;
+    if (pending || available === false || launching) return;
     setLaunching(true);
     setLaunchMessage(null);
     Promise.resolve(onLaunch(agentType))
@@ -126,14 +153,14 @@ function RepoCardImpl({
     <article
       className={cls}
       data-testid={`card-${delta.repo}`}
-      aria-label={`${name} repository ledger row`}
+      aria-label={`Repo ${name}`}
       onClick={onOpen}
     >
-      <div className="repo-card__state-mark" aria-label={`Repo state: ${stateLabel}`}>
+      <div className="repo-card__state-mark" aria-label={`Estado del repo: ${stateLabel}`}>
         <span
           className={active ? "activity-dot activity-dot--active" : "activity-dot"}
           data-testid="activity"
-          aria-label={active ? "active now" : "idle"}
+          aria-label={active ? "activo ahora" : "en reposo"}
         />
         <span>{stateLabel}</span>
       </div>
@@ -158,15 +185,15 @@ function RepoCardImpl({
           </span>
         </button>
         {error && (
-          <span className="error-badge" data-testid="error-badge">
-            {error.class}
+          <span className="error-badge" data-testid="error-badge" title={error.category}>
+            {repoErrorLabel(error.class)}
           </span>
         )}
         <button
           className="repo-card__remove"
           data-testid="repo-card-remove"
-          title="Remove from workbench"
-          aria-label={`Remove ${name} from workbench`}
+          title="Quitar del workbench"
+          aria-label={`Quitar ${name} del workbench`}
           onClick={(e) => {
             e.stopPropagation();
             onRemove();
@@ -183,7 +210,7 @@ function RepoCardImpl({
               type="button"
               className="repo-card__fetch"
               data-testid="repo-card-fetch"
-              title="Fetch remote refs for this repo"
+              title="Actualizar las referencias remotas de este repo"
               disabled={fetching}
               onClick={(e) => {
                 e.stopPropagation();
@@ -191,7 +218,7 @@ function RepoCardImpl({
               }}
               onKeyDown={(e) => e.stopPropagation()}
             >
-              {fetching ? "Fetching" : "Fetch"}
+              {fetching ? "Actualizando…" : "Actualizar"}
             </button>
           )}
         </div>
@@ -202,14 +229,14 @@ function RepoCardImpl({
         )}
         <footer className="repo-card__foot">
           {head ? (
-            <span className="repo-card__commit" title={`${head.summary} Â· ${head.id}`}>
+            <span className="repo-card__commit" title={`${head.summary} · ${head.id}`}>
               <span className="repo-card__commit-summary">{head.summary}</span>
               <span className="repo-card__commit-time">
                 {commitDate(head.timestamp).toLocaleDateString()}
               </span>
             </span>
           ) : (
-            <span className="repo-card__commit repo-card__commit--none">no commits yet</span>
+            <span className="repo-card__commit repo-card__commit--none">sin commits</span>
           )}
         </footer>
       </header>
@@ -217,12 +244,13 @@ function RepoCardImpl({
       <div className="repo-card__counts" data-testid="counts">
         {REPO_STATUS_MARKS.map((mark) => {
           const count = mark.count(status);
+          const label = statusMarkLabel(mark.kind, count);
           return (
             <span
-              aria-label={`${count} ${mark.label.toLowerCase()} ${count === 1 ? "file" : "files"}`}
+              aria-label={`${count} ${count === 1 ? "archivo" : "archivos"} ${label}`}
               className={`count count--${mark.className}`}
               key={mark.kind}
-              title={`${mark.label} files: ${count}`}
+              title={`${count === 1 ? "Archivo" : "Archivos"} ${label}: ${count}`}
             >
               <strong>{count}</strong>
               <span>{mark.short}</span>
@@ -231,8 +259,14 @@ function RepoCardImpl({
         })}
         {signals.length > 0 && (
           <span className="repo-card__signal-count" data-testid="signal-count">
-            {counts.critical > 0 ? counts.critical : signals.length} signal
-            {(counts.critical > 0 ? counts.critical : signals.length) === 1 ? "" : "s"}
+            {counts.critical > 0 ? counts.critical : signals.length}{" "}
+            {counts.critical > 0
+              ? counts.critical === 1
+                ? "señal crítica"
+                : "señales críticas"
+              : signals.length === 1
+                ? "señal"
+                : "señales"}
           </span>
         )}
       </div>
@@ -240,21 +274,32 @@ function RepoCardImpl({
       <div className="repo-card__metrics" data-testid="repo-metrics">
         <span>
           <strong>{metrics.changed_files}</strong>
-          <small>files</small>
+          <small>archivos</small>
         </span>
         <span>
           <strong>+{metrics.lines_added}</strong>
-          <small>added</small>
+          <small>añadidas</small>
         </span>
         <span>
           <strong>-{metrics.lines_removed}</strong>
-          <small>removed</small>
+          <small>eliminadas</small>
         </span>
       </div>
 
       <div className="repo-card__signals">
         {signals.length > 0 && <SignalBadges signals={signals} limit={2} />}
       </div>
+
+      {pending && (
+        <div
+          className="repo-card__notice repo-card__pending"
+          data-testid="repo-pending"
+          role="status"
+          aria-live="polite"
+        >
+          Esperando la primera instantánea del repo…
+        </div>
+      )}
 
       {missingGitleaksConfig && (
         <div
@@ -275,7 +320,7 @@ function RepoCardImpl({
         <span className="repo-card__launcher-label">Agent</span>
         <select
           className="repo-card__agent-select"
-          aria-label="agent type"
+          aria-label="Tipo de Agent"
           value={agentType}
           onChange={(e) => {
             setAvailable(null);
@@ -292,23 +337,35 @@ function RepoCardImpl({
         <button
           className="repo-card__launch"
           data-testid="agent-launch"
-          disabled={launching || (available == null && !availabilityMessage) || available === false}
+          disabled={
+            pending ||
+            launching ||
+            (available == null && !availabilityMessage) ||
+            available === false
+          }
           onClick={launch}
         >
-          {launching ? "Starting" : "Launch"}
+          {launching ? "Iniciando…" : "Iniciar"}
         </button>
         <span
           className="repo-card__launch-msg"
           data-testid="agent-launch-message"
           aria-live="polite"
         >
-          {launchMessage ?? availabilityMessage ?? "\u00a0"}
+          {pending
+            ? "Esperando la instantánea…"
+            : (launchMessage ??
+              availabilityMessage ??
+              (available === null ? "Comprobando disponibilidad…" : "\u00a0"))}
         </span>
       </div>
 
       {error && (
-        <div className="repo-card__error" data-testid="error-detail">
-          <span className="repo-card__error-msg">{error.message}</span>
+        <div className="repo-card__error" data-testid="error-detail" role="alert">
+          <span className="repo-card__error-msg">
+            <strong>Error: </strong>
+            {error.message}
+          </span>
           {error.class === "terminal" && (
             <button
               className="repo-card__retry"
@@ -318,7 +375,7 @@ function RepoCardImpl({
                 onRetry();
               }}
             >
-              Retry
+              Reintentar
             </button>
           )}
         </div>
@@ -331,7 +388,7 @@ export const RepoCard = memo(RepoCardImpl);
 
 function commandMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
-    return String((error as { message?: unknown }).message ?? "Command failed");
+    return String((error as { message?: unknown }).message ?? "No se pudo completar la acción");
   }
-  return String(error || "Command failed");
+  return String(error || "No se pudo completar la acción");
 }

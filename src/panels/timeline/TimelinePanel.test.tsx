@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { IDockviewPanelProps } from "dockview-react";
 import type { FileDiff, RepoDelta } from "../../bus/contract";
 
@@ -23,6 +23,9 @@ function delta(repo: string, over: Partial<RepoDelta> = {}): RepoDelta {
     head: null,
     last_activity_ms: 1_700_000_000_000,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -44,6 +47,14 @@ const diff = (path: string): FileDiff => ({
 });
 
 const panelProps = {} as IDockviewPanelProps;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 describe("TimelinePanel", () => {
   beforeEach(() => {
@@ -69,12 +80,143 @@ describe("TimelinePanel", () => {
 
     render(<TimelinePanel {...panelProps} />);
 
-    expect(screen.getByTestId("timeline-feed")).toHaveTextContent("Working tree changed");
+    expect(screen.getByTestId("timeline-feed")).toHaveTextContent("Árbol de trabajo modificado");
     await waitFor(() => expect(screen.getByText(/ship parser/)).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId("timeline-commit-abc123456789"));
+    const feedRows = within(screen.getByTestId("timeline-feed")).getAllByRole("listitem");
+    expect(feedRows[0]).toHaveTextContent("ship parser");
+    expect(feedRows[1]).toHaveTextContent("Árbol de trabajo modificado");
+
+    const commitButton = screen.getByTestId("timeline-commit-abc123456789");
+    fireEvent.click(commitButton);
+    expect(commitButton).toHaveAttribute("aria-current", "true");
     await waitFor(() => expect(getCommitDiffMock).toHaveBeenCalledWith("/r/api", "abc123456789"));
     expect(await screen.findByTestId("timeline-files")).toHaveTextContent("src/a.ts");
     expect(screen.getByTestId("diff-view")).toHaveTextContent("new line");
+    expect(screen.getByRole("heading", { name: "ship parser" })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Volver a la cronología" }));
+    await waitFor(() => expect(commitButton).toHaveFocus());
+    expect(commitButton).not.toHaveAttribute("aria-current");
+  });
+
+  it("searches commit metadata even when the current repo delta does not match", async () => {
+    getCommitLogMock.mockResolvedValue([
+      {
+        id: "unique-sha",
+        summary: "prepare quantum migration",
+        author: "Ada Lovelace",
+        timestamp: 1_700_000_100,
+      },
+    ]);
+    act(() => {
+      busStore.loadSnapshot([delta("/r/api")], { available: true });
+      qualityStore.setFilters({ search: "quantum migration" });
+    });
+
+    render(<TimelinePanel {...panelProps} />);
+
+    expect(await screen.findByTestId("timeline-commit-unique-sha")).toHaveTextContent(
+      "prepare quantum migration",
+    );
+    expect(getCommitLogMock).toHaveBeenCalledWith("/r/api", 0, expect.any(Number));
+  });
+
+  it("ignores a stale commit diff response after a newer selection", async () => {
+    getCommitLogMock.mockResolvedValue([
+      { id: "commit-a", summary: "commit A", author: "me", timestamp: 1_700_000_200 },
+      { id: "commit-b", summary: "commit B", author: "me", timestamp: 1_700_000_100 },
+    ]);
+    const requestA = deferred<FileDiff[]>();
+    const requestB = deferred<FileDiff[]>();
+    getCommitDiffMock.mockImplementation((_repo: string, commitId: string) =>
+      commitId === "commit-a" ? requestA.promise : requestB.promise,
+    );
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+    render(<TimelinePanel {...panelProps} />);
+
+    await screen.findByTestId("timeline-commit-commit-a");
+    fireEvent.click(screen.getByTestId("timeline-commit-commit-a"));
+    fireEvent.click(screen.getByTestId("timeline-commit-commit-b"));
+
+    await act(async () => requestB.resolve([diff("src/b.ts")]));
+    expect(await screen.findByTestId("timeline-files")).toHaveTextContent("src/b.ts");
+
+    await act(async () => requestA.resolve([diff("src/a.ts")]));
+    expect(screen.getByTestId("timeline-files")).toHaveTextContent("src/b.ts");
+    expect(screen.getByTestId("timeline-files")).not.toHaveTextContent("src/a.ts");
+  });
+
+  it("keeps commit loading distinct from an empty timeline", async () => {
+    let resolveLog: ((items: unknown[]) => void) | null = null;
+    getCommitLogMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveLog = resolve;
+        }),
+    );
+    act(() => {
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            status: { modified: [], staged: [], untracked: [] },
+          }),
+        ],
+        { available: true },
+      );
+    });
+
+    render(<TimelinePanel {...panelProps} />);
+
+    expect(await screen.findByTestId("timeline-commits-loading")).toHaveTextContent(
+      "Cargando historial de commits",
+    );
+    expect(screen.getByRole("region", { name: "Entradas de la cronología" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(screen.queryByTestId("timeline-no-matches")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timeline-log-error")).not.toBeInTheDocument();
+
+    await act(async () => resolveLog?.([]));
+    expect(await screen.findByTestId("timeline-no-matches")).toHaveTextContent(
+      "Ninguna entrada de la cronología",
+    );
+    expect(screen.queryByTestId("timeline-commits-loading")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Entradas de la cronología" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+  });
+
+  it("keeps commit-log failures distinct and retryable", async () => {
+    getCommitLogMock.mockRejectedValueOnce(new Error("history unavailable"));
+    getCommitLogMock.mockResolvedValueOnce([
+      { id: "retry123", summary: "recovered history", author: "me", timestamp: 1_700_000_100 },
+    ]);
+    act(() => {
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            status: { modified: [], staged: [], untracked: [] },
+          }),
+        ],
+        { available: true },
+      );
+    });
+
+    render(<TimelinePanel {...panelProps} />);
+
+    expect(await screen.findByTestId("timeline-log-error")).toHaveTextContent(
+      "history unavailable",
+    );
+    expect(screen.queryByTestId("timeline-no-matches")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reintentar la carga del historial de commits" }),
+    );
+    expect(await screen.findByText(/recovered history/)).toBeInTheDocument();
+    expect(getCommitLogMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("timeline-log-error")).not.toBeInTheDocument();
   });
 
   it("shows degraded and empty states", () => {
@@ -83,8 +225,8 @@ describe("TimelinePanel", () => {
 
     render(<TimelinePanel {...panelProps} />);
 
-    expect(screen.getByTestId("timeline-degraded")).toHaveTextContent("degraded");
-    expect(screen.getByTestId("timeline-empty")).toHaveTextContent("No repos");
+    expect(screen.getByTestId("timeline-degraded")).toHaveTextContent("degradado");
+    expect(screen.getByTestId("timeline-empty")).toHaveTextContent("No hay repositorios");
   });
 
   it("keeps commit diff failures retryable", async () => {
@@ -99,7 +241,7 @@ describe("TimelinePanel", () => {
     await screen.findByText(/broken/);
     fireEvent.click(screen.getByTestId("timeline-commit-badc0de"));
     expect(await screen.findByTestId("timeline-diff-error")).toHaveTextContent("missing commit");
-    fireEvent.click(screen.getByText("Retry"));
+    fireEvent.click(screen.getByText("Reintentar"));
     expect(await screen.findByTestId("timeline-files")).toHaveTextContent("src/a.ts");
   });
 
@@ -188,7 +330,9 @@ describe("TimelinePanel", () => {
 
     render(<TimelinePanel {...panelProps} />);
 
-    expect(await screen.findByTestId("timeline-no-matches")).toHaveTextContent("No timeline");
+    expect(await screen.findByTestId("timeline-no-matches")).toHaveTextContent(
+      "Ninguna entrada de la cronología",
+    );
     expect(screen.queryByText(/old commit/)).not.toBeInTheDocument();
   });
 });

@@ -3,12 +3,24 @@
 // pin=false), a double click PINS (pin=true); Enter pins, Space previews. The
 // active file row is highlighted. Shared by the in-project explorer.
 
-import { useState, type CSSProperties, type MouseEvent } from "react";
+import { useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import type { RepoDelta } from "../../bus/contract";
 import { getPathSignals } from "../../bus/store";
 import { SignalBadges } from "../SignalBadges";
 import { statusMarkForKind } from "../statusMarks";
 import type { TreeNode } from "./fileTree";
+
+function openKeyboardContextMenu(element: HTMLElement): void {
+  const rect = element.getBoundingClientRect();
+  element.dispatchEvent(
+    new globalThis.MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + 16,
+      clientY: rect.bottom,
+    }),
+  );
+}
 
 function fileIconShape(kind: string): string {
   switch (kind) {
@@ -412,8 +424,10 @@ export function FileTreeNode({
   delta,
   depth,
   activePath,
+  focusedPath,
   expandedDirs,
   onToggleDir,
+  onFocusPath,
   onOpen,
   onContextMenu,
   onTreeDragStart,
@@ -427,8 +441,10 @@ export function FileTreeNode({
   delta: RepoDelta;
   depth: number;
   activePath: string | null;
+  focusedPath?: string | null;
   expandedDirs?: Set<string>;
   onToggleDir?: (path: string) => void;
+  onFocusPath?: (path: string) => void;
   onOpen: (path: string, pin: boolean) => void;
   onContextMenu?: (event: MouseEvent, node: TreeNode) => void;
   onTreeDragStart?: (node: TreeNode) => void;
@@ -439,7 +455,9 @@ export function FileTreeNode({
   onDelete?: (node: TreeNode) => void;
 }) {
   const [localOpen, setLocalOpen] = useState(false); // fallback for standalone use
+  const itemRef = useRef<HTMLDivElement | null>(null);
   const open = expandedDirs ? expandedDirs.has(node.path) : localOpen;
+  const itemTabIndex = focusedPath === undefined ? 0 : focusedPath === node.path ? 0 : -1;
   const indent = depth * 12 + 8;
   const indentStyle = {
     paddingLeft: `${indent}px`,
@@ -449,6 +467,10 @@ export function FileTreeNode({
     if (onToggleDir) onToggleDir(node.path);
     else setLocalOpen((o) => !o);
   };
+  const focusItem = () => {
+    onFocusPath?.(node.path);
+    itemRef.current?.focus();
+  };
 
   if (node.isDir) {
     const dirClassBase = node.hasChanges ? "tree-dir__row tree-dir__row--changed" : "tree-dir__row";
@@ -457,41 +479,62 @@ export function FileTreeNode({
       ? `${dirClassBase} tree-dir__row--drop-target tree-dir__row--drop-target-hover`
       : dirClassBase;
     return (
-      <div className="tree-dir">
-        <button
+      <div
+        ref={itemRef}
+        className="tree-dir"
+        role="treeitem"
+        tabIndex={itemTabIndex}
+        aria-level={depth + 1}
+        aria-expanded={open}
+        aria-selected={node.path === activePath}
+        aria-label={node.name}
+        data-tree-path={node.path}
+        data-tree-kind="directory"
+        draggable={!!onTreeDragStart}
+        onFocus={(event) => {
+          if (event.currentTarget === event.target) onFocusPath?.(node.path);
+        }}
+        onDragStart={() => onTreeDragStart?.(node)}
+        onDragEnd={() => onTreeDragEnd?.()}
+        onDragOver={(event) => {
+          if (onTreeDrop) event.preventDefault();
+        }}
+        onDrop={(event) => {
+          if (onTreeDrop) {
+            event.preventDefault();
+            event.stopPropagation();
+            onTreeDrop(node.path);
+          }
+        }}
+        onContextMenu={(event) => onContextMenu?.(event, node)}
+        onKeyDown={(event) => {
+          if (event.currentTarget !== event.target) return;
+          const ctrl = event.ctrlKey || event.metaKey;
+          if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+            event.preventDefault();
+            event.stopPropagation();
+            openKeyboardContextMenu(event.currentTarget);
+          } else if (ctrl && event.key.toLowerCase() === "v") {
+            event.preventDefault();
+            event.stopPropagation();
+            onPasteInto?.(node.path);
+          } else if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleDir();
+          } else if (event.key === "Delete") {
+            event.preventDefault();
+            event.stopPropagation();
+            onDelete?.(node);
+          }
+        }}
+      >
+        <div
           className={dirClass}
-          type="button"
           style={indentStyle}
-          draggable={!!onTreeDragStart}
-          onDragStart={() => onTreeDragStart?.(node)}
-          onDragEnd={() => onTreeDragEnd?.()}
-          onDragOver={(event) => {
-            if (onTreeDrop) {
-              event.preventDefault();
-            }
-          }}
-          onDrop={(event) => {
-            if (onTreeDrop) {
-              event.preventDefault();
-              event.stopPropagation();
-              onTreeDrop(node.path);
-            }
-          }}
-          onPaste={(event) => {
-            // onPaste del webview: los archivos del clipboard del navegador no
-            // traen paths del SO, así que delegamos al clipboard interno
-            // (Ctrl+C dentro del árbol) en lugar de usarlo aquí.
-            // (Ctrl+V en la carpeta se maneja vía keydown abajo.)
-            void event;
-          }}
-          onClick={toggleDir}
-          onContextMenu={(event) => onContextMenu?.(event, node)}
-          onKeyDown={(event) => {
-            if (event.key === "Delete") {
-              event.preventDefault();
-              event.stopPropagation();
-              onDelete?.(node);
-            }
+          onClick={() => {
+            focusItem();
+            toggleDir();
           }}
         >
           <span
@@ -511,27 +554,32 @@ export function FileTreeNode({
               ●
             </span>
           )}
-        </button>
-        {open &&
-          node.children.map((c) => (
-            <FileTreeNode
-              key={c.path}
-              node={c}
-              delta={delta}
-              depth={depth + 1}
-              activePath={activePath}
-              expandedDirs={expandedDirs}
-              onToggleDir={onToggleDir}
-              onOpen={onOpen}
-              onContextMenu={onContextMenu}
-              onTreeDragStart={onTreeDragStart}
-              onTreeDragEnd={onTreeDragEnd}
-              onTreeDrop={onTreeDrop}
-              dropTargetPath={dropTargetPath}
-              onPasteInto={onPasteInto}
-              onDelete={onDelete}
-            />
-          ))}
+        </div>
+        {open && (
+          <div role="group">
+            {node.children.map((c) => (
+              <FileTreeNode
+                key={c.path}
+                node={c}
+                delta={delta}
+                depth={depth + 1}
+                activePath={activePath}
+                focusedPath={focusedPath}
+                expandedDirs={expandedDirs}
+                onToggleDir={onToggleDir}
+                onFocusPath={onFocusPath}
+                onOpen={onOpen}
+                onContextMenu={onContextMenu}
+                onTreeDragStart={onTreeDragStart}
+                onTreeDragEnd={onTreeDragEnd}
+                onTreeDrop={onTreeDrop}
+                dropTargetPath={dropTargetPath}
+                onPasteInto={onPasteInto}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -544,23 +592,42 @@ export function FileTreeNode({
 
   return (
     <div
+      ref={itemRef}
       className={classes.join(" ")}
       style={indentStyle}
-      role="button"
-      tabIndex={0}
+      role="treeitem"
+      tabIndex={itemTabIndex}
+      aria-level={depth + 1}
+      aria-selected={node.path === activePath}
+      aria-label={node.name}
       data-testid={`tree-file-${node.path}`}
+      data-tree-path={node.path}
+      data-tree-kind="file"
       draggable={!!onTreeDragStart}
       onDragStart={() => onTreeDragStart?.(node)}
       onDragEnd={() => onTreeDragEnd?.()}
-      onClick={() => onOpen(node.path, false)}
+      onFocus={(event) => {
+        if (event.currentTarget === event.target) onFocusPath?.(node.path);
+      }}
+      onClick={() => {
+        focusItem();
+        onOpen(node.path, false);
+      }}
       onDoubleClick={() => onOpen(node.path, true)}
       onContextMenu={(event) => onContextMenu?.(event, node)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") {
+        if (e.currentTarget !== e.target) return;
+        if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
           e.preventDefault();
+          e.stopPropagation();
+          openKeyboardContextMenu(e.currentTarget);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
           onOpen(node.path, true);
         } else if (e.key === " ") {
           e.preventDefault();
+          e.stopPropagation();
           onOpen(node.path, false);
         } else if (e.key === "Delete") {
           e.preventDefault();
@@ -575,9 +642,9 @@ export function FileTreeNode({
       </span>
       {changeMark && (
         <span
-          aria-label={`${changeMark.label} file`}
+          aria-label={`${changeMark.label}: archivo`}
           className={`tree-file__mark tree-file__mark--${changeMark.kind}`}
-          title={`${changeMark.label} file`}
+          title={`${changeMark.label}: archivo`}
         >
           {changeMark.short}
         </span>

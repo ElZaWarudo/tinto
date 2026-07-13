@@ -23,6 +23,9 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
     head: null,
     last_activity_ms: 0,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }

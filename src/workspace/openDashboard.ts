@@ -11,7 +11,7 @@ export function openDashboardPanel(api: DockviewApi): void {
     return;
   }
   try {
-    api.addPanel({ id: PANEL_DASHBOARD, component: PANEL_DASHBOARD, title: "Dashboard" });
+    api.addPanel({ id: PANEL_DASHBOARD, component: PANEL_DASHBOARD, title: "Resumen" });
   } catch {
     api.getPanel(PANEL_DASHBOARD)?.api.setActive();
   }

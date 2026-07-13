@@ -33,6 +33,9 @@ function delta(repo: string, revision: number, over: Partial<RepoDelta> = {}): R
     head: null,
     last_activity_ms: revision * 1000,
     error: null,
+    metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+    gitleaks_configured: false,
+    agents_md_configured: false,
     ...over,
   };
 }
@@ -184,6 +187,49 @@ describe("BusStore", () => {
       }),
     );
     expect(store.getState().repos["/r/a"].error?.class).toBe("terminal");
+  });
+
+  it("tracks configuration loading, success, and recoverable failure explicitly", () => {
+    expect(store.getState()).toMatchObject({
+      configStatus: "loading",
+      configError: null,
+      snapshotStatus: "loading",
+      snapshotError: null,
+    });
+
+    store.setConfigError("backend offline");
+    expect(store.getState()).toMatchObject({
+      configStatus: "error",
+      configError: "backend offline",
+      config: null,
+    });
+
+    store.beginConfigLoad();
+    expect(store.getState()).toMatchObject({
+      configStatus: "loading",
+      configError: null,
+    });
+
+    store.setConfig({ version: 1, active: null, workbenches: [] });
+    expect(store.getState()).toMatchObject({
+      configStatus: "ready",
+      configError: null,
+    });
+
+    store.loadSnapshot([], { available: true });
+    expect(store.getState()).toMatchObject({
+      snapshotStatus: "ready",
+      snapshotError: null,
+      loaded: true,
+    });
+
+    store.beginSnapshotLoad();
+    store.setSnapshotError("snapshot offline");
+    expect(store.getState()).toMatchObject({
+      snapshotStatus: "error",
+      snapshotError: "snapshot offline",
+      loaded: true,
+    });
   });
 
   it("exposes passive metrics and signals with additive fallbacks", () => {

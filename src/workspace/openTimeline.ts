@@ -8,7 +8,7 @@ export function openTimelinePanel(api: DockviewApi): void {
     return;
   }
   try {
-    api.addPanel({ id: PANEL_TIMELINE, component: PANEL_TIMELINE, title: "Timeline" });
+    api.addPanel({ id: PANEL_TIMELINE, component: PANEL_TIMELINE, title: "Cronología" });
   } catch {
     api.getPanel(PANEL_TIMELINE)?.api.setActive();
   }

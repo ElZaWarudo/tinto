@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 
 const ops = vi.hoisted(() => ({
   switchWorkbench: vi.fn(),
@@ -48,8 +48,11 @@ const config: WorkbenchConfig = {
 describe("MenuBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     setWindowsHostOverrideForTests(null);
     busStore.resetAll();
+    ops.switchWorkbench.mockResolvedValue(undefined);
+    ops.autodetectFlow.mockResolvedValue(null);
     ops.listWslDistrosFlow.mockResolvedValue(["Ubuntu-24.04", "Debian"]);
     ops.listWslDirectoryFlow.mockResolvedValue({
       path: "/home/me",
@@ -64,8 +67,87 @@ describe("MenuBar", () => {
     expect(screen.getByAltText("Tinto")).toHaveAttribute("src", expect.stringContaining(".png"));
   });
 
+  it("implements roving focus and directional navigation across the menu bar", async () => {
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    const menubar = screen.getByRole("menubar", { name: "Barra de menús" });
+    const workbench = screen.getByTestId("menu-workbench");
+    const repos = screen.getByTestId("menu-repos");
+    const help = screen.getByTestId("menu-help");
+
+    expect(menubar).toContainElement(workbench);
+    expect(workbench).toHaveAttribute("role", "menuitem");
+    expect(workbench).toHaveAttribute("tabindex", "0");
+    expect(repos).toHaveAttribute("tabindex", "-1");
+
+    workbench.focus();
+    fireEvent.keyDown(workbench, { key: "ArrowRight" });
+    expect(repos).toHaveFocus();
+    expect(repos).toHaveAttribute("tabindex", "0");
+
+    fireEvent.keyDown(repos, { key: "End" });
+    expect(help).toHaveFocus();
+    fireEvent.keyDown(help, { key: "Home" });
+    expect(workbench).toHaveFocus();
+
+    fireEvent.keyDown(workbench, { key: "ArrowDown" });
+    await waitFor(() => expect(screen.getByTestId("workbench-recent-Work")).toHaveFocus());
+    expect(screen.getByTestId("workbench-recent-Work")).toHaveAttribute("role", "menuitemradio");
+    expect(screen.getByTestId("workbench-recent-Work")).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.keyDown(screen.getByTestId("workbench-recent-Work"), { key: "ArrowDown" });
+    expect(screen.getByTestId("workbench-recent-Side")).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId("workbench-recent-Side"), { key: "End" });
+    expect(screen.getByTestId("workbench-manage")).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByTestId("workbench-manage"), { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Workbench" })).not.toBeInTheDocument();
+    expect(workbench).toHaveFocus();
+  });
+
+  it("switches open menus with horizontal arrows and names file-only zoom actions", async () => {
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    const workbench = screen.getByTestId("menu-workbench");
+    workbench.focus();
+    fireEvent.keyDown(workbench, { key: "ArrowDown" });
+    await waitFor(() => expect(screen.getByTestId("workbench-recent-Work")).toHaveFocus());
+
+    fireEvent.keyDown(screen.getByTestId("workbench-recent-Work"), { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByTestId("add-repo")).toHaveFocus());
+    expect(screen.queryByRole("menu", { name: "Workbench" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "Repos" })).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByTestId("add-repo"), { key: "Escape" });
+    fireEvent.click(screen.getByTestId("menu-view"));
+    expect(screen.getByText(/Aumentar texto del archivo/)).toBeInTheDocument();
+    expect(screen.getByText(/Reducir texto del archivo/)).toBeInTheDocument();
+    expect(screen.getByText(/Restablecer texto del archivo/)).toBeInTheDocument();
+    expect(screen.getByTestId("qol-glance")).toHaveAttribute("role", "menuitemcheckbox");
+  });
+
+  it("focuses an empty menu state and lets pointer users switch menus directly", async () => {
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    const projects = screen.getByTestId("menu-projects");
+    projects.focus();
+    fireEvent.keyDown(projects, { key: "ArrowDown" });
+
+    const emptyState = await screen.findByTestId("projects-empty");
+    await waitFor(() => expect(emptyState).toHaveFocus());
+    expect(emptyState).toHaveAttribute("role", "menuitem");
+    expect(emptyState).toHaveAttribute("aria-disabled", "true");
+
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    expect(screen.queryByRole("menu", { name: "Proyectos" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "Repos" })).toBeInTheDocument();
+  });
+
   // Covers AE5 (switch trigger) + R7
-  it("lists recent workbenches, marks the active one, and switches on click", () => {
+  it("lists recent workbenches, marks the active one, and switches on click", async () => {
     // Seed an MRU order so we can verify the menu respects it.
     localStorage.setItem("tinto:recent-workbenches:v1", JSON.stringify(["Side", "Work"]));
     act(() => {
@@ -85,10 +167,38 @@ describe("MenuBar", () => {
     expect(activeItem.querySelector(".menu__check")?.textContent).toBe("✓");
 
     fireEvent.click(screen.getByTestId("workbench-recent-Side"));
-    expect(ops.switchWorkbench).toHaveBeenCalledWith("Side", "Work");
+    await waitFor(() => expect(ops.switchWorkbench).toHaveBeenCalledWith("Side", "Work"));
   });
 
-  it("triggers add (via the workspace action) and autodetect from the Repos menu", () => {
+  it("prevents a second workbench switch while the first one is pending", async () => {
+    let finishSwitch!: () => void;
+    ops.switchWorkbench.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSwitch = resolve;
+        }),
+    );
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    fireEvent.click(screen.getByTestId("workbench-recent-Side"));
+    await waitFor(() => expect(ops.switchWorkbench).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    expect(screen.getByTestId("workbench-recent-Side")).toBeDisabled();
+    expect(screen.getByTestId("workbench-recent-Work")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("workbench-recent-Work"));
+    expect(ops.switchWorkbench).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishSwitch();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("workbench-recent-Work")).toBeEnabled();
+  });
+
+  it("triggers add (via the workspace action) and autodetect from the Repos menu", async () => {
     // Add repo goes through the workspace action so it can open the new tab;
     // autodetect still calls the operations flow directly.
     const addRepo = vi.fn();
@@ -113,7 +223,25 @@ describe("MenuBar", () => {
     expect(addRepo).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByTestId("menu-repos"));
     fireEvent.click(screen.getByTestId("autodetect"));
-    expect(ops.autodetectFlow).toHaveBeenCalledWith("Work");
+    await waitFor(() => expect(ops.autodetectFlow).toHaveBeenCalledWith("Work"));
+  });
+
+  it("announces autodetect results and workbench-switch failures", async () => {
+    ops.autodetectFlow.mockResolvedValueOnce({ found: 3, added: 2, failed: 1 });
+    ops.switchWorkbench.mockRejectedValueOnce(new Error("backend offline"));
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    fireEvent.click(screen.getByTestId("autodetect"));
+    expect(await screen.findByTestId("menu-action-feedback")).toHaveTextContent(
+      "2 de 3 repositorios añadidos; 1 no se pudieron añadir.",
+    );
+    expect(screen.getByTestId("menu-action-feedback")).toHaveAttribute("role", "status");
+
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    fireEvent.click(screen.getByTestId("workbench-recent-Side"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("backend offline");
   });
 
   it("does not expose WSL as a separate Repos menu action", () => {
@@ -130,13 +258,12 @@ describe("MenuBar", () => {
 
     expect(screen.getByTestId("add-repo-dialog")).toBeInTheDocument();
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await waitFor(() => expect(screen.getByTestId("wsl-distro")).toBeEnabled());
 
     fireEvent.change(screen.getByTestId("wsl-distro"), {
       target: { value: "Ubuntu-24.04" },
     });
+    await waitFor(() => expect(screen.getByTestId("add-repo-submit")).toBeEnabled());
     fireEvent.change(screen.getByTestId("wsl-path"), { target: { value: "/home/me/repo/" } });
     fireEvent.change(screen.getByTestId("wsl-alias"), { target: { value: "API WSL" } });
     fireEvent.click(screen.getByTestId("add-repo-submit"));
@@ -156,9 +283,7 @@ describe("MenuBar", () => {
     ops.addWslRepoFlow.mockRejectedValue(new Error("distro WSL no soportada: Ubuntu-24.04"));
     render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} />);
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await waitFor(() => expect(screen.getByTestId("add-repo-submit")).toBeEnabled());
 
     fireEvent.change(screen.getByTestId("wsl-path"), { target: { value: "/home/me/repo" } });
     fireEvent.click(screen.getByTestId("add-repo-submit"));
@@ -166,11 +291,14 @@ describe("MenuBar", () => {
     expect(await screen.findByTestId("add-repo-error")).toHaveTextContent(
       "distro WSL no soportada: Ubuntu-24.04",
     );
+    expect(screen.getByTestId("add-repo-error")).toHaveAttribute("role", "alert");
   });
 
   it("can render the add repo dialog as one source-neutral flow", async () => {
     const addLocal = vi.fn();
     render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} onAddLocal={addLocal} />);
+
+    expect(screen.getByTestId("add-local-repo")).toHaveFocus();
 
     await act(async () => {
       await Promise.resolve();
@@ -181,6 +309,18 @@ describe("MenuBar", () => {
     expect(addLocal).toHaveBeenCalledOnce();
     expect(screen.getByText("Linux en WSL")).toBeInTheDocument();
     expect(screen.getByTestId("wsl-path")).toBeInTheDocument();
+  });
+
+  it("keeps local-picker failures inside the focused add-repo dialog", async () => {
+    const addLocal = vi.fn(() => Promise.reject(new Error("selector no disponible")));
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} onAddLocal={addLocal} />);
+
+    fireEvent.click(screen.getByTestId("add-local-repo"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("selector no disponible");
+    expect(screen.getByRole("dialog", { name: "Agregar repo" })).toContainElement(
+      screen.getByRole("alert"),
+    );
   });
 
   it("lets Windows users browse detected WSL distro directories", async () => {
@@ -209,7 +349,60 @@ describe("MenuBar", () => {
     });
 
     expect(screen.getByTestId("wsl-path")).toHaveValue("/home/me/repo");
-    expect(screen.getByText("Git repo")).toBeInTheDocument();
+    expect(screen.getByText("Repositorio Git")).toBeInTheDocument();
+  });
+
+  it("locks the distro selector while a WSL directory request is pending", async () => {
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} />);
+    const directory = await screen.findByTestId("wsl-dir-/home/me/repo");
+    let finishBrowse!: (value: { path: string; is_git_repo: boolean; entries: never[] }) => void;
+    ops.listWslDirectoryFlow.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishBrowse = resolve;
+        }),
+    );
+
+    fireEvent.click(directory);
+    expect(screen.getByTestId("wsl-distro")).toBeDisabled();
+
+    await act(async () => {
+      finishBrowse({ path: "/home/me/repo", is_git_repo: true, entries: [] });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("wsl-distro")).toBeEnabled();
+    expect(screen.getByTestId("wsl-path")).toHaveValue("/home/me/repo");
+  });
+
+  it("keeps the add-repo dialog open while a repository mutation is pending", async () => {
+    const onClose = vi.fn();
+    let finishAdd!: (value: string | null) => void;
+    ops.addWslRepoFlow.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishAdd = resolve;
+        }),
+    );
+    render(<AddRepoDialog activeWorkbench="Work" onClose={onClose} />);
+    await waitFor(() => expect(screen.getByTestId("add-repo-submit")).toBeEnabled());
+
+    fireEvent.change(screen.getByTestId("wsl-path"), { target: { value: "/home/me/repo" } });
+    fireEvent.click(screen.getByTestId("add-repo-submit"));
+
+    expect(screen.getByTestId("add-repo-close")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(screen.getByTestId("add-repo-backdrop"));
+    fireEvent.click(screen.getByTestId("add-repo-close"));
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishAdd(null);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("add-repo-close")).toBeEnabled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("lists loaded WSL repos as regular projects instead of a separate configured list", () => {
@@ -256,6 +449,7 @@ describe("MenuBar", () => {
             error: null,
             metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
             gitleaks_configured: false,
+            agents_md_configured: false,
             signals: [],
             secret_findings: [],
           },
@@ -283,7 +477,10 @@ describe("MenuBar", () => {
       busStore.setWatching({ available: false, reason: "inotify" });
     });
     render(<MenuBar />);
-    expect(screen.getByTestId("watch-indicator")).toHaveTextContent("degraded");
+    expect(screen.getByTestId("watch-indicator")).toHaveTextContent("degradado");
+    expect(screen.getByTestId("watch-indicator")).toHaveAccessibleName(
+      "Observación degradada: inotify",
+    );
   });
 
   it("does not crash when config is missing workbenches", () => {
@@ -356,6 +553,7 @@ describe("MenuBar", () => {
     fireEvent.click(screen.getByTestId("manage-addons"));
 
     expect(screen.getByRole("heading", { name: "Complementos" })).toBeInTheDocument();
+    expect(screen.getByTestId("addons-close")).toHaveFocus();
     expect(ops.getGitleaksSetupStatus).toHaveBeenCalledOnce();
   });
 
@@ -388,6 +586,9 @@ describe("MenuBar", () => {
             head: null,
             last_activity_ms: 0,
             error: null,
+            metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
+            gitleaks_configured: false,
+            agents_md_configured: false,
           },
         ],
         { available: true },
@@ -441,6 +642,8 @@ describe("MenuBar", () => {
     });
 
     expect(ops.installGitleaks).not.toHaveBeenCalled();
+    expect(screen.getByTestId("gitleaks-status")).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("gitleaks-status")).toHaveAttribute("aria-live", "polite");
 
     fireEvent.click(screen.getByTestId("gitleaks-install"));
 
@@ -529,7 +732,21 @@ describe("FirstRun", () => {
 
   it("does not create on a blank name", () => {
     render(<FirstRun />);
-    fireEvent.click(screen.getByTestId("create-wb"));
+    expect(screen.getByTestId("create-wb")).toBeDisabled();
     expect(ops.createAndActivate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the form available and explains backend creation failures", async () => {
+    ops.createAndActivate.mockRejectedValueOnce(new Error("backend offline"));
+    render(<FirstRun />);
+
+    fireEvent.change(screen.getByLabelText("Nombre de la workbench"), {
+      target: { value: "Trabajo" },
+    });
+    fireEvent.click(screen.getByTestId("create-wb"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("backend offline");
+    expect(screen.getByDisplayValue("Trabajo")).toBeInTheDocument();
+    expect(screen.getByTestId("create-wb")).toBeEnabled();
   });
 });

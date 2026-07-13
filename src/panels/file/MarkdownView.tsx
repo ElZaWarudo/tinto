@@ -41,25 +41,25 @@ export function MarkdownView({ repo, path }: { repo: string; path: string }) {
 
   if (errorMessage) {
     return (
-      <div className="markdown-view markdown-view--error" data-testid="md-error">
-        <span>Could not load file: {errorMessage}</span>
+      <div className="markdown-view markdown-view--error" data-testid="md-error" role="alert">
+        <span>No se pudo cargar el archivo: {errorMessage}</span>
         <button type="button" onClick={() => setReloadToken((token) => token + 1)}>
-          Retry
+          Reintentar
         </button>
       </div>
     );
   }
   if (content === undefined) {
     return (
-      <div className="markdown-view markdown-view--loading" data-testid="md-loading">
-        Loading…
+      <div className="markdown-view markdown-view--loading" data-testid="md-loading" role="status">
+        Cargando…
       </div>
     );
   }
   if (content.encoding === "base64") {
     return (
       <div className="markdown-view markdown-view--binary" data-testid="md-binary">
-        Binary file — cannot render.
+        Archivo binario: no se puede renderizar.
       </div>
     );
   }
@@ -71,7 +71,7 @@ export function MarkdownView({ repo, path }: { repo: string; path: string }) {
       </div>
       {content.truncated && (
         <div className="diff-view__notice" data-testid="md-truncated">
-          File truncated at the read limit — content beyond this point is not shown.
+          Archivo truncado en el límite de lectura; el contenido restante no se muestra.
         </div>
       )}
     </div>

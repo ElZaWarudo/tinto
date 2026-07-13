@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const ops = vi.hoisted(() => ({
   createAndActivate: vi.fn(),
@@ -63,6 +63,8 @@ describe("ManageWorkbenchesDialog", () => {
     );
 
     render(<ManageWorkbenchesDialog config={baseConfig} onClose={vi.fn()} />);
+
+    expect(screen.getByTestId("manage-workbenches-close")).toHaveFocus();
 
     const list = screen.getByTestId("manage-workbenches-list");
     const rows = within(list).getAllByTestId(/^manage-workbench-row-/);
@@ -162,21 +164,64 @@ describe("ManageWorkbenchesDialog", () => {
     expect(ops.switchWorkbench).toHaveBeenCalledWith("Side", "Work");
   });
 
+  it("locks every workbench mutation while one operation is pending", async () => {
+    const onClose = vi.fn();
+    let finishSwitch!: () => void;
+    ops.switchWorkbench.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSwitch = resolve;
+        }),
+    );
+
+    render(<ManageWorkbenchesDialog config={baseConfig} onClose={onClose} />);
+    fireEvent.change(screen.getByTestId("manage-workbench-new-input"), {
+      target: { value: "Nueva" },
+    });
+    fireEvent.click(screen.getByTestId("manage-workbench-activate-Side"));
+
+    expect(screen.getByTestId("manage-workbenches-modal")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByTestId("manage-workbench-activate-Client X")).toBeDisabled();
+    expect(screen.getByTestId("manage-workbench-rename-Work")).toBeDisabled();
+    expect(screen.getByTestId("manage-workbench-delete-Client X")).toBeDisabled();
+    expect(screen.getByTestId("manage-workbench-new-input")).toBeDisabled();
+    expect(screen.getByTestId("manage-workbench-new-submit")).toBeDisabled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(screen.getByTestId("manage-workbenches-backdrop"));
+    fireEvent.click(screen.getByTestId("manage-workbenches-close"));
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishSwitch();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("manage-workbenches-modal")).toHaveAttribute("aria-busy", "false");
+    expect(screen.getByTestId("manage-workbench-activate-Client X")).toBeEnabled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("rename: clicking Renombrar opens an input; Enter commits; cancel on Escape", async () => {
     render(<ManageWorkbenchesDialog config={baseConfig} onClose={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId("manage-workbench-rename-Side"));
     const input = screen.getByTestId("manage-workbench-rename-input-Side") as HTMLInputElement;
     expect(input).toBeInTheDocument();
+    expect(input).toHaveAccessibleName("Nuevo nombre para Side");
     expect(input.value).toBe("Side");
 
     fireEvent.change(input, { target: { value: "Hobby" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(ops.renameWorkbenchFlow).toHaveBeenCalledWith("Side", "Hobby");
+    await waitFor(() =>
+      expect(screen.getByTestId("manage-workbenches-modal")).toHaveAttribute("aria-busy", "false"),
+    );
 
     // Open a new rename, press Escape, expect the input to go away without calling the flow.
     fireEvent.click(screen.getByTestId("manage-workbench-rename-Work"));
     const input2 = screen.getByTestId("manage-workbench-rename-input-Work") as HTMLInputElement;
+    expect(input2).toHaveAccessibleName("Nuevo nombre para Work");
     fireEvent.keyDown(input2, { key: "Escape" });
     expect(screen.queryByTestId("manage-workbench-rename-input-Work")).not.toBeInTheDocument();
   });

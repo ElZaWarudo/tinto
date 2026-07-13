@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createRef, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -170,6 +170,7 @@ describe("FileOverviewRuler", () => {
     render(<FileOverviewRuler markers={markers} totalLines={50} bodyRef={ref} />);
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(2);
+    expect(within(screen.getByRole("slider")).queryByRole("button")).not.toBeInTheDocument();
     expect(buttons[0]).toHaveAttribute("data-source", "alert");
     expect(buttons[1]).toHaveAttribute("data-source", "hunk");
   });
@@ -184,10 +185,10 @@ describe("FileOverviewRuler", () => {
     render(<FileOverviewRuler markers={markers} totalLines={50} bodyRef={ref} />);
     expect(screen.getByTestId("overview-summary")).toHaveAttribute(
       "title",
-      "2 posibles secretos · 1 hunk",
+      "2 posibles secretos · 1 fragmento",
     );
     expect(screen.getByLabelText("2 posibles secretos")).toBeInTheDocument();
-    expect(screen.getByLabelText("1 hunk")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 fragmento")).toBeInTheDocument();
   });
 
   it("jumps to the line on marker click and highlights the active marker", () => {

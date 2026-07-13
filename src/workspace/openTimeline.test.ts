@@ -21,7 +21,7 @@ describe("openTimelinePanel", () => {
     expect(api.addPanel).toHaveBeenCalledWith({
       id: PANEL_TIMELINE,
       component: PANEL_TIMELINE,
-      title: "Timeline",
+      title: "Cronología",
     });
     const created = api._panels[PANEL_TIMELINE];
 

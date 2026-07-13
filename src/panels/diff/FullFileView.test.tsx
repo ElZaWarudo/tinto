@@ -43,7 +43,7 @@ describe("FullFileView", () => {
     render(<FullFileView repo="/r/a" path="bin.dat" changedLines={new Set()} />);
 
     expect(await screen.findByTestId("full-binary")).toHaveTextContent(
-      "Binary file — cannot show full content.",
+      "Archivo binario: no se puede mostrar el contenido completo.",
     );
     expect(screen.queryByText("AAEC")).not.toBeInTheDocument();
   });
@@ -56,7 +56,7 @@ describe("FullFileView", () => {
 
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
     expect(container.querySelector(".full-file__line .diff-content")).toHaveTextContent("visible");
-    expect(screen.getByTestId("full-truncated")).toHaveTextContent("File truncated");
+    expect(screen.getByTestId("full-truncated")).toHaveTextContent("Archivo truncado");
   });
 
   it("ignores stale full-file content when the repo revision changes mid-load", async () => {
@@ -104,9 +104,9 @@ describe("FullFileView", () => {
     render(<FullFileView repo="/r/a" path="missing.ts" changedLines={new Set()} />);
 
     expect(await screen.findByTestId("full-error")).toHaveTextContent(
-      "Could not load file: child_exit: el agente WSL cerro stdout",
+      "No se pudo cargar el archivo: child_exit: el agente WSL cerro stdout",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
     expect(await screen.findByTestId("full-file")).toBeInTheDocument();
   });
 

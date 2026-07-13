@@ -6,7 +6,7 @@
 import { useEffect } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { busStore } from "./store";
-import type { FsEventBatch, RepoDelta } from "./contract";
+import type { FsEventBatch, RepoDelta, WorkbenchConfig } from "./contract";
 import { agentSessionStore } from "../agent/sessionStore";
 import { repoTreeStore } from "../workspace/repoTreeStore";
 import {
@@ -35,25 +35,37 @@ function isCurrentReload(generation: number): boolean {
 
 export async function reloadActiveWorkbench(): Promise<void> {
   const generation = nextReloadGeneration();
+  const previous = busStore.getState();
+  const hadUsableWorkbench = previous.config !== null && previous.loaded;
+  busStore.beginConfigLoad();
+  busStore.beginSnapshotLoad();
+  let config: WorkbenchConfig;
   try {
-    const config = await listWorkbenches();
+    config = await listWorkbenches();
     if (!isCurrentReload(generation)) return;
-    busStore.setConfig(config);
-  } catch {
-    /* config is best-effort; names fall back to basenames */
+  } catch (error) {
+    if (!isCurrentReload(generation)) return;
+    const reason = snapshotFailureReason(error);
+    busStore.setConfigError(reason);
+    busStore.setSnapshotError("No se actualizó la instantánea porque falló la configuración.");
+    return;
   }
   try {
     const snapshot = await getWorkbenchSnapshot();
     if (!isCurrentReload(generation)) return;
-    busStore.loadSnapshot(snapshot.repos, snapshot.watching);
+    busStore.loadWorkbench(config, snapshot.repos, snapshot.watching);
   } catch (error) {
     if (!isCurrentReload(generation)) return;
-    if (!busStore.getState().loaded) {
-      busStore.loadSnapshot([], {
+    const reason = snapshotFailureReason(error);
+    if (!hadUsableWorkbench) {
+      busStore.loadWorkbench(config, [], {
         available: false,
-        reason: snapshotFailureReason(error),
+        reason,
       });
+    } else {
+      busStore.finishConfigLoad();
     }
+    busStore.setSnapshotError(reason);
   }
   try {
     const sessions = await listAgentSessions();
@@ -67,9 +79,9 @@ export async function reloadActiveWorkbench(): Promise<void> {
 function snapshotFailureReason(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("transformCallback")) {
-    return "Tauri bridge unavailable; run inside the Tauri shell for live repo data.";
+    return "El puente de Tauri no está disponible; abre Tinto como aplicación de escritorio para cargar los datos de los repositorios.";
   }
-  return message || "Unable to load repo snapshots.";
+  return message || "No se pudieron cargar los datos de los repositorios.";
 }
 
 export function useBusConnection(): void {
