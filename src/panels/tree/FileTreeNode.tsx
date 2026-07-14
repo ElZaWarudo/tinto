@@ -430,9 +430,7 @@ export function FileTreeNode({
   onFocusPath,
   onOpen,
   onContextMenu,
-  onTreeDragStart,
-  onTreeDragEnd,
-  onTreeDrop,
+  draggingPath,
   dropTargetPath,
   onPasteInto,
   onDelete,
@@ -447,9 +445,7 @@ export function FileTreeNode({
   onFocusPath?: (path: string) => void;
   onOpen: (path: string, pin: boolean) => void;
   onContextMenu?: (event: MouseEvent, node: TreeNode) => void;
-  onTreeDragStart?: (node: TreeNode) => void;
-  onTreeDragEnd?: () => void;
-  onTreeDrop?: (targetPath: string) => void;
+  draggingPath?: string | null;
   dropTargetPath?: string | null;
   onPasteInto?: (destDirPath: string) => void;
   onDelete?: (node: TreeNode) => void;
@@ -473,7 +469,13 @@ export function FileTreeNode({
   };
 
   if (node.isDir) {
-    const dirClassBase = node.hasChanges ? "tree-dir__row tree-dir__row--changed" : "tree-dir__row";
+    const dirClassBase = [
+      "tree-dir__row",
+      node.hasChanges ? "tree-dir__row--changed" : "",
+      draggingPath === node.path ? "tree-dir__row--dragging" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     const isDropTarget = dropTargetPath === node.path;
     const dirClass = isDropTarget
       ? `${dirClassBase} tree-dir__row--drop-target tree-dir__row--drop-target-hover`
@@ -490,21 +492,8 @@ export function FileTreeNode({
         aria-label={node.name}
         data-tree-path={node.path}
         data-tree-kind="directory"
-        draggable={!!onTreeDragStart}
         onFocus={(event) => {
           if (event.currentTarget === event.target) onFocusPath?.(node.path);
-        }}
-        onDragStart={() => onTreeDragStart?.(node)}
-        onDragEnd={() => onTreeDragEnd?.()}
-        onDragOver={(event) => {
-          if (onTreeDrop) event.preventDefault();
-        }}
-        onDrop={(event) => {
-          if (onTreeDrop) {
-            event.preventDefault();
-            event.stopPropagation();
-            onTreeDrop(node.path);
-          }
         }}
         onContextMenu={(event) => onContextMenu?.(event, node)}
         onKeyDown={(event) => {
@@ -570,9 +559,7 @@ export function FileTreeNode({
                 onFocusPath={onFocusPath}
                 onOpen={onOpen}
                 onContextMenu={onContextMenu}
-                onTreeDragStart={onTreeDragStart}
-                onTreeDragEnd={onTreeDragEnd}
-                onTreeDrop={onTreeDrop}
+                draggingPath={draggingPath}
                 dropTargetPath={dropTargetPath}
                 onPasteInto={onPasteInto}
                 onDelete={onDelete}
@@ -585,6 +572,7 @@ export function FileTreeNode({
   }
 
   const classes = ["tree-file"];
+  if (draggingPath === node.path) classes.push("tree-file--dragging");
   if (node.changed) classes.push("tree-file--changed");
   if (node.path === activePath) classes.push("tree-file--active");
   const iconKind = fileIconKind(node.name);
@@ -603,9 +591,6 @@ export function FileTreeNode({
       data-testid={`tree-file-${node.path}`}
       data-tree-path={node.path}
       data-tree-kind="file"
-      draggable={!!onTreeDragStart}
-      onDragStart={() => onTreeDragStart?.(node)}
-      onDragEnd={() => onTreeDragEnd?.()}
       onFocus={(event) => {
         if (event.currentTarget === event.target) onFocusPath?.(node.path);
       }}
