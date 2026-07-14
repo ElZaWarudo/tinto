@@ -5,6 +5,9 @@ import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/act
 
 const getCommitLogMock = vi.fn();
 const retryRepoMock = vi.fn();
+const startAgentSessionMock = vi.fn();
+const listAgentSessionsMock = vi.fn();
+const agentBinaryAvailableForRepoMock = vi.fn();
 const updateRepoFsWatchMock = vi.fn();
 const createRepoGitleaksConfigMock = vi.fn();
 const createRepoAgentsMdConfigMock = vi.fn();
@@ -12,6 +15,9 @@ let nestedDockviewProps: Record<string, unknown> | null = null;
 vi.mock("../bus/client", () => ({
   getCommitLog: (...a: unknown[]) => getCommitLogMock(...a),
   retryRepo: (...a: unknown[]) => retryRepoMock(...a),
+  startAgentSession: (...a: unknown[]) => startAgentSessionMock(...a),
+  listAgentSessions: (...a: unknown[]) => listAgentSessionsMock(...a),
+  agentBinaryAvailableForRepo: (...a: unknown[]) => agentBinaryAvailableForRepoMock(...a),
   createRepoGitleaksConfig: (...a: unknown[]) => createRepoGitleaksConfigMock(...a),
   createRepoAgentsMdConfig: (...a: unknown[]) => createRepoAgentsMdConfigMock(...a),
   // FileView (imported by RepoPanel) pulls in the subscription reconciler, which
@@ -73,12 +79,18 @@ describe("RepoPanel", () => {
     repoTreeStore.reset();
     getCommitLogMock.mockReset();
     retryRepoMock.mockReset();
+    startAgentSessionMock.mockReset();
+    listAgentSessionsMock.mockReset();
+    agentBinaryAvailableForRepoMock.mockReset();
     updateRepoFsWatchMock.mockReset();
     createRepoGitleaksConfigMock.mockReset();
     createRepoAgentsMdConfigMock.mockReset();
     updateRepoFsWatchMock.mockResolvedValue(undefined);
     createRepoGitleaksConfigMock.mockResolvedValue(undefined);
     createRepoAgentsMdConfigMock.mockResolvedValue(undefined);
+    startAgentSessionMock.mockResolvedValue("sess-new");
+    listAgentSessionsMock.mockResolvedValue([]);
+    agentBinaryAvailableForRepoMock.mockResolvedValue(true);
     nestedDockviewProps = null;
   });
 
@@ -308,6 +320,43 @@ describe("RepoPanel", () => {
     expect(within(section).queryByText(/falsos positivos/i)).toBeNull();
     expect(within(section).queryByText(/notifiquen a Tinto/i)).toBeNull();
     expect(within(section).queryByRole("button", { name: "Configurar" })).toBeNull();
+  });
+
+  it("launches the selected agent from the initial project overview", async () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => busStore.loadSnapshot([delta("/r/api")], { available: true }));
+    const openAgentTerminal = vi.fn();
+    const value: WorkspaceActions = {
+      openRepo: vi.fn(),
+      addRepo: vi.fn(),
+      removeRepo: vi.fn(),
+      openFile: vi.fn(),
+      openTimeline: vi.fn(),
+      openDashboard: vi.fn(),
+      openAgents: vi.fn(),
+      openAgentTerminal,
+    };
+
+    render(
+      <WorkspaceActionsContext.Provider value={value}>
+        <RepoPanel {...panelProps("/r/api")} />
+      </WorkspaceActionsContext.Provider>,
+    );
+
+    const launcher = screen.getByTestId("agent-launcher-/r/api");
+    expect(within(launcher).getByRole("option", { name: "Claude Code" })).toBeInTheDocument();
+    const launchButton = within(launcher).getByRole("button", { name: "Iniciar" });
+    await waitFor(() => expect(launchButton).toBeEnabled());
+    fireEvent.click(launchButton);
+
+    await waitFor(() => {
+      expect(startAgentSessionMock).toHaveBeenCalledWith("/r/api", "codex");
+      expect(openAgentTerminal).toHaveBeenCalledWith({
+        sessionId: "sess-new",
+        repo: "/r/api",
+        agentType: "codex",
+      });
+    });
   });
 
   it("shows a terminal error with a working retry", async () => {

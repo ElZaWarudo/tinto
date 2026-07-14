@@ -259,6 +259,7 @@ pub enum AgentSessionTimelineKind {
     UserMessage,
     AgentMessage,
     CommandOutput,
+    Activity,
     Lifecycle,
 }
 

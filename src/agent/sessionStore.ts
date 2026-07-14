@@ -73,6 +73,19 @@ export class AgentSessionStore {
     });
   }
 
+  removeSession(sessionId: string) {
+    const sessions = { ...this.state.sessions };
+    const output = { ...this.state.output };
+    const outputTotal = { ...this.state.outputTotal };
+    const timeline = { ...this.state.timeline };
+    delete sessions[sessionId];
+    delete output[sessionId];
+    delete outputTotal[sessionId];
+    delete timeline[sessionId];
+    outputSnapshotCache.delete(sessionId);
+    this.set({ sessions, output, outputTotal, timeline });
+  }
+
   applyChangeLog(sessionId: string, changes: AgentSessionChange[]) {
     const session = this.state.sessions[sessionId];
     if (!session) return;

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { DockviewReact, themeVisualStudio } from "dockview-react";
 import type {
   DockviewReadyEvent,
@@ -6,6 +12,7 @@ import type {
   IDockviewPanelProps,
 } from "dockview-react";
 import {
+  deleteAgentJournalSession,
   getAgentJournalSession,
   listAgentJournalSessions,
   listAgentSessions,
@@ -50,6 +57,20 @@ interface RecentAgentLaunchGroup {
 
 type JournalLoadState = "loading" | "ready" | "error";
 
+interface JournalContextMenuState {
+  session: AgentJournalSessionSummary;
+  left: number;
+  top: number;
+  trigger: HTMLElement;
+}
+
+type OpenJournalContextMenu = (
+  session: AgentJournalSessionSummary,
+  clientX: number,
+  clientY: number,
+  trigger: HTMLElement,
+) => void;
+
 type ConsoleDockPanelProps = Partial<IDockviewPanelProps> & {
   restoreTransferLayout?: boolean;
 };
@@ -73,6 +94,10 @@ export function ConsoleDockPanel({
   const [journalSessions, setJournalSessions] = useState<AgentJournalSessionSummary[]>([]);
   const [launchingKey, setLaunchingKey] = useState<string | null>(null);
   const [openingJournalId, setOpeningJournalId] = useState<string | null>(null);
+  const [deletingJournalId, setDeletingJournalId] = useState<string | null>(null);
+  const [journalContextMenu, setJournalContextMenu] = useState<JournalContextMenuState | null>(
+    null,
+  );
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [journalLoadState, setJournalLoadState] = useState<JournalLoadState>("loading");
   const [journalRequestVersion, setJournalRequestVersion] = useState(0);
@@ -306,6 +331,65 @@ export function ConsoleDockPanel({
       });
   };
 
+  const openJournalContextMenu = useCallback<OpenJournalContextMenu>(
+    (session, clientX, clientY, trigger) => {
+      if (deletingJournalId === session.id) return;
+      const menuWidth = 216;
+      const menuHeight = 44;
+      setLaunchError(null);
+      setJournalContextMenu({
+        session,
+        left: Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8)),
+        top: Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8)),
+        trigger,
+      });
+    },
+    [deletingJournalId],
+  );
+
+  const closeJournalContextMenu = useCallback((restoreFocus: boolean) => {
+    setJournalContextMenu((current) => {
+      if (restoreFocus) {
+        window.queueMicrotask(() => current?.trigger.focus());
+      }
+      return null;
+    });
+  }, []);
+
+  const deleteJournalConversation = () => {
+    const contextMenu = journalContextMenu;
+    if (!contextMenu || deletingJournalId) return;
+    const { session } = contextMenu;
+    const confirmed = window.confirm(
+      `¿Eliminar la conversación guardada de ${busStore.displayName(session.repo)}?\n\nEsta acción no se puede deshacer.`,
+    );
+    if (!confirmed) {
+      closeJournalContextMenu(true);
+      return;
+    }
+
+    setJournalContextMenu(null);
+    setDeletingJournalId(session.id);
+    setLaunchError(null);
+    void deleteAgentJournalSession(session.id)
+      .then((deleted) => {
+        if (!deleted) {
+          throw new Error("La conversación ya no existe.");
+        }
+        setJournalSessions((sessions) =>
+          sessions.filter((savedSession) => savedSession.id !== session.id),
+        );
+        consoleDock.closeTerminal(session.id);
+        agentSessionStore.removeSession(session.id);
+      })
+      .catch((error) => {
+        setLaunchError(commandMessage(error));
+      })
+      .finally(() => {
+        setDeletingJournalId(null);
+      });
+  };
+
   return (
     <div className="console-dock-panel" data-testid="console-dock-panel">
       {terminalCount > 0 && (
@@ -315,10 +399,13 @@ export function ConsoleDockPanel({
           timeline={agentState.timeline}
           journalSessions={journalSessions}
           openingJournalId={openingJournalId}
+          deletingJournalId={deletingJournalId}
           journalLoadState={journalLoadState}
+          journalActionError={launchError}
           workspaceExpanded={workspaceExpanded}
           onFocus={ensureTerminalPanelVisible}
           onOpenJournal={openJournalTranscript}
+          onOpenJournalContextMenu={openJournalContextMenu}
           onRetryJournalLoad={retryJournalLoad}
           onRestoreWorkspace={restoreWorkspaceLayout}
         />
@@ -420,7 +507,9 @@ export function ConsoleDockPanel({
                 <AgentJournalBrowser
                   sessions={journalSessions}
                   openingJournalId={openingJournalId}
+                  deletingJournalId={deletingJournalId}
                   onOpen={openJournalTranscript}
+                  onOpenContextMenu={openJournalContextMenu}
                 />
               )}
             </>
@@ -430,7 +519,9 @@ export function ConsoleDockPanel({
                 <AgentJournalBrowser
                   sessions={journalSessions}
                   openingJournalId={openingJournalId}
+                  deletingJournalId={deletingJournalId}
                   onOpen={openJournalTranscript}
+                  onOpenContextMenu={openJournalContextMenu}
                 />
               )}
               {launchError && (
@@ -441,6 +532,14 @@ export function ConsoleDockPanel({
             </>
           )}
         </div>
+      )}
+      {journalContextMenu && (
+        <JournalContextMenu
+          menu={journalContextMenu}
+          deleting={deletingJournalId === journalContextMenu.session.id}
+          onDelete={deleteJournalConversation}
+          onClose={closeJournalContextMenu}
+        />
       )}
     </div>
   );
@@ -471,10 +570,13 @@ function AgentNavigator({
   timeline,
   journalSessions,
   openingJournalId,
+  deletingJournalId,
   journalLoadState,
+  journalActionError,
   workspaceExpanded,
   onFocus,
   onOpenJournal,
+  onOpenJournalContextMenu,
   onRetryJournalLoad,
   onRestoreWorkspace,
 }: {
@@ -483,10 +585,13 @@ function AgentNavigator({
   timeline: Record<string, AgentSessionTimelineItem[]>;
   journalSessions: AgentJournalSessionSummary[];
   openingJournalId: string | null;
+  deletingJournalId: string | null;
   journalLoadState: JournalLoadState;
+  journalActionError: string | null;
   workspaceExpanded: boolean;
   onFocus: (params: TerminalPanelParams) => void;
   onOpenJournal: (session: AgentJournalSessionSummary) => void;
+  onOpenJournalContextMenu: OpenJournalContextMenu;
   onRetryJournalLoad: () => void;
   onRestoreWorkspace: () => void;
 }) {
@@ -548,6 +653,11 @@ function AgentNavigator({
       </div>
 
       <JournalLoadNotice state={journalLoadState} onRetry={onRetryJournalLoad} />
+      {journalActionError && (
+        <div className="console-dock-panel__quick-error" role="alert">
+          {journalActionError}
+        </div>
+      )}
 
       {journalSessions.length > 0 && (
         <div className="console-dock-panel__navigator-section">
@@ -566,7 +676,21 @@ function AgentNavigator({
                   aria-label={`Abrir la transcripción de ${busStore.displayName(
                     session.repo,
                   )} con ${agentLabel(session.agent_type)}`}
+                  disabled={deletingJournalId === session.id}
                   onClick={() => onOpenJournal(session)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenJournalContextMenu(
+                      session,
+                      event.clientX,
+                      event.clientY,
+                      event.currentTarget,
+                    );
+                  }}
+                  onKeyDown={(event) =>
+                    openJournalMenuFromKeyboard(event, session, onOpenJournalContextMenu)
+                  }
                 >
                   <span
                     className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
@@ -583,9 +707,11 @@ function AgentNavigator({
                   <span className="console-dock-panel__navigator-main">
                     <span>{busStore.displayName(session.repo)}</span>
                     <small>
-                      {openingJournalId === session.id
-                        ? "Abriendo…"
-                        : `Transcripción de ${agentLabel(session.agent_type)}`}
+                      {deletingJournalId === session.id
+                        ? "Eliminando…"
+                        : openingJournalId === session.id
+                          ? "Abriendo…"
+                          : `Transcripción de ${agentLabel(session.agent_type)}`}
                     </small>
                   </span>
                 </button>
@@ -632,11 +758,15 @@ function sessionStatusTone(session: AgentSession | undefined): "live" | "settlin
 function AgentJournalBrowser({
   sessions,
   openingJournalId,
+  deletingJournalId,
   onOpen,
+  onOpenContextMenu,
 }: {
   sessions: AgentJournalSessionSummary[];
   openingJournalId: string | null;
+  deletingJournalId: string | null;
   onOpen: (session: AgentJournalSessionSummary) => void;
+  onOpenContextMenu: OpenJournalContextMenu;
 }) {
   return (
     <section className="console-dock-panel__journal" aria-label="Sesiones recientes de Agents">
@@ -655,6 +785,7 @@ function AgentJournalBrowser({
               aria-label={`Abrir la transcripción de ${busStore.displayName(
                 session.repo,
               )} con ${agentLabel(session.agent_type)}`}
+              disabled={deletingJournalId === session.id}
               onPointerDown={(event) => event.stopPropagation()}
               onMouseDown={(event) => event.stopPropagation()}
               onClick={(event) => {
@@ -662,6 +793,12 @@ function AgentJournalBrowser({
                 event.stopPropagation();
                 onOpen(session);
               }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onOpenContextMenu(session, event.clientX, event.clientY, event.currentTarget);
+              }}
+              onKeyDown={(event) => openJournalMenuFromKeyboard(event, session, onOpenContextMenu)}
             >
               <span
                 className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
@@ -683,13 +820,91 @@ function AgentJournalBrowser({
                 {session.last_event_text && <em>{session.last_event_text}</em>}
               </span>
               <span className="console-dock-panel__journal-action">
-                {openingJournalId === session.id ? "Abriendo…" : "Abrir"}
+                {deletingJournalId === session.id
+                  ? "Eliminando…"
+                  : openingJournalId === session.id
+                    ? "Abriendo…"
+                    : "Abrir"}
               </span>
             </button>
           );
         })}
       </div>
     </section>
+  );
+}
+
+function openJournalMenuFromKeyboard(
+  event: ReactKeyboardEvent<HTMLButtonElement>,
+  session: AgentJournalSessionSummary,
+  onOpen: OpenJournalContextMenu,
+) {
+  if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const bounds = event.currentTarget.getBoundingClientRect();
+  onOpen(session, bounds.left + 12, bounds.top + 12, event.currentTarget);
+}
+
+function JournalContextMenu({
+  menu,
+  deleting,
+  onDelete,
+  onClose,
+}: {
+  menu: JournalContextMenuState;
+  deleting: boolean;
+  onDelete: () => void;
+  onClose: (restoreFocus: boolean) => void;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    });
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) onClose(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [menu.session.id, onClose]);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose(true);
+    } else if (event.key === "Tab") {
+      onClose(false);
+    }
+  };
+
+  return (
+    <div
+      className="tree-menu"
+      ref={menuRef}
+      role="menu"
+      aria-label={`Acciones para la conversación de ${busStore.displayName(menu.session.repo)}`}
+      style={{ left: menu.left, top: menu.top }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onKeyDown={handleKeyDown}
+    >
+      <button
+        className="tree-menu__item tree-menu__item--danger"
+        type="button"
+        role="menuitem"
+        tabIndex={-1}
+        disabled={deleting}
+        onClick={onDelete}
+      >
+        {deleting ? "Eliminando…" : "Eliminar conversación"}
+      </button>
+    </div>
   );
 }
 

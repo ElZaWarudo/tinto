@@ -128,6 +128,19 @@ class ConsoleDock {
     this.ensureTerminalPanel(params, { activate: true });
   }
 
+  closeTerminal(sessionId: string) {
+    const id = agentTerminalPanelId(sessionId);
+    this.cancelForgetTerminal(id);
+    this.pending.delete(id);
+    this.terminals.delete(id);
+    const api = this.api;
+    const panel = api?.getPanel(id);
+    if (api && panel) {
+      api.removePanel(panel);
+    }
+    this.emit();
+  }
+
   private ensureTerminalPanel(
     params: AgentTerminalOpenParams,
     options: EnsureTerminalOptions = {},

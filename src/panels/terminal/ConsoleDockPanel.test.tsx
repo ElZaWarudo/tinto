@@ -1,5 +1,5 @@
 import type { DockviewWillDropEvent, IDockviewPanel } from "dockview-react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { consoleDock } from "../../workspace/consoleDock";
 import { agentTerminalPanelId } from "../../workspace/panels";
@@ -28,11 +28,13 @@ const clientMocks = vi.hoisted(() => ({
   listAgentSessions: vi.fn(() => Promise.resolve([])),
   listAgentJournalSessions: vi.fn<() => Promise<unknown[]>>(() => Promise.resolve([])),
   getAgentJournalSession: vi.fn<() => Promise<unknown | null>>(() => Promise.resolve(null)),
+  deleteAgentJournalSession: vi.fn(() => Promise.resolve(true)),
 }));
 
 const sessionStoreMocks = vi.hoisted(() => ({
   setSessions: vi.fn(),
   upsertSession: vi.fn(),
+  removeSession: vi.fn(),
   state: {
     sessions: {} as Record<string, unknown>,
     output: {},
@@ -69,12 +71,14 @@ vi.mock("../../bus/client", () => ({
   listAgentSessions: clientMocks.listAgentSessions,
   listAgentJournalSessions: clientMocks.listAgentJournalSessions,
   getAgentJournalSession: clientMocks.getAgentJournalSession,
+  deleteAgentJournalSession: clientMocks.deleteAgentJournalSession,
 }));
 
 vi.mock("../../agent/sessionStore", () => ({
   agentSessionStore: {
     setSessions: sessionStoreMocks.setSessions,
     upsertSession: sessionStoreMocks.upsertSession,
+    removeSession: sessionStoreMocks.removeSession,
   },
   useAgentSessionState: () => sessionStoreMocks.state,
 }));
@@ -144,8 +148,11 @@ describe("ConsoleDockPanel detach drop", () => {
     clientMocks.listAgentJournalSessions.mockResolvedValue([]);
     clientMocks.getAgentJournalSession.mockClear();
     clientMocks.getAgentJournalSession.mockResolvedValue(null);
+    clientMocks.deleteAgentJournalSession.mockClear();
+    clientMocks.deleteAgentJournalSession.mockResolvedValue(true);
     sessionStoreMocks.setSessions.mockClear();
     sessionStoreMocks.upsertSession.mockClear();
+    sessionStoreMocks.removeSession.mockClear();
     sessionStoreMocks.state = { sessions: {}, output: {}, outputTotal: {}, timeline: {} };
     detachMocks.markTerminalDetached.mockClear();
     detachMocks.openDetachedTerminalWindow.mockClear();
@@ -301,6 +308,110 @@ describe("ConsoleDockPanel detach drop", () => {
     expect(
       screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
     ).toBeInTheDocument();
+    unmount();
+  });
+
+  it("deletes a saved conversation from its right-click menu", async () => {
+    clientMocks.listAgentJournalSessions.mockResolvedValue([
+      {
+        id: "sess-old",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        ended_at_ms: 4,
+        updated_at_ms: 4,
+        event_count: 2,
+        last_event_kind: "agent_message",
+        last_event_text: "Done",
+        last_event_at_ms: 4,
+      },
+    ]);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const closeSpy = vi.spyOn(consoleDock, "closeTerminal");
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    const savedConversation = await screen.findByRole("button", {
+      name: /abrir la transcripción de api con codex/i,
+    });
+    fireEvent.contextMenu(savedConversation, { clientX: 120, clientY: 80 });
+    const menu = screen.getByRole("menu", { name: /acciones para la conversación de api/i });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Eliminar conversación" }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining("¿Eliminar la conversación guardada de api?"),
+    );
+    await waitFor(() =>
+      expect(clientMocks.deleteAgentJournalSession).toHaveBeenCalledWith("sess-old"),
+    );
+    await waitFor(() => expect(savedConversation).not.toBeInTheDocument());
+    expect(closeSpy).toHaveBeenCalledWith("sess-old");
+    expect(sessionStoreMocks.removeSession).toHaveBeenCalledWith("sess-old");
+
+    closeSpy.mockRestore();
+    confirmSpy.mockRestore();
+    unmount();
+  });
+
+  it("opens the conversation menu with Shift+F10 and returns focus on Escape", async () => {
+    clientMocks.listAgentJournalSessions.mockResolvedValue([
+      {
+        id: "sess-old",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        updated_at_ms: 4,
+        event_count: 0,
+      },
+    ]);
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    const savedConversation = await screen.findByRole("button", {
+      name: /abrir la transcripción de api con codex/i,
+    });
+    savedConversation.focus();
+    fireEvent.keyDown(savedConversation, { key: "F10", shiftKey: true });
+    const menu = screen.getByRole("menu", { name: /acciones para la conversación de api/i });
+    fireEvent.keyDown(menu, { key: "Escape" });
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(savedConversation).toHaveFocus());
+    expect(clientMocks.deleteAgentJournalSession).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("keeps a saved conversation visible when deletion fails", async () => {
+    clientMocks.listAgentJournalSessions.mockResolvedValue([
+      {
+        id: "sess-live",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "running",
+        started_at_ms: 1,
+        updated_at_ms: 4,
+        event_count: 1,
+      },
+    ]);
+    clientMocks.deleteAgentJournalSession.mockRejectedValueOnce(
+      new Error("No se puede eliminar una sesión activa"),
+    );
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    const savedConversation = await screen.findByRole("button", {
+      name: /abrir la transcripción de api con codex/i,
+    });
+    fireEvent.contextMenu(savedConversation, { clientX: 120, clientY: 80 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Eliminar conversación" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No se puede eliminar una sesión activa",
+    );
+    expect(savedConversation).toBeInTheDocument();
+    expect(sessionStoreMocks.removeSession).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
     unmount();
   });
 

@@ -360,6 +360,14 @@ impl AgentJournal {
         Ok(summaries)
     }
 
+    pub fn delete_session(&self, session_id: &str) -> Result<bool, AgentJournalError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM agent_sessions WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(deleted > 0)
+    }
+
     pub fn session_from_journal(
         &self,
         session_id: &str,
@@ -627,6 +635,33 @@ mod tests {
             Some(AgentSessionTimelineKind::AgentMessage)
         );
         assert_eq!(summaries[0].last_event_text.as_deref(), Some("preview"));
+    }
+
+    #[test]
+    fn journal_deletes_a_session_and_its_related_events() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        journal.record_session(&session("sess-1")).expect("session");
+        journal
+            .record_timeline_item(&AgentSessionTimelineItem {
+                session_id: "sess-1".to_string(),
+                id: "event-1".to_string(),
+                kind: AgentSessionTimelineKind::AgentMessage,
+                text: "preview".to_string(),
+                timestamp_ms: 300,
+            })
+            .expect("event");
+
+        assert!(journal.delete_session("sess-1").expect("delete"));
+        assert!(!journal.delete_session("sess-1").expect("delete missing"));
+        assert!(journal.session_summaries(10).expect("summaries").is_empty());
+        assert!(journal
+            .session_from_journal("sess-1")
+            .expect("read deleted session")
+            .is_none());
+        assert!(journal
+            .timeline_for_session("sess-1")
+            .expect("deleted timeline")
+            .is_empty());
     }
 
     #[test]

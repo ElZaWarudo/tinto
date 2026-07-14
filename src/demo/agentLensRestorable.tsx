@@ -17,6 +17,9 @@ import "./agentLensRestorable.css";
 const REPO = "C:\\Users\\User\\Documents\\personal\\digital-product-passport";
 const SESSION_ID = "demo-restorable-session";
 const NOW = 1_798_800_000_000;
+const QUERY = new URLSearchParams(window.location.search);
+const LIVE_PROCESS = QUERY.get("state") === "working";
+const COMPACT_FIXTURE = QUERY.get("viewport") === "compact";
 
 const turnChanges = [
   { path: "src/agent-view.tsx", kind: "modified" as const, timestamp_ms: NOW + 12_000 },
@@ -60,6 +63,17 @@ const timeline: AgentSessionTimelineItem[] = [
     text: "Added a backend registry smoke for completed-session restore and kept the visual metric at 2/2.",
     timestamp_ms: NOW + 46_000,
   },
+  ...(LIVE_PROCESS
+    ? [
+        {
+          session_id: SESSION_ID,
+          id: "demo:activity-1",
+          kind: "activity" as const,
+          text: "Ejecutando npm test -- --run src/panels/terminal/TerminalPanel.test.tsx",
+          timestamp_ms: NOW + 47_000,
+        },
+      ]
+    : []),
 ];
 
 const session: AgentSession = {
@@ -67,11 +81,11 @@ const session: AgentSession = {
   repo: REPO,
   agent_type: "codex",
   wsl_distro: "Ubuntu",
-  status: "completed",
-  pid: null,
+  status: LIVE_PROCESS ? "running" : "completed",
+  pid: LIVE_PROCESS ? 4_242 : null,
   started_at_ms: NOW,
-  ended_at_ms: NOW + 52_000,
-  exit_code: 0,
+  ended_at_ms: LIVE_PROCESS ? null : NOW + 52_000,
+  exit_code: LIVE_PROCESS ? null : 0,
   error: null,
   checkpoint: {
     checkpoint_type: "fs_snapshot",
@@ -79,7 +93,7 @@ const session: AgentSession = {
     snapshot_files: ["src/agent-view.tsx", "src/restore/turns.ts", "docs/agent-lens.md"],
   },
   change_log: turnChanges,
-  turn_status: "waiting",
+  turn_status: LIVE_PROCESS ? "working" : "waiting",
   turn_checkpoints: [
     {
       id: `${SESSION_ID}:turn-1`,
@@ -135,9 +149,9 @@ const session: AgentSession = {
     source_events: 5,
     source_turns: 2,
   },
-  active_sessions: 0,
+  active_sessions: LIVE_PROCESS ? 1 : 0,
   age_ms: 52_000,
-  output_bytes_per_second: 0,
+  output_bytes_per_second: LIVE_PROCESS ? 84 : 0,
 };
 
 const diff = (path: string, added: string[], removed: string[] = []): FileDiff => ({
@@ -272,7 +286,7 @@ const panelProps = {
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <WorkspaceActionsContext.Provider value={actions}>
-      <div className="agent-lens-fixture">
+      <div className={`agent-lens-fixture${COMPACT_FIXTURE ? " agent-lens-fixture--compact" : ""}`}>
         <div className="agent-lens-fixture__panel">
           <TerminalPanel {...panelProps} />
         </div>
