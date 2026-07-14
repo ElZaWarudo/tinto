@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   getAgentJournalSession,
+  getAgentRuntimeCatalog,
   listAgentSessions,
   revertSession,
   revertSessionTurnFile,
@@ -23,6 +24,7 @@ import {
 import type {
   AgentReviewFinding,
   AgentReviewSummary,
+  AgentRuntimeCatalog,
   AgentSession,
   AgentSessionRuntimeOptions,
   AgentSessionOutput,
@@ -37,6 +39,16 @@ import opencodeLogo from "../../assets/agents/opencode.svg";
 import { useWorkspaceActions } from "../../workspace/actions";
 import { consoleDock } from "../../workspace/consoleDock";
 import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
+import { AgentRuntimeControls, type CodexRuntimeMenu } from "./AgentRuntimeControls";
+import {
+  codexModelLabel,
+  codexReasoningLabel,
+  reasoningSupportedByModel,
+  speedSupportedByModel,
+  type CodexModelSelection,
+  type CodexReasoningSelection,
+  type CodexSpeedSelection,
+} from "./agentRuntimeCatalog";
 
 export interface TerminalPanelParams {
   sessionId: string;
@@ -88,10 +100,6 @@ type AgentLensScope = "focused" | "session";
 type AgentLensTab = "files" | "commands" | "timeline";
 type AgentComposerCommandScope = "Codex" | "Tinto" | "Skill";
 type AgentComposerCommandTrigger = "/" | "$";
-type CodexModelSelection = "auto" | "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.3-codex";
-type CodexReasoningSelection = "auto" | "minimal" | "low" | "medium" | "high" | "xhigh";
-type CodexSpeedSelection = "standard" | "fast";
-type CodexRuntimeMenu = "reasoning" | "model" | "speed" | null;
 type AgentComposerHostCommand =
   | "branch"
   | "comments"
@@ -235,72 +243,6 @@ const CODEX_HOST_COMMANDS: Array<{
   },
 ];
 
-const CODEX_MODEL_OPTIONS: Array<{
-  value: CodexModelSelection;
-  label: string;
-  description: string;
-}> = [
-  { value: "auto", label: "Automático", description: "Usar el modelo predeterminado de Codex" },
-  {
-    value: "gpt-5.5",
-    label: "GPT-5.5",
-    description: "La mejor opción general para trabajo complejo con agentes",
-  },
-  {
-    value: "gpt-5.4",
-    label: "GPT-5.4",
-    description: "Buen rendimiento general en programación y razonamiento",
-  },
-  {
-    value: "gpt-5.4-mini",
-    label: "GPT-5.4 mini",
-    description: "Más rápido para revisiones y cambios pequeños",
-  },
-  {
-    value: "gpt-5.3-codex",
-    label: "GPT-5.3 Codex",
-    description: "Opción de compatibilidad centrada en Codex",
-  },
-];
-
-const CODEX_REASONING_OPTIONS: Array<{
-  value: CodexReasoningSelection;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: "auto",
-    label: "Automático",
-    description: "Dejar que Codex use el nivel predeterminado del modelo",
-  },
-  { value: "minimal", label: "Mínimo", description: "El presupuesto de razonamiento más corto" },
-  { value: "low", label: "Bajo", description: "Razonamiento rápido y ligero" },
-  { value: "medium", label: "Medio", description: "Equilibrado para tareas de implementación" },
-  { value: "high", label: "Alto", description: "Razonamiento más profundo para cambios delicados" },
-  {
-    value: "xhigh",
-    label: "Muy alto",
-    description: "El máximo esfuerzo cuando el modelo lo admite",
-  },
-];
-
-const CODEX_SPEED_OPTIONS: Array<{
-  value: CodexSpeedSelection;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: "standard",
-    label: "Normal",
-    description: "Respetar el modelo y el razonamiento seleccionados",
-  },
-  {
-    value: "fast",
-    label: "Rápido",
-    description: "Priorizar opciones rápidas si no se han fijado el modelo ni el razonamiento",
-  },
-];
-
 const AGENT_LENS_TAB_ORDER: AgentLensTab[] = ["files", "commands", "timeline"];
 const COMPOSER_COMMAND_TRIGGER_RE = /(^|\n)([/$])([^\s/$]*)$/;
 const COMPOSER_COMMAND_LINE_RE = /(^|\n)([/$])([^\s/$]*)(?:[^\n]*)$/;
@@ -369,6 +311,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [selectedModel, setSelectedModel] = useState<CodexModelSelection>("auto");
   const [selectedReasoning, setSelectedReasoning] = useState<CodexReasoningSelection>("auto");
   const [selectedSpeed, setSelectedSpeed] = useState<CodexSpeedSelection>("standard");
+  const [runtimeCatalog, setRuntimeCatalog] = useState<AgentRuntimeCatalog | null>(null);
+  const [runtimeCatalogRefreshKey, setRuntimeCatalogRefreshKey] = useState(0);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
   const [mascotAwake, setMascotAwake] = useState(false);
   const [reviewSummary, setReviewSummary] = useState<AgentReviewSummary | null>(null);
@@ -377,6 +321,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [reviewPromptState, setReviewPromptState] = useState<"drafted" | "sent" | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptSearchRef = useRef<HTMLInputElement | null>(null);
+  const runtimeCatalogSessionRef = useRef<string | null>(null);
+  const runtimeCatalogRefreshAppliedRef = useRef(0);
 
   const turns = useMemo(
     () => agentTurns(timeline, sessionOutput, session),
@@ -467,7 +413,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "starting" &&
     session?.status !== "reverted" &&
     session?.status !== "error";
-  const isCodexSession = agentType === "codex";
+  const runtimeProvider = agentRuntimeProvider(agentType);
+  const isCodexSession = runtimeProvider?.id === "codex";
   const composerCommandTrigger = readComposerCommandTrigger(draft);
   const composerCommandQuery = composerCommandTrigger?.query ?? "";
   const composerCommandItems = useMemo<AgentComposerCommand[]>(
@@ -488,7 +435,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         id: "model",
         command: "model",
         description: "Elegir el modelo activo de Codex",
-        disabled: !canCompose || !isCodexSession,
+        disabled:
+          !canCompose ||
+          !isCodexSession ||
+          !speedSupportedByModel(runtimeCatalog, selectedModel, "fast"),
         label: "Modelo",
         aliases: ["modelo"],
         runtimeCommand: "model" as const,
@@ -571,7 +521,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         trigger: "$" as const,
       })),
     ],
-    [canCompose, isCodexSession, session],
+    [canCompose, isCodexSession, runtimeCatalog, selectedModel, session],
   );
   const filteredComposerCommandItems = useMemo(
     () => filterComposerCommands(composerCommandItems, composerCommandTrigger),
@@ -605,6 +555,89 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       cancelled = true;
     };
   }, [isCodexSession, session?.id, session?.runtime_options]);
+
+  useEffect(() => {
+    if (!isCodexSession || !session?.id || readOnly) return;
+    let active = true;
+    let timer: number | undefined;
+    const sessionChanged = runtimeCatalogSessionRef.current !== session.id;
+    const refreshRequested = runtimeCatalogRefreshKey > runtimeCatalogRefreshAppliedRef.current;
+    runtimeCatalogSessionRef.current = session.id;
+    runtimeCatalogRefreshAppliedRef.current = runtimeCatalogRefreshKey;
+    const loadCatalog = async (refresh = false) => {
+      try {
+        const catalog = await getAgentRuntimeCatalog(session.id, refresh);
+        if (!active) return;
+        if (!catalog) {
+          setRuntimeCatalog({
+            status: "error",
+            source: "codex_fallback",
+            models: [],
+            default_model: null,
+            error: "Esta sesión no expone un catálogo de modelos.",
+            updated_at_ms: Date.now(),
+          });
+          return;
+        }
+        setRuntimeCatalog(catalog);
+        if (catalog.status === "loading") {
+          timer = window.setTimeout(() => void loadCatalog(false), 300);
+        }
+      } catch (catalogError) {
+        if (!active) return;
+        setRuntimeCatalog({
+          status: "error",
+          source: "codex_app_server",
+          models: [],
+          default_model: null,
+          error: commandMessage(catalogError),
+          updated_at_ms: Date.now(),
+        });
+      }
+    };
+    queueMicrotask(() => {
+      if (!active) return;
+      setRuntimeCatalog((current) =>
+        current && !sessionChanged
+          ? { ...current, status: "loading", error: null }
+          : {
+              status: "loading",
+              source: "codex_app_server",
+              models: [],
+              default_model: null,
+              error: null,
+              updated_at_ms: Date.now(),
+            },
+      );
+    });
+    void loadCatalog(refreshRequested);
+    return () => {
+      active = false;
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [isCodexSession, readOnly, runtimeCatalogRefreshKey, session?.id]);
+
+  useEffect(() => {
+    if (runtimeCatalog?.status !== "ready") return;
+    const reasoningInvalid = !reasoningSupportedByModel(
+      runtimeCatalog,
+      selectedModel,
+      selectedReasoning,
+    );
+    const fastInvalid = !speedSupportedByModel(runtimeCatalog, selectedModel, selectedSpeed);
+    if (!reasoningInvalid && !fastInvalid) return;
+    queueMicrotask(() => {
+      if (reasoningInvalid) setSelectedReasoning("auto");
+      if (fastInvalid) setSelectedSpeed("standard");
+      setRuntimeNotice(
+        reasoningInvalid && fastInvalid
+          ? "Razonamiento y perfil ajustados al modelo disponible."
+          : reasoningInvalid
+            ? "Razonamiento ajustado al modelo disponible."
+            : "El perfil rápido no está disponible para este modelo.",
+      );
+    });
+  }, [runtimeCatalog, selectedModel, selectedReasoning, selectedSpeed]);
 
   const focusVisibleTurn = (direction: "previous" | "next") => {
     if (visibleTurns.length === 0) return;
@@ -1486,8 +1519,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               ? "La transcripción está archivada y es de solo lectura."
               : "El compositor no está disponible."}
         </span>
-        {isCodexSession && (
-          <CodexRuntimeControls
+        {runtimeProvider && (
+          <AgentRuntimeControls
+            catalog={runtimeCatalog}
+            idBase={`agent-${sessionId}`}
+            providerLabel={runtimeProvider.label}
             menu={runtimeMenu}
             model={selectedModel}
             reasoning={selectedReasoning}
@@ -1497,16 +1533,33 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             onMenuChange={setRuntimeMenu}
             onModelChange={(value) => {
               setSelectedModel(value);
-              setRuntimeNotice(`Modelo cambiado a ${codexModelLabel(value)}.`);
+              const reasoningInvalid = !reasoningSupportedByModel(
+                runtimeCatalog,
+                value,
+                selectedReasoning,
+              );
+              const fastInvalid = !speedSupportedByModel(runtimeCatalog, value, selectedSpeed);
+              if (reasoningInvalid) setSelectedReasoning("auto");
+              if (fastInvalid) setSelectedSpeed("standard");
+              setRuntimeNotice(
+                `Modelo para el próximo turno: ${codexModelLabel(runtimeCatalog, value)}.${
+                  reasoningInvalid || fastInvalid ? " Ajustes incompatibles restablecidos." : ""
+                }`,
+              );
             }}
             onReasoningChange={(value) => {
               setSelectedReasoning(value);
-              setRuntimeNotice(`Razonamiento cambiado a ${codexReasoningLabel(value)}.`);
+              setRuntimeNotice(
+                `Razonamiento para el próximo turno: ${codexReasoningLabel(value)}.`,
+              );
             }}
+            onRefreshCatalog={() => setRuntimeCatalogRefreshKey((current) => current + 1)}
             onSpeedChange={(value) => {
               setSelectedSpeed(value);
               setRuntimeNotice(
-                value === "fast" ? "Modo rápido activado." : "Velocidad normal activada.",
+                value === "fast"
+                  ? "Perfil rápido para el próximo turno."
+                  : "Perfil normal para el próximo turno.",
               );
             }}
           />
@@ -2166,149 +2219,6 @@ function reviewActionPrompt(summary: AgentReviewSummary, findings: AgentReviewFi
     "Presenta primero los hallazgos, ordenados por gravedad y con referencias a archivo y línea cuando sea posible. Si no hay problemas, indícalo con claridad y menciona cualquier carencia que quede en las pruebas.",
   );
   return lines.join("\n");
-}
-
-function CodexRuntimeControls({
-  disabled,
-  menu,
-  model,
-  notice,
-  onMenuChange,
-  onModelChange,
-  onReasoningChange,
-  onSpeedChange,
-  reasoning,
-  speed,
-}: {
-  disabled: boolean;
-  menu: CodexRuntimeMenu;
-  model: CodexModelSelection;
-  notice: string | null;
-  onMenuChange: (menu: CodexRuntimeMenu) => void;
-  onModelChange: (value: CodexModelSelection) => void;
-  onReasoningChange: (value: CodexReasoningSelection) => void;
-  onSpeedChange: (value: CodexSpeedSelection) => void;
-  reasoning: CodexReasoningSelection;
-  speed: CodexSpeedSelection;
-}) {
-  const close = () => onMenuChange(null);
-  return (
-    <div className="agent-panel__runtime" aria-label="Controles de ejecución de Codex">
-      <div className="agent-panel__runtime-buttons">
-        <button
-          type="button"
-          className="agent-panel__runtime-button"
-          disabled={disabled}
-          onClick={() => onMenuChange(menu === "reasoning" ? null : "reasoning")}
-          title={`Razonamiento: ${codexReasoningLabel(reasoning)}.`}
-        >
-          <span aria-hidden="true">○</span>
-          <span>{codexReasoningShortLabel(reasoning)}</span>
-        </button>
-        <button
-          type="button"
-          className="agent-panel__runtime-button"
-          disabled={disabled}
-          onClick={() => onMenuChange(menu === "model" ? null : "model")}
-          title={`Modelo: ${codexModelLabel(model)}.`}
-        >
-          <span aria-hidden="true">⚡</span>
-          <span>{codexModelShortLabel(model)}</span>
-        </button>
-        <button
-          type="button"
-          className="agent-panel__runtime-button"
-          disabled={disabled}
-          onClick={() => onMenuChange(menu === "speed" ? null : "speed")}
-          title={`Velocidad: ${codexSpeedLabel(speed)}.`}
-        >
-          <span aria-hidden="true">↗</span>
-          <span>{codexSpeedLabel(speed)}</span>
-        </button>
-      </div>
-      {notice && (
-        <span
-          className="agent-panel__runtime-notice"
-          title={`Cambio de ejecución de Codex: ${notice}`}
-        >
-          {notice}
-        </span>
-      )}
-      {menu && (
-        <div
-          className="agent-panel__runtime-popover"
-          role="menu"
-          title="Selector de ejecución de Codex"
-        >
-          {menu === "reasoning" &&
-            CODEX_REASONING_OPTIONS.map((option) => (
-              <RuntimeOptionButton
-                active={reasoning === option.value}
-                description={option.description}
-                key={option.value}
-                label={option.label}
-                onClick={() => {
-                  onReasoningChange(option.value);
-                  close();
-                }}
-              />
-            ))}
-          {menu === "model" &&
-            CODEX_MODEL_OPTIONS.map((option) => (
-              <RuntimeOptionButton
-                active={model === option.value}
-                description={option.description}
-                key={option.value}
-                label={option.label}
-                onClick={() => {
-                  onModelChange(option.value);
-                  close();
-                }}
-              />
-            ))}
-          {menu === "speed" &&
-            CODEX_SPEED_OPTIONS.map((option) => (
-              <RuntimeOptionButton
-                active={speed === option.value}
-                description={option.description}
-                key={option.value}
-                label={option.label}
-                onClick={() => {
-                  onSpeedChange(option.value);
-                  close();
-                }}
-              />
-            ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RuntimeOptionButton({
-  active,
-  description,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  description: string;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitemradio"
-      aria-checked={active}
-      className={`agent-panel__runtime-option${active ? " agent-panel__runtime-option--active" : ""}`}
-      onClick={onClick}
-      title={`${label}: ${description}.`}
-    >
-      <span>{label}</span>
-      {active && <span aria-hidden="true">✓</span>}
-    </button>
-  );
 }
 
 function AgentDetailsHeader({
@@ -3268,11 +3178,9 @@ function codexRuntimeOptions(
   reasoning: CodexReasoningSelection,
   speed: CodexSpeedSelection,
 ): AgentSessionRuntimeOptions {
-  const resolvedModel = model === "auto" && speed === "fast" ? "gpt-5.4-mini" : model;
-  const resolvedReasoning = reasoning === "auto" && speed === "fast" ? "low" : reasoning;
   const options: AgentSessionRuntimeOptions = { speed };
-  if (resolvedModel !== "auto") options.model = resolvedModel;
-  if (resolvedReasoning !== "auto") options.reasoning_effort = resolvedReasoning;
+  if (model !== "auto") options.model = model;
+  if (reasoning !== "auto") options.reasoning_effort = reasoning;
   return options;
 }
 
@@ -3282,10 +3190,8 @@ function runtimeSelectionsFromOptions(options: AgentSessionRuntimeOptions): {
   speed: CodexSpeedSelection;
 } {
   return {
-    model: isCodexModelSelection(options.model) ? options.model : "auto",
-    reasoning: isCodexReasoningSelection(options.reasoning_effort)
-      ? options.reasoning_effort
-      : "auto",
+    model: normalizedRuntimeSelection(options.model),
+    reasoning: normalizedRuntimeSelection(options.reasoning_effort),
     speed: options.speed === "fast" ? "fast" : "standard",
   };
 }
@@ -3318,7 +3224,9 @@ function applyCodexRuntimeSlashCommand(
   if (command === "model" || command === "modelo") {
     const model = normalizeCodexModel(rawValue);
     setters.setModel(model);
-    setters.setNotice(`Modelo cambiado a ${codexModelLabel(model)}.`);
+    setters.setNotice(
+      `Modelo para el próximo turno: ${model === "auto" ? "Predeterminado" : model}.`,
+    );
     return true;
   }
   if (command !== "reasoning" && command !== "razonamiento" && command !== "effort") {
@@ -3331,9 +3239,9 @@ function applyCodexRuntimeSlashCommand(
 }
 
 function normalizeCodexModel(value: string | undefined): CodexModelSelection {
-  if (!value || value === "default") return "auto";
+  if (!value || value === "default" || value === "predeterminado") return "auto";
   const normalized = normalizeComposerCommandToken(value);
-  return isCodexModelSelection(normalized) ? normalized : "auto";
+  return normalized || "auto";
 }
 
 function normalizeCodexReasoning(value: string | undefined): CodexReasoningSelection {
@@ -3347,7 +3255,11 @@ function normalizeCodexReasoning(value: string | undefined): CodexReasoningSelec
     .replace(/^extremadamente-alto$/, "xhigh")
     .replace(/^extra$/, "xhigh")
     .replace(/^extra-high$/, "xhigh");
-  return isCodexReasoningSelection(normalized) ? normalized : "auto";
+  return normalized || "auto";
+}
+
+function normalizedRuntimeSelection(value: string | null | undefined): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "auto";
 }
 
 function normalizeCodexSpeed(value: string | undefined): CodexSpeedSelection {
@@ -3362,36 +3274,6 @@ function normalizeCodexSpeed(value: string | undefined): CodexSpeedSelection {
     return "standard";
   }
   return "fast";
-}
-
-function isCodexModelSelection(value: unknown): value is CodexModelSelection {
-  return CODEX_MODEL_OPTIONS.some((option) => option.value === value);
-}
-
-function isCodexReasoningSelection(value: unknown): value is CodexReasoningSelection {
-  return CODEX_REASONING_OPTIONS.some((option) => option.value === value);
-}
-
-function codexModelLabel(value: CodexModelSelection): string {
-  return CODEX_MODEL_OPTIONS.find((option) => option.value === value)?.label ?? "Automático";
-}
-
-function codexModelShortLabel(value: CodexModelSelection): string {
-  if (value === "auto") return "Modelo";
-  return codexModelLabel(value).replace(/^GPT-/, "");
-}
-
-function codexReasoningLabel(value: CodexReasoningSelection): string {
-  return CODEX_REASONING_OPTIONS.find((option) => option.value === value)?.label ?? "Automático";
-}
-
-function codexReasoningShortLabel(value: CodexReasoningSelection): string {
-  if (value === "auto") return "Razonamiento";
-  return codexReasoningLabel(value);
-}
-
-function codexSpeedLabel(value: CodexSpeedSelection): string {
-  return CODEX_SPEED_OPTIONS.find((option) => option.value === value)?.label ?? "Normal";
 }
 
 function agentComposerRowTitle(agentType: string, repo?: string): string {
@@ -6583,6 +6465,20 @@ function checkpointLabel(type: string): string {
   return type === "git_ref"
     ? "punto de control de Git"
     : "punto de control del sistema de archivos";
+}
+
+interface AgentRuntimeProviderDescriptor {
+  id: "codex" | "claude" | "opencode";
+  label: string;
+}
+
+function agentRuntimeProvider(agentType: string): AgentRuntimeProviderDescriptor | null {
+  switch (agentType) {
+    case "codex":
+      return { id: "codex", label: "Codex" };
+    default:
+      return null;
+  }
 }
 
 function agentLabel(agentType: string): string {

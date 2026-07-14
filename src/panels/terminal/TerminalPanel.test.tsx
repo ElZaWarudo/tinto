@@ -3,7 +3,13 @@ import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentHostCommandResult, AgentSession, FileDiff, RepoDelta } from "../../bus/contract";
+import type {
+  AgentHostCommandResult,
+  AgentRuntimeCatalog,
+  AgentSession,
+  FileDiff,
+  RepoDelta,
+} from "../../bus/contract";
 
 const writeAgentSessionInputMock = vi.fn((...args: unknown[]) => {
   void args;
@@ -13,6 +19,9 @@ const listAgentSessionsMock = vi.fn<() => Promise<AgentSession[]>>(() => Promise
 const getAgentJournalSessionMock = vi.fn<() => Promise<AgentSession | null>>(() =>
   Promise.resolve(null),
 );
+const getAgentRuntimeCatalogMock = vi.fn<
+  (sessionId: string, refresh?: boolean) => Promise<AgentRuntimeCatalog | null>
+>(() => Promise.resolve(runtimeCatalogFixture()));
 const revertSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(sessionFixture({ status: "reverted", reverted_at_ms: 3 }));
@@ -47,6 +56,8 @@ const writeClipboardTextMock = vi.fn((...args: unknown[]) => {
 
 vi.mock("../../bus/client", () => ({
   getAgentJournalSession: () => getAgentJournalSessionMock(),
+  getAgentRuntimeCatalog: (sessionId: string, refresh?: boolean) =>
+    getAgentRuntimeCatalogMock(sessionId, refresh),
   listAgentSessions: () => listAgentSessionsMock(),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
@@ -87,6 +98,47 @@ function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
     active_sessions: 1,
     age_ms: 1,
     output_bytes_per_second: null,
+    ...overrides,
+  };
+}
+
+function runtimeCatalogFixture(overrides: Partial<AgentRuntimeCatalog> = {}): AgentRuntimeCatalog {
+  return {
+    status: "ready",
+    source: "codex_app_server",
+    default_model: "gpt-5.6-sol",
+    error: null,
+    updated_at_ms: 4,
+    models: [
+      {
+        id: "gpt-5.6-sol",
+        model: "gpt-5.6-sol",
+        display_name: "GPT-5.6 Sol",
+        description: "Modelo actual de propósito general.",
+        supported_reasoning_efforts: [
+          { value: "medium", description: "Equilibrado" },
+          { value: "high", description: "Profundo" },
+        ],
+        default_reasoning_effort: "medium",
+        service_tiers: [{ id: "fast", name: "Rápido", description: "Prioriza la latencia." }],
+        default_service_tier: null,
+        is_default: true,
+      },
+      {
+        id: "gpt-5.6-luna",
+        model: "gpt-5.6-luna",
+        display_name: "GPT-5.6 Luna",
+        description: "Modelo actual para trabajo deliberado.",
+        supported_reasoning_efforts: [
+          { value: "high", description: "Profundo" },
+          { value: "xhigh", description: "Máximo" },
+        ],
+        default_reasoning_effort: "high",
+        service_tiers: [],
+        default_service_tier: null,
+        is_default: false,
+      },
+    ],
     ...overrides,
   };
 }
@@ -180,6 +232,8 @@ describe("TerminalPanel", () => {
     listAgentSessionsMock.mockClear();
     getAgentJournalSessionMock.mockClear();
     getAgentJournalSessionMock.mockResolvedValue(null);
+    getAgentRuntimeCatalogMock.mockReset();
+    getAgentRuntimeCatalogMock.mockResolvedValue(runtimeCatalogFixture());
     revertSessionMock.mockClear();
     revertSessionTurnFileMock.mockClear();
     restoreSessionTurnMock.mockClear();
@@ -278,25 +332,81 @@ describe("TerminalPanel", () => {
     expect(composer).toHaveValue("");
   });
 
-  it("sends Codex turns with runtime controls selected from the composer popover", async () => {
+  it("sends Codex turns with models discovered from the runtime catalog", async () => {
     const user = userEvent.setup();
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    await user.click(await screen.findByRole("button", { name: /Razonamiento/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Alto" }));
-    await user.click(screen.getByRole("button", { name: /Modelo/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: "GPT-5.5" }));
+    await user.click(await screen.findByRole("button", { name: /Modelo/ }));
+    await user.click(screen.getByRole("radio", { name: /GPT-5\.6 Luna/ }));
+    await user.click(screen.getByRole("button", { name: /Razonamiento/ }));
+    await user.click(screen.getByRole("radio", { name: /^Alto/ }));
 
     const composer = screen.getByLabelText("Mensaje para Codex");
     await user.type(composer, "implementa la vista");
     await user.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       reasoning_effort: "high",
       speed: "standard",
     });
+  });
+
+  it("keeps an explicit model that is not present in the current catalog", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ runtime_options: { model: "future-provider-model", speed: "fast" } }),
+    ]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const modelTrigger = await screen.findByRole("button", {
+      name: /Modelo: future-provider-model/,
+    });
+    await user.click(modelTrigger);
+    expect(screen.getByRole("radio", { name: /future-provider-model/ })).toBeChecked();
+    expect(screen.getByText("NO CATALOGADO")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    const composer = screen.getByLabelText("Mensaje para Codex");
+    await user.type(composer, "continúa");
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "continúa\r", {
+      model: "future-provider-model",
+      speed: "fast",
+    });
+  });
+
+  it("moves focus into the runtime inspector and restores it on Escape", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const modelTrigger = await screen.findByRole("button", { name: /Modelo/ });
+    await user.click(modelTrigger);
+    const checkedModel = await screen.findByRole("radio", { name: /^Predeterminado/ });
+    await waitFor(() => expect(checkedModel).toHaveFocus());
+    expect(modelTrigger).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("dialog", { name: "Configuración de ejecución" }),
+    ).not.toBeInTheDocument();
+    expect(modelTrigger).toHaveFocus();
+    expect(modelTrigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("retries a failed runtime catalog explicitly", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    getAgentRuntimeCatalogMock.mockResolvedValueOnce(
+      runtimeCatalogFixture({ status: "error", models: [], error: "No disponible" }),
+    );
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await user.click(await screen.findByRole("button", { name: /Modelo/ }));
+    await user.click(screen.getByRole("button", { name: "Reintentar" }));
+    await waitFor(() => expect(getAgentRuntimeCatalogMock).toHaveBeenCalledWith("sess-1", true));
   });
 
   it("applies natural runtime slash aliases without sending them to the agent", async () => {

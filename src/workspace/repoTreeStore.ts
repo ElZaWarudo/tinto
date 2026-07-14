@@ -18,6 +18,7 @@ const EMPTY: RepoTreeState = { loading: false, error: false };
 class RepoTreeStore {
   private state: Record<string, RepoTreeState> = {};
   private inflight = new Set<string>();
+  private pendingRefresh = new Set<string>();
   private listeners = new Set<() => void>();
 
   getState = (): Record<string, RepoTreeState> => this.state;
@@ -38,13 +39,19 @@ class RepoTreeStore {
 
   /** Fetch the tree (always), keeping any cached tree visible meanwhile. */
   refresh(repo: string): void {
-    if (this.inflight.has(repo)) return;
+    if (this.inflight.has(repo)) {
+      this.pendingRefresh.add(repo);
+      return;
+    }
     this.inflight.add(repo);
     this.set(repo, { loading: true });
     listRepoTree(repo)
       .then((tree) => this.set(repo, { tree, loading: false, error: false }))
       .catch(() => this.set(repo, { loading: false, error: !this.get(repo).tree }))
-      .finally(() => this.inflight.delete(repo));
+      .finally(() => {
+        this.inflight.delete(repo);
+        if (this.pendingRefresh.delete(repo)) this.refresh(repo);
+      });
   }
 
   /** Fetch only if never loaded (used on project-explorer mount). */
@@ -56,6 +63,7 @@ class RepoTreeStore {
 
   /** Forget a repo's cached tree (e.g. it left the workbench). */
   drop(repo: string): void {
+    this.pendingRefresh.delete(repo);
     if (!(repo in this.state)) return;
     const next = { ...this.state };
     delete next[repo];
@@ -66,6 +74,7 @@ class RepoTreeStore {
   reset(): void {
     this.state = {};
     this.inflight.clear();
+    this.pendingRefresh.clear();
     this.listeners.forEach((l) => l());
   }
 }

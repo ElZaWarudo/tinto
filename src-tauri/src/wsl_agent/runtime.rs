@@ -1848,6 +1848,76 @@ mod tests {
     }
 
     #[test]
+    fn copy_to_repo_places_an_external_file_in_a_nested_directory() {
+        let repo = TempRepo::with_initial_commit();
+        std::fs::create_dir_all(repo.path().join("src/assets")).expect("nested destination");
+        let repo_path = repo.path().canonicalize().expect("canonical repo");
+        let external = tempfile::tempdir().expect("external temp dir");
+        let source = external.path().join("dropped.txt");
+        std::fs::write(&source, "from host\n").expect("external source");
+        let request = AgentRequest::CopyToRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo_path.clone(),
+            allowed_repos: vec![repo_path],
+            dest_dir: "src/assets".into(),
+            sources: vec![source],
+            overwrite: false,
+        };
+
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&request).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+        let AgentResponse::CopyResult { result } = response else {
+            panic!("expected copy result");
+        };
+
+        assert!(result.conflicts.is_empty());
+        assert_eq!(result.copied, vec![PathBuf::from("src/assets/dropped.txt")]);
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("src/assets/dropped.txt")).unwrap(),
+            "from host\n"
+        );
+    }
+
+    #[test]
+    fn move_within_repo_moves_a_file_into_a_nested_directory() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("README.md", "move me\n");
+        std::fs::create_dir_all(repo.path().join("docs/reference")).expect("nested destination");
+        let repo_path = repo.path().canonicalize().expect("canonical repo");
+        let request = AgentRequest::MoveWithinRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo_path.clone(),
+            allowed_repos: vec![repo_path],
+            sources: vec!["README.md".into()],
+            dest_dir: "docs/reference".into(),
+            overwrite: false,
+        };
+
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&request).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+        let AgentResponse::CopyResult { result } = response else {
+            panic!("expected move result");
+        };
+
+        assert!(result.conflicts.is_empty());
+        assert_eq!(
+            result.copied,
+            vec![PathBuf::from("docs/reference/README.md")]
+        );
+        assert!(!repo.path().join("README.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("docs/reference/README.md")).unwrap(),
+            "move me\n"
+        );
+    }
+
+    #[test]
     fn delete_restore_redo_roundtrip() {
         let repo = TempRepo::with_initial_commit();
         repo.write("gone.txt", "bye\n");

@@ -77,6 +77,40 @@ export interface AgentSessionRuntimeOptions {
   speed?: string | null;
 }
 
+export type AgentRuntimeCatalogStatus = "loading" | "ready" | "error";
+
+export interface AgentRuntimeReasoningEffort {
+  value: string;
+  description: string;
+}
+
+export interface AgentRuntimeServiceTier {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface AgentRuntimeModel {
+  id: string;
+  model: string;
+  display_name: string;
+  description: string;
+  supported_reasoning_efforts: AgentRuntimeReasoningEffort[];
+  default_reasoning_effort: string;
+  service_tiers?: AgentRuntimeServiceTier[];
+  default_service_tier?: string | null;
+  is_default: boolean;
+}
+
+export interface AgentRuntimeCatalog {
+  status: AgentRuntimeCatalogStatus;
+  source: string;
+  models?: AgentRuntimeModel[];
+  default_model?: string | null;
+  error?: string | null;
+  updated_at_ms: number;
+}
+
 export interface AgentSessionGoal {
   text: string;
   updated_at_ms: number;
@@ -454,6 +488,11 @@ export interface CuratedBusContractTypeMap {
   AgentSessionTurnCheckpoint: AgentSessionTurnCheckpoint;
   AgentSessionLimits: AgentSessionLimits;
   AgentSessionRuntimeOptions: AgentSessionRuntimeOptions;
+  AgentRuntimeCatalogStatus: AgentRuntimeCatalogStatus;
+  AgentRuntimeReasoningEffort: AgentRuntimeReasoningEffort;
+  AgentRuntimeServiceTier: AgentRuntimeServiceTier;
+  AgentRuntimeModel: AgentRuntimeModel;
+  AgentRuntimeCatalog: AgentRuntimeCatalog;
   AgentSessionGoal: AgentSessionGoal;
   AgentSessionPersonality: AgentSessionPersonality;
   AgentSessionPlanMode: AgentSessionPlanMode;

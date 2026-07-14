@@ -25,11 +25,11 @@ use crate::bus::{
     commands::write_repo_agents_md_config,
     contract::{
         AgentHostCommandResult, AgentHostCommandStatus, AgentJournalSessionSummary,
-        AgentReviewFinding, AgentReviewSummary, AgentSession, AgentSessionChangeLog,
-        AgentSessionContextSummary, AgentSessionFeedback, AgentSessionOutput,
-        AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
-        AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG,
-        EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
+        AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog, AgentSession,
+        AgentSessionChangeLog, AgentSessionContextSummary, AgentSessionFeedback,
+        AgentSessionOutput, AgentSessionRuntimeOptions, AgentSessionStatus,
+        AgentSessionTimelineItem, AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED,
+        EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
     },
     BusHandle, RepoResolveError,
 };
@@ -137,6 +137,18 @@ pub fn list_agent_sessions(
     emit_sessions_snapshot(&app, &sessions);
     emit_change_logs(&app, &sessions);
     Ok(sessions)
+}
+
+#[tauri::command]
+pub fn get_agent_runtime_catalog(
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    refresh: Option<bool>,
+) -> Result<Option<AgentRuntimeCatalog>, CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .session_runtime_catalog(&session_id, refresh.unwrap_or(false))
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]

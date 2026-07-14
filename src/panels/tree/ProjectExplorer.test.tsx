@@ -22,7 +22,15 @@ const moveWithinRepoMock = vi.fn<
   (_repo: string, _sources: string[], _destDir: string, _overwrite: boolean) => Promise<unknown>
 >(() => Promise.resolve({ copied: [], conflicts: [] }));
 const tauriDrag = vi.hoisted(() => ({
-  handler: null as ((event: { payload: { type: string; paths: string[] } }) => void) | null,
+  handler: null as
+    | ((event: {
+        payload: {
+          type: string;
+          paths?: string[];
+          position?: { x: number; y: number };
+        };
+      }) => void)
+    | null,
   onDragDropEvent: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -97,6 +105,15 @@ describe("ProjectExplorer", () => {
     treeClipboard.clear();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      value: MouseEvent,
+    });
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => null),
+    });
     Object.defineProperty(window, "confirm", {
       configurable: true,
       value: vi.fn(() => true),
@@ -558,5 +575,113 @@ describe("ProjectExplorer", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("overwrite-confirm-modal")).not.toBeInTheDocument(),
     );
+  });
+
+  it("drops OS files into the folder under the physical pointer and refreshes immediately", async () => {
+    copyToRepoMock.mockImplementationOnce(async () => {
+      const current = tree as { entries: Array<{ path: string; is_dir: boolean }> };
+      tree = {
+        ...current,
+        entries: [...current.entries, { path: "src/dropped.txt", is_dir: false }],
+      };
+      return { copied: ["src/dropped.txt"], conflicts: [] };
+    });
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const src = await screen.findByRole("treeitem", { name: "src" });
+    const elementFromPoint = vi.mocked(document.elementFromPoint);
+    elementFromPoint.mockReturnValue(src.querySelector(".tree-dir__row"));
+    await waitFor(() => expect(tauriDrag.handler).not.toBeNull());
+
+    act(() => {
+      tauriDrag.handler?.({
+        payload: { type: "enter", paths: ["C:/tmp/dropped.txt"], position: { x: 80, y: 40 } },
+      });
+    });
+    expect(src.querySelector(".tree-dir__row")).toHaveClass("tree-dir__row--drop-target");
+
+    act(() => {
+      tauriDrag.handler?.({
+        payload: { type: "drop", paths: ["C:/tmp/dropped.txt"], position: { x: 80, y: 40 } },
+      });
+    });
+
+    await waitFor(() =>
+      expect(copyToRepoMock).toHaveBeenCalledWith(REPO, "src", ["C:/tmp/dropped.txt"], false),
+    );
+    expect(elementFromPoint).toHaveBeenCalledWith(40, 20);
+    await waitFor(() => expect(listRepoTreeMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(repoTreeStore.get(REPO).tree?.entries).toContainEqual({
+        path: "src/dropped.txt",
+        is_dir: false,
+      }),
+    );
+    const refreshedSrc = screen.getByRole("treeitem", { name: "src" });
+    fireEvent.click(refreshedSrc.querySelector(".tree-dir__row")!);
+    expect(await screen.findByTestId("tree-file-src/dropped.txt")).toBeInTheDocument();
+  });
+
+  it("moves an existing file into a folder through pointer drag without HTML5", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const readme = await screen.findByRole("treeitem", { name: "README.md" });
+    const src = screen.getByRole("treeitem", { name: "src" });
+    vi.mocked(document.elementFromPoint).mockReturnValue(src.querySelector(".tree-dir__row"));
+
+    expect(readme).not.toHaveAttribute("draggable");
+    fireEvent.pointerDown(readme, {
+      button: 0,
+      pointerId: 7,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(document, {
+      pointerId: 7,
+      clientX: 30,
+      clientY: 30,
+    });
+    await waitFor(() => expect(readme).toHaveClass("tree-file--dragging"));
+    await waitFor(() =>
+      expect(src.querySelector(".tree-dir__row")).toHaveClass("tree-dir__row--drop-target"),
+    );
+    fireEvent.pointerUp(document, {
+      pointerId: 7,
+      clientX: 30,
+      clientY: 30,
+    });
+
+    await waitFor(() =>
+      expect(moveWithinRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], "src", false),
+    );
+  });
+
+  it("keeps a short pointer gesture as a normal file click", async () => {
+    const openSpy = vi.spyOn(fileDock, "openFile").mockImplementation(() => {});
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const readme = await screen.findByRole("treeitem", { name: "README.md" });
+
+    fireEvent.pointerDown(readme, {
+      button: 0,
+      pointerId: 8,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(document, {
+      pointerId: 8,
+      clientX: 12,
+      clientY: 12,
+    });
+    fireEvent.pointerUp(document, {
+      pointerId: 8,
+      clientX: 12,
+      clientY: 12,
+    });
+    fireEvent.click(readme);
+
+    expect(moveWithinRepoMock).not.toHaveBeenCalled();
+    expect(openSpy).toHaveBeenCalledWith(REPO, "README.md", false);
+    openSpy.mockRestore();
   });
 });

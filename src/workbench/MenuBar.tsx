@@ -10,12 +10,12 @@ import { enableNotifications, disableNotifications } from "../qol/notifications"
 import { qualityStore, useQualityState } from "../qol/state";
 import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
-import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
 import { autodetectFlow, switchWorkbench } from "./operations";
 import { visibleWorkbenchNames } from "./recentWorkbenches";
 import { AddonsManager } from "./AddonsManager";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { ManageWorkbenchesDialog } from "./ManageWorkbenchesDialog";
+import { WindowBrand, WindowControls, WindowDragRegion } from "./WindowChrome";
 
 type MenuId = "workbench" | "repos" | "projects" | "view" | "addons" | "help";
 
@@ -289,20 +289,8 @@ export function MenuBar() {
   };
 
   return (
-    <div className="menu-bar">
-      <span className="menu-bar__brand">
-        <img
-          className="menu-bar__brand-img"
-          src={tintoWordmarkDark}
-          alt="Tinto"
-          onError={(event) => {
-            event.currentTarget.style.display = "none";
-          }}
-        />
-        <span className="menu-bar__brand-fallback" aria-hidden="true">
-          Tinto
-        </span>
-      </span>
+    <header className="menu-bar">
+      <WindowBrand />
 
       <div ref={menubarRef} className="menu-bar__menus" role="menubar" aria-label="Barra de menús">
         <div className="menu" role="none">
@@ -608,7 +596,7 @@ export function MenuBar() {
         </div>
       </div>
 
-      <span className="menu-bar__spacer" />
+      <WindowDragRegion />
 
       {feedback && (
         <span
@@ -644,6 +632,8 @@ export function MenuBar() {
         {watching.available ? "● observando" : "○ degradado"}
       </span>
 
+      <WindowControls />
+
       {/* Click-away backdrop: closes any open menu. */}
       {open !== null && (
         <button
@@ -668,6 +658,6 @@ export function MenuBar() {
           }}
         />
       )}
-    </div>
+    </header>
   );
 }

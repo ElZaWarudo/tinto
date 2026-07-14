@@ -45,10 +45,65 @@ interface ContextMenuState {
   showSignals: boolean;
 }
 
+interface InternalPointerDrag {
+  node: TreeNode;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  active: boolean;
+}
+
 const MENU_VIEWPORT_MARGIN = 8;
 const EXPLORER_MIN_WIDTH = 160;
 const EXPLORER_DEFAULT_WIDTH = 240;
 const EXPLORER_MAX_WIDTH = 520;
+
+function dropDirectoryAtPhysicalPosition(
+  position: { x: number; y: number } | undefined,
+  treeRoot: HTMLElement | null,
+): string {
+  if (!position || !treeRoot || typeof document.elementFromPoint !== "function") return "";
+  const scale = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  return dropDirectoryAtClientPosition(position.x / scale, position.y / scale, treeRoot) ?? "";
+}
+
+function dropDirectoryAtClientPosition(
+  clientX: number,
+  clientY: number,
+  treeRoot: HTMLElement | null,
+): string | null {
+  if (!treeRoot || typeof document.elementFromPoint !== "function") return null;
+  const element = document.elementFromPoint(clientX, clientY);
+  if (!element || !treeRoot.contains(element)) return null;
+  const item = element.closest<HTMLElement>("[data-tree-kind][data-tree-path]");
+  if (!item) return "";
+  const path = item.dataset.treePath ?? "";
+  if (item.dataset.treeKind === "directory") return path;
+  const separator = path.lastIndexOf("/");
+  return separator >= 0 ? path.slice(0, separator) : "";
+}
+
+function collectTreeNodes(nodes: TreeNode[], output = new Map<string, TreeNode>()) {
+  nodes.forEach((node) => {
+    output.set(node.path, node);
+    if (node.isDir) collectTreeNodes(node.children, output);
+  });
+  return output;
+}
+
+function validDropTarget(node: TreeNode, targetPath: string | null): string | null {
+  if (targetPath === null) return null;
+  const separator = node.path.lastIndexOf("/");
+  const currentParent = separator >= 0 ? node.path.slice(0, separator) : "";
+  if (
+    targetPath === currentParent ||
+    targetPath === node.path ||
+    targetPath.startsWith(`${node.path}/`)
+  ) {
+    return null;
+  }
+  return targetPath;
+}
 
 function explorerWidthStorageKey(repo: string): string {
   return `tinto:explorer-width:${repo}`;
@@ -156,11 +211,15 @@ export function ProjectExplorer({
   const explorerRef = useRef<HTMLDivElement | null>(null);
   const treeRef = useRef<HTMLDivElement | null>(null);
   const menuReturnFocusRef = useRef<HTMLElement | null>(null);
+  const pointerDragRef = useRef<InternalPointerDrag | null>(null);
+  const suppressTreeClickRef = useRef(false);
   // Refs para mantener referencias actualizadas en closures de useEffect
   const handleOsDropRef = useRef<((paths: string[], destDir: string) => Promise<void>) | null>(
     null,
   );
-  const handleTreeDropRef = useRef<((targetPath: string) => Promise<void>) | null>(null);
+  const handleTreeDropRef = useRef<((node: TreeNode, targetPath: string) => Promise<void>) | null>(
+    null,
+  );
   const handlePasteRef = useRef<((destDir: string) => Promise<void>) | null>(null);
 
   const setExplorerWidth = useCallback(
@@ -237,17 +296,21 @@ export function ProjectExplorer({
         const payload = event.payload;
         if (payload.type === "enter" || payload.type === "over") {
           setOsDraggingOver(true);
+          setTreeDropTarget(dropDirectoryAtPhysicalPosition(payload.position, treeRef.current));
           if (payload.type === "enter") {
             setOsDraggedFiles(payload.paths);
           }
         } else if (payload.type === "drop") {
           setOsDraggingOver(false);
           const paths = payload.paths;
+          const targetPath = dropDirectoryAtPhysicalPosition(payload.position, treeRef.current);
           setOsDraggedFiles(paths);
-          handleOsDropRef.current?.(paths, "");
+          setTreeDropTarget(null);
+          handleOsDropRef.current?.(paths, targetPath);
         } else if (payload.type === "leave") {
           setOsDraggingOver(false);
           setOsDraggedFiles(null);
+          setTreeDropTarget(null);
         }
       })
       .then((un) => {
@@ -271,6 +334,7 @@ export function ProjectExplorer({
     const signals = getRepoSignals(delta);
     return filterTreeNodes(buildFileTree(tree.entries, delta.status), filters, signals);
   }, [tree, delta, filters]);
+  const nodesByPath = useMemo(() => collectTreeNodes(nodes), [nodes]);
   const repoSignals = delta ? getRepoSignals(delta) : [];
   const visiblePaths = useMemo(() => visibleTreePaths(nodes, expandedDirs), [nodes, expandedDirs]);
   const effectiveFocusedPath =
@@ -504,27 +568,26 @@ export function ProjectExplorer({
    * desde el nodo que se está arrastrando a `targetPath` (carpeta destino).
    */
   const handleTreeDrop = useCallback(
-    async (targetPath: string) => {
-      if (!draggingNode) return;
-      if (targetPath === draggingNode.path || targetPath.startsWith(`${draggingNode.path}/`)) {
+    async (node: TreeNode, targetPath: string) => {
+      if (targetPath === node.path || targetPath.startsWith(`${node.path}/`)) {
         // No mover un directorio dentro de sí mismo.
         setDraggingNode(null);
         setTreeDropTarget(null);
         return;
       }
+      setDraggingNode(null);
+      setTreeDropTarget(null);
       const report = await sendWithinRepo({
         repo,
-        sources: [draggingNode.path],
+        sources: [node.path],
         destDir: targetPath,
         strategy: "move",
         overwrite: false,
       });
-      setDraggingNode(null);
-      setTreeDropTarget(null);
       processReport(report, async () => {
         const finalReport = await sendWithinRepo({
           repo,
-          sources: [draggingNode.path],
+          sources: [node.path],
           destDir: targetPath,
           strategy: "move",
           overwrite: true,
@@ -532,7 +595,7 @@ export function ProjectExplorer({
         processFinalReport(finalReport);
       });
     },
-    [draggingNode, processFinalReport, processReport, repo],
+    [processFinalReport, processReport, repo],
   );
 
   /** Pega archivos del clipboard interno (Ctrl+C en cualquier nodo) a una
@@ -623,6 +686,57 @@ export function ProjectExplorer({
     handlePasteRef.current = handlePaste;
   }, [handlePaste]);
 
+  useEffect(() => {
+    const resetPointerDrag = () => {
+      pointerDragRef.current = null;
+      suppressTreeClickRef.current = false;
+      setDraggingNode(null);
+      setTreeDropTarget(null);
+    };
+    const onPointerMove = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!drag.active) {
+        if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 5) return;
+        drag.active = true;
+        suppressTreeClickRef.current = true;
+        setDraggingNode(drag.node);
+      }
+      event.preventDefault();
+      const target = validDropTarget(
+        drag.node,
+        dropDirectoryAtClientPosition(event.clientX, event.clientY, treeRef.current),
+      );
+      setTreeDropTarget((current) => (current === target ? current : target));
+    };
+    const onPointerUp = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      pointerDragRef.current = null;
+      if (!drag.active) return;
+      event.preventDefault();
+      const target = validDropTarget(
+        drag.node,
+        dropDirectoryAtClientPosition(event.clientX, event.clientY, treeRef.current),
+      );
+      setDraggingNode(null);
+      setTreeDropTarget(null);
+      if (target !== null) void handleTreeDropRef.current?.(drag.node, target);
+      window.setTimeout(() => {
+        suppressTreeClickRef.current = false;
+      }, 0);
+    };
+    document.addEventListener("pointermove", onPointerMove, { passive: false });
+    document.addEventListener("pointerup", onPointerUp, { passive: false });
+    document.addEventListener("pointercancel", resetPointerDrag);
+    return () => {
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+      document.removeEventListener("pointercancel", resetPointerDrag);
+      pointerDragRef.current = null;
+    };
+  }, []);
+
   const confirmOverwrite = async () => {
     if (!pendingOp) return;
     setPendingOp(null);
@@ -696,19 +810,6 @@ export function ProjectExplorer({
           void handlePaste("");
         }
       }}
-      onDragOver={(event) => {
-        // Solo previene default si NO viene del OS (el OS se maneja via
-        // onDragDropEvent). Para HTML5 drag dentro del árbol, es necesario
-        // para que onDrop dispare.
-        if (draggingNode) event.preventDefault();
-      }}
-      onDrop={(event) => {
-        if (draggingNode) {
-          event.preventDefault();
-          // Drop al raíz del repo (sin target folder específico).
-          void handleTreeDrop("");
-        }
-      }}
     >
       <div className="project-explorer__head">
         <span className="project-explorer__title">{busStore.displayName(repo)}</span>
@@ -727,11 +828,35 @@ export function ProjectExplorer({
       </div>
       <div
         ref={treeRef}
-        className={`project-explorer__body${osDraggingOver ? " project-explorer--dragging-active" : ""}`}
+        className={`project-explorer__body${osDraggingOver ? " project-explorer--dragging-active" : ""}${draggingNode ? " project-explorer__body--internal-dragging" : ""}`}
         data-testid={`project-explorer-body-${repo}`}
         role="tree"
         aria-label={`Archivos de ${busStore.displayName(repo)}`}
         onKeyDown={handleTreeKeyDown}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || event.isPrimary === false) return;
+          const item =
+            event.target instanceof Element
+              ? event.target.closest<HTMLElement>("[data-tree-path][data-tree-kind]")
+              : null;
+          if (!item || !event.currentTarget.contains(item)) return;
+          const node = nodesByPath.get(item.dataset.treePath ?? "");
+          if (!node) return;
+          suppressTreeClickRef.current = false;
+          pointerDragRef.current = {
+            node,
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            active: false,
+          };
+        }}
+        onClickCapture={(event) => {
+          if (!suppressTreeClickRef.current) return;
+          event.preventDefault();
+          event.stopPropagation();
+          suppressTreeClickRef.current = false;
+        }}
       >
         {error && !tree ? (
           <div className="tree-files__msg tree-files__msg--error" role="alert">
@@ -766,12 +891,7 @@ export function ProjectExplorer({
                   onFocusPath={setFocusedPath}
                   onOpen={(path, pin) => fileDock.openFile(repo, path, pin)}
                   onContextMenu={openContextMenu}
-                  onTreeDragStart={(node) => setDraggingNode(node)}
-                  onTreeDragEnd={() => {
-                    setDraggingNode(null);
-                    setTreeDropTarget(null);
-                  }}
-                  onTreeDrop={(targetPath) => void handleTreeDrop(targetPath)}
+                  draggingPath={draggingNode?.path ?? null}
                   dropTargetPath={treeDropTarget}
                   onPasteInto={(destDir) => void handlePaste(destDir)}
                   onDelete={(node) => void handleDelete(node)}
@@ -784,18 +904,23 @@ export function ProjectExplorer({
             )}
           </>
         )}
-        {osDraggingOver && (
+        {osDraggingOver && treeDropTarget === "" && (
           <div
             className="project-explorer__drop-overlay"
             data-testid={`project-explorer-drop-overlay-${repo}`}
           >
             <span className="project-explorer__drop-text">
-              Soltar para copiar al repo
+              Soltar en la raíz
               {osDraggedFiles && osDraggedFiles.length > 0
                 ? ` (${osDraggedFiles.length} archivos)`
                 : ""}
             </span>
           </div>
+        )}
+        {osDraggingOver && (
+          <span className="sr-only" role="status">
+            Destino: {treeDropTarget || "raíz del repositorio"}
+          </span>
         )}
       </div>
       {fileOpError && (

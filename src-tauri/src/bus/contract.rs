@@ -110,6 +110,55 @@ pub struct AgentSessionRuntimeOptions {
     pub speed: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRuntimeCatalogStatus {
+    Loading,
+    Ready,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRuntimeReasoningEffort {
+    pub value: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRuntimeServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRuntimeModel {
+    pub id: String,
+    pub model: String,
+    pub display_name: String,
+    pub description: String,
+    pub supported_reasoning_efforts: Vec<AgentRuntimeReasoningEffort>,
+    pub default_reasoning_effort: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tiers: Vec<AgentRuntimeServiceTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_service_tier: Option<String>,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRuntimeCatalog {
+    pub status: AgentRuntimeCatalogStatus,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<AgentRuntimeModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub updated_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionGoal {
     pub text: String,

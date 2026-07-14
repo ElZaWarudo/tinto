@@ -265,6 +265,7 @@ import {
   addWslRepo,
   forgetRepo,
   getAgentJournalSession,
+  getAgentRuntimeCatalog,
   getCommitDiff,
   getGitleaksSetupStatus,
   getRepoFetchPreview,
@@ -417,6 +418,12 @@ describe("RDM-008 client wrappers", () => {
     void getAgentJournalSession("sess-1");
     expect(invokeMock).toHaveBeenCalledWith("get_agent_journal_session", {
       sessionId: "sess-1",
+    });
+
+    void getAgentRuntimeCatalog("sess-1", true);
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_runtime_catalog", {
+      sessionId: "sess-1",
+      refresh: true,
     });
 
     void revertSession("sess-1", true);

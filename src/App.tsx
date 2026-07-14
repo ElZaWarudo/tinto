@@ -34,6 +34,7 @@ import {
   detachConsolesPanelFromWorkspaceDrop,
 } from "./workspace/detachConsoles";
 import { MenuBar } from "./workbench/MenuBar";
+import { CompactWindowBar } from "./workbench/WindowChrome";
 import { AddRepoDialog } from "./workbench/AddRepoDialog";
 import { FirstRun, StartupFailure, StartupLoading } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
@@ -221,6 +222,7 @@ export default function App() {
   if (!hasUsableShell && startupError) {
     return (
       <div className="app-shell">
+        <CompactWindowBar />
         <StartupFailure message={startupError} onRetry={() => void reloadActiveWorkbench()} />
       </div>
     );
@@ -229,6 +231,7 @@ export default function App() {
   if (!hasUsableShell) {
     return (
       <div className="app-shell">
+        <CompactWindowBar />
         <StartupLoading />
       </div>
     );
@@ -237,6 +240,7 @@ export default function App() {
   if (!config?.active) {
     return (
       <div className="app-shell">
+        <CompactWindowBar />
         <FirstRun />
       </div>
     );

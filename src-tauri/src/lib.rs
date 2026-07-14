@@ -140,6 +140,7 @@ pub fn run() {
             agent_console::commands::start_agent_session,
             agent_console::commands::stop_agent_session,
             agent_console::commands::list_agent_sessions,
+            agent_console::commands::get_agent_runtime_catalog,
             agent_console::commands::list_agent_journal_sessions,
             agent_console::commands::get_agent_journal_session,
             agent_console::commands::agent_binary_available,
