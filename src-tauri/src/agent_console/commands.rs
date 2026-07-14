@@ -174,6 +174,43 @@ pub fn get_agent_journal_session(
 }
 
 #[tauri::command]
+pub fn delete_agent_journal_session(
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    journal: State<'_, Mutex<AgentJournal>>,
+    session_id: String,
+) -> Result<bool, CommandError> {
+    if session_id.trim().is_empty() {
+        return Err(CommandError::new(
+            "invalid_session_id",
+            "la sesión guardada no tiene un identificador válido",
+        ));
+    }
+    {
+        let mut registry = lock_registry(&registry)?;
+        registry
+            .refresh_session_statuses()
+            .map_err(CommandError::from)?;
+        let active = registry.list_sessions().iter().any(|session| {
+            session.id == session_id
+                && matches!(
+                    session.status,
+                    AgentSessionStatus::Starting | AgentSessionStatus::Running
+                )
+        });
+        if active {
+            return Err(CommandError::new(
+                "agent_session_active",
+                "detén la sesión antes de eliminar su conversación guardada",
+            ));
+        }
+    }
+    let journal = lock_journal(&journal)?;
+    journal
+        .delete_session(&session_id)
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))
+}
+
+#[tauri::command]
 pub fn agent_binary_available(agent_type: String) -> Result<bool, CommandError> {
     match resolve_agent_binary(&agent_type) {
         Ok(_) => Ok(true),

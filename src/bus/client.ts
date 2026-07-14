@@ -130,6 +130,9 @@ export const listAgentJournalSessions = (limit?: number) =>
 export const getAgentJournalSession = (sessionId: string) =>
   invoke<AgentSession | null>("get_agent_journal_session", { sessionId });
 
+export const deleteAgentJournalSession = (sessionId: string) =>
+  invoke<boolean>("delete_agent_journal_session", { sessionId });
+
 export const getGitleaksSetupStatus = () =>
   invoke<GitleaksSetupStatus>("get_gitleaks_setup_status");
 export const installGitleaks = () => invoke<GitleaksInstallResult>("install_gitleaks");

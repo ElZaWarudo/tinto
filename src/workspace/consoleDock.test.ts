@@ -204,6 +204,22 @@ describe("consoleDock", () => {
     vi.useRealTimers();
   });
 
+  it("closes and forgets a terminal by session id", () => {
+    const firstApi = fakeApi();
+    consoleDock.register(firstApi as never);
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" });
+    const panel = firstApi._panels[agentTerminalPanelId("sess-1")];
+
+    consoleDock.closeTerminal("sess-1");
+
+    expect(firstApi.removePanel).toHaveBeenCalledWith(panel);
+    expect(consoleDock.openTerminalSessionIds()).toEqual([]);
+    consoleDock.unregister(firstApi as never);
+    const secondApi = fakeApi();
+    consoleDock.register(secondApi as never);
+    expect(secondApi.addPanel).not.toHaveBeenCalled();
+  });
+
   it("does not restore stale console layouts from previous app runs", () => {
     localStorage.setItem("tinto:console-dock", JSON.stringify({ panels: { a: {} } }));
     const api = fakeApi();

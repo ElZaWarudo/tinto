@@ -259,6 +259,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listenMock(...a) }));
 
 import {
+  deleteAgentJournalSession,
   getBlob,
   agentBinaryAvailable,
   agentBinaryAvailableForRepo,
@@ -417,6 +418,11 @@ describe("RDM-008 client wrappers", () => {
 
     void getAgentJournalSession("sess-1");
     expect(invokeMock).toHaveBeenCalledWith("get_agent_journal_session", {
+      sessionId: "sess-1",
+    });
+
+    void deleteAgentJournalSession("sess-1");
+    expect(invokeMock).toHaveBeenCalledWith("delete_agent_journal_session", {
       sessionId: "sess-1",
     });
 
