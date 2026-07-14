@@ -8,7 +8,8 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 
 use super::{app_server::CodexAppServerHandle, AgentConsoleError};
 use crate::{
-    bus::contract::AgentSessionRuntimeOptions, wsl_agent::shell_env::agent_console_script,
+    bus::contract::{AgentRuntimeCatalog, AgentSessionRuntimeOptions},
+    wsl_agent::shell_env::agent_console_script,
 };
 
 pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
@@ -32,6 +33,14 @@ pub trait AgentProcess: Send {
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
         Vec::new()
+    }
+    fn runtime_catalog(&self) -> Option<AgentRuntimeCatalog> {
+        None
+    }
+    fn refresh_runtime_catalog(
+        &mut self,
+    ) -> Result<Option<AgentRuntimeCatalog>, AgentConsoleError> {
+        Ok(None)
     }
 }
 
@@ -89,6 +98,15 @@ impl AgentProcessFactory for PortablePtyFactory {
         distro: &str,
         working_dir: &Path,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if agent_type.eq_ignore_ascii_case("codex") {
+            match CodexAppServerHandle::spawn_wsl(distro, working_dir) {
+                Ok(handle) => return Ok(Box::new(handle)),
+                Err(_error) => {
+                    // Keep the WSL-native terminal path as a compatibility fallback for
+                    // Codex builds that do not expose app-server yet.
+                }
+            }
+        }
         Ok(Box::new(PtyHandle::spawn_wsl_agent(
             agent_type,
             distro,
@@ -286,7 +304,7 @@ fn spawn_error(message: String) -> AgentConsoleError {
 }
 
 #[cfg(windows)]
-fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
+pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
     let mut command = Command::new("taskkill");
     let output = hide_console(command.args(["/F", "/T", "/PID", &pid.to_string()]))
         .output()
@@ -302,7 +320,7 @@ fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
 }
 
 #[cfg(unix)]
-fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
+pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
     let process_group = format!("-{pid}");
     let term = Command::new("kill")
         .args(["-TERM", &process_group])
@@ -323,7 +341,7 @@ fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn kill_process_tree(_pid: u32) -> Result<(), AgentConsoleError> {
+pub(crate) fn kill_process_tree(_pid: u32) -> Result<(), AgentConsoleError> {
     Err(AgentConsoleError::new(
         "process_tree_kill_unsupported",
         "process tree kill no esta soportado en esta plataforma",

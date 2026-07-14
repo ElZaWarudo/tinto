@@ -19,6 +19,7 @@ import {
   type AgentSessionOutput,
   type AgentSessionTimelineItem,
   type AgentSession,
+  type AgentRuntimeCatalog,
   type AgentSessionRuntimeOptions,
   type AgentHostCommandResult,
   type GitleaksSetupStatus,
@@ -119,6 +120,9 @@ export const startAgentSession = (repo: string, agentType: string) =>
 export const stopAgentSession = (sessionId: string) => invoke("stop_agent_session", { sessionId });
 
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
+
+export const getAgentRuntimeCatalog = (sessionId: string, refresh = false) =>
+  invoke<AgentRuntimeCatalog | null>("get_agent_runtime_catalog", { sessionId, refresh });
 
 export const listAgentJournalSessions = (limit?: number) =>
   invoke<AgentJournalSessionSummary[]>("list_agent_journal_sessions", { limit });

@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -15,9 +15,13 @@ use serde_json::{json, Value};
 use super::AgentConsoleError;
 use super::{
     commands::TIMELINE_FRAME_PREFIX,
-    pty::{AgentProcess, AgentProcessEvent},
+    pty::{kill_process_tree, AgentProcess, AgentProcessEvent},
 };
-use crate::bus::contract::{AgentSessionRuntimeOptions, AgentSessionTimelineKind};
+use crate::bus::contract::{
+    AgentRuntimeCatalog, AgentRuntimeCatalogStatus, AgentRuntimeModel, AgentRuntimeReasoningEffort,
+    AgentRuntimeServiceTier, AgentSessionRuntimeOptions, AgentSessionTimelineKind,
+};
+use crate::wsl_agent::shell_env::agent_console_script;
 
 #[cfg(windows)]
 use crate::windows_process::hide_console;
@@ -25,6 +29,7 @@ use crate::windows_process::hide_console;
 const INITIAL_REQUEST_ID: u64 = 1;
 const THREAD_START_REQUEST_ID: u64 = 2;
 const FS_WATCH_REQUEST_ID: u64 = 3;
+const MODEL_LIST_REQUEST_ID: u64 = 4;
 const FIRST_TURN_REQUEST_ID: u64 = 100;
 
 pub struct CodexAppServerHandle {
@@ -37,13 +42,39 @@ pub struct CodexAppServerHandle {
     pending_options: Option<AgentSessionRuntimeOptions>,
     thread_id: Arc<Mutex<Option<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
+    runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
+    pending_model_requests: Arc<Mutex<HashSet<u64>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
 
 impl CodexAppServerHandle {
     pub fn spawn(binary_path: &Path, working_dir: &Path) -> Result<Self, AgentConsoleError> {
-        let mut child = spawn_app_server(binary_path, working_dir)?;
+        let child = spawn_command(build_app_server_command(binary_path, working_dir))?;
+        Self::from_child(child, working_dir, "codex_app_server")
+    }
+
+    pub fn spawn_wsl(distro: &str, working_dir: &Path) -> Result<Self, AgentConsoleError> {
+        let command = build_wsl_app_server_command(distro, working_dir)?;
+        let child = spawn_command(command)?;
+        let mut handle = Self::from_child(child, working_dir, "codex_app_server_wsl")?;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if let Some(status) = handle.child.try_wait().map_err(|error| {
+            AgentConsoleError::new("app_server_status_failed", error.to_string())
+        })? {
+            return Err(AgentConsoleError::new(
+                "app_server_exited_early",
+                format!("codex app-server WSL termino durante el arranque: {status}"),
+            ));
+        }
+        Ok(handle)
+    }
+
+    fn from_child(
+        mut child: Child,
+        working_dir: &Path,
+        catalog_source: &str,
+    ) -> Result<Self, AgentConsoleError> {
         let stdin = child.stdin.take().ok_or_else(|| {
             AgentConsoleError::new(
                 "app_server_spawn_failed",
@@ -61,6 +92,15 @@ impl CodexAppServerHandle {
         let stdin = Arc::new(Mutex::new(stdin));
         let thread_id = Arc::new(Mutex::new(None));
         let pending_turns = Arc::new(Mutex::new(VecDeque::new()));
+        let runtime_catalog = Arc::new(Mutex::new(AgentRuntimeCatalog {
+            status: AgentRuntimeCatalogStatus::Loading,
+            source: catalog_source.to_string(),
+            models: Vec::new(),
+            default_model: None,
+            error: None,
+            updated_at_ms: now_ms(),
+        }));
+        let pending_model_requests = Arc::new(Mutex::new(HashSet::from([MODEL_LIST_REQUEST_ID])));
         let next_request_id = Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID));
         let cwd = working_dir.to_path_buf();
 
@@ -73,6 +113,8 @@ impl CodexAppServerHandle {
                 stdin: Arc::clone(&stdin),
                 thread_id: Arc::clone(&thread_id),
                 pending_turns: Arc::clone(&pending_turns),
+                runtime_catalog: Arc::clone(&runtime_catalog),
+                pending_model_requests: Arc::clone(&pending_model_requests),
                 next_request_id: Arc::clone(&next_request_id),
                 cwd: cwd.clone(),
             },
@@ -88,6 +130,8 @@ impl CodexAppServerHandle {
             pending_options: None,
             thread_id,
             pending_turns,
+            runtime_catalog,
+            pending_model_requests,
             next_request_id,
             cwd,
         })
@@ -165,6 +209,10 @@ impl AgentProcess for CodexAppServerHandle {
     }
 
     fn kill(&mut self) -> Result<(), AgentConsoleError> {
+        if kill_process_tree(self.child.id()).is_ok() {
+            let _ = self.child.kill();
+            return Ok(());
+        }
         self.child
             .kill()
             .map_err(|e| AgentConsoleError::new("app_server_kill_failed", e.to_string()))
@@ -199,9 +247,30 @@ impl AgentProcess for CodexAppServerHandle {
         }
         events
     }
+
+    fn runtime_catalog(&self) -> Option<AgentRuntimeCatalog> {
+        self.runtime_catalog
+            .lock()
+            .ok()
+            .map(|catalog| catalog.clone())
+    }
+
+    fn refresh_runtime_catalog(
+        &mut self,
+    ) -> Result<Option<AgentRuntimeCatalog>, AgentConsoleError> {
+        request_model_catalog(
+            &self.stdin,
+            &self.runtime_catalog,
+            &self.pending_model_requests,
+            &self.next_request_id,
+            None,
+            true,
+        )?;
+        Ok(self.runtime_catalog())
+    }
 }
 
-fn spawn_app_server(binary_path: &Path, working_dir: &Path) -> Result<Child, AgentConsoleError> {
+fn build_app_server_command(binary_path: &Path, working_dir: &Path) -> Command {
     let mut command = Command::new(binary_path);
     command
         .arg("app-server")
@@ -210,6 +279,40 @@ fn spawn_app_server(binary_path: &Path, working_dir: &Path) -> Result<Child, Age
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    command
+}
+
+pub(crate) fn build_wsl_app_server_command(
+    distro: &str,
+    working_dir: &Path,
+) -> Result<Command, AgentConsoleError> {
+    if distro.trim().is_empty() {
+        return Err(AgentConsoleError::new(
+            "missing_distro",
+            "no se configuro la distro WSL",
+        ));
+    }
+
+    let mut command = Command::new("wsl.exe");
+    command
+        .arg("-d")
+        .arg(distro)
+        .arg("--exec")
+        .arg("bash")
+        .arg("-lc")
+        .arg(agent_console_script())
+        .arg("tinto-agent-console-app-server")
+        .arg(working_dir.as_os_str())
+        .arg("codex")
+        .arg("app-server")
+        .arg("--stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    Ok(command)
+}
+
+fn spawn_command(mut command: Command) -> Result<Child, AgentConsoleError> {
     #[cfg(windows)]
     let command = hide_console(&mut command);
     command
@@ -237,6 +340,18 @@ fn send_initial_requests(
         }),
     )?;
     write_json(stdin, &json!({ "method": "initialized", "params": {} }))?;
+    write_json(
+        stdin,
+        &json!({
+            "method": "model/list",
+            "id": MODEL_LIST_REQUEST_ID,
+            "params": {
+                "cursor": null,
+                "limit": 100,
+                "includeHidden": false
+            }
+        }),
+    )?;
     write_json(
         stdin,
         &json!({
@@ -284,6 +399,8 @@ struct ServerRuntimeContext {
     stdin: Arc<Mutex<ChildStdin>>,
     thread_id: Arc<Mutex<Option<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
+    runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
+    pending_model_requests: Arc<Mutex<HashSet<u64>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
@@ -294,6 +411,10 @@ struct PendingTurn {
 }
 
 fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
+    if handle_model_catalog_response(message, context) {
+        return;
+    }
+
     if message.get("id").and_then(Value::as_u64) == Some(THREAD_START_REQUEST_ID) {
         if let Some(id) = message
             .pointer("/result/thread/id")
@@ -353,6 +474,227 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         }
         _ => {}
     }
+}
+
+fn handle_model_catalog_response(message: &Value, context: &ServerRuntimeContext) -> bool {
+    let Some(request_id) = message.get("id").and_then(Value::as_u64) else {
+        return false;
+    };
+    let is_model_request = context
+        .pending_model_requests
+        .lock()
+        .ok()
+        .map(|mut pending| pending.remove(&request_id))
+        .unwrap_or(false);
+    if !is_model_request {
+        return false;
+    }
+
+    if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
+        update_catalog_error(&context.runtime_catalog, error);
+        return true;
+    }
+
+    let Some(data) = message.pointer("/result/data").and_then(Value::as_array) else {
+        update_catalog_error(
+            &context.runtime_catalog,
+            "Codex devolvio un catalogo de modelos no valido",
+        );
+        return true;
+    };
+    let models = data
+        .iter()
+        .filter_map(parse_runtime_model)
+        .collect::<Vec<_>>();
+    if let Ok(mut catalog) = context.runtime_catalog.lock() {
+        for model in models {
+            if let Some(existing) = catalog.models.iter_mut().find(|item| item.id == model.id) {
+                *existing = model;
+            } else {
+                catalog.models.push(model);
+            }
+        }
+        catalog.updated_at_ms = now_ms();
+    }
+
+    let next_cursor = message
+        .pointer("/result/nextCursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty());
+    if let Some(cursor) = next_cursor {
+        if let Err(error) = request_model_catalog(
+            &context.stdin,
+            &context.runtime_catalog,
+            &context.pending_model_requests,
+            &context.next_request_id,
+            Some(cursor),
+            false,
+        ) {
+            update_catalog_error(&context.runtime_catalog, &error.message);
+        }
+        return true;
+    }
+
+    if let Ok(mut catalog) = context.runtime_catalog.lock() {
+        catalog.default_model = catalog
+            .models
+            .iter()
+            .find(|model| model.is_default)
+            .map(|model| model.id.clone());
+        catalog.status = AgentRuntimeCatalogStatus::Ready;
+        catalog.error = None;
+        catalog.updated_at_ms = now_ms();
+    }
+    true
+}
+
+fn request_model_catalog(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    runtime_catalog: &Arc<Mutex<AgentRuntimeCatalog>>,
+    pending_model_requests: &Arc<Mutex<HashSet<u64>>>,
+    next_request_id: &Arc<AtomicU64>,
+    cursor: Option<&str>,
+    refresh: bool,
+) -> Result<(), AgentConsoleError> {
+    let request_id = next_request_id.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut catalog) = runtime_catalog.lock() {
+        catalog.status = AgentRuntimeCatalogStatus::Loading;
+        catalog.error = None;
+        catalog.updated_at_ms = now_ms();
+        if refresh {
+            catalog.models.clear();
+            catalog.default_model = None;
+        }
+    }
+    let mut pending = pending_model_requests.lock().map_err(|_| {
+        AgentConsoleError::new("app_server_lock_poisoned", "model request lock failed")
+    })?;
+    if refresh {
+        pending.clear();
+    }
+    pending.insert(request_id);
+    drop(pending);
+    let result = write_json(
+        stdin,
+        &json!({
+            "method": "model/list",
+            "id": request_id,
+            "params": {
+                "cursor": cursor,
+                "limit": 100,
+                "includeHidden": false
+            }
+        }),
+    );
+    if result.is_err() {
+        if let Ok(mut pending) = pending_model_requests.lock() {
+            pending.remove(&request_id);
+        }
+    }
+    result
+}
+
+fn update_catalog_error(catalog: &Arc<Mutex<AgentRuntimeCatalog>>, message: &str) {
+    if let Ok(mut catalog) = catalog.lock() {
+        catalog.status = AgentRuntimeCatalogStatus::Error;
+        catalog.error = Some(message.to_string());
+        catalog.updated_at_ms = now_ms();
+    }
+}
+
+fn parse_runtime_model(value: &Value) -> Option<AgentRuntimeModel> {
+    let id = value.get("id").and_then(Value::as_str)?.to_string();
+    let supported_reasoning_efforts = value
+        .get("supportedReasoningEfforts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|effort| {
+            Some(AgentRuntimeReasoningEffort {
+                value: effort.get("reasoningEffort")?.as_str()?.to_string(),
+                description: effort
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut service_tiers = Vec::new();
+    for key in ["serviceTiers", "additionalSpeedTiers"] {
+        for tier in value
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let parsed = if let Some(id) = tier.as_str() {
+                Some(AgentRuntimeServiceTier {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    description: String::new(),
+                })
+            } else {
+                tier.get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| AgentRuntimeServiceTier {
+                        id: id.to_string(),
+                        name: tier
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or(id)
+                            .to_string(),
+                        description: tier
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+            };
+            if let Some(parsed) = parsed {
+                if !service_tiers
+                    .iter()
+                    .any(|existing: &AgentRuntimeServiceTier| existing.id == parsed.id)
+                {
+                    service_tiers.push(parsed);
+                }
+            }
+        }
+    }
+    let default_reasoning_effort = value
+        .get("defaultReasoningEffort")
+        .and_then(Value::as_str)
+        .unwrap_or("medium")
+        .to_string();
+    Some(AgentRuntimeModel {
+        model: value
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or(&id)
+            .to_string(),
+        display_name: value
+            .get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or(&id)
+            .to_string(),
+        description: value
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        supported_reasoning_efforts,
+        default_reasoning_effort,
+        service_tiers,
+        default_service_tier: value
+            .get("defaultServiceTier")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        is_default: value
+            .get("isDefault")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        id,
+    })
 }
 
 fn timeline_frame(kind: AgentSessionTimelineKind, text: &str) -> Vec<u8> {
@@ -417,6 +759,19 @@ fn send_turn_start(
     cwd: &Path,
     options: Option<&AgentSessionRuntimeOptions>,
 ) -> Result<(), AgentConsoleError> {
+    write_json(
+        stdin,
+        &turn_start_message(request_id, thread_id, text, cwd, options),
+    )
+}
+
+fn turn_start_message(
+    request_id: u64,
+    thread_id: &str,
+    text: &str,
+    cwd: &Path,
+    options: Option<&AgentSessionRuntimeOptions>,
+) -> Value {
     let mut params = json!({
         "threadId": thread_id,
         "cwd": cwd.to_string_lossy(),
@@ -428,14 +783,17 @@ fn send_turn_start(
     if let Some(effort) = options.and_then(|options| options.reasoning_effort.as_deref()) {
         params["effort"] = json!(effort);
     }
-    write_json(
-        stdin,
-        &json!({
-            "method": "turn/start",
-            "id": request_id,
-            "params": params
-        }),
-    )
+    if let Some(service_tier) = options
+        .and_then(|options| options.speed.as_deref())
+        .filter(|speed| *speed != "standard")
+    {
+        params["serviceTier"] = json!(service_tier);
+    }
+    json!({
+        "method": "turn/start",
+        "id": request_id,
+        "params": params
+    })
 }
 
 fn write_json(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), AgentConsoleError> {
@@ -493,6 +851,7 @@ impl Read for ChannelReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
 
     #[allow(clippy::zombie_processes)]
     fn dummy_stdin() -> Arc<Mutex<ChildStdin>> {
@@ -519,6 +878,15 @@ mod tests {
             stdin: dummy_stdin(),
             thread_id: Arc::new(Mutex::new(Some("t".into()))),
             pending_turns: Arc::new(Mutex::new(VecDeque::new())),
+            runtime_catalog: Arc::new(Mutex::new(AgentRuntimeCatalog {
+                status: AgentRuntimeCatalogStatus::Loading,
+                source: "codex_app_server".into(),
+                models: Vec::new(),
+                default_model: None,
+                error: None,
+                updated_at_ms: 0,
+            })),
+            pending_model_requests: Arc::new(Mutex::new(HashSet::new())),
             next_request_id: Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID)),
             cwd: PathBuf::from("/tmp/repo"),
         }
@@ -587,6 +955,145 @@ mod tests {
         assert!(frame.starts_with("\u{1d}TINTO_TIMELINE "));
         assert!(frame.contains("\"kind\":\"command_output\""));
         assert!(frame.contains("\"text\":\"cargo test\""));
+    }
+
+    #[test]
+    fn model_list_response_populates_dynamic_runtime_catalog() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        context
+            .pending_model_requests
+            .lock()
+            .unwrap()
+            .insert(MODEL_LIST_REQUEST_ID);
+
+        handle_server_message(
+            &json!({
+                "id": MODEL_LIST_REQUEST_ID,
+                "result": {
+                    "data": [{
+                        "id": "gpt-5.6-sol",
+                        "model": "gpt-5.6-sol",
+                        "displayName": "GPT-5.6 Sol",
+                        "description": "",
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": "medium", "description": ""},
+                            {"reasoningEffort": "high", "description": ""}
+                        ],
+                        "defaultReasoningEffort": "medium",
+                        "serviceTiers": [
+                            {"id": "fast", "name": "Fast", "description": ""}
+                        ],
+                        "isDefault": true
+                    }],
+                    "nextCursor": null
+                }
+            }),
+            &context,
+        );
+
+        let catalog = context.runtime_catalog.lock().unwrap().clone();
+        assert_eq!(catalog.status, AgentRuntimeCatalogStatus::Ready);
+        assert_eq!(catalog.default_model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(catalog.models[0].display_name, "GPT-5.6 Sol");
+        assert_eq!(
+            catalog.models[0].supported_reasoning_efforts[1].value,
+            "high"
+        );
+        assert_eq!(catalog.models[0].service_tiers[0].id, "fast");
+    }
+
+    #[test]
+    fn model_list_error_is_kept_out_of_the_transcript() {
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        context
+            .pending_model_requests
+            .lock()
+            .unwrap()
+            .insert(MODEL_LIST_REQUEST_ID);
+
+        handle_server_message(
+            &json!({"id": MODEL_LIST_REQUEST_ID, "error": {"message": "offline"}}),
+            &context,
+        );
+
+        let catalog = context.runtime_catalog.lock().unwrap().clone();
+        assert_eq!(catalog.status, AgentRuntimeCatalogStatus::Error);
+        assert_eq!(catalog.error.as_deref(), Some("offline"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn turn_start_forwards_model_effort_and_fast_service_tier() {
+        let message = turn_start_message(
+            100,
+            "thread-1",
+            "ship it",
+            Path::new("/tmp/repo"),
+            Some(&AgentSessionRuntimeOptions {
+                model: Some("gpt-5.6-sol".into()),
+                reasoning_effort: Some("high".into()),
+                speed: Some("fast".into()),
+            }),
+        );
+
+        assert_eq!(message["params"]["model"], "gpt-5.6-sol");
+        assert_eq!(message["params"]["effort"], "high");
+        assert_eq!(message["params"]["serviceTier"], "fast");
+    }
+
+    #[test]
+    fn wsl_app_server_command_keeps_codex_and_repo_inside_the_distro() {
+        let command = build_wsl_app_server_command("Ubuntu", Path::new("/home/me/repo")).unwrap();
+        let args = command
+            .get_args()
+            .map(OsStr::to_os_string)
+            .collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), OsStr::new("wsl.exe"));
+        assert_eq!(
+            &args[..5],
+            [
+                OsString::from("-d"),
+                OsString::from("Ubuntu"),
+                OsString::from("--exec"),
+                OsString::from("bash"),
+                OsString::from("-lc"),
+            ]
+        );
+        assert!(args[5].to_string_lossy().contains("$nvm_dir/nvm.sh"));
+        assert!(args[5]
+            .to_string_lossy()
+            .contains("/mnt/[A-Za-z]/*) continue"));
+        assert_eq!(
+            &args[6..],
+            [
+                OsString::from("tinto-agent-console-app-server"),
+                OsString::from("/home/me/repo"),
+                OsString::from("codex"),
+                OsString::from("app-server"),
+                OsString::from("--stdio"),
+            ]
+        );
+        assert!(command.get_current_dir().is_none());
+    }
+
+    #[test]
+    fn wsl_app_server_command_rejects_an_empty_distro() {
+        let error = build_wsl_app_server_command(" ", Path::new("/home/me/repo")).unwrap_err();
+
+        assert_eq!(error.category, "missing_distro");
+    }
+
+    #[test]
+    fn turn_start_preserves_a_linux_working_directory() {
+        let message =
+            turn_start_message(100, "thread-1", "ship it", Path::new("/home/me/repo"), None);
+
+        assert_eq!(message["params"]["cwd"], "/home/me/repo");
     }
 
     #[test]

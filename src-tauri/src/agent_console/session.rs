@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use crate::bus::contract::{
-    AgentSession, AgentSessionChange, AgentSessionContextSummary, AgentSessionError,
-    AgentSessionFeedback, AgentSessionGoal, AgentSessionPersonality, AgentSessionPlanMode,
-    AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
+    AgentRuntimeCatalog, AgentSession, AgentSessionChange, AgentSessionContextSummary,
+    AgentSessionError, AgentSessionFeedback, AgentSessionGoal, AgentSessionPersonality,
+    AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
     AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
@@ -198,6 +198,19 @@ impl AgentSessionRecord {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
         let process = self.running_process_mut()?;
         process.resize(cols, rows)
+    }
+
+    pub fn runtime_catalog(&self) -> Option<AgentRuntimeCatalog> {
+        self.process
+            .as_ref()
+            .and_then(|process| process.runtime_catalog())
+    }
+
+    pub fn refresh_runtime_catalog(
+        &mut self,
+    ) -> Result<Option<AgentRuntimeCatalog>, AgentConsoleError> {
+        let process = self.running_process_mut()?;
+        process.refresh_runtime_catalog()
     }
 
     pub fn refresh_status(&mut self) -> Result<(), AgentConsoleError> {

@@ -19,8 +19,8 @@ use std::{
 };
 
 use crate::bus::contract::{
-    AgentSession, AgentSessionContextSummary, AgentSessionError, AgentSessionFeedback,
-    AgentSessionLimits, AgentSessionRuntimeOptions, AgentSessionTimelineItem,
+    AgentRuntimeCatalog, AgentSession, AgentSessionContextSummary, AgentSessionError,
+    AgentSessionFeedback, AgentSessionLimits, AgentSessionRuntimeOptions, AgentSessionTimelineItem,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -264,6 +264,22 @@ impl AgentSessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         session.write_input(input, options)
+    }
+
+    pub fn session_runtime_catalog(
+        &mut self,
+        session_id: &str,
+        refresh: bool,
+    ) -> Result<Option<AgentRuntimeCatalog>, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        if refresh {
+            session.refresh_runtime_catalog()
+        } else {
+            Ok(session.runtime_catalog())
+        }
     }
 
     pub fn set_session_goal(
