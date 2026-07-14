@@ -8,7 +8,8 @@
 import { useEffect, useState } from "react";
 import { DockviewReact, themeVisualStudio } from "dockview-react";
 import type { DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
-import { getCommitLog, retryRepo } from "../bus/client";
+import { agentSessionStore } from "../agent/sessionStore";
+import { getCommitLog, listAgentSessions, retryRepo, startAgentSession } from "../bus/client";
 import type { CommitInfo, RepoDelta, RepoEntry, WorkbenchConfig } from "../bus/contract";
 import {
   busStore,
@@ -29,6 +30,8 @@ import { MetricsPill, SignalBadges } from "./SignalBadges";
 import { WatchedFilesSection } from "./WatchedFilesSection";
 import { FileView } from "./file/FileView";
 import { FileTab } from "./FileTab";
+import { agentAvailabilityKey } from "./agentAvailability";
+import { RepoAgentLauncher } from "./RepoCard";
 import { RepoConfigSection } from "./RepoConfigSection";
 import { RepoSourceBadge } from "./RepoSourceBadge";
 import { ProjectExplorer } from "./tree/ProjectExplorer";
@@ -211,7 +214,7 @@ function RepoOverview({ repo }: { repo: string }) {
   const state = useBusState();
   const { filters } = useQualityState();
   const { repos } = state;
-  const { removeRepo, openFile } = useWorkspaceActions();
+  const { removeRepo, openFile, openAgentTerminal } = useWorkspaceActions();
   const nowMs = useNow(30_000);
   const delta = repos[repo];
   const repoEntry = configuredRepoEntry(state.config, repo);
@@ -279,6 +282,18 @@ function RepoOverview({ repo }: { repo: string }) {
         repoEntry={repoEntry}
         removable
         onRemove={() => removeRepo(repo)}
+      />
+
+      <RepoAgentLauncher
+        repo={repo}
+        availabilityKey={agentAvailabilityKey(repoEntry?.source, repoEntry?.distro)}
+        className="repo-overview__agent-launcher"
+        onLaunch={async (agentType) => {
+          const sessionId = await startAgentSession(repo, agentType);
+          const sessions = await listAgentSessions();
+          agentSessionStore.setSessions(sessions);
+          openAgentTerminal({ sessionId, repo, agentType });
+        }}
       />
 
       {error && (

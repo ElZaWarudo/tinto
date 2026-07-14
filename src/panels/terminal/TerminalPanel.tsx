@@ -261,6 +261,12 @@ interface AgentTurnView {
   restoreReady: boolean;
 }
 
+interface AgentProcessView {
+  label: string;
+  phase: string;
+  tone: "starting" | "thinking" | "settling";
+}
+
 interface AgentReviewResponseView {
   turnIndex: number;
   text: string;
@@ -406,6 +412,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "reverted" &&
     session?.status !== "error";
   const canSend = canCompose && draft.trim().length > 0;
+  const processState = agentProcessState(session, sending, agentType, readOnly);
   const canRestoreTurn =
     !!sessionId &&
     !readOnly &&
@@ -1386,7 +1393,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 title={emptyChatContainerTitle(hasTranscriptQuery, readOnly)}
               >
                 <span title={emptyChatStateLabelTitle(hasTranscriptQuery, readOnly)}>
-                  {hasTranscriptQuery ? "Sin coincidencias" : readOnly ? "Transcripción" : "Listo"}
+                  {hasTranscriptQuery
+                    ? "Sin coincidencias"
+                    : readOnly
+                      ? "Transcripción"
+                      : processState
+                        ? "Turno en curso"
+                        : "Listo"}
                 </span>
                 {!hasTranscriptQuery && readOnly && (
                   <p title={emptyChatHelperTextTitle()}>
@@ -1406,6 +1419,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               </div>
             )}
           </main>
+          {processState && <AgentProcessIndicator process={processState} />}
         </section>
 
         <aside
@@ -2957,6 +2971,68 @@ function AgentMessageBlock({
       )}
     </div>
   );
+}
+
+function AgentProcessIndicator({ process }: { process: AgentProcessView }) {
+  return (
+    <div
+      className={`agent-panel__process agent-panel__process--${process.tone}`}
+      role="status"
+      aria-atomic="true"
+      aria-label={process.label}
+      title={`${process.label}. ${process.phase}.`}
+    >
+      <span className="agent-panel__process-signal" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <strong>{process.label}</strong>
+      <small>{process.phase}</small>
+    </div>
+  );
+}
+
+function agentProcessState(
+  session: AgentSession | undefined,
+  sending: boolean,
+  agentType: string,
+  readOnly: boolean,
+): AgentProcessView | null {
+  if (readOnly) return null;
+  const name = agentLabel(agentType);
+  if (sending) {
+    return { label: `Enviando el turno a ${name}`, phase: "ENVIANDO", tone: "starting" };
+  }
+  if (!session) return null;
+  if (session.status === "starting") {
+    return { label: `${name} se está preparando`, phase: "INICIANDO", tone: "starting" };
+  }
+  if (session.status !== "running") return null;
+  if (session.turn_status === "settling") {
+    return { label: `${name} está revisando cambios`, phase: "VERIFICANDO", tone: "settling" };
+  }
+  if (session.turn_status === "working") {
+    const activity = latestAgentActivity(session);
+    if (activity) {
+      return { label: activity, phase: "ACTIVIDAD", tone: "thinking" };
+    }
+    return { label: `${name} está pensando`, phase: "RAZONANDO", tone: "thinking" };
+  }
+  return null;
+}
+
+function latestAgentActivity(session: AgentSession): string | null {
+  let lastUserAt = 0;
+  let lastResponseAt = 0;
+  let activity: AgentSessionTimelineItem | null = null;
+  for (const item of session.timeline ?? []) {
+    if (item.kind === "user_message") lastUserAt = item.timestamp_ms;
+    if (item.kind === "agent_message") lastResponseAt = item.timestamp_ms;
+    if (item.kind === "activity") activity = item;
+  }
+  if (!activity || activity.timestamp_ms < Math.max(lastUserAt, lastResponseAt)) return null;
+  return activity.text.trim() || null;
 }
 
 function shouldCollapseCommandOutput(text: string): boolean {
@@ -6298,6 +6374,7 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
   for (const item of timeline) {
     const text = item.text.trim();
     if (!text) continue;
+    if (item.kind === "activity") continue;
     if (item.kind === "user_message") {
       current = {
         id: item.id,

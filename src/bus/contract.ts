@@ -178,6 +178,7 @@ export type AgentSessionTimelineKind =
   | "user_message"
   | "agent_message"
   | "command_output"
+  | "activity"
   | "lifecycle";
 
 export interface AgentSessionTimelineItem {

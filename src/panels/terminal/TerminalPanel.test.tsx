@@ -265,7 +265,7 @@ describe("TerminalPanel", () => {
     const conversation = screen.getByLabelText("Conversación con Agent");
     expect(conversation).toHaveAttribute("role", "log");
     expect(conversation).toHaveAttribute("aria-live", "polite");
-    expect(within(conversation).getByText("Listo")).toBeInTheDocument();
+    expect(within(conversation).getByText("Turno en curso")).toBeInTheDocument();
     expect(
       within(conversation).queryByText("Inicia un turno desde el compositor inferior."),
     ).not.toBeInTheDocument();
@@ -284,10 +284,70 @@ describe("TerminalPanel", () => {
     expect(activity).toHaveTextContent("0 turnos");
     expect(activity).toHaveTextContent("0 archivos");
     expect(activity).toHaveTextContent("Transmisión en reposo");
-    expect(screen.getByRole("status")).toHaveTextContent("En ejecución");
-    expect(screen.getByRole("status")).toHaveTextContent("Trabajando");
-    expect(screen.getByRole("status")).toHaveTextContent("1 cambio");
+    const sessionStatus = screen.getByTitle(/Estado: En ejecución/);
+    expect(sessionStatus).toHaveTextContent("En ejecución");
+    expect(sessionStatus).toHaveTextContent("Trabajando");
+    expect(sessionStatus).toHaveTextContent("1 cambio");
+    const processStatus = screen.getByRole("status", { name: "Codex está pensando" });
+    expect(processStatus).toHaveTextContent("Codex está pensando");
+    expect(processStatus).toHaveTextContent("RAZONANDO");
     expect(screen.queryByTestId("terminal-surface")).not.toBeInTheDocument();
+  });
+
+  it("shows distinct live process states without exposing private reasoning", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ turn_status: "settling", output_bytes_per_second: 42 }),
+    ]);
+
+    const { unmount } = render(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
+    );
+
+    const settling = await screen.findByRole("status", {
+      name: "Codex está revisando cambios",
+    });
+    expect(settling).toHaveTextContent("VERIFICANDO");
+    expect(settling.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
+    unmount();
+
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture({ turn_status: "waiting" })]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await screen.findByTitle(/Estado: En ejecución/);
+    expect(
+      screen.queryByRole("status", { name: /Codex está pensando|Codex está revisando cambios/ }),
+    ).toBeNull();
+  });
+
+  it("prefers provider activity over a generic thinking label", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        timeline: [
+          {
+            session_id: "sess-1",
+            id: "user-1",
+            kind: "user_message",
+            text: "Ejecuta las pruebas",
+            timestamp_ms: 10,
+          },
+          {
+            session_id: "sess-1",
+            id: "activity-1",
+            kind: "activity",
+            text: "Ejecutando npm test",
+            timestamp_ms: 11,
+          },
+        ],
+      }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const activity = await screen.findByRole("status", { name: "Ejecutando npm test" });
+    expect(activity).toHaveTextContent("ACTIVIDAD");
+    expect(screen.queryByText("Codex está pensando")).toBeNull();
+    expect(screen.getByLabelText("Conversación con Agent")).not.toHaveTextContent(
+      "Ejecutando npm test",
+    );
   });
 
   it("shows active host context that will steer the next turn", async () => {

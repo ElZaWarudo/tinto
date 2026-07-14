@@ -35,6 +35,102 @@ const AGENT_OPTIONS = [
   { id: "opencode", label: "OpenCode" },
 ];
 
+export interface RepoAgentLauncherProps {
+  repo: string;
+  pending?: boolean;
+  availabilityKey?: string;
+  className?: string;
+  onLaunch: (agentType: string) => Promise<void> | void;
+}
+
+export function RepoAgentLauncher({
+  repo,
+  pending = false,
+  availabilityKey = `repo:${repo}`,
+  className,
+  onLaunch,
+}: RepoAgentLauncherProps) {
+  const [agentType, setAgentType] = useState("codex");
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
+  const [launching, setLaunching] = useState(false);
+  const [launchMessage, setLaunchMessage] = useState<string | null>(null);
+  const selectedAgent = AGENT_OPTIONS.find((agent) => agent.id === agentType) ?? AGENT_OPTIONS[0];
+
+  useEffect(() => {
+    if (pending) return;
+    let alive = true;
+    checkAgentAvailabilityForRepo(repo, availabilityKey, agentType)
+      .then((ok) => {
+        if (!alive) return;
+        setAvailable(ok);
+        setAvailabilityMessage(ok ? null : `No se encontró ${selectedAgent.label}`);
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setAvailable(null);
+        setAvailabilityMessage(commandMessage(error));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [agentType, availabilityKey, pending, repo, selectedAgent.label]);
+
+  const launch = () => {
+    if (pending || available === false || launching) return;
+    setLaunching(true);
+    setLaunchMessage(null);
+    Promise.resolve(onLaunch(agentType))
+      .catch((error) => setLaunchMessage(commandMessage(error)))
+      .finally(() => setLaunching(false));
+  };
+
+  return (
+    <div
+      className={["repo-card__launcher", className].filter(Boolean).join(" ")}
+      data-testid={`agent-launcher-${repo}`}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      <span className="repo-card__launcher-label">Agent</span>
+      <select
+        className="repo-card__agent-select"
+        aria-label="Tipo de Agent"
+        value={agentType}
+        onChange={(event) => {
+          setAvailable(null);
+          setAvailabilityMessage(null);
+          setAgentType(event.target.value);
+        }}
+      >
+        {AGENT_OPTIONS.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="repo-card__launch"
+        data-testid="agent-launch"
+        disabled={
+          pending || launching || (available == null && !availabilityMessage) || available === false
+        }
+        onClick={launch}
+      >
+        {launching ? "Iniciando…" : "Iniciar"}
+      </button>
+      <span className="repo-card__launch-msg" data-testid="agent-launch-message" aria-live="polite">
+        {pending
+          ? "Esperando la instantánea…"
+          : (launchMessage ??
+            availabilityMessage ??
+            (available === null ? "Comprobando disponibilidad…" : "\u00a0"))}
+      </span>
+    </div>
+  );
+}
+
 function branchLabel(branch: BranchInfo | null, head: RepoDelta["head"]): string {
   if (!branch) return "…";
   if (branch.unborn) return "sin commits";
@@ -85,11 +181,6 @@ function RepoCardImpl({
   availabilityKey = `repo:${delta.repo}`,
 }: RepoCardProps) {
   const { status, branch, head, error } = delta;
-  const [agentType, setAgentType] = useState("codex");
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
-  const [launching, setLaunching] = useState(false);
-  const [launchMessage, setLaunchMessage] = useState<string | null>(null);
   const [fetching, setFetching] = useState(false);
   const [fetchMessage, setFetchMessage] = useState<string | null>(null);
   const active = nowMs - activityMs < ACTIVITY_WINDOW_MS;
@@ -98,27 +189,7 @@ function RepoCardImpl({
   const metrics = getRepoMetrics(delta);
   const signals = getRepoSignals(delta);
   const counts = signalCounts(signals);
-  const selectedAgent = AGENT_OPTIONS.find((a) => a.id === agentType) ?? AGENT_OPTIONS[0];
   const missingGitleaksConfig = delta.gitleaks_configured === false;
-
-  useEffect(() => {
-    if (pending) return;
-    let alive = true;
-    checkAgentAvailabilityForRepo(delta.repo, availabilityKey, agentType)
-      .then((ok) => {
-        if (!alive) return;
-        setAvailable(ok);
-        setAvailabilityMessage(ok ? null : `No se encontró ${selectedAgent.label}`);
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setAvailable(null);
-        setAvailabilityMessage(commandMessage(e));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [agentType, selectedAgent.label, delta.repo, availabilityKey, pending]);
 
   const cls = ["repo-card", error ? "repo-card--error" : active ? "repo-card--active" : ""]
     .filter(Boolean)
@@ -130,15 +201,6 @@ function RepoCardImpl({
       : active
         ? "activo"
         : "en reposo";
-
-  const launch = () => {
-    if (pending || available === false || launching) return;
-    setLaunching(true);
-    setLaunchMessage(null);
-    Promise.resolve(onLaunch(agentType))
-      .catch((e) => setLaunchMessage(commandMessage(e)))
-      .finally(() => setLaunching(false));
-  };
 
   const fetchRemote = () => {
     if (!onFetch || fetching) return;
@@ -311,54 +373,12 @@ function RepoCardImpl({
         </div>
       )}
 
-      <div
-        className="repo-card__launcher"
-        data-testid={`agent-launcher-${delta.repo}`}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <span className="repo-card__launcher-label">Agent</span>
-        <select
-          className="repo-card__agent-select"
-          aria-label="Tipo de Agent"
-          value={agentType}
-          onChange={(e) => {
-            setAvailable(null);
-            setAvailabilityMessage(null);
-            setAgentType(e.target.value);
-          }}
-        >
-          {AGENT_OPTIONS.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.label}
-            </option>
-          ))}
-        </select>
-        <button
-          className="repo-card__launch"
-          data-testid="agent-launch"
-          disabled={
-            pending ||
-            launching ||
-            (available == null && !availabilityMessage) ||
-            available === false
-          }
-          onClick={launch}
-        >
-          {launching ? "Iniciando…" : "Iniciar"}
-        </button>
-        <span
-          className="repo-card__launch-msg"
-          data-testid="agent-launch-message"
-          aria-live="polite"
-        >
-          {pending
-            ? "Esperando la instantánea…"
-            : (launchMessage ??
-              availabilityMessage ??
-              (available === null ? "Comprobando disponibilidad…" : "\u00a0"))}
-        </span>
-      </div>
+      <RepoAgentLauncher
+        repo={delta.repo}
+        pending={pending}
+        availabilityKey={availabilityKey}
+        onLaunch={onLaunch}
+      />
 
       {error && (
         <div className="repo-card__error" data-testid="error-detail" role="alert">

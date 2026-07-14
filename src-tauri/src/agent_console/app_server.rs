@@ -446,6 +446,24 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         return;
     };
     match method {
+        "item/started" => {
+            if let Some(item) = message.pointer("/params/item") {
+                if let Some(text) = activity_text_from_item(item, false) {
+                    let _ = context
+                        .output_tx
+                        .send(timeline_frame(AgentSessionTimelineKind::Activity, &text));
+                }
+            }
+        }
+        "item/completed" => {
+            if let Some(item) = message.pointer("/params/item") {
+                if let Some(text) = activity_text_from_item(item, true) {
+                    let _ = context
+                        .output_tx
+                        .send(timeline_frame(AgentSessionTimelineKind::Activity, &text));
+                }
+            }
+        }
         "item/agentMessage/delta" => {
             if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
                 let _ = context.output_tx.send(timeline_frame(
@@ -473,6 +491,87 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             });
         }
         _ => {}
+    }
+}
+
+fn activity_text_from_item(item: &Value, completed: bool) -> Option<String> {
+    let item_type = item.get("type")?.as_str()?;
+    let normalized = item_type.replace(['_', '-'], "").to_ascii_lowercase();
+    let text = match normalized.as_str() {
+        "commandexecution" if !completed => {
+            let command = value_as_text(item.get("command"))?;
+            format!("Ejecutando {command}")
+        }
+        "reasoning" if completed => reasoning_summary(item)
+            .map(|summary| format!("Analizando: {summary}"))
+            .unwrap_or_else(|| "Analizando el siguiente paso".to_string()),
+        "reasoning" => "Analizando el siguiente paso".to_string(),
+        "mcptoolcall" if !completed => {
+            let server = item
+                .get("server")
+                .or_else(|| item.get("serverName"))
+                .and_then(Value::as_str);
+            let tool = item
+                .get("tool")
+                .or_else(|| item.get("toolName"))
+                .or_else(|| item.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("herramienta MCP");
+            match server {
+                Some(server) => format!("Usando {server} / {tool}"),
+                None => format!("Usando {tool}"),
+            }
+        }
+        "websearch" if !completed => "Buscando en la web".to_string(),
+        "filechange" if !completed => "Aplicando cambios en archivos".to_string(),
+        "plan" | "planupdate" if !completed => "Actualizando el plan".to_string(),
+        _ => return None,
+    };
+    Some(truncate_activity_text(&text, 220))
+}
+
+fn value_as_text(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(text) => Some(text.trim().to_string()),
+        Value::Array(parts) => {
+            let text = parts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!text.trim().is_empty()).then(|| text.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn reasoning_summary(item: &Value) -> Option<String> {
+    let summary = item.get("summary")?;
+    if let Some(text) = summary.as_str() {
+        return (!text.trim().is_empty()).then(|| text.trim().to_string());
+    }
+    let text = summary
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .as_str()
+                .or_else(|| entry.get("text").and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
+fn truncate_activity_text(text: &str, max_chars: usize) -> String {
+    let mut chars = text.chars();
+    let prefix = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
     }
 }
 
@@ -955,6 +1054,48 @@ mod tests {
         assert!(frame.starts_with("\u{1d}TINTO_TIMELINE "));
         assert!(frame.contains("\"kind\":\"command_output\""));
         assert!(frame.contains("\"text\":\"cargo test\""));
+    }
+
+    #[test]
+    fn command_start_is_forwarded_as_provider_neutral_activity() {
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({
+                "method":"item/started",
+                "params":{"item":{"id":"cmd-1","type":"commandExecution","command":"npm test"}}
+            }),
+            &context,
+        );
+
+        let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(frame.contains("\"kind\":\"activity\""));
+        assert!(frame.contains("Ejecutando npm test"));
+    }
+
+    #[test]
+    fn reasoning_completion_forwards_summary_without_raw_reasoning() {
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({
+                "method":"item/completed",
+                "params":{"item":{
+                    "id":"reason-1",
+                    "type":"reasoning",
+                    "summary":[{"text":"Comprobando el contrato del agente"}],
+                    "content":[{"type":"reasoningText","text":"contenido privado"}]
+                }}
+            }),
+            &context,
+        );
+
+        let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(frame.contains("\"kind\":\"activity\""));
+        assert!(frame.contains("Analizando: Comprobando el contrato del agente"));
+        assert!(!frame.contains("contenido privado"));
     }
 
     #[test]
