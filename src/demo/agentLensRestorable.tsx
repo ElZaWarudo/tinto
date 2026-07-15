@@ -9,8 +9,10 @@ import type {
   WorkbenchConfig,
 } from "../bus/contract";
 import { busStore } from "../bus/store";
+import { ConsoleDockPanel } from "../panels/terminal/ConsoleDockPanel";
 import { TerminalPanel, type TerminalPanelParams } from "../panels/terminal/TerminalPanel";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
+import { consoleDock } from "../workspace/consoleDock";
 import "../App.css";
 import "./agentLensRestorable.css";
 
@@ -19,7 +21,9 @@ const SESSION_ID = "demo-restorable-session";
 const NOW = 1_798_800_000_000;
 const QUERY = new URLSearchParams(window.location.search);
 const LIVE_PROCESS = QUERY.get("state") === "working";
+const JOURNAL_MODE = QUERY.get("mode") === "journal";
 const COMPACT_FIXTURE = QUERY.get("viewport") === "compact";
+const NAVIGATOR_FIXTURE = QUERY.get("surface") === "navigator";
 
 const turnChanges = [
   { path: "src/agent-view.tsx", kind: "modified" as const, timestamp_ms: NOW + 12_000 },
@@ -39,8 +43,29 @@ const timeline: AgentSessionTimelineItem[] = [
     session_id: SESSION_ID,
     id: "demo:agent-1",
     kind: "agent_message",
-    text: "Implemented the restore-point summary and attached the changed files to turn 1.",
+    text: "Voy a usar ",
     timestamp_ms: NOW + 16_000,
+  },
+  {
+    session_id: SESSION_ID,
+    id: "demo:agent-1b",
+    kind: "agent_message",
+    text: "`caveman` para mantener la respuesta compacta, ",
+    timestamp_ms: NOW + 16_001,
+  },
+  {
+    session_id: SESSION_ID,
+    id: "demo:agent-1c",
+    kind: "agent_message",
+    text: "`memo` para recuperar contexto previo y `dpp-wise` para reflejar la arquitectura real del repositorio. ",
+    timestamp_ms: NOW + 16_002,
+  },
+  {
+    session_id: SESSION_ID,
+    id: "demo:agent-1d",
+    kind: "agent_message",
+    text: "Consultaré sólo las fuentes esenciales y verificaré el flujo completo antes de resumir los cambios.",
+    timestamp_ms: NOW + 16_003,
   },
   {
     session_id: SESSION_ID,
@@ -138,6 +163,11 @@ const session: AgentSession = {
   },
   goal: {
     text: "Make Agent Lens expose restorable turns for completed Codex sessions.",
+    status: "active",
+    token_budget: 200_000,
+    tokens_used: 36_000,
+    time_used_seconds: 482,
+    created_at_ms: NOW - 452_000,
     updated_at_ms: NOW + 30_000,
   },
   personality: null,
@@ -206,6 +236,7 @@ const repoDelta: RepoDelta = {
   metrics: { changed_files: 3, lines_added: 48, lines_removed: 9 },
   gitleaks_configured: true,
   agents_md_configured: true,
+  secret_scan_status: { state: "clean", engine: "gitleaks", version: "8.30.1" },
   signals: [],
   secret_findings: [],
   subscribed_diffs: [
@@ -237,12 +268,37 @@ function installTauriFixture() {
     ...(windowWithTauri.__TAURI_INTERNALS__ ?? {}),
     invoke: async (cmd: string) => {
       if (cmd === "list_agent_sessions") return [session];
+      if (cmd === "list_agent_journal_sessions") {
+        return [
+          {
+            id: "demo-saved-session",
+            repo: REPO,
+            agent_type: "codex",
+            status: "completed",
+            started_at_ms: NOW - 120_000,
+            ended_at_ms: NOW - 60_000,
+            updated_at_ms: NOW - 60_000,
+            event_count: 4,
+            last_event_kind: "agent_message",
+            last_event_text: "Cambios verificados y listos.",
+            last_event_at_ms: NOW - 60_000,
+          },
+        ];
+      }
       if (cmd === "get_agent_journal_session") return session;
+      if (cmd === "resume_agent_journal_session") {
+        return { session_id: "fixture-resumed", mode: "native" };
+      }
       if (cmd === "restore_session_turn") return session;
       if (cmd === "revert_session_turn_file") return session;
       if (cmd === "revert_session") return { ...session, status: "reverted" };
       if (cmd === "stop_agent_session") return null;
       if (cmd === "write_agent_session_input") return null;
+      if (cmd === "write_agent_session_turn") return null;
+      if (cmd === "get_agent_image_preview") return null;
+      if (cmd === "plugin:dialog|open") {
+        return ["C:\\Temp\\screen.png", "C:\\Temp\\requirements.pdf"];
+      }
       if (cmd === "run_agent_host_command") return { status: "completed", message: "demo" };
       return null;
     },
@@ -256,6 +312,9 @@ agentSessionStore.setSessions([session]);
 busStore.resetAll();
 busStore.setConfig(config);
 busStore.loadSnapshot([repoDelta], { available: true });
+if (NAVIGATOR_FIXTURE) {
+  consoleDock.openTerminal({ sessionId: SESSION_ID, repo: REPO, agentType: "codex" });
+}
 
 const actions: WorkspaceActions = {
   openRepo: () => {},
@@ -265,7 +324,9 @@ const actions: WorkspaceActions = {
   openTimeline: () => {},
   openDashboard: () => {},
   openAgents: () => {},
-  openAgentTerminal: () => {},
+  openAgentTerminal: (params) => {
+    document.documentElement.dataset.openedAgentSession = params.sessionId;
+  },
 };
 
 const panelProps = {
@@ -273,6 +334,7 @@ const panelProps = {
     sessionId: SESSION_ID,
     repo: REPO,
     agentType: "codex",
+    mode: JOURNAL_MODE ? "journal" : "live",
   } satisfies TerminalPanelParams,
   api: {
     id: "agent-lens-restorable-fixture",
@@ -288,7 +350,7 @@ createRoot(document.getElementById("root")!).render(
     <WorkspaceActionsContext.Provider value={actions}>
       <div className={`agent-lens-fixture${COMPACT_FIXTURE ? " agent-lens-fixture--compact" : ""}`}>
         <div className="agent-lens-fixture__panel">
-          <TerminalPanel {...panelProps} />
+          {NAVIGATOR_FIXTURE ? <ConsoleDockPanel /> : <TerminalPanel {...panelProps} />}
         </div>
       </div>
     </WorkspaceActionsContext.Provider>

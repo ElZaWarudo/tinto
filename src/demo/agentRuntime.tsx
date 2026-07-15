@@ -76,6 +76,11 @@ export function AgentRuntimeFixture() {
             notice={null}
             onMenuChange={setMenu}
             onModelChange={setModel}
+            onPresetApply={(preset) => {
+              setModel(preset.model);
+              setReasoning(preset.reasoning);
+              setSpeed(preset.speed);
+            }}
             onReasoningChange={setReasoning}
             onRefreshCatalog={() => {}}
             onSpeedChange={setSpeed}

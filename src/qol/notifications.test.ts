@@ -19,6 +19,7 @@ const delta = (repo: string, over: Partial<RepoDelta> = {}): RepoDelta => ({
   metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
   gitleaks_configured: false,
   agents_md_configured: false,
+  secret_scan_status: { state: "not_run" },
   ...over,
 });
 

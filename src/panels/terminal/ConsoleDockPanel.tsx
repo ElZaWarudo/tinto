@@ -71,6 +71,24 @@ type OpenJournalContextMenu = (
   trigger: HTMLElement,
 ) => void;
 
+const NAVIGATOR_COLLAPSED_STORAGE_KEY = "tinto:agents-navigator:collapsed";
+
+function readNavigatorCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(NAVIGATOR_COLLAPSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeNavigatorCollapsed(collapsed: boolean) {
+  try {
+    window.localStorage.setItem(NAVIGATOR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Storage can be unavailable in hardened webviews; the in-memory toggle still works.
+  }
+}
+
 type ConsoleDockPanelProps = Partial<IDockviewPanelProps> & {
   restoreTransferLayout?: boolean;
 };
@@ -335,7 +353,7 @@ export function ConsoleDockPanel({
     (session, clientX, clientY, trigger) => {
       if (deletingJournalId === session.id) return;
       const menuWidth = 216;
-      const menuHeight = 44;
+      const menuHeight = 78;
       setLaunchError(null);
       setJournalContextMenu({
         session,
@@ -550,13 +568,13 @@ function JournalLoadNotice({ state, onRetry }: { state: JournalLoadState; onRetr
   if (state === "loading") {
     return (
       <div className="console-dock-panel__quick-error" role="status" aria-live="polite">
-        Cargando sesiones guardadas…
+        Cargando historial…
       </div>
     );
   }
   return (
     <div className="console-dock-panel__quick-error" role="alert">
-      <span>No se pudieron cargar las sesiones guardadas.</span>
+      <span>No se pudo cargar el historial.</span>
       <button type="button" onClick={onRetry}>
         Reintentar
       </button>
@@ -595,13 +613,50 @@ function AgentNavigator({
   onRetryJournalLoad: () => void;
   onRestoreWorkspace: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState(readNavigatorCollapsed);
+  const activeTerminals = openTerminals.filter((terminal) => terminal.mode !== "journal");
+  const activeTerminalIds = new Set(activeTerminals.map((terminal) => terminal.sessionId));
+  const uniqueJournalSessions = journalSessions.filter(
+    (session) => !activeTerminalIds.has(session.id),
+  );
+  const visibleJournalSessions = uniqueJournalSessions.slice(0, 8);
+  const conversationCount = activeTerminals.length + uniqueJournalSessions.length;
+  const toggleNavigator = () => {
+    setCollapsed((current) => {
+      const next = !current;
+      writeNavigatorCollapsed(next);
+      return next;
+    });
+  };
+
+  if (collapsed) {
+    return (
+      <aside
+        className="console-dock-panel__navigator console-dock-panel__navigator--collapsed"
+        aria-label="Sesiones de Agents contraídas"
+      >
+        <button
+          aria-label="Mostrar conversaciones de Agents"
+          className="console-dock-panel__navigator-expand"
+          onClick={toggleNavigator}
+          title="Mostrar conversaciones de Agents"
+          type="button"
+        >
+          ›
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="console-dock-panel__navigator" aria-label="Sesiones de Agents">
       <div className="console-dock-panel__navigator-section">
         <div className="console-dock-panel__navigator-head">
-          <span>Activas</span>
+          <div className="console-dock-panel__navigator-heading">
+            <span>Conversaciones</span>
+            <small>{conversationCount}</small>
+          </div>
           <span className="console-dock-panel__navigator-head-actions">
-            <small>{openTerminals.length}</small>
             {workspaceExpanded && (
               <button
                 className="console-dock-panel__navigator-restore"
@@ -611,15 +666,31 @@ function AgentNavigator({
                 Restaurar
               </button>
             )}
+            <button
+              aria-label="Ocultar conversaciones de Agents"
+              className="console-dock-panel__navigator-collapse"
+              onClick={toggleNavigator}
+              title="Ocultar conversaciones de Agents"
+              type="button"
+            >
+              ‹
+            </button>
           </span>
         </div>
-        <div className="console-dock-panel__navigator-list">
-          {openTerminals.map((terminal) => {
+        <JournalLoadNotice state={journalLoadState} onRetry={onRetryJournalLoad} />
+        {journalActionError && (
+          <div className="console-dock-panel__quick-error" role="alert">
+            {journalActionError}
+          </div>
+        )}
+        <div className="console-dock-panel__navigator-list" id="agent-conversation-list">
+          {activeTerminals.map((terminal) => {
             const agentType = terminal.agentType ?? "agent";
             const logo = agentLogoSrc(agentType);
             const session = sessions[terminal.sessionId];
             const preview = activeSessionPreview(session, timeline[terminal.sessionId]);
             const tone = sessionStatusTone(session);
+            const active = isActiveAgentSession(session);
             return (
               <button
                 className={`console-dock-panel__navigator-item console-dock-panel__navigator-item--${tone}`}
@@ -640,8 +711,13 @@ function AgentNavigator({
                 </span>
                 <span className="console-dock-panel__navigator-main">
                   <span>{terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"}</span>
+                  {active && (
+                    <strong className="console-dock-panel__navigator-active-indicator">
+                      <i aria-hidden="true" />
+                      Activa
+                    </strong>
+                  )}
                   <small>
-                    <i aria-hidden="true" />
                     {agentLabel(agentType)} / {sessionStatusLabel(session)}
                   </small>
                   {preview && <em>{preview}</em>}
@@ -649,79 +725,65 @@ function AgentNavigator({
               </button>
             );
           })}
+          {visibleJournalSessions.map((session) => {
+            const logo = agentLogoSrc(session.agent_type);
+            return (
+              <button
+                className="console-dock-panel__navigator-item"
+                type="button"
+                key={session.id}
+                aria-label={`Abrir la transcripción de ${busStore.displayName(
+                  session.repo,
+                )} con ${agentLabel(session.agent_type)}`}
+                disabled={deletingJournalId === session.id}
+                onClick={() => onOpenJournal(session)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenJournalContextMenu(
+                    session,
+                    event.clientX,
+                    event.clientY,
+                    event.currentTarget,
+                  );
+                }}
+                onKeyDown={(event) =>
+                  openJournalMenuFromKeyboard(event, session, onOpenJournalContextMenu)
+                }
+              >
+                <span
+                  className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                    session.agent_type,
+                  )}`}
+                  aria-hidden="true"
+                >
+                  {logo ? (
+                    <img src={logo} alt="" />
+                  ) : (
+                    <span>{agentLogoText(session.agent_type)}</span>
+                  )}
+                </span>
+                <span className="console-dock-panel__navigator-main">
+                  <span>{busStore.displayName(session.repo)}</span>
+                  <small>
+                    {deletingJournalId === session.id
+                      ? "Eliminando…"
+                      : openingJournalId === session.id
+                        ? "Abriendo…"
+                        : `Transcripción de ${agentLabel(session.agent_type)}`}
+                  </small>
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
-
-      <JournalLoadNotice state={journalLoadState} onRetry={onRetryJournalLoad} />
-      {journalActionError && (
-        <div className="console-dock-panel__quick-error" role="alert">
-          {journalActionError}
-        </div>
-      )}
-
-      {journalSessions.length > 0 && (
-        <div className="console-dock-panel__navigator-section">
-          <div className="console-dock-panel__navigator-head">
-            <span>Guardadas</span>
-            <small>{journalSessions.length}</small>
-          </div>
-          <div className="console-dock-panel__navigator-list">
-            {journalSessions.slice(0, 8).map((session) => {
-              const logo = agentLogoSrc(session.agent_type);
-              return (
-                <button
-                  className="console-dock-panel__navigator-item"
-                  type="button"
-                  key={session.id}
-                  aria-label={`Abrir la transcripción de ${busStore.displayName(
-                    session.repo,
-                  )} con ${agentLabel(session.agent_type)}`}
-                  disabled={deletingJournalId === session.id}
-                  onClick={() => onOpenJournal(session)}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onOpenJournalContextMenu(
-                      session,
-                      event.clientX,
-                      event.clientY,
-                      event.currentTarget,
-                    );
-                  }}
-                  onKeyDown={(event) =>
-                    openJournalMenuFromKeyboard(event, session, onOpenJournalContextMenu)
-                  }
-                >
-                  <span
-                    className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
-                      session.agent_type,
-                    )}`}
-                    aria-hidden="true"
-                  >
-                    {logo ? (
-                      <img src={logo} alt="" />
-                    ) : (
-                      <span>{agentLogoText(session.agent_type)}</span>
-                    )}
-                  </span>
-                  <span className="console-dock-panel__navigator-main">
-                    <span>{busStore.displayName(session.repo)}</span>
-                    <small>
-                      {deletingJournalId === session.id
-                        ? "Eliminando…"
-                        : openingJournalId === session.id
-                          ? "Abriendo…"
-                          : `Transcripción de ${agentLabel(session.agent_type)}`}
-                    </small>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </aside>
   );
+}
+
+function isActiveAgentSession(session: AgentSession | undefined): boolean {
+  return !session || session.status === "starting" || session.status === "running";
 }
 
 function activeSessionPreview(

@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   getAgentJournalSession,
+  getAgentImagePreview,
   getAgentRuntimeCatalog,
   listAgentSessions,
+  resumeAgentJournalSession,
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
   runAgentHostCommand,
   stopAgentSession,
   writeAgentSessionInput,
+  writeAgentSessionTurn,
 } from "../../bus/client";
 import {
   agentSessionStore,
@@ -58,6 +61,16 @@ export interface TerminalPanelParams {
 }
 
 type TerminalPanelProps = IDockviewPanelProps<TerminalPanelParams>;
+
+type AgentAttachment = {
+  path: string;
+  kind: "image" | "file";
+  previewUrl: string | null;
+};
+
+const MAX_AGENT_ATTACHMENTS = 10;
+const MAX_AGENT_IMAGE_ATTACHMENTS = 4;
+const AGENT_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 
 const panelCloseStopTimers = new Map<string, number>();
 const PANEL_CLOSE_STOP_DELAY_MS = 250;
@@ -295,13 +308,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const repo = params?.repo;
   const agentType = params?.agentType ?? "agent";
   const mode = params?.mode ?? "live";
-  const { openFile } = useWorkspaceActions();
+  const { openFile, openAgentTerminal } = useWorkspaceActions();
   const readOnly = mode === "journal";
   const session = useAgentSession(sessionId);
   const { chunks: sessionOutput } = useAgentSessionOutput(sessionId);
   const timeline = useAgentSessionTimeline(sessionId);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [transcriptQuery, setTranscriptQuery] = useState("");
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -405,13 +419,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   );
   const canCompose =
     !!sessionId &&
-    !readOnly &&
     !sending &&
-    session?.status !== "completed" &&
-    session?.status !== "failed" &&
-    session?.status !== "reverted" &&
-    session?.status !== "error";
-  const canSend = canCompose && draft.trim().length > 0;
+    (readOnly
+      ? !!session
+      : session?.status !== "completed" &&
+        session?.status !== "failed" &&
+        session?.status !== "reverted" &&
+        session?.status !== "error");
+  const canSend = canCompose && (draft.trim().length > 0 || attachments.length > 0);
   const processState = agentProcessState(session, sending, agentType, readOnly);
   const canRestoreTurn =
     !!sessionId &&
@@ -422,6 +437,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "error";
   const runtimeProvider = agentRuntimeProvider(agentType);
   const isCodexSession = runtimeProvider?.id === "codex";
+  const canAttachFiles = canCompose && isCodexSession;
   const composerCommandTrigger = readComposerCommandTrigger(draft);
   const composerCommandQuery = composerCommandTrigger?.query ?? "";
   const composerCommandItems = useMemo<AgentComposerCommand[]>(
@@ -534,7 +550,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     () => filterComposerCommands(composerCommandItems, composerCommandTrigger),
     [composerCommandItems, composerCommandTrigger],
   );
-  const commandMenuVisible = slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
+  const commandMenuVisible =
+    !readOnly && slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
   const composerCommandListboxId = `composer-command-menu-${sessionId}`;
   const composerHintId = `agent-composer-hint-${sessionId}`;
   const activeComposerCommand = commandMenuVisible
@@ -739,6 +756,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     if (!canSend) return;
     const text = draft.trimEnd();
     const slashCommandHandled =
+      !readOnly &&
       isCodexSession &&
       applyCodexRuntimeSlashCommand(text, {
         setModel: setSelectedModel,
@@ -751,22 +769,104 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       setSlashMenuOpen(false);
       return;
     }
-    if (await applyComposerSlashCommand(text)) {
+    if (!readOnly && (await applyComposerSlashCommand(text))) {
       return;
     }
     setSending(true);
     setError(null);
     try {
-      await writeAgentSessionInput(sessionId, `${text}\r`, effectiveRuntimeOptions);
+      let targetSessionId = sessionId;
+      let resumedSessionId: string | null = null;
+      if (readOnly) {
+        if (!session) return;
+        const result = await resumeAgentJournalSession(session.id);
+        targetSessionId = result.session_id;
+        resumedSessionId = result.session_id;
+      }
+      if (attachments.length > 0) {
+        await writeAgentSessionTurn(
+          targetSessionId,
+          text,
+          attachments.map((attachment) => attachment.path),
+          effectiveRuntimeOptions,
+        );
+      } else {
+        await writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions);
+      }
+      if (resumedSessionId && session) {
+        const sessions = await listAgentSessions();
+        agentSessionStore.setSessions(sessions);
+        openAgentTerminal({
+          sessionId: resumedSessionId,
+          repo: session.repo,
+          agentType: session.agent_type,
+        });
+      }
       if (reviewPromptDraft && text.trim() === reviewPromptDraft.trim()) {
         setReviewPromptState("sent");
       }
       setDraft("");
+      setAttachments([]);
       setRuntimeNotice(null);
     } catch (e) {
       setError(commandMessage(e));
     } finally {
       setSending(false);
+    }
+  };
+
+  const pickFiles = async () => {
+    if (!canAttachFiles) return;
+    try {
+      const picked = await open({
+        multiple: true,
+        title: "Adjuntar archivos",
+      });
+      const nextPaths = typeof picked === "string" ? [picked] : (picked ?? []);
+      if (nextPaths.length === 0) return;
+      const currentPaths = new Set(attachments.map((attachment) => attachment.path));
+      const uniquePaths = nextPaths.filter((path) => !currentPaths.has(path));
+      const attachmentLimitExceeded =
+        attachments.length + uniquePaths.length > MAX_AGENT_ATTACHMENTS;
+      const available = uniquePaths.slice(
+        0,
+        Math.max(0, MAX_AGENT_ATTACHMENTS - attachments.length),
+      );
+      const currentImageCount = attachments.filter(
+        (attachment) => attachment.kind === "image",
+      ).length;
+      let addedImageCount = 0;
+      let skippedImageCount = 0;
+      const added = await Promise.all(
+        available.flatMap((path) => {
+          const kind = agentAttachmentKind(path);
+          if (
+            kind === "image" &&
+            currentImageCount + addedImageCount >= MAX_AGENT_IMAGE_ATTACHMENTS
+          ) {
+            skippedImageCount += 1;
+            return [];
+          }
+          if (kind === "image") addedImageCount += 1;
+          return [
+            (async (): Promise<AgentAttachment> => ({
+              path,
+              kind,
+              previewUrl: kind === "image" ? await getAgentImagePreview(path) : null,
+            }))(),
+          ];
+        }),
+      );
+      if (skippedImageCount > 0) {
+        setError(`Puedes adjuntar hasta ${MAX_AGENT_IMAGE_ATTACHMENTS} imágenes por turno.`);
+      } else if (attachmentLimitExceeded) {
+        setError(`Puedes adjuntar hasta ${MAX_AGENT_ATTACHMENTS} archivos por turno.`);
+      } else {
+        setError(null);
+      }
+      setAttachments((current) => [...current, ...added]);
+    } catch (pickError) {
+      setError(commandMessage(pickError));
     }
   };
 
@@ -928,6 +1028,15 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       (item) => item.trigger === "/" && composerCommandMatchesName(item, commandName),
     );
     if (!command || command.disabled) return false;
+    if (
+      command.hostCommand === "goal" &&
+      ["edit", "editar"].includes(argument?.toLocaleLowerCase() ?? "")
+    ) {
+      setDraft(`/goal ${session?.goal?.text ?? ""}`);
+      setSlashMenuOpen(false);
+      window.setTimeout(() => composerInputRef.current?.focus(), 0);
+      return true;
+    }
     if (command.prompt) {
       insertComposerPrompt(command.prompt);
       return true;
@@ -1161,40 +1270,44 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           </span>
         </div>
         <SessionStatus session={session} />
-        <div
-          className="agent-panel__header-actions"
-          title={agentHeaderActionsTitle(agentType, repo)}
-        >
-          <button
-            className="agent-panel__stop"
-            disabled={!canStop}
-            onClick={onStop}
-            title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
-            type="button"
+        {!readOnly && (
+          <div
+            className="agent-panel__header-actions"
+            title={agentHeaderActionsTitle(agentType, repo)}
           >
-            <span title={agentStopControlLabelTitle(stopping)}>
-              {stopping ? "Deteniendo" : "Detener"}
-            </span>
-          </button>
-          <button
-            className="agent-panel__revert"
-            disabled={!canRevert || reverting}
-            onClick={onRevert}
-            title={agentRevertControlTitle(
-              agentType,
-              repo,
-              readOnly,
-              session ?? null,
-              canRevert,
-              reverting,
-            )}
-            type="button"
-          >
-            <span title={agentRevertControlLabelTitle(reverting)}>
-              {reverting ? "Revirtiendo" : "Revertir"}
-            </span>
-          </button>
-        </div>
+            <>
+              <button
+                className="agent-panel__stop"
+                disabled={!canStop}
+                onClick={onStop}
+                title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
+                type="button"
+              >
+                <span title={agentStopControlLabelTitle(stopping)}>
+                  {stopping ? "Deteniendo" : "Detener"}
+                </span>
+              </button>
+              <button
+                className="agent-panel__revert"
+                disabled={!canRevert || reverting}
+                onClick={onRevert}
+                title={agentRevertControlTitle(
+                  agentType,
+                  repo,
+                  readOnly,
+                  session ?? null,
+                  canRevert,
+                  reverting,
+                )}
+                type="button"
+              >
+                <span title={agentRevertControlLabelTitle(reverting)}>
+                  {reverting ? "Revirtiendo" : "Revertir"}
+                </span>
+              </button>
+            </>
+          </div>
+        )}
       </header>
 
       {error && (
@@ -1382,6 +1495,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   focused={turn.index === focusedTurn?.index}
                   onCopyMessage={(target, text) => void copyText(target, text)}
                   onCopyTurn={(target, text) => void copyText(target, text)}
+                  onOpenFile={sessionRepo ? (path) => openFile(sessionRepo, path, true) : undefined}
                   searchQuery={transcriptQuery}
                   turn={turn}
                   turnElementId={agentTurnElementId(sessionId, turn.index)}
@@ -1445,7 +1559,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               scrollToAgentTurn(sessionId, turnIndex, "start");
             }}
           />
-          {session && <AgentHostContextStrip session={session} />}
+          {session && (
+            <AgentHostContextStrip session={session} />
+          )}
           {mascotAwake && <AgentMascotPanel agentType={agentType} repo={repo} />}
           {reviewSummary && (
             <AgentReviewSummaryPanel
@@ -1521,19 +1637,38 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         </aside>
       </div>
 
+      {session?.goal && (
+        <AgentGoalBar
+          canManage={!readOnly && canCompose && !sending}
+          goal={session.goal}
+          onClear={() => void executeHostCommand("goal", "clear")}
+          onEdit={() => {
+            setDraft(`/goal ${session.goal?.text ?? ""}`);
+            setSlashMenuOpen(false);
+            window.setTimeout(() => composerInputRef.current?.focus(), 0);
+          }}
+          onToggle={() =>
+            void executeHostCommand(
+              "goal",
+              session.goal?.status === "active" ? "pause" : "resume",
+            )
+          }
+        />
+      )}
+
       <form
         className="agent-panel__composer"
         onSubmit={onSubmit}
         title={agentComposerTitle(agentType, repo)}
       >
         <span className="sr-only" id={composerHintId}>
-          {canCompose
-            ? "Escribe / para ver comandos o $ para ver skills."
-            : readOnly
-              ? "La transcripción está archivada y es de solo lectura."
+          {readOnly
+            ? "Escribe un mensaje para retomar esta conversación archivada."
+            : canCompose
+              ? "Escribe / para ver comandos o $ para ver skills."
               : "El compositor no está disponible."}
         </span>
-        {runtimeProvider && (
+        {runtimeProvider && !readOnly && (
           <AgentRuntimeControls
             catalog={runtimeCatalog}
             idBase={`agent-${sessionId}`}
@@ -1560,6 +1695,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   reasoningInvalid || fastInvalid ? " Ajustes incompatibles restablecidos." : ""
                 }`,
               );
+            }}
+            onPresetApply={(preset) => {
+              setSelectedModel(preset.model);
+              setSelectedReasoning(preset.reasoning);
+              setSelectedSpeed(preset.speed);
+              setRuntimeNotice(`Preset aplicado: ${preset.name}.`);
             }}
             onReasoningChange={(value) => {
               setSelectedReasoning(value);
@@ -1627,7 +1768,48 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             )}
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="agent-panel__attachments" aria-label="Archivos adjuntos">
+            {attachments.map((attachment) => (
+              <div className="agent-panel__attachment" key={attachment.path}>
+                {attachment.previewUrl ? (
+                  <img alt="" src={attachment.previewUrl} />
+                ) : (
+                  <span className="agent-panel__attachment-file" aria-hidden="true">
+                    {agentAttachmentExtension(attachment.path)}
+                  </span>
+                )}
+                <span title={attachment.path}>{attachmentFileName(attachment.path)}</span>
+                <button
+                  aria-label={`Quitar ${attachmentFileName(attachment.path)}`}
+                  onClick={() =>
+                    setAttachments((current) =>
+                      current.filter((item) => item.path !== attachment.path),
+                    )
+                  }
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="agent-panel__composer-row" title={agentComposerRowTitle(agentType, repo)}>
+          <button
+            aria-label="Adjuntar archivos"
+            className="agent-panel__attach"
+            disabled={!canAttachFiles || attachments.length >= MAX_AGENT_ATTACHMENTS}
+            onClick={() => void pickFiles()}
+            title={
+              isCodexSession
+                ? `Adjuntar hasta ${MAX_AGENT_ATTACHMENTS} archivos al próximo turno`
+                : "Este agente todavía no admite archivos adjuntos"
+            }
+            type="button"
+          >
+            +
+          </button>
           <textarea
             aria-activedescendant={activeComposerCommandId}
             aria-controls={commandMenuVisible ? composerCommandListboxId : undefined}
@@ -1641,7 +1823,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             onKeyDown={onDraftKeyDown}
             title={agentComposerInputTitle(agentType, repo, readOnly, canCompose)}
             placeholder={
-              readOnly ? "Transcripción archivada" : `Mensaje para ${agentLabel(agentType)}`
+              readOnly ? "Continúa esta conversación" : `Mensaje para ${agentLabel(agentType)}`
             }
             disabled={!canCompose}
             rows={2}
@@ -2438,16 +2620,23 @@ function AgentHostContextStrip({ session }: { session: AgentSession }) {
     >
       <span title={agentHostContextLabelTitle()}>Contexto del turno</span>
       <div className="agent-panel__context-items" title={agentHostContextItemsTitle(items.length)}>
-        {items.map((item) => (
-          <div
-            className="agent-panel__context-item"
-            key={item.kind}
-            title={agentHostContextItemTitle(item)}
-          >
-            <small title={agentHostContextItemLabelTitle(item.label)}>{item.label}</small>
-            <strong title={agentHostContextItemValueTitle(item)}>{item.value}</strong>
-          </div>
-        ))}
+        {items.map((item) => {
+          const content = (
+            <>
+              <small title={agentHostContextItemLabelTitle(item.label)}>{item.label}</small>
+              <strong title={agentHostContextItemValueTitle(item)}>{item.value}</strong>
+            </>
+          );
+          return (
+            <div
+              className="agent-panel__context-item"
+              key={item.kind}
+              title={agentHostContextItemTitle(item)}
+            >
+              {content}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -2461,10 +2650,6 @@ type AgentHostContextItem = {
 
 function agentHostContextItems(session: AgentSession): AgentHostContextItem[] {
   const items: AgentHostContextItem[] = [];
-  const goal = compactContextValue(session.goal?.text ?? null);
-  if (goal) {
-    items.push({ kind: "goal", label: "Objetivo", value: goal });
-  }
   const personality = compactContextValue(session.personality?.name ?? null);
   if (personality) {
     items.push({ kind: "personality", label: "Estilo", value: personality });
@@ -2477,6 +2662,88 @@ function agentHostContextItems(session: AgentSession): AgentHostContextItem[] {
     items.push({ kind: "compact", label: "Resumen", value: summary });
   }
   return items;
+}
+
+function AgentGoalBar({
+  canManage,
+  goal,
+  onClear,
+  onEdit,
+  onToggle,
+}: {
+  canManage: boolean;
+  goal: NonNullable<AgentSession["goal"]>;
+  onClear: () => void;
+  onEdit: () => void;
+  onToggle: () => void;
+}) {
+  const budget = goal.token_budget ?? null;
+  const progress = budget && budget > 0 ? Math.min(100, (goal.tokens_used / budget) * 100) : null;
+  const resumable = goal.status !== "active";
+  return (
+    <section
+      aria-label={`Objetivo ${goalStatusLabel(goal.status)}: ${goal.text}`}
+      className="agent-panel__goal-bar"
+      data-status={goal.status}
+    >
+      <span aria-hidden="true" className="agent-panel__goal-state" />
+      <button
+        aria-label={`Editar objetivo: ${goal.text}`}
+        className="agent-panel__goal-objective"
+        disabled={!canManage}
+        onClick={onEdit}
+        title="Editar objetivo"
+        type="button"
+      >
+        <small>{goalStatusLabel(goal.status)}</small>
+        <strong>{goal.text}</strong>
+      </button>
+      <div className="agent-panel__goal-usage" aria-label={goalUsageLabel(goal)}>
+        {progress !== null && (
+          <span className="agent-panel__goal-progress" aria-hidden="true">
+            <i style={{ width: `${progress}%` }} />
+          </span>
+        )}
+        <span>{goalUsageLabel(goal)}</span>
+      </div>
+      <div className="agent-panel__goal-actions">
+        <button disabled={!canManage} onClick={onToggle} type="button">
+          {resumable ? "Reanudar" : "Pausar"}
+        </button>
+        <button disabled={!canManage} onClick={onEdit} type="button">
+          Editar
+        </button>
+        <button disabled={!canManage} onClick={onClear} type="button">
+          Quitar
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function goalStatusLabel(status: NonNullable<AgentSession["goal"]>["status"]): string {
+  switch (status) {
+    case "active":
+      return "En curso";
+    case "paused":
+      return "En pausa";
+    case "blocked":
+      return "Bloqueado";
+    case "usage_limited":
+      return "Límite de uso";
+    case "budget_limited":
+      return "Presupuesto agotado";
+    case "complete":
+      return "Completado";
+  }
+}
+
+function goalUsageLabel(goal: NonNullable<AgentSession["goal"]>): string {
+  const elapsed = goal.time_used_seconds < 60
+    ? `${goal.time_used_seconds} s`
+    : `${Math.floor(goal.time_used_seconds / 60)} min`;
+  if (!goal.token_budget) return elapsed;
+  return `${new Intl.NumberFormat("es-ES", { notation: "compact" }).format(goal.tokens_used)} / ${new Intl.NumberFormat("es-ES", { notation: "compact" }).format(goal.token_budget)} · ${elapsed}`;
 }
 
 function compactContextValue(value: string | null | undefined): string | null {
@@ -2716,6 +2983,7 @@ function AgentTurn({
   focused,
   onCopyMessage,
   onCopyTurn,
+  onOpenFile,
   searchQuery,
   turn,
   turnElementId,
@@ -2725,6 +2993,7 @@ function AgentTurn({
   focused: boolean;
   onCopyMessage: (target: string, text: string) => void;
   onCopyTurn: (target: string, text: string) => void;
+  onOpenFile?: (path: string) => void;
   searchQuery: string;
   turn: AgentTurnView;
   turnElementId: string;
@@ -2879,12 +3148,24 @@ function AgentTurn({
           title={conversationTurnTouchedFilesContainerTitle(turn.index, turn.changes.length)}
         >
           {turn.changes.map((change) => (
-            <span
+            <button
+              aria-label={`Abrir diff de ${change.path}`}
+              className="agent-panel__chat-turn-file"
+              disabled={!onOpenFile}
               key={`${change.kind}:${change.path}`}
+              onClick={() => onOpenFile?.(change.path)}
               title={turnTouchedFileTitle(turn.index, change.kind, change.path)}
+              type="button"
             >
-              {changeKindLabel(change.kind)} {change.path}
-            </span>
+              <span
+                aria-hidden="true"
+                className="agent-panel__chat-turn-file-kind"
+                data-change-kind={change.kind}
+              >
+                {changeKindShortLabel(change.kind)}
+              </span>
+              <span className="agent-panel__chat-turn-file-path">{change.path}</span>
+            </button>
           ))}
         </div>
       )}
@@ -3365,7 +3646,7 @@ function agentComposerInputTitle(
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (readOnly) {
-    return `Entrada de mensajes de ${agentLabel(agentType)} para ${repoLabel}: la transcripción archivada es de solo lectura.`;
+    return `Entrada de mensajes de ${agentLabel(agentType)} para ${repoLabel}: el próximo mensaje retomará la conversación archivada.`;
   }
   if (!canCompose) {
     return `Entrada de mensajes de ${agentLabel(agentType)} para ${repoLabel}: esperando una sesión en la que se pueda escribir.`;
@@ -3384,10 +3665,15 @@ function agentComposerSendTitle(
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (sending) {
-    return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: enviando el borrador.`;
+    return readOnly
+      ? `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: retomando la conversación y enviando el borrador.`
+      : `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: enviando el borrador.`;
   }
   if (readOnly) {
-    return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: la transcripción archivada es de solo lectura.`;
+    if (!hasDraft) {
+      return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: escribe un mensaje para retomar la conversación archivada.`;
+    }
+    return `Retomar la conversación archivada de ${agentLabel(agentType)} para ${repoLabel} y enviar el borrador.`;
   }
   if (!canCompose) {
     return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: esperando una sesión en la que se pueda escribir.`;
@@ -3410,7 +3696,7 @@ function agentIdentityTitle(agentType: string, repo?: string): string {
   return `Identidad de ${agentLabel(agentType)} para ${repoLabel}: nombre de Agent y etiqueta del repositorio.`;
 }
 
-function agentHeaderActionsTitle(agentType: string, repo?: string): string {
+function agentHeaderActionsTitle(agentType: string, repo: string | undefined): string {
   const repoLabel = repo ? repoName(repo) : "sesión de Agent";
   return `Acciones de cabecera de ${agentLabel(agentType)} para ${repoLabel}: controles Detener y Revertir.`;
 }
@@ -5295,6 +5581,13 @@ function changeKindLabel(kind: string): string {
   }
 }
 
+function changeKindShortLabel(kind: string): string {
+  if (kind === "added" || kind === "untracked") return "A";
+  if (kind === "deleted" || kind === "removed") return "D";
+  if (kind === "renamed") return "R";
+  return "M";
+}
+
 function artifactKindLabel(kind: string): string {
   return kind;
 }
@@ -6372,8 +6665,8 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
   const turns: AgentTurnView[] = [];
   let current: AgentTurnView | null = null;
   for (const item of timeline) {
-    const text = item.text.trim();
-    if (!text) continue;
+    const text = item.kind === "agent_message" ? item.text : item.text.trim();
+    if (!text.trim()) continue;
     if (item.kind === "activity") continue;
     if (item.kind === "user_message") {
       current = {
@@ -6427,10 +6720,26 @@ function appendTimelineText(
         : turn.agentText;
   const previous = target[target.length - 1];
   if (previous) {
-    target[target.length - 1] = `${previous}${needsLineBreak(previous, text) ? "\n" : ""}${text}`;
+    const separator = kind === "agent_message" ? "" : needsLineBreak(previous, text) ? "\n" : "";
+    target[target.length - 1] = `${previous}${separator}${text}`;
   } else {
     target.push(text);
   }
+}
+
+function attachmentFileName(path: string): string {
+  return path.replace(/\\/g, "/").split("/").pop() || "archivo";
+}
+
+function agentAttachmentExtension(path: string): string {
+  const name = attachmentFileName(path);
+  const extension = name.includes(".") ? name.split(".").pop() : null;
+  return extension?.slice(0, 4).toUpperCase() || "FILE";
+}
+
+function agentAttachmentKind(path: string): AgentAttachment["kind"] {
+  const extension = attachmentFileName(path).split(".").pop()?.toLowerCase() ?? "";
+  return AGENT_IMAGE_EXTENSIONS.has(extension) ? "image" : "file";
 }
 
 function attachCheckpointChanges(

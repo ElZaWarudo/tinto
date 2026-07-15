@@ -137,6 +137,9 @@ describe("ConsoleDockPanel detach drop", () => {
   beforeEach(() => {
     consoleDock.resetForTests();
     clearRecentAgentLaunchesForTests();
+    localStorage.removeItem("tinto:agents-navigator:active:collapsed");
+    localStorage.removeItem("tinto:agents-navigator:saved:collapsed");
+    localStorage.removeItem("tinto:agents-navigator:collapsed");
     dockviewMocks.api = nestedDockApi();
     busMocks.repos = { "/r/api": {} };
     busMocks.displayName.mockClear();
@@ -421,7 +424,7 @@ describe("ConsoleDockPanel detach drop", () => {
     const { unmount } = render(<ConsoleDockPanel />);
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("No se pudieron cargar las sesiones guardadas");
+    expect(alert).toHaveTextContent("No se pudo cargar el historial");
     fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
 
     await waitFor(() => expect(clientMocks.listAgentJournalSessions).toHaveBeenCalledTimes(2));
@@ -536,9 +539,78 @@ describe("ConsoleDockPanel detach drop", () => {
       await screen.findByRole("complementary", { name: /sesiones de agents/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /mostrar api codex/i })).toBeInTheDocument();
+    expect(screen.getByText("Activa")).toBeInTheDocument();
     expect(screen.getByText(/codex \/ trabajando/i)).toBeInTheDocument();
     expect(screen.getByText("I am updating the parser")).toBeInTheDocument();
     expect(screen.queryByTestId("console-empty")).toBeNull();
+    unmount();
+  });
+
+  it("collapses the conversations navigator horizontally and remembers the choice", async () => {
+    consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
+    const { unmount } = render(<ConsoleDockPanel />);
+
+    expect(screen.getByRole("button", { name: /mostrar api codex/i })).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Ocultar conversaciones de Agents" }),
+    );
+
+    expect(screen.queryByRole("button", { name: /mostrar api codex/i })).toBeNull();
+    expect(
+      screen.getByRole("complementary", { name: "Sesiones de Agents contraídas" }),
+    ).toHaveClass("console-dock-panel__navigator--collapsed");
+    expect(localStorage.getItem("tinto:agents-navigator:collapsed")).toBe("1");
+    unmount();
+
+    render(<ConsoleDockPanel />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Mostrar conversaciones de Agents" }),
+    );
+    expect(screen.getByText("Conversaciones")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /mostrar api codex/i })).toBeInTheDocument();
+  });
+
+  it("shows active and saved conversations in one list with an active indicator", async () => {
+    consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
+    clientMocks.listAgentJournalSessions.mockResolvedValue([
+      {
+        id: "sess-old",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        ended_at_ms: 4,
+        updated_at_ms: 4,
+        event_count: 2,
+        last_event_kind: "agent_message",
+        last_event_text: "Done",
+        last_event_at_ms: 4,
+      },
+      {
+        id: "sess-live",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "running",
+        started_at_ms: 1,
+        ended_at_ms: null,
+        updated_at_ms: 5,
+        event_count: 3,
+        last_event_kind: "agent_message",
+        last_event_text: "Working",
+        last_event_at_ms: 5,
+      },
+    ]);
+    const { unmount } = render(<ConsoleDockPanel />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: /Abrir la transcripci.n de api con Codex/i,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Conversaciones").parentElement).toHaveTextContent("2");
+    expect(screen.queryByText("Activas")).not.toBeInTheDocument();
+    expect(screen.queryByText("Guardadas")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Activa")).toHaveLength(1);
     unmount();
   });
 
