@@ -33,9 +33,12 @@ use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION};
 pub(crate) const GITLEAKS_TEMPLATE: &str = r#"# .gitleaks.toml
 title = "Tinto local scan policy"
 
+[extend]
+useDefault = true
+
 [allowlist]
 paths = [
-  "(?i)^(?:\.git|node_modules|dist|build|\.next)/",
+  '(?i)(?:^|[/\\])(?:\.git|node_modules|dist|build|target|\.next)(?:[/\\]|$)',
 ]
 "#;
 

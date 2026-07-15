@@ -79,6 +79,7 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
     agents_md_configured: false,
+    secret_scan_status: { state: "not_run" },
     ...over,
   };
 }
@@ -163,6 +164,18 @@ describe("ProjectExplorer", () => {
     expect(
       (await screen.findByTestId("tree-file-src/App.css")).querySelector(".tree-icon--css"),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the worktree collapse action inside the normalized active-tab header", async () => {
+    const onToggleCollapse = vi.fn();
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} onToggleCollapse={onToggleCollapse} />);
+
+    const title = await screen.findByText("api");
+    expect(title).toHaveClass("project-explorer__title");
+    const toggle = screen.getByTestId(`project-explorer-collapse-${REPO}`);
+    fireEvent.click(toggle);
+    expect(onToggleCollapse).toHaveBeenCalledOnce();
   });
 
   it("marks a collapsed folder that contains changed files", async () => {

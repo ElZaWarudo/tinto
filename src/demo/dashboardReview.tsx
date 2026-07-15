@@ -59,6 +59,15 @@ function repoDelta(repo: string, changes: string[], offset: number): RepoDelta {
     subscribed_diffs: null,
     gitleaks_configured: true,
     agents_md_configured: true,
+    secret_scan_status:
+      offset === 1
+        ? {
+            state: "degraded",
+            engine: "heuristic",
+            failure_category: "binary_unavailable",
+            message: "Gitleaks no está instalado; se usó el detector básico.",
+          }
+        : { state: "clean", engine: "gitleaks", version: "8.30.1" },
   };
 }
 

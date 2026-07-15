@@ -8,8 +8,8 @@ import type { BranchInfo, RepoDelta } from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
 import { checkAgentAvailabilityForRepo } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
-import { GitleaksConfigNotice } from "./GitleaksConfigNotice";
 import { RepoSourceBadge } from "./RepoSourceBadge";
+import { SecretScanIndicator } from "./SecretScanIndicator";
 import { SignalBadges } from "./SignalBadges";
 import { REPO_STATUS_MARKS } from "./statusMarks";
 
@@ -189,7 +189,6 @@ function RepoCardImpl({
   const metrics = getRepoMetrics(delta);
   const signals = getRepoSignals(delta);
   const counts = signalCounts(signals);
-  const missingGitleaksConfig = delta.gitleaks_configured === false;
 
   const cls = ["repo-card", error ? "repo-card--error" : active ? "repo-card--active" : ""]
     .filter(Boolean)
@@ -350,6 +349,11 @@ function RepoCardImpl({
 
       <div className="repo-card__signals">
         {signals.length > 0 && <SignalBadges signals={signals} limit={2} />}
+        <SecretScanIndicator
+          status={delta.secret_scan_status}
+          findings={delta.secret_findings?.length ?? 0}
+          compact
+        />
       </div>
 
       {pending && (
@@ -360,16 +364,6 @@ function RepoCardImpl({
           aria-live="polite"
         >
           Esperando la primera instantánea del repo…
-        </div>
-      )}
-
-      {missingGitleaksConfig && (
-        <div
-          className="repo-card__notice"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          <GitleaksConfigNotice repo={delta.repo} compact />
         </div>
       )}
 

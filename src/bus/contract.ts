@@ -111,8 +111,21 @@ export interface AgentRuntimeCatalog {
   updated_at_ms: number;
 }
 
+export type AgentSessionGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
+
 export interface AgentSessionGoal {
   text: string;
+  status: AgentSessionGoalStatus;
+  token_budget?: number | null;
+  tokens_used: number;
+  time_used_seconds: number;
+  created_at_ms: number;
   updated_at_ms: number;
 }
 
@@ -139,10 +152,18 @@ export interface AgentSessionContextSummary {
   source_turns: number;
 }
 
+export type AgentSessionResumeMode = "native" | "context_bridge";
+
+export interface AgentSessionResumeResult {
+  session_id: string;
+  mode: AgentSessionResumeMode;
+}
+
 export interface AgentSession {
   id: string;
   repo: string;
   agent_type: string;
+  provider_session_id?: string | null;
   wsl_distro?: string | null;
   status: AgentSessionStatus;
   pid: number | null;
@@ -294,6 +315,19 @@ export interface SecretFinding {
   description: string;
 }
 
+export type SecretScanEngine = "gitleaks" | "heuristic";
+
+export type SecretScanState = "not_run" | "clean" | "findings" | "degraded";
+
+export interface SecretScanStatus {
+  state: SecretScanState;
+  engine?: SecretScanEngine | null;
+  version?: string | null;
+  failure_category?: string | null;
+  message?: string | null;
+  checked_at_ms?: number | null;
+}
+
 export interface RepoMetrics {
   changed_files: number;
   lines_added: number;
@@ -363,6 +397,7 @@ export interface RepoDelta {
   agents_md_configured: boolean;
   signals?: PassiveSignal[]; // RDM-011 additive
   secret_findings?: SecretFinding[]; // additive
+  secret_scan_status: SecretScanStatus;
   subscribed_diffs?: FileDiff[] | null; // RDM-008
 }
 
@@ -494,6 +529,7 @@ export interface CuratedBusContractTypeMap {
   AgentRuntimeServiceTier: AgentRuntimeServiceTier;
   AgentRuntimeModel: AgentRuntimeModel;
   AgentRuntimeCatalog: AgentRuntimeCatalog;
+  AgentSessionGoalStatus: AgentSessionGoalStatus;
   AgentSessionGoal: AgentSessionGoal;
   AgentSessionPersonality: AgentSessionPersonality;
   AgentSessionPlanMode: AgentSessionPlanMode;
@@ -520,6 +556,9 @@ export interface CuratedBusContractTypeMap {
   PassiveSignal: PassiveSignal;
   RepoMetrics: RepoMetrics;
   SecretFinding: SecretFinding;
+  SecretScanEngine: SecretScanEngine;
+  SecretScanState: SecretScanState;
+  SecretScanStatus: SecretScanStatus;
   RepoDelta: RepoDelta;
   FsEventKind: FsEventKind;
   FsEvent: FsEvent;

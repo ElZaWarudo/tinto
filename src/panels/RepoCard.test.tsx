@@ -9,17 +9,12 @@ const clientMocks = vi.hoisted(() => ({
     void args;
     return Promise.resolve(true);
   }),
-  createRepoGitleaksConfig: vi.fn((repo: string) => {
-    void repo;
-    return Promise.resolve();
-  }),
 }));
 vi.mock("../bus/client", () => ({
   agentBinaryAvailableForRepo: (...args: unknown[]) => {
     void args;
     return clientMocks.agentBinaryAvailableForRepo(...args);
   },
-  createRepoGitleaksConfig: (repo: string) => clientMocks.createRepoGitleaksConfig(repo),
 }));
 
 import { RepoCard } from "./RepoCard";
@@ -37,6 +32,7 @@ function makeDelta(over: Partial<RepoDelta> = {}): RepoDelta {
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
     agents_md_configured: false,
+    secret_scan_status: { state: "not_run" },
     ...over,
   };
 }
@@ -69,8 +65,6 @@ describe("RepoCard", () => {
   beforeEach(() => {
     clientMocks.agentBinaryAvailableForRepo.mockReset();
     clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(true);
-    clientMocks.createRepoGitleaksConfig.mockReset();
-    clientMocks.createRepoGitleaksConfig.mockResolvedValue(undefined);
     resetAgentAvailabilityCacheForTests();
   });
 
@@ -138,21 +132,22 @@ describe("RepoCard", () => {
     expect(screen.queryByTestId("repo-source-badge")).toBeNull();
   });
 
-  it("shows a per-repo Gitleaks config notice when the repo has no local config", () => {
-    renderCard({ gitleaks_configured: false });
-    expect(screen.getByTestId("gitleaks-config-notice-compact")).toHaveTextContent(
-      "Gitleaks sin configuración local",
-    );
-    expect(screen.getByText(/\.gitleaks\.toml/)).toBeInTheDocument();
+  it("shows when Gitleaks completed a clean scan", () => {
+    renderCard({ secret_scan_status: { state: "clean", engine: "gitleaks", version: "8.30.1" } });
+    expect(screen.getByTestId("secret-scan-status")).toHaveTextContent("Gitleaks limpio8.30.1");
   });
 
-  it("configures Gitleaks directly for the repo from the notice", async () => {
-    renderCard({ gitleaks_configured: false });
-
-    fireEvent.click(screen.getByText("Configurar"));
-
-    expect(clientMocks.createRepoGitleaksConfig).toHaveBeenCalledWith("/r/api");
-    expect(await screen.findByText("Configurado")).toBeInTheDocument();
+  it("makes degraded protection explicit", () => {
+    renderCard({
+      secret_scan_status: {
+        state: "degraded",
+        engine: "heuristic",
+        failure_category: "binary_unavailable",
+      },
+    });
+    expect(screen.getByTestId("secret-scan-status")).toHaveTextContent(
+      "Gitleaks no disponibleDetector básico activo",
+    );
   });
 
   // Covers AE11: git edge states render without crashing

@@ -1,13 +1,13 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionChange, AgentSessionContextSummary,
-    AgentSessionError, AgentSessionFeedback, AgentSessionGoal, AgentSessionPersonality,
-    AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
-    AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
+    AgentSessionError, AgentSessionFeedback, AgentSessionGoal, AgentSessionGoalStatus,
+    AgentSessionPersonality, AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus,
+    AgentSessionTimelineItem, AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
-    launcher::request_wsl_agent,
+    launcher::{request_wsl_agent, windows_path_to_wsl_mount},
     protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
 
@@ -16,7 +16,7 @@ use super::{
         create_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
         CheckpointConfig, CheckpointRecord,
     },
-    pty::{AgentProcess, AgentProcessEvent},
+    pty::{AgentProcess, AgentProcessEvent, AgentTurnAttachment},
     AgentConsoleError,
 };
 
@@ -29,6 +29,7 @@ pub struct AgentSessionRecord {
     id: String,
     repo: PathBuf,
     agent_type: String,
+    provider_session_id: Option<String>,
     status: AgentSessionStatus,
     pid: Option<u32>,
     started_at_ms: u64,
@@ -81,6 +82,7 @@ impl AgentSessionRecord {
             id,
             repo,
             agent_type,
+            provider_session_id: None,
             status: AgentSessionStatus::Starting,
             pid: None,
             started_at_ms,
@@ -118,6 +120,10 @@ impl AgentSessionRecord {
         self.wsl_distro = Some(distro);
     }
 
+    pub fn set_provider_session_id(&mut self, provider_session_id: String) {
+        self.provider_session_id = Some(provider_session_id);
+    }
+
     pub fn start(&mut self, process: Box<dyn AgentProcess>) -> Result<(), AgentConsoleError> {
         if self.status != AgentSessionStatus::Starting {
             return Err(AgentConsoleError::new(
@@ -144,6 +150,9 @@ impl AgentSessionRecord {
         }
 
         if let Some(process) = self.process.as_mut() {
+            if let Some(provider_session_id) = process.provider_session_id() {
+                self.provider_session_id = Some(provider_session_id);
+            }
             if let Err(error) = process.kill() {
                 self.status = AgentSessionStatus::Error;
                 self.error = Some(error.clone());
@@ -178,8 +187,12 @@ impl AgentSessionRecord {
         self.note_turn_activity(now_ms());
         let planned_input = plan_mode_input(self.plan_mode.as_ref(), input);
         let input = planned_input.as_deref().unwrap_or(input);
+        let native_goal = self
+            .process
+            .as_ref()
+            .is_some_and(|process| process.supports_goals());
         let contextual_input = turn_context_input(
-            self.goal.as_ref(),
+            (!native_goal).then_some(self.goal.as_ref()).flatten(),
             self.personality.as_ref(),
             self.context_summary.as_ref(),
             input,
@@ -193,6 +206,53 @@ impl AgentSessionRecord {
             let process = self.running_process_mut()?;
             process.write_input(input)
         }
+    }
+
+    pub fn write_turn(
+        &mut self,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        self.note_turn_activity(now_ms());
+        let mut input = text.as_bytes().to_vec();
+        input.push(b'\r');
+        let planned_input = plan_mode_input(self.plan_mode.as_ref(), &input);
+        let input = planned_input.as_deref().unwrap_or(&input);
+        let native_goal = self
+            .process
+            .as_ref()
+            .is_some_and(|process| process.supports_goals());
+        let contextual_input = turn_context_input(
+            (!native_goal).then_some(self.goal.as_ref()).flatten(),
+            self.personality.as_ref(),
+            self.context_summary.as_ref(),
+            input,
+        );
+        let input = contextual_input.as_deref().unwrap_or(input);
+        let text = String::from_utf8_lossy(input)
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
+        let runtime_attachments = if let Some(distro) = self.wsl_distro.as_deref() {
+            attachments
+                .iter()
+                .map(|attachment| {
+                    attachment_path_for_wsl(&attachment.path, distro).map(|path| {
+                        AgentTurnAttachment {
+                            path,
+                            is_image: attachment.is_image,
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            attachments.to_vec()
+        };
+        if let Some(options) = options.as_ref() {
+            self.runtime_options = options.clone();
+        }
+        let process = self.running_process_mut()?;
+        process.write_turn(&text, &runtime_attachments, options)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
@@ -220,7 +280,11 @@ impl AgentSessionRecord {
 
         if let Some(process) = self.process.as_mut() {
             let events = process.drain_events();
+            let provider_session_id = process.provider_session_id();
             let exit_code = process.try_exit_code()?;
+            if provider_session_id.is_some() {
+                self.provider_session_id = provider_session_id;
+            }
             for event in events {
                 self.apply_process_event(event)?;
             }
@@ -238,15 +302,60 @@ impl AgentSessionRecord {
         Ok(())
     }
 
-    pub fn set_goal(&mut self, text: String, updated_at_ms: u64) {
+    pub fn set_goal(&mut self, text: String, updated_at_ms: u64) -> Result<(), AgentConsoleError> {
+        let process = self.running_process_mut()?;
+        process.update_goal(
+            Some(text.trim()),
+            Some(AgentSessionGoalStatus::Active),
+            None,
+        )?;
+        let previous = self.goal.as_ref();
         self.goal = Some(AgentSessionGoal {
             text: text.trim().to_string(),
+            status: AgentSessionGoalStatus::Active,
+            token_budget: previous.and_then(|goal| goal.token_budget),
+            tokens_used: previous.map_or(0, |goal| goal.tokens_used),
+            time_used_seconds: previous.map_or(0, |goal| goal.time_used_seconds),
+            created_at_ms: previous.map_or(updated_at_ms, |goal| goal.created_at_ms),
             updated_at_ms,
         });
+        Ok(())
     }
 
-    pub fn clear_goal(&mut self) {
+    pub fn restore_goal(&mut self, goal: AgentSessionGoal) -> Result<(), AgentConsoleError> {
+        self.running_process_mut()?.update_goal(
+            Some(&goal.text),
+            Some(goal.status),
+            Some(goal.token_budget),
+        )?;
+        self.goal = Some(goal);
+        Ok(())
+    }
+
+    pub fn set_goal_status(
+        &mut self,
+        status: AgentSessionGoalStatus,
+        updated_at_ms: u64,
+    ) -> Result<(), AgentConsoleError> {
+        if self.goal.is_none() {
+            return Err(AgentConsoleError::new(
+                "goal_not_set",
+                "esta conversaciÃ³n no tiene un objetivo",
+            ));
+        }
+        self.running_process_mut()?
+            .update_goal(None, Some(status), None)?;
+        if let Some(goal) = self.goal.as_mut() {
+            goal.status = status;
+            goal.updated_at_ms = updated_at_ms;
+        }
+        Ok(())
+    }
+
+    pub fn clear_goal(&mut self) -> Result<(), AgentConsoleError> {
+        self.running_process_mut()?.clear_goal()?;
         self.goal = None;
+        Ok(())
     }
 
     pub fn set_personality(&mut self, name: String, updated_at_ms: u64) {
@@ -279,6 +388,10 @@ impl AgentSessionRecord {
         self.context_summary = Some(summary);
     }
 
+    pub fn set_runtime_options(&mut self, options: AgentSessionRuntimeOptions) {
+        self.runtime_options = options;
+    }
+
     pub fn clear_context_summary(&mut self) {
         self.context_summary = None;
     }
@@ -291,6 +404,14 @@ impl AgentSessionRecord {
             }
             AgentProcessEvent::TurnCompleted { timestamp_ms } => {
                 self.record_turn_done(timestamp_ms)
+            }
+            AgentProcessEvent::GoalUpdated { goal } => {
+                self.goal = Some(goal);
+                Ok(())
+            }
+            AgentProcessEvent::GoalCleared => {
+                self.goal = None;
+                Ok(())
             }
         }
     }
@@ -560,6 +681,7 @@ impl AgentSessionRecord {
             id: self.id.clone(),
             repo: self.repo.clone(),
             agent_type: self.agent_type.clone(),
+            provider_session_id: self.provider_session_id.clone(),
             wsl_distro: self.wsl_distro.clone(),
             status: self.status,
             pid: self.pid,
@@ -882,6 +1004,46 @@ fn turn_context_input(
     Some(contextual)
 }
 
+fn attachment_path_for_wsl(path: &Path, distro: &str) -> Result<PathBuf, AgentConsoleError> {
+    let raw = path.to_string_lossy();
+    if raw.starts_with('/') {
+        return Ok(path.to_path_buf());
+    }
+    if let Some(path) = wsl_unc_path(&raw, distro)? {
+        return Ok(PathBuf::from(path));
+    }
+    windows_path_to_wsl_mount(path)
+        .map(PathBuf::from)
+        .map_err(|error| AgentConsoleError::new(error.category.as_str(), error.message))
+}
+
+fn wsl_unc_path(raw: &str, expected_distro: &str) -> Result<Option<String>, AgentConsoleError> {
+    let normalized = raw.replace('\\', "/");
+    let normalized = normalized
+        .strip_prefix("//?/UNC/")
+        .map(|path| format!("//{path}"))
+        .unwrap_or(normalized);
+    let without_host = ["//wsl.localhost/", "//wsl$/"].iter().find_map(|prefix| {
+        normalized
+            .get(..prefix.len())
+            .filter(|value| value.eq_ignore_ascii_case(prefix))
+            .map(|_| &normalized[prefix.len()..])
+    });
+    let Some(without_host) = without_host else {
+        return Ok(None);
+    };
+    let (distro, rest) = without_host.split_once('/').unwrap_or((without_host, ""));
+    if !distro.eq_ignore_ascii_case(expected_distro) {
+        return Err(AgentConsoleError::new(
+            "attachment_wsl_distro_mismatch",
+            format!(
+                "el archivo pertenece a la distro WSL {distro}, pero la sesion usa {expected_distro}"
+            ),
+        ));
+    }
+    Ok(Some(format!("/{}", rest.trim_start_matches('/'))))
+}
+
 fn trimmed_context_value(value: &str) -> Option<&str> {
     let value = value.trim();
     if value.is_empty() {
@@ -933,6 +1095,36 @@ mod tests {
     use crate::git::test_fixtures::TempRepo;
     use std::io::Read;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn attachment_path_for_wsl_translates_windows_drive_paths() {
+        assert_eq!(
+            attachment_path_for_wsl(&PathBuf::from(r"C:\Users\User\brief.pdf"), "Ubuntu").unwrap(),
+            PathBuf::from("/mnt/c/Users/User/brief.pdf")
+        );
+    }
+
+    #[test]
+    fn attachment_path_for_wsl_accepts_matching_wsl_unc_paths() {
+        assert_eq!(
+            attachment_path_for_wsl(
+                &PathBuf::from(r"\\wsl.localhost\Ubuntu\home\tet\brief.pdf"),
+                "Ubuntu",
+            )
+            .unwrap(),
+            PathBuf::from("/home/tet/brief.pdf")
+        );
+    }
+
+    #[test]
+    fn attachment_path_for_wsl_rejects_a_different_distro() {
+        let error = attachment_path_for_wsl(
+            &PathBuf::from(r"\\wsl$\Debian\home\tet\brief.pdf"),
+            "Ubuntu",
+        )
+        .unwrap_err();
+        assert_eq!(error.category, "attachment_wsl_distro_mismatch");
+    }
 
     #[derive(Debug)]
     struct FakeProcess {
@@ -1134,7 +1326,15 @@ mod tests {
                 writes: Some(writes.clone()),
             }))
             .unwrap();
-        session.set_goal("Ship the Codex harness".into(), 20);
+        session.goal = Some(AgentSessionGoal {
+            text: "Ship the Codex harness".into(),
+            status: AgentSessionGoalStatus::Active,
+            token_budget: None,
+            tokens_used: 0,
+            time_used_seconds: 0,
+            created_at_ms: 20,
+            updated_at_ms: 20,
+        });
         session.set_personality("precise".into(), 21);
         session.set_context_summary(AgentSessionContextSummary {
             text: "Recent work: /review now returns findings.\nNext: steer context.".into(),
@@ -1168,7 +1368,15 @@ mod tests {
                 writes: Some(writes.clone()),
             }))
             .unwrap();
-        session.set_goal("Keep the turn scoped".into(), 20);
+        session.goal = Some(AgentSessionGoal {
+            text: "Keep the turn scoped".into(),
+            status: AgentSessionGoalStatus::Active,
+            token_budget: None,
+            tokens_used: 0,
+            time_used_seconds: 0,
+            created_at_ms: 20,
+            updated_at_ms: 20,
+        });
         session.set_plan_mode(true, 21);
 
         session.write_input(b"edit files\r", None).expect("write");

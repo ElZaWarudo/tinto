@@ -27,7 +27,7 @@ use crate::wsl_agent::{
     protocol::{AgentError, AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
 use checkpoint::{create_checkpoint, CheckpointConfig, CheckpointRecord};
-use pty::{AgentProcessFactory, PortablePtyFactory};
+use pty::{AgentProcessFactory, AgentTurnAttachment, PortablePtyFactory};
 use session::{AgentSessionRecord, CheckpointBackend};
 use validation::{resolve_agent_binary, validate_agent_type};
 
@@ -130,6 +130,43 @@ impl AgentSessionRegistry {
         self.start_session_with_binary_and_output(repo, agent_type, binary_path)
     }
 
+    pub fn resume_session_with_output(
+        &mut self,
+        repo: PathBuf,
+        agent_type: String,
+        provider_session_id: String,
+    ) -> Result<StartedAgentSession, AgentConsoleError> {
+        let repo = canonical_repo(&repo)?;
+        let binary_path = resolve_agent_binary(&agent_type)?;
+        self.refresh_session_statuses()?;
+        self.ensure_capacity(&repo)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let started_at_ms = now_ms();
+        let checkpoint = Some(create_checkpoint(
+            &repo,
+            &id,
+            started_at_ms,
+            &self.checkpoint_config,
+        )?);
+        let mut process =
+            self.process_factory
+                .resume_agent(&binary_path, &repo, &provider_session_id)?;
+        let output_reader = process.take_output_reader();
+        let mut session = AgentSessionRecord::new(
+            id.clone(),
+            repo,
+            agent_type,
+            started_at_ms,
+            checkpoint,
+            self.checkpoint_config.clone(),
+            CheckpointBackend::Local,
+        );
+        session.set_provider_session_id(provider_session_id);
+        session.start(process)?;
+        self.sessions.insert(id.clone(), session);
+        Ok(StartedAgentSession { id, output_reader })
+    }
+
     #[cfg(test)]
     fn start_session_with_binary(
         &mut self,
@@ -182,6 +219,44 @@ impl AgentSessionRegistry {
         agent_type: String,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         self.start_wsl_session_with_output_inner(repo, distro, agent_type, true, true)
+    }
+
+    pub fn resume_wsl_session_with_output(
+        &mut self,
+        repo: PathBuf,
+        distro: String,
+        agent_type: String,
+        provider_session_id: String,
+    ) -> Result<StartedAgentSession, AgentConsoleError> {
+        validate_wsl_repo(&repo)?;
+        validate_agent_type(&agent_type)?;
+        ensure_wsl_agent_binary_via_agent(&distro, &agent_type)?;
+        self.refresh_session_statuses()?;
+        self.ensure_capacity(&repo)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let started_at_ms = now_ms();
+        let checkpoint = Some(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)?);
+        let mut process = self.process_factory.resume_wsl_agent(
+            &agent_type,
+            &distro,
+            &repo,
+            &provider_session_id,
+        )?;
+        let output_reader = process.take_output_reader();
+        let mut session = AgentSessionRecord::new(
+            id.clone(),
+            repo,
+            agent_type,
+            started_at_ms,
+            checkpoint,
+            self.checkpoint_config.clone(),
+            CheckpointBackend::Wsl,
+        );
+        session.set_wsl_distro(distro);
+        session.set_provider_session_id(provider_session_id);
+        session.start(process)?;
+        self.sessions.insert(id.clone(), session);
+        Ok(StartedAgentSession { id, output_reader })
     }
 
     #[cfg(test)]
@@ -266,6 +341,20 @@ impl AgentSessionRegistry {
         session.write_input(input, options)
     }
 
+    pub fn write_session_turn(
+        &mut self,
+        session_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.write_turn(text, attachments, options)
+    }
+
     pub fn session_runtime_catalog(
         &mut self,
         session_id: &str,
@@ -292,7 +381,7 @@ impl AgentSessionRegistry {
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
-        session.set_goal(goal, updated_at_ms);
+        session.set_goal(goal, updated_at_ms)?;
         Ok(session.to_contract())
     }
 
@@ -304,7 +393,34 @@ impl AgentSessionRegistry {
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
-        session.clear_goal();
+        session.clear_goal()?;
+        Ok(session.to_contract())
+    }
+
+    pub fn restore_session_goal(
+        &mut self,
+        session_id: &str,
+        goal: crate::bus::contract::AgentSessionGoal,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.restore_goal(goal)?;
+        Ok(session.to_contract())
+    }
+
+    pub fn set_session_goal_status(
+        &mut self,
+        session_id: &str,
+        status: crate::bus::contract::AgentSessionGoalStatus,
+        updated_at_ms: u64,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_goal_status(status, updated_at_ms)?;
         Ok(session.to_contract())
     }
 
@@ -383,6 +499,19 @@ impl AgentSessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         session.set_context_summary(summary);
+        Ok(session.to_contract())
+    }
+
+    pub fn set_session_runtime_options(
+        &mut self,
+        session_id: &str,
+        options: AgentSessionRuntimeOptions,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_runtime_options(options);
         Ok(session.to_contract())
     }
 

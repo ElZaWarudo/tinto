@@ -19,6 +19,7 @@ import {
   type AgentSessionOutput,
   type AgentSessionTimelineItem,
   type AgentSession,
+  type AgentSessionResumeResult,
   type AgentRuntimeCatalog,
   type AgentSessionRuntimeOptions,
   type AgentHostCommandResult,
@@ -63,6 +64,9 @@ export const addWslRepo = (workbench: string, distro: string, path: string, alia
 
 export const removeRepo = (workbench: string, path: string) =>
   invoke("remove_repo", { workbench, path });
+
+export const removeRepoEntry = (workbench: string, path: string) =>
+  invoke<boolean>("remove_repo_entry", { workbench, path });
 
 export const removeWslRepo = (workbench: string, distro: string, path: string) =>
   invoke("remove_wsl_repo", { workbench, distro, path });
@@ -129,6 +133,9 @@ export const listAgentJournalSessions = (limit?: number) =>
 
 export const getAgentJournalSession = (sessionId: string) =>
   invoke<AgentSession | null>("get_agent_journal_session", { sessionId });
+
+export const resumeAgentJournalSession = (sessionId: string) =>
+  invoke<AgentSessionResumeResult>("resume_agent_journal_session", { sessionId });
 
 export const deleteAgentJournalSession = (sessionId: string) =>
   invoke<boolean>("delete_agent_journal_session", { sessionId });
@@ -202,6 +209,22 @@ export const writeAgentSessionInput = (
     inputBase64: encodeAgentInput(input),
     options: options ?? null,
   });
+
+export const writeAgentSessionTurn = (
+  sessionId: string,
+  text: string,
+  attachmentPaths: string[],
+  options?: AgentSessionRuntimeOptions,
+) =>
+  invoke("write_agent_session_turn", {
+    sessionId,
+    text,
+    attachmentPaths,
+    options: options ?? null,
+  });
+
+export const getAgentImagePreview = (path: string) =>
+  invoke<string | null>("get_agent_image_preview", { path });
 
 export const runAgentHostCommand = (sessionId: string, command: string, argument?: string) =>
   invoke<AgentHostCommandResult>("run_agent_host_command", {

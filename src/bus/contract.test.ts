@@ -61,6 +61,8 @@ describe("passive signal contract types", () => {
       error: null,
       metrics: { changed_files: 1, lines_added: 3, lines_removed: 1 },
       gitleaks_configured: false,
+      agents_md_configured: false,
+      secret_scan_status: { state: "findings", engine: "gitleaks" },
       signals: [
         {
           kind: "sensitive_path",
@@ -266,6 +268,7 @@ import {
   addWslRepo,
   forgetRepo,
   getAgentJournalSession,
+  getAgentImagePreview,
   getAgentRuntimeCatalog,
   getCommitDiff,
   getGitleaksSetupStatus,
@@ -290,13 +293,16 @@ import {
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
+  resumeAgentJournalSession,
   runAgentHostCommand,
+  removeRepoEntry,
   removeWslRepo,
   setSubscriptions,
   startAgentSession,
   stopAgentSession,
   updateRepo,
   writeAgentSessionInput,
+  writeAgentSessionTurn,
 } from "./client";
 
 describe("RDM-008 client wrappers", () => {
@@ -340,6 +346,14 @@ describe("RDM-008 client wrappers", () => {
   it("forgetRepo drops a repo from the live bus snapshot", () => {
     void forgetRepo("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("forget_repo", { repo: "/r/api" });
+  });
+
+  it("removeRepoEntry delegates persisted identity resolution to the backend", () => {
+    void removeRepoEntry("Work", "/home/me/repo");
+    expect(invokeMock).toHaveBeenCalledWith("remove_repo_entry", {
+      workbench: "Work",
+      path: "/home/me/repo",
+    });
   });
 
   it("get_commit_diff passes repo + commitId using Tauri camelCase arg keys", () => {
@@ -418,6 +432,11 @@ describe("RDM-008 client wrappers", () => {
 
     void getAgentJournalSession("sess-1");
     expect(invokeMock).toHaveBeenCalledWith("get_agent_journal_session", {
+      sessionId: "sess-1",
+    });
+
+    void resumeAgentJournalSession("sess-1");
+    expect(invokeMock).toHaveBeenCalledWith("resume_agent_journal_session", {
       sessionId: "sess-1",
     });
 
@@ -503,6 +522,32 @@ describe("RDM-008 client wrappers", () => {
       sessionId: "sess-1",
       cols: 120,
       rows: 36,
+    });
+  });
+
+  it("sends provider-neutral attachment paths with a structured agent turn", () => {
+    void writeAgentSessionTurn(
+      "sess-1",
+      "Inspect this",
+      ["C:\\Temp\\screen.png", "C:\\Temp\\brief.pdf"],
+      {
+        model: "gpt-5.5",
+      },
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith("write_agent_session_turn", {
+      sessionId: "sess-1",
+      text: "Inspect this",
+      attachmentPaths: ["C:\\Temp\\screen.png", "C:\\Temp\\brief.pdf"],
+      options: { model: "gpt-5.5" },
+    });
+  });
+
+  it("loads a validated image preview through the native boundary", () => {
+    void getAgentImagePreview("C:\\Temp\\screen.png");
+
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_image_preview", {
+      path: "C:\\Temp\\screen.png",
     });
   });
 

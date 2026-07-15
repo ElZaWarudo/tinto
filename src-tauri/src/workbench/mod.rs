@@ -411,6 +411,26 @@ impl WorkbenchStore {
         self.persist()
     }
 
+    /// Removes a runtime-visible repo without asking the frontend to infer its
+    /// persisted source or canonical path representation.
+    pub fn remove_repo_entry(
+        &mut self,
+        workbench: &str,
+        runtime_path: &str,
+    ) -> Result<bool, WorkbenchError> {
+        let requested = normalize_runtime_repo_identity(runtime_path);
+        let wb = self.find_mut(workbench)?;
+        let before = wb.repos.len();
+        wb.repos.retain(|repo| {
+            normalize_runtime_repo_identity(&repo.path.to_string_lossy()) != requested
+        });
+        if wb.repos.len() == before {
+            return Ok(false);
+        }
+        self.persist()?;
+        Ok(true)
+    }
+
     /// Edita alias y/o watchlist de un repo (R6).
     pub fn update_repo(
         &mut self,
@@ -469,6 +489,25 @@ impl WorkbenchStore {
         self.persist()?;
         Ok(runtime)
     }
+}
+
+fn normalize_runtime_repo_identity(path: &str) -> String {
+    let mut normalized = path.trim().replace('\\', "/");
+    if normalized
+        .get(.."//?/UNC/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//?/UNC/"))
+    {
+        normalized = format!("//{}", &normalized["//?/UNC/".len()..]);
+    } else if normalized.starts_with("//?/") {
+        normalized = normalized["//?/".len()..].to_string();
+    }
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    if normalized.as_bytes().get(1) == Some(&b':') || normalized.starts_with("//") {
+        normalized.make_ascii_lowercase();
+    }
+    normalized
 }
 
 fn runtime_workbench(workbench: &Workbench) -> Option<Workbench> {
@@ -709,6 +748,49 @@ mod tests {
         // Removing by the non-canonical form still resolves to the stored repo.
         store.remove_repo("A", &noncanon).unwrap();
         assert!(store.config().workbenches[0].repos.is_empty());
+    }
+
+    #[test]
+    fn remove_repo_persiste_tras_reabrir_el_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        {
+            let mut store = store_in(&dir);
+            store.create_workbench("A").unwrap();
+            store.add_repo("A", repo.clone(), None, false).unwrap();
+            store.remove_repo("A", &repo).unwrap();
+        }
+
+        let reloaded = WorkbenchStore::open(dir.path()).expect("reloaded store");
+        assert!(reloaded.config().workbenches[0].repos.is_empty());
+    }
+
+    #[test]
+    fn remove_repo_entry_resuelve_identidades_windows_y_wsl_desde_el_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let mut store = store_in(&dir);
+            store.create_workbench("A").unwrap();
+            store
+                .add_repo("A", PathBuf::from(r"\\?\C:\Users\User\repo"), None, false)
+                .unwrap();
+            store
+                .add_wsl_repo("A", "Ubuntu".into(), "/home/me/repo".into(), None)
+                .unwrap();
+
+            assert!(store.remove_repo_entry("A", r"C:\Users\User\repo").unwrap());
+            assert_eq!(store.config().workbenches[0].repos.len(), 1);
+            assert_eq!(
+                store.config().workbenches[0].repos[0].source,
+                RepoSource::Wsl
+            );
+            assert!(store.remove_repo_entry("A", "/home/me/repo").unwrap());
+            assert!(!store.remove_repo_entry("A", "/home/me/missing").unwrap());
+        }
+
+        let reloaded = WorkbenchStore::open(dir.path()).expect("reloaded store");
+        assert!(reloaded.config().workbenches[0].repos.is_empty());
     }
 
     #[test]

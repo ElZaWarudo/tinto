@@ -33,9 +33,9 @@ use crate::wsl_agent::protocol::{
 };
 use contract::{
     FsEvent, FsEventBatch, FsEventKind, PassiveSignal, PassiveSignalKind, RepoDelta,
-    RepoErrorClass, RepoErrorState, RepoMetrics, SecretFinding, SignalSeverity, SubscriptionTarget,
-    WatchingState, WorkbenchSnapshot, EVENT_FS_EVENTS, EVENT_WATCHING_STATE, EVENT_WORKBENCH_DELTA,
-    MAX_SUBSCRIPTIONS,
+    RepoErrorClass, RepoErrorState, RepoMetrics, SecretFinding, SecretScanStatus, SignalSeverity,
+    SubscriptionTarget, WatchingState, WorkbenchSnapshot, EVENT_FS_EVENTS, EVENT_WATCHING_STATE,
+    EVENT_WORKBENCH_DELTA, MAX_SUBSCRIPTIONS,
 };
 
 /// Concurrencia máxima de recálculos git en vuelo (acota el broadcast de
@@ -91,7 +91,8 @@ pub(crate) struct RecalcOutcome {
     pub gitleaks_configured: bool,
     pub agents_md_configured: bool,
     pub signals: Vec<PassiveSignal>,
-    pub secret_findings: Vec<SecretFinding>,
+    pub secret_findings: Option<Vec<SecretFinding>>,
+    pub secret_scan_status: Option<SecretScanStatus>,
 }
 
 /// Estado en vivo de un repo.
@@ -108,6 +109,7 @@ pub(crate) struct RepoLiveState {
     agents_md_configured: bool,
     signals: Vec<PassiveSignal>,
     secret_findings: Vec<SecretFinding>,
+    secret_scan_status: SecretScanStatus,
     /// Último tamaño conocido por path vigilado (delta de tamaño, Plano 2).
     last_known_sizes: HashMap<PathBuf, u64>,
     wsl_fingerprints: HashMap<PathBuf, FileFingerprint>,
@@ -129,6 +131,7 @@ impl RepoLiveState {
             agents_md_configured: self.agents_md_configured,
             signals: self.signals.clone(),
             secret_findings: self.secret_findings.clone(),
+            secret_scan_status: self.secret_scan_status.clone(),
             subscribed_diffs: None,
         }
     }
@@ -151,7 +154,12 @@ impl RepoLiveState {
         self.gitleaks_configured = outcome.gitleaks_configured;
         self.agents_md_configured = outcome.agents_md_configured;
         self.signals = outcome.signals.clone();
-        self.secret_findings = outcome.secret_findings.clone();
+        if let Some(secret_findings) = &outcome.secret_findings {
+            self.secret_findings = secret_findings.clone();
+        }
+        if let Some(secret_scan_status) = &outcome.secret_scan_status {
+            self.secret_scan_status = secret_scan_status.clone();
+        }
         self.revision += 1;
     }
 
@@ -173,6 +181,7 @@ impl RepoLiveState {
             self.metrics = delta.metrics.clone();
             self.signals = delta.signals.clone();
             self.secret_findings = delta.secret_findings.clone();
+            self.secret_scan_status = delta.secret_scan_status.clone();
         }
         self.revision += 1;
     }
@@ -1446,6 +1455,7 @@ fn empty_wsl_error_delta(repo: &Path, category: &str, message: &str) -> RepoDelt
         agents_md_configured: false,
         signals: Vec::new(),
         secret_findings: Vec::new(),
+        secret_scan_status: SecretScanStatus::default(),
         subscribed_diffs: None,
     }
 }
@@ -1629,15 +1639,25 @@ pub(crate) fn recalc_blocking(
     } else {
         Vec::new()
     };
-    let secret_findings = if needs_analysis {
-        secret_scan::detect_secret_findings(repo, &status, &worktree_diffs)
+    let secret_scan = if needs_analysis {
+        Some(secret_scan::detect_secret_findings(
+            repo,
+            &status,
+            &worktree_diffs,
+        ))
     } else {
-        Vec::new()
+        None
     };
+    let secret_findings = secret_scan.as_ref().map(|result| result.findings.clone());
+    let secret_scan_status = secret_scan.map(|result| result.status);
     let gitleaks_configured = secret_scan::has_repo_gitleaks_config(repo);
     let agents_md_configured = commands::has_repo_agents_md_config(repo);
     let (metrics, signals) = if needs_analysis {
-        metrics_and_signals(&status, &worktree_diffs, &secret_findings)
+        metrics_and_signals(
+            &status,
+            &worktree_diffs,
+            secret_findings.as_deref().unwrap_or_default(),
+        )
     } else {
         (RepoMetrics::default(), Vec::new())
     };
@@ -1676,6 +1696,7 @@ pub(crate) fn recalc_blocking(
         agents_md_configured,
         signals,
         secret_findings,
+        secret_scan_status,
     })
 }
 
@@ -1753,8 +1774,30 @@ mod tests {
         assert!(outcome.head.as_ref().is_some_and(|head| head.is_some()));
         assert_eq!(outcome.metrics, RepoMetrics::default());
         assert!(outcome.signals.is_empty());
-        assert!(outcome.secret_findings.is_empty());
+        assert!(outcome.secret_findings.is_none());
+        assert!(outcome.secret_scan_status.is_none());
         assert!(outcome.subscribed_diffs.is_none());
+
+        let mut state = RepoLiveState {
+            secret_findings: vec![SecretFinding {
+                path: ".env".into(),
+                line: 1,
+                rule_id: "existing".into(),
+                description: "Possible secret".into(),
+            }],
+            secret_scan_status: SecretScanStatus {
+                state: contract::SecretScanState::Findings,
+                engine: Some(contract::SecretScanEngine::Gitleaks),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        state.apply_recalc(&outcome);
+        assert_eq!(state.secret_findings.len(), 1);
+        assert_eq!(
+            state.secret_scan_status.state,
+            contract::SecretScanState::Findings
+        );
     }
 
     #[test]
@@ -1777,6 +1820,11 @@ mod tests {
                 rule_id: "fallback-secret".into(),
                 description: "Possible secret".into(),
             }],
+            secret_scan_status: SecretScanStatus {
+                state: contract::SecretScanState::Findings,
+                engine: Some(contract::SecretScanEngine::Gitleaks),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -1797,6 +1845,7 @@ mod tests {
             agents_md_configured: true,
             signals: Vec::new(),
             secret_findings: Vec::new(),
+            secret_scan_status: SecretScanStatus::default(),
             subscribed_diffs: None,
         };
 
@@ -1805,6 +1854,10 @@ mod tests {
         assert_eq!(state.metrics.changed_files, 2);
         assert_eq!(state.signals.len(), 1);
         assert_eq!(state.secret_findings.len(), 1);
+        assert_eq!(
+            state.secret_scan_status.state,
+            contract::SecretScanState::Findings
+        );
         assert_eq!(state.status.modified, vec![PathBuf::from("src/main.rs")]);
         assert!(state.gitleaks_configured);
         assert!(state.agents_md_configured);
@@ -1822,7 +1875,8 @@ mod tests {
             gitleaks_configured: false,
             agents_md_configured: false,
             signals: Vec::new(),
-            secret_findings: Vec::new(),
+            secret_findings: Some(Vec::new()),
+            secret_scan_status: Some(SecretScanStatus::default()),
         };
         state.apply_recalc(&outcome);
         assert_eq!(state.revision, 1);
@@ -1861,7 +1915,8 @@ mod tests {
             gitleaks_configured: false,
             agents_md_configured: false,
             signals: Vec::new(),
-            secret_findings: Vec::new(),
+            secret_findings: Some(Vec::new()),
+            secret_scan_status: Some(SecretScanStatus::default()),
         };
         state.apply_recalc(&outcome);
         assert!(

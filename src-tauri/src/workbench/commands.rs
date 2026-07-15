@@ -121,6 +121,20 @@ pub fn remove_repo(
     Ok(())
 }
 
+#[tauri::command]
+pub fn remove_repo_entry(
+    store: Store<'_>,
+    bus: Bus<'_>,
+    workbench: String,
+    path: String,
+) -> Result<bool, WorkbenchError> {
+    let removed = locked(&store, |s| s.remove_repo_entry(&workbench, &path))?;
+    if removed {
+        reseed_if_active(&store, &bus, &workbench);
+    }
+    Ok(removed)
+}
+
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn remove_wsl_repo(

@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::{
     journal::AgentJournal,
-    pty::TINTO_TURN_DONE_MARKER,
+    pty::{AgentTurnAttachment, TINTO_TURN_DONE_MARKER},
     validation::{resolve_agent_binary, validate_agent_type},
     AgentConsoleError, AgentSessionRegistry,
 };
@@ -27,7 +27,8 @@ use crate::bus::{
         AgentHostCommandResult, AgentHostCommandStatus, AgentJournalSessionSummary,
         AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog, AgentSession,
         AgentSessionChangeLog, AgentSessionContextSummary, AgentSessionFeedback,
-        AgentSessionOutput, AgentSessionRuntimeOptions, AgentSessionStatus,
+        AgentSessionGoalStatus, AgentSessionOutput, AgentSessionResumeMode,
+        AgentSessionResumeResult, AgentSessionRuntimeOptions, AgentSessionStatus,
         AgentSessionTimelineItem, AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED,
         EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
     },
@@ -44,6 +45,7 @@ use crate::wsl_agent::{
 
 const SESSION_OUTPUT_QUIET_REFRESH_MS: u64 = 2_500;
 const SESSION_OUTPUT_MONITOR_TICK_MS: u64 = 500;
+const MAX_SESSION_GOAL_CHARS: usize = 4_000;
 pub(crate) const TIMELINE_FRAME_PREFIX: &[u8] = b"\x1dTINTO_TIMELINE ";
 static TIMELINE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -102,6 +104,194 @@ pub async fn start_agent_session(
     );
     refresh_and_emit_sessions(&app);
     Ok(started.id)
+}
+
+#[tauri::command]
+pub async fn resume_agent_journal_session(
+    app: AppHandle,
+    bus: State<'_, BusHandle>,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    journal: State<'_, Mutex<AgentJournal>>,
+    session_id: String,
+) -> Result<AgentSessionResumeResult, CommandError> {
+    let archived = {
+        let journal = lock_journal(&journal)?;
+        journal
+            .session_from_journal(&session_id)
+            .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?
+            .ok_or_else(|| {
+                CommandError::new("session_not_found", "la conversacion guardada ya no existe")
+            })?
+    };
+    let resolved = ensure_known_agent_repo(&bus, &archived.repo).await?;
+    let native_resume_id = archived.provider_session_id.clone();
+    let (started, mode) = {
+        let mut registry = lock_registry(&registry)?;
+        let native = native_resume_id.as_deref().and_then(|provider_session_id| {
+            let result = match resolved.source {
+                RepoSource::Local => registry.resume_session_with_output(
+                    resolved.path.clone(),
+                    archived.agent_type.clone(),
+                    provider_session_id.to_string(),
+                ),
+                RepoSource::Wsl => registry.resume_wsl_session_with_output(
+                    resolved.path.clone(),
+                    resolved.distro.clone()?,
+                    archived.agent_type.clone(),
+                    provider_session_id.to_string(),
+                ),
+            };
+            result.ok()
+        });
+        match native {
+            Some(started) => (started, AgentSessionResumeMode::Native),
+            None => {
+                let started = match resolved.source {
+                    RepoSource::Local => registry.start_session_with_output(
+                        resolved.path.clone(),
+                        archived.agent_type.clone(),
+                    )?,
+                    RepoSource::Wsl => registry.start_wsl_session_with_output(
+                        resolved.path.clone(),
+                        resolved.distro.clone().ok_or_else(|| {
+                            CommandError::new("missing_distro", "repo WSL sin distro")
+                        })?,
+                        archived.agent_type.clone(),
+                    )?,
+                };
+                (started, AgentSessionResumeMode::ContextBridge)
+            }
+        }
+    };
+
+    if let Some(output_reader) = started.output_reader {
+        spawn_output_reader(app.clone(), started.id.clone(), output_reader);
+    }
+
+    let resumed_timeline = remap_archived_timeline(&archived.timeline, &started.id);
+    {
+        let mut registry = lock_registry(&registry)?;
+        registry
+            .set_session_runtime_options(&started.id, archived.runtime_options.clone())
+            .map_err(CommandError::from)?;
+        if mode == AgentSessionResumeMode::ContextBridge && archived.agent_type == "codex" {
+            if let Some(goal) = archived.goal.as_ref() {
+                registry
+                    .restore_session_goal(&started.id, goal.clone())
+                    .map_err(CommandError::from)?;
+            }
+        }
+        if let Some(personality) = archived.personality.as_ref() {
+            registry
+                .set_session_personality(
+                    &started.id,
+                    personality.name.clone(),
+                    personality.updated_at_ms,
+                )
+                .map_err(CommandError::from)?;
+        }
+        if let Some(plan_mode) = archived.plan_mode.as_ref() {
+            registry
+                .set_session_plan_mode(&started.id, plan_mode.enabled, plan_mode.updated_at_ms)
+                .map_err(CommandError::from)?;
+        }
+        for feedback in archived.feedback.iter().cloned() {
+            registry
+                .add_session_feedback(&started.id, feedback)
+                .map_err(CommandError::from)?;
+        }
+        let summary = match mode {
+            AgentSessionResumeMode::Native => archived.context_summary.clone(),
+            AgentSessionResumeMode::ContextBridge => Some(resume_context_summary(&archived)),
+        };
+        if let Some(summary) = summary {
+            registry
+                .set_session_context_summary(&started.id, summary)
+                .map_err(CommandError::from)?;
+        }
+    }
+    for item in resumed_timeline {
+        record_timeline_item(&app, item.clone());
+        let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, item);
+    }
+    emit_timeline_text(
+        &app,
+        &started.id,
+        AgentSessionTimelineKind::Lifecycle,
+        Some(match mode {
+            AgentSessionResumeMode::Native => "Conversacion de Codex retomada".to_string(),
+            AgentSessionResumeMode::ContextBridge => {
+                "Conversacion retomada con el contexto archivado".to_string()
+            }
+        }),
+        now_ms(),
+    );
+    refresh_and_emit_sessions(&app);
+    Ok(AgentSessionResumeResult {
+        session_id: started.id,
+        mode,
+    })
+}
+
+fn remap_archived_timeline(
+    timeline: &[AgentSessionTimelineItem],
+    session_id: &str,
+) -> Vec<AgentSessionTimelineItem> {
+    timeline
+        .iter()
+        .enumerate()
+        .map(|(index, item)| AgentSessionTimelineItem {
+            session_id: session_id.to_string(),
+            id: format!("{session_id}:resumed:{index}"),
+            kind: item.kind,
+            text: item.text.clone(),
+            timestamp_ms: item.timestamp_ms,
+        })
+        .collect()
+}
+
+fn resume_context_summary(session: &AgentSession) -> AgentSessionContextSummary {
+    if let Some(summary) = session.context_summary.clone() {
+        return summary;
+    }
+    let mut lines = session
+        .timeline
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.kind,
+                AgentSessionTimelineKind::UserMessage | AgentSessionTimelineKind::AgentMessage
+            )
+        })
+        .rev()
+        .take(10)
+        .map(|item| {
+            let role = if item.kind == AgentSessionTimelineKind::UserMessage {
+                "Usuario"
+            } else {
+                "Agente"
+            };
+            let compact = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let compact = compact.chars().take(220).collect::<String>();
+            format!("{role}: {compact}")
+        })
+        .collect::<Vec<_>>();
+    lines.reverse();
+    AgentSessionContextSummary {
+        text: if lines.is_empty() {
+            "Continua la conversacion archivada en el mismo repositorio y conserva sus decisiones previas."
+                .to_string()
+        } else {
+            lines.join(" | ")
+        },
+        created_at_ms: now_ms(),
+        source_events: session.timeline.len(),
+        source_turns: session
+            .timeline
+            .iter()
+            .filter(|item| item.kind == AgentSessionTimelineKind::UserMessage)
+            .count(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,6 +454,145 @@ pub fn write_agent_session_input(
     );
     refresh_and_emit_sessions(&app);
     Ok(())
+}
+
+#[tauri::command]
+pub fn write_agent_session_turn(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    text: String,
+    attachment_paths: Vec<String>,
+    options: Option<AgentSessionRuntimeOptions>,
+) -> Result<(), CommandError> {
+    if text.trim().is_empty() && attachment_paths.is_empty() {
+        return Err(CommandError::new(
+            "invalid_input",
+            "el mensaje o los archivos adjuntos no pueden estar vacios",
+        ));
+    }
+    if attachment_paths.len() > 10 {
+        return Err(CommandError::new(
+            "too_many_attachments",
+            "puedes adjuntar hasta 10 archivos por turno",
+        ));
+    }
+    let attachments = attachment_paths
+        .into_iter()
+        .map(PathBuf::from)
+        .map(validate_agent_attachment_path)
+        .collect::<Result<Vec<_>, _>>()?;
+    if attachments
+        .iter()
+        .filter(|attachment| attachment.is_image)
+        .count()
+        > 4
+    {
+        return Err(CommandError::new(
+            "too_many_images",
+            "puedes adjuntar hasta 4 imagenes por turno",
+        ));
+    }
+    let text = if text.trim().is_empty() {
+        "Revisa los archivos adjuntos.".to_string()
+    } else {
+        text
+    };
+    let timestamp_ms = now_ms();
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .write_session_turn(&session_id, &text, &attachments, options)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    let attachment_names = attachments
+        .iter()
+        .filter_map(|attachment| {
+            attachment.path.file_name().map(|name| {
+                let label = if attachment.is_image {
+                    "Imagen adjunta"
+                } else {
+                    "Archivo adjunto"
+                };
+                format!("{label}: {}", name.to_string_lossy())
+            })
+        })
+        .collect::<Vec<_>>();
+    let timeline_text = if attachment_names.is_empty() {
+        text
+    } else {
+        format!("{}\n\n{}", text, attachment_names.join("\n"))
+    };
+    emit_timeline_text(
+        &app,
+        &session_id,
+        AgentSessionTimelineKind::UserMessage,
+        Some(timeline_text),
+        timestamp_ms,
+    );
+    refresh_and_emit_sessions(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_agent_image_preview(path: String) -> Result<Option<String>, CommandError> {
+    let attachment = validate_agent_attachment_path(PathBuf::from(path))?;
+    if !attachment.is_image {
+        return Ok(None);
+    }
+    let path = attachment.path;
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| CommandError::new("image_not_found", error.to_string()))?;
+    if metadata.len() > 4 * 1024 * 1024 {
+        return Ok(None);
+    }
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => return Ok(None),
+    };
+    let bytes = std::fs::read(path)
+        .map_err(|error| CommandError::new("image_preview_failed", error.to_string()))?;
+    Ok(Some(format!(
+        "data:{mime};base64,{}",
+        STANDARD.encode(bytes)
+    )))
+}
+
+fn validate_agent_attachment_path(path: PathBuf) -> Result<AgentTurnAttachment, CommandError> {
+    if !path.is_absolute() {
+        return Err(CommandError::new(
+            "invalid_attachment_path",
+            "la ruta del archivo adjunto debe ser absoluta",
+        ));
+    }
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let is_image = matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| CommandError::new("attachment_not_found", error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(CommandError::new(
+            "invalid_attachment_path",
+            "el adjunto no es un archivo",
+        ));
+    }
+    if is_image && metadata.len() > 20 * 1024 * 1024 {
+        return Err(CommandError::new(
+            "image_too_large",
+            "cada imagen debe pesar 20 MB o menos",
+        ));
+    }
+    Ok(AgentTurnAttachment { path, is_image })
 }
 
 #[tauri::command]
@@ -1175,14 +1504,13 @@ fn run_goal_host_command(
     session: &AgentSession,
     argument: Option<String>,
 ) -> Result<AgentHostCommandResult, CommandError> {
-    let raw = argument.unwrap_or_default();
-    let goal = raw.trim();
-    if goal.is_empty() {
+    let action = parse_goal_command(argument.as_deref())?;
+    if matches!(action, GoalCommand::Inspect | GoalCommand::Edit) {
         let message = session
             .goal
             .as_ref()
-            .map(|goal| format!("Current goal: {}", goal.text))
-            .unwrap_or_else(|| "No goal is set for this session.".to_string());
+            .map(|goal| format!("Objetivo {}: {}", goal_status_label(goal.status), goal.text))
+            .unwrap_or_else(|| "Esta conversación no tiene un objetivo activo.".to_string());
         return Ok(AgentHostCommandResult {
             command: "goal".to_string(),
             status: AgentHostCommandStatus::Completed,
@@ -1195,19 +1523,26 @@ fn run_goal_host_command(
         });
     }
     let mut registry = lock_registry(registry)?;
-    let updated = if matches!(
-        goal.to_lowercase().as_str(),
-        "clear" | "reset" | "none" | "off"
-    ) {
-        registry
+    let updated = match action {
+        GoalCommand::Inspect | GoalCommand::Edit => {
+            unreachable!("inspection and editing return before mutation")
+        }
+        GoalCommand::Clear => registry
             .clear_session_goal(&session.id)
-            .map_err(CommandError::from)?
-    } else {
-        registry
-            .set_session_goal(&session.id, goal.to_string(), now_ms())
-            .map_err(CommandError::from)?
+            .map_err(CommandError::from)?,
+        GoalCommand::Set(goal) => registry
+            .set_session_goal(&session.id, goal, now_ms())
+            .map_err(CommandError::from)?,
+        GoalCommand::Pause => registry
+            .set_session_goal_status(&session.id, AgentSessionGoalStatus::Paused, now_ms())
+            .map_err(CommandError::from)?,
+        GoalCommand::Resume => registry
+            .set_session_goal_status(&session.id, AgentSessionGoalStatus::Active, now_ms())
+            .map_err(CommandError::from)?,
     };
+    persist_session_snapshot(app, &updated)?;
     let sessions = registry.list_sessions();
+    drop(registry);
     emit_sessions_snapshot(app, &sessions);
     Ok(AgentHostCommandResult {
         command: "goal".to_string(),
@@ -1215,14 +1550,79 @@ fn run_goal_host_command(
         message: updated
             .goal
             .as_ref()
-            .map(|goal| format!("Goal set: {}", goal.text))
-            .unwrap_or_else(|| "Goal cleared for this session.".to_string()),
+            .map(|goal| format!("Objetivo {}: {}", goal_status_label(goal.status), goal.text))
+            .unwrap_or_else(|| "Objetivo eliminado de esta conversación.".to_string()),
         session_id: None,
         repo: None,
         agent_type: None,
         review_summary: None,
         review_findings: None,
     })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum GoalCommand {
+    Inspect,
+    Edit,
+    Clear,
+    Pause,
+    Resume,
+    Set(String),
+}
+
+fn parse_goal_command(argument: Option<&str>) -> Result<GoalCommand, CommandError> {
+    let normalized = argument
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        return Ok(GoalCommand::Inspect);
+    }
+    if matches!(
+        normalized.to_lowercase().as_str(),
+        "clear" | "borrar" | "limpiar"
+    ) {
+        return Ok(GoalCommand::Clear);
+    }
+    match normalized.to_lowercase().as_str() {
+        "edit" | "editar" => return Ok(GoalCommand::Edit),
+        "pause" | "pausar" => return Ok(GoalCommand::Pause),
+        "resume" | "reanudar" | "continuar" => return Ok(GoalCommand::Resume),
+        _ => {}
+    }
+    let chars = normalized.chars().count();
+    if chars > MAX_SESSION_GOAL_CHARS {
+        return Err(CommandError::new(
+            "goal_too_long",
+            format!("el objetivo tiene {chars} caracteres; el máximo es {MAX_SESSION_GOAL_CHARS}"),
+        ));
+    }
+    Ok(GoalCommand::Set(normalized))
+}
+
+fn goal_status_label(status: AgentSessionGoalStatus) -> &'static str {
+    match status {
+        AgentSessionGoalStatus::Active => "activo",
+        AgentSessionGoalStatus::Paused => "en pausa",
+        AgentSessionGoalStatus::Blocked => "bloqueado",
+        AgentSessionGoalStatus::UsageLimited => "limitado por uso",
+        AgentSessionGoalStatus::BudgetLimited => "sin presupuesto",
+        AgentSessionGoalStatus::Complete => "completado",
+    }
+}
+
+fn persist_session_snapshot(app: &AppHandle, session: &AgentSession) -> Result<(), CommandError> {
+    let journal = app.try_state::<Mutex<AgentJournal>>().ok_or_else(|| {
+        CommandError::new(
+            "agent_journal_unavailable",
+            "no se pudo acceder al historial de la conversación",
+        )
+    })?;
+    let journal = lock_journal(&journal)?;
+    journal
+        .record_session(session)
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))
 }
 
 fn run_personality_host_command(
@@ -2143,6 +2543,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn goal_command_normalizes_text_and_supports_explicit_clear_aliases() {
+        assert_eq!(
+            parse_goal_command(Some("  Ship\n  the\tfeature  ")).unwrap(),
+            GoalCommand::Set("Ship the feature".to_string())
+        );
+        assert_eq!(parse_goal_command(None).unwrap(), GoalCommand::Inspect);
+        assert_eq!(parse_goal_command(Some("edit")).unwrap(), GoalCommand::Edit);
+        assert_eq!(
+            parse_goal_command(Some("pausar")).unwrap(),
+            GoalCommand::Pause
+        );
+        assert_eq!(
+            parse_goal_command(Some("reanudar")).unwrap(),
+            GoalCommand::Resume
+        );
+        assert_eq!(
+            parse_goal_command(Some("borrar")).unwrap(),
+            GoalCommand::Clear
+        );
+        assert_eq!(
+            parse_goal_command(Some("LIMPIAR")).unwrap(),
+            GoalCommand::Clear
+        );
+        assert_eq!(
+            parse_goal_command(Some("Keep the service off")).unwrap(),
+            GoalCommand::Set("Keep the service off".to_string())
+        );
+    }
+
+    #[test]
+    fn goal_command_rejects_values_larger_than_codex_allows() {
+        let error = parse_goal_command(Some(&"x".repeat(MAX_SESSION_GOAL_CHARS + 1))).unwrap_err();
+
+        assert_eq!(error.category, "goal_too_long");
+        assert!(error.message.contains("4001"));
+        assert!(error.message.contains("4000"));
+    }
+
+    #[test]
     fn maps_agent_console_error_without_losing_category() {
         let error = CommandError::from(AgentConsoleError::new("unsupported_agent", "nope"));
 
@@ -2174,6 +2613,29 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.category, "invalid_input");
+    }
+
+    #[test]
+    fn attachment_validation_accepts_generic_regular_files() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("brief.pdf");
+        std::fs::write(&path, b"%PDF fixture").unwrap();
+
+        let attachment = validate_agent_attachment_path(path.clone()).unwrap();
+
+        assert_eq!(attachment.path, path);
+        assert!(!attachment.is_image);
+    }
+
+    #[test]
+    fn attachment_validation_classifies_supported_images() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("screen.webp");
+        std::fs::write(&path, b"image fixture").unwrap();
+
+        let attachment = validate_agent_attachment_path(path).unwrap();
+
+        assert!(attachment.is_image);
     }
 
     #[test]

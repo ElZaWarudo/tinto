@@ -63,6 +63,7 @@ impl AgentJournal {
               id TEXT PRIMARY KEY,
               repo TEXT NOT NULL,
               agent_type TEXT NOT NULL,
+              provider_session_id TEXT,
               source_kind TEXT NOT NULL DEFAULT 'local',
               distro TEXT,
               status TEXT NOT NULL,
@@ -72,6 +73,7 @@ impl AgentJournal {
               restored_to_turn_index INTEGER,
               goal_text TEXT,
               goal_updated_at_ms INTEGER,
+              goal_json TEXT,
               personality_name TEXT,
               personality_updated_at_ms INTEGER,
               plan_mode_enabled INTEGER,
@@ -112,8 +114,10 @@ impl AgentJournal {
             "#,
         )?;
         self.ensure_agent_sessions_column("restored_to_turn_index", "INTEGER")?;
+        self.ensure_agent_sessions_column("provider_session_id", "TEXT")?;
         self.ensure_agent_sessions_column("goal_text", "TEXT")?;
         self.ensure_agent_sessions_column("goal_updated_at_ms", "INTEGER")?;
+        self.ensure_agent_sessions_column("goal_json", "TEXT")?;
         self.ensure_agent_sessions_column("personality_name", "TEXT")?;
         self.ensure_agent_sessions_column("personality_updated_at_ms", "INTEGER")?;
         self.ensure_agent_sessions_column("plan_mode_enabled", "INTEGER")?;
@@ -151,6 +155,11 @@ impl AgentJournal {
         let restored_to_turn_index = session.restored_to_turn_index.map(|value| value as i64);
         let goal_text = session.goal.as_ref().map(|goal| goal.text.as_str());
         let goal_updated_at_ms = session.goal.as_ref().map(|goal| goal.updated_at_ms as i64);
+        let goal_json = session
+            .goal
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let personality_name = session
             .personality
             .as_ref()
@@ -193,16 +202,17 @@ impl AgentJournal {
         self.conn.execute(
             r#"
             INSERT INTO agent_sessions (
-              id, repo, agent_type, source_kind, distro, status,
+              id, repo, agent_type, provider_session_id, source_kind, distro, status,
               started_at_ms, ended_at_ms, updated_at_ms, restored_to_turn_index,
-              goal_text, goal_updated_at_ms, personality_name,
+              goal_text, goal_updated_at_ms, goal_json, personality_name,
               personality_updated_at_ms, plan_mode_enabled, plan_mode_updated_at_ms,
               feedback_json, context_summary_text, context_summary_created_at_ms,
               context_summary_source_events, context_summary_source_turns
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
             ON CONFLICT(id) DO UPDATE SET
               repo = excluded.repo,
               agent_type = excluded.agent_type,
+              provider_session_id = excluded.provider_session_id,
               source_kind = excluded.source_kind,
               distro = excluded.distro,
               status = excluded.status,
@@ -211,6 +221,7 @@ impl AgentJournal {
               restored_to_turn_index = excluded.restored_to_turn_index,
               goal_text = excluded.goal_text,
               goal_updated_at_ms = excluded.goal_updated_at_ms,
+              goal_json = excluded.goal_json,
               personality_name = excluded.personality_name,
               personality_updated_at_ms = excluded.personality_updated_at_ms,
               plan_mode_enabled = excluded.plan_mode_enabled,
@@ -225,6 +236,7 @@ impl AgentJournal {
                 &session.id,
                 repo,
                 &session.agent_type,
+                session.provider_session_id.as_deref(),
                 if session.wsl_distro.is_some() {
                     "wsl"
                 } else {
@@ -238,6 +250,7 @@ impl AgentJournal {
                 restored_to_turn_index,
                 goal_text,
                 goal_updated_at_ms,
+                goal_json,
                 personality_name,
                 personality_updated_at_ms,
                 plan_mode_enabled,
@@ -377,8 +390,8 @@ impl AgentJournal {
             .query_row(
                 r#"
                 SELECT
-                  id, repo, agent_type, distro, status, started_at_ms, ended_at_ms,
-                  restored_to_turn_index, goal_text, goal_updated_at_ms,
+                  id, repo, agent_type, provider_session_id, distro, status, started_at_ms, ended_at_ms,
+                  restored_to_turn_index, goal_text, goal_updated_at_ms, goal_json,
                   personality_name, personality_updated_at_ms,
                   plan_mode_enabled, plan_mode_updated_at_ms,
                   feedback_json,
@@ -394,21 +407,23 @@ impl AgentJournal {
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, Option<String>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
                         row.get::<_, Option<i64>>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                        row.get::<_, Option<i64>>(9)?,
-                        row.get::<_, Option<String>>(10)?,
-                        row.get::<_, Option<i64>>(11)?,
-                        row.get::<_, Option<i64>>(12)?,
+                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<String>>(12)?,
                         row.get::<_, Option<i64>>(13)?,
-                        row.get::<_, Option<String>>(14)?,
-                        row.get::<_, Option<String>>(15)?,
-                        row.get::<_, Option<i64>>(16)?,
-                        row.get::<_, Option<i64>>(17)?,
+                        row.get::<_, Option<i64>>(14)?,
+                        row.get::<_, Option<i64>>(15)?,
+                        row.get::<_, Option<String>>(16)?,
+                        row.get::<_, Option<String>>(17)?,
                         row.get::<_, Option<i64>>(18)?,
+                        row.get::<_, Option<i64>>(19)?,
+                        row.get::<_, Option<i64>>(20)?,
                     ))
                 },
             )
@@ -417,6 +432,7 @@ impl AgentJournal {
             id,
             repo,
             agent_type,
+            provider_session_id,
             wsl_distro,
             status,
             started_at_ms,
@@ -424,6 +440,7 @@ impl AgentJournal {
             restored_to_turn_index,
             goal_text,
             goal_updated_at_ms,
+            goal_json,
             personality_name,
             personality_updated_at_ms,
             plan_mode_enabled,
@@ -448,6 +465,7 @@ impl AgentJournal {
             id,
             repo: PathBuf::from(repo),
             agent_type,
+            provider_session_id,
             wsl_distro,
             status,
             pid: None,
@@ -461,10 +479,20 @@ impl AgentJournal {
             turn_checkpoints: Vec::new(),
             timeline,
             runtime_options: Default::default(),
-            goal: goal_text.map(|text| AgentSessionGoal {
-                text,
-                updated_at_ms: goal_updated_at_ms.unwrap_or(started_at_ms) as u64,
-            }),
+            goal: goal_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<AgentSessionGoal>(json).ok())
+                .or_else(|| {
+                    goal_text.map(|text| AgentSessionGoal {
+                        text,
+                        status: crate::bus::contract::AgentSessionGoalStatus::Active,
+                        token_budget: None,
+                        tokens_used: 0,
+                        time_used_seconds: 0,
+                        created_at_ms: goal_updated_at_ms.unwrap_or(started_at_ms) as u64,
+                        updated_at_ms: goal_updated_at_ms.unwrap_or(started_at_ms) as u64,
+                    })
+                }),
             personality: personality_name.map(|name| AgentSessionPersonality {
                 name,
                 updated_at_ms: personality_updated_at_ms.unwrap_or(started_at_ms) as u64,
@@ -556,6 +584,7 @@ mod tests {
             id: id.to_string(),
             repo: PathBuf::from("/repo"),
             agent_type: "codex".to_string(),
+            provider_session_id: Some("thread-1".to_string()),
             wsl_distro: None,
             status: AgentSessionStatus::Running,
             pid: Some(10),
@@ -704,6 +733,11 @@ mod tests {
         let mut with_goal = session("sess-1");
         with_goal.goal = Some(AgentSessionGoal {
             text: "Build the host harness".to_string(),
+            status: crate::bus::contract::AgentSessionGoalStatus::Paused,
+            token_budget: Some(200_000),
+            tokens_used: 45_000,
+            time_used_seconds: 321,
+            created_at_ms: 200,
             updated_at_ms: 200,
         });
         journal.record_session(&with_goal).expect("session");
@@ -715,6 +749,13 @@ mod tests {
 
         let goal = archived.goal.expect("goal");
         assert_eq!(goal.text, "Build the host harness");
+        assert_eq!(
+            goal.status,
+            crate::bus::contract::AgentSessionGoalStatus::Paused
+        );
+        assert_eq!(goal.token_budget, Some(200_000));
+        assert_eq!(goal.tokens_used, 45_000);
+        assert_eq!(goal.time_used_seconds, 321);
         assert_eq!(goal.updated_at_ms, 200);
     }
 
@@ -827,6 +868,7 @@ mod tests {
             .expect("session");
 
         assert_eq!(archived.id, "sess-1");
+        assert_eq!(archived.provider_session_id.as_deref(), Some("thread-1"));
         assert_eq!(archived.status, AgentSessionStatus::Exited);
         assert_eq!(archived.timeline.len(), 1);
         assert_eq!(archived.active_sessions, 0);

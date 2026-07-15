@@ -14,6 +14,7 @@ const client = vi.hoisted(() => ({
   listWslDirectory: vi.fn(),
   listWslDistros: vi.fn(),
   removeRepo: vi.fn(),
+  removeRepoEntry: vi.fn(),
   removeWslRepo: vi.fn(),
   renameWorkbench: vi.fn(),
   setActiveWorkbench: vi.fn(),
@@ -75,6 +76,7 @@ describe("workbench operations", () => {
     });
     client.listWorkbenches.mockResolvedValue({ version: 1, active: null, workbenches: [] });
     client.removeRepo.mockResolvedValue(undefined);
+    client.removeRepoEntry.mockResolvedValue(true);
     client.removeWslRepo.mockResolvedValue(undefined);
     client.renameWorkbench.mockResolvedValue(undefined);
     client.autodetectReposUnder.mockResolvedValue([]);
@@ -395,13 +397,33 @@ describe("workbench operations", () => {
     dialogMock.confirm.mockResolvedValueOnce(true);
     const ok = await removeRepoFlow("Work", "/r/a");
     expect(ok).toBe(true);
-    expect(client.removeRepo).toHaveBeenCalledWith("Work", "/r/a");
+    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/r/a");
 
     vi.clearAllMocks();
     dialogMock.confirm.mockResolvedValueOnce(false);
     const no = await removeRepoFlow("Work", "/r/a");
     expect(no).toBe(false);
-    expect(client.removeRepo).not.toHaveBeenCalled();
+    expect(client.removeRepoEntry).not.toHaveBeenCalled();
+  });
+
+  it("removeRepoFlow persists removal when Windows supplies a non-prefixed path", async () => {
+    const storedPath = String.raw`\\?\C:\Users\User\Documents\personal\tinto`;
+    const visiblePath = String.raw`C:\Users\User\Documents\personal\tinto`;
+    act(() =>
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [{ path: storedPath, alias: null, fs_watch: [] }] }],
+      }),
+    );
+    dialogMock.confirm.mockResolvedValueOnce(true);
+
+    const removed = await removeRepoFlow("Work", visiblePath);
+
+    expect(removed).toBe(true);
+    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", visiblePath);
+    expect(client.forgetRepo).not.toHaveBeenCalled();
+    expect(reloadMock).toHaveBeenCalledOnce();
   });
 
   it("removeRepoFlow forgets an orphan repo from the bus when it is not in the workbench", async () => {
@@ -409,30 +431,29 @@ describe("workbench operations", () => {
     // from the active workbench's config; clicking Remove must still close the
     // panel and drop the repo from the live bus snapshot.
     act(() => busStore.resetAll());
+    client.removeRepoEntry.mockResolvedValueOnce(false);
     dialogMock.confirm.mockResolvedValueOnce(true);
     const ok = await removeRepoFlow("Work", "/r/orphan");
     expect(ok).toBe(true);
     expect(client.forgetRepo).toHaveBeenCalledWith("/r/orphan");
-    expect(client.removeRepo).not.toHaveBeenCalled();
-    expect(client.removeWslRepo).not.toHaveBeenCalled();
+    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/r/orphan");
     expect(reloadMock).toHaveBeenCalledOnce();
   });
 
   it("removeRepoFlow does not throw when the config is missing workbenches", async () => {
     // The "no longer accessible" panel view can be visible while the active
     // workbench's config arrives with `workbenches` missing (partial snapshot
-    // during first-run recovery). MenuBar already tolerates this; findRepoEntry
-    // must do the same so the Remove click does not surface an unhandled
-    // TypeError into the console.
+    // during first-run recovery). Removal must still delegate to the backend
+    // rather than inspecting the partial frontend shape.
     act(() => {
       busStore.setConfig({ version: 1, active: "Work" } as WorkbenchConfig);
     });
+    client.removeRepoEntry.mockResolvedValueOnce(false);
     dialogMock.confirm.mockResolvedValueOnce(true);
     const ok = await removeRepoFlow("Work", "/r/orphan");
     expect(ok).toBe(true);
     expect(client.forgetRepo).toHaveBeenCalledWith("/r/orphan");
-    expect(client.removeRepo).not.toHaveBeenCalled();
-    expect(client.removeWslRepo).not.toHaveBeenCalled();
+    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/r/orphan");
     expect(reloadMock).toHaveBeenCalledOnce();
   });
 
@@ -449,11 +470,11 @@ describe("workbench operations", () => {
     const ok = await removeRepoFlow("Work", "/r/a");
     expect(ok).toBe(true);
     expect(confirmSpy).toHaveBeenCalled();
-    expect(client.removeRepo).toHaveBeenCalledWith("Work", "/r/a");
+    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/r/a");
     confirmSpy.mockRestore();
   });
 
-  it("removeRepoFlow routes WSL repos through removeWslRepo", async () => {
+  it("removeRepoFlow delegates WSL repo removal to the unified backend command", async () => {
     act(() =>
       busStore.setConfig({
         version: 1,
@@ -477,37 +498,17 @@ describe("workbench operations", () => {
     dialogMock.confirm.mockResolvedValueOnce(true);
     const ok = await removeRepoFlow("Work", "/home/me/repo");
     expect(ok).toBe(true);
-    expect(client.removeWslRepo).toHaveBeenCalledWith("Work", "Ubuntu-24.04", "/home/me/repo");
-    expect(client.removeRepo).not.toHaveBeenCalled();
+    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/home/me/repo");
   });
 
-  it("removeRepoFlow refreshes config before treating a WSL repo as an orphan", async () => {
+  it("removeRepoFlow delegates stale WSL identity resolution to the backend", async () => {
     act(() => busStore.resetAll());
-    client.listWorkbenches.mockResolvedValueOnce({
-      version: 1,
-      active: "Work",
-      workbenches: [
-        {
-          name: "Work",
-          repos: [
-            {
-              path: "/home/teb",
-              alias: null,
-              fs_watch: [],
-              source: "wsl",
-              distro: "Ubuntu",
-            },
-          ],
-        },
-      ],
-    });
     dialogMock.confirm.mockResolvedValueOnce(true);
 
     const ok = await removeRepoFlow("Work", "/home/teb");
 
     expect(ok).toBe(true);
-    expect(client.listWorkbenches).toHaveBeenCalledOnce();
-    expect(client.removeWslRepo).toHaveBeenCalledWith("Work", "Ubuntu", "/home/teb");
+    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/home/teb");
     expect(client.forgetRepo).not.toHaveBeenCalled();
   });
 

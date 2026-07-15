@@ -109,6 +109,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             workbench::commands::add_wsl_repo,
             workbench::commands::remove_repo,
+            workbench::commands::remove_repo_entry,
             #[cfg(target_os = "windows")]
             workbench::commands::remove_wsl_repo,
             #[cfg(target_os = "windows")]
@@ -141,12 +142,15 @@ pub fn run() {
             agent_console::commands::stop_agent_session,
             agent_console::commands::list_agent_sessions,
             agent_console::commands::get_agent_runtime_catalog,
+            agent_console::commands::get_agent_image_preview,
             agent_console::commands::list_agent_journal_sessions,
             agent_console::commands::get_agent_journal_session,
+            agent_console::commands::resume_agent_journal_session,
             agent_console::commands::delete_agent_journal_session,
             agent_console::commands::agent_binary_available,
             agent_console::commands::agent_binary_available_for_repo,
             agent_console::commands::write_agent_session_input,
+            agent_console::commands::write_agent_session_turn,
             agent_console::commands::run_agent_host_command,
             agent_console::commands::resize_agent_session,
             agent_console::commands::revert_session,
