@@ -760,7 +760,8 @@ fn repo_delta(
             gitleaks_configured: outcome.gitleaks_configured,
             agents_md_configured: outcome.agents_md_configured,
             signals: outcome.signals,
-            secret_findings: outcome.secret_findings,
+            secret_findings: outcome.secret_findings.unwrap_or_default(),
+            secret_scan_status: outcome.secret_scan_status.unwrap_or_default(),
             subscribed_diffs: outcome.subscribed_diffs,
         },
         Err(error) => RepoDelta {
@@ -776,6 +777,7 @@ fn repo_delta(
             agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Vec::new(),
+            secret_scan_status: Default::default(),
             subscribed_diffs: None,
         },
     }

@@ -36,6 +36,7 @@ const INCLUDE = new Set([
   "AgentRuntimeServiceTier",
   "AgentRuntimeModel",
   "AgentRuntimeCatalog",
+  "AgentSessionGoalStatus",
   "AgentSessionGoal",
   "AgentSessionPersonality",
   "AgentSessionPlanMode",
@@ -62,6 +63,9 @@ const INCLUDE = new Set([
   "PassiveSignal",
   "RepoMetrics",
   "SecretFinding",
+  "SecretScanEngine",
+  "SecretScanState",
+  "SecretScanStatus",
   "RepoDelta",
   "FsEventKind",
   "FsEvent",
@@ -198,8 +202,9 @@ function renderItem(item) {
   if (item.kind === "enum") {
     const renameAll = serdeRenameAll(item.attrs);
     const values = item.variants.map((variant) => `"${renameVariant(variant, renameAll)}"`);
-    if (values.length <= 3) {
-      return `export type ${item.name} = ${values.join(" | ")};`;
+    const singleLine = `export type ${item.name} = ${values.join(" | ")};`;
+    if (singleLine.length <= 100) {
+      return singleLine;
     }
     return (
       [`export type ${item.name} =`, ...values.map((value) => `  | ${value}`)].join("\n") + ";"

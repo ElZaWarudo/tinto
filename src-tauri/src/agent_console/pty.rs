@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
 };
 
@@ -8,11 +8,37 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 
 use super::{app_server::CodexAppServerHandle, AgentConsoleError};
 use crate::{
-    bus::contract::{AgentRuntimeCatalog, AgentSessionRuntimeOptions},
+    bus::contract::{AgentRuntimeCatalog, AgentSessionGoalStatus, AgentSessionRuntimeOptions},
     wsl_agent::shell_env::agent_console_script,
 };
 
 pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTurnAttachment {
+    pub path: PathBuf,
+    pub is_image: bool,
+}
+
+pub fn prompt_with_file_attachments(
+    text: &str,
+    attachments: &[AgentTurnAttachment],
+    include_images: bool,
+) -> String {
+    let paths = attachments
+        .iter()
+        .filter(|attachment| include_images || !attachment.is_image)
+        .map(|attachment| format!("- {}", attachment.path.to_string_lossy()))
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return text.to_string();
+    }
+    format!(
+        "# Files mentioned by the user:\n{}\n\n{}",
+        paths.join("\n"),
+        text
+    )
+}
 
 #[cfg(windows)]
 use crate::windows_process::hide_console;
@@ -29,6 +55,17 @@ pub trait AgentProcess: Send {
     ) -> Result<(), AgentConsoleError> {
         self.write_input(input)
     }
+    fn write_turn(
+        &mut self,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        let prompt = prompt_with_file_attachments(text, attachments, true);
+        let mut input = prompt.into_bytes();
+        input.push(b'\r');
+        self.write_input_with_options(&input, options)
+    }
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
@@ -37,17 +74,48 @@ pub trait AgentProcess: Send {
     fn runtime_catalog(&self) -> Option<AgentRuntimeCatalog> {
         None
     }
+    fn provider_session_id(&self) -> Option<String> {
+        None
+    }
     fn refresh_runtime_catalog(
         &mut self,
     ) -> Result<Option<AgentRuntimeCatalog>, AgentConsoleError> {
         Ok(None)
     }
+    fn supports_goals(&self) -> bool {
+        false
+    }
+    fn update_goal(
+        &mut self,
+        _objective: Option<&str>,
+        _status: Option<AgentSessionGoalStatus>,
+        _token_budget: Option<Option<u64>>,
+    ) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "goal_unsupported",
+            "este runtime no admite objetivos persistentes",
+        ))
+    }
+    fn clear_goal(&mut self) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "goal_unsupported",
+            "este runtime no admite objetivos persistentes",
+        ))
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProcessEvent {
-    FileActivity { timestamp_ms: u64 },
-    TurnCompleted { timestamp_ms: u64 },
+    FileActivity {
+        timestamp_ms: u64,
+    },
+    TurnCompleted {
+        timestamp_ms: u64,
+    },
+    GoalUpdated {
+        goal: crate::bus::contract::AgentSessionGoal,
+    },
+    GoalCleared,
 }
 
 pub trait AgentProcessFactory: Send + Sync {
@@ -67,6 +135,33 @@ pub trait AgentProcessFactory: Send + Sync {
         Err(AgentConsoleError::new(
             "wsl_agent_unsupported",
             "este runtime no soporta sesiones WSL",
+        ))
+    }
+
+    fn resume_agent(
+        &self,
+        binary_path: &Path,
+        working_dir: &Path,
+        provider_session_id: &str,
+    ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        let _ = (binary_path, working_dir, provider_session_id);
+        Err(AgentConsoleError::new(
+            "agent_resume_unsupported",
+            "este runtime no puede reanudar conversaciones nativas",
+        ))
+    }
+
+    fn resume_wsl_agent(
+        &self,
+        agent_type: &str,
+        distro: &str,
+        working_dir: &Path,
+        provider_session_id: &str,
+    ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        let _ = (agent_type, distro, working_dir, provider_session_id);
+        Err(AgentConsoleError::new(
+            "agent_resume_unsupported",
+            "este runtime WSL no puede reanudar conversaciones nativas",
         ))
     }
 }
@@ -111,6 +206,45 @@ impl AgentProcessFactory for PortablePtyFactory {
             agent_type,
             distro,
             working_dir,
+        )?))
+    }
+
+    fn resume_agent(
+        &self,
+        binary_path: &Path,
+        working_dir: &Path,
+        provider_session_id: &str,
+    ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if !is_codex_binary(binary_path) {
+            return Err(AgentConsoleError::new(
+                "agent_resume_unsupported",
+                "el proveedor no admite reanudacion nativa todavia",
+            ));
+        }
+        Ok(Box::new(CodexAppServerHandle::resume(
+            binary_path,
+            working_dir,
+            provider_session_id,
+        )?))
+    }
+
+    fn resume_wsl_agent(
+        &self,
+        agent_type: &str,
+        distro: &str,
+        working_dir: &Path,
+        provider_session_id: &str,
+    ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if !agent_type.eq_ignore_ascii_case("codex") {
+            return Err(AgentConsoleError::new(
+                "agent_resume_unsupported",
+                "el proveedor no admite reanudacion nativa todavia",
+            ));
+        }
+        Ok(Box::new(CodexAppServerHandle::resume_wsl(
+            distro,
+            working_dir,
+            provider_session_id,
         )?))
     }
 }
@@ -352,6 +486,28 @@ pub(crate) fn kill_process_tree(_pid: u32) -> Result<(), AgentConsoleError> {
 mod tests {
     use super::*;
     use std::ffi::{OsStr, OsString};
+
+    #[test]
+    fn fallback_prompt_mentions_every_attachment_path() {
+        let prompt = prompt_with_file_attachments(
+            "review these",
+            &[
+                AgentTurnAttachment {
+                    path: PathBuf::from("/tmp/screen.png"),
+                    is_image: true,
+                },
+                AgentTurnAttachment {
+                    path: PathBuf::from("/tmp/brief.pdf"),
+                    is_image: false,
+                },
+            ],
+            true,
+        );
+
+        assert!(prompt.contains("- /tmp/screen.png"));
+        assert!(prompt.contains("- /tmp/brief.pdf"));
+        assert!(prompt.ends_with("review these"));
+    }
 
     #[test]
     fn build_agent_command_uses_binary_and_working_dir() {

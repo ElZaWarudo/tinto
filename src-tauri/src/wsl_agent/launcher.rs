@@ -520,7 +520,10 @@ fn default_agent_root_linux_path() -> Result<String, AgentError> {
 }
 
 pub(crate) fn windows_path_to_wsl_mount(path: &std::path::Path) -> Result<String, AgentError> {
-    let text = path.to_string_lossy().replace('\\', "/");
+    let mut text = path.to_string_lossy().replace('\\', "/");
+    if text.starts_with("//?/") {
+        text = text["//?/".len()..].to_string();
+    }
     let Some((drive, rest)) = text.split_once(":/") else {
         return Err(AgentError::new(
             AgentErrorCategory::MissingAgent,
@@ -1273,6 +1276,15 @@ mod tests {
             .expect("translate");
 
         assert_eq!(translated, "/mnt/c/Users/Mayor/tinto");
+    }
+
+    #[test]
+    fn windows_path_translation_accepts_extended_length_paths() {
+        let translated =
+            windows_path_to_wsl_mount(std::path::Path::new(r"\\?\C:\Users\Mayor\screen.png"))
+                .unwrap();
+
+        assert_eq!(translated, "/mnt/c/Users/Mayor/screen.png");
     }
 
     fn temp_agent_path(label: &str) -> PathBuf {

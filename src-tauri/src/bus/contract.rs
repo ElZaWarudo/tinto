@@ -159,9 +159,26 @@ pub struct AgentRuntimeCatalog {
     pub updated_at_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionGoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSessionGoal {
     pub text: String,
+    pub status: AgentSessionGoalStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
+    pub tokens_used: u64,
+    pub time_used_seconds: u64,
+    pub created_at_ms: u64,
     pub updated_at_ms: u64,
 }
 
@@ -192,12 +209,27 @@ pub struct AgentSessionContextSummary {
     pub source_turns: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionResumeMode {
+    Native,
+    ContextBridge,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionResumeResult {
+    pub session_id: String,
+    pub mode: AgentSessionResumeMode,
+}
+
 /// Metadata publica de una sesion de agente. La E/S PTY se anade en ACI-002.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSession {
     pub id: String,
     pub repo: PathBuf,
     pub agent_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl_distro: Option<String>,
     pub status: AgentSessionStatus,
@@ -431,6 +463,38 @@ pub struct SecretFinding {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretScanEngine {
+    Gitleaks,
+    Heuristic,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretScanState {
+    #[default]
+    NotRun,
+    Clean,
+    Findings,
+    Degraded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SecretScanStatus {
+    pub state: SecretScanState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<SecretScanEngine>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at_ms: Option<u64>,
+}
+
 /// Delta de estado de un repo (evento `tinto://workbench-delta` y entrada
 /// del snapshot).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -452,6 +516,8 @@ pub struct RepoDelta {
     pub signals: Vec<PassiveSignal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secret_findings: Vec<SecretFinding>,
+    #[serde(default)]
+    pub secret_scan_status: SecretScanStatus,
     /// Diffs de los objetivos suscritos de este repo; `None` sin suscripción.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscribed_diffs: Option<Vec<FileDiff>>,
@@ -578,6 +644,13 @@ mod tests {
                 rule_id: "generic-api-key".into(),
                 description: "Possible secret".into(),
             }],
+            secret_scan_status: SecretScanStatus {
+                state: SecretScanState::Findings,
+                engine: Some(SecretScanEngine::Gitleaks),
+                version: Some("8.30.1".into()),
+                checked_at_ms: Some(123),
+                ..Default::default()
+            },
             subscribed_diffs: None,
         };
         let json = serde_json::to_value(&delta).unwrap();
@@ -591,6 +664,8 @@ mod tests {
         assert_eq!(json["signals"][0]["severity"], "warning");
         assert_eq!(json["secret_findings"][0]["line"], 12);
         assert_eq!(json["secret_findings"][0]["rule_id"], "generic-api-key");
+        assert_eq!(json["secret_scan_status"]["state"], "findings");
+        assert_eq!(json["secret_scan_status"]["engine"], "gitleaks");
         assert!(json.get("subscribed_diffs").is_none(), "None se omite");
         for key in ["status", "branch", "head", "last_activity_ms"] {
             assert!(json.get(key).is_some(), "falta {key}");
@@ -633,6 +708,7 @@ mod tests {
             id: "sess-1".into(),
             repo: "/r/api".into(),
             agent_type: "codex".into(),
+            provider_session_id: Some("thread-1".into()),
             wsl_distro: None,
             status: AgentSessionStatus::Running,
             pid: Some(42),
@@ -689,6 +765,11 @@ mod tests {
             },
             goal: Some(AgentSessionGoal {
                 text: "Ship host commands".into(),
+                status: AgentSessionGoalStatus::Active,
+                token_budget: Some(200_000),
+                tokens_used: 10_000,
+                time_used_seconds: 120,
+                created_at_ms: 1760000000100,
                 updated_at_ms: 1760000000200,
             }),
             personality: Some(AgentSessionPersonality {

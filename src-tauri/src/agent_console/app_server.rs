@@ -15,11 +15,15 @@ use serde_json::{json, Value};
 use super::AgentConsoleError;
 use super::{
     commands::TIMELINE_FRAME_PREFIX,
-    pty::{kill_process_tree, AgentProcess, AgentProcessEvent},
+    pty::{
+        kill_process_tree, prompt_with_file_attachments, AgentProcess, AgentProcessEvent,
+        AgentTurnAttachment,
+    },
 };
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentRuntimeCatalogStatus, AgentRuntimeModel, AgentRuntimeReasoningEffort,
-    AgentRuntimeServiceTier, AgentSessionRuntimeOptions, AgentSessionTimelineKind,
+    AgentRuntimeServiceTier, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionRuntimeOptions,
+    AgentSessionTimelineKind,
 };
 use crate::wsl_agent::shell_env::agent_console_script;
 
@@ -27,7 +31,7 @@ use crate::wsl_agent::shell_env::agent_console_script;
 use crate::windows_process::hide_console;
 
 const INITIAL_REQUEST_ID: u64 = 1;
-const THREAD_START_REQUEST_ID: u64 = 2;
+const THREAD_REQUEST_ID: u64 = 2;
 const FS_WATCH_REQUEST_ID: u64 = 3;
 const MODEL_LIST_REQUEST_ID: u64 = 4;
 const FIRST_TURN_REQUEST_ID: u64 = 100;
@@ -42,6 +46,7 @@ pub struct CodexAppServerHandle {
     pending_options: Option<AgentSessionRuntimeOptions>,
     thread_id: Arc<Mutex<Option<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
+    pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
     next_request_id: Arc<AtomicU64>,
@@ -51,13 +56,27 @@ pub struct CodexAppServerHandle {
 impl CodexAppServerHandle {
     pub fn spawn(binary_path: &Path, working_dir: &Path) -> Result<Self, AgentConsoleError> {
         let child = spawn_command(build_app_server_command(binary_path, working_dir))?;
-        Self::from_child(child, working_dir, "codex_app_server")
+        Self::from_child(child, working_dir, "codex_app_server", None)
+    }
+
+    pub fn resume(
+        binary_path: &Path,
+        working_dir: &Path,
+        provider_session_id: &str,
+    ) -> Result<Self, AgentConsoleError> {
+        let child = spawn_command(build_app_server_command(binary_path, working_dir))?;
+        Self::from_child(
+            child,
+            working_dir,
+            "codex_app_server",
+            Some(provider_session_id),
+        )
     }
 
     pub fn spawn_wsl(distro: &str, working_dir: &Path) -> Result<Self, AgentConsoleError> {
         let command = build_wsl_app_server_command(distro, working_dir)?;
         let child = spawn_command(command)?;
-        let mut handle = Self::from_child(child, working_dir, "codex_app_server_wsl")?;
+        let mut handle = Self::from_child(child, working_dir, "codex_app_server_wsl", None)?;
         std::thread::sleep(std::time::Duration::from_millis(50));
         if let Some(status) = handle.child.try_wait().map_err(|error| {
             AgentConsoleError::new("app_server_status_failed", error.to_string())
@@ -70,10 +89,26 @@ impl CodexAppServerHandle {
         Ok(handle)
     }
 
+    pub fn resume_wsl(
+        distro: &str,
+        working_dir: &Path,
+        provider_session_id: &str,
+    ) -> Result<Self, AgentConsoleError> {
+        let command = build_wsl_app_server_command(distro, working_dir)?;
+        let child = spawn_command(command)?;
+        Self::from_child(
+            child,
+            working_dir,
+            "codex_app_server_wsl",
+            Some(provider_session_id),
+        )
+    }
+
     fn from_child(
         mut child: Child,
         working_dir: &Path,
         catalog_source: &str,
+        resume_thread_id: Option<&str>,
     ) -> Result<Self, AgentConsoleError> {
         let stdin = child.stdin.take().ok_or_else(|| {
             AgentConsoleError::new(
@@ -92,6 +127,7 @@ impl CodexAppServerHandle {
         let stdin = Arc::new(Mutex::new(stdin));
         let thread_id = Arc::new(Mutex::new(None));
         let pending_turns = Arc::new(Mutex::new(VecDeque::new()));
+        let pending_goal_updates = Arc::new(Mutex::new(VecDeque::new()));
         let runtime_catalog = Arc::new(Mutex::new(AgentRuntimeCatalog {
             status: AgentRuntimeCatalogStatus::Loading,
             source: catalog_source.to_string(),
@@ -104,7 +140,7 @@ impl CodexAppServerHandle {
         let next_request_id = Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID));
         let cwd = working_dir.to_path_buf();
 
-        send_initial_requests(&stdin, &cwd)?;
+        send_initial_requests(&stdin, &cwd, resume_thread_id)?;
         spawn_stdout_thread(
             stdout,
             ServerRuntimeContext {
@@ -113,6 +149,7 @@ impl CodexAppServerHandle {
                 stdin: Arc::clone(&stdin),
                 thread_id: Arc::clone(&thread_id),
                 pending_turns: Arc::clone(&pending_turns),
+                pending_goal_updates: Arc::clone(&pending_goal_updates),
                 runtime_catalog: Arc::clone(&runtime_catalog),
                 pending_model_requests: Arc::clone(&pending_model_requests),
                 next_request_id: Arc::clone(&next_request_id),
@@ -130,6 +167,7 @@ impl CodexAppServerHandle {
             pending_options: None,
             thread_id,
             pending_turns,
+            pending_goal_updates,
             runtime_catalog,
             pending_model_requests,
             next_request_id,
@@ -140,6 +178,7 @@ impl CodexAppServerHandle {
     fn submit_turn(
         &mut self,
         text: String,
+        attachments: Vec<AgentTurnAttachment>,
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         let thread = self.thread_id.lock().ok().and_then(|thread| thread.clone());
@@ -150,11 +189,16 @@ impl CodexAppServerHandle {
                 request_id,
                 &thread_id,
                 &text,
+                &attachments,
                 &self.cwd,
                 options.as_ref(),
             )?;
         } else if let Ok(mut pending) = self.pending_turns.lock() {
-            pending.push_back(PendingTurn { text, options });
+            pending.push_back(PendingTurn {
+                text,
+                attachments,
+                options,
+            });
             let _ = self
                 .output_tx
                 .send(b"\r\nCodex app-server is still initializing; queued turn.\r\n".to_vec());
@@ -177,7 +221,7 @@ impl CodexAppServerHandle {
                     let options = self.pending_options.take();
                     self.line_buffer.clear();
                     if !text.is_empty() {
-                        self.submit_turn(text, options)?;
+                        self.submit_turn(text, Vec::new(), options)?;
                     }
                 }
                 b'\n' => {
@@ -193,6 +237,26 @@ impl CodexAppServerHandle {
             }
         }
         Ok(())
+    }
+
+    fn submit_goal_update(&mut self, update: PendingGoalUpdate) -> Result<(), AgentConsoleError> {
+        let thread = self.thread_id.lock().ok().and_then(|thread| thread.clone());
+        if let Some(thread_id) = thread {
+            send_goal_update(
+                &self.stdin,
+                self.next_request_id.fetch_add(1, Ordering::SeqCst),
+                &thread_id,
+                &update,
+            )
+        } else {
+            self.pending_goal_updates
+                .lock()
+                .map_err(|_| {
+                    AgentConsoleError::new("app_server_lock_poisoned", "goal queue lock failed")
+                })?
+                .push_back(update);
+            Ok(())
+        }
     }
 }
 
@@ -230,6 +294,15 @@ impl AgentProcess for CodexAppServerHandle {
         self.write_input_inner(input, options)
     }
 
+    fn write_turn(
+        &mut self,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        self.submit_turn(text.to_string(), attachments.to_vec(), options)
+    }
+
     fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
         Ok(())
     }
@@ -255,6 +328,10 @@ impl AgentProcess for CodexAppServerHandle {
             .map(|catalog| catalog.clone())
     }
 
+    fn provider_session_id(&self) -> Option<String> {
+        self.thread_id.lock().ok().and_then(|thread| thread.clone())
+    }
+
     fn refresh_runtime_catalog(
         &mut self,
     ) -> Result<Option<AgentRuntimeCatalog>, AgentConsoleError> {
@@ -267,6 +344,27 @@ impl AgentProcess for CodexAppServerHandle {
             true,
         )?;
         Ok(self.runtime_catalog())
+    }
+
+    fn supports_goals(&self) -> bool {
+        true
+    }
+
+    fn update_goal(
+        &mut self,
+        objective: Option<&str>,
+        status: Option<AgentSessionGoalStatus>,
+        token_budget: Option<Option<u64>>,
+    ) -> Result<(), AgentConsoleError> {
+        self.submit_goal_update(PendingGoalUpdate::Set {
+            objective: objective.map(str::to_string),
+            status,
+            token_budget,
+        })
+    }
+
+    fn clear_goal(&mut self) -> Result<(), AgentConsoleError> {
+        self.submit_goal_update(PendingGoalUpdate::Clear)
     }
 }
 
@@ -323,6 +421,7 @@ fn spawn_command(mut command: Command) -> Result<Child, AgentConsoleError> {
 fn send_initial_requests(
     stdin: &Arc<Mutex<ChildStdin>>,
     cwd: &Path,
+    resume_thread_id: Option<&str>,
 ) -> Result<(), AgentConsoleError> {
     write_json(
         stdin,
@@ -352,18 +451,7 @@ fn send_initial_requests(
             }
         }),
     )?;
-    write_json(
-        stdin,
-        &json!({
-            "method": "thread/start",
-            "id": THREAD_START_REQUEST_ID,
-            "params": {
-                "cwd": cwd.to_string_lossy(),
-                "runtimeWorkspaceRoots": [cwd.to_string_lossy()],
-                "ephemeral": true
-            }
-        }),
-    )?;
+    write_json(stdin, &thread_request_message(cwd, resume_thread_id))?;
     write_json(
         stdin,
         &json!({
@@ -375,6 +463,29 @@ fn send_initial_requests(
             }
         }),
     )
+}
+
+fn thread_request_message(cwd: &Path, resume_thread_id: Option<&str>) -> Value {
+    match resume_thread_id {
+        Some(thread_id) => json!({
+            "method": "thread/resume",
+            "id": THREAD_REQUEST_ID,
+            "params": {
+                "threadId": thread_id,
+                "cwd": cwd.to_string_lossy(),
+                "runtimeWorkspaceRoots": [cwd.to_string_lossy()]
+            }
+        }),
+        None => json!({
+            "method": "thread/start",
+            "id": THREAD_REQUEST_ID,
+            "params": {
+                "cwd": cwd.to_string_lossy(),
+                "runtimeWorkspaceRoots": [cwd.to_string_lossy()],
+                "ephemeral": false
+            }
+        }),
+    }
 }
 
 fn spawn_stdout_thread(stdout: impl Read + Send + 'static, context: ServerRuntimeContext) {
@@ -399,6 +510,7 @@ struct ServerRuntimeContext {
     stdin: Arc<Mutex<ChildStdin>>,
     thread_id: Arc<Mutex<Option<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
+    pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
     next_request_id: Arc<AtomicU64>,
@@ -407,7 +519,18 @@ struct ServerRuntimeContext {
 
 struct PendingTurn {
     text: String,
+    attachments: Vec<AgentTurnAttachment>,
     options: Option<AgentSessionRuntimeOptions>,
+}
+
+#[derive(Debug, Clone)]
+enum PendingGoalUpdate {
+    Set {
+        objective: Option<String>,
+        status: Option<AgentSessionGoalStatus>,
+        token_budget: Option<Option<u64>>,
+    },
+    Clear,
 }
 
 fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
@@ -415,7 +538,7 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         return;
     }
 
-    if message.get("id").and_then(Value::as_u64) == Some(THREAD_START_REQUEST_ID) {
+    if message.get("id").and_then(Value::as_u64) == Some(THREAD_REQUEST_ID) {
         if let Some(id) = message
             .pointer("/result/thread/id")
             .and_then(Value::as_str)
@@ -424,6 +547,18 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             if let Ok(mut slot) = context.thread_id.lock() {
                 *slot = Some(id.clone());
             }
+            let _ = send_goal_get(
+                &context.stdin,
+                context.next_request_id.fetch_add(1, Ordering::SeqCst),
+                &id,
+            );
+            flush_pending_goal_updates(
+                &context.stdin,
+                &context.pending_goal_updates,
+                &context.next_request_id,
+                &id,
+                &context.output_tx,
+            );
             flush_pending_turns(
                 &context.stdin,
                 &context.pending_turns,
@@ -440,6 +575,16 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             .output_tx
             .send(format!("\r\nCodex app-server error: {error}\r\n> ").into_bytes());
         return;
+    }
+
+    if let Some(goal) = message.pointer("/result/goal") {
+        if goal.is_null() {
+            let _ = context.event_tx.send(AgentProcessEvent::GoalCleared);
+        } else if let Some(goal) = agent_goal_from_value(goal) {
+            let _ = context
+                .event_tx
+                .send(AgentProcessEvent::GoalUpdated { goal });
+        }
     }
 
     let Some(method) = message.get("method").and_then(Value::as_str) else {
@@ -484,6 +629,19 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             let _ = context.event_tx.send(AgentProcessEvent::TurnCompleted {
                 timestamp_ms: now_ms(),
             });
+        }
+        "thread/goal/updated" => {
+            if let Some(goal) = message
+                .pointer("/params/goal")
+                .and_then(agent_goal_from_value)
+            {
+                let _ = context
+                    .event_tx
+                    .send(AgentProcessEvent::GoalUpdated { goal });
+            }
+        }
+        "thread/goal/cleared" => {
+            let _ = context.event_tx.send(AgentProcessEvent::GoalCleared);
         }
         "turn/started" | "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
             let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
@@ -822,6 +980,140 @@ fn buffered_turn_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
 
+fn agent_goal_from_value(value: &Value) -> Option<AgentSessionGoal> {
+    let status = match value.get("status")?.as_str()? {
+        "active" => AgentSessionGoalStatus::Active,
+        "paused" => AgentSessionGoalStatus::Paused,
+        "blocked" => AgentSessionGoalStatus::Blocked,
+        "usageLimited" => AgentSessionGoalStatus::UsageLimited,
+        "budgetLimited" => AgentSessionGoalStatus::BudgetLimited,
+        "complete" => AgentSessionGoalStatus::Complete,
+        _ => return None,
+    };
+    Some(AgentSessionGoal {
+        text: value.get("objective")?.as_str()?.to_string(),
+        status,
+        token_budget: value
+            .get("tokenBudget")
+            .and_then(Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok()),
+        tokens_used: value
+            .get("tokensUsed")
+            .and_then(Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0),
+        time_used_seconds: value
+            .get("timeUsedSeconds")
+            .and_then(Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0),
+        created_at_ms: value
+            .get("createdAt")
+            .and_then(Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0)
+            .saturating_mul(1_000),
+        updated_at_ms: value
+            .get("updatedAt")
+            .and_then(Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0)
+            .saturating_mul(1_000),
+    })
+}
+
+fn goal_status_name(status: AgentSessionGoalStatus) -> &'static str {
+    match status {
+        AgentSessionGoalStatus::Active => "active",
+        AgentSessionGoalStatus::Paused => "paused",
+        AgentSessionGoalStatus::Blocked => "blocked",
+        AgentSessionGoalStatus::UsageLimited => "usageLimited",
+        AgentSessionGoalStatus::BudgetLimited => "budgetLimited",
+        AgentSessionGoalStatus::Complete => "complete",
+    }
+}
+
+fn send_goal_get(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    request_id: u64,
+    thread_id: &str,
+) -> Result<(), AgentConsoleError> {
+    write_json(
+        stdin,
+        &json!({
+            "method": "thread/goal/get",
+            "id": request_id,
+            "params": { "threadId": thread_id }
+        }),
+    )
+}
+
+fn send_goal_update(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    request_id: u64,
+    thread_id: &str,
+    update: &PendingGoalUpdate,
+) -> Result<(), AgentConsoleError> {
+    match update {
+        PendingGoalUpdate::Clear => write_json(
+            stdin,
+            &json!({
+                "method": "thread/goal/clear",
+                "id": request_id,
+                "params": { "threadId": thread_id }
+            }),
+        ),
+        PendingGoalUpdate::Set {
+            objective,
+            status,
+            token_budget,
+        } => {
+            let mut params = json!({ "threadId": thread_id });
+            if let Some(objective) = objective {
+                params["objective"] = json!(objective);
+            }
+            if let Some(status) = status {
+                params["status"] = json!(goal_status_name(status.clone()));
+            }
+            if let Some(token_budget) = token_budget {
+                params["tokenBudget"] = token_budget.map_or(Value::Null, |value| json!(value));
+            }
+            write_json(
+                stdin,
+                &json!({
+                    "method": "thread/goal/set",
+                    "id": request_id,
+                    "params": params
+                }),
+            )
+        }
+    }
+}
+
+fn flush_pending_goal_updates(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    pending_goal_updates: &Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
+    next_request_id: &Arc<AtomicU64>,
+    thread_id: &str,
+    output_tx: &Sender<Vec<u8>>,
+) {
+    let Some(mut pending) = pending_goal_updates.lock().ok() else {
+        return;
+    };
+    while let Some(update) = pending.pop_front() {
+        if let Err(error) = send_goal_update(
+            stdin,
+            next_request_id.fetch_add(1, Ordering::SeqCst),
+            thread_id,
+            &update,
+        ) {
+            let _ = output_tx
+                .send(format!("\r\nCodex app-server error: {}\r\n> ", error.message).into_bytes());
+            break;
+        }
+    }
+}
+
 fn flush_pending_turns(
     stdin: &Arc<Mutex<ChildStdin>>,
     pending_turns: &Arc<Mutex<VecDeque<PendingTurn>>>,
@@ -840,6 +1132,7 @@ fn flush_pending_turns(
             request_id,
             thread_id,
             &text.text,
+            &text.attachments,
             cwd,
             text.options.as_ref(),
         ) {
@@ -855,12 +1148,13 @@ fn send_turn_start(
     request_id: u64,
     thread_id: &str,
     text: &str,
+    attachments: &[AgentTurnAttachment],
     cwd: &Path,
     options: Option<&AgentSessionRuntimeOptions>,
 ) -> Result<(), AgentConsoleError> {
     write_json(
         stdin,
-        &turn_start_message(request_id, thread_id, text, cwd, options),
+        &turn_start_message(request_id, thread_id, text, attachments, cwd, options),
     )
 }
 
@@ -868,13 +1162,25 @@ fn turn_start_message(
     request_id: u64,
     thread_id: &str,
     text: &str,
+    attachments: &[AgentTurnAttachment],
     cwd: &Path,
     options: Option<&AgentSessionRuntimeOptions>,
 ) -> Value {
+    let mut input = attachments
+        .iter()
+        .filter(|attachment| attachment.is_image)
+        .map(
+            |attachment| json!({ "type": "localImage", "path": attachment.path.to_string_lossy() }),
+        )
+        .collect::<Vec<_>>();
+    input.push(json!({
+        "type": "text",
+        "text": prompt_with_file_attachments(text, attachments, false)
+    }));
     let mut params = json!({
         "threadId": thread_id,
         "cwd": cwd.to_string_lossy(),
-        "input": [{ "type": "text", "text": text }]
+        "input": input
     });
     if let Some(model) = options.and_then(|options| options.model.as_deref()) {
         params["model"] = json!(model);
@@ -977,6 +1283,7 @@ mod tests {
             stdin: dummy_stdin(),
             thread_id: Arc::new(Mutex::new(Some("t".into()))),
             pending_turns: Arc::new(Mutex::new(VecDeque::new())),
+            pending_goal_updates: Arc::new(Mutex::new(VecDeque::new())),
             runtime_catalog: Arc::new(Mutex::new(AgentRuntimeCatalog {
                 status: AgentRuntimeCatalogStatus::Loading,
                 source: "codex_app_server".into(),
@@ -1006,6 +1313,58 @@ mod tests {
             AgentProcessEvent::TurnCompleted { .. }
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_goal_update_is_forwarded_with_progress_and_status() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({
+                "method": "thread/goal/updated",
+                "params": {
+                    "threadId": "t",
+                    "goal": {
+                        "threadId": "t",
+                        "objective": "Ship goal mode",
+                        "status": "paused",
+                        "tokenBudget": 200000,
+                        "tokensUsed": 45000,
+                        "timeUsedSeconds": 321,
+                        "createdAt": 1760000000,
+                        "updatedAt": 1760000321
+                    }
+                }
+            }),
+            &context,
+        );
+
+        let AgentProcessEvent::GoalUpdated { goal } = event_rx.recv().unwrap() else {
+            panic!("expected goal update");
+        };
+        assert_eq!(goal.text, "Ship goal mode");
+        assert_eq!(goal.status, AgentSessionGoalStatus::Paused);
+        assert_eq!(goal.token_budget, Some(200_000));
+        assert_eq!(goal.tokens_used, 45_000);
+        assert_eq!(goal.time_used_seconds, 321);
+        assert_eq!(goal.updated_at_ms, 1_760_000_321_000);
+    }
+
+    #[test]
+    fn native_goal_clear_is_forwarded() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({"method":"thread/goal/cleared","params":{"threadId":"t"}}),
+            &context,
+        );
+
+        assert!(matches!(
+            event_rx.recv().unwrap(),
+            AgentProcessEvent::GoalCleared
+        ));
     }
 
     #[test]
@@ -1173,6 +1532,7 @@ mod tests {
             100,
             "thread-1",
             "ship it",
+            &[],
             Path::new("/tmp/repo"),
             Some(&AgentSessionRuntimeOptions {
                 model: Some("gpt-5.6-sol".into()),
@@ -1231,10 +1591,78 @@ mod tests {
 
     #[test]
     fn turn_start_preserves_a_linux_working_directory() {
-        let message =
-            turn_start_message(100, "thread-1", "ship it", Path::new("/home/me/repo"), None);
+        let message = turn_start_message(
+            100,
+            "thread-1",
+            "ship it",
+            &[],
+            Path::new("/home/me/repo"),
+            None,
+        );
 
         assert_eq!(message["params"]["cwd"], "/home/me/repo");
+    }
+
+    #[test]
+    fn turn_start_sends_local_images_before_the_text_prompt() {
+        let message = turn_start_message(
+            100,
+            "thread-1",
+            "inspect this",
+            &[AgentTurnAttachment {
+                path: PathBuf::from("/tmp/screenshot.png"),
+                is_image: true,
+            }],
+            Path::new("/tmp/repo"),
+            None,
+        );
+
+        assert_eq!(message["params"]["input"][0]["type"], "localImage");
+        assert_eq!(message["params"]["input"][0]["path"], "/tmp/screenshot.png");
+        assert_eq!(message["params"]["input"][1]["type"], "text");
+        assert_eq!(message["params"]["input"][1]["text"], "inspect this");
+    }
+
+    #[test]
+    fn turn_start_mentions_generic_files_in_the_text_prompt() {
+        let message = turn_start_message(
+            100,
+            "thread-1",
+            "summarize it",
+            &[AgentTurnAttachment {
+                path: PathBuf::from("/tmp/brief.pdf"),
+                is_image: false,
+            }],
+            Path::new("/tmp/repo"),
+            None,
+        );
+
+        assert_eq!(message["params"]["input"].as_array().unwrap().len(), 1);
+        assert_eq!(message["params"]["input"][0]["type"], "text");
+        assert_eq!(
+            message["params"]["input"][0]["text"],
+            "# Files mentioned by the user:\n- /tmp/brief.pdf\n\nsummarize it"
+        );
+    }
+
+    #[test]
+    fn starts_persistent_threads_for_future_resume() {
+        let message = thread_request_message(Path::new("/tmp/repo"), None);
+
+        assert_eq!(message["method"], "thread/start");
+        assert_eq!(message["params"]["ephemeral"], false);
+    }
+
+    #[test]
+    fn resumes_the_provider_thread_in_the_current_workspace() {
+        let message = thread_request_message(Path::new("/tmp/repo"), Some("thread-42"));
+
+        assert_eq!(message["method"], "thread/resume");
+        assert_eq!(message["params"]["threadId"], "thread-42");
+        assert_eq!(
+            message["params"]["cwd"],
+            Path::new("/tmp/repo").to_string_lossy().as_ref()
+        );
     }
 
     #[test]
