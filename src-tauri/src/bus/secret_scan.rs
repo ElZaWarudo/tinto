@@ -10,11 +10,12 @@ use std::process::Command;
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tar::Archive;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use super::contract::SecretFinding;
+use super::contract::{SecretFinding, SecretScanEngine, SecretScanState, SecretScanStatus};
 use crate::git::{DiffLineKind, FileDiff, RepoStatus};
 
 const GITLEAKS_TIMEOUT_SECONDS: u64 = 8;
@@ -60,8 +61,52 @@ enum ArchiveKind {
 struct ManagedReleaseAsset {
     name: String,
     download_url: String,
+    checksum_url: String,
     archive: ArchiveKind,
     version: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanFailure {
+    BinaryUnavailable,
+    LaunchFailed,
+    ScanFailed,
+    ReportUnavailable,
+    InvalidReport,
+}
+
+impl ScanFailure {
+    fn category(self) -> &'static str {
+        match self {
+            Self::BinaryUnavailable => "binary_unavailable",
+            Self::LaunchFailed => "launch_failed",
+            Self::ScanFailed => "scan_failed",
+            Self::ReportUnavailable => "report_unavailable",
+            Self::InvalidReport => "invalid_report",
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::BinaryUnavailable => "Gitleaks no está instalado; se usó el detector básico.",
+            Self::LaunchFailed => "Gitleaks no pudo iniciarse; se usó el detector básico.",
+            Self::ScanFailed => {
+                "Gitleaks no pudo completar el análisis; revisa .gitleaks.toml. Se usó el detector básico."
+            }
+            Self::ReportUnavailable => {
+                "Gitleaks no produjo un reporte legible; se usó el detector básico."
+            }
+            Self::InvalidReport => {
+                "Gitleaks produjo un reporte inválido; se usó el detector básico."
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SecretScanResult {
+    pub(crate) findings: Vec<SecretFinding>,
+    pub(crate) status: SecretScanStatus,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,15 +129,57 @@ pub(crate) fn detect_secret_findings(
     repo: &Path,
     status: &RepoStatus,
     diffs: &[FileDiff],
-) -> Vec<SecretFinding> {
+) -> SecretScanResult {
     let changed_paths = changed_paths(status, diffs);
     if changed_paths.is_empty() {
-        return Vec::new();
+        return SecretScanResult {
+            findings: Vec::new(),
+            status: SecretScanStatus {
+                state: SecretScanState::NotRun,
+                message: Some("Sin cambios que analizar.".into()),
+                ..Default::default()
+            },
+        };
     }
 
     let config = repo_gitleaks_config(repo);
-    scan_with_gitleaks(repo, status, diffs, &changed_paths, config.as_deref())
-        .unwrap_or_else(|| heuristic_findings(diffs))
+    match scan_with_gitleaks(repo, status, diffs, &changed_paths, config.as_deref()) {
+        Ok((findings, version)) => SecretScanResult {
+            status: SecretScanStatus {
+                state: if findings.is_empty() {
+                    SecretScanState::Clean
+                } else {
+                    SecretScanState::Findings
+                },
+                engine: Some(SecretScanEngine::Gitleaks),
+                version,
+                checked_at_ms: Some(now_epoch_ms()),
+                ..Default::default()
+            },
+            findings,
+        },
+        Err(failure) => {
+            let findings = heuristic_findings(diffs);
+            SecretScanResult {
+                findings,
+                status: SecretScanStatus {
+                    state: SecretScanState::Degraded,
+                    engine: Some(SecretScanEngine::Heuristic),
+                    failure_category: Some(failure.category().into()),
+                    message: Some(failure.message().into()),
+                    checked_at_ms: Some(now_epoch_ms()),
+                    ..Default::default()
+                },
+            }
+        }
+    }
+}
+
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub(crate) fn has_repo_gitleaks_config(repo: &Path) -> bool {
@@ -160,9 +247,10 @@ fn install_managed_gitleaks() -> Result<PathBuf, String> {
     let release = resolve_latest_gitleaks_release()?;
     let asset = pick_gitleaks_asset(&release)
         .ok_or_else(|| format!("no hay binario publicado para {}", target_descriptor()))?;
-    let response = Client::builder()
+    let client = Client::builder()
         .build()
-        .map_err(|error| format!("no se pudo crear el cliente HTTP: {error}"))?
+        .map_err(|error| format!("no se pudo crear el cliente HTTP: {error}"))?;
+    let response = client
         .get(&asset.download_url)
         .header("User-Agent", GITLEAKS_USER_AGENT)
         .send()
@@ -171,6 +259,7 @@ fn install_managed_gitleaks() -> Result<PathBuf, String> {
     let bytes = response
         .bytes()
         .map_err(|error| format!("descarga incompleta de {}: {error}", asset.name))?;
+    verify_release_checksum(&client, &asset, bytes.as_ref())?;
     let target = managed_gitleaks_install_path();
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
@@ -506,12 +595,65 @@ fn pick_gitleaks_asset(release: &GithubRelease) -> Option<ManagedReleaseAsset> {
         if !lower.contains("gitleaks") || !os_match || !arch_match {
             return None;
         }
+        let version = infer_version_from_release(release, asset);
+        let checksum_name = format!("gitleaks_{version}_checksums.txt");
+        let checksum_url = release
+            .assets
+            .iter()
+            .find(|candidate| candidate.name == checksum_name)
+            .map(|candidate| candidate.browser_download_url.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "{GITLEAKS_RELEASES_BASE}/download/{}/{}",
+                    release.tag_name, checksum_name
+                )
+            });
         Some(ManagedReleaseAsset {
             name: asset.name.clone(),
             download_url: asset.browser_download_url.clone(),
+            checksum_url,
             archive,
-            version: infer_version_from_release(release, asset),
+            version,
         })
+    })
+}
+
+fn verify_release_checksum(
+    client: &Client,
+    asset: &ManagedReleaseAsset,
+    archive_bytes: &[u8],
+) -> Result<(), String> {
+    let checksums = client
+        .get(&asset.checksum_url)
+        .header("User-Agent", GITLEAKS_USER_AGENT)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| format!("no se pudo descargar el checksum oficial: {error}"))?
+        .text()
+        .map_err(|error| format!("no se pudo leer el checksum oficial: {error}"))?;
+    let expected = checksum_for_asset(&checksums, &asset.name)
+        .ok_or_else(|| format!("el checksum oficial no incluye {}", asset.name))?;
+    let actual = format!("{:x}", Sha256::digest(archive_bytes));
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "el checksum de {} no coincide con la release oficial",
+            asset.name
+        ));
+    }
+    Ok(())
+}
+
+fn checksum_for_asset<'a>(checksums: &'a str, asset_name: &str) -> Option<&'a str> {
+    checksums.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let checksum = fields.next()?;
+        let name = fields.next()?.trim_start_matches('*');
+        (name == asset_name
+            && checksum.len() == 64
+            && checksum
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()))
+        .then_some(checksum)
     })
 }
 
@@ -682,8 +824,9 @@ fn scan_with_gitleaks(
     diffs: &[FileDiff],
     changed_paths: &HashSet<String>,
     config_path: Option<&Path>,
-) -> Option<Vec<SecretFinding>> {
-    let gitleaks = gitleaks_binary_path()?;
+) -> Result<(Vec<SecretFinding>, Option<String>), ScanFailure> {
+    let gitleaks = gitleaks_binary_path().ok_or(ScanFailure::BinaryUnavailable)?;
+    let version = gitleaks_version(&gitleaks);
     let report_path = std::env::temp_dir().join(format!("tinto-gitleaks-{}.json", Uuid::new_v4()));
     let mut command = Command::new(gitleaks);
     if let Some(path) = config_path {
@@ -703,27 +846,38 @@ fn scan_with_gitleaks(
         .arg(&report_path)
         .arg(repo)
         .output()
-        .ok()?;
+        .map_err(|_| ScanFailure::LaunchFailed)?;
     if !output.status.success() {
         let _ = std::fs::remove_file(&report_path);
-        return None;
+        return Err(ScanFailure::ScanFailed);
     }
 
-    let report = std::fs::read_to_string(&report_path).ok()?;
+    let report =
+        std::fs::read_to_string(&report_path).map_err(|_| ScanFailure::ReportUnavailable)?;
     let _ = std::fs::remove_file(&report_path);
     let report = if report.trim().is_empty() {
         "[]".to_string()
     } else {
         report
     };
-    let parsed: Vec<GitleaksReportFinding> = serde_json::from_str(&report).ok()?;
-    Some(filter_report_findings(
-        repo,
-        status,
-        diffs,
-        changed_paths,
-        parsed,
+    let parsed: Vec<GitleaksReportFinding> =
+        serde_json::from_str(&report).map_err(|_| ScanFailure::InvalidReport)?;
+    Ok((
+        filter_report_findings(repo, status, diffs, changed_paths, parsed),
+        version,
     ))
+}
+
+fn gitleaks_version(binary: &Path) -> Option<String> {
+    let output = Command::new(binary).arg("version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
 }
 
 fn repo_gitleaks_config(repo: &Path) -> Option<PathBuf> {
@@ -930,6 +1084,7 @@ fn normalize_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bus::commands::GITLEAKS_TEMPLATE;
 
     fn sample_diff(path: &str, lines: Vec<(&str, Option<u32>)>) -> FileDiff {
         FileDiff {
@@ -1062,5 +1217,63 @@ mod tests {
             assets[0].browser_download_url,
             "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
         );
+    }
+
+    #[test]
+    fn generated_config_is_valid_and_extends_default_rules() {
+        let config: toml::Value = toml::from_str(GITLEAKS_TEMPLATE).expect("valid TOML");
+        assert_eq!(
+            config
+                .get("extend")
+                .and_then(|extend| extend.get("useDefault"))
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn checksum_parser_matches_only_the_requested_asset() {
+        let checksums = concat!(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  gitleaks_8.30.1_linux_x64.tar.gz\n",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *gitleaks_8.30.1_windows_x64.zip\n"
+        );
+
+        assert_eq!(
+            checksum_for_asset(checksums, "gitleaks_8.30.1_windows_x64.zip"),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(checksum_for_asset(checksums, "missing.zip"), None);
+    }
+
+    #[test]
+    fn real_gitleaks_detects_safe_canary_when_available() {
+        if gitleaks_binary_path().is_none() {
+            return;
+        }
+        let repo = tempfile::tempdir().expect("temp repo");
+        let canary = format!(
+            "GITHUB_TOKEN={}{}\n",
+            "ghp_", "A7fK2mP9qR4sT8vW1xY6zB3cD5eG0hJ2kL9n"
+        );
+        fs::write(repo.path().join("canary.env"), &canary).expect("write canary");
+        fs::write(repo.path().join(".gitleaks.toml"), GITLEAKS_TEMPLATE).expect("write config");
+        let status = RepoStatus {
+            modified: Vec::new(),
+            staged: Vec::new(),
+            untracked: vec!["canary.env".into()],
+        };
+        let diffs = vec![sample_diff(
+            "canary.env",
+            vec![(canary.trim_end(), Some(1))],
+        )];
+
+        let result = detect_secret_findings(repo.path(), &status, &diffs);
+
+        assert_eq!(result.status.engine, Some(SecretScanEngine::Gitleaks));
+        assert_eq!(result.status.state, SecretScanState::Findings);
+        assert!(result
+            .findings
+            .iter()
+            .any(|finding| normalize_path(&finding.path) == "canary.env"));
     }
 }

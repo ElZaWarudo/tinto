@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { createRepoAgentsMdConfig, createRepoGitleaksConfig } from "../bus/client";
+import type { SecretScanStatus } from "../bus/contract";
+import { SecretScanIndicator } from "./SecretScanIndicator";
 
 function commandMessage(error: unknown, fallback: string): string {
   if (
@@ -83,16 +85,21 @@ export function RepoConfigSection({
   repo,
   gitleaksConfigured,
   agentsMdConfigured,
+  secretScanStatus,
+  secretFindings,
 }: {
   repo: string;
   gitleaksConfigured: boolean;
   agentsMdConfigured: boolean;
+  secretScanStatus: SecretScanStatus;
+  secretFindings: number;
 }) {
   return (
     <section className="repo-config-section" data-testid="repo-config-section">
       <div className="repo-config-section__head">
         <h3>Configuración del repo</h3>
       </div>
+      <SecretScanIndicator status={secretScanStatus} findings={secretFindings} />
       <RepoConfigItem
         key={`gitleaks-${repo}`}
         title="Gitleaks"

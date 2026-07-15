@@ -1,0 +1,3 @@
+# Historical synthetic fixtures. Keep ignores fingerprint-scoped so new matches still fail CI.
+6a546ac29c4c718a9714f3e157d7b89366a59750:src/demo/main.tsx:stripe-access-token:23
+2f1e1ab7b9167b688df535a2c1fe5585e48fdaf2:src/panels/timeline/TimelinePanel.test.tsx:generic-api-key:73
