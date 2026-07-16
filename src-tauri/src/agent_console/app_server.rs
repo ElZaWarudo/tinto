@@ -45,6 +45,7 @@ pub struct CodexAppServerHandle {
     line_buffer: Vec<u8>,
     pending_options: Option<AgentSessionRuntimeOptions>,
     thread_id: Arc<Mutex<Option<String>>>,
+    active_turn_id: Arc<Mutex<Option<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
@@ -126,6 +127,8 @@ impl CodexAppServerHandle {
         let (event_tx, event_rx) = mpsc::channel();
         let stdin = Arc::new(Mutex::new(stdin));
         let thread_id = Arc::new(Mutex::new(None));
+        let active_turn_id = Arc::new(Mutex::new(None));
+        let completed_agent_messages = Arc::new(Mutex::new(Vec::new()));
         let pending_turns = Arc::new(Mutex::new(VecDeque::new()));
         let pending_goal_updates = Arc::new(Mutex::new(VecDeque::new()));
         let runtime_catalog = Arc::new(Mutex::new(AgentRuntimeCatalog {
@@ -148,6 +151,8 @@ impl CodexAppServerHandle {
                 event_tx,
                 stdin: Arc::clone(&stdin),
                 thread_id: Arc::clone(&thread_id),
+                active_turn_id: Arc::clone(&active_turn_id),
+                completed_agent_messages: Arc::clone(&completed_agent_messages),
                 pending_turns: Arc::clone(&pending_turns),
                 pending_goal_updates: Arc::clone(&pending_goal_updates),
                 runtime_catalog: Arc::clone(&runtime_catalog),
@@ -166,6 +171,7 @@ impl CodexAppServerHandle {
             line_buffer: Vec::new(),
             pending_options: None,
             thread_id,
+            active_turn_id,
             pending_turns,
             pending_goal_updates,
             runtime_catalog,
@@ -301,6 +307,39 @@ impl AgentProcess for CodexAppServerHandle {
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         self.submit_turn(text.to_string(), attachments.to_vec(), options)
+    }
+
+    fn steer_turn(
+        &mut self,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        let thread_id = self
+            .thread_id
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .ok_or_else(|| {
+                AgentConsoleError::new("steer_unavailable", "Codex aún está iniciando")
+            })?;
+        let turn_id = self
+            .active_turn_id
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .ok_or_else(|| {
+                AgentConsoleError::new("steer_unavailable", "no hay un turno activo que intervenir")
+            })?;
+        write_json(
+            &self.stdin,
+            &turn_steer_message(
+                self.next_request_id.fetch_add(1, Ordering::SeqCst),
+                &thread_id,
+                &turn_id,
+                text,
+                attachments,
+            ),
+        )
     }
 
     fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
@@ -509,6 +548,8 @@ struct ServerRuntimeContext {
     event_tx: Sender<AgentProcessEvent>,
     stdin: Arc<Mutex<ChildStdin>>,
     thread_id: Arc<Mutex<Option<String>>>,
+    active_turn_id: Arc<Mutex<Option<String>>>,
+    completed_agent_messages: Arc<Mutex<Vec<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
@@ -571,6 +612,9 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
     }
 
     if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
+        let _ = context.event_tx.send(AgentProcessEvent::Error {
+            error: AgentConsoleError::new("provider_error", error),
+        });
         let _ = context
             .output_tx
             .send(format!("\r\nCodex app-server error: {error}\r\n> ").into_bytes());
@@ -607,16 +651,23 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                         .output_tx
                         .send(timeline_frame(AgentSessionTimelineKind::Activity, &text));
                 }
+                if normalized_item_type(item).as_deref() == Some("agentmessage") {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        let text = text.trim();
+                        if !text.is_empty() {
+                            if let Ok(mut messages) = context.completed_agent_messages.lock() {
+                                messages.push(text.to_string());
+                            }
+                            let _ = context.output_tx.send(timeline_frame(
+                                AgentSessionTimelineKind::AgentProgress,
+                                text,
+                            ));
+                        }
+                    }
+                }
             }
         }
-        "item/agentMessage/delta" => {
-            if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
-                let _ = context.output_tx.send(timeline_frame(
-                    AgentSessionTimelineKind::AgentMessage,
-                    delta,
-                ));
-            }
-        }
+        "item/agentMessage/delta" => {}
         "item/commandExecution/outputDelta" => {
             if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
                 let _ = context.output_tx.send(timeline_frame(
@@ -626,6 +677,25 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             }
         }
         "turn/completed" => {
+            let final_message =
+                context
+                    .completed_agent_messages
+                    .lock()
+                    .ok()
+                    .and_then(|mut messages| {
+                        let final_message = messages.pop();
+                        messages.clear();
+                        final_message
+                    });
+            if let Some(text) = final_message {
+                let _ = context.output_tx.send(timeline_frame(
+                    AgentSessionTimelineKind::AgentMessage,
+                    &text,
+                ));
+            }
+            if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
+                *active_turn_id = None;
+            }
             let _ = context.event_tx.send(AgentProcessEvent::TurnCompleted {
                 timestamp_ms: now_ms(),
             });
@@ -643,7 +713,20 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         "thread/goal/cleared" => {
             let _ = context.event_tx.send(AgentProcessEvent::GoalCleared);
         }
-        "turn/started" | "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
+        "turn/started" => {
+            if let Ok(mut messages) = context.completed_agent_messages.lock() {
+                messages.clear();
+            }
+            if let Some(turn_id) = message.pointer("/params/turn/id").and_then(Value::as_str) {
+                if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
+                    *active_turn_id = Some(turn_id.to_string());
+                }
+            }
+            let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
+                timestamp_ms: now_ms(),
+            });
+        }
+        "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
             let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
                 timestamp_ms: now_ms(),
             });
@@ -653,8 +736,7 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
 }
 
 fn activity_text_from_item(item: &Value, completed: bool) -> Option<String> {
-    let item_type = item.get("type")?.as_str()?;
-    let normalized = item_type.replace(['_', '-'], "").to_ascii_lowercase();
+    let normalized = normalized_item_type(item)?;
     let text = match normalized.as_str() {
         "commandexecution" if !completed => {
             let command = value_as_text(item.get("command"))?;
@@ -686,6 +768,15 @@ fn activity_text_from_item(item: &Value, completed: bool) -> Option<String> {
         _ => return None,
     };
     Some(truncate_activity_text(&text, 220))
+}
+
+fn normalized_item_type(item: &Value) -> Option<String> {
+    Some(
+        item.get("type")?
+            .as_str()?
+            .replace(['_', '-'], "")
+            .to_ascii_lowercase(),
+    )
 }
 
 fn value_as_text(value: Option<&Value>) -> Option<String> {
@@ -1201,6 +1292,35 @@ fn turn_start_message(
     })
 }
 
+fn turn_steer_message(
+    request_id: u64,
+    thread_id: &str,
+    turn_id: &str,
+    text: &str,
+    attachments: &[AgentTurnAttachment],
+) -> Value {
+    let mut input = attachments
+        .iter()
+        .filter(|attachment| attachment.is_image)
+        .map(
+            |attachment| json!({ "type": "localImage", "path": attachment.path.to_string_lossy() }),
+        )
+        .collect::<Vec<_>>();
+    input.push(json!({
+        "type": "text",
+        "text": prompt_with_file_attachments(text, attachments, false)
+    }));
+    json!({
+        "method": "turn/steer",
+        "id": request_id,
+        "params": {
+            "threadId": thread_id,
+            "expectedTurnId": turn_id,
+            "input": input
+        }
+    })
+}
+
 fn write_json(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), AgentConsoleError> {
     let mut line = serde_json::to_vec(value)
         .map_err(|e| AgentConsoleError::new("app_server_encode_failed", e.to_string()))?;
@@ -1282,6 +1402,8 @@ mod tests {
             event_tx,
             stdin: dummy_stdin(),
             thread_id: Arc::new(Mutex::new(Some("t".into()))),
+            active_turn_id: Arc::new(Mutex::new(None)),
+            completed_agent_messages: Arc::new(Mutex::new(Vec::new())),
             pending_turns: Arc::new(Mutex::new(VecDeque::new())),
             pending_goal_updates: Arc::new(Mutex::new(VecDeque::new())),
             runtime_catalog: Arc::new(Mutex::new(AgentRuntimeCatalog {
@@ -1313,6 +1435,35 @@ mod tests {
             AgentProcessEvent::TurnCompleted { .. }
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn turn_notifications_track_the_active_turn_for_steering() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({"method":"turn/started","params":{"threadId":"t","turn":{"id":"turn-7"}}}),
+            &context,
+        );
+        assert_eq!(
+            context.active_turn_id.lock().unwrap().as_deref(),
+            Some("turn-7")
+        );
+        handle_server_message(
+            &json!({"method":"turn/completed","params":{"threadId":"t","turn":{"id":"turn-7"}}}),
+            &context,
+        );
+        assert!(context.active_turn_id.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn steer_message_uses_the_active_turn_precondition() {
+        let message = turn_steer_message(101, "thread-1", "turn-7", "Ajusta también esto", &[]);
+        assert_eq!(message["method"], "turn/steer");
+        assert_eq!(message["params"]["threadId"], "thread-1");
+        assert_eq!(message["params"]["expectedTurnId"], "turn-7");
+        assert_eq!(message["params"]["input"][0]["text"], "Ajusta también esto");
     }
 
     #[test]
@@ -1384,19 +1535,34 @@ mod tests {
     }
 
     #[test]
-    fn agent_delta_is_forwarded_as_timeline_frame() {
+    fn completed_agent_messages_are_promoted_from_progress_to_final_output() {
         let (tx, rx) = mpsc::channel();
-        let (event_tx, _event_rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
         let context = dummy_context(tx, event_tx);
         handle_server_message(
-            &json!({"method":"item/agentMessage/delta","params":{"delta":"hello"}}),
+            &json!({
+                "method":"item/completed",
+                "params":{"item":{"id":"message-1","type":"agentMessage","text":"**Hello** world"}}
+            }),
             &context,
         );
 
-        let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
-        assert!(frame.starts_with("\u{1d}TINTO_TIMELINE "));
-        assert!(frame.contains("\"kind\":\"agent_message\""));
-        assert!(frame.contains("\"text\":\"hello\""));
+        let progress = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(progress.contains("\"kind\":\"agent_progress\""));
+        assert!(progress.contains("**Hello** world"));
+
+        handle_server_message(
+            &json!({"method":"turn/completed","params":{"turn":{"id":"turn-1"}}}),
+            &context,
+        );
+
+        let final_message = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(final_message.contains("\"kind\":\"agent_message\""));
+        assert!(final_message.contains("**Hello** world"));
+        assert!(matches!(
+            event_rx.recv().unwrap(),
+            AgentProcessEvent::TurnCompleted { .. }
+        ));
     }
 
     #[test]

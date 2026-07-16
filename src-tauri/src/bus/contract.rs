@@ -289,10 +289,19 @@ pub struct AgentSessionOutput {
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionTimelineKind {
     UserMessage,
+    SteerMessage,
     AgentMessage,
+    AgentProgress,
     CommandOutput,
     Activity,
     Lifecycle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionAttachment {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_image: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -302,6 +311,8 @@ pub struct AgentSessionTimelineItem {
     pub kind: AgentSessionTimelineKind,
     pub text: String,
     pub timestamp_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AgentSessionAttachment>,
 }
 
 /// Guarda de tamaño para contenido de archivos/blobs.
@@ -318,6 +329,8 @@ pub struct AgentJournalSessionSummary {
     pub ended_at_ms: Option<u64>,
     pub updated_at_ms: u64,
     pub event_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_user_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_kind: Option<AgentSessionTimelineKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -757,6 +770,7 @@ mod tests {
                 kind: AgentSessionTimelineKind::AgentMessage,
                 text: "Listo".into(),
                 timestamp_ms: 1760000000101,
+                attachments: Vec::new(),
             }],
             runtime_options: AgentSessionRuntimeOptions {
                 model: Some("gpt-5.5".into()),
@@ -903,6 +917,7 @@ mod tests {
             kind: AgentSessionTimelineKind::AgentMessage,
             text: "Hecho".into(),
             timestamp_ms: 1760000000001,
+            attachments: Vec::new(),
         };
 
         let json = serde_json::to_value(&item).unwrap();

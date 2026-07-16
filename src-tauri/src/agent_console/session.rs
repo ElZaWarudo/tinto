@@ -184,6 +184,7 @@ impl AgentSessionRecord {
         input: &[u8],
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
+        self.error = None;
         self.note_turn_activity(now_ms());
         let planned_input = plan_mode_input(self.plan_mode.as_ref(), input);
         let input = planned_input.as_deref().unwrap_or(input);
@@ -214,6 +215,7 @@ impl AgentSessionRecord {
         attachments: &[AgentTurnAttachment],
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
+        self.error = None;
         self.note_turn_activity(now_ms());
         let mut input = text.as_bytes().to_vec();
         input.push(b'\r');
@@ -253,6 +255,37 @@ impl AgentSessionRecord {
         }
         let process = self.running_process_mut()?;
         process.write_turn(&text, &runtime_attachments, options)
+    }
+
+    pub fn steer_turn(
+        &mut self,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        self.error = None;
+        if self.turn_status != AgentSessionTurnStatus::Working {
+            return Err(AgentConsoleError::new(
+                "steer_unavailable",
+                "no hay un turno activo que intervenir",
+            ));
+        }
+        let runtime_attachments = if let Some(distro) = self.wsl_distro.as_deref() {
+            attachments
+                .iter()
+                .map(|attachment| {
+                    attachment_path_for_wsl(&attachment.path, distro).map(|path| {
+                        AgentTurnAttachment {
+                            path,
+                            is_image: attachment.is_image,
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            attachments.to_vec()
+        };
+        self.running_process_mut()?
+            .steer_turn(text, &runtime_attachments)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
@@ -405,6 +438,12 @@ impl AgentSessionRecord {
             AgentProcessEvent::TurnCompleted { timestamp_ms } => {
                 self.record_turn_done(timestamp_ms)
             }
+            AgentProcessEvent::Error { error } => {
+                self.error = Some(error);
+                self.turn_started_at_ms = None;
+                self.turn_status = AgentSessionTurnStatus::Waiting;
+                Ok(())
+            }
             AgentProcessEvent::GoalUpdated { goal } => {
                 self.goal = Some(goal);
                 Ok(())
@@ -555,7 +594,14 @@ impl AgentSessionRecord {
     }
 
     pub fn record_turn_done(&mut self, timestamp_ms: u64) -> Result<(), AgentConsoleError> {
-        self.refresh_turn_checkpoints(timestamp_ms, true)
+        if let Err(error) = self.refresh_turn_checkpoints(timestamp_ms, true) {
+            self.pending_turn_signature = None;
+            self.pending_turn_seen_at_ms = None;
+            self.turn_started_at_ms = None;
+            self.turn_status = AgentSessionTurnStatus::Waiting;
+            self.error = Some(error);
+        }
+        Ok(())
     }
 
     fn refresh_change_log(&mut self) -> Result<(), AgentConsoleError> {
@@ -595,11 +641,7 @@ impl AgentSessionRecord {
         if changes.is_empty() {
             self.pending_turn_signature = None;
             self.pending_turn_seen_at_ms = None;
-            if force_close
-                || self
-                    .last_output_at_ms
-                    .is_none_or(|last| now_ms.saturating_sub(last) >= OUTPUT_QUIET_MS)
-            {
+            if force_close {
                 self.turn_started_at_ms = None;
                 self.turn_status = AgentSessionTurnStatus::Waiting;
             }
@@ -622,6 +664,11 @@ impl AgentSessionRecord {
                 .pending_turn_seen_at_ms
                 .is_some_and(|seen| now_ms.saturating_sub(seen) < FILESYSTEM_QUIET_MS)
         {
+            self.turn_status = AgentSessionTurnStatus::Settling;
+            return Ok(());
+        }
+
+        if !force_close {
             self.turn_status = AgentSessionTurnStatus::Settling;
             return Ok(());
         }
@@ -1390,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_turn_closes_after_output_and_filesystem_quiet() {
+    fn changed_turn_closes_only_after_explicit_provider_completion() {
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "before\n");
         repo.write("other.txt", "other before\n");
@@ -1422,6 +1469,15 @@ mod tests {
 
         session
             .refresh_turn_checkpoints(10 + OUTPUT_QUIET_MS + FILESYSTEM_QUIET_MS + 2, false)
+            .unwrap();
+
+        assert!(session.to_contract().turn_checkpoints.is_empty());
+        assert_eq!(
+            session.to_contract().turn_status,
+            AgentSessionTurnStatus::Settling
+        );
+        session
+            .record_turn_done(10 + OUTPUT_QUIET_MS + FILESYSTEM_QUIET_MS + 3)
             .unwrap();
 
         let contract = session.to_contract();
@@ -1496,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn output_only_turn_does_not_create_empty_checkpoint() {
+    fn output_only_turn_stays_working_until_provider_completes_it() {
         let repo = TempRepo::with_initial_commit();
         let checkpoint = create_checkpoint(
             repo.path(),
@@ -1522,7 +1578,7 @@ mod tests {
 
         let contract = session.to_contract();
         assert!(contract.turn_checkpoints.is_empty());
-        assert_eq!(contract.turn_status, AgentSessionTurnStatus::Waiting);
+        assert_eq!(contract.turn_status, AgentSessionTurnStatus::Working);
     }
 
     #[test]
@@ -1551,5 +1607,34 @@ mod tests {
         let contract = session.to_contract();
         assert!(contract.turn_checkpoints.is_empty());
         assert_eq!(contract.turn_status, AgentSessionTurnStatus::Waiting);
+    }
+
+    #[test]
+    fn checkpoint_failure_does_not_leave_a_completed_turn_working() {
+        let repo = TempRepo::with_initial_commit();
+        let checkpoint = create_checkpoint(
+            repo.path(),
+            "missing-repo-turn-session",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+        let mut session = AgentSessionRecord::new(
+            "missing-repo-turn-session".into(),
+            repo.path().to_path_buf(),
+            "codex".into(),
+            1,
+            Some(checkpoint),
+            CheckpointConfig::default(),
+            CheckpointBackend::Local,
+        );
+        session.record_output_activity(10);
+        std::fs::remove_dir_all(repo.path()).unwrap();
+
+        session.record_turn_done(11).unwrap();
+
+        let contract = session.to_contract();
+        assert_eq!(contract.turn_status, AgentSessionTurnStatus::Waiting);
+        assert!(contract.error.is_some());
     }
 }

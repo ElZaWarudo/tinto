@@ -17,6 +17,8 @@ use zip::ZipArchive;
 
 use super::contract::{SecretFinding, SecretScanEngine, SecretScanState, SecretScanStatus};
 use crate::git::{DiffLineKind, FileDiff, RepoStatus};
+#[cfg(target_os = "windows")]
+use crate::windows_process::hide_console;
 
 const GITLEAKS_TIMEOUT_SECONDS: u64 = 8;
 const FALLBACK_RULE_ID: &str = "heuristic-possible-secret";
@@ -271,7 +273,11 @@ fn install_managed_gitleaks() -> Result<PathBuf, String> {
 }
 
 fn run_install_attempt(attempt: &InstallAttempt) -> (bool, String) {
-    let output = Command::new(attempt.program).args(attempt.args).output();
+    let mut command = Command::new(attempt.program);
+    command.args(attempt.args);
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
+    let output = command.output();
     match output {
         Ok(output) => {
             let detail = if output.status.success() {
@@ -829,6 +835,8 @@ fn scan_with_gitleaks(
     let version = gitleaks_version(&gitleaks);
     let report_path = std::env::temp_dir().join(format!("tinto-gitleaks-{}.json", Uuid::new_v4()));
     let mut command = Command::new(gitleaks);
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
     if let Some(path) = config_path {
         command.arg("--config").arg(path);
     }
@@ -869,7 +877,11 @@ fn scan_with_gitleaks(
 }
 
 fn gitleaks_version(binary: &Path) -> Option<String> {
-    let output = Command::new(binary).arg("version").output().ok()?;
+    let mut command = Command::new(binary);
+    command.arg("version");
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }

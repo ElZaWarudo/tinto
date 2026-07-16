@@ -13,7 +13,7 @@ use std::{fs, io};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::contract::{
@@ -26,6 +26,8 @@ use super::{BusHandle, RepoResolveError, ResolvedRepo};
 use crate::git::{
     CommitInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Git2Engine, GitEngine, GitError,
 };
+#[cfg(target_os = "windows")]
+use crate::windows_process::hide_console;
 use crate::workbench::RepoSource;
 use crate::wsl_agent::launcher::request_wsl_agent;
 use crate::wsl_agent::protocol::{AgentRequest, AgentResponse, PROTOCOL_VERSION};
@@ -57,14 +59,14 @@ printf '%s\n' "$TINTO_TURN_DONE_MARKER"
 <!-- tinto-iade:end -->
 "#;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoFetchPreview {
     pub remote: String,
     pub host: String,
     pub sanitized_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoFetchResult {
     pub remote: String,
     pub host: String,
@@ -219,10 +221,22 @@ pub async fn get_repo_fetch_preview(
             let repo_abs = resolved.path;
             blocking(move || repo_fetch_preview(&repo_abs, None)).await
         }
-        RepoSource::Wsl => Err(CommandError::new(
-            "unsupported-repo-source",
-            "fetch opt-in solo está disponible para repos locales",
-        )),
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::RepoFetchPreview {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                    },
+                )? {
+                    AgentResponse::RepoFetchPreview { preview } => Ok(preview),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
     }
 }
 
@@ -246,10 +260,24 @@ pub async fn fetch_repo(
             let repo_abs = resolved.path;
             blocking(move || fetch_repo_local(&repo_abs, &remote, &confirmed_host)).await
         }
-        RepoSource::Wsl => Err(CommandError::new(
-            "unsupported-repo-source",
-            "fetch opt-in solo está disponible para repos locales",
-        )),
+        RepoSource::Wsl => {
+            blocking(move || {
+                match wsl_request(
+                    resolved.distro,
+                    AgentRequest::FetchRepo {
+                        protocol_version: PROTOCOL_VERSION,
+                        repo: resolved.path,
+                        allowed_repos: resolved.wsl_repos,
+                        remote,
+                        confirmed_host,
+                    },
+                )? {
+                    AgentResponse::RepoFetchResult { result } => Ok(result),
+                    response => Err(unexpected_wsl_response(response)),
+                }
+            })
+            .await
+        }
     }
 }
 
@@ -262,19 +290,19 @@ pub(crate) fn gitleaks_setup_status() -> GitleaksSetupStatus {
         };
     };
 
-    let version = Command::new(&path)
-        .arg("version")
-        .output()
-        .ok()
-        .and_then(|output| {
-            if !output.status.success() {
-                return None;
-            }
-            let raw = str::from_utf8(&output.stdout).ok()?;
-            raw.lines()
-                .find(|line| !line.trim().is_empty())
-                .map(|line| line.trim().to_string())
-        });
+    let mut command = Command::new(&path);
+    command.arg("version");
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
+    let version = command.output().ok().and_then(|output| {
+        if !output.status.success() {
+            return None;
+        }
+        let raw = str::from_utf8(&output.stdout).ok()?;
+        raw.lines()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| line.trim().to_string())
+    });
 
     GitleaksSetupStatus {
         installed: true,
@@ -351,13 +379,17 @@ pub(crate) fn fetch_repo_local(
         ));
     }
 
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(repo_abs)
         .arg("fetch")
         .arg("--prune")
         .arg(&preview.remote)
-        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
+    let output = command
         .output()
         .map_err(|_| CommandError::new("git-unavailable", "git no está disponible"))?;
 

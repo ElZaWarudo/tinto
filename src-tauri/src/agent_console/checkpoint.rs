@@ -16,6 +16,8 @@ use crate::bus::contract::{
 };
 
 use super::AgentConsoleError;
+#[cfg(target_os = "windows")]
+use crate::windows_process::hide_console;
 
 const DEFAULT_RETENTION_PER_REPO: usize = 50;
 const DEFAULT_MAX_CHECKPOINT_BYTES: u64 = 100 * 1024 * 1024;
@@ -580,10 +582,11 @@ fn change(path: &Path, kind: AgentSessionChangeKind, timestamp_ms: u64) -> Agent
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<(), AgentConsoleError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo).args(args);
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
+    let output = command
         .output()
         .map_err(|e| AgentConsoleError::new("revert_failed", e.to_string()))?;
     if output.status.success() {
@@ -599,10 +602,11 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<(), AgentConsoleError> {
 fn git_file_exists_at(repo: &Path, hash: &str, rel: &Path) -> Result<bool, AgentConsoleError> {
     let rel_text = rel.to_string_lossy();
     let spec = format!("{hash}:{rel_text}");
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["cat-file", "-e", &spec])
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo).args(["cat-file", "-e", &spec]);
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
+    let output = command
         .output()
         .map_err(|e| AgentConsoleError::new("revert_failed", e.to_string()))?;
     Ok(output.status.success())

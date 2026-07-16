@@ -340,7 +340,15 @@ impl AgentJournal {
                 WHERE e.session_id = s.id
                 ORDER BY e.seq DESC
                 LIMIT 1
-              ) AS last_event_json
+              ) AS last_event_json,
+              (
+                SELECT payload_json
+                FROM agent_events e
+                WHERE e.session_id = s.id
+                  AND json_extract(e.payload_json, '$.kind') = 'user_message'
+                ORDER BY e.seq ASC
+                LIMIT 1
+              ) AS first_user_event_json
             FROM agent_sessions s
             ORDER BY s.updated_at_ms DESC, s.started_at_ms DESC
             LIMIT ?1
@@ -351,6 +359,11 @@ impl AgentJournal {
             let last_event = last_event_json
                 .as_deref()
                 .and_then(|json| serde_json::from_str::<AgentSessionTimelineItem>(json).ok());
+            let first_user_event_json: Option<String> = row.get(10)?;
+            let first_user_message = first_user_event_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<AgentSessionTimelineItem>(json).ok())
+                .map(|event| event.text);
             Ok(AgentJournalSessionSummary {
                 id: row.get(0)?,
                 repo: PathBuf::from(row.get::<_, String>(1)?),
@@ -361,6 +374,7 @@ impl AgentJournal {
                 ended_at_ms: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
                 updated_at_ms: row.get::<_, i64>(7)? as u64,
                 event_count: row.get::<_, i64>(8)? as usize,
+                first_user_message,
                 last_event_kind: last_event.as_ref().map(|event| event.kind),
                 last_event_text: last_event.as_ref().map(|event| event.text.clone()),
                 last_event_at_ms: last_event.as_ref().map(|event| event.timestamp_ms),
@@ -622,6 +636,7 @@ mod tests {
                 kind: AgentSessionTimelineKind::AgentMessage,
                 text: "respuesta".to_string(),
                 timestamp_ms: 300,
+                attachments: Vec::new(),
             })
             .expect("event 2");
         journal
@@ -631,6 +646,7 @@ mod tests {
                 kind: AgentSessionTimelineKind::UserMessage,
                 text: "hola".to_string(),
                 timestamp_ms: 200,
+                attachments: Vec::new(),
             })
             .expect("event 1");
 
@@ -647,10 +663,21 @@ mod tests {
         journal
             .record_timeline_item(&AgentSessionTimelineItem {
                 session_id: "sess-1".to_string(),
+                id: "event-user".to_string(),
+                kind: AgentSessionTimelineKind::UserMessage,
+                text: "Revisa la autenticación del proyecto".to_string(),
+                timestamp_ms: 200,
+                attachments: Vec::new(),
+            })
+            .expect("user event");
+        journal
+            .record_timeline_item(&AgentSessionTimelineItem {
+                session_id: "sess-1".to_string(),
                 id: "event-1".to_string(),
                 kind: AgentSessionTimelineKind::AgentMessage,
                 text: "preview".to_string(),
                 timestamp_ms: 300,
+                attachments: Vec::new(),
             })
             .expect("event");
 
@@ -658,7 +685,11 @@ mod tests {
 
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, "sess-1");
-        assert_eq!(summaries[0].event_count, 1);
+        assert_eq!(summaries[0].event_count, 2);
+        assert_eq!(
+            summaries[0].first_user_message.as_deref(),
+            Some("Revisa la autenticación del proyecto")
+        );
         assert_eq!(
             summaries[0].last_event_kind,
             Some(AgentSessionTimelineKind::AgentMessage)
@@ -677,6 +708,7 @@ mod tests {
                 kind: AgentSessionTimelineKind::AgentMessage,
                 text: "preview".to_string(),
                 timestamp_ms: 300,
+                attachments: Vec::new(),
             })
             .expect("event");
 
@@ -706,6 +738,7 @@ mod tests {
                 kind: AgentSessionTimelineKind::UserMessage,
                 text: "first".to_string(),
                 timestamp_ms: 200,
+                attachments: Vec::new(),
             })
             .expect("event 1");
         journal
@@ -715,6 +748,7 @@ mod tests {
                 kind: AgentSessionTimelineKind::AgentMessage,
                 text: "second".to_string(),
                 timestamp_ms: 300,
+                attachments: Vec::new(),
             })
             .expect("event 2");
 
@@ -859,6 +893,7 @@ mod tests {
                 kind: AgentSessionTimelineKind::Lifecycle,
                 text: "Session started".to_string(),
                 timestamp_ms: 200,
+                attachments: Vec::new(),
             })
             .expect("event");
 

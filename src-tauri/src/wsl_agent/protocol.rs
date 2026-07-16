@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_console::checkpoint::CheckpointRecord;
+use crate::bus::commands::{RepoFetchPreview, RepoFetchResult};
 use crate::bus::contract::{
     AgentSessionChange, FileContent, GitleaksInstallResult, GitleaksSetupStatus, RepoDelta,
     RepoTree, SubscriptionTarget,
@@ -167,6 +168,18 @@ pub enum AgentRequest {
         repo: PathBuf,
         allowed_repos: Vec<PathBuf>,
     },
+    RepoFetchPreview {
+        protocol_version: u16,
+        repo: PathBuf,
+        allowed_repos: Vec<PathBuf>,
+    },
+    FetchRepo {
+        protocol_version: u16,
+        repo: PathBuf,
+        allowed_repos: Vec<PathBuf>,
+        remote: String,
+        confirmed_host: String,
+    },
     CreateGitWorktree {
         protocol_version: u16,
         repo: PathBuf,
@@ -319,6 +332,12 @@ pub enum AgentResponse {
     },
     GitReviewSummary {
         summary: GitReviewSummary,
+    },
+    RepoFetchPreview {
+        preview: RepoFetchPreview,
+    },
+    RepoFetchResult {
+        result: RepoFetchResult,
     },
     GitWorktreeCreated {
         path: PathBuf,
@@ -547,6 +566,12 @@ impl AgentRequest {
                 protocol_version, ..
             }
             | Self::GitReviewSummary {
+                protocol_version, ..
+            }
+            | Self::RepoFetchPreview {
+                protocol_version, ..
+            }
+            | Self::FetchRepo {
                 protocol_version, ..
             }
             | Self::CreateGitWorktree {
