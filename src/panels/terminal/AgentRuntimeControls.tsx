@@ -125,7 +125,7 @@ export function AgentRuntimeControls({
         'input[type="radio"]:checked:not(:disabled)',
       );
       const first = panelRef.current?.querySelector<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled)',
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled)",
       );
       (checked ?? first)?.focus();
     });
@@ -165,6 +165,7 @@ export function AgentRuntimeControls({
       speed,
       icon: nextPresetIcon(presets),
       color: nextPresetColor(presets),
+      favorite: false,
     });
   };
   const savePresetDraft = () => {
@@ -177,7 +178,8 @@ export function AgentRuntimeControls({
     if (
       presets.some(
         (preset) =>
-          preset.id !== presetDraft.id && preset.name.toLocaleLowerCase() === name.toLocaleLowerCase(),
+          preset.id !== presetDraft.id &&
+          preset.name.toLocaleLowerCase() === name.toLocaleLowerCase(),
       )
     ) {
       setPresetError("Ya existe un preset con ese nombre.");
@@ -257,6 +259,19 @@ export function AgentRuntimeControls({
           ▾
         </span>
       </button>
+      <button
+        aria-pressed={speed === "fast"}
+        className="agent-panel__runtime-fast"
+        disabled={disabled || !speedSupportedByModel(catalog, model, "fast")}
+        onClick={() => {
+          setSelectedPresetId(null);
+          onSpeedChange(speed === "fast" ? "standard" : "fast");
+        }}
+        title={speed === "fast" ? "Desactivar modo Fast" : "Activar modo Fast"}
+        type="button"
+      >
+        Fast
+      </button>
       {notice && (
         <span className="agent-panel__runtime-notice" role="status" aria-live="polite">
           {notice}
@@ -322,6 +337,14 @@ export function AgentRuntimeControls({
                   setPresetError(null);
                 }}
                 onSave={savePresetDraft}
+                onSetFavorite={(preset) =>
+                  storePresets(
+                    presets.map((item) => ({
+                      ...item,
+                      favorite: item.id === preset.id ? !preset.favorite : false,
+                    })),
+                  )
+                }
                 presets={presets}
               />
             )}
@@ -395,6 +418,7 @@ function RuntimePresetPanel({
   onDraftChange,
   onEdit,
   onSave,
+  onSetFavorite,
   presets,
 }: {
   activePresetId: string | null;
@@ -408,6 +432,7 @@ function RuntimePresetPanel({
   onDraftChange: (draft: RuntimePreset) => void;
   onEdit: (preset: RuntimePreset) => void;
   onSave: () => void;
+  onSetFavorite: (preset: RuntimePreset) => void;
   presets: RuntimePreset[];
 }) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -477,7 +502,12 @@ function RuntimePresetPanel({
             <span>Modelo</span>
             <select
               onChange={(event) =>
-                onDraftChange({ ...draft, model: event.target.value, reasoning: "auto", speed: "standard" })
+                onDraftChange({
+                  ...draft,
+                  model: event.target.value,
+                  reasoning: "auto",
+                  speed: "standard",
+                })
               }
               value={draft.model}
             >
@@ -587,6 +617,20 @@ function RuntimePresetPanel({
                     ✓
                   </span>
                 )}
+              </button>
+              <button
+                aria-label={
+                  preset.favorite
+                    ? `Quitar ${preset.name} como preset favorito`
+                    : `Usar ${preset.name} al iniciar los chats`
+                }
+                aria-pressed={preset.favorite}
+                className="agent-panel__preset-favorite"
+                onClick={() => onSetFavorite(preset)}
+                title={preset.favorite ? "Preset favorito" : "Usar al iniciar los chats"}
+                type="button"
+              >
+                {preset.favorite ? "★" : "☆"}
               </button>
               <button
                 aria-label={`Editar preset ${preset.name}`}
@@ -769,10 +813,7 @@ function catalogStateLabel(catalog: AgentRuntimeCatalog | null): string {
   return "Codex";
 }
 
-function runtimePresetSummary(
-  preset: RuntimePreset,
-  catalog: AgentRuntimeCatalog | null,
-): string {
+function runtimePresetSummary(preset: RuntimePreset, catalog: AgentRuntimeCatalog | null): string {
   return [
     codexModelLabel(catalog, preset.model),
     codexReasoningLabel(preset.reasoning),
