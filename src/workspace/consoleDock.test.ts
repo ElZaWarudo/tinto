@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { consoleDock } from "./consoleDock";
-import { PANEL_AGENT_TERMINAL, agentTerminalPanelId } from "./panels";
+import { agentConversationTabTitle, consoleDock } from "./consoleDock";
+import { PANEL_AGENT_TERMINAL, TAB_AGENT_CONVERSATION, agentTerminalPanelId } from "./panels";
 
 function fakeApi() {
   const removePanelCallbacks: Array<(panel: (typeof panels)[string]) => void> = [];
@@ -61,6 +61,14 @@ function fakeApi() {
 }
 
 describe("consoleDock", () => {
+  it("identifies a conversation tab with its agent, project, and first-message title", () => {
+    expect(
+      agentConversationTabTitle(
+        { sessionId: "sess-1", repo: "/work/api", agentType: "codex" },
+        "Corrige la autenticación",
+      ),
+    ).toBe("Codex · api · Corrige la autenticación");
+  });
   beforeEach(() => {
     consoleDock.resetForTests();
   });
@@ -80,7 +88,8 @@ describe("consoleDock", () => {
     expect(api.addPanel).toHaveBeenCalledWith({
       id: agentTerminalPanelId("sess-123456789"),
       component: PANEL_AGENT_TERMINAL,
-      title: "codex sess-123",
+      tabComponent: TAB_AGENT_CONVERSATION,
+      title: "Codex · api",
       params: {
         sessionId: "sess-123456789",
         repo: "/r/api",
@@ -109,6 +118,19 @@ describe("consoleDock", () => {
     consoleDock.register(api as never);
 
     expect(api.addPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels tabs by agent and project and only numbers repeated chats", () => {
+    const api = fakeApi();
+    consoleDock.register(api as never);
+
+    consoleDock.openTerminal({ sessionId: "sess-1", repo: "/r/api", agentType: "codex" });
+    consoleDock.openTerminal({ sessionId: "sess-2", repo: "/r/api", agentType: "codex" });
+    consoleDock.openTerminal({ sessionId: "sess-3", repo: "/r/web", agentType: "codex" });
+
+    expect(api._panels[agentTerminalPanelId("sess-1")].title).toBe("Codex · api");
+    expect(api._panels[agentTerminalPanelId("sess-2")].title).toBe("Codex · api · Chat 2");
+    expect(api._panels[agentTerminalPanelId("sess-3")].title).toBe("Codex · web");
   });
 
   it("does not steal focus from existing terminal tabs while remounting", () => {
@@ -158,7 +180,8 @@ describe("consoleDock", () => {
     expect(secondApi.addPanel).toHaveBeenCalledWith({
       id: agentTerminalPanelId("sess-2"),
       component: PANEL_AGENT_TERMINAL,
-      title: "codex sess-2",
+      tabComponent: TAB_AGENT_CONVERSATION,
+      title: "Codex · b",
       params: {
         sessionId: "sess-2",
         repo: "/r/b",
@@ -179,7 +202,8 @@ describe("consoleDock", () => {
     expect(secondApi.addPanel).toHaveBeenCalledWith({
       id: agentTerminalPanelId("sess-1"),
       component: PANEL_AGENT_TERMINAL,
-      title: "codex sess-1",
+      tabComponent: TAB_AGENT_CONVERSATION,
+      title: "Codex · a",
       params: {
         sessionId: "sess-1",
         repo: "/r/a",

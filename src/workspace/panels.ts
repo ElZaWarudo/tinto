@@ -13,6 +13,7 @@ export const PANEL_AGENT_TERMINAL = "agent-terminal";
 
 /** Custom dockview tab for project panels (shows a change indicator). */
 export const TAB_REPO = "repoTab";
+export const TAB_AGENT_CONVERSATION = "agentConversationTab";
 
 /** Panel id for a repo's detail panel, keyed by its canonical path. */
 export function repoPanelId(canonicalPath: string): string {

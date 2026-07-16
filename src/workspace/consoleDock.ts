@@ -2,6 +2,7 @@ import type { DockviewApi } from "dockview-react";
 import type { SerializedDockview } from "dockview-react";
 import {
   PANEL_AGENT_TERMINAL,
+  TAB_AGENT_CONVERSATION,
   agentTerminalPanelId,
   sessionIdFromAgentTerminalPanelId,
 } from "./panels";
@@ -19,10 +20,36 @@ interface EnsureTerminalOptions {
   activate?: boolean;
 }
 
-function terminalTitle(params: AgentTerminalOpenParams): string {
-  const agent = params.agentType ?? "agent";
-  const short = params.sessionId.length > 8 ? params.sessionId.slice(0, 8) : params.sessionId;
-  return `${agent} ${short}`;
+export function agentTerminalTitle(params: AgentTerminalOpenParams, chatNumber = 1): string {
+  const agent = agentTitleLabel(params.agentType);
+  const project = projectTitleLabel(params.repo);
+  return `${agent} · ${project}${chatNumber > 1 ? ` · Chat ${chatNumber}` : ""}`;
+}
+
+export function agentConversationTabTitle(
+  params: AgentTerminalOpenParams,
+  conversationTitle: string,
+): string {
+  return `${agentTitleLabel(params.agentType)} · ${projectTitleLabel(params.repo)} · ${conversationTitle}`;
+}
+
+function agentTitleLabel(agentType: string | undefined): string {
+  const normalized = agentType?.trim().toLocaleLowerCase();
+  if (normalized === "codex") return "Codex";
+  if (normalized === "claude") return "Claude";
+  if (normalized === "opencode") return "OpenCode";
+  return agentType?.trim() || "Agent";
+}
+
+function projectTitleLabel(repo: string | undefined): string {
+  const normalized = repo?.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized?.split("/").pop() || "Proyecto";
+}
+
+function terminalGroupKey(params: AgentTerminalOpenParams): string {
+  return `${params.agentType?.trim().toLocaleLowerCase() || "agent"}\n${
+    params.repo?.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase() || ""
+  }`;
 }
 
 function hasPanels(layout: SerializedDockview | null): boolean {
@@ -61,6 +88,8 @@ class ConsoleDock {
   private api: DockviewApi | null = null;
   private pending = new Map<string, AgentTerminalOpenParams>();
   private terminals = new Map<string, AgentTerminalOpenParams>();
+  private terminalChatNumbers = new Map<string, number>();
+  private nextChatNumberByGroup = new Map<string, number>();
   private forgetTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposers: Array<() => void> = [];
   private listeners = new Set<() => void>();
@@ -133,6 +162,7 @@ class ConsoleDock {
     this.cancelForgetTerminal(id);
     this.pending.delete(id);
     this.terminals.delete(id);
+    this.terminalChatNumbers.delete(id);
     const api = this.api;
     const panel = api?.getPanel(id);
     if (api && panel) {
@@ -163,7 +193,8 @@ class ConsoleDock {
       api.addPanel({
         id,
         component: PANEL_AGENT_TERMINAL,
-        title: terminalTitle(params),
+        title: agentTerminalTitle(params, this.terminalChatNumbers.get(id) ?? 1),
+        tabComponent: TAB_AGENT_CONVERSATION,
         params,
       });
       this.emit();
@@ -178,6 +209,12 @@ class ConsoleDock {
   private rememberTerminal(params: AgentTerminalOpenParams) {
     const id = agentTerminalPanelId(params.sessionId);
     this.cancelForgetTerminal(id);
+    if (!this.terminalChatNumbers.has(id)) {
+      const group = terminalGroupKey(params);
+      const next = (this.nextChatNumberByGroup.get(group) ?? 0) + 1;
+      this.nextChatNumberByGroup.set(group, next);
+      this.terminalChatNumbers.set(id, next);
+    }
     this.terminals.set(id, params);
   }
 
@@ -200,6 +237,7 @@ class ConsoleDock {
     const timer = setTimeout(() => {
       this.forgetTimers.delete(panelId);
       this.terminals.delete(panelId);
+      this.terminalChatNumbers.delete(panelId);
       this.pending.delete(panelId);
       this.emit();
     }, 250);
@@ -250,6 +288,8 @@ class ConsoleDock {
     this.api = null;
     this.pending.clear();
     this.terminals.clear();
+    this.terminalChatNumbers.clear();
+    this.nextChatNumberByGroup.clear();
     this.forgetTimers.forEach((timer) => clearTimeout(timer));
     this.forgetTimers.clear();
     this.disposers.forEach((dispose) => dispose());

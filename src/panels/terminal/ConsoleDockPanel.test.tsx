@@ -298,6 +298,7 @@ describe("ConsoleDockPanel detach drop", () => {
         started_at_ms: 1,
         updated_at_ms: 3,
         event_count: 2,
+        first_user_message: "Actualiza la autenticación y revisa las sesiones expiradas",
         last_event_kind: "agent_message",
         last_event_text: "Done with the refactor",
         last_event_at_ms: 3,
@@ -307,6 +308,9 @@ describe("ConsoleDockPanel detach drop", () => {
     const { unmount } = render(<ConsoleDockPanel />);
 
     expect(await screen.findByText("Sesiones recientes")).toBeInTheDocument();
+    expect(
+      screen.getByText("Actualiza la autenticación y revisa las sesiones expiradas"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Done with the refactor")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
@@ -540,7 +544,7 @@ describe("ConsoleDockPanel detach drop", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /mostrar api codex/i })).toBeInTheDocument();
     expect(screen.getByText("Activa")).toBeInTheDocument();
-    expect(screen.getByText(/codex \/ trabajando/i)).toBeInTheDocument();
+    expect(screen.getByText(/codex · api · trabajando/i)).toBeInTheDocument();
     expect(screen.getByText("I am updating the parser")).toBeInTheDocument();
     expect(screen.queryByTestId("console-empty")).toBeNull();
     unmount();
