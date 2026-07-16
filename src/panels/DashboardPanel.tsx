@@ -33,6 +33,97 @@ function useNow(intervalMs: number): number {
 
 const SKELETON_COUNT = 3;
 
+interface LoadingRepoPreview {
+  path: string;
+  name: string;
+}
+
+function DashboardLoading({
+  activeWorkbench,
+  repos,
+}: {
+  activeWorkbench: string | null;
+  repos: LoadingRepoPreview[];
+}) {
+  const previewRepos = repos.length
+    ? repos.slice(0, 6)
+    : Array.from({ length: SKELETON_COUNT }, (_, index) => ({
+        path: `loading-${index}`,
+        name: "Repositorio",
+      }));
+
+  return (
+    <div className="dashboard dashboard--loading" aria-busy="true">
+      <div
+        className="dashboard__loading-preview"
+        data-testid="dashboard-loading-preview"
+        aria-hidden="true"
+      >
+        <div className="dashboard__status-band">
+          <div className="dashboard__status-title">
+            <span className="dashboard__status-label">Bitácora del workbench</span>
+            <strong>{activeWorkbench ?? "Workbench activo"}</strong>
+          </div>
+          <dl className="dashboard__counters">
+            {[
+              ["Repos", repos.length],
+              ["Activos", 0],
+              ["Archivos", 0],
+              ["Señales", 0],
+              ["Bloqueados", 0],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+          <div className="dashboard__loading-actions">
+            <span />
+            <span />
+          </div>
+        </div>
+        <div className="dashboard__loading-filters">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="dashboard__ledger-ruler">
+          <span>Repo / rama</span>
+          <span>Estado de Git</span>
+          <span>Volumen de cambios</span>
+          <span>Señales</span>
+          <span>Inicio de Agent</span>
+        </div>
+        <div className="repo-ledger repo-ledger--loading" data-testid="skeletons">
+          {previewRepos.map((repo) => (
+            <div className="dashboard__loading-repo" key={repo.path}>
+              <span className="dashboard__loading-state" />
+              <strong>{repo.name}</strong>
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div
+        className="dashboard__loading-overlay"
+        data-testid="dashboard-loading-overlay"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="dashboard__loading-indicator">
+          <span className="dashboard__loading-spinner" aria-hidden="true" />
+          <strong>Cargando repos</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function pendingRepoDelta(repo: string): RepoDelta {
   return {
     repo,
@@ -67,29 +158,22 @@ export function DashboardPanel() {
   const { openRepo, addRepo, openAgents, openAgentTerminal, removeRepo } = useWorkspaceActions();
   const nowMs = useNow(1000);
 
+  const activeConfig = (state.config?.workbenches ?? []).find(
+    (workbench) => workbench.name === state.config?.active,
+  );
+
   if (!loaded) {
     return (
-      <div className="dashboard" aria-busy="true">
-        <div
-          className="dashboard__status-band dashboard__status-band--loading"
-          role="status"
-          aria-live="polite"
-        >
-          <span className="dashboard__status-label">Bitácora del workbench</span>
-          <strong>Cargando repos</strong>
-        </div>
-        <div className="repo-ledger repo-ledger--loading" data-testid="skeletons">
-          {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
-            <div className="repo-card repo-card--skeleton" key={i} />
-          ))}
-        </div>
-      </div>
+      <DashboardLoading
+        activeWorkbench={state.config?.active ?? null}
+        repos={(activeConfig?.repos ?? []).map((repo) => ({
+          path: repo.path,
+          name: busStore.displayName(repo.path),
+        }))}
+      />
     );
   }
 
-  const activeConfig = (state.config?.workbenches ?? []).find(
-    (w) => w.name === state.config?.active,
-  );
   const repoEntries = new Map((activeConfig?.repos ?? []).map((repo) => [repo.path, repo]));
   const configuredRepoEntries = new Map(
     (state.config?.workbenches ?? []).flatMap((workbench) =>

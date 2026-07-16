@@ -10,8 +10,8 @@ use crate::agent_console::checkpoint::{
 };
 use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
-    file_content_from_bytes, gitleaks_setup_status, list_repo_tree_capped,
-    read_file_content_bounded, read_media_content_bounded, validate_media_path,
+    fetch_repo_local, file_content_from_bytes, gitleaks_setup_status, list_repo_tree_capped,
+    read_file_content_bounded, read_media_content_bounded, repo_fetch_preview, validate_media_path,
     write_repo_agents_md_config, write_repo_gitleaks_config,
 };
 use crate::bus::contract::{
@@ -202,6 +202,26 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
         } => with_allowed_repo(&repo, &allowed_repos, || {
             Ok(AgentResponse::GitReviewSummary {
                 summary: git_review_summary_linux(&repo)?,
+            })
+        }),
+        AgentRequest::RepoFetchPreview {
+            repo,
+            allowed_repos,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            Ok(AgentResponse::RepoFetchPreview {
+                preview: repo_fetch_preview(&repo, None)?,
+            })
+        }),
+        AgentRequest::FetchRepo {
+            repo,
+            allowed_repos,
+            remote,
+            confirmed_host,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            Ok(AgentResponse::RepoFetchResult {
+                result: fetch_repo_local(&repo, &remote, &confirmed_host)?,
             })
         }),
         AgentRequest::CreateGitWorktree {

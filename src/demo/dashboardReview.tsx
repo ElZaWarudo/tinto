@@ -107,19 +107,23 @@ function installTauriFixture() {
 
 installTauriFixture();
 busStore.resetAll();
-busStore.loadWorkbench(
-  config,
-  [
-    repoDelta(REPOS.tinto, ["src/App.css", "src/workbench/MenuBar.tsx", "README.md"], 0),
-    repoDelta(
-      REPOS.passport,
-      ["src/agent-view.tsx", "vite.config.ts", "docs/agent-lens.md", "src/mobile.ts"],
-      1,
-    ),
-    repoDelta(REPOS.notes, ["src/routes/notes.ts", "tests/notes.test.ts"], 2),
-  ],
-  { available: true },
-);
+if (new URLSearchParams(window.location.search).get("state") === "loading") {
+  busStore.setConfig(config);
+} else {
+  busStore.loadWorkbench(
+    config,
+    [
+      repoDelta(REPOS.tinto, ["src/App.css", "src/workbench/MenuBar.tsx", "README.md"], 0),
+      repoDelta(
+        REPOS.passport,
+        ["src/agent-view.tsx", "vite.config.ts", "docs/agent-lens.md", "src/mobile.ts"],
+        1,
+      ),
+      repoDelta(REPOS.notes, ["src/routes/notes.ts", "tests/notes.test.ts"], 2),
+    ],
+    { available: true },
+  );
+}
 
 const actions: WorkspaceActions = {
   openRepo: () => {},

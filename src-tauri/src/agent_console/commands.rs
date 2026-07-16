@@ -26,8 +26,8 @@ use crate::bus::{
     contract::{
         AgentHostCommandResult, AgentHostCommandStatus, AgentJournalSessionSummary,
         AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog, AgentSession,
-        AgentSessionChangeLog, AgentSessionContextSummary, AgentSessionFeedback,
-        AgentSessionGoalStatus, AgentSessionOutput, AgentSessionResumeMode,
+        AgentSessionAttachment, AgentSessionChangeLog, AgentSessionContextSummary,
+        AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput, AgentSessionResumeMode,
         AgentSessionResumeResult, AgentSessionRuntimeOptions, AgentSessionStatus,
         AgentSessionTimelineItem, AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED,
         EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
@@ -246,6 +246,7 @@ fn remap_archived_timeline(
             kind: item.kind,
             text: item.text.clone(),
             timestamp_ms: item.timestamp_ms,
+            attachments: item.attachments.clone(),
         })
         .collect()
 }
@@ -254,19 +255,29 @@ fn resume_context_summary(session: &AgentSession) -> AgentSessionContextSummary 
     if let Some(summary) = session.context_summary.clone() {
         return summary;
     }
-    let mut lines = session
-        .timeline
+    context_summary_from_timeline(&session.timeline)
+}
+
+fn context_summary_from_timeline(
+    timeline: &[AgentSessionTimelineItem],
+) -> AgentSessionContextSummary {
+    let mut lines = timeline
         .iter()
         .filter(|item| {
             matches!(
                 item.kind,
-                AgentSessionTimelineKind::UserMessage | AgentSessionTimelineKind::AgentMessage
+                AgentSessionTimelineKind::UserMessage
+                    | AgentSessionTimelineKind::SteerMessage
+                    | AgentSessionTimelineKind::AgentMessage
             )
         })
         .rev()
         .take(10)
         .map(|item| {
-            let role = if item.kind == AgentSessionTimelineKind::UserMessage {
+            let role = if matches!(
+                item.kind,
+                AgentSessionTimelineKind::UserMessage | AgentSessionTimelineKind::SteerMessage
+            ) {
                 "Usuario"
             } else {
                 "Agente"
@@ -285,13 +296,104 @@ fn resume_context_summary(session: &AgentSession) -> AgentSessionContextSummary 
             lines.join(" | ")
         },
         created_at_ms: now_ms(),
-        source_events: session.timeline.len(),
-        source_turns: session
-            .timeline
+        source_events: timeline.len(),
+        source_turns: timeline
             .iter()
             .filter(|item| item.kind == AgentSessionTimelineKind::UserMessage)
             .count(),
     }
+}
+
+#[tauri::command]
+pub async fn branch_agent_session_from_message(
+    app: AppHandle,
+    bus: State<'_, BusHandle>,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    message_id: String,
+) -> Result<AgentSessionResumeResult, CommandError> {
+    let source = {
+        let registry = lock_registry(&registry)?;
+        registry
+            .get_session(&session_id)
+            .ok_or_else(|| CommandError::new("session_not_found", "la conversación ya no existe"))?
+    };
+    let previous_timeline = timeline_before_user_message(&source.timeline, &message_id)?;
+    let resolved = ensure_known_agent_repo(&bus, &source.repo).await?;
+    let started_result =
+        {
+            let mut registry = lock_registry(&registry)?;
+            if matches!(
+                source.status,
+                AgentSessionStatus::Starting | AgentSessionStatus::Running
+            ) {
+                registry
+                    .stop_session(&session_id)
+                    .map_err(CommandError::from)?;
+            }
+            match resolved.source {
+                RepoSource::Local => registry
+                    .start_session_with_output(resolved.path.clone(), source.agent_type.clone()),
+                RepoSource::Wsl => registry.start_wsl_session_with_output(
+                    resolved.path.clone(),
+                    resolved.distro.clone().ok_or_else(|| {
+                        CommandError::new("missing_distro", "repo WSL sin distro")
+                    })?,
+                    source.agent_type.clone(),
+                ),
+            }
+        };
+    let started = match started_result {
+        Ok(started) => started,
+        Err(error) => {
+            refresh_and_emit_sessions(&app);
+            return Err(CommandError::from(error));
+        }
+    };
+    if let Some(output_reader) = started.output_reader {
+        spawn_output_reader(app.clone(), started.id.clone(), output_reader);
+    }
+    {
+        let mut registry = lock_registry(&registry)?;
+        registry
+            .set_session_runtime_options(&started.id, source.runtime_options.clone())
+            .map_err(CommandError::from)?;
+        registry
+            .set_session_context_summary(
+                &started.id,
+                context_summary_from_timeline(&previous_timeline),
+            )
+            .map_err(CommandError::from)?;
+    }
+    for item in remap_archived_timeline(&previous_timeline, &started.id) {
+        record_timeline_item(&app, item.clone());
+        let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, item);
+    }
+    emit_timeline_text(
+        &app,
+        &started.id,
+        AgentSessionTimelineKind::Lifecycle,
+        Some("Conversación continuada desde el último mensaje editado".to_string()),
+        now_ms(),
+    );
+    refresh_and_emit_sessions(&app);
+    Ok(AgentSessionResumeResult {
+        session_id: started.id,
+        mode: AgentSessionResumeMode::ContextBridge,
+    })
+}
+
+fn timeline_before_user_message(
+    timeline: &[AgentSessionTimelineItem],
+    message_id: &str,
+) -> Result<Vec<AgentSessionTimelineItem>, CommandError> {
+    let target_index = timeline
+        .iter()
+        .position(|item| {
+            item.id == message_id && item.kind == AgentSessionTimelineKind::UserMessage
+        })
+        .ok_or_else(|| CommandError::new("turn_not_found", "no se encontró el mensaje a editar"))?;
+    Ok(timeline[..target_index].to_vec())
 }
 
 #[derive(Debug, Deserialize)]
@@ -504,30 +606,85 @@ pub fn write_agent_session_turn(
         .write_session_turn(&session_id, &text, &attachments, options)
         .map_err(CommandError::from)?;
     drop(registry);
-    let attachment_names = attachments
+    let timeline_attachments = attachments
         .iter()
-        .filter_map(|attachment| {
-            attachment.path.file_name().map(|name| {
-                let label = if attachment.is_image {
-                    "Imagen adjunta"
-                } else {
-                    "Archivo adjunto"
-                };
-                format!("{label}: {}", name.to_string_lossy())
-            })
+        .map(|attachment| AgentSessionAttachment {
+            path: attachment.path.clone(),
+            name: attachment
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "archivo".to_string()),
+            is_image: attachment.is_image,
         })
         .collect::<Vec<_>>();
-    let timeline_text = if attachment_names.is_empty() {
-        text
-    } else {
-        format!("{}\n\n{}", text, attachment_names.join("\n"))
-    };
-    emit_timeline_text(
+    emit_timeline_item(
         &app,
         &session_id,
         AgentSessionTimelineKind::UserMessage,
-        Some(timeline_text),
+        Some(text),
         timestamp_ms,
+        timeline_attachments,
+    );
+    refresh_and_emit_sessions(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn steer_agent_session_turn(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    text: String,
+    attachment_paths: Vec<String>,
+) -> Result<(), CommandError> {
+    if text.trim().is_empty() && attachment_paths.is_empty() {
+        return Err(CommandError::new(
+            "invalid_input",
+            "el mensaje o los archivos adjuntos no pueden estar vacios",
+        ));
+    }
+    if attachment_paths.len() > 10 {
+        return Err(CommandError::new(
+            "too_many_attachments",
+            "puedes adjuntar hasta 10 archivos por mensaje",
+        ));
+    }
+    let attachments = attachment_paths
+        .into_iter()
+        .map(PathBuf::from)
+        .map(validate_agent_attachment_path)
+        .collect::<Result<Vec<_>, _>>()?;
+    let text = if text.trim().is_empty() {
+        "Revisa los archivos adjuntos.".to_string()
+    } else {
+        text
+    };
+    let timestamp_ms = now_ms();
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .steer_session_turn(&session_id, &text, &attachments)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    let timeline_attachments = attachments
+        .iter()
+        .map(|attachment| AgentSessionAttachment {
+            path: attachment.path.clone(),
+            name: attachment
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "archivo".to_string()),
+            is_image: attachment.is_image,
+        })
+        .collect::<Vec<_>>();
+    emit_timeline_item(
+        &app,
+        &session_id,
+        AgentSessionTimelineKind::SteerMessage,
+        Some(text),
+        timestamp_ms,
+        timeline_attachments,
     );
     refresh_and_emit_sessions(&app);
     Ok(())
@@ -2371,6 +2528,17 @@ fn emit_timeline_text(
     text: Option<String>,
     timestamp_ms: u64,
 ) {
+    emit_timeline_item(app, session_id, kind, text, timestamp_ms, Vec::new());
+}
+
+fn emit_timeline_item(
+    app: &AppHandle,
+    session_id: &str,
+    kind: AgentSessionTimelineKind,
+    text: Option<String>,
+    timestamp_ms: u64,
+    attachments: Vec<AgentSessionAttachment>,
+) {
     let Some(text) = text else {
         return;
     };
@@ -2388,6 +2556,7 @@ fn emit_timeline_text(
         kind,
         text,
         timestamp_ms,
+        attachments,
     };
     record_timeline_item(app, payload.clone());
     let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, payload);
@@ -2541,6 +2710,40 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_context_stops_before_the_selected_user_message() {
+        let item =
+            |id: &str, kind: AgentSessionTimelineKind, text: &str| AgentSessionTimelineItem {
+                session_id: "session-1".to_string(),
+                id: id.to_string(),
+                kind,
+                text: text.to_string(),
+                timestamp_ms: 1,
+                attachments: Vec::new(),
+            };
+        let timeline = vec![
+            item("user-1", AgentSessionTimelineKind::UserMessage, "Primero"),
+            item(
+                "agent-1",
+                AgentSessionTimelineKind::AgentMessage,
+                "Respuesta",
+            ),
+            item("user-2", AgentSessionTimelineKind::UserMessage, "Segundo"),
+        ];
+
+        let context = timeline_before_user_message(&timeline, "user-2").expect("context");
+
+        assert_eq!(context.len(), 2);
+        assert_eq!(context[0].id, "user-1");
+        assert_eq!(context[1].id, "agent-1");
+        assert_eq!(
+            timeline_before_user_message(&timeline, "missing")
+                .unwrap_err()
+                .category,
+            "turn_not_found"
+        );
+    }
 
     #[test]
     fn goal_command_normalizes_text_and_supports_explicit_clear_aliases() {

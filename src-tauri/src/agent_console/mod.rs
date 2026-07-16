@@ -355,6 +355,19 @@ impl AgentSessionRegistry {
         session.write_turn(text, attachments, options)
     }
 
+    pub fn steer_session_turn(
+        &mut self,
+        session_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.steer_turn(text, attachments)
+    }
+
     pub fn session_runtime_catalog(
         &mut self,
         session_id: &str,
@@ -1243,6 +1256,7 @@ mod tests {
                 kind: crate::bus::contract::AgentSessionTimelineKind::UserMessage,
                 text: "modify the temp repo".into(),
                 timestamp_ms: 10,
+                attachments: Vec::new(),
             })
             .unwrap();
         std::fs::write(repo.path().join("base.txt"), "after\n").unwrap();

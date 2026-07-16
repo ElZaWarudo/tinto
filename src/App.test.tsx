@@ -90,6 +90,21 @@ describe("App", () => {
     expect(screen.getByAltText("Tinto")).toBeInTheDocument();
   });
 
+  it("mounts the workspace as soon as config is ready while repos are still loading", () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      });
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
+    expect(screen.queryByTestId("startup-loading")).not.toBeInTheDocument();
+  });
+
   // Covers AE1 (first-run gate) + R8
   it("shows first-run when loaded with no active workbench", () => {
     act(() => {

@@ -137,6 +137,9 @@ export const getAgentJournalSession = (sessionId: string) =>
 export const resumeAgentJournalSession = (sessionId: string) =>
   invoke<AgentSessionResumeResult>("resume_agent_journal_session", { sessionId });
 
+export const branchAgentSessionFromMessage = (sessionId: string, messageId: string) =>
+  invoke<AgentSessionResumeResult>("branch_agent_session_from_message", { sessionId, messageId });
+
 export const deleteAgentJournalSession = (sessionId: string) =>
   invoke<boolean>("delete_agent_journal_session", { sessionId });
 
@@ -221,6 +224,13 @@ export const writeAgentSessionTurn = (
     text,
     attachmentPaths,
     options: options ?? null,
+  });
+
+export const steerAgentSessionTurn = (sessionId: string, text: string, attachmentPaths: string[]) =>
+  invoke("steer_agent_session_turn", {
+    sessionId,
+    text,
+    attachmentPaths,
   });
 
 export const getAgentImagePreview = (path: string) =>

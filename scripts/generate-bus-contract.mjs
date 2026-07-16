@@ -45,6 +45,7 @@ const INCLUDE = new Set([
   "AgentSession",
   "AgentSessionOutput",
   "AgentSessionTimelineKind",
+  "AgentSessionAttachment",
   "AgentSessionTimelineItem",
   "AgentJournalSessionSummary",
   "AgentHostCommandStatus",

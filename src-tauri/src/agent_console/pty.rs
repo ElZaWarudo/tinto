@@ -66,6 +66,16 @@ pub trait AgentProcess: Send {
         input.push(b'\r');
         self.write_input_with_options(&input, options)
     }
+    fn steer_turn(
+        &mut self,
+        _text: &str,
+        _attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "steer_unsupported",
+            "este runtime no admite intervenir en el turno activo",
+        ))
+    }
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
@@ -111,6 +121,9 @@ pub enum AgentProcessEvent {
     },
     TurnCompleted {
         timestamp_ms: u64,
+    },
+    Error {
+        error: AgentConsoleError,
     },
     GoalUpdated {
         goal: crate::bus::contract::AgentSessionGoal,

@@ -184,16 +184,18 @@ describe("RepoCard", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("hides opt-in fetch for WSL repos and repos without upstream counts", () => {
-    renderCard({}, { source: "wsl", onFetch: vi.fn() });
-    expect(screen.queryByTestId("repo-card-fetch")).toBeNull();
+  it("offers the same opt-in fetch for WSL repos and hides it without an upstream", () => {
+    const onFetch = vi.fn(() => Promise.resolve());
+    renderCard({}, { source: "wsl", onFetch });
+    fireEvent.click(screen.getByTestId("repo-card-fetch"));
+    expect(onFetch).toHaveBeenCalledOnce();
 
     renderCard(
       { branch: { name: "feat", detached: false, unborn: false, ahead: null, behind: null } },
       { source: "local", onFetch: vi.fn() },
     );
     expect(screen.getAllByTestId("branch")[1]).toHaveTextContent("sin rama remota");
-    expect(screen.queryAllByTestId("repo-card-fetch")).toHaveLength(0);
+    expect(screen.getAllByTestId("repo-card-fetch")).toHaveLength(1);
   });
 
   // Covers AE10: activity indicator within/outside the window

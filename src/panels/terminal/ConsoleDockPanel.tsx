@@ -31,10 +31,15 @@ import opencodeLogo from "../../assets/agents/opencode.svg";
 import {
   PANEL_AGENT_CONSOLES,
   PANEL_AGENT_TERMINAL,
+  TAB_AGENT_CONVERSATION,
   agentTerminalPanelId,
   sessionIdFromAgentTerminalPanelId,
 } from "../../workspace/panels";
-import { consoleDock } from "../../workspace/consoleDock";
+import {
+  agentConversationTabTitle,
+  agentTerminalTitle,
+  consoleDock,
+} from "../../workspace/consoleDock";
 import { armExternalTabDetach } from "../../workspace/externalTabDetach";
 import { ensureCompactAgentWorkspace } from "../../workspace/openAgentTerminal";
 import {
@@ -43,10 +48,15 @@ import {
   type RecentAgentLaunch,
 } from "../../workspace/recentAgentLaunches";
 import { TerminalPanel, type TerminalPanelParams } from "./TerminalPanel";
+import { AgentConversationTab } from "./AgentConversationTab";
 import { detachTerminalFromConsoleDrop, detachTerminalPanel } from "./detachTerminalPanel";
 
 const consoleComponents = {
   [PANEL_AGENT_TERMINAL]: TerminalPanel,
+};
+
+const consoleTabComponents = {
+  [TAB_AGENT_CONVERSATION]: AgentConversationTab,
 };
 
 interface RecentAgentLaunchGroup {
@@ -101,6 +111,7 @@ export function ConsoleDockPanel({
   const { repos } = useBusState();
   const agentState = useAgentSessionState();
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const dockHostRef = useRef<HTMLDivElement | null>(null);
   const layoutFrameRef = useRef<number | null>(null);
   const movePanelDisposeRef = useRef<(() => void) | null>(null);
@@ -119,6 +130,7 @@ export function ConsoleDockPanel({
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [journalLoadState, setJournalLoadState] = useState<JournalLoadState>("loading");
   const [journalRequestVersion, setJournalRequestVersion] = useState(0);
+  const [compactNavigator, setCompactNavigator] = useState(false);
   const [workspaceExpanded, setWorkspaceExpanded] = useState(
     () => workspacePanelApi?.isMaximized() ?? false,
   );
@@ -174,6 +186,18 @@ export function ConsoleDockPanel({
   }, [scheduleConsoleDockLayout]);
 
   useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const update = () => {
+      if (panel.clientWidth > 0) setCompactNavigator(panel.clientWidth <= 900);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(panel);
+    update();
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     if (!containerApi || !workspacePanelApi) return;
     const updateExpandedState = () => setWorkspaceExpanded(workspacePanelApi.isMaximized());
     updateExpandedState();
@@ -200,6 +224,20 @@ export function ConsoleDockPanel({
       active = false;
     };
   }, [terminalCount, journalRequestVersion]);
+
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    for (const terminal of openTerminals) {
+      const firstUserMessage = agentState.timeline[terminal.sessionId]?.find(
+        (item) => item.kind === "user_message",
+      )?.text;
+      if (!firstUserMessage) continue;
+      api
+        .getPanel(agentTerminalPanelId(terminal.sessionId))
+        ?.api.setTitle(agentConversationTabTitle(terminal, conversationTitle(firstUserMessage)));
+    }
+  }, [agentState.timeline, openTerminals]);
 
   const retryJournalLoad = () => {
     setJournalLoadState("loading");
@@ -267,7 +305,8 @@ export function ConsoleDockPanel({
       const panel = api.addPanel({
         id,
         component: PANEL_AGENT_TERMINAL,
-        title: terminalTitle(params),
+        title: agentTerminalTitle(params),
+        tabComponent: TAB_AGENT_CONVERSATION,
         params,
       });
       panel.api.setActive();
@@ -409,7 +448,7 @@ export function ConsoleDockPanel({
   };
 
   return (
-    <div className="console-dock-panel" data-testid="console-dock-panel">
+    <div className="console-dock-panel" data-testid="console-dock-panel" ref={panelRef}>
       {terminalCount > 0 && (
         <AgentNavigator
           openTerminals={openTerminals}
@@ -420,6 +459,7 @@ export function ConsoleDockPanel({
           deletingJournalId={deletingJournalId}
           journalLoadState={journalLoadState}
           journalActionError={launchError}
+          compact={compactNavigator}
           workspaceExpanded={workspaceExpanded}
           onFocus={ensureTerminalPanelVisible}
           onOpenJournal={openJournalTranscript}
@@ -431,6 +471,7 @@ export function ConsoleDockPanel({
       <div className="console-dock-panel__dock" ref={dockHostRef}>
         <DockviewReact
           components={consoleComponents}
+          tabComponents={consoleTabComponents}
           dndStrategy="pointer"
           theme={themeVisualStudio}
           onReady={onReady}
@@ -591,6 +632,7 @@ function AgentNavigator({
   deletingJournalId,
   journalLoadState,
   journalActionError,
+  compact,
   workspaceExpanded,
   onFocus,
   onOpenJournal,
@@ -606,6 +648,7 @@ function AgentNavigator({
   deletingJournalId: string | null;
   journalLoadState: JournalLoadState;
   journalActionError: string | null;
+  compact: boolean;
   workspaceExpanded: boolean;
   onFocus: (params: TerminalPanelParams) => void;
   onOpenJournal: (session: AgentJournalSessionSummary) => void;
@@ -614,6 +657,7 @@ function AgentNavigator({
   onRestoreWorkspace: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(readNavigatorCollapsed);
+  const [compactExpanded, setCompactExpanded] = useState(false);
   const activeTerminals = openTerminals.filter((terminal) => terminal.mode !== "journal");
   const activeTerminalIds = new Set(activeTerminals.map((terminal) => terminal.sessionId));
   const uniqueJournalSessions = journalSessions.filter(
@@ -629,7 +673,22 @@ function AgentNavigator({
     });
   };
 
-  if (collapsed) {
+  const showNavigator = () => {
+    if (collapsed) {
+      setCollapsed(false);
+      writeNavigatorCollapsed(false);
+    }
+    if (compact) setCompactExpanded(true);
+  };
+  const hideNavigator = () => {
+    if (compact) {
+      setCompactExpanded(false);
+    } else {
+      toggleNavigator();
+    }
+  };
+
+  if (collapsed || (compact && !compactExpanded)) {
     return (
       <aside
         className="console-dock-panel__navigator console-dock-panel__navigator--collapsed"
@@ -637,9 +696,9 @@ function AgentNavigator({
       >
         <button
           aria-label="Mostrar conversaciones de Agents"
+          aria-expanded="false"
           className="console-dock-panel__navigator-expand"
-          onClick={toggleNavigator}
-          title="Mostrar conversaciones de Agents"
+          onClick={showNavigator}
           type="button"
         >
           ›
@@ -649,7 +708,12 @@ function AgentNavigator({
   }
 
   return (
-    <aside className="console-dock-panel__navigator" aria-label="Sesiones de Agents">
+    <aside
+      className={`console-dock-panel__navigator${
+        compact ? " console-dock-panel__navigator--overlay" : ""
+      }`}
+      aria-label="Sesiones de Agents"
+    >
       <div className="console-dock-panel__navigator-section">
         <div className="console-dock-panel__navigator-head">
           <div className="console-dock-panel__navigator-heading">
@@ -669,8 +733,7 @@ function AgentNavigator({
             <button
               aria-label="Ocultar conversaciones de Agents"
               className="console-dock-panel__navigator-collapse"
-              onClick={toggleNavigator}
-              title="Ocultar conversaciones de Agents"
+              onClick={hideNavigator}
               type="button"
             >
               ‹
@@ -689,6 +752,9 @@ function AgentNavigator({
             const logo = agentLogoSrc(agentType);
             const session = sessions[terminal.sessionId];
             const preview = activeSessionPreview(session, timeline[terminal.sessionId]);
+            const title = conversationTitle(
+              timeline[terminal.sessionId]?.find((item) => item.kind === "user_message")?.text,
+            );
             const tone = sessionStatusTone(session);
             const active = isActiveAgentSession(session);
             return (
@@ -698,7 +764,7 @@ function AgentNavigator({
                 key={terminal.sessionId}
                 aria-label={`Mostrar ${busStore.displayName(
                   terminal.repo ?? terminal.sessionId,
-                )} ${agentLabel(agentType)}`}
+                )} ${agentLabel(agentType)}: ${title}`}
                 onClick={() => onFocus(terminal)}
               >
                 <span
@@ -710,7 +776,7 @@ function AgentNavigator({
                   {logo ? <img src={logo} alt="" /> : <span>{agentLogoText(agentType)}</span>}
                 </span>
                 <span className="console-dock-panel__navigator-main">
-                  <span>{terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"}</span>
+                  <span>{title}</span>
                   {active && (
                     <strong className="console-dock-panel__navigator-active-indicator">
                       <i aria-hidden="true" />
@@ -718,7 +784,9 @@ function AgentNavigator({
                     </strong>
                   )}
                   <small>
-                    {agentLabel(agentType)} / {sessionStatusLabel(session)}
+                    {agentLabel(agentType)} ·{" "}
+                    {terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"} ·{" "}
+                    {sessionStatusLabel(session)}
                   </small>
                   {preview && <em>{preview}</em>}
                 </span>
@@ -727,6 +795,7 @@ function AgentNavigator({
           })}
           {visibleJournalSessions.map((session) => {
             const logo = agentLogoSrc(session.agent_type);
+            const title = conversationTitle(session.first_user_message);
             return (
               <button
                 className="console-dock-panel__navigator-item"
@@ -734,7 +803,7 @@ function AgentNavigator({
                 key={session.id}
                 aria-label={`Abrir la transcripción de ${busStore.displayName(
                   session.repo,
-                )} con ${agentLabel(session.agent_type)}`}
+                )} con ${agentLabel(session.agent_type)}: ${title}`}
                 disabled={deletingJournalId === session.id}
                 onClick={() => onOpenJournal(session)}
                 onContextMenu={(event) => {
@@ -764,13 +833,13 @@ function AgentNavigator({
                   )}
                 </span>
                 <span className="console-dock-panel__navigator-main">
-                  <span>{busStore.displayName(session.repo)}</span>
+                  <span>{title}</span>
                   <small>
                     {deletingJournalId === session.id
                       ? "Eliminando…"
                       : openingJournalId === session.id
                         ? "Abriendo…"
-                        : `Transcripción de ${agentLabel(session.agent_type)}`}
+                        : `${agentLabel(session.agent_type)} · ${busStore.displayName(session.repo)}`}
                   </small>
                 </span>
               </button>
@@ -798,6 +867,20 @@ function activeSessionPreview(
   if (session.turn_status === "working") return "Trabajando en el turno actual";
   if (session.turn_status === "settling") return "Recopilando los archivos modificados";
   return null;
+}
+
+function conversationTitle(text: string | null | undefined): string {
+  const compact = (text ?? "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_>#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return "Nueva conversación";
+  if (compact.length <= 58) return compact;
+  const prefix = compact.slice(0, 58);
+  const boundary = prefix.lastIndexOf(" ");
+  return `${prefix.slice(0, boundary > 36 ? boundary : 58).trimEnd()}…`;
 }
 
 function sessionStatusLabel(session: AgentSession | undefined): string {
@@ -839,6 +922,7 @@ function AgentJournalBrowser({
       <div className="console-dock-panel__journal-list">
         {sessions.map((session) => {
           const logo = agentLogoSrc(session.agent_type);
+          const title = conversationTitle(session.first_user_message);
           return (
             <button
               className="console-dock-panel__journal-card"
@@ -846,7 +930,7 @@ function AgentJournalBrowser({
               key={session.id}
               aria-label={`Abrir la transcripción de ${busStore.displayName(
                 session.repo,
-              )} con ${agentLabel(session.agent_type)}`}
+              )} con ${agentLabel(session.agent_type)}: ${title}`}
               disabled={deletingJournalId === session.id}
               onPointerDown={(event) => event.stopPropagation()}
               onMouseDown={(event) => event.stopPropagation()}
@@ -875,9 +959,10 @@ function AgentJournalBrowser({
                 )}
               </span>
               <span className="console-dock-panel__journal-main">
-                <span>{busStore.displayName(session.repo)}</span>
+                <span>{title}</span>
                 <small>
-                  {agentLabel(session.agent_type)} / {sessionLabel(session)}
+                  {agentLabel(session.agent_type)} · {busStore.displayName(session.repo)} ·{" "}
+                  {sessionLabel(session)}
                 </small>
                 {session.last_event_text && <em>{session.last_event_text}</em>}
               </span>
@@ -968,12 +1053,6 @@ function JournalContextMenu({
       </button>
     </div>
   );
-}
-
-function terminalTitle(params: TerminalPanelParams): string {
-  const agent = params.agentType ?? "agent";
-  const short = params.sessionId.length > 8 ? params.sessionId.slice(0, 8) : params.sessionId;
-  return `${agent} ${short}`;
 }
 
 function groupRecentLaunches(launches: RecentAgentLaunch[]): RecentAgentLaunchGroup[] {

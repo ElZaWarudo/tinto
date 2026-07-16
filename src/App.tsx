@@ -214,12 +214,12 @@ export default function App() {
     closeInactiveRepoPanels(api, config);
   }, [config]);
 
-  const hasUsableShell = config !== null && loaded;
+  const hasConfiguredShell = config !== null;
   const startupError = !config ? configError : !loaded ? snapshotError : null;
 
   // Only the initial boot owns the full-screen status. Background reloads keep
   // the existing workspace mounted so dialogs, focus, and unsaved UI state survive.
-  if (!hasUsableShell && startupError) {
+  if (!hasConfiguredShell && startupError) {
     return (
       <div className="app-shell">
         <CompactWindowBar />
@@ -228,7 +228,7 @@ export default function App() {
     );
   }
 
-  if (!hasUsableShell) {
+  if (!hasConfiguredShell) {
     return (
       <div className="app-shell">
         <CompactWindowBar />

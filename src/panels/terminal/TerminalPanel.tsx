@@ -5,6 +5,7 @@ import { confirm, open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  branchAgentSessionFromMessage,
   getAgentJournalSession,
   getAgentImagePreview,
   getAgentRuntimeCatalog,
@@ -15,6 +16,7 @@ import {
   restoreSessionTurn,
   runAgentHostCommand,
   stopAgentSession,
+  steerAgentSessionTurn,
   writeAgentSessionInput,
   writeAgentSessionTurn,
 } from "../../bus/client";
@@ -28,6 +30,7 @@ import type {
   AgentReviewFinding,
   AgentReviewSummary,
   AgentRuntimeCatalog,
+  AgentSessionAttachment,
   AgentSession,
   AgentSessionRuntimeOptions,
   AgentSessionOutput,
@@ -52,6 +55,7 @@ import {
   type CodexReasoningSelection,
   type CodexSpeedSelection,
 } from "./agentRuntimeCatalog";
+import { loadFavoriteRuntimePreset } from "./runtimePresets";
 
 export interface TerminalPanelParams {
   sessionId: string;
@@ -67,6 +71,41 @@ type AgentAttachment = {
   kind: "image" | "file";
   previewUrl: string | null;
 };
+
+interface QueuedAgentMessage {
+  id: string;
+  text: string;
+  attachments: AgentAttachment[];
+  runtimeOptions: AgentSessionRuntimeOptions;
+}
+
+const AGENT_QUEUE_STORAGE_KEY = "tinto.agent-message-queues.v1";
+
+function loadAgentMessageQueue(sessionId: string): QueuedAgentMessage[] {
+  try {
+    const queues = JSON.parse(localStorage.getItem(AGENT_QUEUE_STORAGE_KEY) ?? "{}") as Record<
+      string,
+      QueuedAgentMessage[]
+    >;
+    return Array.isArray(queues[sessionId]) ? queues[sessionId] : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAgentMessageQueue(sessionId: string, messages: QueuedAgentMessage[]) {
+  try {
+    const queues = JSON.parse(localStorage.getItem(AGENT_QUEUE_STORAGE_KEY) ?? "{}") as Record<
+      string,
+      QueuedAgentMessage[]
+    >;
+    if (messages.length > 0) queues[sessionId] = messages;
+    else delete queues[sessionId];
+    localStorage.setItem(AGENT_QUEUE_STORAGE_KEY, JSON.stringify(queues));
+  } catch {
+    // La cola sigue funcionando en memoria aunque el almacenamiento esté bloqueado.
+  }
+}
 
 const MAX_AGENT_ATTACHMENTS = 10;
 const MAX_AGENT_IMAGE_ATTACHMENTS = 4;
@@ -257,8 +296,16 @@ const CODEX_HOST_COMMANDS: Array<{
 ];
 
 const AGENT_LENS_TAB_ORDER: AgentLensTab[] = ["files", "commands", "timeline"];
-const COMPOSER_COMMAND_TRIGGER_RE = /(^|\n)([/$])([^\s/$]*)$/;
+const COMPOSER_SLASH_TRIGGER_RE = /(^|\s)(\/)([^\s/$]*)$/;
+const COMPOSER_SKILL_TRIGGER_RE = /(^|\s)(\$)([^\s/$]*)$/;
 const COMPOSER_COMMAND_LINE_RE = /(^|\n)([/$])([^\s/$]*)(?:[^\n]*)$/;
+
+interface ComposerCommandTriggerMatch {
+  boundary: string;
+  index: number;
+  query: string;
+  trigger: AgentComposerCommandTrigger;
+}
 
 interface AgentTurnView {
   id: string;
@@ -266,12 +313,36 @@ interface AgentTurnView {
   startedAtMs: number | null;
   updatedAtMs: number | null;
   userText: string | null;
+  attachments: AgentSessionAttachment[];
   agentText: string[];
   commandText: string[];
   systemText: string[];
+  events: AgentTurnEventView[];
   changes: Array<{ path: string; kind: string }>;
   restoreCheckpointId: string | null;
   restoreReady: boolean;
+}
+
+interface AgentTurnEventView {
+  id: string;
+  kind: Exclude<AgentSessionTimelineItem["kind"], "user_message">;
+  text: string;
+}
+
+type AgentTurnDisplayItem =
+  | { type: "event"; event: AgentTurnEventView }
+  | {
+      type: "thought";
+      id: string;
+      events: AgentTurnEventView[];
+      defaultOpen: boolean;
+    };
+
+interface EditingAgentMessage {
+  id: string;
+  index: number;
+  text: string;
+  attachments: AgentAttachment[];
 }
 
 interface AgentProcessView {
@@ -316,9 +387,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  const [editingMessage, setEditingMessage] = useState<EditingAgentMessage | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState("");
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedAgentMessage[]>(() =>
+    loadAgentMessageQueue(sessionId),
+  );
+  const queueDispatchingRef = useRef(false);
+  const queueAwaitingTurnStartRef = useRef(false);
+  const nextQueuedMessageIdRef = useRef(queuedMessages.length + 1);
   const [stopping, setStopping] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [revertingFile, setRevertingFile] = useState<string | null>(null);
@@ -328,9 +406,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [activeSlashCommandIndex, setActiveSlashCommandIndex] = useState(0);
   const [runtimeMenu, setRuntimeMenu] = useState<CodexRuntimeMenu>(null);
-  const [selectedModel, setSelectedModel] = useState<CodexModelSelection>("auto");
-  const [selectedReasoning, setSelectedReasoning] = useState<CodexReasoningSelection>("auto");
-  const [selectedSpeed, setSelectedSpeed] = useState<CodexSpeedSelection>("standard");
+  const [initialRuntimePreset] = useState(() => loadFavoriteRuntimePreset());
+  const [selectedModel, setSelectedModel] = useState<CodexModelSelection>(
+    initialRuntimePreset?.model ?? "auto",
+  );
+  const [selectedReasoning, setSelectedReasoning] = useState<CodexReasoningSelection>(
+    initialRuntimePreset?.reasoning ?? "auto",
+  );
+  const [selectedSpeed, setSelectedSpeed] = useState<CodexSpeedSelection>(
+    initialRuntimePreset?.speed ?? "standard",
+  );
   const [runtimeCatalog, setRuntimeCatalog] = useState<AgentRuntimeCatalog | null>(null);
   const [runtimeCatalogRefreshKey, setRuntimeCatalogRefreshKey] = useState(0);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
@@ -397,26 +482,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       ? `Resultado de búsqueda seleccionado: ${activeSearchResultIndex + 1} de ${visibleTurns.length}.`
       : `No hay ningún resultado seleccionado entre los ${visibleTurns.length} coincidentes.`
     : null;
-  const previousSearchResultTitle = transcriptSearchNavigationTitle(
-    "previous",
-    hasTranscriptQuery,
-    visibleTurns.length,
-  );
-  const nextSearchResultTitle = transcriptSearchNavigationTitle(
-    "next",
-    hasTranscriptQuery,
-    visibleTurns.length,
-  );
-  const transcriptCopyTitle = transcriptCopyButtonTitle(
-    hasTranscriptQuery,
-    visibleTurns.length,
-    turns.length,
-  );
-  const latestTurnTitle = latestTurnButtonTitle(
-    hasTranscriptQuery,
-    visibleTurns.length,
-    turns.length,
-  );
   const canCompose =
     !!sessionId &&
     !sending &&
@@ -426,8 +491,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         session?.status !== "failed" &&
         session?.status !== "reverted" &&
         session?.status !== "error");
-  const canSend = canCompose && (draft.trim().length > 0 || attachments.length > 0);
-  const processState = agentProcessState(session, sending, agentType, readOnly);
+  const composerEnabled = canCompose && !editingMessage;
+  const canSend = composerEnabled && (draft.trim().length > 0 || attachments.length > 0);
+  const turnActive = !readOnly && session?.turn_status === "working";
+  const processState = agentProcessState(session, sending, agentType, readOnly, timeline);
+  const visibleError = error ?? (session?.error ? commandMessage(session.error) : null);
   const canRestoreTurn =
     !!sessionId &&
     !readOnly &&
@@ -437,7 +505,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "error";
   const runtimeProvider = agentRuntimeProvider(agentType);
   const isCodexSession = runtimeProvider?.id === "codex";
-  const canAttachFiles = canCompose && isCodexSession;
+  const canAttachFiles = composerEnabled && isCodexSession;
+  const canEditMessages = !readOnly && !turnActive && !sending;
   const composerCommandTrigger = readComposerCommandTrigger(draft);
   const composerCommandQuery = composerCommandTrigger?.query ?? "";
   const composerCommandItems = useMemo<AgentComposerCommand[]>(
@@ -566,7 +635,57 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   );
 
   useEffect(() => {
-    if (!session?.runtime_options || !isCodexSession) return;
+    saveAgentMessageQueue(sessionId, queuedMessages);
+  }, [queuedMessages, sessionId]);
+
+  useEffect(() => {
+    if (session?.turn_status === "working") {
+      queueAwaitingTurnStartRef.current = false;
+    }
+  }, [session?.turn_status]);
+
+  useEffect(() => {
+    const next = queuedMessages[0];
+    if (
+      !next ||
+      readOnly ||
+      sending ||
+      queueDispatchingRef.current ||
+      queueAwaitingTurnStartRef.current ||
+      session?.status !== "running" ||
+      session.turn_status !== "waiting"
+    ) {
+      return;
+    }
+    queueDispatchingRef.current = true;
+    setSending(true);
+    setError(null);
+    void writeAgentSessionTurn(
+      sessionId,
+      next.text,
+      next.attachments.map((attachment) => attachment.path),
+      next.runtimeOptions,
+    )
+      .then(() => {
+        queueAwaitingTurnStartRef.current = true;
+        setQueuedMessages((current) => current.filter((message) => message.id !== next.id));
+      })
+      .catch((queueError) =>
+        setError(`No se pudo enviar el mensaje encolado: ${commandMessage(queueError)}`),
+      )
+      .finally(() => {
+        queueDispatchingRef.current = false;
+        setSending(false);
+      });
+  }, [queuedMessages, readOnly, sending, session?.status, session?.turn_status, sessionId]);
+
+  useEffect(() => {
+    if (
+      !session?.runtime_options ||
+      !isCodexSession ||
+      !runtimeOptionsHaveSelection(session.runtime_options)
+    )
+      return;
     const restored = runtimeSelectionsFromOptions(session.runtime_options);
     let cancelled = false;
     queueMicrotask(() => {
@@ -752,7 +871,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     !stopping &&
     (session.status === "running" || session.status === "starting");
 
-  const sendDraft = async () => {
+  const sendDraft = async (action: "send" | "queue" | "steer" = "send") => {
     if (!canSend) return;
     const text = draft.trimEnd();
     const slashCommandHandled =
@@ -772,25 +891,44 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     if (!readOnly && (await applyComposerSlashCommand(text))) {
       return;
     }
+    if (action === "queue") {
+      const queued: QueuedAgentMessage = {
+        id: `${sessionId}:queued:${nextQueuedMessageIdRef.current++}`,
+        text: text.trim().length > 0 ? text : "Revisa los archivos adjuntos.",
+        attachments: attachments.map((attachment) => ({ ...attachment, previewUrl: null })),
+        runtimeOptions: effectiveRuntimeOptions,
+      };
+      setQueuedMessages((current) => [...current, queued]);
+      setDraft("");
+      setAttachments([]);
+      setRuntimeNotice(null);
+      return;
+    }
     setSending(true);
     setError(null);
     try {
       let targetSessionId = sessionId;
       let resumedSessionId: string | null = null;
-      if (readOnly) {
+      if (action === "steer") {
+        await steerAgentSessionTurn(
+          sessionId,
+          text,
+          attachments.map((attachment) => attachment.path),
+        );
+      } else if (readOnly) {
         if (!session) return;
         const result = await resumeAgentJournalSession(session.id);
         targetSessionId = result.session_id;
         resumedSessionId = result.session_id;
       }
-      if (attachments.length > 0) {
+      if (action !== "steer" && attachments.length > 0) {
         await writeAgentSessionTurn(
           targetSessionId,
           text,
           attachments.map((attachment) => attachment.path),
           effectiveRuntimeOptions,
         );
-      } else {
+      } else if (action !== "steer") {
         await writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions);
       }
       if (resumedSessionId && session) {
@@ -813,6 +951,63 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     } finally {
       setSending(false);
     }
+  };
+
+  const sendEditedMessage = async () => {
+    if (!editingMessage || sending || !editingMessage.text.trim()) return;
+    setSending(true);
+    setError(null);
+    try {
+      const result = await branchAgentSessionFromMessage(sessionId, editingMessage.id);
+      if (editingMessage.attachments.length > 0) {
+        await writeAgentSessionTurn(
+          result.session_id,
+          editingMessage.text.trimEnd(),
+          editingMessage.attachments.map((attachment) => attachment.path),
+          effectiveRuntimeOptions,
+        );
+      } else {
+        await writeAgentSessionInput(
+          result.session_id,
+          `${editingMessage.text.trimEnd()}\r`,
+          effectiveRuntimeOptions,
+        );
+      }
+      const sessions = await listAgentSessions();
+      agentSessionStore.setSessions(sessions);
+      if (session) {
+        openAgentTerminal({
+          sessionId: result.session_id,
+          repo: session.repo,
+          agentType: session.agent_type,
+        });
+      }
+      setEditingMessage(null);
+    } catch (editError) {
+      setError(commandMessage(editError));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const beginEditingMessage = async (turn: AgentTurnView) => {
+    if (!turn.userText || !canEditMessages) return;
+    const restoredAttachments = await Promise.all(
+      turn.attachments.map(async (attachment) => ({
+        path: attachment.path,
+        kind: attachment.is_image ? ("image" as const) : ("file" as const),
+        previewUrl: attachment.is_image
+          ? await getAgentImagePreview(attachment.path).catch(() => null)
+          : null,
+      })),
+    );
+    setEditingMessage({
+      id: turn.id,
+      index: turn.index,
+      text: turn.userText,
+      attachments: restoredAttachments,
+    });
+    setError(null);
   };
 
   const pickFiles = async () => {
@@ -1244,16 +1439,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   };
 
   return (
-    <div
-      className="agent-panel"
-      data-testid={`terminal-panel-${sessionId}`}
-      title={agentPanelTitle(agentType, repo)}
-    >
-      <header className="agent-panel__header" title={agentHeaderTitle(agentType, repo)}>
+    <div className="agent-panel" data-testid={`terminal-panel-${sessionId}`}>
+      <header className="agent-panel__header">
         <span
           className={`agent-panel__logo agent-panel__logo--${agentLogoClass(agentType)}`}
           aria-hidden="true"
-          title={agentLogoTitle(agentType, repo)}
         >
           {agentLogoSrc(agentType) ? (
             <img src={agentLogoSrc(agentType) ?? ""} alt="" />
@@ -1261,20 +1451,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             <span>{agentLogoText(agentType)}</span>
           )}
         </span>
-        <div className="agent-panel__identity" title={agentIdentityTitle(agentType, repo)}>
-          <span className="agent-panel__agent" title={agentNameLabelTitle(agentType, repo)}>
-            {agentLabel(agentType)}
-          </span>
-          <span className="agent-panel__repo" title={agentRepoLabelTitle(agentType, repo)}>
-            {repo ? repoName(repo) : "Sesión de Agent"}
-          </span>
+        <div className="agent-panel__identity">
+          <span className="agent-panel__agent">{agentLabel(agentType)}</span>
+          <span className="agent-panel__repo">{repo ? repoName(repo) : "Sesión de Agent"}</span>
         </div>
         <SessionStatus session={session} />
         {!readOnly && (
-          <div
-            className="agent-panel__header-actions"
-            title={agentHeaderActionsTitle(agentType, repo)}
-          >
+          <div className="agent-panel__header-actions">
             <>
               <button
                 className="agent-panel__stop"
@@ -1283,9 +1466,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
                 type="button"
               >
-                <span title={agentStopControlLabelTitle(stopping)}>
-                  {stopping ? "Deteniendo" : "Detener"}
-                </span>
+                <span>{stopping ? "Deteniendo" : "Detener"}</span>
               </button>
               <button
                 className="agent-panel__revert"
@@ -1301,53 +1482,30 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 )}
                 type="button"
               >
-                <span title={agentRevertControlLabelTitle(reverting)}>
-                  {reverting ? "Revirtiendo" : "Revertir"}
-                </span>
+                <span>{reverting ? "Revirtiendo" : "Revertir"}</span>
               </button>
             </>
           </div>
         )}
       </header>
 
-      {error && (
-        <div
-          className="agent-panel__error"
-          data-testid="terminal-panel-error"
-          role="alert"
-          title={agentErrorBannerTitle(error)}
-        >
-          {error}
+      {visibleError && (
+        <div className="agent-panel__error" data-testid="terminal-panel-error" role="alert">
+          {visibleError}
         </div>
       )}
 
       <div
         className={`agent-panel__workspace${detailsOpen ? " agent-panel__workspace--details" : ""}`}
-        title={agentWorkspaceTitle(agentType, repo)}
       >
         <section
           className={`agent-panel__chat-shell${
             !detailsOpen ? " agent-panel__chat-shell--active" : ""
           }`}
-          title={agentChatShellTitle(agentType, repo)}
         >
-          <div
-            className="agent-panel__chat-tools"
-            title={transcriptToolsContainerTitle(
-              hasTranscriptQuery,
-              visibleTurns.length,
-              turns.length,
-            )}
-          >
-            <label
-              className="agent-panel__chat-search"
-              title={transcriptSearchContainerTitle(
-                hasTranscriptQuery,
-                visibleTurns.length,
-                turns.length,
-              )}
-            >
-              <span title={transcriptSearchLabelTitle()}>Buscar en la transcripción</span>
+          <div className="agent-panel__chat-tools">
+            <label className="agent-panel__chat-search">
+              <span>Buscar en la transcripción</span>
               <span className="sr-only" id="agent-transcript-search-hint">
                 Pulsa Intro para recorrer los turnos coincidentes y Escape para borrar la búsqueda.
               </span>
@@ -1359,24 +1517,20 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 onChange={(event) => setTranscriptQuery(event.currentTarget.value)}
                 onKeyDown={onTranscriptSearchKeyDown}
                 placeholder="Buscar mensajes, comandos o archivos..."
-                title={transcriptSearchInputTitle()}
                 type="search"
               />
             </label>
             <div
               aria-label="Navegación por los resultados de la transcripción"
-              className="agent-panel__chat-result-actions"
+              className={`agent-panel__chat-result-actions${
+                hasTranscriptQuery ? "" : " agent-panel__chat-result-actions--idle"
+              }`}
               role="group"
             >
               <span
                 aria-label={transcriptSearchCountDescription}
                 aria-live="polite"
                 className="agent-panel__chat-search-count"
-                title={transcriptSearchCountTitle(
-                  hasTranscriptQuery,
-                  visibleTurns.length,
-                  turns.length,
-                )}
               >
                 {hasTranscriptQuery
                   ? `${visibleTurns.length} de ${turns.length} turnos`
@@ -1386,10 +1540,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 <span
                   aria-label={activeSearchResultDescription ?? "Resultado de búsqueda activo"}
                   className="agent-panel__chat-search-position"
-                  title={activeSearchResultPositionTitle(
-                    activeSearchResultIndex,
-                    visibleTurns.length,
-                  )}
                 >
                   {activeSearchResultLabel}
                 </span>
@@ -1399,31 +1549,24 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 className="agent-panel__chat-nav"
                 disabled={!canNavigateSearchResults}
                 onClick={() => focusVisibleTurn("previous")}
-                title={previousSearchResultTitle}
                 type="button"
               >
-                <span title={transcriptSearchNavigationLabelTitle("previous")}>Anterior</span>
+                <span>Anterior</span>
               </button>
               <button
                 aria-label="Resultado siguiente"
                 className="agent-panel__chat-nav"
                 disabled={!canNavigateSearchResults}
                 onClick={() => focusVisibleTurn("next")}
-                title={nextSearchResultTitle}
                 type="button"
               >
-                <span title={transcriptSearchNavigationLabelTitle("next")}>Siguiente</span>
+                <span>Siguiente</span>
               </button>
             </div>
             <div
               aria-label="Acciones de la transcripción"
               className="agent-panel__chat-secondary-actions"
               role="group"
-              title={transcriptSecondaryActionsTitle(
-                hasTranscriptQuery,
-                visibleTurns.length,
-                turns.length,
-              )}
             >
               <button
                 className="agent-panel__chat-nav agent-panel__chat-nav--secondary"
@@ -1435,36 +1578,23 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                     scrollToAgentTurn(sessionId, latest.index, "end");
                   }
                 }}
-                title={latestTurnTitle}
                 type="button"
               >
-                <span title={transcriptSecondaryActionLabelTitle("Último")}>Último</span>
+                <span>Último</span>
               </button>
               <button
                 className="agent-panel__chat-copy agent-panel__chat-copy--secondary"
                 disabled={visibleTurns.length === 0}
                 onClick={() => void copyText("transcript", transcriptText(visibleTurns))}
-                title={transcriptCopyTitle}
                 type="button"
               >
-                <span
-                  title={transcriptSecondaryActionLabelTitle(
-                    copiedTarget === "transcript" ? "Copiado" : "Copiar lo visible",
-                  )}
-                >
-                  {copiedTarget === "transcript" ? "Copiado" : "Copiar lo visible"}
-                </span>
+                <span>{copiedTarget === "transcript" ? "Copiado" : "Copiar lo visible"}</span>
               </button>
               {session && (
                 <button
                   aria-expanded={detailsOpen}
                   className="agent-panel__details-toggle"
                   onClick={() => setDetailsOpen((open) => !open)}
-                  title={
-                    detailsOpen
-                      ? "Ocultar los detalles y volver a la conversación."
-                      : "Mostrar los detalles, puntos de restauración, archivos, comandos y Timeline."
-                  }
                   type="button"
                 >
                   <span>{detailsOpen ? "Ocultar detalles" : "Detalles"}</span>
@@ -1479,24 +1609,34 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             aria-relevant="additions text"
             aria-atomic="false"
             role="log"
-            title={conversationContainerTitle(
-              hasTranscriptQuery,
-              visibleTurns.length,
-              turns.length,
-              readOnly,
-            )}
+            onClickCapture={(event) => {
+              if (!sessionRepo || !(event.target instanceof Element)) return;
+              const target = event.target.closest<HTMLElement>("[data-repo-path]");
+              const repoPath = target?.dataset.repoPath;
+              if (!repoPath) return;
+              event.preventDefault();
+              openFile(sessionRepo, repoPath, true);
+            }}
           >
             {visibleTurns.length > 0 ? (
               visibleTurns.map((turn) => (
                 <AgentTurn
                   key={turn.id}
                   copiedTarget={copiedTarget}
+                  editingMessage={editingMessage?.id === turn.id ? editingMessage : null}
                   firstTurnAtMs={turns[0]?.startedAtMs ?? null}
                   focused={turn.index === focusedTurn?.index}
+                  onCancelEdit={() => setEditingMessage(null)}
+                  onChangeEditText={(text) =>
+                    setEditingMessage((current) => (current ? { ...current, text } : current))
+                  }
                   onCopyMessage={(target, text) => void copyText(target, text)}
                   onCopyTurn={(target, text) => void copyText(target, text)}
+                  onEditMessage={canEditMessages ? () => void beginEditingMessage(turn) : undefined}
                   onOpenFile={sessionRepo ? (path) => openFile(sessionRepo, path, true) : undefined}
+                  onSubmitEdit={() => void sendEditedMessage()}
                   searchQuery={transcriptQuery}
+                  sendingEdit={sending && editingMessage?.id === turn.id}
                   turn={turn}
                   turnElementId={agentTurnElementId(sessionId, turn.index)}
                 />
@@ -1559,9 +1699,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               scrollToAgentTurn(sessionId, turnIndex, "start");
             }}
           />
-          {session && (
-            <AgentHostContextStrip session={session} />
-          )}
+          {session && <AgentHostContextStrip session={session} />}
           {mascotAwake && <AgentMascotPanel agentType={agentType} repo={repo} />}
           {reviewSummary && (
             <AgentReviewSummaryPanel
@@ -1648,19 +1786,41 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             window.setTimeout(() => composerInputRef.current?.focus(), 0);
           }}
           onToggle={() =>
-            void executeHostCommand(
-              "goal",
-              session.goal?.status === "active" ? "pause" : "resume",
-            )
+            void executeHostCommand("goal", session.goal?.status === "active" ? "pause" : "resume")
           }
         />
       )}
 
       <form
         className="agent-panel__composer"
+        hidden={Boolean(editingMessage)}
         onSubmit={onSubmit}
         title={agentComposerTitle(agentType, repo)}
       >
+        {queuedMessages.length > 0 && (
+          <div className="agent-panel__queue" aria-label="Mensajes en cola">
+            <span>{queuedMessages.length} en cola</span>
+            <div className="agent-panel__queue-items">
+              {queuedMessages.map((message, index) => (
+                <div className="agent-panel__queue-item" key={message.id}>
+                  <small>{index + 1}</small>
+                  <span title={message.text}>{message.text}</span>
+                  <button
+                    aria-label={`Quitar mensaje ${index + 1} de la cola`}
+                    onClick={() =>
+                      setQueuedMessages((current) =>
+                        current.filter((queued) => queued.id !== message.id),
+                      )
+                    }
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <span className="sr-only" id={composerHintId}>
           {readOnly
             ? "Escribe un mensaje para retomar esta conversación archivada."
@@ -1668,7 +1828,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               ? "Escribe / para ver comandos o $ para ver skills."
               : "El compositor no está disponible."}
         </span>
-        {runtimeProvider && !readOnly && (
+        {runtimeProvider && (
           <AgentRuntimeControls
             catalog={runtimeCatalog}
             idBase={`agent-${sessionId}`}
@@ -1677,7 +1837,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             model={selectedModel}
             reasoning={selectedReasoning}
             speed={selectedSpeed}
-            disabled={!canCompose}
+            disabled={!composerEnabled}
             notice={runtimeNotice}
             onMenuChange={setRuntimeMenu}
             onModelChange={(value) => {
@@ -1700,7 +1860,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               setSelectedModel(preset.model);
               setSelectedReasoning(preset.reasoning);
               setSelectedSpeed(preset.speed);
-              setRuntimeNotice(`Preset aplicado: ${preset.name}.`);
+              setRuntimeNotice(null);
             }}
             onReasoningChange={(value) => {
               setSelectedReasoning(value);
@@ -1711,11 +1871,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             onRefreshCatalog={() => setRuntimeCatalogRefreshKey((current) => current + 1)}
             onSpeedChange={(value) => {
               setSelectedSpeed(value);
-              setRuntimeNotice(
-                value === "fast"
-                  ? "Perfil rápido para el próximo turno."
-                  : "Perfil normal para el próximo turno.",
-              );
+              setRuntimeNotice(value === "fast" ? "Perfil rápido para el próximo turno." : null);
             }}
           />
         )}
@@ -1828,6 +1984,28 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             disabled={!canCompose}
             rows={2}
           />
+          <button
+            aria-label="Encolar para el siguiente turno"
+            className="agent-panel__queue-action"
+            disabled={!canSend || !turnActive}
+            hidden={!turnActive}
+            onClick={() => void sendDraft("queue")}
+            title="Guardar este mensaje y enviarlo cuando termine el turno actual"
+            type="button"
+          >
+            Encolar
+          </button>
+          <button
+            aria-label="Intervenir en el turno activo"
+            className="agent-panel__steer"
+            disabled={!canSend || !turnActive || !isCodexSession}
+            hidden={!turnActive || !isCodexSession}
+            onClick={() => void sendDraft("steer")}
+            title="Enviar este mensaje al turno que Codex está ejecutando ahora"
+            type="button"
+          >
+            Intervenir
+          </button>
           <button
             className="agent-panel__send"
             type="submit"
@@ -2739,9 +2917,10 @@ function goalStatusLabel(status: NonNullable<AgentSession["goal"]>["status"]): s
 }
 
 function goalUsageLabel(goal: NonNullable<AgentSession["goal"]>): string {
-  const elapsed = goal.time_used_seconds < 60
-    ? `${goal.time_used_seconds} s`
-    : `${Math.floor(goal.time_used_seconds / 60)} min`;
+  const elapsed =
+    goal.time_used_seconds < 60
+      ? `${goal.time_used_seconds} s`
+      : `${Math.floor(goal.time_used_seconds / 60)} min`;
   if (!goal.token_budget) return elapsed;
   return `${new Intl.NumberFormat("es-ES", { notation: "compact" }).format(goal.tokens_used)} / ${new Intl.NumberFormat("es-ES", { notation: "compact" }).format(goal.token_budget)} · ${elapsed}`;
 }
@@ -2979,57 +3158,59 @@ function AgentTurnFocus({
 
 function AgentTurn({
   copiedTarget,
+  editingMessage,
   firstTurnAtMs,
   focused,
+  onCancelEdit,
+  onChangeEditText,
   onCopyMessage,
   onCopyTurn,
+  onEditMessage,
   onOpenFile,
+  onSubmitEdit,
   searchQuery,
+  sendingEdit,
   turn,
   turnElementId,
 }: {
   copiedTarget: string | null;
+  editingMessage: EditingAgentMessage | null;
   firstTurnAtMs: number | null;
   focused: boolean;
+  onCancelEdit: () => void;
+  onChangeEditText: (text: string) => void;
   onCopyMessage: (target: string, text: string) => void;
   onCopyTurn: (target: string, text: string) => void;
+  onEditMessage?: () => void;
   onOpenFile?: (path: string) => void;
+  onSubmitEdit: () => void;
   searchQuery: string;
+  sendingEdit: boolean;
   turn: AgentTurnView;
   turnElementId: string;
 }) {
   const timeLabel = turnTimeLabel(turn, firstTurnAtMs);
   const turnTarget = `${turn.id}:turn`;
   const artifactSummary = turnArtifactSummary(turn.changes);
-  const commandSummary = turnCommandSummaryText(turn);
   const searchMatches = agentTurnSearchMatches(turn, searchQuery);
   const searchMatchesLabel = `Coincidencias de búsqueda del turno ${turn.index}`;
   const turnCopied = copiedTarget === turnTarget;
+  const displayItems = groupTurnEvents(turn.events);
   return (
     <article
       aria-current={focused ? "true" : undefined}
       className={`agent-panel__chat-turn${focused ? " agent-panel__chat-turn--focused" : ""}`}
       id={turnElementId}
-      title={conversationTurnContainerTitle(turn, focused)}
     >
-      <div
-        className="agent-panel__chat-turn-head"
-        title={conversationTurnHeaderContainerTitle(turn.index)}
-      >
-        <div
-          className="agent-panel__chat-turn-title"
-          title={conversationTurnTitleContainerTitle(turn.index)}
-        >
-          <span title={turnIndexLabelTitle(turn.index)}>Turno {turn.index}</span>
-          <small title={turnSummaryTitle(turn)}>{turnSummaryLabel(turn)}</small>
+      <div className="agent-panel__chat-turn-head">
+        <div className="agent-panel__chat-turn-title">
+          <span>Turno {turn.index}</span>
+          <small>{turnSummaryLabel(turn)}</small>
         </div>
-        <div
-          className="agent-panel__chat-turn-meta"
-          title={conversationTurnMetadataContainerTitle(turn.index)}
-        >
-          {timeLabel && <small title={turnTimeTitle(turn.index, timeLabel)}>{timeLabel}</small>}
+        <div className="agent-panel__chat-turn-meta">
+          {timeLabel && <small>{timeLabel}</small>}
           {turn.changes.length > 0 && (
-            <small title={turnTouchedFilesTitle(turn.index, turn.changes.length)}>
+            <small>
               {turn.changes.length}{" "}
               {turn.changes.length === 1 ? "archivo modificado" : "archivos modificados"}
             </small>
@@ -3037,12 +3218,9 @@ function AgentTurn({
           <button
             className="agent-panel__turn-copy"
             onClick={() => onCopyTurn(turnTarget, turnTranscriptText(turn, firstTurnAtMs))}
-            title={turnCopyButtonTitle(turn.index, turnCopied)}
             type="button"
           >
-            <span title={turnCopyLabelTitle(turnCopied ? "Copiado" : "Copiar turno")}>
-              {turnCopied ? "Copiado" : "Copiar turno"}
-            </span>
+            <span>{turnCopied ? "Copiado" : "Copiar turno"}</span>
           </button>
         </div>
       </div>
@@ -3050,103 +3228,80 @@ function AgentTurn({
         <div
           className="agent-panel__turn-artifacts"
           aria-label={`Resumen de artefactos del turno ${turn.index}`}
-          title={turnArtifactSummaryContainerTitle(turn.index, artifactSummary.length)}
         >
           {artifactSummary.map((item) => (
-            <span key={item.kind} title={turnArtifactSummaryChipTitle(turn.index, item)}>
+            <span key={item.kind}>
               {artifactKindLabel(item.kind)} {item.count}
             </span>
           ))}
         </div>
       )}
-      {commandSummary && (
-        <div
-          className="agent-panel__turn-commands"
-          aria-label={`Resumen de comandos del turno ${turn.index}`}
-          title={turnCommandSummaryContainerTitle(turn.index)}
-        >
-          <span title={turnCommandSummaryTitle(turn.index, commandSummary)}>
-            Comando reciente: {commandSummary}
-          </span>
-        </div>
-      )}
       {searchMatches.length > 0 && (
-        <div
-          className="agent-panel__turn-search-matches"
-          aria-label={searchMatchesLabel}
-          title={`${searchMatchesLabel}: explica por qué este turno coincide con la búsqueda.`}
-        >
+        <div className="agent-panel__turn-search-matches" aria-label={searchMatchesLabel}>
           {searchMatches.map((match) => (
-            <span key={match.key} title={match.title}>
-              {match.label}
-            </span>
+            <span key={match.key}>{match.label}</span>
           ))}
         </div>
       )}
       {turn.userText && (
         <AgentMessageBlock
           copied={copiedTarget === `${turn.id}:user`}
-          copyTitle={messageCopyButtonTitle(turn.index, "You", copiedTarget === `${turn.id}:user`)}
           kind="user_message"
           label="Tú"
           onCopy={() => onCopyMessage(`${turn.id}:user`, turn.userText ?? "")}
+          editState={
+            editingMessage
+              ? {
+                  text: editingMessage.text,
+                  sending: sendingEdit,
+                  onCancel: onCancelEdit,
+                  onChange: onChangeEditText,
+                  onSubmit: onSubmitEdit,
+                }
+              : undefined
+          }
+          onEdit={onEditMessage}
+          onOpenFile={onOpenFile}
           text={turn.userText}
           turnIndex={turn.index}
+          attachments={turn.attachments}
         />
       )}
-      {turn.agentText.map((text, index) => (
-        <AgentMessageBlock
-          copied={copiedTarget === `${turn.id}:agent:${index}`}
-          copyTitle={messageCopyButtonTitle(
-            turn.index,
-            "Agent",
-            copiedTarget === `${turn.id}:agent:${index}`,
-          )}
-          kind="agent_message"
-          label="Agent"
-          onCopy={() => onCopyMessage(`${turn.id}:agent:${index}`, text)}
-          text={text}
-          key={`a-${index}`}
-          turnIndex={turn.index}
-        />
-      ))}
-      {turn.commandText.map((text, index) => (
-        <AgentMessageBlock
-          copied={copiedTarget === `${turn.id}:command:${index}`}
-          copyTitle={messageCopyButtonTitle(
-            turn.index,
-            "Comando",
-            copiedTarget === `${turn.id}:command:${index}`,
-          )}
-          kind="command_output"
-          label="Comando"
-          onCopy={() => onCopyMessage(`${turn.id}:command:${index}`, text)}
-          text={text}
-          key={`c-${index}`}
-          turnIndex={turn.index}
-        />
-      ))}
-      {turn.systemText.map((text, index) => (
-        <AgentMessageBlock
-          copied={copiedTarget === `${turn.id}:system:${index}`}
-          copyTitle={messageCopyButtonTitle(
-            turn.index,
-            "Sistema",
-            copiedTarget === `${turn.id}:system:${index}`,
-          )}
-          kind="lifecycle"
-          label="Sistema"
-          onCopy={() => onCopyMessage(`${turn.id}:system:${index}`, text)}
-          text={text}
-          key={`s-${index}`}
-          turnIndex={turn.index}
-        />
-      ))}
+      {displayItems.map((item) => {
+        if (item.type === "thought") {
+          return (
+            <AgentThoughtDisclosure
+              defaultOpen={item.defaultOpen}
+              events={item.events}
+              key={item.id}
+              onOpenFile={onOpenFile}
+            />
+          );
+        }
+        const event = item.event;
+        const label =
+          event.kind === "steer_message"
+            ? "Tú"
+            : event.kind === "agent_message"
+              ? "Agent"
+              : event.kind === "command_output"
+                ? "Comando"
+                : "Sistema";
+        return (
+          <AgentMessageBlock
+            copied={copiedTarget === `${turn.id}:event:${event.id}`}
+            kind={event.kind}
+            label={label}
+            onCopy={() => onCopyMessage(`${turn.id}:event:${event.id}`, event.text)}
+            onOpenFile={onOpenFile}
+            text={event.text}
+            key={event.id}
+            turnIndex={turn.index}
+          />
+        );
+      })}
       {turn.changes.length > 0 && (
-        <div
-          className="agent-panel__chat-turn-files"
-          title={conversationTurnTouchedFilesContainerTitle(turn.index, turn.changes.length)}
-        >
+        <div className="agent-panel__chat-turn-files">
           {turn.changes.map((change) => (
             <button
               aria-label={`Abrir diff de ${change.path}`}
@@ -3154,7 +3309,6 @@ function AgentTurn({
               disabled={!onOpenFile}
               key={`${change.kind}:${change.path}`}
               onClick={() => onOpenFile?.(change.path)}
-              title={turnTouchedFileTitle(turn.index, change.kind, change.path)}
               type="button"
             >
               <span
@@ -3173,83 +3327,267 @@ function AgentTurn({
   );
 }
 
+function AgentThoughtDisclosure({
+  defaultOpen,
+  events,
+  onOpenFile,
+}: {
+  defaultOpen: boolean;
+  events: AgentTurnEventView[];
+  onOpenFile?: (path: string) => void;
+}) {
+  const latest = events[events.length - 1];
+  const summary = compactProcessLabel(latest?.text ?? "") ?? "Actividad del agente";
+  return (
+    <details className="agent-panel__thought" open={defaultOpen || undefined}>
+      <summary>
+        <span>Pensamiento</span>
+        <small>{summary}</small>
+        <span aria-hidden="true" className="agent-panel__thought-chevron">
+          ›
+        </span>
+      </summary>
+      <div className="agent-panel__thought-events">
+        {events.map((event) => (
+          <div className="agent-panel__thought-event" key={event.id}>
+            <AgentMarkdown onOpenFile={onOpenFile} text={event.text} />
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function AgentMessageBlock({
+  attachments = [],
   copied,
-  copyTitle,
+  editState,
   kind,
   label,
   onCopy,
+  onEdit,
+  onOpenFile,
   text,
   turnIndex,
 }: {
+  attachments?: AgentSessionAttachment[];
   copied: boolean;
-  copyTitle: string;
+  editState?: {
+    text: string;
+    sending: boolean;
+    onCancel: () => void;
+    onChange: (text: string) => void;
+    onSubmit: () => void;
+  };
   kind: AgentSessionTimelineItem["kind"];
   label: string;
   onCopy: () => void;
+  onEdit?: () => void;
+  onOpenFile?: (path: string) => void;
   text: string;
   turnIndex: number;
 }) {
   const technical = kind === "command_output";
+  const progress = kind === "activity" || kind === "agent_progress";
+  const visualKind = kind === "steer_message" ? "user_message" : kind;
   const commandSummary = technical ? commandOutputSummary(text) : null;
   const commandSummaryLabel = commandSummary ?? "Salida del comando";
   const collapseCommand = technical && shouldCollapseCommandOutput(text);
-  return (
-    <div
-      className={`agent-panel__message agent-panel__message--${kind}`}
-      title={messageBlockContainerTitle(turnIndex, label)}
-    >
-      <div className="agent-panel__message-head" title={messageHeaderTitle(label)}>
-        <div className="agent-panel__message-role" title={messageRoleLabelTitle(label)}>
-          {label}
+  if (progress) {
+    return (
+      <div className={`agent-panel__message agent-panel__message--${visualKind}`} role="note">
+        <span className="agent-panel__message-activity-signal" aria-hidden="true" />
+        <div className="agent-panel__message-activity-copy">
+          <AgentMarkdown onOpenFile={onOpenFile} text={text} />
         </div>
-        <button
-          className="agent-panel__message-copy"
-          aria-label={`Copiar mensaje de ${label}`}
-          onClick={onCopy}
-          title={copyTitle}
-          type="button"
+      </div>
+    );
+  }
+  if (editState && visualKind === "user_message") {
+    return (
+      <div className="agent-panel__message agent-panel__message--user_message agent-panel__message--editing">
+        <form
+          className="agent-panel__inline-editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            editState.onSubmit();
+          }}
         >
-          <span title={messageCopyLabelTitle(copied ? "Copiado" : "Copiar")}>
-            {copied ? "Copiado" : "Copiar"}
-          </span>
-        </button>
+          {attachments.length > 0 && <AgentMessageAttachments attachments={attachments} />}
+          <textarea
+            aria-label={`Editar mensaje del turno ${turnIndex}`}
+            autoFocus
+            disabled={editState.sending}
+            onChange={(event) => editState.onChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                editState.onCancel();
+              } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            rows={Math.max(2, Math.min(8, editState.text.split("\n").length))}
+            value={editState.text}
+          />
+          <div className="agent-panel__inline-editor-actions">
+            <span>Se creará una rama desde este mensaje</span>
+            <button disabled={editState.sending} onClick={editState.onCancel} type="button">
+              Cancelar
+            </button>
+            <button
+              className="agent-panel__inline-editor-submit"
+              disabled={editState.sending || !editState.text.trim()}
+              type="submit"
+            >
+              {editState.sending ? "Creando rama…" : "Crear rama"}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+  return (
+    <div className={`agent-panel__message agent-panel__message--${visualKind}`}>
+      <div className="agent-panel__message-head">
+        <div className="agent-panel__message-role">{label}</div>
+        <div className="agent-panel__message-actions">
+          {onEdit && (
+            <button
+              aria-label={`Editar mensaje del turno ${turnIndex}`}
+              className="agent-panel__message-edit"
+              onClick={onEdit}
+              type="button"
+            >
+              Editar
+            </button>
+          )}
+          <button
+            className="agent-panel__message-copy"
+            aria-label={`Copiar mensaje de ${label}`}
+            onClick={onCopy}
+            type="button"
+          >
+            <span>{copied ? "Copiado" : "Copiar"}</span>
+          </button>
+        </div>
       </div>
       {technical ? (
         collapseCommand ? (
-          <details
-            className="agent-panel__command-block"
-            title={collapsedCommandBlockTitle(turnIndex)}
-          >
-            <summary title={collapsedCommandSummaryRowTitle(turnIndex)}>
-              <span title={collapsedCommandSummaryLabelTitle(commandSummaryLabel)}>
-                {commandSummaryLabel}
-              </span>
-              <small title={collapsedCommandDisclosureLabelTitle()}>Mostrar salida</small>
+          <details className="agent-panel__command-block">
+            <summary>
+              <span>{commandSummaryLabel}</span>
+              <small>Mostrar salida</small>
             </summary>
-            <pre
-              className="agent-panel__message-terminal"
-              title={messageTerminalContentTitle(turnIndex)}
-            >
-              {text}
-            </pre>
+            <pre className="agent-panel__message-terminal">{text}</pre>
           </details>
         ) : (
-          <pre
-            className="agent-panel__message-terminal"
-            title={messageTerminalContentTitle(turnIndex)}
-          >
-            {text}
-          </pre>
+          <pre className="agent-panel__message-terminal">{text}</pre>
         )
       ) : (
-        <div
-          className="agent-panel__markdown"
-          title={messageMarkdownContentTitle(turnIndex, label)}
-        >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+        <div className="agent-panel__markdown">
+          {attachments.length > 0 && <AgentMessageAttachments attachments={attachments} />}
+          <AgentMarkdown onOpenFile={onOpenFile} text={text} />
         </div>
       )}
+    </div>
+  );
+}
+
+function AgentMarkdown({
+  onOpenFile,
+  text,
+}: {
+  onOpenFile?: (path: string) => void;
+  text: string;
+}) {
+  return (
+    <ReactMarkdown
+      components={{
+        a: ({ children, href }) => {
+          const repoPath = markdownRepoPath(href);
+          if (repoPath && onOpenFile) {
+            return (
+              <button
+                className="agent-panel__markdown-file-link"
+                data-repo-path={repoPath}
+                type="button"
+              >
+                {children}
+              </button>
+            );
+          }
+          return (
+            <a href={href} rel="noreferrer" target="_blank">
+              {children}
+            </a>
+          );
+        },
+      }}
+      remarkPlugins={[remarkGfm]}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+}
+
+function markdownRepoPath(href: string | undefined): string | null {
+  if (!href || href === "/" || href.startsWith("#")) return null;
+  const windowsPath = /^[a-z]:[\\/]/i.test(href);
+  if (!windowsPath && /^[a-z][a-z\d+.-]*:/i.test(href)) return null;
+  const withoutLocation = href.split(/[?#]/, 1)[0];
+  if (!withoutLocation) return null;
+  try {
+    return decodeURIComponent(withoutLocation).replace(/\\/g, "/").replace(/^\.\//, "");
+  } catch {
+    return withoutLocation.replace(/\\/g, "/").replace(/^\.\//, "");
+  }
+}
+
+function AgentMessageAttachments({ attachments }: { attachments: AgentSessionAttachment[] }) {
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const imageKey = attachments
+    .filter((attachment) => attachment.is_image)
+    .map((item) => item.path)
+    .join("\n");
+
+  useEffect(() => {
+    let active = true;
+    const imagePaths = imageKey ? imageKey.split("\n") : [];
+    void Promise.all(
+      imagePaths.map(async (path) => {
+        try {
+          return [path, await getAgentImagePreview(path)] as const;
+        } catch {
+          return [path, null] as const;
+        }
+      }),
+    ).then((results) => {
+      if (!active) return;
+      setPreviews(
+        Object.fromEntries(
+          results.filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+        ),
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [imageKey]);
+
+  return (
+    <div className="agent-panel__message-attachments" aria-label="Archivos adjuntos del mensaje">
+      {attachments.map((attachment) => (
+        <div className="agent-panel__message-attachment" key={attachment.path}>
+          {previews[attachment.path] ? (
+            <img alt={`Vista previa de ${attachment.name}`} src={previews[attachment.path]} />
+          ) : (
+            <span aria-hidden="true">{agentAttachmentExtension(attachment.name)}</span>
+          )}
+          <small>{attachment.name}</small>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3279,6 +3617,7 @@ function agentProcessState(
   sending: boolean,
   agentType: string,
   readOnly: boolean,
+  timeline: AgentSessionTimelineItem[],
 ): AgentProcessView | null {
   if (readOnly) return null;
   const name = agentLabel(agentType);
@@ -3294,7 +3633,7 @@ function agentProcessState(
     return { label: `${name} está revisando cambios`, phase: "VERIFICANDO", tone: "settling" };
   }
   if (session.turn_status === "working") {
-    const activity = latestAgentActivity(session);
+    const activity = latestAgentActivity(timeline);
     if (activity) {
       return { label: activity, phase: "ACTIVIDAD", tone: "thinking" };
     }
@@ -3303,17 +3642,24 @@ function agentProcessState(
   return null;
 }
 
-function latestAgentActivity(session: AgentSession): string | null {
+function latestAgentActivity(timeline: AgentSessionTimelineItem[]): string | null {
   let lastUserAt = 0;
-  let lastResponseAt = 0;
   let activity: AgentSessionTimelineItem | null = null;
-  for (const item of session.timeline ?? []) {
+  for (const item of timeline) {
     if (item.kind === "user_message") lastUserAt = item.timestamp_ms;
-    if (item.kind === "agent_message") lastResponseAt = item.timestamp_ms;
-    if (item.kind === "activity") activity = item;
+    if (item.kind === "activity" || item.kind === "agent_progress") activity = item;
   }
-  if (!activity || activity.timestamp_ms < Math.max(lastUserAt, lastResponseAt)) return null;
-  return activity.text.trim() || null;
+  if (!activity || activity.timestamp_ms < lastUserAt) return null;
+  return compactProcessLabel(activity.text);
+}
+
+function compactProcessLabel(text: string): string | null {
+  const firstLine = text
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.replace(/^\s*[-*#]+\s*/, "").trim())
+    .find(Boolean);
+  if (!firstLine) return null;
+  return firstLine.length > 110 ? `${firstLine.slice(0, 107)}...` : firstLine;
 }
 
 function shouldCollapseCommandOutput(text: string): boolean {
@@ -3327,10 +3673,6 @@ function commandOutputSummary(text: string): string {
     .find(Boolean);
   if (!firstLine) return "Salida del comando";
   return firstLine.length > 96 ? `${firstLine.slice(0, 93)}...` : firstLine;
-}
-
-function agentErrorBannerTitle(error: string): string {
-  return `Aviso de error de la sesión de Agent: ${error}`;
 }
 
 function emptyChatContainerTitle(hasTranscriptQuery: boolean, readOnly: boolean): string {
@@ -3359,26 +3701,6 @@ function emptyChatHelperTextTitle(): string {
 
 function emptyChatClearSearchActionTitle(): string {
   return "Acción del estado vacío de la conversación con Agent: borrar la búsqueda, recuperar todos los turnos y devolver el foco al buscador.";
-}
-
-function agentHeaderTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Cabecera de ${agentLabel(agentType)} para ${repoLabel}: identidad, estado y controles de sesión.`;
-}
-
-function agentPanelTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Superficie de la sesión de ${agentLabel(agentType)} para ${repoLabel}: cabecera, estado, conversación, Agent Lens y compositor.`;
-}
-
-function agentWorkspaceTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Espacio de trabajo de ${agentLabel(agentType)} para ${repoLabel}: resumen, actividad, conversación, panel de inspección y compositor.`;
-}
-
-function agentChatShellTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Contenedor de chat de ${agentLabel(agentType)} para ${repoLabel}: herramientas de transcripción y columna de conversación.`;
 }
 
 function agentSideRailTitle(agentType: string, repo?: string): string {
@@ -3449,10 +3771,20 @@ function agentCommandEmptyTitle(
 function readComposerCommandTrigger(
   value: string,
 ): { trigger: AgentComposerCommandTrigger; query: string } | null {
-  const match = value.match(COMPOSER_COMMAND_TRIGGER_RE);
+  const match = findComposerCommandTrigger(value);
+  return match ? { trigger: match.trigger, query: match.query } : null;
+}
+
+function findComposerCommandTrigger(value: string): ComposerCommandTriggerMatch | null {
+  const match = value.match(COMPOSER_SLASH_TRIGGER_RE) ?? value.match(COMPOSER_SKILL_TRIGGER_RE);
   const trigger = match?.[2];
-  if (trigger !== "/" && trigger !== "$") return null;
-  return { trigger, query: match?.[3] ?? "" };
+  if (!match || match.index == null || (trigger !== "/" && trigger !== "$")) return null;
+  return {
+    boundary: match[1] ?? "",
+    index: match.index,
+    query: match[3] ?? "",
+    trigger,
+  };
 }
 
 function filterComposerCommands(
@@ -3513,10 +3845,13 @@ function nextComposerCommandIndex(current: number, count: number, forward: boole
 }
 
 function replaceDraftComposerCommand(current: string, replacement: string): string {
-  const match = current.match(COMPOSER_COMMAND_TRIGGER_RE);
-  if (!match || match.index == null) {
+  const match = findComposerCommandTrigger(current);
+  if (!match) {
     const trimmed = current.trimEnd();
     return trimmed ? `${trimmed}\n\n${replacement}` : replacement;
+  }
+  if (match.boundary !== "" && match.boundary !== "\n") {
+    return `${current.slice(0, match.index + match.boundary.length)}${replacement}`;
   }
   const prefix = current.slice(0, match.index);
   const trimmedPrefix = prefix.trimEnd();
@@ -3524,6 +3859,10 @@ function replaceDraftComposerCommand(current: string, replacement: string): stri
 }
 
 function clearDraftComposerCommand(current: string): string {
+  const trigger = findComposerCommandTrigger(current);
+  if (trigger) {
+    return current.slice(0, trigger.index).trimEnd();
+  }
   const match = current.match(COMPOSER_COMMAND_LINE_RE);
   if (!match || match.index == null) return current;
   const prefix = current.slice(0, match.index);
@@ -3551,6 +3890,10 @@ function runtimeSelectionsFromOptions(options: AgentSessionRuntimeOptions): {
     reasoning: normalizedRuntimeSelection(options.reasoning_effort),
     speed: options.speed === "fast" ? "fast" : "standard",
   };
+}
+
+function runtimeOptionsHaveSelection(options: AgentSessionRuntimeOptions): boolean {
+  return Boolean(options.model || options.reasoning_effort || options.speed);
 }
 
 function applyCodexRuntimeSlashCommand(
@@ -3691,16 +4034,6 @@ function agentComposerSendLabelTitle(sending: boolean): string {
   return `Acción de envío del compositor: ${sending ? "Enviando" : "Enviar"}.`;
 }
 
-function agentIdentityTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Identidad de ${agentLabel(agentType)} para ${repoLabel}: nombre de Agent y etiqueta del repositorio.`;
-}
-
-function agentHeaderActionsTitle(agentType: string, repo: string | undefined): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Acciones de cabecera de ${agentLabel(agentType)} para ${repoLabel}: controles Detener y Revertir.`;
-}
-
 function agentStopControlTitle(
   agentType: string,
   repo: string | undefined,
@@ -3719,10 +4052,6 @@ function agentStopControlTitle(
     return `Detener la sesión en ejecución de ${agentLabel(agentType)} en ${repoLabel}.`;
   }
   return `Detener ${agentLabel(agentType)} en ${repoLabel}: la sesión no está en ejecución.`;
-}
-
-function agentStopControlLabelTitle(stopping: boolean): string {
-  return `Acción para detener Agent: ${stopping ? "Deteniendo" : "Detener"}.`;
 }
 
 function agentRevertControlTitle(
@@ -3750,64 +4079,6 @@ function agentRevertControlTitle(
     return `Revertir los cambios de la sesión de ${agentLabel(agentType)} en ${repoLabel}.`;
   }
   return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: detén la sesión antes de revertir.`;
-}
-
-function agentRevertControlLabelTitle(reverting: boolean): string {
-  return `Acción para revertir Agent: ${reverting ? "Revirtiendo" : "Revertir"}.`;
-}
-
-function agentLogoTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Logotipo de ${agentLabel(agentType)} para ${repoLabel}: marca de Agent.`;
-}
-
-function agentRepoLabelTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  if (!repo) {
-    return `Etiqueta del repositorio de ${agentLabel(agentType)} para ${repoLabel}: sin ruta de repositorio.`;
-  }
-  return `Etiqueta del repositorio de ${agentLabel(agentType)} para ${repoLabel}: ruta completa ${repo}.`;
-}
-
-function agentNameLabelTitle(agentType: string, repo?: string): string {
-  const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Etiqueta del nombre visible de ${agentLabel(agentType)} para ${repoLabel}.`;
-}
-
-function collapsedCommandSummaryLabelTitle(summary: string): string {
-  return `Resumen de la salida contraída del comando: ${summary}.`;
-}
-
-function collapsedCommandDisclosureLabelTitle(): string {
-  return "Etiqueta del control de salida contraída del comando: Mostrar salida.";
-}
-
-function collapsedCommandBlockTitle(turnIndex: number): string {
-  return `Contenedor de la salida contraída del comando del turno ${turnIndex}: control de resumen y texto completo de la salida.`;
-}
-
-function collapsedCommandSummaryRowTitle(turnIndex: number): string {
-  return `Fila de resumen de la salida contraída del comando del turno ${turnIndex}: actívala para mostrar u ocultar la salida completa.`;
-}
-
-function messageRoleLabelTitle(label: string): string {
-  return `Etiqueta del rol del mensaje de Agent: ${label}.`;
-}
-
-function messageBlockContainerTitle(turnIndex: number, label: string): string {
-  return `Bloque de mensaje de Agent del turno ${turnIndex}: contenido de ${label} y control para copiar.`;
-}
-
-function messageMarkdownContentTitle(turnIndex: number, label: string): string {
-  return `Contenido Markdown de ${label} renderizado para el turno ${turnIndex}.`;
-}
-
-function messageTerminalContentTitle(turnIndex: number): string {
-  return `Texto de salida de comandos del turno ${turnIndex}.`;
-}
-
-function messageHeaderTitle(label: string): string {
-  return `Cabecera del mensaje de Agent para ${label}: etiqueta de rol y control para copiar.`;
 }
 
 function SessionStatus({ session }: { session: AgentSession | undefined }) {
@@ -5791,7 +6062,9 @@ function agentSessionOverview(turns: AgentTurnView[]): AgentSessionOverviewView 
   let latest: string | null = null;
 
   for (const turn of turns) {
-    messages += (turn.userText ? 1 : 0) + turn.agentText.length + turn.systemText.length;
+    messages +=
+      (turn.userText ? 1 : 0) +
+      turn.events.filter((event) => event.kind !== "command_output").length;
     commands += turn.commandText.length;
     for (const change of turn.changes) files.add(change.path);
     latest = latestActivityText(turn) ?? latest;
@@ -5984,13 +6257,7 @@ function agentActivityThroughputFactTitle(throughput: string): string {
 }
 
 function latestActivityText(turn: AgentTurnView): string | null {
-  const candidates = [
-    turn.userText ?? "",
-    ...turn.agentText,
-    ...turn.commandText,
-    ...turn.systemText,
-  ].filter(Boolean);
-  return candidates[candidates.length - 1] ?? null;
+  return turn.events[turn.events.length - 1]?.text ?? turn.userText ?? null;
 }
 
 function turnTimeLabel(turn: AgentTurnView, firstTurnAtMs: number | null): string | null {
@@ -6045,9 +6312,17 @@ function turnTranscriptText(turn: AgentTurnView, firstTurnAtMs: number | null): 
   const parts: string[] = [`Turno ${turn.index}${timeLabel ? ` (${timeLabel})` : ""}`];
   if (artifactSummary) parts.push(`Artefactos: ${artifactSummary}.`);
   if (turn.userText) parts.push(`Tú:\n${turn.userText}`);
-  turn.agentText.forEach((text) => parts.push(`Agent:\n${text}`));
-  turn.commandText.forEach((text) => parts.push(`Comando:\n${text}`));
-  turn.systemText.forEach((text) => parts.push(`Sistema:\n${text}`));
+  turn.events.forEach((event) => {
+    const label =
+      event.kind === "steer_message"
+        ? "Tú"
+        : event.kind === "agent_message"
+          ? "Agent"
+          : event.kind === "command_output"
+            ? "Comando"
+            : "Sistema";
+    parts.push(`${label}:\n${event.text}`);
+  });
   if (turn.changes.length > 0) {
     parts.push(
       `Archivos:\n${turn.changes.map((change) => `- ${changeKindLabel(change.kind)} ${change.path}`).join("\n")}`,
@@ -6142,10 +6417,6 @@ function focusedTurnTimeTitle(turnIndex: number, timeLabel: string): string {
   return `Tiempo del turno seleccionado ${turnIndex} respecto al primero: ${timeLabel}.`;
 }
 
-function turnTimeTitle(turnIndex: number, timeLabel: string): string {
-  return `Tiempo del turno ${turnIndex} respecto al primero: ${timeLabel}.`;
-}
-
 function focusedTurnFactTitle(
   turnIndex: number,
   kind: "commands" | "files",
@@ -6183,43 +6454,6 @@ function focusedTurnLatestActivityTitle(turnIndex: number, latest: string): stri
 
 function focusedTurnSummaryTitle(turn: AgentTurnView): string {
   return `Cantidad de mensajes, comandos y archivos del turno seleccionado ${turn.index}: ${turnSummaryLabel(turn)}.`;
-}
-
-function turnSummaryTitle(turn: AgentTurnView): string {
-  return `Cantidad de mensajes, comandos y archivos del turno ${turn.index}: ${turnSummaryLabel(turn)}.`;
-}
-
-function conversationTurnContainerTitle(turn: AgentTurnView, focused: boolean): string {
-  const focusState = focused ? "seleccionado" : "no seleccionado";
-  return `Contenedor del turno ${turn.index} de la conversación: ${focusState}; ${turnSummaryLabel(turn)}.`;
-}
-
-function conversationTurnHeaderContainerTitle(turnIndex: number): string {
-  return `Cabecera del turno ${turnIndex} de la conversación: título, metadatos y control para copiar.`;
-}
-
-function conversationTurnTitleContainerTitle(turnIndex: number): string {
-  return `Título del turno ${turnIndex} de la conversación: etiqueta del turno y resumen de la transcripción.`;
-}
-
-function conversationTurnMetadataContainerTitle(turnIndex: number): string {
-  return `Metadatos del turno ${turnIndex} de la conversación: tiempo, cantidad de archivos modificados y control para copiar.`;
-}
-
-function turnIndexLabelTitle(turnIndex: number): string {
-  return `Etiqueta de índice del turno de la conversación: Turno ${turnIndex}.`;
-}
-
-function turnTouchedFilesTitle(turnIndex: number, count: number): string {
-  return `El turno ${turnIndex} modificó ${countLabel(count, "archivo", "archivos")}.`;
-}
-
-function conversationTurnTouchedFilesContainerTitle(turnIndex: number, count: number): string {
-  return `Archivos modificados del turno ${turnIndex} de la conversación: ${countLabel(count, "indicador", "indicadores")}.`;
-}
-
-function turnTouchedFileTitle(turnIndex: number, kind: string, path: string): string {
-  return `Archivo modificado en el turno ${turnIndex}: ${changeKindLabel(kind)} ${path}.`;
 }
 
 function agentLensFileTitle(turnIndex: number | null, kind: string, path: string): string {
@@ -6305,14 +6539,6 @@ function turnCommandSummaryTitle(turnIndex: number, commandSummary: string): str
   return `Resumen compacto de la salida de comandos reciente del turno ${turnIndex}: ${commandSummary}`;
 }
 
-function turnCommandSummaryContainerTitle(turnIndex: number): string {
-  return `Resumen de comandos del turno ${turnIndex} de la conversación: 1 resumen de comando reciente.`;
-}
-
-function turnArtifactSummaryContainerTitle(turnIndex: number, categoryCount: number): string {
-  return `Resumen de artefactos del turno ${turnIndex} de la conversación: ${countLabel(categoryCount, "categoría", "categorías")}.`;
-}
-
 function turnArtifactSummaryChipTitle(
   turnIndex: number,
   item: { kind: AgentLensArtifactKind; count: number },
@@ -6338,11 +6564,7 @@ function fileActionPrompt({
 }
 
 function turnSummaryLabel(turn: AgentTurnView): string {
-  const messages =
-    (turn.userText ? 1 : 0) +
-    turn.agentText.length +
-    turn.systemText.length +
-    turn.commandText.length;
+  const messages = (turn.userText ? 1 : 0) + turn.events.length;
   const parts = [countLabel(messages, "mensaje", "mensajes")];
   if (turn.commandText.length > 0) {
     parts.push(countLabel(turn.commandText.length, "comando", "comandos"));
@@ -6391,168 +6613,8 @@ function turnNoun(count: number): string {
   return count === 1 ? "turno" : "turnos";
 }
 
-function transcriptSearchNavigationTitle(
-  direction: "previous" | "next",
-  hasQuery: boolean,
-  matchCount: number,
-): string {
-  const label = direction === "previous" ? "anterior" : "siguiente";
-  if (!hasQuery) return `Busca en la transcripción para navegar al resultado ${label}.`;
-  if (matchCount < 2)
-    return `Se necesitan al menos dos turnos coincidentes para ir al resultado ${label}.`;
-  return `Ir al resultado ${label}`;
-}
-
-function transcriptSearchNavigationLabelTitle(direction: "previous" | "next"): string {
-  return `Etiqueta de navegación de la búsqueda en la transcripción: resultado ${direction === "previous" ? "anterior" : "siguiente"}.`;
-}
-
-function transcriptCopyButtonTitle(
-  hasQuery: boolean,
-  visibleCount: number,
-  totalCount: number,
-): string {
-  if (visibleCount === 0) return "No hay turnos visibles que copiar.";
-  if (hasQuery) {
-    return `Copiar ${visibleCount} ${turnNoun(visibleCount)} filtrados de ${totalCount} en total.`;
-  }
-  return `Copiar los ${totalCount} ${turnNoun(totalCount)} de la transcripción.`;
-}
-
-function latestTurnButtonTitle(
-  hasQuery: boolean,
-  visibleCount: number,
-  totalCount: number,
-): string {
-  if (visibleCount === 0) return "No hay turnos visibles a los que ir.";
-  if (hasQuery) {
-    return `Ir al último turno filtrado de ${totalCount} ${turnNoun(totalCount)} en total.`;
-  }
-  return `Ir al último de los ${totalCount} ${turnNoun(totalCount)} de la transcripción.`;
-}
-
-function transcriptSecondaryActionLabelTitle(
-  label: "Último" | "Copiar lo visible" | "Copiado",
-): string {
-  return `Acción secundaria de la transcripción: ${label}.`;
-}
-
 function transcriptClearSearchLabelTitle(): string {
   return "Borrar la búsqueda de la transcripción.";
-}
-
-function transcriptToolsContainerTitle(
-  hasQuery: boolean,
-  visibleCount: number,
-  totalCount: number,
-): string {
-  if (hasQuery) {
-    if (visibleCount === 0) {
-      return `Herramientas de la transcripción de Agent: búsqueda activa sin turnos coincidentes entre ${totalCount} ${turnNoun(totalCount)} en total.`;
-    }
-    return `Herramientas de la transcripción de Agent: búsqueda activa con ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
-  }
-  if (totalCount === 0) {
-    return "Herramientas de la transcripción de Agent: búsqueda, navegación por resultados y controles para ir al último turno y copiar, a la espera de turnos.";
-  }
-  return `Herramientas de la transcripción de Agent: búsqueda, navegación por resultados y controles para ir al último turno y copiar los ${totalCount} ${turnNoun(totalCount)}.`;
-}
-
-function transcriptSecondaryActionsTitle(
-  hasQuery: boolean,
-  visibleCount: number,
-  totalCount: number,
-): string {
-  if (visibleCount === 0) {
-    if (hasQuery) {
-      return `Acciones secundarias de la transcripción: no hay turnos coincidentes a los que ir o que copiar entre ${totalCount} ${turnNoun(totalCount)} en total.`;
-    }
-    return "Acciones secundarias de la transcripción: controles para ir al último turno y copiar lo visible, a la espera de turnos.";
-  }
-  if (hasQuery) {
-    return `Acciones secundarias de la transcripción: ir al último turno filtrado y copiar ${visibleCount} ${turnNoun(visibleCount)} filtrados de ${totalCount} en total.`;
-  }
-  return `Acciones secundarias de la transcripción: ir al último turno y copiar los ${totalCount} ${turnNoun(totalCount)}.`;
-}
-
-function transcriptSearchContainerTitle(
-  hasQuery: boolean,
-  visibleCount: number,
-  totalCount: number,
-): string {
-  if (hasQuery) {
-    if (visibleCount === 0) {
-      return `Búsqueda en la transcripción: ningún turno coincide entre ${totalCount} ${turnNoun(totalCount)} en total.`;
-    }
-    return `Búsqueda en la transcripción: ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
-  }
-  return `Búsqueda en la transcripción: encuentra mensajes, comandos y archivos entre ${totalCount} ${turnNoun(totalCount)}.`;
-}
-
-function transcriptSearchLabelTitle(): string {
-  return "Buscar en la transcripción.";
-}
-
-function transcriptSearchInputTitle(): string {
-  return "Busca mensajes, comandos o archivos. Pulsa Escape para borrar la búsqueda.";
-}
-
-function transcriptSearchCountTitle(
-  hasQuery: boolean,
-  visibleCount: number,
-  totalCount: number,
-): string {
-  if (hasQuery) {
-    return `Cantidad de resultados de la búsqueda en la transcripción: ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
-  }
-  return `Cantidad de resultados de la búsqueda en la transcripción: se muestran los ${totalCount} ${turnNoun(totalCount)}.`;
-}
-
-function activeSearchResultPositionTitle(activeIndex: number, matchCount: number): string {
-  if (activeIndex >= 0) {
-    return `Posición activa de la búsqueda en la transcripción: resultado ${activeIndex + 1} de ${matchCount} ${turnNoun(matchCount)} coincidentes.`;
-  }
-  return `Posición activa de la búsqueda en la transcripción: ningún resultado seleccionado entre ${matchCount} ${turnNoun(matchCount)} coincidentes.`;
-}
-
-function conversationContainerTitle(
-  hasQuery: boolean,
-  visibleCount: number,
-  totalCount: number,
-  readOnly: boolean,
-): string {
-  if (visibleCount === 0) {
-    if (hasQuery) {
-      return `Transcripción de la conversación con Agent: ningún turno coincide entre ${totalCount} ${turnNoun(totalCount)} en total.`;
-    }
-    return readOnly
-      ? "Transcripción de la conversación con Agent: no hay turnos guardados."
-      : "Transcripción de la conversación con Agent: lista para el primer turno.";
-  }
-  if (hasQuery) {
-    return `Transcripción de la conversación con Agent: ${visibleCount} ${turnNoun(visibleCount)} coincidentes entre ${totalCount} en total.`;
-  }
-  return `Transcripción de la conversación con Agent: se muestran los ${totalCount} ${turnNoun(totalCount)}.`;
-}
-
-function turnCopyButtonTitle(turnIndex: number, copied: boolean): string {
-  return copied
-    ? `Transcripción completa del turno ${turnIndex} copiada al portapapeles.`
-    : `Copiar la transcripción completa del turno ${turnIndex}, incluidos mensajes, comandos y archivos modificados.`;
-}
-
-function turnCopyLabelTitle(label: "Copiar turno" | "Copiado"): string {
-  return `Acción para copiar el turno de la conversación: ${label}.`;
-}
-
-function messageCopyButtonTitle(turnIndex: number, label: string, copied: boolean): string {
-  return copied
-    ? `Mensaje de ${label} del turno ${turnIndex} copiado al portapapeles.`
-    : `Copiar el mensaje de ${label} del turno ${turnIndex}.`;
-}
-
-function messageCopyLabelTitle(label: "Copiar" | "Copiado"): string {
-  return `Acción para copiar el mensaje: ${label}.`;
 }
 
 function agentTurnSearchText(turn: AgentTurnView): string {
@@ -6650,9 +6712,15 @@ function agentTurns(
           agentText: fallbackBlocks,
           commandText: [],
           systemText: [],
+          events: fallbackBlocks.map((text, index) => ({
+            id: `fallback-output:${index}`,
+            kind: "agent_message" as const,
+            text,
+          })),
           changes: [],
           restoreCheckpointId: null,
           restoreReady: false,
+          attachments: [],
         },
       ],
       session,
@@ -6667,7 +6735,7 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
   for (const item of timeline) {
     const text = item.kind === "agent_message" ? item.text : item.text.trim();
     if (!text.trim()) continue;
-    if (item.kind === "activity") continue;
+    if (!current && item.kind === "lifecycle" && /^session started$/i.test(text)) continue;
     if (item.kind === "user_message") {
       current = {
         id: item.id,
@@ -6678,9 +6746,11 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
         agentText: [],
         commandText: [],
         systemText: [],
+        events: [],
         changes: [],
         restoreCheckpointId: null,
         restoreReady: false,
+        attachments: item.attachments ?? [],
       };
       turns.push(current);
       continue;
@@ -6695,36 +6765,107 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
         agentText: [],
         commandText: [],
         systemText: [],
+        events: [],
         changes: [],
         restoreCheckpointId: null,
         restoreReady: false,
+        attachments: [],
       };
       turns.push(current);
     }
     current.updatedAtMs = item.timestamp_ms;
-    appendTimelineText(current, item.kind, text);
+    appendTimelineText(current, item, text);
   }
   return turns;
 }
 
-function appendTimelineText(
-  turn: AgentTurnView,
-  kind: AgentSessionTimelineItem["kind"],
-  text: string,
-) {
+function appendTimelineText(turn: AgentTurnView, item: AgentSessionTimelineItem, text: string) {
+  const kind = item.kind;
+  if (kind === "user_message") return;
+  const previousEvent = turn.events[turn.events.length - 1];
+  if (kind === "activity" || kind === "agent_progress") {
+    turn.events.push({ id: item.id, kind, text });
+    return;
+  }
+  if (kind === "steer_message") {
+    if (previousEvent?.kind === kind) {
+      previousEvent.text = `${previousEvent.text}${needsLineBreak(previousEvent.text, text) ? "\n" : ""}${text}`;
+    } else {
+      turn.events.push({ id: item.id, kind, text });
+    }
+    return;
+  }
   const target =
     kind === "command_output"
       ? turn.commandText
       : kind === "lifecycle"
         ? turn.systemText
         : turn.agentText;
-  const previous = target[target.length - 1];
-  if (previous) {
-    const separator = kind === "agent_message" ? "" : needsLineBreak(previous, text) ? "\n" : "";
-    target[target.length - 1] = `${previous}${separator}${text}`;
+  if (previousEvent?.kind === kind) {
+    const separator =
+      kind === "agent_message" ? "" : needsLineBreak(previousEvent.text, text) ? "\n" : "";
+    previousEvent.text = `${previousEvent.text}${separator}${text}`;
+    target[target.length - 1] = previousEvent.text;
   } else {
     target.push(text);
+    turn.events.push({ id: item.id, kind, text });
   }
+}
+
+function visibleTurnEvents(events: AgentTurnEventView[]): AgentTurnEventView[] {
+  const visible: AgentTurnEventView[] = [];
+  events.forEach((event, index) => {
+    const progress = event.kind === "activity" || event.kind === "agent_progress";
+    if (
+      event.kind === "agent_progress" &&
+      events
+        .slice(index + 1)
+        .some((later) => later.kind === "agent_message" && later.text.trim() === event.text.trim())
+    ) {
+      return;
+    }
+    const previous = visible[visible.length - 1];
+    if (
+      progress &&
+      previous &&
+      (previous.kind === "activity" || previous.kind === "agent_progress") &&
+      previous.text.trim() === event.text.trim()
+    ) {
+      return;
+    }
+    visible.push(event);
+  });
+  return visible;
+}
+
+function groupTurnEvents(events: AgentTurnEventView[]): AgentTurnDisplayItem[] {
+  const visible = visibleTurnEvents(events);
+  const items: AgentTurnDisplayItem[] = [];
+  let index = 0;
+  while (index < visible.length) {
+    const event = visible[index];
+    const progress = event.kind === "activity" || event.kind === "agent_progress";
+    if (!progress) {
+      items.push({ type: "event", event });
+      index += 1;
+      continue;
+    }
+    const thoughtEvents: AgentTurnEventView[] = [];
+    while (index < visible.length) {
+      const candidate = visible[index];
+      if (candidate.kind !== "activity" && candidate.kind !== "agent_progress") break;
+      thoughtEvents.push(candidate);
+      index += 1;
+    }
+    const resolved = visible.slice(index).some((candidate) => candidate.kind === "agent_message");
+    items.push({
+      type: "thought",
+      id: `thought:${thoughtEvents[0]?.id ?? index}`,
+      events: thoughtEvents,
+      defaultOpen: !resolved,
+    });
+  }
+  return items;
 }
 
 function attachmentFileName(path: string): string {
@@ -6760,9 +6901,11 @@ function attachCheckpointChanges(
         agentText: [],
         commandText: [],
         systemText: [],
+        events: [],
         changes: [],
         restoreCheckpointId: null,
         restoreReady: false,
+        attachments: [],
       };
       next.push(turn);
     }

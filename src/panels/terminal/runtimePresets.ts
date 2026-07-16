@@ -17,6 +17,7 @@ export interface RuntimePreset {
   speed: CodexSpeedSelection;
   icon: RuntimePresetIcon;
   color: string;
+  favorite: boolean;
 }
 
 export const DEFAULT_RUNTIME_PRESETS: RuntimePreset[] = [
@@ -28,6 +29,7 @@ export const DEFAULT_RUNTIME_PRESETS: RuntimePreset[] = [
     speed: "standard",
     icon: "calendar",
     color: "#2dd4bf",
+    favorite: true,
   },
   {
     id: "deep-work",
@@ -37,6 +39,7 @@ export const DEFAULT_RUNTIME_PRESETS: RuntimePreset[] = [
     speed: "standard",
     icon: "target",
     color: "#8b5cf6",
+    favorite: false,
   },
   {
     id: "quick-tasks",
@@ -46,6 +49,7 @@ export const DEFAULT_RUNTIME_PRESETS: RuntimePreset[] = [
     speed: "fast",
     icon: "bolt",
     color: "#f59e0b",
+    favorite: false,
   },
 ];
 
@@ -63,13 +67,19 @@ export function loadRuntimePresets(): RuntimePreset[] {
 }
 
 export function saveRuntimePresets(presets: RuntimePreset[]): RuntimePreset[] {
-  const safe = presets.map(parseRuntimePreset).filter(isPresent).slice(0, MAX_PRESETS);
+  const safe = normalizeFavorite(
+    presets.map(parseRuntimePreset).filter(isPresent).slice(0, MAX_PRESETS),
+  );
   try {
     globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(safe));
   } catch {
     // Presets remain usable for this session when storage is unavailable.
   }
   return safe;
+}
+
+export function loadFavoriteRuntimePreset(): RuntimePreset | null {
+  return loadRuntimePresets().find((preset) => preset.favorite) ?? null;
 }
 
 export function runtimePresetMatches(
@@ -101,18 +111,21 @@ function cloneDefaults(): RuntimePreset[] {
 function parseRuntimePreset(value: unknown): RuntimePreset | null {
   if (!value || typeof value !== "object") return null;
   const preset = value as Partial<RuntimePreset> & { accent?: string };
-  if (!(
-    typeof preset.id === "string" &&
-    preset.id.length > 0 &&
-    typeof preset.name === "string" &&
-    preset.name.trim().length > 0 &&
-    preset.name.length <= 40 &&
-    typeof preset.model === "string" &&
-    preset.model.length > 0 &&
-    typeof preset.reasoning === "string" &&
-    preset.reasoning.length > 0 &&
-    (preset.speed === "standard" || preset.speed === "fast")
-  )) return null;
+  if (
+    !(
+      typeof preset.id === "string" &&
+      preset.id.length > 0 &&
+      typeof preset.name === "string" &&
+      preset.name.trim().length > 0 &&
+      preset.name.length <= 40 &&
+      typeof preset.model === "string" &&
+      preset.model.length > 0 &&
+      typeof preset.reasoning === "string" &&
+      preset.reasoning.length > 0 &&
+      (preset.speed === "standard" || preset.speed === "fast")
+    )
+  )
+    return null;
   const icons: RuntimePresetIcon[] = ["calendar", "target", "bolt", "code", "compass", "spark"];
   const legacyColors: Record<string, string> = {
     mint: "#2dd4bf",
@@ -132,8 +145,14 @@ function parseRuntimePreset(value: unknown): RuntimePreset | null {
     color:
       typeof preset.color === "string" && /^#[0-9a-f]{6}$/i.test(preset.color)
         ? preset.color.toLowerCase()
-        : legacyColors[preset.accent ?? ""] ?? "#3b82f6",
+        : (legacyColors[preset.accent ?? ""] ?? "#3b82f6"),
+    favorite: preset.favorite === true,
   };
+}
+
+function normalizeFavorite(presets: RuntimePreset[]): RuntimePreset[] {
+  const favorite = presets.find((preset) => preset.favorite)?.id ?? null;
+  return presets.map((preset) => ({ ...preset, favorite: preset.id === favorite }));
 }
 
 function isPresent<T>(value: T | null): value is T {
