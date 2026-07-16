@@ -278,6 +278,38 @@ describe("useBusConnection", () => {
     expect(h.getSnapshot).not.toHaveBeenCalled();
   });
 
+  it("publishes initial config while the first repo snapshot is still loading", async () => {
+    const pendingSnapshot = deferred<{
+      watching: { available: boolean };
+      repos: RepoDelta[];
+    }>();
+    h.listWb.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        {
+          name: "Work",
+          repos: [{ path: "/r/work", alias: null, fs_watch: [] }],
+        },
+      ],
+    });
+    h.getSnapshot.mockReturnValueOnce(pendingSnapshot.promise);
+
+    const reload = reloadActiveWorkbench();
+    await waitFor(() => expect(h.getSnapshot).toHaveBeenCalledOnce());
+
+    expect(busStore.getState()).toMatchObject({
+      config: { active: "Work" },
+      configStatus: "ready",
+      loaded: false,
+      snapshotStatus: "loading",
+    });
+
+    pendingSnapshot.resolve({ watching: { available: true }, repos: [makeDelta("/r/work", 1)] });
+    await reload;
+    expect(busStore.getState()).toMatchObject({ loaded: true, snapshotStatus: "ready" });
+  });
+
   it("does not combine an old config with a new snapshot when a later config reload fails", async () => {
     act(() => {
       busStore.setConfig({ version: 1, active: "Work", workbenches: [] });

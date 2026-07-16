@@ -43,6 +43,9 @@ export async function reloadActiveWorkbench(): Promise<void> {
   try {
     config = await listWorkbenches();
     if (!isCurrentReload(generation)) return;
+    if (!hadUsableWorkbench) {
+      busStore.setConfig(config);
+    }
   } catch (error) {
     if (!isCurrentReload(generation)) return;
     const reason = snapshotFailureReason(error);

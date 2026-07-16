@@ -299,6 +299,7 @@ import {
   removeWslRepo,
   setSubscriptions,
   startAgentSession,
+  steerAgentSessionTurn,
   stopAgentSession,
   updateRepo,
   writeAgentSessionInput,
@@ -540,6 +541,16 @@ describe("RDM-008 client wrappers", () => {
       text: "Inspect this",
       attachmentPaths: ["C:\\Temp\\screen.png", "C:\\Temp\\brief.pdf"],
       options: { model: "gpt-5.5" },
+    });
+  });
+
+  it("steers the active provider turn with structured attachments", () => {
+    void steerAgentSessionTurn("sess-1", "También revisa esto", ["C:\\Temp\\screen.png"]);
+
+    expect(invokeMock).toHaveBeenCalledWith("steer_agent_session_turn", {
+      sessionId: "sess-1",
+      text: "También revisa esto",
+      attachmentPaths: ["C:\\Temp\\screen.png"],
     });
   });
 

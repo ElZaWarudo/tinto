@@ -197,7 +197,9 @@ export interface AgentSessionOutput {
 
 export type AgentSessionTimelineKind =
   | "user_message"
+  | "steer_message"
   | "agent_message"
+  | "agent_progress"
   | "command_output"
   | "activity"
   | "lifecycle";
@@ -208,6 +210,13 @@ export interface AgentSessionTimelineItem {
   kind: AgentSessionTimelineKind;
   text: string;
   timestamp_ms: number;
+  attachments?: AgentSessionAttachment[];
+}
+
+export interface AgentSessionAttachment {
+  path: string;
+  name: string;
+  is_image: boolean;
 }
 
 export interface AgentJournalSessionSummary {
@@ -220,6 +229,7 @@ export interface AgentJournalSessionSummary {
   ended_at_ms?: number | null;
   updated_at_ms: number;
   event_count: number;
+  first_user_message?: string | null;
   last_event_kind?: AgentSessionTimelineKind | null;
   last_event_text?: string | null;
   last_event_at_ms?: number | null;
@@ -538,6 +548,7 @@ export interface CuratedBusContractTypeMap {
   AgentSession: AgentSession;
   AgentSessionOutput: AgentSessionOutput;
   AgentSessionTimelineKind: AgentSessionTimelineKind;
+  AgentSessionAttachment: AgentSessionAttachment;
   AgentSessionTimelineItem: AgentSessionTimelineItem;
   AgentJournalSessionSummary: AgentJournalSessionSummary;
   AgentHostCommandStatus: AgentHostCommandStatus;
