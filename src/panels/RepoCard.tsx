@@ -266,7 +266,7 @@ function RepoCardImpl({
         <div className="repo-card__branch" data-testid="branch">
           <span className="repo-card__branch-name">{branchLabel(branch, head)}</span>
           {upstream && <span className="repo-card__upstream">{upstream}</span>}
-          {hasRemoteUpstream && source !== "wsl" && onFetch && (
+          {hasRemoteUpstream && onFetch && (
             <button
               type="button"
               className="repo-card__fetch"

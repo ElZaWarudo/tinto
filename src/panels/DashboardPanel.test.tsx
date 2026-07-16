@@ -87,6 +87,34 @@ describe("DashboardPanel", () => {
     renderDash();
     expect(screen.getByTestId("skeletons")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Cargando repos");
+    expect(screen.getByTestId("dashboard-loading-preview")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByTestId("dashboard-loading-overlay")).toBeInTheDocument();
+  });
+
+  it("previews configured repos behind the initial loading overlay", () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              { path: "/r/api", alias: "API", source: "local", distro: null, fs_watch: [] },
+              { path: "/r/web", alias: null, source: "local", distro: null, fs_watch: [] },
+            ],
+          },
+        ],
+      });
+    });
+
+    renderDash();
+
+    const preview = screen.getByTestId("dashboard-loading-preview");
+    expect(preview).toHaveTextContent("Work");
+    expect(preview).toHaveTextContent("API");
+    expect(preview).toHaveTextContent("web");
+    expect(screen.getByRole("status")).toHaveTextContent("Cargando repos");
   });
 
   // Covers AE12: zero-repos state with an Add action
