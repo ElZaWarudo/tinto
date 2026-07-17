@@ -501,6 +501,12 @@ export interface CopyResult {
   copied: string[];
   /** Conflictos detectados (vacío si todo OK). */
   conflicts: FileConflict[];
+  /** Limpiezas auxiliares pendientes tras una mutación ya completada. */
+  warnings?: string[];
+}
+
+export interface FileOpOutcome {
+  warnings: string[];
 }
 
 export interface DeletedEntry {
@@ -511,6 +517,9 @@ export interface DeletedEntry {
 export interface DeleteResult {
   token: string;
   entries: DeletedEntry[];
+  completed?: boolean;
+  recovery_required?: boolean;
+  warnings?: string[];
 }
 
 // The generated Rust mirror exposes the same map. contract.parity.ts checks

@@ -8,7 +8,7 @@ use crate::bus::contract::{
     AgentSessionChange, FileContent, GitleaksInstallResult, GitleaksSetupStatus, RepoDelta,
     RepoTree, SubscriptionTarget,
 };
-use crate::file_ops::commands::{CopyResult, DeleteResult};
+use crate::file_ops::commands::{CopyResult, DeleteResult, FileOpOutcome};
 use crate::git::{CommitInfo, FileDiff};
 
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -222,6 +222,8 @@ pub enum AgentRequest {
         allowed_repos: Vec<PathBuf>,
         session_id: String,
         created_at_ms: u64,
+        #[serde(default)]
+        ephemeral: bool,
     },
     AgentCheckpointScan {
         protocol_version: u16,
@@ -239,6 +241,11 @@ pub enum AgentRequest {
         allowed_repos: Vec<PathBuf>,
         checkpoint: CheckpointRecord,
         path: PathBuf,
+    },
+    AgentCheckpointRemove {
+        protocol_version: u16,
+        allowed_repos: Vec<PathBuf>,
+        checkpoint: CheckpointRecord,
     },
     CopyToRepo {
         protocol_version: u16,
@@ -362,6 +369,9 @@ pub enum AgentResponse {
     },
     DeleteResult {
         result: DeleteResult,
+    },
+    FileOpOutcome {
+        result: FileOpOutcome,
     },
     Unit,
     Error {
@@ -605,6 +615,9 @@ impl AgentRequest {
                 protocol_version, ..
             }
             | Self::AgentCheckpointRevertFile {
+                protocol_version, ..
+            }
+            | Self::AgentCheckpointRemove {
                 protocol_version, ..
             }
             | Self::CopyToRepo {

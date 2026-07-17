@@ -1225,6 +1225,7 @@ mod tests {
             allowed_repos: vec!["/home/me/repo".into()],
             session_id: "sess".into(),
             created_at_ms: 1,
+            ephemeral: false,
         };
         let mutating_checkpoint_file = AgentRequest::AgentCheckpointRevertFile {
             protocol_version: PROTOCOL_VERSION,
@@ -1239,6 +1240,7 @@ mod tests {
                 session_id: "sess".into(),
                 checkpoint_dir: "/tmp/tinto-checkpoint".into(),
                 created_at_ms: 1,
+                ephemeral: false,
             },
             path: "src/a.rs".into(),
         };
