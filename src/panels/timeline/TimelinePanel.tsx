@@ -119,7 +119,6 @@ export function TimelinePanel(props: IDockviewPanelProps) {
     for (const repo of Array.from(loadedCommitKeys.current.keys())) {
       if (!targetRepos.has(repo)) loadedCommitKeys.current.delete(repo);
     }
-    const targetByRepo = new Map(targets.map((target) => [target.repo, target.head]));
     const staleTargets = targets.filter(
       (target) => loadedCommitKeys.current.get(target.repo) !== target.head,
     );
@@ -138,54 +137,49 @@ export function TimelinePanel(props: IDockviewPanelProps) {
       };
     }
 
-    const staleRepos = new Set(staleTargets.map((target) => target.repo));
     setCommits((current) =>
-      Object.fromEntries(
-        Object.entries(current).filter(([repo]) => targetRepos.has(repo) && !staleRepos.has(repo)),
-      ),
+      Object.fromEntries(Object.entries(current).filter(([repo]) => targetRepos.has(repo))),
     );
     setLogError(null);
     setLoadingCommits(true);
 
-    void Promise.all(
-      staleTargets.map(async (target) => {
-        try {
-          const items = await getCommitLog(target.repo, 0, TIMELINE_COMMIT_LIMIT);
-          return { ok: true as const, target, items };
-        } catch (error) {
-          return { ok: false as const, target, error: asCmdError(error) };
-        }
-      }),
-    )
-      .then((results) => {
-        if (!active) return;
-        setCommits((current) => {
-          const next = Object.fromEntries(
-            Object.entries(current).filter(([repo]) => targetRepos.has(repo)),
-          );
-          for (const result of results) {
-            if (!result.ok) continue;
-            next[result.target.repo] = result.items;
-            loadedCommitKeys.current.set(
-              result.target.repo,
-              targetByRepo.get(result.target.repo) ?? "no-head",
-            );
-          }
-          return next;
-        });
-        const failures = results.filter((result) => !result.ok);
-        if (failures.length === 0) {
-          setLogError(null);
-          setResolvedCommitLogKey(commitLogKey);
-        } else {
-          const firstFailure = failures[0];
-          const suffix = failures.length === 1 ? "" : ` (${failures.length} repos fallaron)`;
-          setLogError(`${firstFailure.error.message}${suffix}`);
-        }
-      })
-      .finally(() => {
-        if (active) setLoadingCommits(false);
-      });
+    let pendingCount = staleTargets.length;
+    const failures = Array<CmdError | null>(staleTargets.length).fill(null);
+    const completeTarget = () => {
+      pendingCount -= 1;
+      if (!active || pendingCount > 0) return;
+      const completedFailures = failures.filter((error): error is CmdError => error !== null);
+      if (completedFailures.length === 0) {
+        setLogError(null);
+        setResolvedCommitLogKey(commitLogKey);
+      } else {
+        const suffix =
+          completedFailures.length === 1 ? "" : ` (${completedFailures.length} repos fallaron)`;
+        setLogError(`${completedFailures[0].message}${suffix}`);
+      }
+      setLoadingCommits(false);
+    };
+
+    staleTargets.forEach((target, targetIndex) => {
+      void getCommitLog(target.repo, 0, TIMELINE_COMMIT_LIMIT).then(
+        (items) => {
+          if (!active) return;
+          setCommits((current) => ({
+            ...Object.fromEntries(
+              Object.entries(current).filter(([repo]) => targetRepos.has(repo)),
+            ),
+            [target.repo]: items,
+          }));
+          loadedCommitKeys.current.set(target.repo, target.head);
+          completeTarget();
+        },
+        (error) => {
+          if (!active) return;
+          failures[targetIndex] = asCmdError(error);
+          completeTarget();
+        },
+      );
+    });
     return () => {
       active = false;
     };

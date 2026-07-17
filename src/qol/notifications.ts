@@ -148,19 +148,25 @@ export function NotificationWatcher({
 
   useEffect(() => {
     if (!notificationsEnabled) return;
+    const markUnavailable = (key: string) => {
+      sent.current.delete(key);
+      qualityStore.setNotificationState({
+        enabled: false,
+        status: "unavailable",
+        message: "Las notificaciones fallaron en este entorno.",
+      });
+    };
     for (const notification of collectRelevantNotifications(busState, (repo) =>
       busStore.displayName(repo),
     )) {
       if (sent.current.has(notification.key)) continue;
       sent.current.add(notification.key);
       try {
-        void adapter.send(notification);
+        void Promise.resolve(adapter.send(notification)).catch(() =>
+          markUnavailable(notification.key),
+        );
       } catch {
-        qualityStore.setNotificationState({
-          enabled: false,
-          status: "unavailable",
-          message: "Las notificaciones fallaron en este entorno.",
-        });
+        markUnavailable(notification.key);
       }
     }
   }, [adapter, busState, notificationsEnabled]);

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { createElement } from "react";
 
@@ -22,34 +22,50 @@ const h = vi.hoisted(() => ({
   listSessions: vi.fn(),
   ensureTreeLoaded: vi.fn(),
   refreshTree: vi.fn(),
+  listenerFailures: {
+    delta: null,
+    fs: null,
+    watching: null,
+    sessions: null,
+    changeLog: null,
+    output: null,
+    timeline: null,
+  } as Record<string, unknown | null>,
 }));
 
 vi.mock("./client", () => ({
   onWorkbenchDelta: vi.fn((cb) => {
+    if (h.listenerFailures.delta) return Promise.reject(h.listenerFailures.delta);
     h.deltaCb = cb;
     return Promise.resolve(h.unlistenDelta);
   }),
   onFsEvents: vi.fn((cb) => {
+    if (h.listenerFailures.fs) return Promise.reject(h.listenerFailures.fs);
     h.fsCb = cb;
     return Promise.resolve(h.unlistenFs);
   }),
   onWatchingState: vi.fn((cb) => {
+    if (h.listenerFailures.watching) return Promise.reject(h.listenerFailures.watching);
     h.watchCb = cb;
     return Promise.resolve(h.unlistenWatch);
   }),
   onAgentSessionsChanged: vi.fn((cb) => {
+    if (h.listenerFailures.sessions) return Promise.reject(h.listenerFailures.sessions);
     h.sessionsCb = cb;
     return Promise.resolve(h.unlistenSessions);
   }),
   onAgentSessionChangeLog: vi.fn((cb) => {
+    if (h.listenerFailures.changeLog) return Promise.reject(h.listenerFailures.changeLog);
     h.changeLogCb = cb;
     return Promise.resolve(h.unlistenChangeLog);
   }),
   onAgentSessionOutput: vi.fn((cb) => {
+    if (h.listenerFailures.output) return Promise.reject(h.listenerFailures.output);
     h.outputCb = cb;
     return Promise.resolve(h.unlistenOutput);
   }),
   onAgentSessionTimeline: vi.fn((cb) => {
+    if (h.listenerFailures.timeline) return Promise.reject(h.listenerFailures.timeline);
     h.timelineCb = cb;
     return Promise.resolve(h.unlistenTimeline);
   }),
@@ -68,7 +84,7 @@ vi.mock("../workspace/repoTreeStore", () => ({
 import { reloadActiveWorkbench, useBusConnection } from "./connection";
 import { agentSessionStore } from "../agent/sessionStore";
 import { busStore } from "./store";
-import type { RepoDelta } from "./contract";
+import type { AgentSession, RepoDelta } from "./contract";
 
 function makeDelta(repo: string, revision = 1): RepoDelta {
   return {
@@ -83,6 +99,22 @@ function makeDelta(repo: string, revision = 1): RepoDelta {
     gitleaks_configured: false,
     agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
+  };
+}
+
+function makeSession(id: string): AgentSession {
+  return {
+    id,
+    repo: "/r/a",
+    agent_type: "codex",
+    status: "running",
+    pid: 123,
+    started_at_ms: 1,
+    exit_code: null,
+    error: null,
+    turn_status: "working",
+    active_sessions: 1,
+    age_ms: 10,
   };
 }
 
@@ -106,9 +138,23 @@ describe("useBusConnection", () => {
     vi.clearAllMocks();
     busStore.resetAll();
     agentSessionStore.reset();
+    h.deltaCb = null;
+    h.fsCb = null;
+    h.watchCb = null;
+    h.sessionsCb = null;
+    h.changeLogCb = null;
+    h.outputCb = null;
+    h.timelineCb = null;
     h.getSnapshot.mockResolvedValue({ watching: { available: true }, repos: [] });
     h.listWb.mockResolvedValue({ version: 1, active: "Work", workbenches: [] });
     h.listSessions.mockResolvedValue([]);
+    Object.keys(h.listenerFailures).forEach((key) => {
+      h.listenerFailures[key] = null;
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("attaches listeners and loads config + snapshot", async () => {
@@ -122,6 +168,87 @@ describe("useBusConnection", () => {
     expect(h.outputCb).toBeTypeOf("function");
     expect(h.timelineCb).toBeTypeOf("function");
     expect(busStore.getState().config?.active).toBe("Work");
+  });
+
+  it("preserves agent sessions, identifies list failures, and clears the error after reload", async () => {
+    agentSessionStore.setSessions([makeSession("existing")]);
+    h.listSessions.mockRejectedValueOnce(new Error("agent backend offline"));
+
+    await reloadActiveWorkbench();
+
+    expect(agentSessionStore.getState().sessions.existing).toBeDefined();
+    expect(busStore.getState().connectionErrors["agent-session-list"]).toContain(
+      "Listado de sesiones Agent: agent backend offline",
+    );
+
+    h.listSessions.mockResolvedValueOnce([makeSession("recovered")]);
+    await reloadActiveWorkbench();
+
+    expect(agentSessionStore.getState().sessions.existing).toBeUndefined();
+    expect(agentSessionStore.getState().sessions.recovered).toBeDefined();
+    expect(busStore.getState().connectionErrors["agent-session-list"]).toBeUndefined();
+  });
+
+  it("retries a failed Agent session list without clearing the previous sessions", async () => {
+    vi.useFakeTimers();
+    agentSessionStore.setSessions([makeSession("existing")]);
+    h.listSessions
+      .mockRejectedValueOnce(new Error("agent backend offline"))
+      .mockResolvedValueOnce([makeSession("recovered")]);
+
+    render(createElement(Probe));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(agentSessionStore.getState().sessions.existing).toBeDefined();
+    expect(busStore.getState().connectionErrors["agent-session-list"]).toContain(
+      "agent backend offline",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(h.listSessions).toHaveBeenCalledTimes(2);
+    expect(agentSessionStore.getState().sessions.existing).toBeUndefined();
+    expect(agentSessionStore.getState().sessions.recovered).toBeDefined();
+    expect(busStore.getState().connectionErrors["agent-session-list"]).toBeUndefined();
+  });
+
+  it("publishes listener failures and reconnects without clearing the current snapshot", async () => {
+    vi.useFakeTimers();
+    act(() => busStore.loadSnapshot([makeDelta("/r/existing", 3)], { available: true }));
+    h.getSnapshot.mockResolvedValueOnce({
+      watching: { available: true },
+      repos: [makeDelta("/r/existing", 3)],
+    });
+    h.listenerFailures.delta = new Error("delta listener offline");
+
+    const view = render(createElement(Probe));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(busStore.getState().repos["/r/existing"]?.revision).toBe(3);
+    expect(busStore.getState().connectionErrors["repo-deltas"]).toContain(
+      "Canal de cambios de repositorios: delta listener offline",
+    );
+
+    h.listenerFailures.delta = null;
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(h.deltaCb).toBeTypeOf("function");
+    expect(busStore.getState().connectionErrors["repo-deltas"]).toBeUndefined();
+    view.unmount();
   });
 
   it("marks the initial snapshot degraded when the Tauri bridge is unavailable", async () => {

@@ -2,8 +2,10 @@ use std::{
     collections::HashSet,
     fs,
     hash::{Hash, Hasher},
+    io,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use git2::{Repository, StatusOptions};
@@ -22,6 +24,10 @@ use crate::windows_process::hide_console;
 const DEFAULT_RETENTION_PER_REPO: usize = 50;
 const DEFAULT_MAX_CHECKPOINT_BYTES: u64 = 100 * 1024 * 1024;
 const DEFAULT_MAX_REPO_BYTES: u64 = 500 * 1024 * 1024;
+const EPHEMERAL_GIT_INDEX_BACKUP: &str = "git-index";
+const EPHEMERAL_GIT_INDEX_ABSENT: &str = "git-index.absent";
+const EPHEMERAL_NON_GIT: &str = "non-git";
+static EPHEMERAL_INDEX_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct CheckpointConfig {
@@ -47,6 +53,8 @@ pub struct CheckpointRecord {
     pub session_id: String,
     pub checkpoint_dir: PathBuf,
     pub created_at_ms: u64,
+    #[serde(default)]
+    pub ephemeral: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,7 +84,29 @@ pub fn create_checkpoint(
     created_at_ms: u64,
     config: &CheckpointConfig,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
+    create_checkpoint_inner(repo, session_id, created_at_ms, config, true)
+}
+
+pub fn create_ephemeral_checkpoint(
+    repo: &Path,
+    session_id: &str,
+    created_at_ms: u64,
+    config: &CheckpointConfig,
+) -> Result<CheckpointRecord, AgentConsoleError> {
+    create_checkpoint_inner(repo, session_id, created_at_ms, config, false)
+}
+
+fn create_checkpoint_inner(
+    repo: &Path,
+    session_id: &str,
+    created_at_ms: u64,
+    config: &CheckpointConfig,
+    enforce_retention: bool,
+) -> Result<CheckpointRecord, AgentConsoleError> {
     let repo = canonical_repo(repo)?;
+    if !enforce_retention {
+        ensure_ephemeral_checkpoint_supported(&repo)?;
+    }
     let repo_dir = checkpoints_repo_dir(&repo)?;
     let checkpoint_dir = repo_dir.join(session_id);
     if checkpoint_dir.exists() {
@@ -131,8 +161,15 @@ pub fn create_checkpoint(
         }
     };
 
-    prune_checkpoints(&repo_dir, config.retention_per_repo)?;
-    enforce_repo_budget(&repo_dir, config.max_repo_bytes)?;
+    if enforce_retention {
+        prune_checkpoints(&repo_dir, config.retention_per_repo)?;
+        enforce_repo_budget(&repo_dir, config.max_repo_bytes)?;
+    } else if let Err(error) =
+        snapshot_ephemeral_git_index(&repo, &checkpoint_dir, config.max_checkpoint_bytes)
+    {
+        let _ = fs::remove_dir_all(&checkpoint_dir);
+        return Err(error);
+    }
 
     Ok(CheckpointRecord {
         contract,
@@ -140,14 +177,42 @@ pub fn create_checkpoint(
         session_id: session_id.to_string(),
         checkpoint_dir,
         created_at_ms,
+        ephemeral: !enforce_retention,
     })
+}
+
+pub fn remove_ephemeral_checkpoint(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
+    if !record.ephemeral {
+        return Err(AgentConsoleError::new(
+            "checkpoint_invalid",
+            "checkpoint cleanup requires an ephemeral checkpoint",
+        ));
+    }
+    if !record.checkpoint_dir.exists() {
+        return Ok(());
+    }
+    let repo = canonical_repo(&record.repo)?;
+    let repo_dir = checkpoints_repo_dir(&repo)?;
+    let checkpoint_dir = record.checkpoint_dir.canonicalize().map_err(io_error)?;
+    let expected_parent = repo_dir.canonicalize().map_err(io_error)?;
+    if checkpoint_dir.parent() != Some(expected_parent.as_path()) {
+        return Err(AgentConsoleError::new(
+            "checkpoint_invalid",
+            "checkpoint cleanup target is outside the managed repository directory",
+        ));
+    }
+    fs::remove_dir_all(checkpoint_dir).map_err(io_error)
 }
 
 pub fn revert_checkpoint(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
     match record.contract.checkpoint_type {
         AgentSessionCheckpointType::GitRef => revert_git(record),
         AgentSessionCheckpointType::FsSnapshot => revert_fs(record),
+    }?;
+    if record.ephemeral {
+        restore_ephemeral_git_index(record)?;
     }
+    Ok(())
 }
 
 pub fn revert_checkpoint_file(
@@ -169,6 +234,211 @@ pub fn scan_change_log(
         AgentSessionCheckpointType::GitRef => scan_git_changes(&record.repo, timestamp_ms),
         AgentSessionCheckpointType::FsSnapshot => scan_fs_changes(record, timestamp_ms),
     }
+}
+
+fn ensure_ephemeral_checkpoint_supported(repo: &Path) -> Result<(), AgentConsoleError> {
+    let Ok(repository) = Repository::open(repo) else {
+        let walker = WalkBuilder::new(repo)
+            .follow_links(false)
+            .hidden(false)
+            .build();
+        for entry in walker {
+            let entry = entry.map_err(|error| AgentConsoleError::new("io", error.to_string()))?;
+            let path = entry.path();
+            let Ok(relative) = path.strip_prefix(repo) else {
+                continue;
+            };
+            if relative.as_os_str().is_empty() || has_git_component(relative) {
+                continue;
+            }
+            if entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_symlink())
+            {
+                return Err(ephemeral_symlink_error(relative));
+            }
+        }
+        return Ok(());
+    };
+
+    let mut options = StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    let statuses = repository
+        .statuses(Some(&mut options))
+        .map_err(|error| AgentConsoleError::new("checkpoint_git_failed", error.to_string()))?;
+    for entry in statuses.iter() {
+        let status = entry.status();
+        let Some(path) = entry.path() else {
+            return Err(AgentConsoleError::new(
+                "checkpoint_unsupported",
+                "the safety checkpoint cannot preserve a non-UTF-8 Git path",
+            ));
+        };
+        let relative = Path::new(path);
+        if status.is_index_typechange() || status.is_wt_typechange() {
+            return Err(ephemeral_symlink_error(relative));
+        }
+        match fs::symlink_metadata(repo.join(relative)) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(ephemeral_symlink_error(relative));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+    Ok(())
+}
+
+fn ephemeral_symlink_error(path: &Path) -> AgentConsoleError {
+    AgentConsoleError::new(
+        "checkpoint_unsupported",
+        format!(
+            "the safety checkpoint cannot preserve symlink state for {}",
+            path.display()
+        ),
+    )
+}
+
+fn snapshot_ephemeral_git_index(
+    repo: &Path,
+    checkpoint_dir: &Path,
+    max_checkpoint_bytes: u64,
+) -> Result<(), AgentConsoleError> {
+    let Ok(repository) = Repository::open(repo) else {
+        fs::write(checkpoint_dir.join(EPHEMERAL_NON_GIT), []).map_err(io_error)?;
+        return Ok(());
+    };
+    let index = repository.path().join("index");
+    match fs::symlink_metadata(&index) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::copy(&index, checkpoint_dir.join(EPHEMERAL_GIT_INDEX_BACKUP)).map_err(io_error)?;
+        }
+        Ok(_) => {
+            return Err(AgentConsoleError::new(
+                "checkpoint_unsupported",
+                "the safety checkpoint cannot preserve a non-file Git index",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::write(checkpoint_dir.join(EPHEMERAL_GIT_INDEX_ABSENT), []).map_err(io_error)?;
+        }
+        Err(error) => return Err(io_error(error)),
+    }
+    if dir_size(checkpoint_dir)? > max_checkpoint_bytes {
+        return Err(AgentConsoleError::new(
+            "checkpoint_too_large",
+            format!(
+                "checkpoint exceeds {} MB",
+                max_checkpoint_bytes / 1024 / 1024
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn restore_ephemeral_git_index(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
+    let backup = record.checkpoint_dir.join(EPHEMERAL_GIT_INDEX_BACKUP);
+    let absent = record.checkpoint_dir.join(EPHEMERAL_GIT_INDEX_ABSENT);
+    let non_git = record.checkpoint_dir.join(EPHEMERAL_NON_GIT);
+    let state_count = usize::from(backup.is_file())
+        + usize::from(absent.is_file())
+        + usize::from(non_git.is_file());
+    if state_count != 1 {
+        return Err(AgentConsoleError::new(
+            "checkpoint_invalid",
+            "ephemeral checkpoint has no unambiguous Git index state",
+        ));
+    }
+    if non_git.is_file() {
+        return Ok(());
+    }
+
+    let repository = Repository::open(&record.repo)
+        .map_err(|error| AgentConsoleError::new("checkpoint_git_failed", error.to_string()))?;
+    let index = repository.path().join("index");
+    if backup.is_file() {
+        replace_file_transactionally(&backup, &index).map_err(io_error)?;
+        return Ok(());
+    }
+
+    match fs::symlink_metadata(&index) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::remove_file(index).map_err(io_error)?;
+        }
+        Ok(_) => {
+            return Err(AgentConsoleError::new(
+                "checkpoint_unsupported",
+                "the safety checkpoint refuses to remove a non-file Git index",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error(error)),
+    }
+    Ok(())
+}
+
+fn replace_file_transactionally(source: &Path, destination: &Path) -> io::Result<()> {
+    let parent = destination.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Git index destination has no parent",
+        )
+    })?;
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("index");
+    let suffix = EPHEMERAL_INDEX_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let stage = parent.join(format!(
+        ".{file_name}.tinto-restore-{}-{suffix}",
+        std::process::id()
+    ));
+    let previous = parent.join(format!(
+        ".{file_name}.tinto-previous-{}-{suffix}",
+        std::process::id()
+    ));
+
+    if let Err(error) = fs::copy(source, &stage) {
+        let _ = fs::remove_file(&stage);
+        return Err(error);
+    }
+    let had_destination = match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            if let Err(error) = fs::rename(destination, &previous) {
+                let _ = fs::remove_file(&stage);
+                return Err(error);
+            }
+            true
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(&stage);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Git index destination is not a regular file",
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            let _ = fs::remove_file(&stage);
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = fs::rename(&stage, destination) {
+        if had_destination {
+            let _ = fs::rename(&previous, destination);
+        }
+        let _ = fs::remove_file(&stage);
+        return Err(error);
+    }
+    if had_destination {
+        fs::remove_file(previous)?;
+    }
+    Ok(())
 }
 
 fn git_checkpoint_state(repo: &Path) -> Result<Option<GitCheckpointState>, AgentConsoleError> {
@@ -866,6 +1136,25 @@ mod tests {
     use super::*;
     use crate::git::test_fixtures::TempRepo;
 
+    fn git_output(repo: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("utf-8 git output")
+    }
+
+    fn git_status_porcelain(repo: &Path) -> String {
+        git_output(repo, &["status", "--porcelain=v1"])
+    }
+
     #[test]
     fn checkpoint_creation_records_git_head_when_repo_is_clean() {
         let repo = TempRepo::with_initial_commit();
@@ -1072,6 +1361,135 @@ mod tests {
         let repo_dir = last_dir.unwrap().parent().unwrap().to_path_buf();
         let dirs = checkpoint_dirs(&repo_dir).unwrap();
         assert_eq!(dirs.len(), 5);
+    }
+
+    #[test]
+    fn ephemeral_checkpoint_does_not_prune_the_target_and_can_be_removed() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "target\n");
+        let config = CheckpointConfig {
+            retention_per_repo: 1,
+            ..CheckpointConfig::default()
+        };
+        let target = create_checkpoint(repo.path(), "target", 1, &config).unwrap();
+
+        repo.write("base.txt", "current\n");
+        let safety = create_ephemeral_checkpoint(repo.path(), "safety", 2, &config).unwrap();
+
+        assert!(target.checkpoint_dir.exists());
+        assert!(safety.checkpoint_dir.exists());
+        remove_ephemeral_checkpoint(&safety).unwrap();
+        assert!(target.checkpoint_dir.exists());
+        assert!(!safety.checkpoint_dir.exists());
+    }
+
+    #[test]
+    fn ephemeral_checkpoint_restores_staged_index_state() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write_and_stage("base.txt", "staged content\n");
+        let status_before = git_status_porcelain(repo.path());
+        let safety = create_ephemeral_checkpoint(
+            repo.path(),
+            "safety-staged-index",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+
+        run_git(repo.path(), &["reset", "--hard", "HEAD"]).unwrap();
+        revert_checkpoint(&safety).unwrap();
+
+        assert_eq!(git_status_porcelain(repo.path()), status_before);
+        assert_eq!(
+            git_output(repo.path(), &["show", ":base.txt"]),
+            "staged content\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "staged content\n"
+        );
+        remove_ephemeral_checkpoint(&safety).unwrap();
+    }
+
+    #[test]
+    fn ephemeral_checkpoint_restores_staged_and_unstaged_index_state() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write_and_stage("base.txt", "staged content\n");
+        repo.write("base.txt", "unstaged content\n");
+        let status_before = git_status_porcelain(repo.path());
+        let safety = create_ephemeral_checkpoint(
+            repo.path(),
+            "safety-mixed-index",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+
+        run_git(repo.path(), &["reset", "--hard", "HEAD"]).unwrap();
+        revert_checkpoint(&safety).unwrap();
+
+        assert_eq!(git_status_porcelain(repo.path()), status_before);
+        assert_eq!(
+            git_output(repo.path(), &["show", ":base.txt"]),
+            "staged content\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "unstaged content\n"
+        );
+        remove_ephemeral_checkpoint(&safety).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ephemeral_checkpoint_rejects_a_dirty_symlink_before_repo_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let repo = TempRepo::with_initial_commit();
+        let link = repo.path().join("base-link.txt");
+        symlink("base.txt", &link).unwrap();
+
+        let error = create_ephemeral_checkpoint(
+            repo.path(),
+            "safety-symlink",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.category, "checkpoint_unsupported");
+        assert!(error.message.contains("base-link.txt"));
+        assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
+    }
+
+    #[test]
+    fn ephemeral_checkpoint_cleanup_rejects_an_external_directory() {
+        let repo = TempRepo::with_initial_commit();
+        let _anchor = create_checkpoint(
+            repo.path(),
+            "cleanup-validation-anchor",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let record = CheckpointRecord {
+            contract: AgentSessionCheckpoint {
+                checkpoint_type: AgentSessionCheckpointType::FsSnapshot,
+                git_hash: None,
+                snapshot_files: Vec::new(),
+            },
+            repo: repo.path().to_path_buf(),
+            session_id: "external".into(),
+            checkpoint_dir: external.path().to_path_buf(),
+            created_at_ms: 1,
+            ephemeral: true,
+        };
+
+        let error = remove_ephemeral_checkpoint(&record).unwrap_err();
+
+        assert_eq!(error.category, "checkpoint_invalid");
+        assert!(external.path().exists());
     }
 
     #[test]

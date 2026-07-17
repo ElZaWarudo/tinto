@@ -32,6 +32,7 @@ import {
   deleteWithinRepo,
   conflictDescription,
   needsConfirmation,
+  type CopyStrategy,
   type FileOpReport,
 } from "../file/fileOps";
 import { deleteUndoManager } from "../file/deleteUndo";
@@ -47,10 +48,13 @@ interface ContextMenuState {
 
 interface InternalPointerDrag {
   node: TreeNode;
+  sources: string[];
+  triggerSelected: boolean;
   pointerId: number;
   startX: number;
   startY: number;
   active: boolean;
+  strategy: CopyStrategy;
 }
 
 const MENU_VIEWPORT_MARGIN = 8;
@@ -91,14 +95,20 @@ function collectTreeNodes(nodes: TreeNode[], output = new Map<string, TreeNode>(
   return output;
 }
 
-function validDropTarget(node: TreeNode, targetPath: string | null): string | null {
+function parentPath(path: string): string {
+  const separator = path.lastIndexOf("/");
+  return separator >= 0 ? path.slice(0, separator) : "";
+}
+
+function validDropTarget(sources: string[], targetPath: string | null): string | null {
   if (targetPath === null) return null;
-  const separator = node.path.lastIndexOf("/");
-  const currentParent = separator >= 0 ? node.path.slice(0, separator) : "";
   if (
-    targetPath === currentParent ||
-    targetPath === node.path ||
-    targetPath.startsWith(`${node.path}/`)
+    sources.some(
+      (source) =>
+        targetPath === parentPath(source) ||
+        targetPath === source ||
+        targetPath.startsWith(`${source}/`),
+    )
   ) {
     return null;
   }
@@ -192,6 +202,7 @@ export function ProjectExplorer({
   const delta = state.repos[repo];
   const [expandedDirs, setExpandedDirs] = useExplorerExpanded(repo);
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   // Drag/drop + paste state
   const [draggingNode, setDraggingNode] = useState<TreeNode | null>(null);
@@ -208,18 +219,28 @@ export function ProjectExplorer({
   } | null>(null);
   const [osDraggedFiles, setOsDraggedFiles] = useState<string[] | null>(null);
   const [fileOpError, setFileOpError] = useState<string | null>(null);
+  const [fileOpPending, setFileOpPending] = useState<string | null>(null);
+  const [dragStrategy, setDragStrategy] = useState<CopyStrategy>("move");
   const explorerRef = useRef<HTMLDivElement | null>(null);
   const treeRef = useRef<HTMLDivElement | null>(null);
   const menuReturnFocusRef = useRef<HTMLElement | null>(null);
+  const selectionAnchorRef = useRef<string | null>(null);
   const pointerDragRef = useRef<InternalPointerDrag | null>(null);
+  const fileOpRunningRef = useRef(false);
   const suppressTreeClickRef = useRef(false);
   // Refs para mantener referencias actualizadas en closures de useEffect
   const handleOsDropRef = useRef<((paths: string[], destDir: string) => Promise<void>) | null>(
     null,
   );
-  const handleTreeDropRef = useRef<((node: TreeNode, targetPath: string) => Promise<void>) | null>(
-    null,
-  );
+  const handleTreeDropRef = useRef<
+    | ((
+        sources: string[],
+        label: string,
+        targetPath: string,
+        strategy: CopyStrategy,
+      ) => Promise<void>)
+    | null
+  >(null);
   const handlePasteRef = useRef<((destDir: string) => Promise<void>) | null>(null);
 
   const setExplorerWidth = useCallback(
@@ -231,6 +252,23 @@ export function ProjectExplorer({
       });
     },
     [repo],
+  );
+
+  const runFileOperation = useCallback(
+    async (label: string, operation: () => Promise<void>): Promise<boolean> => {
+      if (fileOpRunningRef.current) return false;
+      fileOpRunningRef.current = true;
+      setFileOpPending(label);
+      setFileOpError(null);
+      try {
+        await operation();
+        return true;
+      } finally {
+        fileOpRunningRef.current = false;
+        setFileOpPending(null);
+      }
+    },
+    [],
   );
 
   // Load on mount; the store keeps it cached (stale-while-revalidate) thereafter.
@@ -343,6 +381,53 @@ export function ProjectExplorer({
     visiblePaths[0] ??
     null;
 
+  const selectOnly = (path: string) => {
+    selectionAnchorRef.current = path;
+    setSelectedPaths(new Set([path]));
+  };
+
+  const toggleSelection = (path: string) => {
+    selectionAnchorRef.current = path;
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const selectNode = (event: MouseEvent, node: TreeNode) => {
+    const toggle = event.ctrlKey || event.metaKey;
+    if (!event.shiftKey) {
+      if (toggle) toggleSelection(node.path);
+      else selectOnly(node.path);
+      return;
+    }
+
+    const anchor = selectionAnchorRef.current;
+    const siblings = visiblePaths.filter((path) => parentPath(path) === parentPath(node.path));
+    const anchorIndex = anchor ? siblings.indexOf(anchor) : -1;
+    const targetIndex = siblings.indexOf(node.path);
+    if (anchorIndex < 0 || targetIndex < 0) {
+      selectOnly(node.path);
+      return;
+    }
+
+    const range = siblings.slice(
+      Math.min(anchorIndex, targetIndex),
+      Math.max(anchorIndex, targetIndex) + 1,
+    );
+    setSelectedPaths((current) => new Set(toggle ? [...current, ...range] : range));
+  };
+
+  const operationSourcesFor = (triggerPath: string): string[] => {
+    if (!selectedPaths.has(triggerPath) || !visiblePaths.includes(triggerPath)) {
+      return [triggerPath];
+    }
+    const selectedInVisibleOrder = visiblePaths.filter((path) => selectedPaths.has(path));
+    return selectedInVisibleOrder.length > 0 ? selectedInVisibleOrder : [triggerPath];
+  };
+
   const toggleDir = (path: string) => {
     setExpandedDirs((current) => {
       const next = new Set(current);
@@ -374,6 +459,7 @@ export function ProjectExplorer({
     const item = (event.currentTarget as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
     item?.focus();
     setFocusedPath(node.path);
+    if (!selectedPaths.has(node.path)) selectOnly(node.path);
     menuReturnFocusRef.current = item;
     const rect = item?.getBoundingClientRect();
     const keyboardPosition = event.clientX === 0 && event.clientY === 0;
@@ -516,6 +602,7 @@ export function ProjectExplorer({
         return false;
       }
       refreshTree();
+      if (report.warnings?.length) setFileOpError(report.warnings.join(" "));
       return true;
     },
     [refreshTree],
@@ -542,60 +629,72 @@ export function ProjectExplorer({
   const handleOsDrop = useCallback(
     async (paths: string[], destDir: string) => {
       if (!paths.length) return;
-      const report = await sendFromOs({
-        repo,
-        destDir,
-        sources: paths,
-        strategy: "copy",
-        overwrite: false,
-      });
-      processReport(report, async () => {
-        const finalReport = await sendFromOs({
-          repo,
-          destDir,
-          sources: paths,
-          strategy: "copy",
-          overwrite: true,
-        });
-        processFinalReport(finalReport);
-      });
+      await runFileOperation(
+        `Copiando ${paths.length === 1 ? "un archivo" : `${paths.length} archivos`}…`,
+        async () => {
+          const report = await sendFromOs({
+            repo,
+            destDir,
+            sources: paths,
+            strategy: "copy",
+            overwrite: false,
+          });
+          processReport(report, async () => {
+            await runFileOperation("Sobrescribiendo archivos…", async () => {
+              const finalReport = await sendFromOs({
+                repo,
+                destDir,
+                sources: paths,
+                strategy: "copy",
+                overwrite: true,
+              });
+              processFinalReport(finalReport);
+            });
+          });
+        },
+      );
     },
-    [processFinalReport, processReport, repo],
+    [processFinalReport, processReport, repo, runFileOperation],
   );
 
   /**
    * Copia (drag con Ctrl) o mueve (drag sin Ctrl) archivos dentro del repo
-   * desde el nodo que se está arrastrando a `targetPath` (carpeta destino).
+   * desde la selección que se está arrastrando a `targetPath` (carpeta destino).
    */
   const handleTreeDrop = useCallback(
-    async (node: TreeNode, targetPath: string) => {
-      if (targetPath === node.path || targetPath.startsWith(`${node.path}/`)) {
-        // No mover un directorio dentro de sí mismo.
+    async (sources: string[], label: string, targetPath: string, strategy: CopyStrategy) => {
+      if (sources.some((source) => targetPath === source || targetPath.startsWith(`${source}/`))) {
+        // No mover un directorio seleccionado dentro de sí mismo.
         setDraggingNode(null);
         setTreeDropTarget(null);
         return;
       }
       setDraggingNode(null);
       setTreeDropTarget(null);
-      const report = await sendWithinRepo({
-        repo,
-        sources: [node.path],
-        destDir: targetPath,
-        strategy: "move",
-        overwrite: false,
-      });
-      processReport(report, async () => {
-        const finalReport = await sendWithinRepo({
+      const verb = strategy === "copy" ? "Copiando" : "Moviendo";
+      await runFileOperation(`${verb} ${label}…`, async () => {
+        const report = await sendWithinRepo({
           repo,
-          sources: [node.path],
+          sources,
           destDir: targetPath,
-          strategy: "move",
-          overwrite: true,
+          strategy,
+          overwrite: false,
         });
-        processFinalReport(finalReport);
+        processReport(report, async () => {
+          await runFileOperation(`${verb} y sobrescribiendo ${label}…`, async () => {
+            const finalReport = await sendWithinRepo({
+              repo,
+              sources,
+              destDir: targetPath,
+              strategy,
+              overwrite: true,
+            });
+            processFinalReport(finalReport);
+          });
+        });
       });
     },
-    [processFinalReport, processReport, repo],
+    [processFinalReport, processReport, repo, runFileOperation],
   );
 
   /** Pega archivos del clipboard interno (Ctrl+C en cualquier nodo) a una
@@ -610,57 +709,83 @@ export function ProjectExplorer({
         );
         return;
       }
-      const report = await sendWithinRepo({
-        repo,
-        sources: clip.paths,
-        destDir,
-        strategy: clip.mode === "cut" ? "move" : "copy",
-        overwrite: false,
-      });
-      const completed = processReport(report, async () => {
-        const finalReport = await sendWithinRepo({
+      const strategy = clip.mode === "cut" ? "move" : "copy";
+      const verb = strategy === "copy" ? "Copiando" : "Moviendo";
+      await runFileOperation(`${verb} elementos…`, async () => {
+        const report = await sendWithinRepo({
           repo,
           sources: clip.paths,
           destDir,
-          strategy: clip.mode === "cut" ? "move" : "copy",
-          overwrite: true,
+          strategy,
+          overwrite: false,
         });
-        const retryCompleted = processFinalReport(finalReport);
-        if (retryCompleted && clip.mode === "cut") treeClipboard.clear();
+        const completed = processReport(report, async () => {
+          await runFileOperation(`${verb} y sobrescribiendo elementos…`, async () => {
+            const finalReport = await sendWithinRepo({
+              repo,
+              sources: clip.paths,
+              destDir,
+              strategy,
+              overwrite: true,
+            });
+            const retryCompleted = processFinalReport(finalReport);
+            if (retryCompleted && clip.mode === "cut") treeClipboard.clear();
+          });
+        });
+        if (completed && clip.mode === "cut") treeClipboard.clear();
       });
-      if (completed && clip.mode === "cut") treeClipboard.clear();
     },
-    [processFinalReport, processReport, repo],
+    [processFinalReport, processReport, repo, runFileOperation],
   );
 
   const handleDelete = async (node: TreeNode) => {
-    const label = node.isDir ? "carpeta" : "archivo";
+    if (fileOpRunningRef.current) return;
+    const sources = operationSourcesFor(node.path);
+    const singleLabel = node.isDir ? "carpeta" : "archivo";
+    const operationLabel = sources.length === 1 ? singleLabel : `${sources.length} elementos`;
+    const confirmation =
+      sources.length === 1
+        ? `Eliminar ${singleLabel} "${node.path}" del disco?`
+        : `Eliminar ${sources.length} elementos seleccionados del disco?`;
     if (
       !window.confirm(
-        `Eliminar ${label} "${node.path}" del disco?\n\nPuedes restaurarlo con Ctrl+Z mientras Tinto siga abierto.`,
+        `${confirmation}\n\nPuedes restaurarlo con Ctrl+Z mientras Tinto siga abierto.`,
       )
     ) {
       return;
     }
-    const report = await deleteWithinRepo({ repo, sources: [node.path] });
-    if (report.fatalError) {
-      setFileOpError(report.fatalError);
-      return;
-    }
-    if (report.deleteResult) {
-      deleteUndoManager.recordDelete(repo, report.deleteResult);
-    }
-    refreshTree();
+    await runFileOperation(`Eliminando ${operationLabel}…`, async () => {
+      const report = await deleteWithinRepo({
+        repo,
+        sources,
+        userConsent: true,
+      });
+      if (report.fatalError) {
+        setFileOpError(report.fatalError);
+        return;
+      }
+      if (report.deleteResult) {
+        deleteUndoManager.recordDelete(repo, report.deleteResult);
+      }
+      refreshTree();
+      if (report.warnings?.length) setFileOpError(report.warnings.join(" "));
+    });
   };
 
   const undoDelete = async () => {
-    const report = await deleteUndoManager.undo();
-    if (report?.fatalError) setFileOpError(report.fatalError);
+    await runFileOperation("Restaurando elemento eliminado…", async () => {
+      const report = await deleteUndoManager.undo();
+      if (report?.fatalError) setFileOpError(report.fatalError);
+      else if (report?.warnings?.length) setFileOpError(report.warnings.join(" "));
+    });
   };
 
   const redoDelete = async () => {
-    const report = await deleteUndoManager.redo();
-    if (report?.fatalError) setFileOpError(report.fatalError);
+    await runFileOperation("Rehaciendo eliminación…", async () => {
+      const report = await deleteUndoManager.redo();
+      if (report?.fatalError) setFileOpError(report.fatalError);
+      else if (report?.warnings?.length) setFileOpError(report.warnings.join(" "));
+    });
   };
 
   const deleteActiveFile = () => {
@@ -692,6 +817,7 @@ export function ProjectExplorer({
       suppressTreeClickRef.current = false;
       setDraggingNode(null);
       setTreeDropTarget(null);
+      setDragStrategy("move");
     };
     const onPointerMove = (event: globalThis.PointerEvent) => {
       const drag = pointerDragRef.current;
@@ -700,14 +826,32 @@ export function ProjectExplorer({
         if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 5) return;
         drag.active = true;
         suppressTreeClickRef.current = true;
+        if (!drag.triggerSelected) {
+          selectionAnchorRef.current = drag.node.path;
+          setSelectedPaths(new Set([drag.node.path]));
+        }
         setDraggingNode(drag.node);
       }
       event.preventDefault();
+      const strategy = event.ctrlKey ? "copy" : "move";
+      if (drag.strategy !== strategy) {
+        drag.strategy = strategy;
+        setDragStrategy(strategy);
+      }
       const target = validDropTarget(
-        drag.node,
+        drag.sources,
         dropDirectoryAtClientPosition(event.clientX, event.clientY, treeRef.current),
       );
       setTreeDropTarget((current) => (current === target ? current : target));
+    };
+    const onControlChange = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Control") return;
+      const drag = pointerDragRef.current;
+      if (!drag?.active) return;
+      const strategy: CopyStrategy = event.type === "keydown" ? "copy" : "move";
+      if (drag.strategy === strategy) return;
+      drag.strategy = strategy;
+      setDragStrategy(strategy);
     };
     const onPointerUp = (event: globalThis.PointerEvent) => {
       const drag = pointerDragRef.current;
@@ -716,12 +860,18 @@ export function ProjectExplorer({
       if (!drag.active) return;
       event.preventDefault();
       const target = validDropTarget(
-        drag.node,
+        drag.sources,
         dropDirectoryAtClientPosition(event.clientX, event.clientY, treeRef.current),
       );
       setDraggingNode(null);
       setTreeDropTarget(null);
-      if (target !== null) void handleTreeDropRef.current?.(drag.node, target);
+      setDragStrategy("move");
+      const dropStrategy: CopyStrategy = event.ctrlKey ? "copy" : "move";
+      if (target !== null) {
+        const label =
+          drag.sources.length === 1 ? drag.node.name : `${drag.sources.length} elementos`;
+        void handleTreeDropRef.current?.(drag.sources, label, target, dropStrategy);
+      }
       window.setTimeout(() => {
         suppressTreeClickRef.current = false;
       }, 0);
@@ -729,10 +879,14 @@ export function ProjectExplorer({
     document.addEventListener("pointermove", onPointerMove, { passive: false });
     document.addEventListener("pointerup", onPointerUp, { passive: false });
     document.addEventListener("pointercancel", resetPointerDrag);
+    document.addEventListener("keydown", onControlChange);
+    document.addEventListener("keyup", onControlChange);
     return () => {
       document.removeEventListener("pointermove", onPointerMove);
       document.removeEventListener("pointerup", onPointerUp);
       document.removeEventListener("pointercancel", resetPointerDrag);
+      document.removeEventListener("keydown", onControlChange);
+      document.removeEventListener("keyup", onControlChange);
       pointerDragRef.current = null;
     };
   }, []);
@@ -769,6 +923,8 @@ export function ProjectExplorer({
       ref={explorerRef}
       className="project-explorer"
       data-testid={`project-explorer-${repo}`}
+      data-drag-strategy={draggingNode ? dragStrategy : undefined}
+      aria-busy={fileOpPending ? "true" : undefined}
       style={{ width: explorerWidth }}
       onKeyDown={(event) => {
         const treeItem =
@@ -800,10 +956,10 @@ export function ProjectExplorer({
           void undoDelete();
         } else if (key === "c" && targetPath) {
           event.preventDefault();
-          treeClipboard.copy(repo, [targetPath]);
+          treeClipboard.copy(repo, operationSourcesFor(targetPath));
         } else if (key === "x" && targetPath) {
           event.preventDefault();
-          treeClipboard.cut(repo, [targetPath]);
+          treeClipboard.cut(repo, operationSourcesFor(targetPath));
         } else if (key === "v") {
           event.preventDefault();
           // Pegar al raíz del repositorio.
@@ -831,10 +987,12 @@ export function ProjectExplorer({
         className={`project-explorer__body${osDraggingOver ? " project-explorer--dragging-active" : ""}${draggingNode ? " project-explorer__body--internal-dragging" : ""}`}
         data-testid={`project-explorer-body-${repo}`}
         role="tree"
+        aria-multiselectable="true"
         aria-label={`Archivos de ${busStore.displayName(repo)}`}
         onKeyDown={handleTreeKeyDown}
         onPointerDown={(event) => {
           if (event.button !== 0 || event.isPrimary === false) return;
+          if (fileOpRunningRef.current) return;
           const item =
             event.target instanceof Element
               ? event.target.closest<HTMLElement>("[data-tree-path][data-tree-kind]")
@@ -842,14 +1000,19 @@ export function ProjectExplorer({
           if (!item || !event.currentTarget.contains(item)) return;
           const node = nodesByPath.get(item.dataset.treePath ?? "");
           if (!node) return;
+          const sources = operationSourcesFor(node.path);
           suppressTreeClickRef.current = false;
           pointerDragRef.current = {
             node,
+            sources,
+            triggerSelected: selectedPaths.has(node.path),
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
             active: false,
+            strategy: event.ctrlKey ? "copy" : "move",
           };
+          setDragStrategy(event.ctrlKey ? "copy" : "move");
         }}
         onClickCapture={(event) => {
           if (!suppressTreeClickRef.current) return;
@@ -885,11 +1048,14 @@ export function ProjectExplorer({
                   delta={delta}
                   depth={0}
                   activePath={active}
+                  selectedPaths={selectedPaths}
                   focusedPath={effectiveFocusedPath}
                   expandedDirs={expandedDirs}
                   onToggleDir={toggleDir}
                   onFocusPath={setFocusedPath}
                   onOpen={(path, pin) => fileDock.openFile(repo, path, pin)}
+                  onSelect={selectNode}
+                  onToggleSelection={(node) => toggleSelection(node.path)}
                   onContextMenu={openContextMenu}
                   draggingPath={draggingNode?.path ?? null}
                   dropTargetPath={treeDropTarget}
@@ -922,7 +1088,26 @@ export function ProjectExplorer({
             Destino: {treeDropTarget || "raíz del repositorio"}
           </span>
         )}
+        {draggingNode && (
+          <span className="sr-only" role="status" aria-live="polite">
+            {dragStrategy === "copy" ? "Copiar" : "Mover"}{" "}
+            {operationSourcesFor(draggingNode.path).length === 1
+              ? draggingNode.name
+              : `${operationSourcesFor(draggingNode.path).length} elementos`}
+            . Suelta sobre una carpeta para completar.
+          </span>
+        )}
       </div>
+      {fileOpPending && (
+        <div
+          className="tree-files__msg"
+          role="status"
+          aria-live="polite"
+          data-testid="file-op-pending"
+        >
+          {fileOpPending}
+        </div>
+      )}
       {fileOpError && (
         <div
           className="tree-files__msg tree-files__msg--error"
@@ -975,6 +1160,7 @@ export function ProjectExplorer({
           onFilterFolder={() =>
             runMenuAction(() => qualityStore.setFilters({ repo, search: menu.node.path }))
           }
+          mutationPending={Boolean(fileOpPending)}
         />
       )}
       <div
@@ -1016,6 +1202,7 @@ function TreeContextMenu({
   onDelete,
   onOpenChanged,
   onFilterFolder,
+  mutationPending,
 }: {
   repo: string;
   menu: ContextMenuState;
@@ -1037,6 +1224,7 @@ function TreeContextMenu({
   onDelete: () => void;
   onOpenChanged: () => void;
   onFilterFolder: () => void;
+  mutationPending: boolean;
 }) {
   const { node } = menu;
   const isChangedFile = !node.isDir && node.changed !== null;
@@ -1147,7 +1335,7 @@ function TreeContextMenu({
       <MenuButton onClick={onCopyAbsolute}>Copiar ruta absoluta</MenuButton>
       {!node.isDir && <MenuButton onClick={onCopyName}>Copiar nombre</MenuButton>}
       <div className="tree-menu__sep" role="separator" />
-      <MenuButton onClick={onDelete} danger>
+      <MenuButton onClick={onDelete} danger disabled={mutationPending}>
         Eliminar
       </MenuButton>
 

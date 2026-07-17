@@ -4,7 +4,9 @@
 //! policy. Never auto-overwrites.
 
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use tauri::State;
@@ -40,6 +42,16 @@ pub struct CopyResult {
     pub copied: Vec<String>,
     /// Conflictos detectados (vacío si todo OK).
     pub conflicts: Vec<FileConflict>,
+    /// Limpiezas auxiliares que no invalidan la mutación ya completada.
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileOpOutcome {
+    /// Limpiezas auxiliares que no invalidan la mutación ya completada.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +66,24 @@ pub struct DeletedEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteResult {
     pub token: String,
+    pub entries: Vec<DeletedEntry>,
+    /// `false` indica que el borrado se interrumpió y requiere restauración.
+    #[serde(default = "default_true")]
+    pub completed: bool,
+    #[serde(default)]
+    pub recovery_required: bool,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct DeleteManifest {
+    pub token: String,
+    pub repo: PathBuf,
     pub entries: Vec<DeletedEntry>,
 }
 
@@ -128,15 +158,17 @@ pub async fn copy_to_repo(
         return Ok(CopyResult {
             copied: Vec::new(),
             conflicts,
+            warnings: Vec::new(),
         });
     }
 
     let repo_root = repo_abs.clone();
-    let copied = run_copy_blocking(repo_root, to_copy)?;
+    let (copied, warnings) = run_copy_blocking(repo_root, to_copy)?;
 
     Ok(CopyResult {
         copied,
         conflicts: Vec::new(),
+        warnings,
     })
 }
 
@@ -192,14 +224,16 @@ pub async fn copy_within_repo(
         return Ok(CopyResult {
             copied: Vec::new(),
             conflicts,
+            warnings: Vec::new(),
         });
     }
 
-    let copied = run_copy_blocking(repo_abs, to_copy)?;
+    let (copied, warnings) = run_copy_blocking(repo_abs, to_copy)?;
 
     Ok(CopyResult {
         copied,
         conflicts: Vec::new(),
+        warnings,
     })
 }
 
@@ -256,14 +290,16 @@ pub async fn move_within_repo(
         return Ok(CopyResult {
             copied: Vec::new(),
             conflicts,
+            warnings: Vec::new(),
         });
     }
 
-    let moved = run_move_blocking(repo_abs, to_move)?;
+    let (moved, warnings) = run_move_blocking(repo_abs, to_move)?;
 
     Ok(CopyResult {
         copied: moved,
         conflicts: Vec::new(),
+        warnings,
     })
 }
 
@@ -274,7 +310,7 @@ pub async fn export_from_repo(
     repo: PathBuf,
     sources: Vec<PathBuf>, // relativas al repo
     dest_dir: PathBuf,     // absoluto del OS
-) -> Result<(), CommandError> {
+) -> Result<FileOpOutcome, CommandError> {
     let resolved = resolve_file_op_repo(&bus, &repo).await?;
     if resolved.source == RepoSource::Wsl {
         return wsl_export_from_repo(resolved, sources, dest_dir);
@@ -299,27 +335,22 @@ pub async fn export_from_repo(
         srcs.push(src_abs);
     }
 
-    let dest_root = dest_dir.clone();
-    std::thread::spawn(move || -> std::io::Result<()> {
-        for src_abs in &srcs {
-            let name = src_abs.file_name().unwrap_or_default();
-            let dest = dest_root.join(name);
-            if dest.exists() {
-                if dest.is_dir() {
-                    fs::remove_dir_all(&dest)?;
-                } else {
-                    fs::remove_file(&dest)?;
-                }
-            }
-            copy_recursive(src_abs, &dest)?;
-        }
-        Ok(())
-    })
-    .join()
-    .map_err(|_| CommandError::new("export-panic", "thread panicked"))?
-    .map_err(|e| CommandError::new("export-failed", format!("no se pudo exportar: {e}")))?;
+    let to_copy = srcs
+        .into_iter()
+        .map(|src| {
+            let name = src.file_name().unwrap_or_default();
+            let dest = dest_dir.join(name);
+            (src, dest)
+        })
+        .collect();
+    let batch = std::thread::spawn(move || run_copy_batch_with_hook(to_copy, |_| Ok(())))
+        .join()
+        .map_err(|_| CommandError::new("export-panic", "thread panicked"))?
+        .map_err(|e| CommandError::new("export-failed", format!("no se pudo exportar: {e}")))?;
 
-    Ok(())
+    Ok(FileOpOutcome {
+        warnings: batch.warnings,
+    })
 }
 
 /// Elimina archivos o directorios dentro del repo. Rechaza el root del repo y
@@ -329,7 +360,9 @@ pub async fn delete_from_repo(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
     sources: Vec<PathBuf>, // relativas al repo
+    user_consent: bool,
 ) -> Result<DeleteResult, CommandError> {
+    require_delete_user_consent(user_consent)?;
     let resolved = resolve_file_op_repo(&bus, &repo).await?;
     if resolved.source == RepoSource::Wsl {
         return wsl_delete_from_repo(resolved, sources);
@@ -385,24 +418,57 @@ pub async fn delete_from_repo(
         .collect();
     write_delete_manifest(
         &backup_root,
-        &DeleteResult {
+        &DeleteManifest {
             token: token.clone(),
+            repo: repo_abs.clone(),
             entries: entries.clone(),
         },
     )?;
 
-    std::thread::spawn(move || -> std::io::Result<()> {
-        fs::create_dir_all(&objects_root)?;
-        for (index, (_, target, _)) in filtered.into_iter().enumerate() {
-            move_path(&target, &objects_root.join(index.to_string()))?;
-        }
-        Ok(())
-    })
-    .join()
-    .map_err(|_| CommandError::new("delete-panic", "thread panicked"))?
-    .map_err(|e| CommandError::new("delete-failed", format!("no se pudo eliminar: {e}")))?;
+    let moves = filtered
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, target, _))| (target, objects_root.join(index.to_string())))
+        .collect();
+    let runner_root = backup_root.clone();
+    let batch =
+        std::thread::spawn(move || run_delete_batch_with_hook(&runner_root, moves, |_| Ok(())))
+            .join()
+            .map_err(|_| CommandError::new("delete-panic", "thread panicked"))?;
 
-    Ok(DeleteResult { token, entries })
+    match batch {
+        Ok(warnings) => Ok(DeleteResult {
+            token,
+            entries,
+            completed: true,
+            recovery_required: false,
+            warnings,
+        }),
+        Err(failure) if failure.recovery_required => Ok(DeleteResult {
+            token,
+            entries,
+            completed: false,
+            recovery_required: true,
+            warnings: vec![format!(
+                "El borrado no terminó y se conservó una copia recuperable. Usa Deshacer para restaurarla: {}",
+                failure.error
+            )],
+        }),
+        Err(failure) => Err(CommandError::new(
+            "delete-failed",
+            format!("no se pudo eliminar: {}", failure.error),
+        )),
+    }
+}
+
+fn require_delete_user_consent(user_consent: bool) -> Result<(), CommandError> {
+    if user_consent {
+        return Ok(());
+    }
+    Err(CommandError::new(
+        "user-consent-required",
+        "eliminar archivos requiere confirmación explícita del usuario",
+    ))
 }
 
 #[tauri::command]
@@ -410,47 +476,24 @@ pub async fn restore_deleted_from_repo(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
     token: String,
-) -> Result<(), CommandError> {
+) -> Result<FileOpOutcome, CommandError> {
     let resolved = resolve_file_op_repo(&bus, &repo).await?;
     if resolved.source == RepoSource::Wsl {
         return wsl_restore_deleted_from_repo(resolved, token);
     }
     let repo_abs = resolved.path;
-    let backup_root = undo_backup_root(&token)?;
-    let manifest = read_delete_manifest(&backup_root)?;
-    let objects_root = backup_root.join("objects");
-    let mut targets = Vec::with_capacity(manifest.entries.len());
-    for entry in manifest.entries {
-        let dest = safe_join(&repo_abs, &entry.path)?;
-        if dest == repo_abs {
-            return Err(CommandError::new(
-                "restore-root-forbidden",
-                "no se puede restaurar sobre el root del repo",
-            ));
-        }
-        targets.push((dest, entry.path, entry.backup_name));
-    }
+    let manifest = read_bound_delete_manifest(&repo_abs, &token)?;
+    let targets = plan_delete_replay(&repo_abs, &manifest, ReplayDirection::Restore)?;
 
-    std::thread::spawn(move || -> std::io::Result<()> {
-        for (dest, rel, backup_name) in targets {
-            if dest.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    format!("{} ya existe", rel.display()),
-                ));
-            }
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            move_path(&objects_root.join(backup_name), &dest)?;
-        }
-        Ok(())
-    })
-    .join()
-    .map_err(|_| CommandError::new("restore-panic", "thread panicked"))?
-    .map_err(|e| CommandError::new("restore-failed", format!("no se pudo restaurar: {e}")))?;
+    let warnings =
+        std::thread::spawn(move || run_replay_batch_with_hook(&token, targets, true, |_| Ok(())))
+            .join()
+            .map_err(|_| CommandError::new("restore-panic", "thread panicked"))?
+            .map_err(|e| {
+                CommandError::new("restore-failed", format!("no se pudo restaurar: {e}"))
+            })?;
 
-    Ok(())
+    Ok(FileOpOutcome { warnings })
 }
 
 #[tauri::command]
@@ -458,52 +501,24 @@ pub async fn redo_deleted_from_repo(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
     token: String,
-) -> Result<(), CommandError> {
+) -> Result<FileOpOutcome, CommandError> {
     let resolved = resolve_file_op_repo(&bus, &repo).await?;
     if resolved.source == RepoSource::Wsl {
         return wsl_redo_deleted_from_repo(resolved, token);
     }
     let repo_abs = resolved.path;
-    let backup_root = undo_backup_root(&token)?;
-    let manifest = read_delete_manifest(&backup_root)?;
-    let objects_root = backup_root.join("objects");
-    let mut targets = Vec::with_capacity(manifest.entries.len());
-    for entry in manifest.entries {
-        let src = safe_join(&repo_abs, &entry.path)?;
-        if src == repo_abs {
-            return Err(CommandError::new(
-                "redo-root-forbidden",
-                "no se puede rehacer el borrado del root del repo",
-            ));
-        }
-        targets.push((src, entry.path, entry.backup_name));
-    }
+    let manifest = read_bound_delete_manifest(&repo_abs, &token)?;
+    let targets = plan_delete_replay(&repo_abs, &manifest, ReplayDirection::Redo)?;
 
-    std::thread::spawn(move || -> std::io::Result<()> {
-        fs::create_dir_all(&objects_root)?;
-        for (src, rel, backup_name) in targets {
-            if !src.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("{} no existe", rel.display()),
-                ));
-            }
-            let backup = objects_root.join(backup_name);
-            if backup.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    format!("backup {} ya existe", backup.display()),
-                ));
-            }
-            move_path(&src, &backup)?;
-        }
-        Ok(())
-    })
-    .join()
-    .map_err(|_| CommandError::new("redo-delete-panic", "thread panicked"))?
-    .map_err(|e| CommandError::new("redo-delete-failed", format!("no se pudo rehacer: {e}")))?;
+    let warnings =
+        std::thread::spawn(move || run_replay_batch_with_hook(&token, targets, false, |_| Ok(())))
+            .join()
+            .map_err(|_| CommandError::new("redo-delete-panic", "thread panicked"))?
+            .map_err(|e| {
+                CommandError::new("redo-delete-failed", format!("no se pudo rehacer: {e}"))
+            })?;
 
-    Ok(())
+    Ok(FileOpOutcome { warnings })
 }
 
 async fn resolve_file_op_repo(bus: &BusHandle, repo: &Path) -> Result<ResolvedRepo, CommandError> {
@@ -595,7 +610,7 @@ fn wsl_export_from_repo(
     resolved: ResolvedRepo,
     sources: Vec<PathBuf>,
     dest_dir: PathBuf,
-) -> Result<(), CommandError> {
+) -> Result<FileOpOutcome, CommandError> {
     let dest_dir = translate_host_path_for_wsl(dest_dir)?;
     match wsl_request(
         resolved.distro,
@@ -607,7 +622,7 @@ fn wsl_export_from_repo(
             dest_dir,
         },
     )? {
-        AgentResponse::Unit => Ok(()),
+        AgentResponse::FileOpOutcome { result } => Ok(result),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
 }
@@ -633,7 +648,7 @@ fn wsl_delete_from_repo(
 fn wsl_restore_deleted_from_repo(
     resolved: ResolvedRepo,
     token: String,
-) -> Result<(), CommandError> {
+) -> Result<FileOpOutcome, CommandError> {
     match wsl_request(
         resolved.distro,
         AgentRequest::RestoreDeletedFromRepo {
@@ -643,12 +658,15 @@ fn wsl_restore_deleted_from_repo(
             token,
         },
     )? {
-        AgentResponse::Unit => Ok(()),
+        AgentResponse::FileOpOutcome { result } => Ok(result),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
 }
 
-fn wsl_redo_deleted_from_repo(resolved: ResolvedRepo, token: String) -> Result<(), CommandError> {
+fn wsl_redo_deleted_from_repo(
+    resolved: ResolvedRepo,
+    token: String,
+) -> Result<FileOpOutcome, CommandError> {
     match wsl_request(
         resolved.distro,
         AgentRequest::RedoDeletedFromRepo {
@@ -658,7 +676,7 @@ fn wsl_redo_deleted_from_repo(resolved: ResolvedRepo, token: String) -> Result<(
             token,
         },
     )? {
-        AgentResponse::Unit => Ok(()),
+        AgentResponse::FileOpOutcome { result } => Ok(result),
         response => Err(unexpected_file_ops_wsl_response(response)),
     }
 }
@@ -667,29 +685,649 @@ fn unexpected_file_ops_wsl_response(_response: AgentResponse) -> CommandError {
     CommandError::new("malformed_response", "respuesta inesperada del agente WSL")
 }
 
+// Staging and backups are siblings of the destination so every install/rollback
+// rename stays on one filesystem on both Windows and Linux.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplacementPhase {
+    Staged,
+    DestinationBackedUp,
+    ReplacementInstalled,
+    SourceBackedUp,
+}
+
+struct InstalledReplacement {
+    dest: PathBuf,
+    stage: PathBuf,
+    backup: Option<PathBuf>,
+}
+
+struct InstalledMove {
+    source: PathBuf,
+    source_backup: PathBuf,
+    replacement: InstalledReplacement,
+}
+
+impl InstalledMove {
+    fn commit(self) -> Vec<String> {
+        let mut warnings = self.replacement.commit();
+        if let Some(warning) = cleanup_after_commit(&self.source_backup) {
+            warnings.push(warning);
+        }
+        warnings
+    }
+
+    fn rollback(self) -> io::Result<()> {
+        self.rollback_with_source_restore(|from, to| fs::rename(from, to))
+    }
+
+    fn rollback_with_source_restore(
+        self,
+        restore_source: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    ) -> io::Result<()> {
+        match restore_source(&self.source_backup, &self.source) {
+            Ok(()) => self.replacement.rollback(),
+            // Conserva el reemplazo instalado: en un borrado es el objeto al que
+            // apunta el manifest y permite recuperar el origen ausente.
+            Err(error) => Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "no se pudo restaurar el origen {}; se conservó una copia en {}: {error}",
+                    self.source.display(),
+                    self.replacement.dest.display()
+                ),
+            )),
+        }
+    }
+}
+
+impl InstalledReplacement {
+    fn commit(self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if let Some(backup) = self.backup {
+            if let Some(warning) = cleanup_after_commit(&backup) {
+                warnings.push(warning);
+            }
+        }
+        warnings
+    }
+
+    fn rollback(self) -> io::Result<()> {
+        fs::rename(&self.dest, &self.stage)?;
+
+        if let Some(backup) = &self.backup {
+            if let Err(restore_error) = fs::rename(backup, &self.dest) {
+                let replacement_restore = fs::rename(&self.stage, &self.dest);
+                return Err(combine_io_errors(
+                    io::Error::new(
+                        restore_error.kind(),
+                        format!(
+                            "no se pudo restaurar el destino original desde {}: {restore_error}",
+                            backup.display()
+                        ),
+                    ),
+                    replacement_restore,
+                    "tampoco se pudo devolver el reemplazo al destino",
+                ));
+            }
+        }
+
+        remove_path(&self.stage)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn transactional_copy(src: &Path, dest: &Path) -> io::Result<()> {
+    transactional_copy_with_hook(src, dest, |_| Ok(()))
+}
+
+#[cfg(test)]
+fn transactional_copy_with_hook(
+    src: &Path,
+    dest: &Path,
+    mut hook: impl FnMut(ReplacementPhase) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut stage_copy = copy_recursive;
+    transactional_copy_with_hook_and_stage_copy(src, dest, &mut hook, &mut stage_copy)
+}
+
+#[cfg(test)]
+fn transactional_copy_with_hook_and_stage_copy(
+    src: &Path,
+    dest: &Path,
+    hook: &mut impl FnMut(ReplacementPhase) -> io::Result<()>,
+    stage_copy: &mut impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let installed = install_copy(src, dest, hook, stage_copy)?;
+    let _warnings = installed.commit();
+    Ok(())
+}
+
+fn install_copy(
+    src: &Path,
+    dest: &Path,
+    hook: &mut impl FnMut(ReplacementPhase) -> io::Result<()>,
+    stage_copy: &mut impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<InstalledReplacement> {
+    stage_and_install(src, dest, hook, stage_copy)
+}
+
+#[cfg(test)]
+pub(crate) fn transactional_copy_with_stage_copy(
+    src: &Path,
+    dest: &Path,
+    mut stage_copy: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut hook = |_| Ok(());
+    transactional_copy_with_hook_and_stage_copy(src, dest, &mut hook, &mut stage_copy)
+}
+
+#[cfg(test)]
+fn transactional_move(src: &Path, dest: &Path) -> io::Result<()> {
+    transactional_move_with_hook(src, dest, |_| Ok(()))
+}
+
+#[cfg(test)]
+fn transactional_move_with_hook(
+    src: &Path,
+    dest: &Path,
+    mut hook: impl FnMut(ReplacementPhase) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut stage_copy = copy_recursive;
+    transactional_move_with_hook_and_stage_copy(src, dest, &mut hook, &mut stage_copy)
+}
+
+#[cfg(test)]
+fn transactional_move_with_hook_and_stage_copy(
+    src: &Path,
+    dest: &Path,
+    hook: &mut impl FnMut(ReplacementPhase) -> io::Result<()>,
+    stage_copy: &mut impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let installed = install_move(src, dest, hook, stage_copy)?;
+    let _warnings = installed.commit();
+    Ok(())
+}
+
+fn install_move(
+    src: &Path,
+    dest: &Path,
+    hook: &mut impl FnMut(ReplacementPhase) -> io::Result<()>,
+    stage_copy: &mut impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<InstalledMove> {
+    let source_backup = neighbor_path(src, "source")?;
+    let installed = stage_and_install(src, dest, hook, stage_copy)?;
+
+    if let Err(source_error) = fs::rename(src, &source_backup) {
+        return Err(combine_io_errors(
+            source_error,
+            installed.rollback(),
+            "falló el rollback del destino",
+        ));
+    }
+
+    if let Err(injected_error) = hook(ReplacementPhase::SourceBackedUp) {
+        let source_restore = fs::rename(&source_backup, src);
+        let error = combine_io_errors(
+            injected_error,
+            source_restore,
+            "falló la restauración del origen",
+        );
+        return Err(combine_io_errors(
+            error,
+            installed.rollback(),
+            "falló el rollback del destino",
+        ));
+    }
+
+    Ok(InstalledMove {
+        source: src.to_path_buf(),
+        source_backup,
+        replacement: installed,
+    })
+}
+
+#[cfg(test)]
+fn transactional_move_with_stage_copy(
+    src: &Path,
+    dest: &Path,
+    mut stage_copy: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut hook = |_| Ok(());
+    transactional_move_with_hook_and_stage_copy(src, dest, &mut hook, &mut stage_copy)
+}
+
+fn stage_and_install(
+    src: &Path,
+    dest: &Path,
+    hook: &mut impl FnMut(ReplacementPhase) -> io::Result<()>,
+    stage_copy: &mut impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<InstalledReplacement> {
+    if src == dest || (src.is_dir() && dest.starts_with(src)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "el destino no puede ser el origen ni estar dentro de él",
+        ));
+    }
+
+    let stage = neighbor_path(dest, "stage")?;
+    if let Err(copy_error) = stage_copy(src, &stage) {
+        return Err(combine_io_errors(
+            copy_error,
+            remove_path(&stage),
+            "no se pudo limpiar el staging incompleto",
+        ));
+    }
+
+    if let Err(injected_error) = hook(ReplacementPhase::Staged) {
+        return Err(combine_io_errors(
+            injected_error,
+            remove_path(&stage),
+            "no se pudo limpiar el staging",
+        ));
+    }
+
+    let backup = if dest.exists() {
+        let backup = neighbor_path(dest, "backup")?;
+        if let Err(backup_error) = fs::rename(dest, &backup) {
+            return Err(combine_io_errors(
+                backup_error,
+                remove_path(&stage),
+                "no se pudo limpiar el staging",
+            ));
+        }
+        Some(backup)
+    } else {
+        None
+    };
+
+    if let Err(injected_error) = hook(ReplacementPhase::DestinationBackedUp) {
+        return Err(rollback_before_install(
+            injected_error,
+            dest,
+            &stage,
+            backup.as_deref(),
+        ));
+    }
+
+    if let Err(install_error) = fs::rename(&stage, dest) {
+        return Err(rollback_before_install(
+            install_error,
+            dest,
+            &stage,
+            backup.as_deref(),
+        ));
+    }
+
+    let installed = InstalledReplacement {
+        dest: dest.to_path_buf(),
+        stage,
+        backup,
+    };
+
+    if let Err(injected_error) = hook(ReplacementPhase::ReplacementInstalled) {
+        return Err(combine_io_errors(
+            injected_error,
+            installed.rollback(),
+            "falló el rollback del reemplazo",
+        ));
+    }
+
+    Ok(installed)
+}
+
+fn rollback_before_install(
+    primary: io::Error,
+    dest: &Path,
+    stage: &Path,
+    backup: Option<&Path>,
+) -> io::Error {
+    let error = if let Some(backup) = backup {
+        combine_io_errors(
+            primary,
+            fs::rename(backup, dest),
+            "no se pudo restaurar el destino original",
+        )
+    } else {
+        primary
+    };
+    combine_io_errors(error, remove_path(stage), "no se pudo limpiar el staging")
+}
+
+fn neighbor_path(path: &Path, role: &str) -> io::Result<PathBuf> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} no tiene directorio padre", path.display()),
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} no tiene nombre de archivo", path.display()),
+        )
+    })?;
+    let mut candidate = OsString::from(".");
+    candidate.push(file_name);
+    candidate.push(format!(".tinto-{role}-{}", Uuid::new_v4()));
+    Ok(parent.join(candidate))
+}
+
+fn remove_path(path: &Path) -> io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+fn cleanup_after_commit(path: &Path) -> Option<String> {
+    cleanup_after_commit_with(path, remove_path)
+}
+
+fn cleanup_after_commit_with(
+    path: &Path,
+    cleanup: impl FnOnce(&Path) -> io::Result<()>,
+) -> Option<String> {
+    cleanup(path).err().map(|error| {
+        format!(
+            "La operación terminó, pero no se pudo limpiar el respaldo temporal {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn combine_io_errors(
+    primary: io::Error,
+    follow_up: io::Result<()>,
+    follow_up_context: &str,
+) -> io::Error {
+    match follow_up {
+        Ok(()) => primary,
+        Err(follow_up_error) => io::Error::new(
+            primary.kind(),
+            format!("{primary}; {follow_up_context}: {follow_up_error}"),
+        ),
+    }
+}
+
+#[cfg(test)]
+#[path = "commands_tests.rs"]
+mod transactional_replacement_tests;
+
+pub(crate) struct BatchMutationResult {
+    pub destinations: Vec<PathBuf>,
+    pub warnings: Vec<String>,
+}
+
+pub(crate) fn run_copy_batch_with_hook(
+    to_copy: Vec<(PathBuf, PathBuf)>,
+    mut after_item: impl FnMut(usize) -> io::Result<()>,
+) -> io::Result<BatchMutationResult> {
+    let mut installed = Vec::with_capacity(to_copy.len());
+    let mut destinations = Vec::with_capacity(to_copy.len());
+
+    for (index, (src, dest)) in to_copy.into_iter().enumerate() {
+        let mut replacement_hook = |_| Ok(());
+        let mut stage_copy = copy_recursive;
+        let replacement = match install_copy(&src, &dest, &mut replacement_hook, &mut stage_copy) {
+            Ok(replacement) => replacement,
+            Err(error) => return Err(rollback_copy_batch(error, installed)),
+        };
+        destinations.push(dest);
+        installed.push(replacement);
+
+        if let Err(error) = after_item(index + 1) {
+            return Err(rollback_copy_batch(error, installed));
+        }
+    }
+
+    let mut warnings = Vec::new();
+    for replacement in installed {
+        warnings.extend(replacement.commit());
+    }
+    Ok(BatchMutationResult {
+        destinations,
+        warnings,
+    })
+}
+
+pub(crate) fn run_move_batch_with_hook(
+    to_move: Vec<(PathBuf, PathBuf)>,
+    mut after_item: impl FnMut(usize) -> io::Result<()>,
+) -> io::Result<BatchMutationResult> {
+    let mut installed = Vec::with_capacity(to_move.len());
+    let mut destinations = Vec::with_capacity(to_move.len());
+
+    for (index, (src, dest)) in to_move.into_iter().enumerate() {
+        let mut replacement_hook = |_| Ok(());
+        let mut stage_copy = copy_recursive;
+        let moved = match install_move(&src, &dest, &mut replacement_hook, &mut stage_copy) {
+            Ok(moved) => moved,
+            Err(error) => return Err(rollback_move_batch(error, installed)),
+        };
+        destinations.push(dest);
+        installed.push(moved);
+
+        if let Err(error) = after_item(index + 1) {
+            return Err(rollback_move_batch(error, installed));
+        }
+    }
+
+    let mut warnings = Vec::new();
+    for moved in installed {
+        warnings.extend(moved.commit());
+    }
+    Ok(BatchMutationResult {
+        destinations,
+        warnings,
+    })
+}
+
+fn rollback_copy_batch(primary: io::Error, installed: Vec<InstalledReplacement>) -> io::Error {
+    installed.into_iter().rev().fold(primary, |error, item| {
+        combine_io_errors(error, item.rollback(), "fallo el rollback del lote")
+    })
+}
+
+fn rollback_move_batch(primary: io::Error, installed: Vec<InstalledMove>) -> io::Error {
+    installed.into_iter().rev().fold(primary, |error, item| {
+        combine_io_errors(error, item.rollback(), "fallo el rollback del lote")
+    })
+}
+
+pub(crate) fn run_delete_batch_with_hook(
+    backup_root: &Path,
+    moves: Vec<(PathBuf, PathBuf)>,
+    after_item: impl FnMut(usize) -> io::Result<()>,
+) -> Result<Vec<String>, DeleteBatchFailure> {
+    let objects_root = backup_root.join("objects");
+    if let Err(error) = fs::create_dir_all(&objects_root) {
+        return Err(DeleteBatchFailure::rolled_back(combine_io_errors(
+            error,
+            remove_path(backup_root),
+            "no se pudo limpiar el token de borrado",
+        )));
+    }
+
+    let rollback_check = moves.clone();
+    match run_move_batch_with_hook(moves, after_item) {
+        Ok(batch) => Ok(batch.warnings),
+        Err(error) if batch_is_at_source(&rollback_check) => {
+            Err(DeleteBatchFailure::rolled_back(combine_io_errors(
+                error,
+                remove_path(backup_root),
+                "no se pudo limpiar el token de borrado revertido",
+            )))
+        }
+        Err(error) if recovery_manifest_is_usable(&rollback_check) => {
+            Err(DeleteBatchFailure::recovery_required(io::Error::new(
+                error.kind(),
+                format!("{error}; el borrado quedó incompleto y requiere restauración"),
+            )))
+        }
+        Err(error) => Err(DeleteBatchFailure::rolled_back(io::Error::new(
+            error.kind(),
+            format!("{error}; rollback incompleto sin una copia recuperable para cada elemento"),
+        ))),
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DeleteBatchFailure {
+    pub error: io::Error,
+    pub recovery_required: bool,
+}
+
+impl DeleteBatchFailure {
+    fn rolled_back(error: io::Error) -> Self {
+        Self {
+            error,
+            recovery_required: false,
+        }
+    }
+
+    fn recovery_required(error: io::Error) -> Self {
+        Self {
+            error,
+            recovery_required: true,
+        }
+    }
+}
+
+fn recovery_manifest_is_usable(moves: &[(PathBuf, PathBuf)]) -> bool {
+    let mut recovery_needed = false;
+    moves.iter().all(|(source, backup)| {
+        if source.exists() {
+            true
+        } else {
+            recovery_needed = true;
+            backup.exists()
+        }
+    }) && recovery_needed
+}
+
+pub(crate) fn run_replay_batch_with_hook(
+    token: &str,
+    moves: Vec<(PathBuf, PathBuf)>,
+    create_destination_parents: bool,
+    after_item: impl FnMut(usize) -> io::Result<()>,
+) -> io::Result<Vec<String>> {
+    let created_dirs = if create_destination_parents {
+        create_missing_parent_dirs(&moves)?
+    } else {
+        Vec::new()
+    };
+    let rollback_check = moves.clone();
+
+    match run_move_batch_with_hook(moves, after_item) {
+        Ok(batch) => Ok(batch.warnings),
+        Err(error) if batch_is_at_source(&rollback_check) => Err(combine_io_errors(
+            error,
+            remove_created_dirs(&created_dirs),
+            "no se pudieron limpiar los directorios creados",
+        )),
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!("{error}; rollback incompleto: conserva el token {token} para recuperacion",),
+        )),
+    }
+}
+
+fn batch_is_at_source(moves: &[(PathBuf, PathBuf)]) -> bool {
+    moves.iter().all(|(source, destination)| {
+        source.exists()
+            && !destination.exists()
+            && !has_transaction_artifact(source)
+            && !has_transaction_artifact(destination)
+    })
+}
+
+fn has_transaction_artifact(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(file_name) = path.file_name() else {
+        return false;
+    };
+    let prefix = format!(".{}.tinto-", file_name.to_string_lossy());
+    fs::read_dir(parent)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        })
+        .unwrap_or(true)
+}
+
+fn create_missing_parent_dirs(moves: &[(PathBuf, PathBuf)]) -> io::Result<Vec<PathBuf>> {
+    let mut missing = Vec::new();
+    for (_, destination) in moves {
+        let mut cursor = destination.parent();
+        while let Some(directory) = cursor {
+            if directory.exists() {
+                break;
+            }
+            missing.push(directory.to_path_buf());
+            cursor = directory.parent();
+        }
+    }
+    missing.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    missing.dedup();
+
+    let mut created = Vec::with_capacity(missing.len());
+    for directory in missing {
+        if let Err(error) = fs::create_dir(&directory) {
+            return Err(combine_io_errors(
+                error,
+                remove_created_dirs(&created),
+                "no se pudieron limpiar los directorios creados",
+            ));
+        }
+        created.push(directory);
+    }
+    Ok(created)
+}
+
+fn remove_created_dirs(created: &[PathBuf]) -> io::Result<()> {
+    let mut first_error = None;
+    for directory in created.iter().rev() {
+        if let Err(error) = fs::remove_dir(directory) {
+            if error.kind() != io::ErrorKind::NotFound && first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn run_copy_blocking(
     repo_abs: PathBuf,
     to_copy: Vec<(PathBuf, PathBuf)>,
-) -> Result<Vec<String>, CommandError> {
-    std::thread::spawn(move || -> std::io::Result<Vec<String>> {
-        let mut out = Vec::with_capacity(to_copy.len());
-        for (src, dest) in to_copy {
-            if dest.exists() {
-                if dest.is_dir() {
-                    fs::remove_dir_all(&dest)?;
-                } else {
-                    fs::remove_file(&dest)?;
-                }
-            }
-            copy_recursive(&src, &dest)?;
-            out.push(
+) -> Result<(Vec<String>, Vec<String>), CommandError> {
+    std::thread::spawn(move || -> std::io::Result<(Vec<String>, Vec<String>)> {
+        let batch = run_copy_batch_with_hook(to_copy, |_| Ok(()))?;
+        let copied = batch
+            .destinations
+            .into_iter()
+            .map(|dest| {
                 dest.strip_prefix(&repo_abs)
                     .unwrap_or(&dest)
                     .display()
-                    .to_string(),
-            );
-        }
-        Ok(out)
+                    .to_string()
+            })
+            .collect();
+        Ok((copied, batch.warnings))
     })
     .join()
     .map_err(|_| CommandError::new("copy-panic", "thread panicked"))?
@@ -699,52 +1337,24 @@ pub(crate) fn run_copy_blocking(
 pub(crate) fn run_move_blocking(
     repo_abs: PathBuf,
     to_move: Vec<(PathBuf, PathBuf)>,
-) -> Result<Vec<String>, CommandError> {
-    std::thread::spawn(move || -> std::io::Result<Vec<String>> {
-        let mut out = Vec::with_capacity(to_move.len());
-        for (src, dest) in to_move {
-            if dest.exists() {
-                if dest.is_dir() {
-                    fs::remove_dir_all(&dest)?;
-                } else {
-                    fs::remove_file(&dest)?;
-                }
-            }
-            if fs::rename(&src, &dest).is_err() {
-                copy_recursive(&src, &dest)?;
-                if src.is_dir() {
-                    fs::remove_dir_all(&src)?;
-                } else {
-                    fs::remove_file(&src)?;
-                }
-            }
-            out.push(
+) -> Result<(Vec<String>, Vec<String>), CommandError> {
+    std::thread::spawn(move || -> std::io::Result<(Vec<String>, Vec<String>)> {
+        let batch = run_move_batch_with_hook(to_move, |_| Ok(()))?;
+        let moved = batch
+            .destinations
+            .into_iter()
+            .map(|dest| {
                 dest.strip_prefix(&repo_abs)
                     .unwrap_or(&dest)
                     .display()
-                    .to_string(),
-            );
-        }
-        Ok(out)
+                    .to_string()
+            })
+            .collect();
+        Ok((moved, batch.warnings))
     })
     .join()
     .map_err(|_| CommandError::new("move-panic", "thread panicked"))?
     .map_err(|e| CommandError::new("move-failed", format!("no se pudo mover: {e}")))
-}
-
-pub(crate) fn move_path(src: &Path, dest: &Path) -> std::io::Result<()> {
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if fs::rename(src, dest).is_err() {
-        copy_recursive(src, dest)?;
-        if src.is_dir() {
-            fs::remove_dir_all(src)?;
-        } else {
-            fs::remove_file(src)?;
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn undo_backup_root(token: &str) -> Result<PathBuf, CommandError> {
@@ -755,7 +1365,7 @@ pub(crate) fn undo_backup_root(token: &str) -> Result<PathBuf, CommandError> {
 
 pub(crate) fn write_delete_manifest(
     root: &Path,
-    manifest: &DeleteResult,
+    manifest: &DeleteManifest,
 ) -> Result<(), CommandError> {
     fs::create_dir_all(root).map_err(|e| {
         CommandError::new(
@@ -774,7 +1384,7 @@ pub(crate) fn write_delete_manifest(
     })
 }
 
-pub(crate) fn read_delete_manifest(root: &Path) -> Result<DeleteResult, CommandError> {
+pub(crate) fn read_delete_manifest(root: &Path) -> Result<DeleteManifest, CommandError> {
     let bytes = fs::read(root.join("manifest.json")).map_err(|e| {
         CommandError::new(
             "undo-manifest-missing",
@@ -783,4 +1393,90 @@ pub(crate) fn read_delete_manifest(root: &Path) -> Result<DeleteResult, CommandE
     })?;
     serde_json::from_slice(&bytes)
         .map_err(|e| CommandError::new("undo-manifest-invalid", format!("manifest inválido: {e}")))
+}
+
+pub(crate) fn read_bound_delete_manifest(
+    repo: &Path,
+    token: &str,
+) -> Result<DeleteManifest, CommandError> {
+    let backup_root = undo_backup_root(token)?;
+    let manifest = read_delete_manifest(&backup_root)?;
+    if manifest.token != token {
+        return Err(CommandError::new(
+            "undo-manifest-invalid",
+            "el token no coincide con su manifest de recuperación",
+        ));
+    }
+    let requested_repo = repo.canonicalize().map_err(|error| {
+        CommandError::new(
+            "repository-not-found",
+            format!("no se pudo resolver el repositorio: {error}"),
+        )
+    })?;
+    let manifest_repo = manifest.repo.canonicalize().map_err(|error| {
+        CommandError::new(
+            "undo-repo-mismatch",
+            format!("el repositorio original del token ya no está disponible: {error}"),
+        )
+    })?;
+    if requested_repo != manifest_repo {
+        return Err(CommandError::new(
+            "undo-repo-mismatch",
+            "el token de recuperación pertenece a otro repositorio",
+        ));
+    }
+    Ok(manifest)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ReplayDirection {
+    Restore,
+    Redo,
+}
+
+pub(crate) fn plan_delete_replay(
+    repo: &Path,
+    manifest: &DeleteManifest,
+    direction: ReplayDirection,
+) -> Result<Vec<(PathBuf, PathBuf)>, CommandError> {
+    let objects_root = undo_backup_root(&manifest.token)?.join("objects");
+    let mut moves = Vec::with_capacity(manifest.entries.len());
+    for entry in &manifest.entries {
+        let repo_path = safe_join(repo, &entry.path)?;
+        if repo_path == repo {
+            return Err(CommandError::new(
+                "delete-replay-root-forbidden",
+                "no se puede restaurar ni eliminar el root del repo",
+            ));
+        }
+        let backup = objects_root.join(&entry.backup_name);
+        let repo_exists = repo_path.exists();
+        let backup_exists = backup.exists();
+        match (direction, repo_exists, backup_exists) {
+            (ReplayDirection::Restore, false, true) => moves.push((backup, repo_path)),
+            (ReplayDirection::Redo, true, false) => moves.push((repo_path, backup)),
+            // La entrada ya alcanzó el estado solicitado. Esto vuelve a hacer
+            // reintentable un lote cuyo rollback fue parcial.
+            (ReplayDirection::Restore, true, false) | (ReplayDirection::Redo, false, true) => {}
+            (_, true, true) => {
+                return Err(CommandError::new(
+                    "delete-replay-conflict",
+                    format!(
+                        "{} existe tanto en el repositorio como en el respaldo",
+                        entry.path.display()
+                    ),
+                ));
+            }
+            (_, false, false) => {
+                return Err(CommandError::new(
+                    "delete-replay-missing",
+                    format!(
+                        "{} no existe ni en el repositorio ni en el respaldo",
+                        entry.path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(moves)
 }

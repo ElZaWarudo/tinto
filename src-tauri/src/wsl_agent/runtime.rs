@@ -6,7 +6,8 @@ use std::{fs, io};
 use ignore::WalkBuilder;
 
 use crate::agent_console::checkpoint::{
-    create_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log, CheckpointConfig,
+    create_checkpoint, create_ephemeral_checkpoint, remove_ephemeral_checkpoint, revert_checkpoint,
+    revert_checkpoint_file, scan_change_log, CheckpointConfig,
 };
 use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
@@ -20,9 +21,13 @@ use crate::bus::contract::{
 };
 use crate::bus::secret_scan;
 use crate::bus::{git_error_state, recalc_blocking, RecalcScope};
+#[cfg(test)]
+use crate::file_ops::commands::transactional_copy_with_stage_copy;
 use crate::file_ops::commands::{
-    copy_recursive, move_path, read_delete_manifest, run_copy_blocking, run_move_blocking,
-    undo_backup_root, write_delete_manifest, CopyResult, DeleteResult, DeletedEntry,
+    plan_delete_replay, read_bound_delete_manifest, run_copy_batch_with_hook,
+    run_delete_batch_with_hook, run_move_batch_with_hook, run_replay_batch_with_hook,
+    undo_backup_root, write_delete_manifest, CopyResult, DeleteManifest, DeleteResult,
+    DeletedEntry, FileOpOutcome, ReplayDirection,
 };
 use crate::file_ops::{safe_join, FileConflict, FileConflictKind};
 use crate::git::{Git2Engine, GitEngine};
@@ -296,14 +301,24 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             allowed_repos,
             session_id,
             created_at_ms,
+            ephemeral,
             ..
         } => with_allowed_repo(&repo, &allowed_repos, || {
-            let checkpoint = create_checkpoint(
-                &repo,
-                &session_id,
-                created_at_ms,
-                &CheckpointConfig::default(),
-            )?;
+            let checkpoint = if ephemeral {
+                create_ephemeral_checkpoint(
+                    &repo,
+                    &session_id,
+                    created_at_ms,
+                    &CheckpointConfig::default(),
+                )?
+            } else {
+                create_checkpoint(
+                    &repo,
+                    &session_id,
+                    created_at_ms,
+                    &CheckpointConfig::default(),
+                )?
+            };
             Ok(AgentResponse::AgentCheckpoint { checkpoint })
         }),
         AgentRequest::AgentCheckpointScan {
@@ -332,6 +347,14 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             ..
         } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
             revert_checkpoint_file(&checkpoint, &path)?;
+            Ok(AgentResponse::Unit)
+        }),
+        AgentRequest::AgentCheckpointRemove {
+            allowed_repos,
+            checkpoint,
+            ..
+        } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
+            remove_ephemeral_checkpoint(&checkpoint)?;
             Ok(AgentResponse::Unit)
         }),
         AgentRequest::CopyToRepo {
@@ -377,8 +400,9 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             dest_dir,
             ..
         } => with_allowed_repo(&repo, &allowed_repos, || {
-            export_from_repo_linux(&repo, &sources, &dest_dir)?;
-            Ok(AgentResponse::Unit)
+            Ok(AgentResponse::FileOpOutcome {
+                result: export_from_repo_linux(&repo, &sources, &dest_dir)?,
+            })
         }),
         AgentRequest::DeleteFromRepo {
             repo,
@@ -396,8 +420,9 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             token,
             ..
         } => with_allowed_repo(&repo, &allowed_repos, || {
-            restore_deleted_from_repo_linux(&repo, &token)?;
-            Ok(AgentResponse::Unit)
+            Ok(AgentResponse::FileOpOutcome {
+                result: restore_deleted_from_repo_linux(&repo, &token)?,
+            })
         }),
         AgentRequest::RedoDeletedFromRepo {
             repo,
@@ -405,8 +430,9 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             token,
             ..
         } => with_allowed_repo(&repo, &allowed_repos, || {
-            redo_deleted_from_repo_linux(&repo, &token)?;
-            Ok(AgentResponse::Unit)
+            Ok(AgentResponse::FileOpOutcome {
+                result: redo_deleted_from_repo_linux(&repo, &token)?,
+            })
         }),
     }
 }
@@ -1040,12 +1066,14 @@ fn copy_to_repo_linux(
         return Ok(CopyResult {
             copied: Vec::new(),
             conflicts,
+            warnings: Vec::new(),
         });
     }
-    let copied = run_copy_blocking(repo.to_path_buf(), to_copy)?;
+    let (copied, warnings) = run_linux_copy_or_move_batch(repo, to_copy, false, |_| Ok(()))?;
     Ok(CopyResult {
         copied,
         conflicts: Vec::new(),
+        warnings,
     })
 }
 
@@ -1109,17 +1137,40 @@ fn copy_or_move_within_repo_linux(
         return Ok(CopyResult {
             copied: Vec::new(),
             conflicts,
+            warnings: Vec::new(),
         });
     }
-    let copied = if move_sources {
-        run_move_blocking(repo.to_path_buf(), pairs)?
-    } else {
-        run_copy_blocking(repo.to_path_buf(), pairs)?
-    };
+    let (copied, warnings) = run_linux_copy_or_move_batch(repo, pairs, move_sources, |_| Ok(()))?;
     Ok(CopyResult {
         copied,
         conflicts: Vec::new(),
+        warnings,
     })
+}
+
+fn run_linux_copy_or_move_batch(
+    repo: &Path,
+    pairs: Vec<(PathBuf, PathBuf)>,
+    move_sources: bool,
+    after_item: impl FnMut(usize) -> io::Result<()>,
+) -> Result<(Vec<String>, Vec<String>), AgentRuntimeError> {
+    let batch = if move_sources {
+        run_move_batch_with_hook(pairs, after_item)?
+    } else {
+        run_copy_batch_with_hook(pairs, after_item)?
+    };
+    let copied = batch
+        .destinations
+        .into_iter()
+        .map(|destination| {
+            destination
+                .strip_prefix(repo)
+                .unwrap_or(&destination)
+                .display()
+                .to_string()
+        })
+        .collect();
+    Ok((copied, batch.warnings))
 }
 
 fn classify_for_copy(
@@ -1148,14 +1199,40 @@ fn export_from_repo_linux(
     repo: &Path,
     sources: &[PathBuf],
     dest_dir: &Path,
+) -> Result<FileOpOutcome, AgentRuntimeError> {
+    let pairs = export_pairs_linux(repo, sources, dest_dir)?;
+    let batch = run_copy_batch_with_hook(pairs, |_| Ok(()))?;
+    Ok(FileOpOutcome {
+        warnings: batch.warnings,
+    })
+}
+
+#[cfg(test)]
+fn export_from_repo_linux_with_copy(
+    repo: &Path,
+    sources: &[PathBuf],
+    dest_dir: &Path,
+    mut copy: impl FnMut(&Path, &Path) -> io::Result<()>,
 ) -> Result<(), AgentRuntimeError> {
+    let pairs = export_pairs_linux(repo, sources, dest_dir)?;
+    for (src, dest) in pairs {
+        copy(&src, &dest)?;
+    }
+    Ok(())
+}
+
+fn export_pairs_linux(
+    repo: &Path,
+    sources: &[PathBuf],
+    dest_dir: &Path,
+) -> Result<Vec<(PathBuf, PathBuf)>, AgentRuntimeError> {
     if !dest_dir.is_dir() {
         return Err(AgentRuntimeError::new(
             "dest-not-a-dir",
             "dest_dir no es un directorio en el filesystem",
         ));
     }
-    let mut srcs = Vec::with_capacity(sources.len());
+    let mut pairs = Vec::with_capacity(sources.len());
     for src_rel in sources {
         let src_abs = safe_join(repo, src_rel)?;
         if !src_abs.exists() {
@@ -1164,26 +1241,24 @@ fn export_from_repo_linux(
                 format!("no existe {} en el repo", src_rel.display()),
             ));
         }
-        srcs.push(src_abs);
-    }
-    for src_abs in &srcs {
         let name = src_abs.file_name().unwrap_or_default();
         let dest = dest_dir.join(name);
-        if dest.exists() {
-            if dest.is_dir() {
-                fs::remove_dir_all(&dest)?;
-            } else {
-                fs::remove_file(&dest)?;
-            }
-        }
-        copy_recursive(src_abs, &dest)?;
+        pairs.push((src_abs, dest));
     }
-    Ok(())
+    Ok(pairs)
 }
 
 fn delete_from_repo_linux(
     repo: &Path,
     sources: &[PathBuf],
+) -> Result<DeleteResult, AgentRuntimeError> {
+    delete_from_repo_linux_with_hook(repo, sources, |_| Ok(()))
+}
+
+fn delete_from_repo_linux_with_hook(
+    repo: &Path,
+    sources: &[PathBuf],
+    after_item: impl FnMut(usize) -> io::Result<()>,
 ) -> Result<DeleteResult, AgentRuntimeError> {
     let repo_abs = repo
         .canonicalize()
@@ -1235,73 +1310,73 @@ fn delete_from_repo_linux(
         .collect();
     write_delete_manifest(
         &backup_root,
-        &DeleteResult {
+        &DeleteManifest {
             token: token.clone(),
+            repo: repo_abs.clone(),
             entries: entries.clone(),
         },
     )?;
-    fs::create_dir_all(&objects_root)?;
-    for (index, (_, target, _)) in filtered.into_iter().enumerate() {
-        move_path(&target, &objects_root.join(index.to_string()))?;
+    let moves = filtered
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, target, _))| (target, objects_root.join(index.to_string())))
+        .collect();
+    match run_delete_batch_with_hook(&backup_root, moves, after_item) {
+        Ok(warnings) => Ok(DeleteResult {
+            token,
+            entries,
+            completed: true,
+            recovery_required: false,
+            warnings,
+        }),
+        Err(failure) if failure.recovery_required => Ok(DeleteResult {
+            token,
+            entries,
+            completed: false,
+            recovery_required: true,
+            warnings: vec![format!(
+                "El borrado no terminó y se conservó una copia recuperable. Usa Deshacer para restaurarla: {}",
+                failure.error
+            )],
+        }),
+        Err(failure) => Err(failure.error.into()),
     }
-    Ok(DeleteResult { token, entries })
 }
 
-fn restore_deleted_from_repo_linux(repo: &Path, token: &str) -> Result<(), AgentRuntimeError> {
-    let backup_root = undo_backup_root(token)?;
-    let manifest = read_delete_manifest(&backup_root)?;
-    let objects_root = backup_root.join("objects");
-    for entry in manifest.entries {
-        let dest = safe_join(repo, &entry.path)?;
-        if dest == repo {
-            return Err(AgentRuntimeError::new(
-                "restore-root-forbidden",
-                "no se puede restaurar sobre el root del repo",
-            ));
-        }
-        if dest.exists() {
-            return Err(AgentRuntimeError::new(
-                "restore-failed",
-                format!("{} ya existe", entry.path.display()),
-            ));
-        }
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        move_path(&objects_root.join(entry.backup_name), &dest)?;
-    }
-    Ok(())
+fn restore_deleted_from_repo_linux(
+    repo: &Path,
+    token: &str,
+) -> Result<FileOpOutcome, AgentRuntimeError> {
+    restore_deleted_from_repo_linux_with_hook(repo, token, |_| Ok(()))
 }
 
-fn redo_deleted_from_repo_linux(repo: &Path, token: &str) -> Result<(), AgentRuntimeError> {
-    let backup_root = undo_backup_root(token)?;
-    let manifest = read_delete_manifest(&backup_root)?;
-    let objects_root = backup_root.join("objects");
-    fs::create_dir_all(&objects_root)?;
-    for entry in manifest.entries {
-        let src = safe_join(repo, &entry.path)?;
-        if src == repo {
-            return Err(AgentRuntimeError::new(
-                "redo-root-forbidden",
-                "no se puede rehacer el borrado del root del repo",
-            ));
-        }
-        if !src.exists() {
-            return Err(AgentRuntimeError::new(
-                "redo-delete-failed",
-                format!("{} no existe", entry.path.display()),
-            ));
-        }
-        let backup = objects_root.join(entry.backup_name);
-        if backup.exists() {
-            return Err(AgentRuntimeError::new(
-                "redo-delete-failed",
-                format!("backup {} ya existe", backup.display()),
-            ));
-        }
-        move_path(&src, &backup)?;
-    }
-    Ok(())
+fn restore_deleted_from_repo_linux_with_hook(
+    repo: &Path,
+    token: &str,
+    after_item: impl FnMut(usize) -> io::Result<()>,
+) -> Result<FileOpOutcome, AgentRuntimeError> {
+    let manifest = read_bound_delete_manifest(repo, token)?;
+    let moves = plan_delete_replay(repo, &manifest, ReplayDirection::Restore)?;
+    let warnings = run_replay_batch_with_hook(token, moves, true, after_item)?;
+    Ok(FileOpOutcome { warnings })
+}
+
+fn redo_deleted_from_repo_linux(
+    repo: &Path,
+    token: &str,
+) -> Result<FileOpOutcome, AgentRuntimeError> {
+    redo_deleted_from_repo_linux_with_hook(repo, token, |_| Ok(()))
+}
+
+fn redo_deleted_from_repo_linux_with_hook(
+    repo: &Path,
+    token: &str,
+    after_item: impl FnMut(usize) -> io::Result<()>,
+) -> Result<FileOpOutcome, AgentRuntimeError> {
+    let manifest = read_bound_delete_manifest(repo, token)?;
+    let moves = plan_delete_replay(repo, &manifest, ReplayDirection::Redo)?;
+    let warnings = run_replay_batch_with_hook(token, moves, false, after_item)?;
+    Ok(FileOpOutcome { warnings })
 }
 
 struct AgentRuntimeError {
@@ -1361,6 +1436,26 @@ mod tests {
         encode_agent_request, parse_agent_response_line, AgentRequest, RepoFsWatchConfig,
         PROTOCOL_VERSION,
     };
+
+    fn injected_batch_failure() -> io::Error {
+        io::Error::new(io::ErrorKind::Other, "fallo de lote Linux inyectado")
+    }
+
+    fn assert_no_transaction_artifacts(parent: &Path) {
+        let artifacts: Vec<PathBuf> = fs::read_dir(parent)
+            .expect("read transaction parent")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(".tinto-"))
+            })
+            .collect();
+        assert!(
+            artifacts.is_empty(),
+            "transaction artifacts remained: {artifacts:?}"
+        );
+    }
 
     #[test]
     fn rejects_repo_outside_allowlist() {
@@ -1750,6 +1845,7 @@ mod tests {
             allowed_repos: vec![repo.path().to_path_buf()],
             session_id: "sess-wsl".into(),
             created_at_ms: 1,
+            ephemeral: false,
         };
         let response = parse_agent_response_line(
             &respond_to_request_line(&encode_agent_request(&create).expect("encode"))
@@ -1819,6 +1915,43 @@ mod tests {
             "before\n"
         );
         assert!(!repo.path().join("created.txt").exists());
+    }
+
+    #[test]
+    fn agent_ephemeral_checkpoint_can_be_created_and_removed_agent_side() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "current\n");
+        let create = AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.path().to_path_buf(),
+            allowed_repos: vec![repo.path().to_path_buf()],
+            session_id: "sess-wsl-safety".into(),
+            created_at_ms: 1,
+            ephemeral: true,
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&create).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+        let AgentResponse::AgentCheckpoint { checkpoint } = response else {
+            panic!("expected checkpoint");
+        };
+        assert!(checkpoint.checkpoint_dir.exists());
+
+        let remove = AgentRequest::AgentCheckpointRemove {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint: checkpoint.clone(),
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&remove).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+
+        assert_eq!(response, AgentResponse::Unit);
+        assert!(!checkpoint.checkpoint_dir.exists());
     }
 
     #[test]
@@ -1904,6 +2037,90 @@ mod tests {
     }
 
     #[test]
+    fn export_from_repo_safely_overwrites_an_existing_destination() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("report.txt", "new report\n");
+        let repo_path = repo.path().canonicalize().expect("canonical repo");
+        let destination = tempfile::tempdir().expect("export destination");
+        std::fs::write(destination.path().join("report.txt"), "old report\n")
+            .expect("existing destination");
+        let request = AgentRequest::ExportFromRepo {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo_path.clone(),
+            allowed_repos: vec![repo_path],
+            sources: vec!["report.txt".into()],
+            dest_dir: destination.path().to_path_buf(),
+        };
+
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&request).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+
+        assert_eq!(
+            response,
+            AgentResponse::FileOpOutcome {
+                result: FileOpOutcome::default(),
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("report.txt")).unwrap(),
+            "new report\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.path().join("report.txt")).unwrap(),
+            "new report\n"
+        );
+        assert!(std::fs::read_dir(destination.path())
+            .expect("read destination")
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".tinto-")));
+    }
+
+    #[test]
+    fn export_from_repo_rolls_back_a_partial_staging_copy_in_the_linux_runtime() {
+        let fixture =
+            tempfile::tempdir_in(std::env::current_dir().expect("current test directory"))
+                .expect("runtime export fixture");
+        let repo_path = fixture.path().join("repo");
+        let destination = fixture.path().join("destination");
+        std::fs::create_dir_all(&repo_path).expect("repo directory");
+        std::fs::create_dir_all(&destination).expect("export destination");
+        let source_before: Vec<u8> = (0..=255).cycle().take(8 * 1024).collect();
+        let source_file = repo_path.join("report.bin");
+        std::fs::write(&source_file, &source_before).expect("source file");
+        let repo_path = repo_path.canonicalize().expect("canonical repo");
+        let destination_file = destination.join("report.bin");
+        let destination_before: Vec<u8> = (0..=127).rev().cycle().take(4 * 1024).collect();
+        std::fs::write(&destination_file, &destination_before).expect("existing destination");
+
+        let result = export_from_repo_linux_with_copy(
+            &repo_path,
+            &[PathBuf::from("report.bin")],
+            &destination,
+            |src, dest| {
+                transactional_copy_with_stage_copy(src, dest, |from, stage| {
+                    let bytes = std::fs::read(from)?;
+                    std::fs::write(stage, &bytes[..bytes.len() / 2])?;
+                    Err(io::Error::new(io::ErrorKind::Other, "fallo WSL inyectado"))
+                })
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&source_file).unwrap(), source_before);
+        assert_eq!(
+            std::fs::read(&destination_file).unwrap(),
+            destination_before
+        );
+        assert!(std::fs::read_dir(&destination)
+            .expect("read destination")
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".tinto-")));
+    }
+
+    #[test]
     fn move_within_repo_moves_a_file_into_a_nested_directory() {
         let repo = TempRepo::with_initial_commit();
         repo.write("README.md", "move me\n");
@@ -1970,7 +2187,12 @@ mod tests {
                 .expect("respond"),
         )
         .expect("parse");
-        assert_eq!(response, AgentResponse::Unit);
+        assert_eq!(
+            response,
+            AgentResponse::FileOpOutcome {
+                result: FileOpOutcome::default(),
+            }
+        );
         assert!(repo.path().join("gone.txt").exists());
 
         let redo = AgentRequest::RedoDeletedFromRepo {
@@ -1984,7 +2206,194 @@ mod tests {
                 .expect("respond"),
         )
         .expect("parse");
-        assert_eq!(response, AgentResponse::Unit);
+        assert_eq!(
+            response,
+            AgentResponse::FileOpOutcome {
+                result: FileOpOutcome::default(),
+            }
+        );
         assert!(!repo.path().join("gone.txt").exists());
+    }
+
+    #[test]
+    fn linux_copy_batch_rolls_back_after_the_first_object() {
+        let fixture = tempfile::tempdir().expect("linux copy fixture");
+        let source = fixture.path().join("source");
+        let destination = fixture.path().join("destination");
+        fs::create_dir_all(&source).expect("source dir");
+        fs::create_dir_all(&destination).expect("destination dir");
+        let source_one = vec![0x71; 4096];
+        let source_two = vec![0x72; 8192];
+        let destination_one = vec![0xC1; 1024];
+        let destination_two = vec![0xC2; 2048];
+        fs::write(source.join("one.bin"), &source_one).expect("source one");
+        fs::write(source.join("two.bin"), &source_two).expect("source two");
+        fs::write(destination.join("one.bin"), &destination_one).expect("destination one");
+        fs::write(destination.join("two.bin"), &destination_two).expect("destination two");
+
+        let result = run_linux_copy_or_move_batch(
+            fixture.path(),
+            vec![
+                (source.join("one.bin"), destination.join("one.bin")),
+                (source.join("two.bin"), destination.join("two.bin")),
+            ],
+            false,
+            |completed| {
+                if completed == 1 {
+                    Err(injected_batch_failure())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(source.join("one.bin")).unwrap(), source_one);
+        assert_eq!(fs::read(source.join("two.bin")).unwrap(), source_two);
+        assert_eq!(
+            fs::read(destination.join("one.bin")).unwrap(),
+            destination_one
+        );
+        assert_eq!(
+            fs::read(destination.join("two.bin")).unwrap(),
+            destination_two
+        );
+        assert_no_transaction_artifacts(&source);
+        assert_no_transaction_artifacts(&destination);
+    }
+
+    #[test]
+    fn linux_move_batch_rolls_back_after_the_first_object() {
+        let fixture = tempfile::tempdir().expect("linux move fixture");
+        let source = fixture.path().join("source");
+        let destination = fixture.path().join("destination");
+        fs::create_dir_all(&source).expect("source dir");
+        fs::create_dir_all(&destination).expect("destination dir");
+        let source_one = vec![0x81; 4096];
+        let source_two = vec![0x82; 8192];
+        let destination_one = vec![0xD1; 1024];
+        let destination_two = vec![0xD2; 2048];
+        fs::write(source.join("one.bin"), &source_one).expect("source one");
+        fs::write(source.join("two.bin"), &source_two).expect("source two");
+        fs::write(destination.join("one.bin"), &destination_one).expect("destination one");
+        fs::write(destination.join("two.bin"), &destination_two).expect("destination two");
+
+        let result = run_linux_copy_or_move_batch(
+            fixture.path(),
+            vec![
+                (source.join("one.bin"), destination.join("one.bin")),
+                (source.join("two.bin"), destination.join("two.bin")),
+            ],
+            true,
+            |completed| {
+                if completed == 1 {
+                    Err(injected_batch_failure())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(source.join("one.bin")).unwrap(), source_one);
+        assert_eq!(fs::read(source.join("two.bin")).unwrap(), source_two);
+        assert_eq!(
+            fs::read(destination.join("one.bin")).unwrap(),
+            destination_one
+        );
+        assert_eq!(
+            fs::read(destination.join("two.bin")).unwrap(),
+            destination_two
+        );
+        assert_no_transaction_artifacts(&source);
+        assert_no_transaction_artifacts(&destination);
+    }
+
+    #[test]
+    fn linux_delete_batch_rolls_back_after_the_first_object() {
+        let fixture = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .expect("linux delete fixture");
+        let repo = fixture.path().join("repo");
+        fs::create_dir_all(&repo).expect("repo dir");
+        let one = vec![0x91; 4096];
+        let two = vec![0x92; 8192];
+        fs::write(repo.join("one.bin"), &one).expect("source one");
+        fs::write(repo.join("two.bin"), &two).expect("source two");
+        let repo_path = repo.canonicalize().expect("canonical repo");
+
+        let result = delete_from_repo_linux_with_hook(
+            &repo_path,
+            &[PathBuf::from("one.bin"), PathBuf::from("two.bin")],
+            |completed| {
+                if completed == 1 {
+                    Err(injected_batch_failure())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(repo.join("one.bin")).unwrap(), one);
+        assert_eq!(fs::read(repo.join("two.bin")).unwrap(), two);
+        assert_no_transaction_artifacts(&repo);
+    }
+
+    #[test]
+    fn linux_restore_and_redo_failures_leave_the_token_retriable() {
+        let fixture = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .expect("linux replay fixture");
+        let repo = fixture.path().join("repo");
+        fs::create_dir_all(&repo).expect("repo dir");
+        let one = vec![0xA1; 4096];
+        let two = vec![0xA2; 8192];
+        fs::write(repo.join("one.bin"), &one).expect("source one");
+        fs::write(repo.join("two.bin"), &two).expect("source two");
+        let repo_path = repo.canonicalize().expect("canonical repo");
+        let deleted = delete_from_repo_linux(
+            &repo_path,
+            &[PathBuf::from("one.bin"), PathBuf::from("two.bin")],
+        )
+        .unwrap_or_else(|error| panic!("initial delete: {}", error.message));
+        let backup_root = undo_backup_root(&deleted.token).expect("backup root");
+        let objects = backup_root.join("objects");
+
+        let restore =
+            restore_deleted_from_repo_linux_with_hook(&repo_path, &deleted.token, |completed| {
+                if completed == 1 {
+                    Err(injected_batch_failure())
+                } else {
+                    Ok(())
+                }
+            });
+        assert!(restore.is_err());
+        assert!(!repo.join("one.bin").exists());
+        assert!(!repo.join("two.bin").exists());
+        assert_eq!(fs::read(objects.join("0")).unwrap(), one);
+        assert_eq!(fs::read(objects.join("1")).unwrap(), two);
+        assert_no_transaction_artifacts(&repo);
+        assert_no_transaction_artifacts(&objects);
+
+        restore_deleted_from_repo_linux(&repo_path, &deleted.token)
+            .unwrap_or_else(|error| panic!("restore retry: {}", error.message));
+        let redo =
+            redo_deleted_from_repo_linux_with_hook(&repo_path, &deleted.token, |completed| {
+                if completed == 1 {
+                    Err(injected_batch_failure())
+                } else {
+                    Ok(())
+                }
+            });
+        assert!(redo.is_err());
+        assert_eq!(fs::read(repo.join("one.bin")).unwrap(), one);
+        assert_eq!(fs::read(repo.join("two.bin")).unwrap(), two);
+        assert!(!objects.join("0").exists());
+        assert!(!objects.join("1").exists());
+        assert_no_transaction_artifacts(&repo);
+        assert_no_transaction_artifacts(&objects);
+
+        redo_deleted_from_repo_linux(&repo_path, &deleted.token)
+            .unwrap_or_else(|error| panic!("redo retry: {}", error.message));
+        fs::remove_dir_all(backup_root).expect("cleanup undo fixture");
     }
 }

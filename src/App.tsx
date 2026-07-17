@@ -35,6 +35,7 @@ import {
 } from "./workspace/detachConsoles";
 import { MenuBar } from "./workbench/MenuBar";
 import { CompactWindowBar } from "./workbench/WindowChrome";
+import { BrowserReviewHome } from "./workbench/BrowserReviewHome";
 import { AddRepoDialog } from "./workbench/AddRepoDialog";
 import { FirstRun, StartupFailure, StartupLoading } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
@@ -75,13 +76,27 @@ function closeInactiveRepoPanels(
   }
 }
 
+function usesNativeRuntime(): boolean {
+  return Boolean((globalThis as typeof globalThis & { isTauri?: boolean }).isTauri);
+}
+
 export default function App() {
+  if (import.meta.env.MODE !== "test" && !usesNativeRuntime()) {
+    return <BrowserReviewHome />;
+  }
+  return <NativeApp />;
+}
+
+function NativeApp() {
   useBusConnection();
-  const { config, loaded, configError, snapshotError } = useBusState();
+  const busState = useBusState();
+  const { config, loaded, configError, snapshotError } = busState;
+  const connectionErrors = Object.entries(busState.connectionErrors);
   const { glanceMode } = useQualityState();
   const apiRef = useRef<DockviewApi | null>(null);
   const [showAddRepo, setShowAddRepo] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionRetry, setActionRetry] = useState<(() => void) | null>(null);
 
   const addLocalRepoFromPicker = async () => {
     const active = busStore.getState().config?.active;
@@ -113,8 +128,10 @@ export default function App() {
         if (isWindowsHost()) setShowAddRepo(true);
         else {
           setActionError(null);
+          setActionRetry(null);
           void addLocalRepoFromPicker().catch((error) => {
             setActionError(commandErrorMessage(error, "No se pudo añadir el repositorio local."));
+            setActionRetry(null);
           });
         }
       },
@@ -122,6 +139,7 @@ export default function App() {
         const active = busStore.getState().config?.active;
         if (!active) return;
         setActionError(null);
+        setActionRetry(null);
         void removeRepoFlow(active, path)
           .then((removed) => {
             if (!removed) return;
@@ -136,6 +154,7 @@ export default function App() {
           })
           .catch((e) => {
             setActionError(commandErrorMessage(e, "No se pudo quitar el repositorio."));
+            setActionRetry(null);
           });
       },
       openFile: (path, filePath, pin = false) => {
@@ -180,6 +199,10 @@ export default function App() {
       openDashboard: () => actions.openDashboard(),
       openTimeline: () => actions.openTimeline(),
       addRepo: () => actions.addRepo(),
+      onFileMutationError: (message, retry) => {
+        setActionError(message);
+        setActionRetry(() => retry);
+      },
     });
   }, [actions]);
 
@@ -188,7 +211,8 @@ export default function App() {
     let unlisten: (() => void) | null = null;
     void onDetachedConsolesReattach((terminals) => {
       const api = apiRef.current;
-      if (!api) return;
+      if (!api)
+        throw new Error("El workspace principal todavía no está listo para reanexar Agents.");
       openAgentConsolesPanel(api);
       terminals.forEach((params) => consoleDock.openTerminal(params));
     })
@@ -253,6 +277,21 @@ export default function App() {
       <div className="app-shell">
         <NotificationWatcher />
         <MenuBar />
+        {connectionErrors.length > 0 && (
+          <div
+            aria-atomic="true"
+            aria-live="polite"
+            className="app-shell__notice"
+            data-testid="connection-errors-banner"
+            role="status"
+          >
+            <strong>Conexión parcial.</strong>{" "}
+            {connectionErrors.map(([channel, message]) => (
+              <span key={channel}>{message} </span>
+            ))}
+            Se conserva el último estado disponible mientras Tinto reconecta.
+          </div>
+        )}
         {(actionError || shellError) && (
           <div className="app-shell__notice" role="alert" data-testid="app-shell-error">
             <span>{actionError ?? shellError}</span>
@@ -262,9 +301,29 @@ export default function App() {
               </button>
             )}
             {actionError && (
-              <button type="button" onClick={() => setActionError(null)}>
-                Cerrar
-              </button>
+              <>
+                {actionRetry && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionError(null);
+                      setActionRetry(null);
+                      actionRetry();
+                    }}
+                  >
+                    Reintentar
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionError(null);
+                    setActionRetry(null);
+                  }}
+                >
+                  Cerrar
+                </button>
+              </>
             )}
           </div>
         )}

@@ -424,11 +424,14 @@ export function FileTreeNode({
   delta,
   depth,
   activePath,
+  selectedPaths,
   focusedPath,
   expandedDirs,
   onToggleDir,
   onFocusPath,
   onOpen,
+  onSelect,
+  onToggleSelection,
   onContextMenu,
   draggingPath,
   dropTargetPath,
@@ -439,11 +442,14 @@ export function FileTreeNode({
   delta: RepoDelta;
   depth: number;
   activePath: string | null;
+  selectedPaths?: ReadonlySet<string>;
   focusedPath?: string | null;
   expandedDirs?: Set<string>;
   onToggleDir?: (path: string) => void;
   onFocusPath?: (path: string) => void;
   onOpen: (path: string, pin: boolean) => void;
+  onSelect?: (event: MouseEvent, node: TreeNode) => void;
+  onToggleSelection?: (node: TreeNode) => void;
   onContextMenu?: (event: MouseEvent, node: TreeNode) => void;
   draggingPath?: string | null;
   dropTargetPath?: string | null;
@@ -453,6 +459,7 @@ export function FileTreeNode({
   const [localOpen, setLocalOpen] = useState(false); // fallback for standalone use
   const itemRef = useRef<HTMLDivElement | null>(null);
   const open = expandedDirs ? expandedDirs.has(node.path) : localOpen;
+  const selected = selectedPaths?.has(node.path) ?? node.path === activePath;
   const itemTabIndex = focusedPath === undefined ? 0 : focusedPath === node.path ? 0 : -1;
   const indent = depth * 12 + 8;
   const indentStyle = {
@@ -472,6 +479,7 @@ export function FileTreeNode({
     const dirClassBase = [
       "tree-dir__row",
       node.hasChanges ? "tree-dir__row--changed" : "",
+      selected ? "tree-dir__row--selected" : "",
       draggingPath === node.path ? "tree-dir__row--dragging" : "",
     ]
       .filter(Boolean)
@@ -488,7 +496,7 @@ export function FileTreeNode({
         tabIndex={itemTabIndex}
         aria-level={depth + 1}
         aria-expanded={open}
-        aria-selected={node.path === activePath}
+        aria-selected={selected}
         aria-label={node.name}
         data-tree-path={node.path}
         data-tree-kind="directory"
@@ -499,7 +507,11 @@ export function FileTreeNode({
         onKeyDown={(event) => {
           if (event.currentTarget !== event.target) return;
           const ctrl = event.ctrlKey || event.metaKey;
-          if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+          if (ctrl && event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            onToggleSelection?.(node);
+          } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
             event.preventDefault();
             event.stopPropagation();
             openKeyboardContextMenu(event.currentTarget);
@@ -521,9 +533,10 @@ export function FileTreeNode({
         <div
           className={dirClass}
           style={indentStyle}
-          onClick={() => {
+          onClick={(event) => {
             focusItem();
-            toggleDir();
+            onSelect?.(event, node);
+            if (!event.ctrlKey && !event.metaKey && !event.shiftKey) toggleDir();
           }}
         >
           <span
@@ -553,11 +566,14 @@ export function FileTreeNode({
                 delta={delta}
                 depth={depth + 1}
                 activePath={activePath}
+                selectedPaths={selectedPaths}
                 focusedPath={focusedPath}
                 expandedDirs={expandedDirs}
                 onToggleDir={onToggleDir}
                 onFocusPath={onFocusPath}
                 onOpen={onOpen}
+                onSelect={onSelect}
+                onToggleSelection={onToggleSelection}
                 onContextMenu={onContextMenu}
                 draggingPath={draggingPath}
                 dropTargetPath={dropTargetPath}
@@ -575,6 +591,7 @@ export function FileTreeNode({
   if (draggingPath === node.path) classes.push("tree-file--dragging");
   if (node.changed) classes.push("tree-file--changed");
   if (node.path === activePath) classes.push("tree-file--active");
+  if (selected) classes.push("tree-file--selected");
   const iconKind = fileIconKind(node.name);
   const changeMark = node.changed ? statusMarkForKind(node.changed) : null;
 
@@ -586,7 +603,7 @@ export function FileTreeNode({
       role="treeitem"
       tabIndex={itemTabIndex}
       aria-level={depth + 1}
-      aria-selected={node.path === activePath}
+      aria-selected={selected}
       aria-label={node.name}
       data-testid={`tree-file-${node.path}`}
       data-tree-path={node.path}
@@ -594,15 +611,21 @@ export function FileTreeNode({
       onFocus={(event) => {
         if (event.currentTarget === event.target) onFocusPath?.(node.path);
       }}
-      onClick={() => {
+      onClick={(event) => {
         focusItem();
-        onOpen(node.path, false);
+        onSelect?.(event, node);
+        if (!event.ctrlKey && !event.metaKey && !event.shiftKey) onOpen(node.path, false);
       }}
       onDoubleClick={() => onOpen(node.path, true)}
       onContextMenu={(event) => onContextMenu?.(event, node)}
       onKeyDown={(e) => {
         if (e.currentTarget !== e.target) return;
-        if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+        const ctrl = e.ctrlKey || e.metaKey;
+        if (ctrl && e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggleSelection?.(node);
+        } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
           e.preventDefault();
           e.stopPropagation();
           openKeyboardContextMenu(e.currentTarget);

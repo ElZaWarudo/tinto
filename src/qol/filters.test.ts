@@ -72,6 +72,7 @@ describe("quality filters", () => {
       configError: null,
       snapshotStatus: "ready",
       snapshotError: null,
+      connectionErrors: {},
       loaded: true,
     };
 

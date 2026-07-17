@@ -89,6 +89,23 @@ describe("shortcuts", () => {
       cleanup();
     });
 
+    it("suspends workspace shortcuts while an aria-modal dialog is open", () => {
+      const apiRef = { current: mockApi };
+      const cleanup = installShortcuts(apiRef, mockActions);
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      document.body.appendChild(dialog);
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "D", ctrlKey: true, shiftKey: true }),
+      );
+
+      expect(mockActions.openDashboard).not.toHaveBeenCalled();
+      dialog.remove();
+      cleanup();
+    });
+
     it("calls openDashboard on Ctrl+Shift+D", () => {
       const apiRef = { current: mockApi };
       const cleanup = installShortcuts(apiRef, mockActions);
@@ -149,6 +166,30 @@ describe("shortcuts", () => {
       expect(redoSpy).toHaveBeenCalled();
       undoSpy.mockRestore();
       redoSpy.mockRestore();
+      cleanup();
+    });
+
+    it("surfaces a failed file undo with a retry that reuses the recoverable operation", async () => {
+      const undoSpy = vi
+        .spyOn(deleteUndoManager, "undo")
+        .mockResolvedValueOnce({
+          copied: [],
+          conflicts: [],
+          fatalError: "No se pudo restaurar",
+        })
+        .mockResolvedValueOnce({ copied: [], conflicts: [] });
+      const onFileMutationError = vi.fn();
+      const apiRef = { current: mockApi };
+      const cleanup = installShortcuts(apiRef, { ...mockActions, onFileMutationError });
+
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
+      await vi.waitFor(() => expect(onFileMutationError).toHaveBeenCalledOnce());
+
+      const retry = onFileMutationError.mock.calls[0][1];
+      retry();
+      await vi.waitFor(() => expect(undoSpy).toHaveBeenCalledTimes(2));
+
+      undoSpy.mockRestore();
       cleanup();
     });
 

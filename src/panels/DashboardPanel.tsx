@@ -2,7 +2,7 @@
 // (skeletons), the degraded watching banner, the zero-repos state, and live
 // updates (memoized rows re-render only on their own repo's change).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listAgentSessions, retryRepo, startAgentSession } from "../bus/client";
 import { agentSessionStore } from "../agent/sessionStore";
 import {
@@ -32,6 +32,7 @@ function useNow(intervalMs: number): number {
 }
 
 const SKELETON_COUNT = 3;
+const DELTA_ANNOUNCEMENT_DELAY_MS = 200;
 
 interface LoadingRepoPreview {
   path: string;
@@ -151,12 +152,128 @@ function mergeActiveConfigPaths(livePaths: string[], configuredPaths: string[]):
   );
 }
 
+function materialDeltaFingerprint(delta: RepoDelta): string {
+  return JSON.stringify({
+    status: delta.status,
+    branch: delta.branch,
+    head: delta.head?.id ?? null,
+    error: delta.error,
+    metrics: delta.metrics,
+    signals: delta.signals,
+  });
+}
+
+function repoDeltaAnnouncement(delta: RepoDelta): string {
+  const name = busStore.displayName(delta.repo);
+  if (delta.error) {
+    return `${name} requiere atención por ${delta.error.category}.`;
+  }
+  const changedFiles = new Set([
+    ...delta.status.modified,
+    ...delta.status.staged,
+    ...delta.status.untracked,
+  ]).size;
+  const signalCount = getRepoSignals(delta).length;
+  const fileLabel = changedFiles === 1 ? "archivo con cambios" : "archivos con cambios";
+  const signalLabel = signalCount === 1 ? "señal" : "señales";
+  return `${name} actualizado: ${changedFiles} ${fileLabel} y ${signalCount} ${signalLabel}.`;
+}
+
+interface DeltaAnnouncement {
+  sequence: number;
+  text: string;
+}
+
+function useDeltaAnnouncement(
+  repos: Record<string, RepoDelta>,
+  activeWorkbench: string | null,
+  snapshotReady: boolean,
+): DeltaAnnouncement | null {
+  const [announcement, setAnnouncement] = useState<DeltaAnnouncement | null>(null);
+  const previousFingerprints = useRef<Map<string, string> | null>(null);
+  const baselineWorkbench = useRef<string | null | undefined>(undefined);
+  const awaitingSnapshotBaseline = useRef(true);
+  const pending = useRef(new Map<string, RepoDelta>());
+  const flushTimer = useRef<number | null>(null);
+  const announcementSequence = useRef(0);
+
+  useEffect(() => {
+    const currentFingerprints = new Map(
+      Object.entries(repos).map(([repo, delta]) => [repo, materialDeltaFingerprint(delta)]),
+    );
+    const workbenchChanged = baselineWorkbench.current !== activeWorkbench;
+    baselineWorkbench.current = activeWorkbench;
+    if (!snapshotReady) awaitingSnapshotBaseline.current = true;
+    if (!snapshotReady || awaitingSnapshotBaseline.current || workbenchChanged) {
+      if (snapshotReady) awaitingSnapshotBaseline.current = false;
+      previousFingerprints.current = currentFingerprints;
+      pending.current.clear();
+      if (flushTimer.current !== null) {
+        window.clearTimeout(flushTimer.current);
+        flushTimer.current = null;
+      }
+      setAnnouncement(null);
+      return;
+    }
+    const previous = previousFingerprints.current;
+    previousFingerprints.current = currentFingerprints;
+    if (previous === null) return;
+
+    for (const repo of pending.current.keys()) {
+      if (!currentFingerprints.has(repo)) pending.current.delete(repo);
+    }
+    let hasNewMaterialDelta = false;
+    for (const [repo, delta] of Object.entries(repos)) {
+      if (previous.get(repo) !== currentFingerprints.get(repo)) {
+        pending.current.set(repo, delta);
+        hasNewMaterialDelta = true;
+      }
+    }
+    if (pending.current.size === 0) {
+      if (flushTimer.current !== null) {
+        window.clearTimeout(flushTimer.current);
+        flushTimer.current = null;
+      }
+      return;
+    }
+    if (!hasNewMaterialDelta) return;
+
+    if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+    flushTimer.current = window.setTimeout(() => {
+      const summaries = Array.from(pending.current.values())
+        .sort((a, b) => busStore.displayName(a.repo).localeCompare(busStore.displayName(b.repo)))
+        .map(repoDeltaAnnouncement);
+      pending.current.clear();
+      flushTimer.current = null;
+      announcementSequence.current += 1;
+      setAnnouncement({
+        sequence: announcementSequence.current,
+        text: summaries.join(" "),
+      });
+    }, DELTA_ANNOUNCEMENT_DELAY_MS);
+  }, [activeWorkbench, repos, snapshotReady]);
+
+  useEffect(
+    () => () => {
+      if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+    },
+    [],
+  );
+
+  return announcement;
+}
+
 export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
   const { openRepo, addRepo, openAgents, openAgentTerminal, removeRepo } = useWorkspaceActions();
   const nowMs = useNow(1000);
+  const deltaAnnouncement = useDeltaAnnouncement(
+    repos,
+    state.config?.active ?? null,
+    state.snapshotStatus === "ready",
+  );
 
   const activeConfig = (state.config?.workbenches ?? []).find(
     (workbench) => workbench.name === state.config?.active,
@@ -244,6 +361,20 @@ export function DashboardPanel() {
       </div>
 
       <DashboardFilters />
+
+      <p
+        aria-atomic="true"
+        aria-live="polite"
+        className="sr-only"
+        data-testid="dashboard-delta-announcement"
+        role="status"
+      >
+        {deltaAnnouncement ? (
+          <span data-testid="dashboard-delta-announcement-message" key={deltaAnnouncement.sequence}>
+            {deltaAnnouncement.text}
+          </span>
+        ) : null}
+      </p>
 
       {!watching.available && (
         <div

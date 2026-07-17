@@ -1,5 +1,5 @@
 import type { DockviewWillDropEvent, IDockviewPanel } from "dockview-react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { consoleDock } from "../../workspace/consoleDock";
 import { agentTerminalPanelId } from "../../workspace/panels";
@@ -124,6 +124,16 @@ function dropEvent(panelId: string | null, kind = "edge") {
     getData: vi.fn(() => ({ panelId })),
     preventDefault: vi.fn(),
   } as unknown as DockviewWillDropEvent;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function dockApi(panel?: IDockviewPanel) {
@@ -318,6 +328,60 @@ describe("ConsoleDockPanel detach drop", () => {
     unmount();
   });
 
+  it("keeps saved conversations visible while a journal refresh is pending or fails", async () => {
+    const savedSessions = [
+      {
+        id: "sess-old",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        updated_at_ms: 3,
+        event_count: 2,
+        first_user_message: "Conserva esta conversación",
+        last_event_kind: "agent_message",
+        last_event_text: "Lista para continuar",
+        last_event_at_ms: 3,
+      },
+    ];
+    const refresh = deferred<unknown[]>();
+    clientMocks.listAgentJournalSessions
+      .mockResolvedValueOnce(savedSessions)
+      .mockReturnValueOnce(refresh.promise)
+      .mockResolvedValueOnce(savedSessions);
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    expect(
+      await screen.findByRole("button", { name: /abrir la transcripción de api con codex/i }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
+    });
+
+    await waitFor(() => expect(clientMocks.listAgentJournalSessions).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("status")).toHaveTextContent("Actualizando historial");
+    expect(
+      screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
+    ).toBeInTheDocument();
+
+    await act(async () => refresh.reject(new Error("offline")));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No se pudo actualizar el historial. Se conserva la última lista disponible.",
+    );
+    expect(
+      screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
+    await waitFor(() => expect(clientMocks.listAgentJournalSessions).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(
+      screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
+    ).toBeInTheDocument();
+    unmount();
+  });
+
   it("deletes a saved conversation from its right-click menu", async () => {
     clientMocks.listAgentJournalSessions.mockResolvedValue([
       {
@@ -349,7 +413,7 @@ describe("ConsoleDockPanel detach drop", () => {
       expect.stringContaining("¿Eliminar la conversación guardada de api?"),
     );
     await waitFor(() =>
-      expect(clientMocks.deleteAgentJournalSession).toHaveBeenCalledWith("sess-old"),
+      expect(clientMocks.deleteAgentJournalSession).toHaveBeenCalledWith("sess-old", true),
     );
     await waitFor(() => expect(savedConversation).not.toBeInTheDocument());
     expect(closeSpy).toHaveBeenCalledWith("sess-old");
@@ -413,7 +477,7 @@ describe("ConsoleDockPanel detach drop", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Eliminar conversación" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "No se puede eliminar una sesión activa",
+      "No se eliminó la conversación guardada. Sigue disponible; vuelve a intentarlo.",
     );
     expect(savedConversation).toBeInTheDocument();
     expect(sessionStoreMocks.removeSession).not.toHaveBeenCalled();

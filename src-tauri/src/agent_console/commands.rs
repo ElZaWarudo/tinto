@@ -470,7 +470,9 @@ pub fn delete_agent_journal_session(
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     journal: State<'_, Mutex<AgentJournal>>,
     session_id: String,
+    user_consent: bool,
 ) -> Result<bool, CommandError> {
+    require_journal_delete_user_consent(user_consent)?;
     if session_id.trim().is_empty() {
         return Err(CommandError::new(
             "invalid_session_id",
@@ -500,6 +502,16 @@ pub fn delete_agent_journal_session(
     journal
         .delete_session(&session_id)
         .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))
+}
+
+fn require_journal_delete_user_consent(user_consent: bool) -> Result<(), CommandError> {
+    if user_consent {
+        return Ok(());
+    }
+    Err(CommandError::new(
+        "consent_required",
+        "eliminar la conversación guardada requiere confirmación explícita del usuario",
+    ))
 }
 
 #[tauri::command]
@@ -2710,6 +2722,15 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn journal_delete_requires_explicit_user_consent() {
+        let error = require_journal_delete_user_consent(false).unwrap_err();
+
+        assert_eq!(error.category, "consent_required");
+        assert!(error.message.contains("confirmación explícita"));
+        assert!(require_journal_delete_user_consent(true).is_ok());
+    }
 
     #[test]
     fn branch_context_stops_before_the_selected_user_message() {

@@ -165,6 +165,31 @@ describe("App", () => {
     expect(screen.getByTestId("app-shell-error")).toHaveTextContent("snapshot offline");
   });
 
+  it("shows connection channel failures globally without discarding the workspace", () => {
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      });
+      busStore.loadSnapshot([], { available: true });
+      busStore.setConnectionError(
+        "agent-session-list",
+        "Listado de sesiones Agent: backend offline",
+      );
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("workspace-stub")).toBeInTheDocument();
+    expect(screen.getByTestId("connection-errors-banner")).toHaveTextContent(
+      "Listado de sesiones Agent: backend offline",
+    );
+    expect(screen.getByTestId("connection-errors-banner")).toHaveTextContent(
+      "Se conserva el último estado disponible mientras Tinto reconecta",
+    );
+  });
+
   it("surfaces local-picker failures from the non-Windows add-repo action", async () => {
     setWindowsHostOverrideForTests(false);
     vi.mocked(open).mockRejectedValueOnce(new Error("selector no disponible"));

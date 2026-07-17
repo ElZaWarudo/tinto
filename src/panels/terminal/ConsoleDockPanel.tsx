@@ -65,7 +65,7 @@ interface RecentAgentLaunchGroup {
   lastUsedAt: number;
 }
 
-type JournalLoadState = "loading" | "ready" | "error";
+type JournalLoadState = "loading" | "ready" | "refreshing" | "load-error" | "refresh-error";
 
 interface JournalContextMenuState {
   session: AgentJournalSessionSummary;
@@ -115,6 +115,7 @@ export function ConsoleDockPanel({
   const dockHostRef = useRef<HTMLDivElement | null>(null);
   const layoutFrameRef = useRef<number | null>(null);
   const movePanelDisposeRef = useRef<(() => void) | null>(null);
+  const journalLoadedOnceRef = useRef(false);
   const [terminalCount, setTerminalCount] = useState(0);
   const [openTerminals, setOpenTerminals] = useState<TerminalPanelParams[]>([]);
   const [recentLaunches, setRecentLaunches] = useState<RecentAgentLaunch[]>(() =>
@@ -207,17 +208,18 @@ export function ConsoleDockPanel({
 
   useEffect(() => {
     let active = true;
+    if (journalLoadedOnceRef.current) setJournalLoadState("refreshing");
     void listAgentJournalSessions(18)
       .then((sessions) => {
         if (active) {
+          journalLoadedOnceRef.current = true;
           setJournalSessions(sessions);
           setJournalLoadState("ready");
         }
       })
       .catch(() => {
         if (active) {
-          setJournalSessions([]);
-          setJournalLoadState("error");
+          setJournalLoadState(journalLoadedOnceRef.current ? "refresh-error" : "load-error");
         }
       });
     return () => {
@@ -240,7 +242,7 @@ export function ConsoleDockPanel({
   }, [agentState.timeline, openTerminals]);
 
   const retryJournalLoad = () => {
-    setJournalLoadState("loading");
+    setJournalLoadState(journalLoadedOnceRef.current ? "refreshing" : "loading");
     setJournalRequestVersion((version) => version + 1);
   };
 
@@ -347,7 +349,12 @@ export function ConsoleDockPanel({
           .catch(() => {});
       })
       .catch((error) => {
-        setLaunchError(commandMessage(error));
+        setLaunchError(
+          reportAgentFailure(
+            error,
+            "No se inició la conversación. Comprueba que el Agent esté disponible y vuelve a intentarlo.",
+          ),
+        );
       })
       .finally(() => {
         setLaunchingKey(null);
@@ -381,7 +388,12 @@ export function ConsoleDockPanel({
         ensureTerminalPanelVisible(params);
       })
       .catch((error) => {
-        setLaunchError(commandMessage(error));
+        setLaunchError(
+          reportAgentFailure(
+            error,
+            "No se abrió la conversación guardada. Vuelve a intentarlo desde el diario.",
+          ),
+        );
       })
       .finally(() => {
         setOpeningJournalId(null);
@@ -428,7 +440,7 @@ export function ConsoleDockPanel({
     setJournalContextMenu(null);
     setDeletingJournalId(session.id);
     setLaunchError(null);
-    void deleteAgentJournalSession(session.id)
+    void deleteAgentJournalSession(session.id, true)
       .then((deleted) => {
         if (!deleted) {
           throw new Error("La conversación ya no existe.");
@@ -440,7 +452,12 @@ export function ConsoleDockPanel({
         agentSessionStore.removeSession(session.id);
       })
       .catch((error) => {
-        setLaunchError(commandMessage(error));
+        setLaunchError(
+          reportAgentFailure(
+            error,
+            "No se eliminó la conversación guardada. Sigue disponible; vuelve a intentarlo.",
+          ),
+        );
       })
       .finally(() => {
         setDeletingJournalId(null);
@@ -606,16 +623,20 @@ export function ConsoleDockPanel({
 
 function JournalLoadNotice({ state, onRetry }: { state: JournalLoadState; onRetry: () => void }) {
   if (state === "ready") return null;
-  if (state === "loading") {
+  if (state === "loading" || state === "refreshing") {
     return (
       <div className="console-dock-panel__quick-error" role="status" aria-live="polite">
-        Cargando historial…
+        {state === "loading" ? "Cargando historial…" : "Actualizando historial…"}
       </div>
     );
   }
   return (
     <div className="console-dock-panel__quick-error" role="alert">
-      <span>No se pudo cargar el historial.</span>
+      <span>
+        {state === "load-error"
+          ? "No se pudo cargar el historial."
+          : "No se pudo actualizar el historial. Se conserva la última lista disponible."}
+      </span>
       <button type="button" onClick={onRetry}>
         Reintentar
       </button>
@@ -1152,9 +1173,7 @@ function agentLogoClass(agentType: string): string {
   return agentType.replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "agent";
 }
 
-function commandMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) {
-    return String((error as { message?: unknown }).message ?? "No se pudo iniciar el Agent");
-  }
-  return String(error || "No se pudo iniciar el Agent");
+function reportAgentFailure(error: unknown, userMessage: string): string {
+  console.error("tinto: agent dock action failed", error);
+  return userMessage;
 }

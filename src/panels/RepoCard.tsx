@@ -69,7 +69,12 @@ export function RepoAgentLauncher({
       .catch((error) => {
         if (!alive) return;
         setAvailable(null);
-        setAvailabilityMessage(commandMessage(error));
+        setAvailabilityMessage(
+          reportActionFailure(
+            error,
+            "No se pudo comprobar el Agent. Puedes intentar iniciarlo de todos modos.",
+          ),
+        );
       });
     return () => {
       alive = false;
@@ -81,7 +86,14 @@ export function RepoAgentLauncher({
     setLaunching(true);
     setLaunchMessage(null);
     Promise.resolve(onLaunch(agentType))
-      .catch((error) => setLaunchMessage(commandMessage(error)))
+      .catch((error) =>
+        setLaunchMessage(
+          reportActionFailure(
+            error,
+            "No se inició el Agent. Comprueba que esté disponible y vuelve a intentarlo.",
+          ),
+        ),
+      )
       .finally(() => setLaunching(false));
   };
 
@@ -206,7 +218,14 @@ function RepoCardImpl({
     setFetching(true);
     setFetchMessage(null);
     Promise.resolve(onFetch())
-      .catch((e) => setFetchMessage(commandMessage(e)))
+      .catch((e) =>
+        setFetchMessage(
+          reportActionFailure(
+            e,
+            "No se actualizó el repositorio remoto. Comprueba la conexión y vuelve a intentarlo.",
+          ),
+        ),
+      )
       .finally(() => setFetching(false));
   };
 
@@ -400,9 +419,7 @@ function RepoCardImpl({
 
 export const RepoCard = memo(RepoCardImpl);
 
-function commandMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) {
-    return String((error as { message?: unknown }).message ?? "No se pudo completar la acción");
-  }
-  return String(error || "No se pudo completar la acción");
+function reportActionFailure(error: unknown, userMessage: string): string {
+  console.error("tinto: repo action failed", error);
+  return userMessage;
 }

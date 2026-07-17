@@ -27,6 +27,7 @@ import {
   type GitleaksInstallResult,
   type CopyResult,
   type DeleteResult,
+  type FileOpOutcome,
   type FileContent,
   type FileDiff,
   type FsEventBatch,
@@ -140,8 +141,8 @@ export const resumeAgentJournalSession = (sessionId: string) =>
 export const branchAgentSessionFromMessage = (sessionId: string, messageId: string) =>
   invoke<AgentSessionResumeResult>("branch_agent_session_from_message", { sessionId, messageId });
 
-export const deleteAgentJournalSession = (sessionId: string) =>
-  invoke<boolean>("delete_agent_journal_session", { sessionId });
+export const deleteAgentJournalSession = (sessionId: string, userConsent: boolean) =>
+  invoke<boolean>("delete_agent_journal_session", { sessionId, userConsent });
 
 export const getGitleaksSetupStatus = () =>
   invoke<GitleaksSetupStatus>("get_gitleaks_setup_status");
@@ -296,16 +297,16 @@ export const moveWithinRepo = (
   });
 
 export const exportFromRepo = (repo: string, sources: string[], destDir: string) =>
-  invoke("export_from_repo", { repo, sources, destDir });
+  invoke<FileOpOutcome>("export_from_repo", { repo, sources, destDir });
 
-export const deleteFromRepo = (repo: string, sources: string[]) =>
-  invoke<DeleteResult>("delete_from_repo", { repo, sources });
+export const deleteFromRepo = (repo: string, sources: string[], userConsent: boolean) =>
+  invoke<DeleteResult>("delete_from_repo", { repo, sources, userConsent });
 
 export const restoreDeletedFromRepo = (repo: string, token: string) =>
-  invoke("restore_deleted_from_repo", { repo, token });
+  invoke<FileOpOutcome>("restore_deleted_from_repo", { repo, token });
 
 export const redoDeletedFromRepo = (repo: string, token: string) =>
-  invoke("redo_deleted_from_repo", { repo, token });
+  invoke<FileOpOutcome>("redo_deleted_from_repo", { repo, token });
 
 // ---- Event listeners (StrictMode-safe; see KTD6) ----
 // Each returns a promise resolving to an unlisten fn. Callers attach in an

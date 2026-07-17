@@ -441,9 +441,10 @@ describe("RDM-008 client wrappers", () => {
       sessionId: "sess-1",
     });
 
-    void deleteAgentJournalSession("sess-1");
+    void deleteAgentJournalSession("sess-1", true);
     expect(invokeMock).toHaveBeenCalledWith("delete_agent_journal_session", {
       sessionId: "sess-1",
+      userConsent: true,
     });
 
     void getAgentRuntimeCatalog("sess-1", true);

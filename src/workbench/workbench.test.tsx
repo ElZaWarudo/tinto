@@ -106,6 +106,67 @@ describe("MenuBar", () => {
     expect(workbench).toHaveFocus();
   });
 
+  it("enters the menu bar with F10 or bare Alt and restores the prior focus on Escape", () => {
+    const origin = document.createElement("button");
+    origin.textContent = "Origen";
+    document.body.appendChild(origin);
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+    const workbench = screen.getByTestId("menu-workbench");
+
+    origin.focus();
+    fireEvent.keyDown(window, { key: "F10" });
+    expect(workbench).toHaveFocus();
+    fireEvent.keyDown(workbench, { key: "Escape" });
+    expect(origin).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "Alt", altKey: true });
+    expect(origin).toHaveFocus();
+    fireEvent.keyUp(window, { key: "Alt" });
+    expect(workbench).toHaveFocus();
+    origin.remove();
+  });
+
+  it.each([
+    ["Alt+Tab", "Tab"],
+    ["Alt+F4", "F4"],
+    ["Alt+Space", " "],
+  ])("leaves %s to the platform without moving focus", (_label, chordKey) => {
+    const origin = document.createElement("button");
+    origin.textContent = "Origen";
+    document.body.appendChild(origin);
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+    origin.focus();
+
+    const altDown = new KeyboardEvent("keydown", {
+      key: "Alt",
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(altDown);
+    const chord = new KeyboardEvent("keydown", {
+      key: chordKey,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(chord);
+    const altUp = new KeyboardEvent("keyup", {
+      key: "Alt",
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(altUp);
+
+    expect(altDown.defaultPrevented).toBe(false);
+    expect(chord.defaultPrevented).toBe(false);
+    expect(altUp.defaultPrevented).toBe(false);
+    expect(origin).toHaveFocus();
+    origin.remove();
+  });
+
   it("switches open menus with horizontal arrows and names file-only zoom actions", async () => {
     act(() => busStore.setConfig(config));
     render(<MenuBar />);
