@@ -46,10 +46,8 @@ the monitoring pipeline** and Tinto will never trigger them on its own:
 
 - **File operations** with safety nets: delete goes to the OS trash
   (recoverable), copy and move can be undone from the file dock clipboard.
-- **Integrated terminal** (xterm.js) for running commands against the open
-  repo. Detachable into its own window.
-- **External agent terminal** launcher that spawns your agent's CLI in a real
-  shell.
+- **Agent session consoles** for launching and directing supported coding
+  agents against a registered repo, with detachable windows when needed.
 
 Turning any of these off does not affect monitoring. They are conveniences
 for you, the human.
@@ -107,11 +105,12 @@ Chronological feed across all repos in the active workbench
 diffs, no terminal required. Detection of orphan changes (dirty working
 tree sitting uncommitted for a while).
 
-### Terminal
+### Agents
 
-Integrated terminal panel (xterm.js) for running commands on the open repo.
-Supports a **detached window** so you can keep the terminal on one monitor
-while watching the diff on another.
+Agent consoles launch supported coding-agent sessions against a registered
+repo and keep their turns, commands, checkpoints, and changed files together.
+They support **detached windows** so you can direct a session on one monitor
+while watching repository activity or a diff on another.
 
 ### Project explorer
 
@@ -159,8 +158,8 @@ architecture) is in [tinto-design.md](tinto-design.md).
 
 ## Status
 
-The app already ships: dashboard, live diff viewer, file tree, integrated
-terminal, timeline, workbenches, WSL support, glance mode, notifications,
+The app already ships: dashboard, live diff viewer, file tree, Agent consoles,
+timeline, workbenches, WSL support, glance mode, notifications,
 and most of the passive signals. The living roadmap is in
 [docs/roadmaps/](docs/roadmaps/) and the build/packaging plan in
 [docs/build-guide.md](docs/build-guide.md).
