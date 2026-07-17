@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createRef, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -157,11 +158,13 @@ describe("FileOverviewRuler", () => {
     render(<FileOverviewRuler markers={markers} totalLines={100} bodyRef={ref} />);
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(3);
-    expect(buttons[0]).toHaveStyle({ top: "0%" });
-    expect(buttons[2]).toHaveStyle({ top: "100%" });
+    expect(buttons[0]).toHaveStyle({ top: "12px", "--overview-marker-target-size": "24px" });
+    expect(buttons[2]).toHaveStyle({ top: "388px", "--overview-marker-target-size": "24px" });
+    expect(buttons[0]).toHaveStyle({ "--overview-marker-line-offset": "-12px" });
+    expect(buttons[2]).toHaveStyle({ "--overview-marker-line-offset": "12px" });
   });
 
-  it("stacks two markers that fall on the same line", () => {
+  it("clusters markers that share one line into one exact target", () => {
     const { ref } = makeBody(50);
     const markers: FileOverviewMarker[] = [
       { line: 10, severity: "critical", label: "Alert" },
@@ -169,10 +172,71 @@ describe("FileOverviewRuler", () => {
     ];
     render(<FileOverviewRuler markers={markers} totalLines={50} bodyRef={ref} />);
     const buttons = screen.getAllByRole("button");
-    expect(buttons).toHaveLength(2);
+    expect(buttons).toHaveLength(1);
     expect(within(screen.getByRole("slider")).queryByRole("button")).not.toBeInTheDocument();
     expect(buttons[0]).toHaveAttribute("data-source", "alert");
-    expect(buttons[1]).toHaveAttribute("data-source", "hunk");
+    expect(buttons[0]).toHaveAttribute("data-sources", "alert hunk");
+    expect(buttons[0]).toHaveAttribute("data-marker-count", "2");
+    expect(buttons[0]).toHaveAccessibleName("Alert; Hunk, línea 10");
+  });
+
+  it("redistributes dense targets without overlap and keeps pointer and keyboard identity exact", async () => {
+    const user = userEvent.setup();
+    const { ref, node } = makeBody(80);
+    const lines = [7, 13, 14, 57, 58, 59];
+    const onActiveLineChange = vi.fn();
+    const markers: FileOverviewMarker[] = lines.map((line) => ({
+      line,
+      severity: "critical",
+      label: `Secret ${line}`,
+    }));
+
+    render(
+      <FileOverviewRuler
+        markers={markers}
+        totalLines={80}
+        bodyRef={ref}
+        onActiveLineChange={onActiveLineChange}
+      />,
+    );
+
+    const buttons = lines.map((line) =>
+      screen.getByRole("button", { name: `Secret ${line}, línea ${line}` }),
+    );
+    const centers = buttons.map((button) => Number.parseFloat(button.style.top));
+    const sizes = buttons.map((button) =>
+      Number.parseFloat(button.style.getPropertyValue("--overview-marker-target-size")),
+    );
+    const lineOffsets = buttons.map((button) =>
+      Number.parseFloat(button.style.getPropertyValue("--overview-marker-line-offset")),
+    );
+    const trackHeight = Number.parseFloat(
+      screen
+        .getByTestId("file-overview-ruler")
+        .style.getPropertyValue("--file-overview-ruler-track-height"),
+    );
+    expect(sizes).toEqual(lines.map(() => 24));
+    for (let index = 1; index < centers.length; index += 1) {
+      expect(centers[index] - centers[index - 1]).toBeGreaterThanOrEqual(24);
+    }
+    lines.forEach((line, index) => {
+      const visualCenter = centers[index] + lineOffsets[index];
+      const proportionalCenter = ((line - 1) / 79) * trackHeight;
+      expect(Math.abs(visualCenter - proportionalCenter)).toBeLessThanOrEqual(1);
+    });
+
+    for (const [index, line] of lines.entries()) {
+      onActiveLineChange.mockClear();
+      await user.click(buttons[index]);
+      expect(onActiveLineChange).toHaveBeenLastCalledWith(line);
+      expect(node.querySelector(`[data-line="${line}"]`)?.scrollIntoView).toHaveBeenCalled();
+
+      onActiveLineChange.mockClear();
+      buttons[index].focus();
+      await user.keyboard("{Enter}");
+      expect(onActiveLineChange).toHaveBeenLastCalledWith(line);
+      expect(buttons[index]).toHaveFocus();
+    }
   });
 
   it("summarizes marker types in the minimap legend", () => {

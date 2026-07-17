@@ -3,6 +3,8 @@ import { type CSSProperties, useEffect, useState } from "react";
 const MINIMAP_MIN_HEIGHT_PX = 96;
 const MINIMAP_LINE_HEIGHT_PX = 4;
 const MINIMAP_MAX_RENDERED_LINES = 600;
+const MARKER_TARGET_SIZE_PX = 24;
+const MARKER_SUMMARY_SPACE_PX = 20;
 
 export interface FileOverviewMarker {
   line: number;
@@ -36,6 +38,7 @@ export function FileOverviewRuler({
   const hasLines = totalLines > 0;
   const sorted = [...markers].sort((a, b) => a.line - b.line);
   const markerGroups = buildMarkerGroups(sorted);
+  const markerTargets = buildMarkerTargets(sorted);
 
   const [activeLine, setActiveLine] = useState<number | null>(null);
   const [rulerHeight, setRulerHeight] = useState<number | null>(null);
@@ -128,23 +131,24 @@ export function FileOverviewRuler({
       )
     : 0;
   const minimapLines = hasLines ? buildMinimapLines(overviewLines, totalLines) : [];
-  const trackHeight =
+  const desiredTrackHeight = Math.max(
+    MINIMAP_MIN_HEIGHT_PX,
+    totalLines * MINIMAP_LINE_HEIGHT_PX,
+    markerTargets.length * MARKER_TARGET_SIZE_PX,
+  );
+  const availableTrackHeight =
     rulerHeight == null
-      ? null
-      : Math.min(
-          Math.max(MINIMAP_MIN_HEIGHT_PX, totalLines * MINIMAP_LINE_HEIGHT_PX),
-          Math.max(MINIMAP_MIN_HEIGHT_PX, rulerHeight - (markerGroups.length > 0 ? 20 : 0)),
-        );
-  const viewportTopPx = trackHeight == null ? 0 : (trackHeight * viewportTopPercent) / 100;
-  const viewportHeightPx = trackHeight == null ? 18 : (trackHeight * viewportHeightPercent) / 100;
+      ? desiredTrackHeight
+      : Math.max(1, rulerHeight - (markerGroups.length > 0 ? MARKER_SUMMARY_SPACE_PX : 0));
+  const trackHeight = Math.min(desiredTrackHeight, availableTrackHeight);
+  const markerPlacements = buildMarkerPlacements(markerTargets, totalLines, trackHeight);
+  const viewportTopPx = (trackHeight * viewportTopPercent) / 100;
+  const viewportHeightPx = (trackHeight * viewportHeightPercent) / 100;
   const currentLine = hasLines ? (activeLine ?? topLine) : 1;
-  const rulerStyle =
-    rulerHeight == null
-      ? undefined
-      : ({
-          "--file-overview-ruler-height": `${rulerHeight}px`,
-          "--file-overview-ruler-track-height": `${trackHeight}px`,
-        } as CSSProperties);
+  const rulerStyle = {
+    ...(rulerHeight == null ? {} : { "--file-overview-ruler-height": `${rulerHeight}px` }),
+    "--file-overview-ruler-track-height": `${trackHeight}px`,
+  } as CSSProperties;
 
   return (
     <div
@@ -220,28 +224,33 @@ export function FileOverviewRuler({
           </>
         )}
       </div>
-      {sorted.length > 0 && (
+      {markerPlacements.length > 0 && (
         <div className="file-overview-ruler__markers" aria-label="Marcas navegables">
-          {sorted.map((marker, index) => {
-            const top = hasLines
-              ? Math.min(100, Math.max(0, ((marker.line - 1) / Math.max(totalLines - 1, 1)) * 100))
-              : 0;
+          {markerPlacements.map(({ marker, top, lineOffset, targetSize }, index) => {
             const source = marker.source ?? "alert";
             const markerText = `${marker.label} · L${marker.line}`;
             const isActive = activeLine === marker.line;
             return (
               <button
-                key={`${source}:${marker.severity}:${marker.line}:${index}`}
+                key={`line:${marker.line}`}
                 type="button"
                 className={`file-overview-ruler__mark file-overview-ruler__mark--${marker.severity} file-overview-ruler__mark--${source}${
                   isActive ? " file-overview-ruler__mark--active" : ""
                 }`}
-                style={{ top: `${top}%` }}
+                style={
+                  {
+                    top: `${top}px`,
+                    "--overview-marker-line-offset": `${lineOffset}px`,
+                    "--overview-marker-target-size": `${targetSize}px`,
+                  } as CSSProperties
+                }
                 title={`${marker.label} · línea ${marker.line}`}
                 aria-label={`${marker.label}, línea ${marker.line}`}
                 data-testid={`overview-marker-${marker.line}-${index}`}
                 data-marker-line={marker.line}
+                data-marker-count={marker.count}
                 data-source={source}
+                data-sources={marker.sources.join(" ")}
                 onClick={() => jumpToLine(marker.line)}
               >
                 <span className="file-overview-ruler__mark-icon" aria-hidden="true">
@@ -255,6 +264,123 @@ export function FileOverviewRuler({
       )}
     </div>
   );
+}
+
+type MarkerSource = NonNullable<FileOverviewMarker["source"]>;
+type MarkerSeverity = FileOverviewMarker["severity"];
+
+interface FileOverviewMarkerTarget {
+  line: number;
+  severity: MarkerSeverity;
+  label: string;
+  source: MarkerSource;
+  sources: MarkerSource[];
+  count: number;
+}
+
+interface FileOverviewMarkerPlacement {
+  marker: FileOverviewMarkerTarget;
+  top: number;
+  lineOffset: number;
+  targetSize: number;
+}
+
+function buildMarkerTargets(markers: FileOverviewMarker[]): FileOverviewMarkerTarget[] {
+  const byLine = new Map<
+    number,
+    {
+      severity: MarkerSeverity;
+      labels: string[];
+      sources: Set<MarkerSource>;
+      count: number;
+    }
+  >();
+
+  for (const marker of markers) {
+    const source = marker.source ?? "alert";
+    const current = byLine.get(marker.line);
+    if (!current) {
+      byLine.set(marker.line, {
+        severity: marker.severity,
+        labels: [marker.label],
+        sources: new Set([source]),
+        count: 1,
+      });
+      continue;
+    }
+
+    current.count += 1;
+    current.sources.add(source);
+    if (!current.labels.includes(marker.label)) current.labels.push(marker.label);
+    if (severityRank(marker.severity) > severityRank(current.severity)) {
+      current.severity = marker.severity;
+    }
+  }
+
+  return Array.from(byLine.entries())
+    .sort(([lineA], [lineB]) => lineA - lineB)
+    .map(([line, group]) => {
+      const sources = (["alert", "hunk", "search"] as const).filter((source) =>
+        group.sources.has(source),
+      );
+      return {
+        line,
+        severity: group.severity,
+        label: group.labels.join("; "),
+        source: sources[0] ?? "alert",
+        sources,
+        count: group.count,
+      };
+    });
+}
+
+function buildMarkerPlacements(
+  markers: FileOverviewMarkerTarget[],
+  totalLines: number,
+  trackHeight: number,
+): FileOverviewMarkerPlacement[] {
+  if (markers.length === 0 || trackHeight <= 0) return [];
+
+  // Keep every hit target independent. When the physical track cannot fit
+  // 24px per unique line, use the largest non-overlapping size available.
+  const targetSize = Math.min(MARKER_TARGET_SIZE_PX, trackHeight / markers.length);
+  const halfTarget = targetSize / 2;
+  const maxCenter = Math.max(halfTarget, trackHeight - halfTarget);
+  const lineCenters = markers.map((marker) => {
+    const ratio = (marker.line - 1) / Math.max(totalLines - 1, 1);
+    return ratio * trackHeight;
+  });
+  const targetCenters = lineCenters.map((center) =>
+    Math.min(maxCenter, Math.max(halfTarget, center)),
+  );
+
+  for (let index = 1; index < targetCenters.length; index += 1) {
+    targetCenters[index] = Math.max(targetCenters[index], targetCenters[index - 1] + targetSize);
+  }
+  if (targetCenters.at(-1)! > maxCenter) {
+    targetCenters[targetCenters.length - 1] = maxCenter;
+    for (let index = targetCenters.length - 2; index >= 0; index -= 1) {
+      targetCenters[index] = Math.min(targetCenters[index], targetCenters[index + 1] - targetSize);
+    }
+  }
+
+  return markers.map((marker, index) => ({
+    marker,
+    top: targetCenters[index],
+    lineOffset: lineCenters[index] - targetCenters[index],
+    targetSize,
+  }));
+}
+
+function severityRank(severity: MarkerSeverity): number {
+  switch (severity) {
+    case "critical":
+      return 3;
+    case "warning":
+      return 2;
+    case "info":
+      return 1;
+  }
 }
 
 function sourceIcon(source: FileOverviewMarker["source"]): string {

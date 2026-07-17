@@ -19,6 +19,8 @@ export type RetryFn = () => Promise<void> | void;
 export interface FileOpReport {
   copied: string[];
   conflicts: FileConflict[];
+  /** Avisos no fatales de limpieza o recuperación que deben mostrarse al usuario. */
+  warnings?: string[];
   /** Error fatal si el comando falló con algo que no son conflictos. */
   fatalError?: string;
 }
@@ -32,14 +34,19 @@ export class FatalFileOpError extends Error {}
 /** Llama al comando backend y normaliza el resultado. */
 async function runWithConflictSurface(
   promise: Promise<CopyResult>,
-  failureMessage: string,
+  consoleLabel: string,
+  userMessage: string,
 ): Promise<FileOpReport> {
   try {
     const result = await promise;
-    return { copied: result.copied, conflicts: result.conflicts };
+    return {
+      copied: result.copied,
+      conflicts: result.conflicts,
+      warnings: result.warnings ?? [],
+    };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { copied: [], conflicts: [], fatalError: `${failureMessage}: ${message}` };
+    console.error(`tinto: ${consoleLabel}`, error);
+    return { copied: [], conflicts: [], fatalError: userMessage };
   }
 }
 
@@ -59,14 +66,16 @@ export async function sendFromOs(params: {
   if (params.strategy === "copy") {
     return runWithConflictSurface(
       copyToRepo(params.repo, params.destDir, params.sources, params.overwrite),
-      "No se pudo copiar al repositorio",
+      "copy to repo failed",
+      "No se copiaron los archivos. Comprueba que el origen y el destino sigan disponibles y vuelve a intentarlo.",
     );
   }
   // Si el caller pidió move pero es OS->repo, hacemos copy siempre; no
   // removemos archivos del filesystem del usuario sin consentimiento explícito.
   return runWithConflictSurface(
     copyToRepo(params.repo, params.destDir, params.sources, params.overwrite),
-    "No se pudo copiar al repositorio",
+    "copy to repo failed",
+    "No se copiaron los archivos. Comprueba que el origen y el destino sigan disponibles y vuelve a intentarlo.",
   );
 }
 
@@ -84,9 +93,10 @@ export async function sendWithinRepo(params: {
       : copyWithinRepo(params.repo, params.sources, params.destDir, params.overwrite);
   return runWithConflictSurface(
     promise,
+    params.strategy === "move" ? "move within repo failed" : "copy within repo failed",
     params.strategy === "move"
-      ? "No se pudo mover dentro del repositorio"
-      : "No se pudo copiar dentro del repositorio",
+      ? "No se movieron los archivos. Comprueba que sigan disponibles y vuelve a intentarlo."
+      : "No se copiaron los archivos. Comprueba que el origen y el destino sigan disponibles y vuelve a intentarlo.",
   );
 }
 
@@ -97,14 +107,15 @@ export async function sendToOs(params: {
   destDir: string; // absoluto del OS
 }): Promise<FileOpReport> {
   try {
-    await exportFromRepo(params.repo, params.sources, params.destDir);
-    return { copied: [], conflicts: [] };
+    const outcome = await exportFromRepo(params.repo, params.sources, params.destDir);
+    return { copied: [], conflicts: [], warnings: outcome?.warnings ?? [] };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    console.error("tinto: export from repo failed", error);
     return {
       copied: [],
       conflicts: [],
-      fatalError: `No se pudo exportar desde el repositorio: ${message}`,
+      fatalError:
+        "No se exportaron los archivos. Comprueba la carpeta de destino y vuelve a intentarlo.",
     };
   }
 }
@@ -113,16 +124,22 @@ export async function sendToOs(params: {
 export async function deleteWithinRepo(params: {
   repo: string;
   sources: string[]; // relativas al repo
+  userConsent: boolean;
 }): Promise<DeleteOpReport> {
   try {
-    const deleteResult = await deleteFromRepo(params.repo, params.sources);
-    return { copied: [], conflicts: [], deleteResult };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const deleteResult = await deleteFromRepo(params.repo, params.sources, params.userConsent);
     return {
       copied: [],
       conflicts: [],
-      fatalError: `No se pudo eliminar del repositorio: ${message}`,
+      deleteResult,
+      warnings: deleteResult.warnings ?? [],
+    };
+  } catch (error: unknown) {
+    console.error("tinto: delete from repo failed", error);
+    return {
+      copied: [],
+      conflicts: [],
+      fatalError: "No se eliminó el elemento. Comprueba que siga disponible y vuelve a intentarlo.",
     };
   }
 }
@@ -132,14 +149,15 @@ export async function restoreDeletedWithinRepo(params: {
   token: string;
 }): Promise<FileOpReport> {
   try {
-    await restoreDeletedFromRepo(params.repo, params.token);
-    return { copied: [], conflicts: [] };
+    const outcome = await restoreDeletedFromRepo(params.repo, params.token);
+    return { copied: [], conflicts: [], warnings: outcome?.warnings ?? [] };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    console.error("tinto: restore deleted item failed", error);
     return {
       copied: [],
       conflicts: [],
-      fatalError: `No se pudo restaurar el elemento eliminado: ${message}`,
+      fatalError:
+        "No se restauró el elemento. Puedes volver a intentarlo desde Tinto mientras siga abierto.",
     };
   }
 }
@@ -149,14 +167,15 @@ export async function redoDeletedWithinRepo(params: {
   token: string;
 }): Promise<FileOpReport> {
   try {
-    await redoDeletedFromRepo(params.repo, params.token);
-    return { copied: [], conflicts: [] };
+    const outcome = await redoDeletedFromRepo(params.repo, params.token);
+    return { copied: [], conflicts: [], warnings: outcome?.warnings ?? [] };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    console.error("tinto: redo deleted item failed", error);
     return {
       copied: [],
       conflicts: [],
-      fatalError: `No se pudo rehacer la eliminación: ${message}`,
+      fatalError:
+        "No se repitió la eliminación. Comprueba que el elemento siga disponible y vuelve a intentarlo.",
     };
   }
 }

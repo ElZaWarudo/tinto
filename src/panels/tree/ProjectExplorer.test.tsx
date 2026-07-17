@@ -3,9 +3,9 @@ import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 
 let tree: unknown = { entries: [], truncated: false };
 const listRepoTreeMock = vi.fn(() => Promise.resolve(tree));
-const deleteFromRepoMock = vi.fn<(_repo: string, _sources: string[]) => Promise<unknown>>(() =>
-  Promise.resolve({ token: "11111111-1111-4111-8111-111111111111", entries: [] }),
-);
+const deleteFromRepoMock = vi.fn<
+  (_repo: string, _sources: string[], _userConsent: boolean) => Promise<unknown>
+>(() => Promise.resolve({ token: "11111111-1111-4111-8111-111111111111", entries: [] }));
 const restoreDeletedFromRepoMock = vi.fn<(_repo: string, _token: string) => Promise<void>>(() =>
   Promise.resolve(),
 );
@@ -51,7 +51,8 @@ vi.mock("../../bus/client", () => ({
   moveWithinRepo: (repo: string, sources: string[], destDir: string, overwrite: boolean) =>
     moveWithinRepoMock(repo, sources, destDir, overwrite),
   exportFromRepo: vi.fn(),
-  deleteFromRepo: (repo: string, sources: string[]) => deleteFromRepoMock(repo, sources),
+  deleteFromRepo: (repo: string, sources: string[], userConsent: boolean) =>
+    deleteFromRepoMock(repo, sources, userConsent),
   restoreDeletedFromRepo: (repo: string, token: string) => restoreDeletedFromRepoMock(repo, token),
   redoDeletedFromRepo: (repo: string, token: string) => redoDeletedFromRepoMock(repo, token),
 }));
@@ -309,6 +310,114 @@ describe("ProjectExplorer", () => {
     expect(src).toHaveFocus();
   });
 
+  it("keeps multi-selection separate from focus and the active file", async () => {
+    const openSpy = vi.spyOn(fileDock, "openFile");
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const treeWidget = await screen.findByRole("tree", { name: "Archivos de api" });
+    const src = screen.getByRole("treeitem", { name: "src" });
+    const env = screen.getByRole("treeitem", { name: ".env" });
+    const packageJson = screen.getByRole("treeitem", { name: "package.json" });
+    const readme = screen.getByRole("treeitem", { name: "README.md" });
+    expect(treeWidget).toHaveAttribute("aria-multiselectable", "true");
+
+    fireEvent.click(readme);
+    expect(readme).toHaveAttribute("aria-selected", "true");
+    expect(openSpy).toHaveBeenCalledWith(REPO, "README.md", false);
+
+    fireEvent.click(packageJson, { ctrlKey: true });
+    expect(readme).toHaveAttribute("aria-selected", "true");
+    expect(packageJson).toHaveAttribute("aria-selected", "true");
+    expect(openSpy).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(src.querySelector(".tree-dir__row")!, { shiftKey: true });
+    expect(src).toHaveAttribute("aria-selected", "true");
+    expect(env).toHaveAttribute("aria-selected", "true");
+    expect(packageJson).toHaveAttribute("aria-selected", "true");
+    expect(readme).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByTestId("tree-file-src/a.ts")).not.toBeInTheDocument();
+
+    env.focus();
+    fireEvent.keyDown(env, { key: " ", ctrlKey: true });
+    expect(env).toHaveAttribute("aria-selected", "false");
+    expect(src).toHaveAttribute("aria-selected", "true");
+    expect(packageJson).toHaveAttribute("aria-selected", "true");
+    openSpy.mockRestore();
+  });
+
+  it("uses the selected paths for copy and delete from a selected trigger", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const packageJson = await screen.findByRole("treeitem", { name: "package.json" });
+    const readme = screen.getByRole("treeitem", { name: "README.md" });
+    fireEvent.click(readme);
+    fireEvent.click(packageJson, { ctrlKey: true });
+
+    packageJson.focus();
+    fireEvent.keyDown(packageJson, { key: "c", ctrlKey: true });
+    expect(treeClipboard.get()).toEqual({
+      repo: REPO,
+      paths: ["package.json", "README.md"],
+      mode: "copy",
+    });
+
+    fireEvent.keyDown(packageJson, { key: "Delete" });
+    await waitFor(() =>
+      expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["package.json", "README.md"], true),
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Eliminar 2 elementos seleccionados"),
+    );
+  });
+
+  it("drags the selection only when the trigger belongs to it", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const src = await screen.findByRole("treeitem", { name: "src" });
+    const env = screen.getByRole("treeitem", { name: ".env" });
+    const packageJson = screen.getByRole("treeitem", { name: "package.json" });
+    const readme = screen.getByRole("treeitem", { name: "README.md" });
+    vi.mocked(document.elementFromPoint).mockReturnValue(src.querySelector(".tree-dir__row"));
+    fireEvent.click(readme);
+    fireEvent.click(packageJson, { ctrlKey: true });
+
+    fireEvent.pointerDown(packageJson, {
+      button: 0,
+      pointerId: 11,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(document, { pointerId: 11, clientX: 30, clientY: 30 });
+    fireEvent.pointerUp(document, { pointerId: 11, clientX: 30, clientY: 30 });
+    await waitFor(() =>
+      expect(moveWithinRepoMock).toHaveBeenCalledWith(
+        REPO,
+        ["package.json", "README.md"],
+        "src",
+        false,
+      ),
+    );
+
+    moveWithinRepoMock.mockClear();
+    fireEvent.pointerDown(env, {
+      button: 0,
+      pointerId: 12,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(document, { pointerId: 12, clientX: 30, clientY: 30 });
+    fireEvent.pointerUp(document, { pointerId: 12, clientX: 30, clientY: 30 });
+    await waitFor(() =>
+      expect(moveWithinRepoMock).toHaveBeenCalledWith(REPO, [".env"], "src", false),
+    );
+    expect(env).toHaveAttribute("aria-selected", "true");
+    expect(packageJson).toHaveAttribute("aria-selected", "false");
+    expect(readme).toHaveAttribute("aria-selected", "false");
+  });
+
   it("pastes the internal clipboard into the focused subfolder", async () => {
     act(() => busStore.loadSnapshot([delta()], { available: true }));
     render(<ProjectExplorer repo={REPO} />);
@@ -444,9 +553,60 @@ describe("ProjectExplorer", () => {
     fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
     fireEvent.click(screen.getByText("Eliminar"));
 
-    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"]));
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], true));
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('archivo "README.md"'));
     await waitFor(() => expect(listRepoTreeMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("surfaces an incomplete-delete recovery and keeps its token undoable", async () => {
+    const recoveryToken = "22222222-2222-4222-8222-222222222222";
+    deleteFromRepoMock.mockResolvedValueOnce({
+      token: recoveryToken,
+      entries: [{ path: "README.md", is_dir: false }],
+      completed: false,
+      recovery_required: true,
+      warnings: ["El borrado no terminó. Usa Deshacer para restaurarlo."],
+    });
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const explorer = await screen.findByTestId(`project-explorer-${REPO}`);
+    const readme = await screen.findByTestId("tree-file-README.md");
+    fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
+    fireEvent.click(screen.getByText("Eliminar"));
+
+    expect(await screen.findByTestId("file-op-error")).toHaveTextContent(
+      "El borrado no terminó. Usa Deshacer para restaurarlo.",
+    );
+    fireEvent.keyDown(explorer, { key: "z", ctrlKey: true });
+    await waitFor(() =>
+      expect(restoreDeletedFromRepoMock).toHaveBeenCalledWith(REPO, recoveryToken),
+    );
+  });
+
+  it("keeps technical file-operation details in the console instead of the alert", async () => {
+    const technicalError = new Error(
+      "thread panicked while reading the manifest from staging backup at root del repo",
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    deleteFromRepoMock.mockRejectedValueOnce(technicalError);
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+
+    const readme = await screen.findByTestId("tree-file-README.md");
+    fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
+    fireEvent.click(screen.getByText("Eliminar"));
+
+    const alert = await screen.findByTestId("file-op-error");
+    expect(alert).toHaveTextContent(
+      "No se eliminó el elemento. Comprueba que siga disponible y vuelve a intentarlo.",
+    );
+    expect(alert).not.toHaveTextContent("thread panicked");
+    expect(alert).not.toHaveTextContent("manifest");
+    expect(alert).not.toHaveTextContent("staging");
+    expect(alert).not.toHaveTextContent("backup");
+    expect(consoleError).toHaveBeenCalledWith("tinto: delete from repo failed", technicalError);
+    consoleError.mockRestore();
   });
 
   it("restores and redoes a deleted file with Ctrl+Z and Ctrl+Shift+Z", async () => {
@@ -457,7 +617,7 @@ describe("ProjectExplorer", () => {
     const readme = await screen.findByTestId("tree-file-README.md");
     fireEvent.contextMenu(readme, { clientX: 20, clientY: 30 });
     fireEvent.click(screen.getByText("Eliminar"));
-    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"]));
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], true));
 
     fireEvent.keyDown(explorer, { key: "z", ctrlKey: true });
     await waitFor(() =>
@@ -483,7 +643,7 @@ describe("ProjectExplorer", () => {
     const readme = await screen.findByTestId("tree-file-README.md");
     fireEvent.keyDown(readme, { key: "Delete" });
 
-    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"]));
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], true));
   });
 
   it("deletes a folder from the context menu after confirmation", async () => {
@@ -493,7 +653,7 @@ describe("ProjectExplorer", () => {
     fireEvent.contextMenu(await screen.findByText("src"), { clientX: 20, clientY: 30 });
     fireEvent.click(screen.getByText("Eliminar"));
 
-    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["src"]));
+    await waitFor(() => expect(deleteFromRepoMock).toHaveBeenCalledWith(REPO, ["src"], true));
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('carpeta "src"'));
   });
 
@@ -667,6 +827,111 @@ describe("ProjectExplorer", () => {
     await waitFor(() =>
       expect(moveWithinRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], "src", false),
     );
+  });
+
+  it("copies when Ctrl is pressed at pointer drop and keeps the source in place", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const readme = await screen.findByRole("treeitem", { name: "README.md" });
+    const src = screen.getByRole("treeitem", { name: "src" });
+    vi.mocked(document.elementFromPoint).mockReturnValue(src.querySelector(".tree-dir__row"));
+
+    fireEvent.pointerDown(readme, {
+      button: 0,
+      pointerId: 9,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(document, {
+      pointerId: 9,
+      clientX: 30,
+      clientY: 30,
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("Mover README.md");
+    fireEvent.keyDown(document, { key: "Control", ctrlKey: true });
+    expect(screen.getByRole("status")).toHaveTextContent("Copiar README.md");
+    expect(screen.getByTestId(`project-explorer-${REPO}`)).toHaveAttribute(
+      "data-drag-strategy",
+      "copy",
+    );
+    fireEvent.pointerUp(document, {
+      pointerId: 9,
+      clientX: 30,
+      clientY: 30,
+      ctrlKey: true,
+    });
+
+    await waitFor(() =>
+      expect(copyWithinRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], "src", false),
+    );
+    expect(moveWithinRepoMock).not.toHaveBeenCalled();
+  });
+
+  it("moves when Ctrl is released at pointer drop", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const readme = await screen.findByRole("treeitem", { name: "README.md" });
+    const src = screen.getByRole("treeitem", { name: "src" });
+    vi.mocked(document.elementFromPoint).mockReturnValue(src.querySelector(".tree-dir__row"));
+
+    fireEvent.pointerDown(readme, {
+      button: 0,
+      pointerId: 10,
+      clientX: 10,
+      clientY: 10,
+      ctrlKey: true,
+    });
+    fireEvent.pointerMove(document, {
+      pointerId: 10,
+      clientX: 30,
+      clientY: 30,
+      ctrlKey: true,
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("Copiar README.md");
+    expect(screen.getByTestId(`project-explorer-${REPO}`)).toHaveAttribute(
+      "data-drag-strategy",
+      "copy",
+    );
+    fireEvent.keyUp(document, { key: "Control" });
+    expect(screen.getByRole("status")).toHaveTextContent("Mover README.md");
+    expect(screen.getByTestId(`project-explorer-${REPO}`)).toHaveAttribute(
+      "data-drag-strategy",
+      "move",
+    );
+    fireEvent.pointerUp(document, {
+      pointerId: 10,
+      clientX: 30,
+      clientY: 30,
+    });
+
+    await waitFor(() =>
+      expect(moveWithinRepoMock).toHaveBeenCalledWith(REPO, ["README.md"], "src", false),
+    );
+    expect(copyWithinRepoMock).not.toHaveBeenCalled();
+  });
+
+  it("announces a pending paste and ignores repeated mutation gestures", async () => {
+    let resolveCopy: ((value: unknown) => void) | null = null;
+    copyWithinRepoMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCopy = resolve;
+        }),
+    );
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    render(<ProjectExplorer repo={REPO} />);
+    const src = await screen.findByRole("treeitem", { name: "src" });
+    treeClipboard.copy(REPO, ["README.md"]);
+
+    src.focus();
+    fireEvent.keyDown(src, { key: "v", ctrlKey: true });
+    fireEvent.keyDown(src, { key: "v", ctrlKey: true });
+
+    expect(await screen.findByTestId("file-op-pending")).toHaveTextContent("Copiando elementos");
+    expect(copyWithinRepoMock).toHaveBeenCalledTimes(1);
+
+    act(() => resolveCopy?.({ copied: ["src/README.md"], conflicts: [] }));
+    await waitFor(() => expect(screen.queryByTestId("file-op-pending")).not.toBeInTheDocument());
   });
 
   it("keeps a short pointer gesture as a normal file click", async () => {
