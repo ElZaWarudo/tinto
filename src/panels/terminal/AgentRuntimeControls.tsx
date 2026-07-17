@@ -172,7 +172,7 @@ export function AgentRuntimeControls({
     if (!presetDraft) return;
     const name = presetDraft.name.trim();
     if (!name) {
-      setPresetError("Escribe un nombre para el preset.");
+      setPresetError("Escribe un nombre para la configuración guardada.");
       return;
     }
     if (
@@ -182,7 +182,7 @@ export function AgentRuntimeControls({
           preset.name.toLocaleLowerCase() === name.toLocaleLowerCase(),
       )
     ) {
-      setPresetError("Ya existe un preset con ese nombre.");
+      setPresetError("Ya existe una configuración guardada con ese nombre.");
       return;
     }
     const saved = {
@@ -250,7 +250,7 @@ export function AgentRuntimeControls({
         ref={summaryTriggerRef}
         type="button"
       >
-        <span>Preset</span>
+        <span>Configuración guardada</span>
         <strong>
           {activePreset?.name ?? "Personalizado"} · {modelDisplay} · {reasoningDisplay} ·{" "}
           {codexSpeedLabel(speed)}
@@ -267,10 +267,10 @@ export function AgentRuntimeControls({
           setSelectedPresetId(null);
           onSpeedChange(speed === "fast" ? "standard" : "fast");
         }}
-        title={speed === "fast" ? "Desactivar modo Fast" : "Activar modo Fast"}
+        title={speed === "fast" ? "Desactivar modo rápido" : "Activar modo rápido"}
         type="button"
       >
-        Fast
+        Rápido
       </button>
       {notice && (
         <span className="agent-panel__runtime-notice" role="status" aria-live="polite">
@@ -613,7 +613,10 @@ function RuntimePresetPanel({
                   <small>{unavailable ?? runtimePresetSummary(preset, catalog)}</small>
                 </span>
                 {activePresetId === preset.id && (
-                  <span aria-label="Preset activo" className="agent-panel__preset-check">
+                  <span
+                    aria-label="Configuración guardada activa"
+                    className="agent-panel__preset-check"
+                  >
                     ✓
                   </span>
                 )}
@@ -621,19 +624,21 @@ function RuntimePresetPanel({
               <button
                 aria-label={
                   preset.favorite
-                    ? `Quitar ${preset.name} como preset favorito`
+                    ? `Quitar ${preset.name} como configuración guardada favorita`
                     : `Usar ${preset.name} al iniciar los chats`
                 }
                 aria-pressed={preset.favorite}
                 className="agent-panel__preset-favorite"
                 onClick={() => onSetFavorite(preset)}
-                title={preset.favorite ? "Preset favorito" : "Usar al iniciar los chats"}
+                title={
+                  preset.favorite ? "Configuración guardada favorita" : "Usar al iniciar los chats"
+                }
                 type="button"
               >
                 {preset.favorite ? "★" : "☆"}
               </button>
               <button
-                aria-label={`Editar preset ${preset.name}`}
+                aria-label={`Editar configuración guardada ${preset.name}`}
                 className="agent-panel__preset-edit"
                 onClick={() => onEdit(preset)}
                 title={`Editar ${preset.name}`}
@@ -912,7 +917,7 @@ function PresetIcon({ icon }: { icon: RuntimePresetIcon }) {
 }
 
 function runtimeInspectorTitle(menu: Exclude<CodexRuntimeMenu, null>): string {
-  if (menu === "presets") return "Presets de ejecución";
+  if (menu === "presets") return "Configuraciones guardadas de ejecución";
   if (menu === "summary") return "Ejecución del próximo turno";
   if (menu === "model") return "Modelo del próximo turno";
   if (menu === "reasoning") return "Razonamiento del próximo turno";

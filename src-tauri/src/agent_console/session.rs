@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionChange, AgentSessionContextSummary,
@@ -13,8 +16,9 @@ use crate::wsl_agent::{
 
 use super::{
     checkpoint::{
-        create_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
-        CheckpointConfig, CheckpointRecord,
+        create_checkpoint, create_ephemeral_checkpoint, remove_ephemeral_checkpoint,
+        revert_checkpoint, revert_checkpoint_file, scan_change_log, CheckpointConfig,
+        CheckpointRecord,
     },
     pty::{AgentProcess, AgentProcessEvent, AgentTurnAttachment},
     AgentConsoleError,
@@ -24,6 +28,7 @@ const OUTPUT_QUIET_MS: u64 = 2_000;
 const FILESYSTEM_QUIET_MS: u64 = 1_500;
 const WSL_TURN_SCAN_INTERVAL_MS: u64 = 5_000;
 const MAX_TIMELINE_ITEMS_PER_SESSION: usize = 2_000;
+static SAFETY_CHECKPOINT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub struct AgentSessionRecord {
     id: String,
@@ -489,21 +494,15 @@ impl AgentSessionRecord {
             return Ok(());
         }
         self.refresh_change_log()?;
-        let checkpoint = self.checkpoint.as_ref().ok_or_else(|| {
+        let checkpoint = self.checkpoint.clone().ok_or_else(|| {
             AgentConsoleError::new(
                 "checkpoint_unsupported",
                 "esta sesion no tiene checkpoint reversible",
             )
         })?;
-        match self.checkpoint_backend {
-            CheckpointBackend::Local => revert_checkpoint(checkpoint)?,
-            CheckpointBackend::Wsl => {
-                revert_wsl_checkpoint(self.wsl_distro.as_deref(), checkpoint)?
-            }
-        }
+        self.apply_checkpoint_transaction(CheckpointMutation::Full(checkpoint))?;
         self.reverted_at_ms = Some(now_ms());
         self.status = AgentSessionStatus::Reverted;
-        self.refresh_change_log()?;
         Ok(())
     }
 
@@ -531,14 +530,7 @@ impl AgentSessionRecord {
                     "no existe el checkpoint del turno",
                 )
             })?;
-        match self.checkpoint_backend {
-            CheckpointBackend::Local => revert_checkpoint_file(&checkpoint, path)?,
-            CheckpointBackend::Wsl => {
-                revert_wsl_checkpoint_file(self.wsl_distro.as_deref(), &checkpoint, path)?
-            }
-        }
-        self.refresh_change_log()?;
-        Ok(())
+        self.apply_checkpoint_transaction(CheckpointMutation::File(checkpoint, path.to_path_buf()))
     }
 
     pub fn restore_to_turn(&mut self, turn_checkpoint_id: &str) -> Result<(), AgentConsoleError> {
@@ -566,14 +558,9 @@ impl AgentSessionRecord {
                 "no existe el checkpoint posterior del turno",
             )
         })?;
-        match self.checkpoint_backend {
-            CheckpointBackend::Local => revert_checkpoint(&checkpoint)?,
-            CheckpointBackend::Wsl => {
-                revert_wsl_checkpoint(self.wsl_distro.as_deref(), &checkpoint)?
-            }
-        }
-        self.restored_to_turn_index = Some(turn.index);
-        self.refresh_change_log()?;
+        let turn_index = turn.index;
+        self.apply_checkpoint_transaction(CheckpointMutation::Full(checkpoint))?;
+        self.restored_to_turn_index = Some(turn_index);
         Ok(())
     }
 
@@ -606,6 +593,32 @@ impl AgentSessionRecord {
 
     fn refresh_change_log(&mut self) -> Result<(), AgentConsoleError> {
         self.change_log = self.scan_changes(self.checkpoint.as_ref(), now_ms())?;
+        Ok(())
+    }
+
+    fn apply_checkpoint_transaction(
+        &mut self,
+        mutation: CheckpointMutation,
+    ) -> Result<(), AgentConsoleError> {
+        let backend = self.checkpoint_backend;
+        let distro = self.wsl_distro.clone();
+        let baseline = self.checkpoint.clone();
+        let safety_id = format!(
+            "{}-safety-{}-{}",
+            self.id,
+            now_ms(),
+            SAFETY_CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let changes = execute_backend_checkpoint_transaction(
+            backend,
+            distro.as_deref(),
+            &self.repo,
+            &safety_id,
+            &self.checkpoint_config,
+            || apply_checkpoint_mutation(backend, distro.as_deref(), &mutation),
+            || scan_checkpoint_changes(backend, distro.as_deref(), baseline.as_ref(), now_ms()),
+        )?;
+        self.change_log = changes;
         Ok(())
     }
 
@@ -774,15 +787,12 @@ impl AgentSessionRecord {
         checkpoint: Option<&CheckpointRecord>,
         timestamp_ms: u64,
     ) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
-        match (checkpoint, self.checkpoint_backend) {
-            (Some(checkpoint), CheckpointBackend::Local) => {
-                scan_change_log(checkpoint, timestamp_ms)
-            }
-            (Some(checkpoint), CheckpointBackend::Wsl) => {
-                scan_wsl_change_log(self.wsl_distro.as_deref(), checkpoint)
-            }
-            (None, _) => Ok(Vec::new()),
-        }
+        scan_checkpoint_changes(
+            self.checkpoint_backend,
+            self.wsl_distro.as_deref(),
+            checkpoint,
+            timestamp_ms,
+        )
     }
 
     fn create_followup_checkpoint(
@@ -802,6 +812,108 @@ impl AgentSessionRecord {
                 now_ms,
             ),
         }
+    }
+}
+
+enum CheckpointMutation {
+    Full(CheckpointRecord),
+    File(CheckpointRecord, PathBuf),
+}
+
+fn apply_checkpoint_mutation(
+    backend: CheckpointBackend,
+    distro: Option<&str>,
+    mutation: &CheckpointMutation,
+) -> Result<(), AgentConsoleError> {
+    match (backend, mutation) {
+        (CheckpointBackend::Local, CheckpointMutation::Full(checkpoint)) => {
+            revert_checkpoint(checkpoint)
+        }
+        (CheckpointBackend::Local, CheckpointMutation::File(checkpoint, path)) => {
+            revert_checkpoint_file(checkpoint, path)
+        }
+        (CheckpointBackend::Wsl, CheckpointMutation::Full(checkpoint)) => {
+            revert_wsl_checkpoint(distro, checkpoint)
+        }
+        (CheckpointBackend::Wsl, CheckpointMutation::File(checkpoint, path)) => {
+            revert_wsl_checkpoint_file(distro, checkpoint, path)
+        }
+    }
+}
+
+fn scan_checkpoint_changes(
+    backend: CheckpointBackend,
+    distro: Option<&str>,
+    checkpoint: Option<&CheckpointRecord>,
+    timestamp_ms: u64,
+) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    match (checkpoint, backend) {
+        (Some(checkpoint), CheckpointBackend::Local) => scan_change_log(checkpoint, timestamp_ms),
+        (Some(checkpoint), CheckpointBackend::Wsl) => scan_wsl_change_log(distro, checkpoint),
+        (None, _) => Ok(Vec::new()),
+    }
+}
+
+fn execute_backend_checkpoint_transaction(
+    backend: CheckpointBackend,
+    distro: Option<&str>,
+    repo: &Path,
+    safety_id: &str,
+    config: &CheckpointConfig,
+    apply: impl FnOnce() -> Result<(), AgentConsoleError>,
+    refresh: impl FnOnce() -> Result<Vec<AgentSessionChange>, AgentConsoleError>,
+) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    execute_checkpoint_transaction(
+        || match backend {
+            CheckpointBackend::Local => {
+                create_ephemeral_checkpoint(repo, safety_id, now_ms(), config)
+            }
+            CheckpointBackend::Wsl => {
+                create_wsl_ephemeral_checkpoint(distro, repo, safety_id, now_ms())
+            }
+        },
+        apply,
+        refresh,
+        |safety| match backend {
+            CheckpointBackend::Local => revert_checkpoint(safety),
+            CheckpointBackend::Wsl => revert_wsl_checkpoint(distro, safety),
+        },
+        |safety| match backend {
+            CheckpointBackend::Local => remove_ephemeral_checkpoint(safety),
+            CheckpointBackend::Wsl => remove_wsl_ephemeral_checkpoint(distro, safety),
+        },
+    )
+}
+
+fn execute_checkpoint_transaction<S>(
+    create_safety: impl FnOnce() -> Result<S, AgentConsoleError>,
+    apply: impl FnOnce() -> Result<(), AgentConsoleError>,
+    refresh: impl FnOnce() -> Result<Vec<AgentSessionChange>, AgentConsoleError>,
+    rollback: impl FnOnce(&S) -> Result<(), AgentConsoleError>,
+    cleanup: impl FnOnce(&S) -> Result<(), AgentConsoleError>,
+) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    let safety = create_safety()?;
+    match apply().and_then(|()| refresh()) {
+        Ok(changes) => {
+            let _ = cleanup(&safety);
+            Ok(changes)
+        }
+        Err(operation_error) => match rollback(&safety) {
+            Ok(()) => {
+                let _ = cleanup(&safety);
+                Err(operation_error)
+            }
+            Err(rollback_error) => Err(AgentConsoleError::new(
+                "checkpoint_transaction_partial",
+                format!(
+                    "checkpoint operation failed ({}: {}); rollback also failed ({}: {}); repository state may be partial",
+                    operation_error.category,
+                    operation_error.message,
+                    rollback_error.category,
+                    rollback_error.message
+                ),
+            )),
+        },
     }
 }
 
@@ -917,6 +1029,25 @@ fn create_wsl_checkpoint(
     session_id: &str,
     created_at_ms: u64,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
+    create_wsl_checkpoint_with_mode(distro, repo, session_id, created_at_ms, false)
+}
+
+fn create_wsl_ephemeral_checkpoint(
+    distro: Option<&str>,
+    repo: &std::path::Path,
+    session_id: &str,
+    created_at_ms: u64,
+) -> Result<CheckpointRecord, AgentConsoleError> {
+    create_wsl_checkpoint_with_mode(distro, repo, session_id, created_at_ms, true)
+}
+
+fn create_wsl_checkpoint_with_mode(
+    distro: Option<&str>,
+    repo: &std::path::Path,
+    session_id: &str,
+    created_at_ms: u64,
+    ephemeral: bool,
+) -> Result<CheckpointRecord, AgentConsoleError> {
     let distro =
         distro.ok_or_else(|| AgentConsoleError::new("missing_distro", "repo WSL sin distro"))?;
     let response = request_wsl_agent(
@@ -927,12 +1058,38 @@ fn create_wsl_checkpoint(
             allowed_repos: vec![repo.to_path_buf()],
             session_id: session_id.into(),
             created_at_ms,
+            ephemeral,
         },
     )
     .map_err(map_wsl_agent_error)?;
 
     match response {
         AgentResponse::AgentCheckpoint { checkpoint } => Ok(checkpoint),
+        AgentResponse::Error { category, message } => {
+            Err(AgentConsoleError::new(category, message))
+        }
+        _ => Err(unexpected_wsl_response()),
+    }
+}
+
+fn remove_wsl_ephemeral_checkpoint(
+    distro: Option<&str>,
+    checkpoint: &CheckpointRecord,
+) -> Result<(), AgentConsoleError> {
+    let distro =
+        distro.ok_or_else(|| AgentConsoleError::new("missing_distro", "repo WSL sin distro"))?;
+    let response = request_wsl_agent(
+        distro,
+        &AgentRequest::AgentCheckpointRemove {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint: checkpoint.clone(),
+        },
+    )
+    .map_err(map_wsl_agent_error)?;
+
+    match response {
+        AgentResponse::Unit => Ok(()),
         AgentResponse::Error { category, message } => {
             Err(AgentConsoleError::new(category, message))
         }
@@ -1231,6 +1388,7 @@ mod tests {
             session_id: "s1".into(),
             checkpoint_dir: checkpoint_dir.path().to_path_buf(),
             created_at_ms: 1,
+            ephemeral: false,
         };
         let record = AgentSessionRecord::new(
             "s1".into(),
@@ -1636,5 +1794,98 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.turn_status, AgentSessionTurnStatus::Waiting);
         assert!(contract.error.is_some());
+    }
+
+    #[test]
+    fn checkpoint_transaction_rolls_back_an_intermediate_local_failure() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "current base\n");
+        repo.write("other.txt", "current other\n");
+        let config = CheckpointConfig::default();
+        let anchor = create_checkpoint(repo.path(), "transaction-anchor", 1, &config).unwrap();
+        let safety_id = "transaction-mid-failure";
+
+        let error = execute_backend_checkpoint_transaction(
+            CheckpointBackend::Local,
+            None,
+            repo.path(),
+            safety_id,
+            &config,
+            || {
+                repo.write("base.txt", "partially restored\n");
+                std::fs::remove_file(repo.path().join("other.txt")).unwrap();
+                Err(AgentConsoleError::new(
+                    "revert_failed",
+                    "injected intermediate failure",
+                ))
+            },
+            || panic!("refresh must not run after apply fails"),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.category, "revert_failed");
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "current base\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("other.txt")).unwrap(),
+            "current other\n"
+        );
+        assert!(!anchor
+            .checkpoint_dir
+            .parent()
+            .unwrap()
+            .join(safety_id)
+            .exists());
+    }
+
+    #[test]
+    fn checkpoint_transaction_rolls_back_when_refresh_fails() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("base.txt", "current\n");
+        let config = CheckpointConfig::default();
+
+        let error = execute_backend_checkpoint_transaction(
+            CheckpointBackend::Local,
+            None,
+            repo.path(),
+            "transaction-refresh-failure",
+            &config,
+            || {
+                repo.write("base.txt", "restored target\n");
+                Ok(())
+            },
+            || {
+                Err(AgentConsoleError::new(
+                    "checkpoint_scan_failed",
+                    "injected refresh failure",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.category, "checkpoint_scan_failed");
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "current\n"
+        );
+    }
+
+    #[test]
+    fn checkpoint_transaction_declares_partial_state_when_rollback_fails() {
+        let error = execute_checkpoint_transaction(
+            || Ok(()),
+            || Err(AgentConsoleError::new("revert_failed", "target failed")),
+            || Ok(Vec::new()),
+            |_| Err(AgentConsoleError::new("rollback_failed", "safety failed")),
+            |_| Ok(()),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.category, "checkpoint_transaction_partial");
+        assert!(error.message.contains("target failed"));
+        assert!(error.message.contains("safety failed"));
+        assert!(error.message.contains("state may be partial"));
     }
 }

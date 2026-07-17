@@ -6,7 +6,19 @@ const DETACHED_CONSOLES_PARAM = "tintoDetachedConsoles";
 const DETACHED_CONSOLES_SESSIONS_PARAM = "sessions";
 const DETACHED_CONSOLES_OPEN_TERMINAL_EVENT = "tinto://detached-consoles-open-terminal";
 const DETACHED_CONSOLES_REATTACH_EVENT = "tinto://detached-consoles-reattach";
+const DETACHED_CONSOLES_REATTACH_ACK_EVENT = "tinto://detached-consoles-reattach-ack";
+const DETACHED_CONSOLES_REATTACH_TIMEOUT_MS = 3_000;
 const DETACHED_SKIP_STOP_PREFIX = "tinto:detached-terminal:";
+let reattachRequestSequence = 0;
+
+interface DetachedConsolesReattachRequest {
+  requestId: string;
+  terminals: TerminalPanelParams[];
+}
+
+interface DetachedConsolesReattachAck {
+  requestId: string;
+}
 
 export function detachedTerminalWindowLabel(sessionId: string): string {
   const safe = sessionId.replace(/[^a-zA-Z0-9-_:]/g, "_");
@@ -205,9 +217,30 @@ export async function onDetachedConsolesOpenTerminal(
 }
 
 export async function reattachDetachedConsoles(params: TerminalPanelParams[]): Promise<boolean> {
+  reattachRequestSequence += 1;
+  const requestId = `${Date.now()}-${reattachRequestSequence}`;
   try {
-    await emit(DETACHED_CONSOLES_REATTACH_EVENT, params);
-    return true;
+    let resolveAck: (received: boolean) => void = () => {};
+    const ack = new Promise<boolean>((resolve) => {
+      resolveAck = resolve;
+    });
+    const unlisten = await listen<DetachedConsolesReattachAck>(
+      DETACHED_CONSOLES_REATTACH_ACK_EVENT,
+      (event) => {
+        if (event.payload.requestId === requestId) resolveAck(true);
+      },
+    );
+    const timeout = window.setTimeout(
+      () => resolveAck(false),
+      DETACHED_CONSOLES_REATTACH_TIMEOUT_MS,
+    );
+    try {
+      await emit(DETACHED_CONSOLES_REATTACH_EVENT, { requestId, terminals: params });
+      return await ack;
+    } finally {
+      window.clearTimeout(timeout);
+      unlisten();
+    }
   } catch (error) {
     console.error("Failed to reattach detached consoles window", error);
     return false;
@@ -215,11 +248,19 @@ export async function reattachDetachedConsoles(params: TerminalPanelParams[]): P
 }
 
 export async function onDetachedConsolesReattach(
-  callback: (params: TerminalPanelParams[]) => void,
+  callback: (params: TerminalPanelParams[]) => void | Promise<void>,
 ): Promise<UnlistenFn> {
   try {
-    return listen<TerminalPanelParams[]>(DETACHED_CONSOLES_REATTACH_EVENT, (event) => {
-      callback(event.payload);
+    return listen<DetachedConsolesReattachRequest>(DETACHED_CONSOLES_REATTACH_EVENT, (event) => {
+      const request = event.payload;
+      if (!request || typeof request.requestId !== "string" || !Array.isArray(request.terminals)) {
+        return;
+      }
+      void Promise.resolve(callback(request.terminals))
+        .then(() => emit(DETACHED_CONSOLES_REATTACH_ACK_EVENT, { requestId: request.requestId }))
+        .catch((error) => {
+          console.error("Failed to acknowledge detached console reattach", error);
+        });
     });
   } catch (error) {
     if (!isUnavailableTauriEventBridgeError(error)) {
@@ -233,11 +274,13 @@ function isUnavailableTauriEventBridgeError(error: unknown): boolean {
   return error instanceof TypeError && error.message.includes("transformCallback");
 }
 
-export async function closeCurrentDetachedWindow(): Promise<void> {
+export async function closeCurrentDetachedWindow(): Promise<boolean> {
   try {
     const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     await getCurrentWebviewWindow().close();
+    return true;
   } catch (error) {
     console.error("Failed to close detached consoles window", error);
+    return false;
   }
 }

@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { act, render, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BusState } from "../bus/store";
+import { busStore } from "../bus/store";
 import type { RepoDelta } from "../bus/contract";
 import {
   collectRelevantNotifications,
   enableNotifications,
+  NotificationWatcher,
   type NotificationAdapter,
 } from "./notifications";
 import { qualityStore } from "./state";
@@ -24,6 +28,11 @@ const delta = (repo: string, over: Partial<RepoDelta> = {}): RepoDelta => ({
 });
 
 describe("quality notifications", () => {
+  beforeEach(() => {
+    busStore.resetAll();
+    qualityStore.reset();
+  });
+
   it("collects high-attention events with redacted copy and stable keys", () => {
     const state: BusState = {
       repos: {
@@ -65,6 +74,7 @@ describe("quality notifications", () => {
       configError: null,
       snapshotStatus: "ready",
       snapshotError: null,
+      connectionErrors: {},
       loaded: true,
       watching: { available: false, reason: "inotify" },
     };
@@ -109,5 +119,48 @@ describe("quality notifications", () => {
     await expect(enableNotifications(adapter)).resolves.toBe(true);
     expect(qualityStore.getState().notificationsEnabled).toBe(true);
     expect(qualityStore.getState().notificationStatus).toBe("ready");
+  });
+
+  it("marks rejected sends unavailable and retries the failed key after re-enabling", async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("native send failed"))
+      .mockResolvedValue(undefined);
+    const adapter: NotificationAdapter = {
+      ensurePermission: vi.fn().mockResolvedValue("granted"),
+      send,
+    };
+    act(() => {
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            signals: [
+              {
+                kind: "possible_secret",
+                severity: "critical",
+                path: ".env",
+                message: "redacted",
+              },
+            ],
+          }),
+        ],
+        { available: true },
+      );
+      qualityStore.setNotificationState({ enabled: true, status: "ready", message: null });
+    });
+
+    render(createElement(NotificationWatcher, { adapter }));
+
+    await waitFor(() => expect(qualityStore.getState().notificationStatus).toBe("unavailable"));
+    expect(qualityStore.getState().notificationsEnabled).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await enableNotifications(adapter);
+    });
+
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(qualityStore.getState().notificationStatus).toBe("ready");
+    expect(qualityStore.getState().notificationsEnabled).toBe(true);
   });
 });

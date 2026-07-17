@@ -81,6 +81,8 @@ export function MenuBar() {
   const [activeTrigger, setActiveTrigger] = useState<MenuId>("workbench");
   const menubarRef = useRef<HTMLDivElement | null>(null);
   const pendingMenuFocus = useRef<"first" | "last" | null>(null);
+  const keyboardEntryReturnFocus = useRef<HTMLElement | null>(null);
+  const bareAltArmed = useRef(false);
 
   const active = config?.active ?? "";
   const rovingTrigger = !active && activeTrigger === "repos" ? "workbench" : activeTrigger;
@@ -132,6 +134,48 @@ export function MenuBar() {
     pendingMenuFocus.current = null;
     item?.focus();
   }, [open]);
+
+  useEffect(() => {
+    const focusMenubar = () => {
+      const current = document.activeElement;
+      if (current instanceof HTMLElement && !menubarRef.current?.contains(current)) {
+        keyboardEntryReturnFocus.current = current;
+      }
+      setActiveTrigger("workbench");
+      menubarRef.current?.querySelector<HTMLButtonElement>("#menu-trigger-workbench")?.focus();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isF10 = event.key === "F10" && !event.ctrlKey && !event.metaKey && !event.altKey;
+      const isBareAlt = event.key === "Alt" && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+      if (isBareAlt) {
+        bareAltArmed.current = !document.querySelector('[role="dialog"][aria-modal="true"]');
+        return;
+      }
+      bareAltArmed.current = false;
+      if (!isF10 || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      event.preventDefault();
+      focusMenubar();
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== "Alt") return;
+      const shouldEnter = bareAltArmed.current;
+      bareAltArmed.current = false;
+      if (!shouldEnter || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      event.preventDefault();
+      focusMenubar();
+    };
+    const cancelBareAlt = () => {
+      bareAltArmed.current = false;
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", cancelBareAlt);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", cancelBareAlt);
+    };
+  }, []);
 
   const enabledTriggers = () =>
     MENU_IDS.filter((id) => {
@@ -189,6 +233,11 @@ export function MenuBar() {
         if (open !== null) {
           event.preventDefault();
           closeMenu(true);
+        } else if (keyboardEntryReturnFocus.current) {
+          event.preventDefault();
+          const target = keyboardEntryReturnFocus.current;
+          keyboardEntryReturnFocus.current = null;
+          target.focus();
         }
         break;
     }

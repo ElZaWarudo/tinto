@@ -51,6 +51,16 @@ body {
   opacity: 0.28;
 }
 
+.agent-runtime-fixture__feedback {
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--agent-rule);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 520px) {
   .agent-runtime-fixture {
     padding: 0;

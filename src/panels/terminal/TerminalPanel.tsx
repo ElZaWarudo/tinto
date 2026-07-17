@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, KeyboardEvent, SetStateAction } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
@@ -32,6 +32,7 @@ import type {
   AgentRuntimeCatalog,
   AgentSessionAttachment,
   AgentSession,
+  AgentSessionResumeMode,
   AgentSessionRuntimeOptions,
   AgentSessionOutput,
   AgentSessionTimelineItem,
@@ -71,6 +72,50 @@ type AgentAttachment = {
   kind: "image" | "file";
   previewUrl: string | null;
 };
+
+interface AgentComposerDraft {
+  text: string;
+  attachments: AgentAttachment[];
+}
+
+const MAX_AGENT_COMPOSER_DRAFTS = 20;
+const agentComposerDrafts = new Map<string, AgentComposerDraft>();
+
+function readAgentComposerDraft(sessionId: string): AgentComposerDraft {
+  const saved = agentComposerDrafts.get(sessionId);
+  if (!saved) return { text: "", attachments: [] };
+  agentComposerDrafts.delete(sessionId);
+  agentComposerDrafts.set(sessionId, saved);
+  return {
+    text: saved.text,
+    attachments: saved.attachments.map((attachment) => ({ ...attachment })),
+  };
+}
+
+function writeAgentComposerDraft(sessionId: string, text: string, attachments: AgentAttachment[]) {
+  if (!sessionId) return;
+  if (!text && attachments.length === 0) {
+    agentComposerDrafts.delete(sessionId);
+    return;
+  }
+  agentComposerDrafts.delete(sessionId);
+  agentComposerDrafts.set(sessionId, {
+    text,
+    attachments: attachments.map((attachment) => ({ ...attachment })),
+  });
+  while (agentComposerDrafts.size > MAX_AGENT_COMPOSER_DRAFTS) {
+    const oldestSessionId = agentComposerDrafts.keys().next().value;
+    if (typeof oldestSessionId !== "string") break;
+    agentComposerDrafts.delete(oldestSessionId);
+  }
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function resetAgentComposerDraftsForTests() {
+  agentComposerDrafts.clear();
+  panelCloseStopTimers.forEach((timer) => window.clearTimeout(timer));
+  panelCloseStopTimers.clear();
+}
 
 interface QueuedAgentMessage {
   id: string;
@@ -150,7 +195,7 @@ const AGENT_SKILL_SHORTCUTS = [
 
 type AgentLensScope = "focused" | "session";
 type AgentLensTab = "files" | "commands" | "timeline";
-type AgentComposerCommandScope = "Codex" | "Tinto" | "Skill";
+type AgentComposerCommandScope = "Codex" | "Tinto" | "Habilidad";
 type AgentComposerCommandTrigger = "/" | "$";
 type AgentComposerHostCommand =
   | "branch"
@@ -345,6 +390,92 @@ interface EditingAgentMessage {
   attachments: AgentAttachment[];
 }
 
+interface JournalResumeTarget {
+  sessionId: string;
+  repo: string;
+  agentType: string;
+  resumeMode: AgentSessionResumeMode;
+}
+
+interface ResumedSessionSync {
+  status: "pending" | "error";
+}
+
+type ResumedAgentSession = AgentSession & {
+  __tintoResumedSessionSync?: ResumedSessionSync;
+};
+
+const RESUMED_SESSION_SYNC_ERROR =
+  "No se pudo confirmar la conversación retomada. El mensaje se envió y la conversación sigue disponible.";
+const resumedSessionRefreshes = new Map<string, Promise<boolean>>();
+
+function resumedSessionSync(session: AgentSession | undefined): ResumedSessionSync | null {
+  return (session as ResumedAgentSession | undefined)?.__tintoResumedSessionSync ?? null;
+}
+
+function withResumedSessionSync(session: AgentSession, sync: ResumedSessionSync): AgentSession {
+  return { ...session, __tintoResumedSessionSync: sync } as ResumedAgentSession;
+}
+
+function refreshResumedSession(sessionId: string): Promise<boolean> {
+  const pending = resumedSessionRefreshes.get(sessionId);
+  if (pending) return pending;
+  const refresh = (async () => {
+    try {
+      const sessions = await listAgentSessions();
+      const confirmed = sessions.find((candidate) => candidate.id === sessionId);
+      if (!confirmed) throw new Error(`Resumed Agent session ${sessionId} was not listed`);
+      agentSessionStore.upsertSession(confirmed);
+      return true;
+    } catch (refreshError) {
+      console.error("tinto: resumed Agent session refresh failed", refreshError);
+      const current = agentSessionStore.getState().sessions[sessionId];
+      if (current && resumedSessionSync(current)) {
+        agentSessionStore.upsertSession(withResumedSessionSync(current, { status: "error" }));
+      }
+      return false;
+    } finally {
+      resumedSessionRefreshes.delete(sessionId);
+    }
+  })();
+  resumedSessionRefreshes.set(sessionId, refresh);
+  return refresh;
+}
+
+function provisionalResumedSession(
+  source: AgentSession,
+  target: JournalResumeTarget,
+): AgentSession {
+  return withResumedSessionSync(
+    {
+      ...source,
+      id: target.sessionId,
+      provider_session_id: target.resumeMode === "native" ? source.provider_session_id : null,
+      status: "starting",
+      pid: null,
+      started_at_ms: Date.now(),
+      ended_at_ms: null,
+      exit_code: null,
+      error: null,
+      checkpoint: null,
+      change_log: [],
+      turn_status: "waiting",
+      turn_checkpoints: [],
+      timeline: (source.timeline ?? []).map((item, index) => ({
+        ...item,
+        session_id: target.sessionId,
+        id: `${target.sessionId}:resumed:${index}`,
+      })),
+      reverted_at_ms: null,
+      restored_to_turn_index: null,
+      active_sessions: Math.max(1, source.active_sessions),
+      age_ms: 0,
+      output_bytes_per_second: null,
+    },
+    { status: "pending" },
+  );
+}
+
 interface AgentProcessView {
   label: string;
   phase: string;
@@ -384,9 +515,34 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const session = useAgentSession(sessionId);
   const { chunks: sessionOutput } = useAgentSessionOutput(sessionId);
   const timeline = useAgentSessionTimeline(sessionId);
+  const [initialComposerDraft] = useState(() => readAgentComposerDraft(sessionId));
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  const [draft, setDraftState] = useState(initialComposerDraft.text);
+  const [attachments, setAttachmentsState] = useState(initialComposerDraft.attachments);
+  const draftRef = useRef(initialComposerDraft.text);
+  const attachmentsRef = useRef(initialComposerDraft.attachments);
+  const draftSessionIdRef = useRef(sessionId);
+  const latestSessionIdRef = useRef(sessionId);
+  const setDraft = (update: SetStateAction<string>) => {
+    const targetSessionId = sessionId;
+    setDraftState((current) => {
+      if (latestSessionIdRef.current !== targetSessionId) return current;
+      const next = typeof update === "function" ? update(current) : update;
+      draftRef.current = next;
+      writeAgentComposerDraft(targetSessionId, next, attachmentsRef.current);
+      return next;
+    });
+  };
+  const setAttachments = (update: SetStateAction<AgentAttachment[]>) => {
+    const targetSessionId = sessionId;
+    setAttachmentsState((current) => {
+      if (latestSessionIdRef.current !== targetSessionId) return current;
+      const next = typeof update === "function" ? update(current) : update;
+      attachmentsRef.current = next;
+      writeAgentComposerDraft(targetSessionId, draftRef.current, next);
+      return next;
+    });
+  };
   const [editingMessage, setEditingMessage] = useState<EditingAgentMessage | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState("");
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
@@ -424,10 +580,22 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [reviewFindings, setReviewFindings] = useState<AgentReviewFinding[]>([]);
   const [reviewPromptDraft, setReviewPromptDraft] = useState<string | null>(null);
   const [reviewPromptState, setReviewPromptState] = useState<"drafted" | "sent" | null>(null);
+  const [resumeSyncRetrying, setResumeSyncRetrying] = useState(false);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptSearchRef = useRef<HTMLInputElement | null>(null);
   const runtimeCatalogSessionRef = useRef<string | null>(null);
   const runtimeCatalogRefreshAppliedRef = useRef(0);
+
+  useLayoutEffect(() => {
+    latestSessionIdRef.current = sessionId;
+    if (draftSessionIdRef.current === sessionId) return;
+    draftSessionIdRef.current = sessionId;
+    const saved = readAgentComposerDraft(sessionId);
+    draftRef.current = saved.text;
+    attachmentsRef.current = saved.attachments;
+    setDraftState(saved.text);
+    setAttachmentsState(saved.attachments);
+  }, [sessionId]);
 
   const turns = useMemo(
     () => agentTurns(timeline, sessionOutput, session),
@@ -495,7 +663,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const canSend = composerEnabled && (draft.trim().length > 0 || attachments.length > 0);
   const turnActive = !readOnly && session?.turn_status === "working";
   const processState = agentProcessState(session, sending, agentType, readOnly, timeline);
-  const visibleError = error ?? (session?.error ? commandMessage(session.error) : null);
+  const resumeSync = resumedSessionSync(session);
+  const visibleError =
+    error ??
+    (resumeSync?.status === "error"
+      ? RESUMED_SESSION_SYNC_ERROR
+      : session?.error
+        ? agentSessionFailureMessage()
+        : null);
   const canRestoreTurn =
     !!sessionId &&
     !readOnly &&
@@ -609,7 +784,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         description: skill.title,
         disabled: !canCompose,
         label: skill.label,
-        scope: "Skill" as const,
+        scope: "Habilidad" as const,
         trigger: "$" as const,
       })),
     ],
@@ -637,6 +812,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   useEffect(() => {
     saveAgentMessageQueue(sessionId, queuedMessages);
   }, [queuedMessages, sessionId]);
+
+  useEffect(() => {
+    if (session?.error) console.error("tinto: agent session reported failure", session.error);
+  }, [session?.error]);
 
   useEffect(() => {
     if (session?.turn_status === "working") {
@@ -671,7 +850,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         setQueuedMessages((current) => current.filter((message) => message.id !== next.id));
       })
       .catch((queueError) =>
-        setError(`No se pudo enviar el mensaje encolado: ${commandMessage(queueError)}`),
+        setError(
+          reportAgentFailure(
+            queueError,
+            "El mensaje sigue en cola. No se pudo enviar; vuelve a intentarlo cuando la sesión esté disponible.",
+          ),
+        ),
       )
       .finally(() => {
         queueDispatchingRef.current = false;
@@ -733,7 +917,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           source: "codex_app_server",
           models: [],
           default_model: null,
-          error: commandMessage(catalogError),
+          error: reportAgentFailure(
+            catalogError,
+            "No se pudo actualizar la configuración de ejecución.",
+          ),
           updated_at_ms: Date.now(),
         });
       }
@@ -820,24 +1007,36 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     if (!sessionId) return;
     cancelPanelCloseStop(sessionId);
     let active = true;
-    const loadSession =
-      mode === "journal"
-        ? getAgentJournalSession(sessionId).then((session) => (session ? [session] : []))
-        : listAgentSessions();
-    void loadSession
-      .then((sessions) => {
-        if (!active) return;
-        if (mode === "journal") {
-          const session = sessions[0];
-          if (session) agentSessionStore.upsertSession(session);
-          else setError("No se encontró la transcripción de la sesión.");
-        } else {
-          agentSessionStore.setSessions(sessions);
-        }
-      })
-      .catch((e) => {
-        if (active) setError(commandMessage(e));
-      });
+    const initialResumeSync = resumedSessionSync(agentSessionStore.getState().sessions[sessionId]);
+    if (mode !== "journal" && initialResumeSync) {
+      if (initialResumeSync.status === "pending") void refreshResumedSession(sessionId);
+    } else {
+      const loadSession =
+        mode === "journal"
+          ? getAgentJournalSession(sessionId).then((session) => (session ? [session] : []))
+          : listAgentSessions();
+      void loadSession
+        .then((sessions) => {
+          if (!active) return;
+          if (mode === "journal") {
+            const session = sessions[0];
+            if (session) agentSessionStore.upsertSession(session);
+            else setError("No se encontró la transcripción de la sesión.");
+          } else {
+            agentSessionStore.setSessions(sessions);
+          }
+        })
+        .catch((e) => {
+          if (active) {
+            setError(
+              reportAgentFailure(
+                e,
+                "No se pudo cargar la conversación. Vuelve a abrirla desde la lista de Agents.",
+              ),
+            );
+          }
+        });
+    }
     return () => {
       active = false;
       if (readOnly) return;
@@ -908,7 +1107,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     setError(null);
     try {
       let targetSessionId = sessionId;
-      let resumedSessionId: string | null = null;
+      let journalResume: JournalResumeTarget | null = null;
       if (action === "steer") {
         await steerAgentSessionTurn(
           sessionId,
@@ -919,7 +1118,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         if (!session) return;
         const result = await resumeAgentJournalSession(session.id);
         targetSessionId = result.session_id;
-        resumedSessionId = result.session_id;
+        journalResume = {
+          sessionId: result.session_id,
+          repo: session.repo,
+          agentType: session.agent_type,
+          resumeMode: result.mode,
+        };
       }
       if (action !== "steer" && attachments.length > 0) {
         await writeAgentSessionTurn(
@@ -931,25 +1135,43 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       } else if (action !== "steer") {
         await writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions);
       }
-      if (resumedSessionId && session) {
-        const sessions = await listAgentSessions();
-        agentSessionStore.setSessions(sessions);
-        openAgentTerminal({
-          sessionId: resumedSessionId,
-          repo: session.repo,
-          agentType: session.agent_type,
-        });
-      }
       if (reviewPromptDraft && text.trim() === reviewPromptDraft.trim()) {
         setReviewPromptState("sent");
       }
       setDraft("");
       setAttachments([]);
       setRuntimeNotice(null);
+      if (journalResume && session) {
+        if (!agentSessionStore.getState().sessions[journalResume.sessionId]) {
+          agentSessionStore.upsertSession(provisionalResumedSession(session, journalResume));
+        }
+        openAgentTerminal({
+          sessionId: journalResume.sessionId,
+          repo: journalResume.repo,
+          agentType: journalResume.agentType,
+        });
+        void refreshResumedSession(journalResume.sessionId);
+      }
     } catch (e) {
-      setError(commandMessage(e));
+      setError(
+        reportAgentFailure(
+          e,
+          "El mensaje no se envió. Tu borrador sigue aquí; vuelve a intentarlo cuando la sesión esté disponible.",
+        ),
+      );
     } finally {
       setSending(false);
+    }
+  };
+
+  const retryResumedSessionSync = async () => {
+    if (!session || resumeSync?.status !== "error" || resumeSyncRetrying) return;
+    setResumeSyncRetrying(true);
+    agentSessionStore.upsertSession(withResumedSessionSync(session, { status: "pending" }));
+    try {
+      await refreshResumedSession(session.id);
+    } finally {
+      setResumeSyncRetrying(false);
     }
   };
 
@@ -984,7 +1206,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       }
       setEditingMessage(null);
     } catch (editError) {
-      setError(commandMessage(editError));
+      setError(
+        reportAgentFailure(
+          editError,
+          "No se creó la conversación editada. Conservamos tus cambios; vuelve a intentarlo.",
+        ),
+      );
     } finally {
       setSending(false);
     }
@@ -1061,7 +1288,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       }
       setAttachments((current) => [...current, ...added]);
     } catch (pickError) {
-      setError(commandMessage(pickError));
+      setError(
+        reportAgentFailure(
+          pickError,
+          "No se pudieron adjuntar los archivos. Comprueba que sigan disponibles y vuelve a intentarlo.",
+        ),
+      );
     }
   };
 
@@ -1202,7 +1434,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         }
       }
     } catch (e) {
-      setError(commandMessage(e));
+      setError(
+        reportAgentFailure(
+          e,
+          "La acción de Agent no se completó. Revisa el estado de la sesión y vuelve a intentarlo.",
+        ),
+      );
     } finally {
       setSending(false);
       clearComposerCommand();
@@ -1349,7 +1586,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         1600,
       );
     } catch (e) {
-      setError(commandMessage(e));
+      setError(reportAgentFailure(e, "No se pudo copiar. Vuelve a intentarlo."));
     }
   };
 
@@ -1360,7 +1597,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         title: "Restaurar turno de Agent",
         kind: "warning",
-        okLabel: "Restaurar",
+        okLabel: "Restaurar desde este turno",
         cancelLabel: "Cancelar",
       },
     );
@@ -1372,7 +1609,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       agentSessionStore.upsertSession(updated);
       setFocusedTurnIndex(turn.index);
     } catch (e) {
-      setError(commandMessage(e));
+      setError(
+        reportAgentFailure(
+          e,
+          "No se restauró el turno. La sesión conserva su estado anterior; vuelve a intentarlo.",
+        ),
+      );
     } finally {
       setRestoringTurnId(null);
     }
@@ -1385,7 +1627,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         title: "Revertir sesión de Agent",
         kind: "warning",
-        okLabel: "Revertir",
+        okLabel: "Revertir sesión",
         cancelLabel: "Cancelar",
       },
     );
@@ -1396,7 +1638,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       const updated = await revertSession(sessionId, true);
       agentSessionStore.upsertSession(updated);
     } catch (e) {
-      setError(commandMessage(e));
+      setError(
+        reportAgentFailure(
+          e,
+          "No se revirtió la sesión. Los cambios permanecen como estaban; vuelve a intentarlo.",
+        ),
+      );
     } finally {
       setReverting(false);
     }
@@ -1411,7 +1658,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       const sessions = await listAgentSessions();
       agentSessionStore.setSessions(sessions);
     } catch (e) {
-      setError(commandMessage(e));
+      setError(
+        reportAgentFailure(
+          e,
+          "No se detuvo el turno. Comprueba el estado de la sesión antes de volver a intentarlo.",
+        ),
+      );
     } finally {
       setStopping(false);
     }
@@ -1419,7 +1671,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const onRevertTurnFile = async (turnCheckpointId: string, path: string) => {
     if (!sessionId || !canRevertTurnFile || revertingFile) return;
-    const ok = await confirm(`¿Revertir ${path} al punto de control de este turno?`, {
+    const ok = await confirm(`¿Revertir el archivo ${path} al punto de control de este turno?`, {
       title: "Revertir archivo desde el turno",
       kind: "warning",
       okLabel: "Revertir archivo",
@@ -1432,7 +1684,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       const updated = await revertSessionTurnFile(sessionId, turnCheckpointId, path, true);
       agentSessionStore.upsertSession(updated);
     } catch (e) {
-      setError(commandMessage(e));
+      setError(
+        reportAgentFailure(
+          e,
+          "No se revirtió el archivo. Conserva su estado actual; vuelve a intentarlo cuando la sesión esté detenida.",
+        ),
+      );
     } finally {
       setRevertingFile(null);
     }
@@ -1466,7 +1723,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
                 type="button"
               >
-                <span>{stopping ? "Deteniendo" : "Detener"}</span>
+                <span>{stopping ? "Deteniendo turno" : "Detener turno"}</span>
               </button>
               <button
                 className="agent-panel__revert"
@@ -1482,7 +1739,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 )}
                 type="button"
               >
-                <span>{reverting ? "Revirtiendo" : "Revertir"}</span>
+                <span>{reverting ? "Revirtiendo sesión" : "Revertir sesión"}</span>
               </button>
             </>
           </div>
@@ -1491,7 +1748,16 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
       {visibleError && (
         <div className="agent-panel__error" data-testid="terminal-panel-error" role="alert">
-          {visibleError}
+          <span>{visibleError}</span>
+          {resumeSync?.status === "error" && (
+            <button
+              disabled={resumeSyncRetrying}
+              onClick={() => void retryResumedSessionSync()}
+              type="button"
+            >
+              {resumeSyncRetrying ? "Confirmando…" : "Reintentar"}
+            </button>
+          )}
         </div>
       )}
 
@@ -1825,7 +2091,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           {readOnly
             ? "Escribe un mensaje para retomar esta conversación archivada."
             : canCompose
-              ? "Escribe / para ver comandos o $ para ver skills."
+              ? "Escribe / para ver comandos o $ para ver habilidades."
               : "El compositor no está disponible."}
         </span>
         {runtimeProvider && (
@@ -1985,28 +2251,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             rows={2}
           />
           <button
-            aria-label="Encolar para el siguiente turno"
-            className="agent-panel__queue-action"
-            disabled={!canSend || !turnActive}
-            hidden={!turnActive}
-            onClick={() => void sendDraft("queue")}
-            title="Guardar este mensaje y enviarlo cuando termine el turno actual"
-            type="button"
-          >
-            Encolar
-          </button>
-          <button
-            aria-label="Intervenir en el turno activo"
-            className="agent-panel__steer"
-            disabled={!canSend || !turnActive || !isCodexSession}
-            hidden={!turnActive || !isCodexSession}
-            onClick={() => void sendDraft("steer")}
-            title="Enviar este mensaje al turno que Codex está ejecutando ahora"
-            type="button"
-          >
-            Intervenir
-          </button>
-          <button
             className="agent-panel__send"
             type="submit"
             disabled={!canSend}
@@ -2024,6 +2268,32 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               {sending ? "Enviando" : "Enviar"}
             </span>
           </button>
+          {turnActive && (
+            <div className="agent-panel__active-turn-actions">
+              <button
+                aria-label="Encolar para el siguiente turno"
+                className="agent-panel__queue-action"
+                disabled={!canSend || !turnActive}
+                hidden={!turnActive}
+                onClick={() => void sendDraft("queue")}
+                title="Guardar este mensaje y enviarlo cuando termine el turno actual"
+                type="button"
+              >
+                Encolar
+              </button>
+              <button
+                aria-label="Intervenir en el turno activo"
+                className="agent-panel__steer"
+                disabled={!canSend || !turnActive || !isCodexSession}
+                hidden={!turnActive || !isCodexSession}
+                onClick={() => void sendDraft("steer")}
+                title="Enviar este mensaje al turno que Codex está ejecutando ahora"
+                type="button"
+              >
+                Intervenir
+              </button>
+            </div>
+          )}
         </div>
       </form>
     </div>
@@ -3148,7 +3418,7 @@ function AgentTurnFocus({
           type="button"
         >
           <span title={focusedTurnRestoreLabelTitle(isRestoringThisTurn)}>
-            {isRestoringThisTurn ? "Restaurando" : "Restaurar aquí"}
+            {isRestoringThisTurn ? "Restaurando turno" : "Restaurar desde este turno"}
           </span>
         </button>
       </div>
@@ -3710,7 +3980,7 @@ function agentSideRailTitle(agentType: string, repo?: string): string {
 
 function agentComposerTitle(agentType: string, repo?: string): string {
   const repoLabel = repo ? repoName(repo) : "sesión de Agent";
-  return `Compositor de ${agentLabel(agentType)} para ${repoLabel}: menú de comandos, menciones de skills y entrada de mensajes.`;
+  return `Compositor de ${agentLabel(agentType)} para ${repoLabel}: menú de comandos, menciones de habilidades y entrada de mensajes.`;
 }
 
 function agentCommandMenuTitle(
@@ -4043,15 +4313,15 @@ function agentStopControlTitle(
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (stopping) {
-    return `Detener ${agentLabel(agentType)} en ${repoLabel}: deteniendo la sesión.`;
+    return `Detener turno de ${agentLabel(agentType)} en ${repoLabel}: deteniendo el turno.`;
   }
   if (readOnly) {
-    return `Detener ${agentLabel(agentType)} en ${repoLabel}: las transcripciones archivadas son de solo lectura.`;
+    return `Detener turno de ${agentLabel(agentType)} en ${repoLabel}: las transcripciones archivadas son de solo lectura.`;
   }
   if (canStop) {
-    return `Detener la sesión en ejecución de ${agentLabel(agentType)} en ${repoLabel}.`;
+    return `Detener el turno en ejecución de ${agentLabel(agentType)} en ${repoLabel}.`;
   }
-  return `Detener ${agentLabel(agentType)} en ${repoLabel}: la sesión no está en ejecución.`;
+  return `Detener turno de ${agentLabel(agentType)} en ${repoLabel}: el turno no está en ejecución.`;
 }
 
 function agentRevertControlTitle(
@@ -4064,21 +4334,21 @@ function agentRevertControlTitle(
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (reverting) {
-    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: revirtiendo.`;
+    return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: revirtiendo cambios.`;
   }
   if (readOnly) {
-    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: la transcripción archivada es de solo lectura.`;
+    return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: la transcripción archivada es de solo lectura.`;
   }
   if (session?.status === "reverted") {
-    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: la sesión ya se revirtió.`;
+    return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: la sesión ya se revirtió.`;
   }
   if (session && !session.checkpoint) {
-    return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: no hay un punto de control reversible.`;
+    return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: no hay un punto de control reversible.`;
   }
   if (canRevert) {
-    return `Revertir los cambios de la sesión de ${agentLabel(agentType)} en ${repoLabel}.`;
+    return `Revertir la sesión de ${agentLabel(agentType)} en ${repoLabel} y deshacer sus cambios.`;
   }
-  return `Revertir cambios de ${agentLabel(agentType)} en ${repoLabel}: detén la sesión antes de revertir.`;
+  return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: detén el turno antes de revertir.`;
 }
 
 function SessionStatus({ session }: { session: AgentSession | undefined }) {
@@ -4105,9 +4375,9 @@ function SessionStatus({ session }: { session: AgentSession | undefined }) {
     >
       <span
         className={`agent-panel__status agent-panel__status--${session.status}`}
-        title={sessionStatusFacetTitle(session.status)}
+        title={sessionStatusFacetTitle(session)}
       >
-        {sessionStatusLabel(session.status)}
+        {sessionCompletionLabel(session)}
       </span>
       <span title={turnStatusFacetTitle(session.turn_status ?? "waiting")}>
         {turnStatusLabel(session.turn_status ?? "waiting")}
@@ -4570,7 +4840,9 @@ function AgentLens({
                         </button>
                         {previewItem.turnCheckpointId && (
                           <button
-                            aria-label="Revertir el archivo seleccionado"
+                            aria-label={
+                              isPreviewReverting ? "Revirtiendo archivo" : "Revertir archivo"
+                            }
                             disabled={!canRevertTurnFile || isPreviewReverting}
                             onClick={() =>
                               onRevertTurnFile(previewItem.turnCheckpointId ?? "", previewItem.path)
@@ -4585,10 +4857,10 @@ function AgentLens({
                           >
                             <span
                               title={agentLensPreviewActionLabelTitle(
-                                isPreviewReverting ? "Revirtiendo" : "Revertir",
+                                isPreviewReverting ? "Revirtiendo archivo" : "Revertir archivo",
                               )}
                             >
-                              {isPreviewReverting ? "Revirtiendo" : "Revertir"}
+                              {isPreviewReverting ? "Revirtiendo archivo" : "Revertir archivo"}
                             </span>
                           </button>
                         )}
@@ -4735,10 +5007,14 @@ function AgentLens({
                                 >
                                   <span
                                     title={agentLensFileActionLabelTitle(
-                                      revertingFile === key ? "Revirtiendo" : "Revertir",
+                                      revertingFile === key
+                                        ? "Revirtiendo archivo"
+                                        : "Revertir archivo",
                                     )}
                                   >
-                                    {revertingFile === key ? "Revirtiendo" : "Revertir"}
+                                    {revertingFile === key
+                                      ? "Revirtiendo archivo"
+                                      : "Revertir archivo"}
                                   </span>
                                 </button>
                               )}
@@ -6166,7 +6442,7 @@ function agentActivitySummary(
     return {
       title: "Requiere atención",
       detail: session.error
-        ? commandMessage(session.error)
+        ? agentSessionFailureMessage()
         : `${status}. Revisa la transcripción y la salida de comandos reciente.`,
       checkpoint,
       throughput,
@@ -6175,7 +6451,7 @@ function agentActivitySummary(
   }
   if (session.status === "completed" || session.status === "reverted") {
     return {
-      title: session.status === "reverted" ? "Cambios revertidos" : "Sesión completada",
+      title: session.status === "reverted" ? "Cambios revertidos" : sessionCompletionLabel(session),
       detail: `${countLabel(changeCount, "cambio registrado", "cambios registrados")}. Estado del turno: ${turnState}.`,
       checkpoint,
       throughput,
@@ -6410,7 +6686,7 @@ function focusedTurnRestoreButtonTitle(
 }
 
 function focusedTurnRestoreLabelTitle(restoring: boolean): string {
-  return restoring ? "Restaurando el turno seleccionado." : "Restaurar en este turno.";
+  return restoring ? "Restaurando el turno seleccionado." : "Restaurar desde este turno.";
 }
 
 function focusedTurnTimeTitle(turnIndex: number, timeLabel: string): string {
@@ -6479,7 +6755,7 @@ function agentLensFileKindMetaTitle(kind: AgentLensArtifactKind, changeKind: str
 
 function agentLensFileActionsTitle(path: string, canShowRevert: boolean): string {
   const controls = canShowRevert
-    ? "vista previa, abrir, preguntar y revertir"
+    ? "vista previa, abrir, preguntar y revertir el archivo"
     : "vista previa, abrir y preguntar";
   return `Acciones de Agent Lens para ${path}: ${controls}.`;
 }
@@ -6512,11 +6788,12 @@ function agentLensRevertActionTitle(
   canRevert: boolean,
   isReverting: boolean,
 ): string {
-  const scope = turnIndex ? `el turno ${turnIndex}` : "este turno";
-  if (isReverting) return `Revirtiendo ${path} desde ${scope}.`;
+  const sourceScope = turnIndex ? `el turno ${turnIndex}` : "este turno";
+  const checkpointScope = turnIndex ? `del turno ${turnIndex}` : "de este turno";
+  if (isReverting) return `Revirtiendo el archivo ${path} desde ${sourceScope}.`;
   return canRevert
-    ? `Revertir ${path} al punto de control de ${scope}.`
-    : `Detén la sesión antes de revertir ${path}.`;
+    ? `Revertir el archivo ${path} al punto de control ${checkpointScope}.`
+    : `Detén la sesión antes de revertir el archivo ${path}.`;
 }
 
 function agentLensFileGroupCountTitle(kind: AgentLensArtifactKind, count: number): string {
@@ -6953,11 +7230,13 @@ function stripAnsi(text: string): string {
   return text.replace(ansiEscapePattern, "");
 }
 
-function commandMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) {
-    return String((error as { message?: unknown }).message ?? "Falló el comando de Agent.");
-  }
-  return String(error || "Falló el comando de Agent.");
+function reportAgentFailure(error: unknown, userMessage: string): string {
+  console.error("tinto: agent action failed", error);
+  return userMessage;
+}
+
+function agentSessionFailureMessage(): string {
+  return "La sesión de Agent requiere atención. Revisa la conversación y vuelve a intentarlo si la acción sigue disponible.";
 }
 
 function turnStatusLabel(status: string): string {
@@ -6988,6 +7267,13 @@ function sessionStatusLabel(status: string): string {
     default:
       return status;
   }
+}
+
+function sessionCompletionLabel(session: AgentSession): string {
+  if (session.status !== "completed") return sessionStatusLabel(session.status);
+  return session.checkpoint
+    ? "Turno completado · punto de control listo"
+    : "Turno finalizado · sin punto de control verificable";
 }
 
 function checkpointLabel(type: string): string {
@@ -7072,8 +7358,8 @@ function auditTitle(session: AgentSession): string {
   return pieces.filter(Boolean).join(" / ");
 }
 
-function sessionStatusFacetTitle(status: AgentSession["status"]): string {
-  return `Indicador de estado de la sesión de Agent: ${sessionStatusLabel(status)}.`;
+function sessionStatusFacetTitle(session: AgentSession): string {
+  return `Indicador de estado de la sesión de Agent: ${sessionCompletionLabel(session)}.`;
 }
 
 function turnStatusFacetTitle(turnStatus: string): string {

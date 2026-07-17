@@ -146,6 +146,21 @@ export interface ShortcutActions {
   openDashboard: () => void;
   openTimeline: () => void;
   addRepo: () => void;
+  onFileMutationError?: (message: string, retry: () => void) => void;
+}
+
+function runDeleteHistoryAction(action: "undo" | "redo", actions: ShortcutActions): void {
+  const retry = () => {
+    void deleteUndoManager[action]().then((report) => {
+      if (!report?.fatalError) return;
+      if (actions.onFileMutationError) {
+        actions.onFileMutationError(report.fatalError, retry);
+      } else {
+        console.warn("tinto: file undo failed", report.fatalError);
+      }
+    });
+  };
+  retry();
 }
 
 /** Install all global keyboard shortcuts. Returns a cleanup function. */
@@ -160,6 +175,7 @@ export function installShortcuts(
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
       return;
     }
+    if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
 
     const api = apiRef.current;
     if (!api) return;
@@ -170,9 +186,7 @@ export function installShortcuts(
     // Undo/redo file deletion: Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z
     if (e.key === "z" || e.key === "Z") {
       e.preventDefault();
-      void (e.shiftKey ? deleteUndoManager.redo() : deleteUndoManager.undo()).then((report) => {
-        if (report?.fatalError) console.warn("tinto: file undo failed", report.fatalError);
-      });
+      runDeleteHistoryAction(e.shiftKey ? "redo" : "undo", actions);
       return;
     }
 

@@ -828,6 +828,7 @@ fn create_wsl_checkpoint(
             allowed_repos: vec![repo.to_path_buf()],
             session_id: session_id.into(),
             created_at_ms,
+            ephemeral: false,
         },
     )
     .map_err(map_wsl_agent_error)?;
