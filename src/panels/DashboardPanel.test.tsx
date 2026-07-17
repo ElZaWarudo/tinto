@@ -208,6 +208,115 @@ describe("DashboardPanel", () => {
     );
   });
 
+  it("announces rapid material deltas once per repo in one polite batch", async () => {
+    act(() => busStore.loadSnapshot([delta("/r/a", 1), delta("/r/b", 1)], { available: true }));
+    renderDash();
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/a", 2, { status: { modified: ["x"], staged: [], untracked: [] } }),
+      ),
+    );
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/a", 3, { status: { modified: ["x", "y"], staged: [], untracked: [] } }),
+      ),
+    );
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/b", 2, { status: { modified: [], staged: ["z"], untracked: [] } }),
+      ),
+    );
+
+    const liveRegion = screen.getByTestId("dashboard-delta-announcement");
+    expect(liveRegion).toHaveAttribute("aria-live", "polite");
+    await waitFor(() => expect(liveRegion).toHaveTextContent("a actualizado: 2 archivos"));
+    expect(liveRegion).toHaveTextContent("b actualizado: 1 archivo");
+    expect(liveRegion.textContent?.match(/a actualizado/g)).toHaveLength(1);
+  });
+
+  it("announces consecutive material batches even when their summaries match", async () => {
+    act(() => busStore.loadSnapshot([delta("/r/a", 1)], { available: true }));
+    renderDash();
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/a", 2, { status: { modified: ["x", "y"], staged: [], untracked: [] } }),
+      ),
+    );
+    const firstMessage = await screen.findByTestId("dashboard-delta-announcement-message");
+    expect(firstMessage).toHaveTextContent("a actualizado: 2 archivos");
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/a", 3, { status: { modified: ["u", "v"], staged: [], untracked: [] } }),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-delta-announcement-message")).not.toBe(firstMessage),
+    );
+    expect(screen.getByTestId("dashboard-delta-announcement-message")).toHaveTextContent(
+      "a actualizado: 2 archivos",
+    );
+  });
+
+  it("treats a switched workbench snapshot as a baseline before announcing later deltas", async () => {
+    act(() =>
+      busStore.loadWorkbench(
+        {
+          version: 1,
+          active: "A",
+          workbenches: [
+            {
+              name: "A",
+              repos: [{ path: "/r/a", alias: null, source: "local", distro: null, fs_watch: [] }],
+            },
+          ],
+        },
+        [delta("/r/a", 1)],
+        { available: true },
+      ),
+    );
+    renderDash();
+
+    act(() =>
+      busStore.loadWorkbench(
+        {
+          version: 1,
+          active: "B",
+          workbenches: [
+            {
+              name: "B",
+              repos: [{ path: "/r/b", alias: null, source: "local", distro: null, fs_watch: [] }],
+            },
+          ],
+        },
+        [
+          delta("/r/b", 1, {
+            status: { modified: ["snapshot.ts"], staged: [], untracked: [] },
+          }),
+        ],
+        { available: true },
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    });
+    expect(screen.queryByTestId("dashboard-delta-announcement-message")).not.toBeInTheDocument();
+
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/b", 2, {
+          status: { modified: ["after-switch.ts"], staged: [], untracked: [] },
+        }),
+      ),
+    );
+    expect(await screen.findByTestId("dashboard-delta-announcement-message")).toHaveTextContent(
+      "b actualizado: 1 archivo",
+    );
+  });
+
   // Covers AE3: a new commit / branch update reflects live
   it("reflects a branch update from a newer delta", () => {
     act(() => busStore.loadSnapshot([delta("/r/a", 1)], { available: true }));

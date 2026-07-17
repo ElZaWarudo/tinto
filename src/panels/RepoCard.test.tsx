@@ -272,7 +272,7 @@ describe("RepoCard", () => {
     const { onLaunch } = renderCard();
 
     expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent(
-      "el agente WSL cerro stdout",
+      "No se pudo comprobar el Agent. Puedes intentar iniciarlo de todos modos.",
     );
     const button = screen.getByTestId("agent-launch");
     expect(button).not.toBeDisabled();

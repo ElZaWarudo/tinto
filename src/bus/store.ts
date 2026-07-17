@@ -21,6 +21,16 @@ import type {
 
 export const MAX_FS_EVENTS_PER_REPO = 50;
 
+export type BusConnectionChannel =
+  | "repo-deltas"
+  | "file-events"
+  | "watching-state"
+  | "agent-session-list"
+  | "agent-sessions"
+  | "agent-changes"
+  | "agent-output"
+  | "agent-timeline";
+
 export const EMPTY_METRICS: RepoMetrics = {
   changed_files: 0,
   lines_added: 0,
@@ -48,6 +58,8 @@ export interface BusState {
   snapshotStatus: "loading" | "ready" | "error";
   /** Recoverable snapshot error. Existing repo data remains usable when present. */
   snapshotError: string | null;
+  /** Recoverable listener/channel errors. Existing data remains usable while reconnecting. */
+  connectionErrors: Partial<Record<BusConnectionChannel, string>>;
   /** True once the first snapshot has been applied (distinguishes loading). */
   loaded: boolean;
 }
@@ -63,6 +75,7 @@ const EMPTY: BusState = {
   configError: null,
   snapshotStatus: "loading",
   snapshotError: null,
+  connectionErrors: {},
   loaded: false,
 };
 
@@ -230,6 +243,21 @@ export class BusStore {
 
   setSnapshotError(message: string) {
     this.set({ ...this.state, snapshotStatus: "error", snapshotError: message });
+  }
+
+  setConnectionError(channel: BusConnectionChannel, message: string) {
+    if (this.state.connectionErrors[channel] === message) return;
+    this.set({
+      ...this.state,
+      connectionErrors: { ...this.state.connectionErrors, [channel]: message },
+    });
+  }
+
+  clearConnectionError(channel: BusConnectionChannel) {
+    if (!(channel in this.state.connectionErrors)) return;
+    const connectionErrors = { ...this.state.connectionErrors };
+    delete connectionErrors[channel];
+    this.set({ ...this.state, connectionErrors });
   }
 
   /** Clear live repo state (on workbench switch); config is reloaded separately. */

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { IDockviewPanelProps } from "dockview-react";
-import type { FileDiff, RepoDelta } from "../../bus/contract";
+import type { CommitInfo, FileDiff, RepoDelta } from "../../bus/contract";
 
 const getCommitLogMock = vi.fn();
 const getCommitDiffMock = vi.fn();
@@ -51,10 +51,12 @@ const panelProps = {} as IDockviewPanelProps;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe("TimelinePanel", () => {
@@ -310,6 +312,144 @@ describe("TimelinePanel", () => {
 
     await waitFor(() => expect(getCommitLogMock).toHaveBeenCalledTimes(3));
     expect(getCommitLogMock).toHaveBeenLastCalledWith("/r/api", 0, 8);
+  });
+
+  it("publishes each repo history as it resolves while aggregate loading remains pending", async () => {
+    const apiLog = deferred<CommitInfo[]>();
+    const webLog = deferred<CommitInfo[]>();
+    getCommitLogMock.mockImplementation((repo: string) =>
+      repo === "/r/api" ? apiLog.promise : webLog.promise,
+    );
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              { path: "/r/api", alias: "API", fs_watch: [] },
+              { path: "/r/web", alias: "WEB", fs_watch: [] },
+            ],
+          },
+        ],
+      });
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            head: { id: "api-head", summary: "api head", author: "me", timestamp: 1_700_000_100 },
+          }),
+          delta("/r/web", {
+            head: { id: "web-head", summary: "web head", author: "me", timestamp: 1_700_000_100 },
+          }),
+        ],
+        { available: true },
+      );
+    });
+
+    render(<TimelinePanel {...panelProps} />);
+    await waitFor(() => expect(getCommitLogMock).toHaveBeenCalledTimes(2));
+
+    await act(async () =>
+      apiLog.resolve([
+        {
+          id: "api-fast",
+          summary: "api history arrived",
+          author: "me",
+          timestamp: 1_700_000_200,
+        },
+      ]),
+    );
+
+    expect(await screen.findByTestId("timeline-commit-api-fast")).toBeInTheDocument();
+    expect(screen.queryByTestId("timeline-commit-web-slow")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Entradas de la cronología" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+
+    await act(async () =>
+      webLog.resolve([
+        {
+          id: "web-slow",
+          summary: "web history arrived",
+          author: "me",
+          timestamp: 1_700_000_150,
+        },
+      ]),
+    );
+
+    expect(await screen.findByTestId("timeline-commit-web-slow")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Entradas de la cronología" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+  });
+
+  it("keeps prior commit rows while refreshing and after a refresh failure", async () => {
+    const refresh = deferred<CommitInfo[]>();
+    getCommitLogMock.mockResolvedValueOnce([
+      { id: "old-commit", summary: "old history", author: "me", timestamp: 1_700_000_100 },
+    ]);
+    act(() =>
+      busStore.loadSnapshot(
+        [
+          delta("/r/api", {
+            head: { id: "old-head", summary: "old", author: "me", timestamp: 1_700_000_100 },
+          }),
+        ],
+        { available: true },
+      ),
+    );
+
+    render(<TimelinePanel {...panelProps} />);
+    expect(await screen.findByTestId("timeline-commit-old-commit")).toBeInTheDocument();
+
+    getCommitLogMock.mockReturnValueOnce(refresh.promise);
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/api", {
+          revision: 2,
+          head: { id: "new-head", summary: "new", author: "me", timestamp: 1_700_000_200 },
+        }),
+      ),
+    );
+
+    await waitFor(() => expect(getCommitLogMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("timeline-commit-old-commit")).toBeInTheDocument();
+    expect(screen.getByTestId("timeline-commits-refreshing")).toHaveTextContent("Actualizando");
+
+    await act(async () =>
+      refresh.resolve([
+        {
+          id: "new-commit",
+          summary: "new history",
+          author: "me",
+          timestamp: 1_700_000_200,
+        },
+      ]),
+    );
+    expect(await screen.findByTestId("timeline-commit-new-commit")).toBeInTheDocument();
+    expect(screen.queryByTestId("timeline-commit-old-commit")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timeline-commits-refreshing")).not.toBeInTheDocument();
+
+    getCommitLogMock.mockRejectedValueOnce(new Error("refresh offline"));
+    act(() =>
+      busStore.applyDelta(
+        delta("/r/api", {
+          revision: 3,
+          head: {
+            id: "failed-head",
+            summary: "failed",
+            author: "me",
+            timestamp: 1_700_000_300,
+          },
+        }),
+      ),
+    );
+
+    expect(await screen.findByTestId("timeline-log-error")).toHaveTextContent("refresh offline");
+    expect(screen.getByTestId("timeline-commit-new-commit")).toBeInTheDocument();
   });
 
   it("applies the time filter to commit entries", async () => {
