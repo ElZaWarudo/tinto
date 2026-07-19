@@ -236,6 +236,16 @@ describe("ConsoleDockPanel detach drop", () => {
     unmount();
   });
 
+  it("shows Kimi recent launches with a text fallback", () => {
+    markRecentAgentLaunch({ repo: "/r/api", agentType: "kimi" });
+
+    const { unmount } = render(<ConsoleDockPanel />);
+
+    expect(screen.getByRole("button", { name: /iniciar api con kimi code/i })).toBeInTheDocument();
+    expect(screen.getByText("Ki")).toBeInTheDocument();
+    unmount();
+  });
+
   it("starts a new session from a recent launch shortcut", async () => {
     markRecentAgentLaunch({ repo: "/r/api", agentType: "codex" });
     const openSpy = vi.spyOn(consoleDock, "openTerminal");

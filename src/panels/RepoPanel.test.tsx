@@ -7,7 +7,7 @@ const getCommitLogMock = vi.fn();
 const retryRepoMock = vi.fn();
 const startAgentSessionMock = vi.fn();
 const listAgentSessionsMock = vi.fn();
-const agentBinaryAvailableForRepoMock = vi.fn();
+const agentProviderReadinessForRepoMock = vi.fn();
 const updateRepoFsWatchMock = vi.fn();
 const createRepoGitleaksConfigMock = vi.fn();
 const createRepoAgentsMdConfigMock = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("../bus/client", () => ({
   retryRepo: (...a: unknown[]) => retryRepoMock(...a),
   startAgentSession: (...a: unknown[]) => startAgentSessionMock(...a),
   listAgentSessions: (...a: unknown[]) => listAgentSessionsMock(...a),
-  agentBinaryAvailableForRepo: (...a: unknown[]) => agentBinaryAvailableForRepoMock(...a),
+  agentProviderReadinessForRepo: (...a: unknown[]) => agentProviderReadinessForRepoMock(...a),
   createRepoGitleaksConfig: (...a: unknown[]) => createRepoGitleaksConfigMock(...a),
   createRepoAgentsMdConfig: (...a: unknown[]) => createRepoAgentsMdConfigMock(...a),
   // FileView (imported by RepoPanel) pulls in the subscription reconciler, which
@@ -82,7 +82,7 @@ describe("RepoPanel", () => {
     retryRepoMock.mockReset();
     startAgentSessionMock.mockReset();
     listAgentSessionsMock.mockReset();
-    agentBinaryAvailableForRepoMock.mockReset();
+    agentProviderReadinessForRepoMock.mockReset();
     updateRepoFsWatchMock.mockReset();
     createRepoGitleaksConfigMock.mockReset();
     createRepoAgentsMdConfigMock.mockReset();
@@ -91,7 +91,12 @@ describe("RepoPanel", () => {
     createRepoAgentsMdConfigMock.mockResolvedValue(undefined);
     startAgentSessionMock.mockResolvedValue("sess-new");
     listAgentSessionsMock.mockResolvedValue([]);
-    agentBinaryAvailableForRepoMock.mockResolvedValue(true);
+    agentProviderReadinessForRepoMock.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "binary_available",
+    });
     nestedDockviewProps = null;
   });
 

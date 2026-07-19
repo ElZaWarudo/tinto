@@ -37,6 +37,7 @@ function agentTitleLabel(agentType: string | undefined): string {
   const normalized = agentType?.trim().toLocaleLowerCase();
   if (normalized === "codex") return "Codex";
   if (normalized === "claude") return "Claude";
+  if (normalized === "kimi") return "Kimi Code";
   if (normalized === "opencode") return "OpenCode";
   return agentType?.trim() || "Agent";
 }

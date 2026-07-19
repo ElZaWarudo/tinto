@@ -1438,7 +1438,7 @@ mod tests {
     };
 
     fn injected_batch_failure() -> io::Error {
-        io::Error::new(io::ErrorKind::Other, "fallo de lote Linux inyectado")
+        io::Error::other("fallo de lote Linux inyectado")
     }
 
     fn assert_no_transaction_artifacts(parent: &Path) {
@@ -2103,7 +2103,7 @@ mod tests {
                 transactional_copy_with_stage_copy(src, dest, |from, stage| {
                     let bytes = std::fs::read(from)?;
                     std::fs::write(stage, &bytes[..bytes.len() / 2])?;
-                    Err(io::Error::new(io::ErrorKind::Other, "fallo WSL inyectado"))
+                    Err(io::Error::other("fallo WSL inyectado"))
                 })
             },
         );

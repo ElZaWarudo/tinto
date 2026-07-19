@@ -1,19 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ACTIVITY_WINDOW_MS } from "./constants";
-import type { RepoDelta } from "../bus/contract";
+import type { AgentProviderReadiness, RepoDelta } from "../bus/contract";
 
 const NOW = 1_700_000_000_000;
 const clientMocks = vi.hoisted(() => ({
-  agentBinaryAvailableForRepo: vi.fn((...args: unknown[]) => {
+  agentProviderReadinessForRepo: vi.fn((...args: unknown[]): Promise<AgentProviderReadiness> => {
     void args;
-    return Promise.resolve(true);
+    return Promise.resolve({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "binary_available",
+    });
   }),
 }));
 vi.mock("../bus/client", () => ({
-  agentBinaryAvailableForRepo: (...args: unknown[]) => {
+  agentProviderReadinessForRepo: (...args: unknown[]) => {
     void args;
-    return clientMocks.agentBinaryAvailableForRepo(...args);
+    return clientMocks.agentProviderReadinessForRepo(...args);
   },
 }));
 
@@ -63,8 +68,13 @@ function renderCard(
 
 describe("RepoCard", () => {
   beforeEach(() => {
-    clientMocks.agentBinaryAvailableForRepo.mockReset();
-    clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(true);
+    clientMocks.agentProviderReadinessForRepo.mockReset();
+    clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "binary_available",
+    });
     resetAgentAvailabilityCacheForTests();
   });
 
@@ -254,11 +264,16 @@ describe("RepoCard", () => {
   });
 
   it("disables launch when the selected agent binary is missing", async () => {
-    clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(false);
+    clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "wsl",
+      distro: "Ubuntu-24.04",
+      state: "unavailable",
+    });
     const { onLaunch } = renderCard();
 
     expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent(
-      "No se encontró Codex",
+      "No se encontró Codex en WSL Ubuntu-24.04",
     );
     expect(screen.getByTestId("agent-launch")).toBeDisabled();
     fireEvent.click(screen.getByTestId("agent-launch"));
@@ -266,7 +281,7 @@ describe("RepoCard", () => {
   });
 
   it("allows launch when the availability probe fails", async () => {
-    clientMocks.agentBinaryAvailableForRepo.mockRejectedValue(
+    clientMocks.agentProviderReadinessForRepo.mockRejectedValue(
       new Error("el agente WSL cerro stdout"),
     );
     const { onLaunch } = renderCard();
@@ -296,7 +311,38 @@ describe("RepoCard", () => {
 
     fireEvent.change(screen.getByLabelText("Tipo de Agent"), { target: { value: "claude" } });
 
-    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/api", "claude");
+    expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledWith("/r/api", "claude");
+  });
+
+  it("offers Kimi and forces a fresh readiness check after a miss", async () => {
+    clientMocks.agentProviderReadinessForRepo
+      .mockResolvedValueOnce({
+        agent_type: "codex",
+        source: "local",
+        distro: null,
+        state: "binary_available",
+      })
+      .mockResolvedValueOnce({
+        agent_type: "kimi",
+        source: "local",
+        distro: null,
+        state: "unavailable",
+      })
+      .mockResolvedValueOnce({
+        agent_type: "kimi",
+        source: "local",
+        distro: null,
+        state: "binary_available",
+      });
+    renderCard();
+
+    fireEvent.change(screen.getByLabelText("Tipo de Agent"), { target: { value: "kimi" } });
+    expect(await screen.findByText(/No se encontró Kimi Code en este equipo/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Volver a comprobar" }));
+
+    await waitFor(() => expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId("agent-launch")).not.toBeDisabled();
   });
 
   it("shares an availability check for cards in the same environment", async () => {
@@ -305,7 +351,7 @@ describe("RepoCard", () => {
 
     await screen.findAllByTestId("agent-launch");
 
-    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledTimes(1);
-    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/api", "codex");
+    expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledTimes(1);
+    expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledWith("/r/api", "codex");
   });
 });

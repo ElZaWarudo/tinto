@@ -2,6 +2,7 @@
 //! conectan en el siguiente review unit; este modulo mantiene el lifecycle
 //! testeable sin exponer todavia nueva superficie IPC.
 
+pub mod acp;
 pub mod app_server;
 pub mod checkpoint;
 pub mod commands;
@@ -15,19 +16,21 @@ use std::{
     fmt,
     io::Read,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{mpsc::Receiver, Arc},
 };
 
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionContextSummary, AgentSessionError,
-    AgentSessionFeedback, AgentSessionLimits, AgentSessionRuntimeOptions, AgentSessionTimelineItem,
+    AgentSessionFeedback, AgentSessionLimits, AgentSessionResumeMode, AgentSessionRuntimeOptions,
+    AgentSessionTimelineItem,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
     protocol::{AgentError, AgentRequest, AgentResponse, PROTOCOL_VERSION},
 };
+use acp::{AcpLaunchIntent, AcpProcessSupervisor, PtyCompatibilityProcess};
 use checkpoint::{create_checkpoint, CheckpointConfig, CheckpointRecord};
-use pty::{AgentProcessFactory, AgentTurnAttachment, PortablePtyFactory};
+use pty::{AgentProcess, AgentProcessFactory, AgentTurnAttachment, PortablePtyFactory};
 use session::{AgentSessionRecord, CheckpointBackend};
 use validation::{resolve_agent_binary, validate_agent_type};
 
@@ -81,9 +84,12 @@ pub struct AgentSessionRegistry {
     limits: AgentSessionLimits,
 }
 
+type ResumeResultReceiver = Receiver<Result<AgentSessionResumeMode, AgentConsoleError>>;
+
 pub struct StartedAgentSession {
     pub id: String,
     pub output_reader: Option<Box<dyn Read + Send>>,
+    pub(crate) resume_result: Option<ResumeResultReceiver>,
 }
 
 impl AgentSessionRegistry {
@@ -135,6 +141,7 @@ impl AgentSessionRegistry {
         repo: PathBuf,
         agent_type: String,
         provider_session_id: String,
+        fallback_context: AgentSessionContextSummary,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         let repo = canonical_repo(&repo)?;
         let binary_path = resolve_agent_binary(&agent_type)?;
@@ -148,9 +155,37 @@ impl AgentSessionRegistry {
             started_at_ms,
             &self.checkpoint_config,
         )?);
-        let mut process =
-            self.process_factory
-                .resume_agent(&binary_path, &repo, &provider_session_id)?;
+        let acp_provider = matches!(agent_type.as_str(), "kimi" | "opencode");
+        let (mut process, resume_result): (Box<dyn AgentProcess>, Option<ResumeResultReceiver>) =
+            if acp_provider {
+                let intent = AcpLaunchIntent::LoadSession {
+                    provider_session_id: provider_session_id.clone(),
+                    fallback_context,
+                };
+                let mut supervisor = match agent_type.as_str() {
+                    "kimi" => AcpProcessSupervisor::spawn(
+                        binary_path.clone(),
+                        repo.clone(),
+                        id.clone(),
+                        intent,
+                    )?,
+                    "opencode" => AcpProcessSupervisor::spawn_opencode(
+                        binary_path.clone(),
+                        repo.clone(),
+                        id.clone(),
+                        intent,
+                    )?,
+                    _ => unreachable!("ACP provider checked above"),
+                };
+                let resume_result = supervisor.take_resume_result();
+                (Box::new(supervisor), resume_result)
+            } else {
+                (
+                    self.process_factory
+                        .resume_agent(&binary_path, &repo, &provider_session_id)?,
+                    None,
+                )
+            };
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
             id.clone(),
@@ -161,10 +196,16 @@ impl AgentSessionRegistry {
             self.checkpoint_config.clone(),
             CheckpointBackend::Local,
         );
-        session.set_provider_session_id(provider_session_id);
+        if !acp_provider {
+            session.set_provider_session_id(provider_session_id);
+        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
-        Ok(StartedAgentSession { id, output_reader })
+        Ok(StartedAgentSession {
+            id,
+            output_reader,
+            resume_result,
+        })
     }
 
     #[cfg(test)]
@@ -196,7 +237,21 @@ impl AgentSessionRegistry {
             started_at_ms,
             &self.checkpoint_config,
         )?);
-        let mut process = self.process_factory.spawn_agent(&binary_path, &repo)?;
+        let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
+            "kimi" => Box::new(AcpProcessSupervisor::spawn(
+                binary_path.clone(),
+                repo.clone(),
+                id.clone(),
+                AcpLaunchIntent::NewSession,
+            )?),
+            "opencode" => Box::new(AcpProcessSupervisor::spawn_opencode(
+                binary_path.clone(),
+                repo.clone(),
+                id.clone(),
+                AcpLaunchIntent::NewSession,
+            )?),
+            _ => self.process_factory.spawn_agent(&binary_path, &repo)?,
+        };
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
             id.clone(),
@@ -209,7 +264,11 @@ impl AgentSessionRegistry {
         );
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
-        Ok(StartedAgentSession { id, output_reader })
+        Ok(StartedAgentSession {
+            id,
+            output_reader,
+            resume_result: None,
+        })
     }
 
     pub fn start_wsl_session_with_output(
@@ -256,7 +315,11 @@ impl AgentSessionRegistry {
         session.set_provider_session_id(provider_session_id);
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
-        Ok(StartedAgentSession { id, output_reader })
+        Ok(StartedAgentSession {
+            id,
+            output_reader,
+            resume_result: None,
+        })
     }
 
     #[cfg(test)]
@@ -291,9 +354,20 @@ impl AgentSessionRegistry {
         } else {
             None
         };
-        let mut process = self
+        let process = self
             .process_factory
             .spawn_wsl_agent(&agent_type, &distro, &repo)?;
+        let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
+            "kimi" => Box::new(PtyCompatibilityProcess::new(
+                process,
+                "Kimi ACP en WSL no tiene recolección de grupo de proceso verificada; se usa PTY.",
+            )),
+            "opencode" => Box::new(PtyCompatibilityProcess::new(
+                process,
+                "OpenCode ACP en WSL no tiene contención y recolección verificadas; se usa PTY.",
+            )),
+            _ => process,
+        };
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
             id.clone(),
@@ -307,7 +381,11 @@ impl AgentSessionRegistry {
         session.set_wsl_distro(distro);
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
-        Ok(StartedAgentSession { id, output_reader })
+        Ok(StartedAgentSession {
+            id,
+            output_reader,
+            resume_result: None,
+        })
     }
 
     pub fn stop_session(&mut self, session_id: &str) -> Result<(), AgentConsoleError> {
@@ -316,6 +394,45 @@ impl AgentSessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         session.stop()
+    }
+
+    pub fn retry_session_acp(
+        &mut self,
+        session_id: &str,
+        confirmed: bool,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.retry_acp(confirmed)
+    }
+
+    pub fn respond_session_acp_permission(
+        &mut self,
+        session_id: &str,
+        permission_id: &str,
+        option_id: Option<&str>,
+        deny: bool,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.respond_acp_permission(permission_id, option_id, deny)
+    }
+
+    pub fn set_session_acp_config_option(
+        &mut self,
+        session_id: &str,
+        config_id: &str,
+        value_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_acp_config_option(config_id, value_id)
     }
 
     pub fn refresh_session_statuses(&mut self) -> Result<(), AgentConsoleError> {

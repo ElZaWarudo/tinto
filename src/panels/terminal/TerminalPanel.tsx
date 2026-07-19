@@ -10,7 +10,10 @@ import {
   getAgentImagePreview,
   getAgentRuntimeCatalog,
   listAgentSessions,
+  respondAgentSessionAcpPermission,
   resumeAgentJournalSession,
+  retryAgentSessionAcp,
+  setAgentSessionAcpConfigOption,
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
@@ -30,6 +33,8 @@ import type {
   AgentReviewFinding,
   AgentReviewSummary,
   AgentRuntimeCatalog,
+  AgentSessionAcpPermission,
+  AgentSessionAcpRuntime,
   AgentSessionAttachment,
   AgentSession,
   AgentSessionResumeMode,
@@ -581,6 +586,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [reviewPromptDraft, setReviewPromptDraft] = useState<string | null>(null);
   const [reviewPromptState, setReviewPromptState] = useState<"drafted" | "sent" | null>(null);
   const [resumeSyncRetrying, setResumeSyncRetrying] = useState(false);
+  const [retryingAcp, setRetryingAcp] = useState(false);
+  const [respondingPermissionId, setRespondingPermissionId] = useState<string | null>(null);
+  const [settingAcpConfigId, setSettingAcpConfigId] = useState<string | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptSearchRef = useRef<HTMLInputElement | null>(null);
   const runtimeCatalogSessionRef = useRef<string | null>(null);
@@ -650,9 +658,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       ? `Resultado de búsqueda seleccionado: ${activeSearchResultIndex + 1} de ${visibleTurns.length}.`
       : `No hay ningún resultado seleccionado entre los ${visibleTurns.length} coincidentes.`
     : null;
+  const acpRuntime = session?.acp_runtime ?? null;
+  const acpAcceptsInput =
+    !acpRuntime || acpRuntime.state === "acp_ready" || acpRuntime.state === "pty_compatibility";
   const canCompose =
     !!sessionId &&
     !sending &&
+    acpAcceptsInput &&
     (readOnly
       ? !!session
       : session?.status !== "completed" &&
@@ -680,7 +692,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "error";
   const runtimeProvider = agentRuntimeProvider(agentType);
   const isCodexSession = runtimeProvider?.id === "codex";
-  const canAttachFiles = composerEnabled && isCodexSession;
+  const isAcpSession = !isCodexSession && Boolean(acpRuntime);
+  const acpAcceptsImageAttachments =
+    acpRuntime?.state === "acp_ready" && acpRuntime.image_attachments;
+  const canAttachFiles = composerEnabled && (isCodexSession || acpAcceptsImageAttachments);
   const canEditMessages = !readOnly && !turnActive && !sending;
   const composerCommandTrigger = readComposerCommandTrigger(draft);
   const composerCommandQuery = composerCommandTrigger?.query ?? "";
@@ -829,6 +844,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       !next ||
       readOnly ||
       sending ||
+      !acpAcceptsInput ||
       queueDispatchingRef.current ||
       queueAwaitingTurnStartRef.current ||
       session?.status !== "running" ||
@@ -861,7 +877,15 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         queueDispatchingRef.current = false;
         setSending(false);
       });
-  }, [queuedMessages, readOnly, sending, session?.status, session?.turn_status, sessionId]);
+  }, [
+    acpAcceptsInput,
+    queuedMessages,
+    readOnly,
+    sending,
+    session?.status,
+    session?.turn_status,
+    sessionId,
+  ]);
 
   useEffect(() => {
     if (
@@ -1072,6 +1096,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const sendDraft = async (action: "send" | "queue" | "steer" = "send") => {
     if (!canSend) return;
+    if (
+      isAcpSession &&
+      attachments.length > 0 &&
+      (!acpAcceptsImageAttachments || attachments.some((attachment) => attachment.kind !== "image"))
+    ) {
+      setError("Este proveedor ACP solo admite las imágenes que haya negociado para la sesión.");
+      return;
+    }
     const text = draft.trimEnd();
     const slashCommandHandled =
       !readOnly &&
@@ -1241,13 +1273,28 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     if (!canAttachFiles) return;
     try {
       const picked = await open({
+        ...(isAcpSession
+          ? {
+              filters: [
+                {
+                  name: "Imágenes",
+                  extensions: Array.from(AGENT_IMAGE_EXTENSIONS),
+                },
+              ],
+            }
+          : {}),
         multiple: true,
-        title: "Adjuntar archivos",
+        title: isAcpSession ? "Adjuntar imágenes" : "Adjuntar archivos",
       });
       const nextPaths = typeof picked === "string" ? [picked] : (picked ?? []);
       if (nextPaths.length === 0) return;
       const currentPaths = new Set(attachments.map((attachment) => attachment.path));
-      const uniquePaths = nextPaths.filter((path) => !currentPaths.has(path));
+      const uniquePaths = nextPaths.filter(
+        (path) =>
+          !currentPaths.has(path) && (!isAcpSession || agentAttachmentKind(path) === "image"),
+      );
+      const rejectedNonImage =
+        isAcpSession && nextPaths.some((path) => agentAttachmentKind(path) !== "image");
       const attachmentLimitExceeded =
         attachments.length + uniquePaths.length > MAX_AGENT_ATTACHMENTS;
       const available = uniquePaths.slice(
@@ -1279,7 +1326,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           ];
         }),
       );
-      if (skippedImageCount > 0) {
+      if (rejectedNonImage) {
+        setError("Este proveedor ACP solo admite imágenes; se omitieron los otros archivos.");
+      } else if (skippedImageCount > 0) {
         setError(`Puedes adjuntar hasta ${MAX_AGENT_IMAGE_ATTACHMENTS} imágenes por turno.`);
       } else if (attachmentLimitExceeded) {
         setError(`Puedes adjuntar hasta ${MAX_AGENT_ATTACHMENTS} archivos por turno.`);
@@ -1669,6 +1718,80 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     }
   };
 
+  const onRetryAcp = async () => {
+    if (!sessionId || !acpRuntime?.retry_available || retryingAcp) return;
+    const confirmed = acpRuntime.state === "pty_compatibility";
+    if (confirmed) {
+      const accepted = await confirm(
+        "¿Cambiar esta sesión de PTY a ACP? Se conservará la transcripción y el punto de control, pero el nuevo proveedor ACP no repetirá mensajes anteriores.",
+        {
+          title: "Cambiar a ACP",
+          kind: "warning",
+          okLabel: "Cambiar a ACP",
+          cancelLabel: "Mantener PTY",
+        },
+      );
+      if (!accepted) return;
+    }
+    setRetryingAcp(true);
+    setError(null);
+    try {
+      await retryAgentSessionAcp(sessionId, confirmed);
+    } catch (retryError) {
+      setError(
+        reportAgentFailure(
+          retryError,
+          "No se pudo reintentar ACP. La sesión conserva su modo y su transcripción actuales.",
+        ),
+      );
+    } finally {
+      setRetryingAcp(false);
+    }
+  };
+
+  const onRespondAcpPermission = async (permissionId: string, optionId?: string, deny = false) => {
+    if (!sessionId || respondingPermissionId) return;
+    setRespondingPermissionId(permissionId);
+    setError(null);
+    try {
+      await respondAgentSessionAcpPermission(sessionId, permissionId, optionId, deny);
+    } catch (permissionError) {
+      setError(
+        reportAgentFailure(
+          permissionError,
+          "No se registró la decisión. El permiso conserva su estado actual.",
+        ),
+      );
+    } finally {
+      setRespondingPermissionId(null);
+    }
+  };
+
+  const onSetAcpConfigOption = async (configId: string, valueId: string) => {
+    if (
+      !sessionId ||
+      settingAcpConfigId ||
+      acpRuntime?.state !== "acp_ready" ||
+      session?.turn_status !== "waiting"
+    ) {
+      return;
+    }
+    setSettingAcpConfigId(configId);
+    setError(null);
+    try {
+      await setAgentSessionAcpConfigOption(sessionId, configId, valueId);
+    } catch (configError) {
+      setError(
+        reportAgentFailure(
+          configError,
+          "No se actualizó la configuración ACP. Se conserva el valor anterior.",
+        ),
+      );
+    } finally {
+      setSettingAcpConfigId(null);
+    }
+  };
+
   const onRevertTurnFile = async (turnCheckpointId: string, path: string) => {
     if (!sessionId || !canRevertTurnFile || revertingFile) return;
     const ok = await confirm(`¿Revertir el archivo ${path} al punto de control de este turno?`, {
@@ -1759,6 +1882,23 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             </button>
           )}
         </div>
+      )}
+
+      {acpRuntime && (
+        <AgentAcpPanel
+          agentType={agentType}
+          onConfigOption={(configId, valueId) => void onSetAcpConfigOption(configId, valueId)}
+          onPermission={(permissionId, optionId, deny) =>
+            void onRespondAcpPermission(permissionId, optionId, deny)
+          }
+          onRetry={() => void onRetryAcp()}
+          permissions={session?.acp_permissions ?? []}
+          respondingPermissionId={respondingPermissionId}
+          retrying={retryingAcp}
+          runtime={acpRuntime}
+          settingConfigId={settingAcpConfigId}
+          turnIdle={!readOnly && session?.turn_status === "waiting"}
+        />
       )}
 
       <div
@@ -2226,7 +2366,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             title={
               isCodexSession
                 ? `Adjuntar hasta ${MAX_AGENT_ATTACHMENTS} archivos al próximo turno`
-                : "Este agente todavía no admite archivos adjuntos"
+                : acpAcceptsImageAttachments
+                  ? `Adjuntar hasta ${MAX_AGENT_IMAGE_ATTACHMENTS} imágenes al próximo turno`
+                  : "Este agente no ha negociado adjuntos de imagen para esta sesión"
             }
             type="button"
           >
@@ -2298,6 +2440,244 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       </form>
     </div>
   );
+}
+
+function AgentAcpPanel({
+  agentType,
+  onConfigOption,
+  onPermission,
+  onRetry,
+  permissions,
+  respondingPermissionId,
+  retrying,
+  runtime,
+  settingConfigId,
+  turnIdle,
+}: {
+  agentType: string;
+  onConfigOption: (configId: string, valueId: string) => void;
+  onPermission: (permissionId: string, optionId?: string, deny?: boolean) => void;
+  onRetry: () => void;
+  permissions: AgentSessionAcpPermission[];
+  respondingPermissionId: string | null;
+  retrying: boolean;
+  runtime: AgentSessionAcpRuntime;
+  settingConfigId: string | null;
+  turnIdle: boolean;
+}) {
+  const panelRef = useRef<HTMLElement | null>(null);
+  const focusedPermissionId = useRef<string | null>(null);
+  const provider = agentLabel(agentType);
+  const copy = agentAcpRuntimeCopy(runtime, provider);
+  const permissionAnnouncement = agentAcpPermissionAnnouncement(permissions);
+  const configOptions = runtime.config_options ?? [];
+  useEffect(() => {
+    const focused = focusedPermissionId.current;
+    if (!focused) return;
+    const permission = permissions.find((candidate) => candidate.id === focused);
+    if (permission?.state === "pending") return;
+    const next = panelRef.current?.querySelector<HTMLElement>(
+      '[data-state="pending"] button:not(:disabled)',
+    );
+    (next ?? panelRef.current)?.focus();
+    focusedPermissionId.current = null;
+  }, [permissions]);
+  return (
+    <section
+      aria-label={`Estado ACP de ${provider}`}
+      className="agent-panel__acp"
+      data-state={runtime.state}
+      ref={panelRef}
+      tabIndex={-1}
+    >
+      <div
+        aria-label={`Estado ACP de ${provider}: ${copy.title}`}
+        aria-live="polite"
+        className="agent-panel__acp-status"
+        role="status"
+      >
+        <div>
+          <strong>{copy.title}</strong>
+          {copy.detail && <span>{copy.detail}</span>}
+          {runtime.lost_capabilities && runtime.lost_capabilities.length > 0 && (
+            <small>Sin: {runtime.lost_capabilities.join(", ")}.</small>
+          )}
+          <span className="sr-only">{permissionAnnouncement}</span>
+        </div>
+        {runtime.retry_available && (
+          <button
+            disabled={retrying || !turnIdle}
+            onClick={onRetry}
+            title={
+              turnIdle
+                ? "Reintentar la conexión ACP"
+                : "Espera a que termine el turno antes de cambiar de transporte"
+            }
+            type="button"
+          >
+            {retrying ? "Reintentando ACP…" : "Reintentar ACP"}
+          </button>
+        )}
+      </div>
+      {configOptions.length > 0 && (
+        <div aria-label={`Configuración ACP de ${provider}`} className="agent-panel__acp-config">
+          {configOptions.map((option) => (
+            <label data-category={option.category} key={option.id}>
+              <span>{option.label}</span>
+              <select
+                aria-label={`${option.label} de ${provider}`}
+                disabled={runtime.state !== "acp_ready" || !turnIdle || settingConfigId !== null}
+                onChange={(event) => onConfigOption(option.id, event.currentTarget.value)}
+                value={option.current_value}
+              >
+                {option.values.map((value) => (
+                  <option key={value.id} value={value.id}>
+                    {value.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+      )}
+      {permissions.length > 0 && (
+        <div aria-label="Permisos ACP" className="agent-panel__acp-permissions">
+          {permissions.map((permission) => {
+            const pending = permission.state === "pending";
+            const submitting = respondingPermissionId === permission.id;
+            const hasRejectOption = permission.options.some((option) =>
+              option.kind.startsWith("reject_"),
+            );
+            return (
+              <article
+                aria-labelledby={`acp-permission-${permission.id}`}
+                className="agent-panel__acp-permission"
+                data-state={permission.state}
+                key={permission.id}
+                onFocusCapture={() => {
+                  if (pending) focusedPermissionId.current = permission.id;
+                }}
+              >
+                <div>
+                  <strong id={`acp-permission-${permission.id}`}>{permission.title}</strong>
+                  <small>{agentAcpPermissionStateLabel(permission.state)}</small>
+                  {permission.reason && <span>{permission.reason}</span>}
+                </div>
+                {pending && (
+                  <div aria-label={`Decisión para ${permission.title}`} role="group">
+                    {permission.options.map((option) => (
+                      <button
+                        className={
+                          option.kind.startsWith("reject_")
+                            ? "agent-panel__acp-permission-reject"
+                            : undefined
+                        }
+                        disabled={Boolean(respondingPermissionId)}
+                        key={option.id}
+                        onClick={() => onPermission(permission.id, option.id)}
+                        type="button"
+                      >
+                        {submitting ? "Registrando…" : option.label}
+                      </button>
+                    ))}
+                    {!hasRejectOption && (
+                      <button
+                        className="agent-panel__acp-permission-reject"
+                        disabled={Boolean(respondingPermissionId)}
+                        onClick={() => onPermission(permission.id, undefined, true)}
+                        type="button"
+                      >
+                        {submitting ? "Registrando…" : "Denegar"}
+                      </button>
+                    )}
+                    <button
+                      disabled={Boolean(respondingPermissionId)}
+                      onClick={() => onPermission(permission.id)}
+                      type="button"
+                    >
+                      {submitting ? "Registrando…" : "Cancelar"}
+                    </button>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function agentAcpRuntimeCopy(
+  runtime: AgentSessionAcpRuntime,
+  provider: string,
+): { title: string; detail: string | null } {
+  switch (runtime.state) {
+    case "unavailable":
+      return {
+        title: "ACP no disponible",
+        detail: runtime.detail ?? `${provider} no está disponible para esta sesión.`,
+      };
+    case "authentication_required":
+      return {
+        title: "Autenticación necesaria",
+        detail: [
+          runtime.detail,
+          `Inicia sesión con ${provider} desde su CLI y pulsa Reintentar ACP. Tinto no recibe ni guarda credenciales.`,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      };
+    case "connecting_acp":
+      return {
+        title: "Conectando mediante ACP…",
+        detail: runtime.detail ?? `Estableciendo una sesión estructurada con ${provider}.`,
+      };
+    case "acp_ready":
+      return {
+        title: "ACP listo",
+        detail: runtime.detail ?? `${provider} está conectado mediante ACP.`,
+      };
+    case "pty_compatibility":
+      return {
+        title: "Modo de compatibilidad PTY",
+        detail: runtime.detail ?? `${provider} continúa en el transporte de terminal compatible.`,
+      };
+    case "failed":
+      return {
+        title: "ACP falló",
+        detail: [runtime.detail, "No se reenvió ni reprodujo el turno mediante PTY."]
+          .filter(Boolean)
+          .join(" "),
+      };
+  }
+}
+
+function agentAcpPermissionAnnouncement(permissions: AgentSessionAcpPermission[]): string {
+  if (permissions.length === 0) return "No hay solicitudes de permiso ACP.";
+  return permissions
+    .map(
+      (permission) =>
+        `Permiso ${permission.title}: ${agentAcpPermissionStateLabel(permission.state)}.`,
+    )
+    .join(" ");
+}
+
+function agentAcpPermissionStateLabel(state: AgentSessionAcpPermission["state"]): string {
+  switch (state) {
+    case "pending":
+      return "Pendiente";
+    case "allowed":
+      return "Permitido";
+    case "denied":
+      return "Denegado";
+    case "cancelled":
+      return "Cancelado";
+    case "expired":
+      return "Caducado";
+    case "invalidated":
+      return "Invalidado";
+  }
 }
 
 function AgentMascotPanel({ agentType, repo }: { agentType: string; repo?: string }) {
@@ -7302,6 +7682,8 @@ function agentLabel(agentType: string): string {
       return "Codex";
     case "claude":
       return "Claude Code";
+    case "kimi":
+      return "Kimi Code";
     case "opencode":
       return "OpenCode";
     default:
@@ -7315,6 +7697,8 @@ function agentLogoText(agentType: string): string {
       return "Cx";
     case "claude":
       return "Cl";
+    case "kimi":
+      return "Ki";
     case "opencode":
       return "OC";
     default:

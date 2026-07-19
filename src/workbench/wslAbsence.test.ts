@@ -17,6 +17,7 @@ const FRONTEND_RUNTIME_SURFACES = Object.entries(rawSources)
 
 const WSL_ALLOWED_RUNTIME_FILES = new Set([
   "src/bus/client.ts",
+  "src/bus/contract.generated.ts",
   "src/bus/contract.ts",
   "src/bus/store.ts",
   "src/panels/agentAvailability.ts",

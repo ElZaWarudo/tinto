@@ -11,9 +11,14 @@ const clientMocks = vi.hoisted(() => ({
     return Promise.resolve("sess-1");
   }),
   listAgentSessions: vi.fn(() => Promise.resolve([])),
-  agentBinaryAvailableForRepo: vi.fn((...args: unknown[]) => {
+  agentProviderReadinessForRepo: vi.fn((...args: unknown[]) => {
     void args;
-    return Promise.resolve(true);
+    return Promise.resolve({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "binary_available",
+    });
   }),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -24,8 +29,8 @@ vi.mock("../bus/client", () => ({
   retryRepo: (...args: unknown[]) => clientMocks.retryRepo(...args),
   startAgentSession: (...args: unknown[]) => clientMocks.startAgentSession(...args),
   listAgentSessions: () => clientMocks.listAgentSessions(),
-  agentBinaryAvailableForRepo: (...args: unknown[]) =>
-    clientMocks.agentBinaryAvailableForRepo(...args),
+  agentProviderReadinessForRepo: (...args: unknown[]) =>
+    clientMocks.agentProviderReadinessForRepo(...args),
 }));
 
 import { DashboardPanel } from "./DashboardPanel";
@@ -77,8 +82,13 @@ describe("DashboardPanel", () => {
     clientMocks.retryRepo.mockClear();
     clientMocks.startAgentSession.mockClear();
     clientMocks.listAgentSessions.mockClear();
-    clientMocks.agentBinaryAvailableForRepo.mockReset();
-    clientMocks.agentBinaryAvailableForRepo.mockResolvedValue(true);
+    clientMocks.agentProviderReadinessForRepo.mockReset();
+    clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "binary_available",
+    });
     resetAgentAvailabilityCacheForTests();
   });
 
@@ -188,7 +198,7 @@ describe("DashboardPanel", () => {
     expect(screen.getByTestId("repo-pending")).toHaveAttribute("role", "status");
     expect(screen.queryByTestId("error-detail")).not.toBeInTheDocument();
     expect(screen.queryByTestId("error-badge")).not.toBeInTheDocument();
-    expect(clientMocks.agentBinaryAvailableForRepo).not.toHaveBeenCalled();
+    expect(clientMocks.agentProviderReadinessForRepo).not.toHaveBeenCalled();
   });
 
   // Covers AE2: a status change updates that card live
@@ -345,7 +355,7 @@ describe("DashboardPanel", () => {
     renderDash({ openAgentTerminal });
 
     await waitFor(() =>
-      expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/r/a", "codex"),
+      expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledWith("/r/a", "codex"),
     );
     fireEvent.click(await screen.findByTestId("agent-launch"));
 
@@ -395,7 +405,7 @@ describe("DashboardPanel", () => {
 
     renderDash();
 
-    await waitFor(() => expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledTimes(1));
-    expect(clientMocks.agentBinaryAvailableForRepo).toHaveBeenCalledWith("/home/me/api", "codex");
+    await waitFor(() => expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledTimes(1));
+    expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledWith("/home/me/api", "codex");
   });
 });

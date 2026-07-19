@@ -97,7 +97,14 @@ function installTauriFixture() {
   windowWithTauri.__TAURI_INTERNALS__ = {
     ...(windowWithTauri.__TAURI_INTERNALS__ ?? {}),
     invoke: async (cmd: string) => {
-      if (cmd === "agent_binary_available_for_repo") return true;
+      if (cmd === "agent_provider_readiness_for_repo") {
+        return {
+          agent_type: "codex",
+          source: "local",
+          distro: null,
+          state: "binary_available",
+        };
+      }
       if (cmd === "list_agent_sessions") return [];
       return null;
     },

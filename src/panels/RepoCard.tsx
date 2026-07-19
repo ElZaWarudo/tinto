@@ -4,7 +4,7 @@
 // are drilled into via the project's own explorer, not here.
 
 import { memo, useEffect, useState } from "react";
-import type { BranchInfo, RepoDelta } from "../bus/contract";
+import type { AgentProviderReadiness, BranchInfo, RepoDelta } from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
 import { checkAgentAvailabilityForRepo } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
@@ -32,6 +32,7 @@ export interface RepoCardProps {
 const AGENT_OPTIONS = [
   { id: "codex", label: "Codex" },
   { id: "claude", label: "Claude Code" },
+  { id: "kimi", label: "Kimi Code" },
   { id: "opencode", label: "OpenCode" },
 ];
 
@@ -53,6 +54,7 @@ export function RepoAgentLauncher({
   const [agentType, setAgentType] = useState("codex");
   const [available, setAvailable] = useState<boolean | null>(null);
   const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
+  const [forceRecheckToken, setForceRecheckToken] = useState(0);
   const [launching, setLaunching] = useState(false);
   const [launchMessage, setLaunchMessage] = useState<string | null>(null);
   const selectedAgent = AGENT_OPTIONS.find((agent) => agent.id === agentType) ?? AGENT_OPTIONS[0];
@@ -60,11 +62,16 @@ export function RepoAgentLauncher({
   useEffect(() => {
     if (pending) return;
     let alive = true;
-    checkAgentAvailabilityForRepo(repo, availabilityKey, agentType)
-      .then((ok) => {
+    checkAgentAvailabilityForRepo(repo, availabilityKey, agentType, {
+      force: forceRecheckToken > 0,
+    })
+      .then((readiness) => {
         if (!alive) return;
+        const ok = readiness.state === "binary_available";
         setAvailable(ok);
-        setAvailabilityMessage(ok ? null : `No se encontró ${selectedAgent.label}`);
+        setAvailabilityMessage(
+          ok ? null : providerUnavailableMessage(selectedAgent.label, readiness),
+        );
       })
       .catch((error) => {
         if (!alive) return;
@@ -79,7 +86,7 @@ export function RepoAgentLauncher({
     return () => {
       alive = false;
     };
-  }, [agentType, availabilityKey, pending, repo, selectedAgent.label]);
+  }, [agentType, availabilityKey, forceRecheckToken, pending, repo, selectedAgent.label]);
 
   const launch = () => {
     if (pending || available === false || launching) return;
@@ -112,6 +119,7 @@ export function RepoAgentLauncher({
         onChange={(event) => {
           setAvailable(null);
           setAvailabilityMessage(null);
+          setForceRecheckToken(0);
           setAgentType(event.target.value);
         }}
       >
@@ -139,8 +147,29 @@ export function RepoAgentLauncher({
             availabilityMessage ??
             (available === null ? "Comprobando disponibilidad…" : "\u00a0"))}
       </span>
+      {available === false ? (
+        <button
+          type="button"
+          className="repo-card__availability-recheck"
+          onClick={() => {
+            setAvailable(null);
+            setAvailabilityMessage(null);
+            setForceRecheckToken((token) => token + 1);
+          }}
+        >
+          Volver a comprobar
+        </button>
+      ) : null}
     </div>
   );
+}
+
+function providerUnavailableMessage(agentLabel: string, readiness: AgentProviderReadiness): string {
+  if (readiness.source === "wsl") {
+    const source = readiness.distro ? `WSL ${readiness.distro}` : "WSL";
+    return `No se encontró ${agentLabel} en ${source}. Instálalo en esa distribución y vuelve a comprobar.`;
+  }
+  return `No se encontró ${agentLabel} en este equipo. Instálalo aquí y vuelve a comprobar.`;
 }
 
 function branchLabel(branch: BranchInfo | null, head: RepoDelta["head"]): string {

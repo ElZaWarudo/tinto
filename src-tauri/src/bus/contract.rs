@@ -17,6 +17,130 @@ pub const EVENT_AGENT_SESSION_OUTPUT: &str = "tinto://agent-session-output";
 pub const EVENT_AGENT_SESSION_CHANGE_LOG: &str = "tinto://agent-session-change-log";
 pub const EVENT_AGENT_SESSION_TIMELINE: &str = "tinto://agent-session-timeline";
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProviderSource {
+    Local,
+    Wsl,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProviderReadinessState {
+    Unavailable,
+    BinaryAvailable,
+}
+
+/// Source-aware provider discovery. Binary presence is intentionally not ACP readiness.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentProviderReadiness {
+    pub agent_type: String,
+    pub source: AgentProviderSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    pub state: AgentProviderReadinessState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionAcpState {
+    Unavailable,
+    AuthenticationRequired,
+    ConnectingAcp,
+    AcpReady,
+    PtyCompatibility,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentSessionAcpMode {
+    Acp,
+    Pty,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentSessionAcpConfigCategory {
+    Model,
+    Mode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionAcpConfigValue {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionAcpConfigOption {
+    pub id: String,
+    pub label: String,
+    pub category: AgentSessionAcpConfigCategory,
+    pub current_value: String,
+    pub values: Vec<AgentSessionAcpConfigValue>,
+}
+
+/// Observable ACP lifecycle state for providers that use the structured runtime.
+/// Existing Codex, Claude, and generic PTY sessions omit this projection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionAcpRuntime {
+    pub state: AgentSessionAcpState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AgentSessionAcpMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lost_capabilities: Vec<String>,
+    pub retry_available: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub image_attachments: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_options: Vec<AgentSessionAcpConfigOption>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionAcpPermissionKind {
+    AllowOnce,
+    AllowAlways,
+    RejectOnce,
+    RejectAlways,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionAcpPermissionState {
+    Pending,
+    Allowed,
+    Denied,
+    Cancelled,
+    Expired,
+    Invalidated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionAcpPermissionOption {
+    pub id: String,
+    pub label: String,
+    pub kind: AgentSessionAcpPermissionKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionAcpPermission {
+    pub id: String,
+    pub generation: u64,
+    pub provider_session_id: String,
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub title: String,
+    pub options: Vec<AgentSessionAcpPermissionOption>,
+    pub state: AgentSessionAcpPermissionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub expires_at_ms: u64,
+}
+
 /// Estado lifecycle de una sesion de agente gestionada por el backend.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -228,6 +352,10 @@ pub struct AgentSession {
     pub id: String,
     pub repo: PathBuf,
     pub agent_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acp_runtime: Option<AgentSessionAcpRuntime>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acp_permissions: Vec<AgentSessionAcpPermission>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -721,6 +849,8 @@ mod tests {
             id: "sess-1".into(),
             repo: "/r/api".into(),
             agent_type: "codex".into(),
+            acp_runtime: None,
+            acp_permissions: Vec::new(),
             provider_session_id: Some("thread-1".into()),
             wsl_distro: None,
             status: AgentSessionStatus::Running,
@@ -816,6 +946,7 @@ mod tests {
         assert_eq!(json["id"], "sess-1");
         assert_eq!(json["repo"], "/r/api");
         assert_eq!(json["agent_type"], "codex");
+        assert!(json.get("acp_runtime").is_none());
         assert_eq!(json["status"], "running");
         assert_eq!(json["pid"], 42);
         assert_eq!(json["started_at_ms"], 1760000000000u64);
@@ -852,6 +983,77 @@ mod tests {
         assert_eq!(json["context_summary"]["source_turns"], 2);
         assert_eq!(json["active_sessions"], 1);
         assert_eq!(json["age_ms"], 42);
+    }
+
+    #[test]
+    fn agent_session_acp_runtime_serializa_estados_y_detalles_opcionales() {
+        let states = [
+            AgentSessionAcpState::Unavailable,
+            AgentSessionAcpState::AuthenticationRequired,
+            AgentSessionAcpState::ConnectingAcp,
+            AgentSessionAcpState::AcpReady,
+            AgentSessionAcpState::PtyCompatibility,
+            AgentSessionAcpState::Failed,
+        ];
+        let serialized = states
+            .into_iter()
+            .map(|state| serde_json::to_value(state).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            serialized,
+            vec![
+                "unavailable",
+                "authentication_required",
+                "connecting_acp",
+                "acp_ready",
+                "pty_compatibility",
+                "failed",
+            ]
+        );
+
+        let ready = AgentSessionAcpRuntime {
+            state: AgentSessionAcpState::AcpReady,
+            mode: Some(AgentSessionAcpMode::Acp),
+            detail: None,
+            lost_capabilities: Vec::new(),
+            retry_available: false,
+            image_attachments: true,
+            config_options: Vec::new(),
+        };
+        let ready_json = serde_json::to_value(ready).unwrap();
+        assert_eq!(ready_json["mode"], "acp");
+        assert!(ready_json.get("detail").is_none());
+        assert!(ready_json.get("lost_capabilities").is_none());
+
+        let compatibility = AgentSessionAcpRuntime {
+            state: AgentSessionAcpState::PtyCompatibility,
+            mode: Some(AgentSessionAcpMode::Pty),
+            detail: Some("ACP v1 no disponible".into()),
+            lost_capabilities: vec!["structured_updates".into(), "permissions".into()],
+            retry_available: true,
+            image_attachments: false,
+            config_options: Vec::new(),
+        };
+        let compatibility_json = serde_json::to_value(compatibility).unwrap();
+        assert_eq!(compatibility_json["mode"], "pty");
+        assert_eq!(compatibility_json["detail"], "ACP v1 no disponible");
+        assert_eq!(
+            compatibility_json["lost_capabilities"],
+            serde_json::json!(["structured_updates", "permissions"])
+        );
+        assert_eq!(compatibility_json["retry_available"], true);
+
+        let unavailable: AgentSessionAcpRuntime = serde_json::from_value(serde_json::json!({
+            "state": "unavailable",
+            "retry_available": false
+        }))
+        .unwrap();
+        assert_eq!(unavailable.mode, None);
+        assert_eq!(unavailable.detail, None);
+        assert!(unavailable.lost_capabilities.is_empty());
+        assert!(!unavailable.image_attachments);
+        assert!(unavailable.config_options.is_empty());
     }
 
     #[test]

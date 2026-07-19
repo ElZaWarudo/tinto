@@ -1,11 +1,11 @@
-import { agentBinaryAvailableForRepo } from "../bus/client";
-import type { RepoSource } from "../bus/contract";
+import { agentProviderReadinessForRepo } from "../bus/client";
+import type { AgentProviderReadiness, RepoSource } from "../bus/contract";
 
 const AVAILABILITY_TTL_MS = 10_000;
 
 interface CachedAvailability {
   expiresAt: number;
-  promise: Promise<boolean>;
+  promise: Promise<AgentProviderReadiness>;
 }
 
 const availabilityCache = new Map<string, CachedAvailability>();
@@ -19,15 +19,16 @@ export function checkAgentAvailabilityForRepo(
   repo: string,
   environmentKey: string,
   agentType: string,
-): Promise<boolean> {
+  options: { force?: boolean } = {},
+): Promise<AgentProviderReadiness> {
   const cacheKey = `${environmentKey}:${agentType}`;
   const now = Date.now();
   const cached = availabilityCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
+  if (!options.force && cached && cached.expiresAt > now) {
     return cached.promise;
   }
 
-  const promise = agentBinaryAvailableForRepo(repo, agentType).catch((error) => {
+  const promise = agentProviderReadinessForRepo(repo, agentType).catch((error) => {
     availabilityCache.delete(cacheKey);
     throw error;
   });

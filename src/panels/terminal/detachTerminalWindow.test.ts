@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import {
   detachedConsolesUrl,
+  detachedTerminalWindowTitle,
   onDetachedConsolesReattach,
   readDetachedConsolesFlag,
   readDetachedConsolesParams,
@@ -41,6 +42,15 @@ describe("detached console windows", () => {
       { sessionId: "sess-1", repo: "/r/a", agentType: "codex" },
       { sessionId: "sess-2", repo: "/r/b", agentType: "claude" },
     ]);
+  });
+
+  it("uses provider labels in detached terminal window titles", () => {
+    expect(detachedTerminalWindowTitle({ sessionId: "sess-kimi-123", agentType: "kimi" })).toBe(
+      "Kimi Code sess-kim",
+    );
+    expect(detachedTerminalWindowTitle({ sessionId: "sess-open-123", agentType: "opencode" })).toBe(
+      "OpenCode sess-ope",
+    );
   });
 
   it("ignores malformed detached console session data", () => {

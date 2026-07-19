@@ -25,6 +25,21 @@ export function detachedTerminalWindowLabel(sessionId: string): string {
   return `terminal-${safe}`;
 }
 
+export function detachedTerminalWindowTitle(params: TerminalPanelParams): string {
+  const agentType = params.agentType?.trim().toLowerCase();
+  const agentLabel =
+    agentType === "codex"
+      ? "Codex"
+      : agentType === "claude"
+        ? "Claude Code"
+        : agentType === "kimi"
+          ? "Kimi Code"
+          : agentType === "opencode"
+            ? "OpenCode"
+            : params.agentType?.trim() || "Agent";
+  return `${agentLabel} ${params.sessionId.slice(0, 8)}`;
+}
+
 export function detachedTerminalUrl(params: TerminalPanelParams): string {
   const query = new URLSearchParams();
   query.set(DETACHED_PARAM, "1");
@@ -111,7 +126,7 @@ export function consumeTerminalDetachedMarker(sessionId: string): boolean {
 
 export async function openDetachedTerminalWindow(params: TerminalPanelParams): Promise<boolean> {
   const label = detachedTerminalWindowLabel(params.sessionId);
-  const title = `${params.agentType ?? "agent"} ${params.sessionId.slice(0, 8)}`;
+  const title = detachedTerminalWindowTitle(params);
   try {
     const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     const existing = await WebviewWindow.getByLabel(label);

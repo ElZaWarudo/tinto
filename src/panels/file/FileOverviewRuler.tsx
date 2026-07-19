@@ -357,7 +357,7 @@ function buildMarkerPlacements(
   for (let index = 1; index < targetCenters.length; index += 1) {
     targetCenters[index] = Math.max(targetCenters[index], targetCenters[index - 1] + targetSize);
   }
-  if (targetCenters.at(-1)! > maxCenter) {
+  if (targetCenters[targetCenters.length - 1]! > maxCenter) {
     targetCenters[targetCenters.length - 1] = maxCenter;
     for (let index = targetCenters.length - 2; index >= 0; index -= 1) {
       targetCenters[index] = Math.min(targetCenters[index], targetCenters[index + 1] - targetSize);

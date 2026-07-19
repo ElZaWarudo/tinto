@@ -480,6 +480,8 @@ impl AgentJournal {
             repo: PathBuf::from(repo),
             agent_type,
             provider_session_id,
+            acp_runtime: None,
+            acp_permissions: Vec::new(),
             wsl_distro,
             status,
             pid: None,
@@ -591,7 +593,11 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
 
-    use crate::bus::contract::{AgentSession, AgentSessionTimelineKind};
+    use crate::bus::contract::{
+        AgentSession, AgentSessionAcpMode, AgentSessionAcpPermission,
+        AgentSessionAcpPermissionState, AgentSessionAcpRuntime, AgentSessionAcpState,
+        AgentSessionTimelineKind,
+    };
 
     fn session(id: &str) -> AgentSession {
         AgentSession {
@@ -599,6 +605,8 @@ mod tests {
             repo: PathBuf::from("/repo"),
             agent_type: "codex".to_string(),
             provider_session_id: Some("thread-1".to_string()),
+            acp_runtime: None,
+            acp_permissions: Vec::new(),
             wsl_distro: None,
             status: AgentSessionStatus::Running,
             pid: Some(10),
@@ -885,7 +893,29 @@ mod tests {
     #[test]
     fn journal_reconstructs_archived_session_with_timeline() {
         let journal = AgentJournal::open_in_memory().expect("journal");
-        journal.record_session(&session("sess-1")).expect("session");
+        let mut live = session("sess-1");
+        live.acp_runtime = Some(AgentSessionAcpRuntime {
+            state: AgentSessionAcpState::AcpReady,
+            mode: Some(AgentSessionAcpMode::Acp),
+            detail: Some("TINTO_SECRET_CANARY".to_owned()),
+            lost_capabilities: Vec::new(),
+            retry_available: false,
+            image_attachments: false,
+            config_options: Vec::new(),
+        });
+        live.acp_permissions = vec![AgentSessionAcpPermission {
+            id: "permission".to_owned(),
+            generation: 1,
+            provider_session_id: "thread-1".to_owned(),
+            turn_id: "turn".to_owned(),
+            tool_call_id: "tool".to_owned(),
+            title: "TINTO_SECRET_CANARY".to_owned(),
+            options: Vec::new(),
+            state: AgentSessionAcpPermissionState::Pending,
+            reason: None,
+            expires_at_ms: 500,
+        }];
+        journal.record_session(&live).expect("session");
         journal
             .record_timeline_item(&AgentSessionTimelineItem {
                 session_id: "sess-1".to_string(),
@@ -902,8 +932,11 @@ mod tests {
             .expect("read")
             .expect("session");
 
+        assert!(!format!("{archived:?}").contains("TINTO_SECRET_CANARY"));
         assert_eq!(archived.id, "sess-1");
         assert_eq!(archived.provider_session_id.as_deref(), Some("thread-1"));
+        assert!(archived.acp_runtime.is_none());
+        assert!(archived.acp_permissions.is_empty());
         assert_eq!(archived.status, AgentSessionStatus::Exited);
         assert_eq!(archived.timeline.len(), 1);
         assert_eq!(archived.active_sessions, 0);

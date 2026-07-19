@@ -4670,6 +4670,113 @@ select option {
   cursor: wait;
   opacity: 0.7;
 }
+.agent-panel__acp {
+  margin: 10px 14px 0;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 8px;
+  background: rgba(30, 64, 175, 0.1);
+  color: var(--fg);
+  font-size: 12px;
+}
+.agent-panel__acp[data-state="authentication_required"],
+.agent-panel__acp[data-state="pty_compatibility"] {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(120, 53, 15, 0.12);
+}
+.agent-panel__acp[data-state="failed"] {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.16);
+}
+.agent-panel__acp-status,
+.agent-panel__acp-permission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 9px 10px;
+}
+.agent-panel__acp-status > div,
+.agent-panel__acp-permission > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.agent-panel__acp-status span,
+.agent-panel__acp-status small,
+.agent-panel__acp-permission span,
+.agent-panel__acp-permission small {
+  color: var(--fg-muted);
+}
+.agent-panel__acp-status button,
+.agent-panel__acp-permission button {
+  flex: none;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+}
+.agent-panel__acp-status button:hover:not(:disabled),
+.agent-panel__acp-permission button:hover:not(:disabled),
+.agent-panel__acp-status button:focus-visible,
+.agent-panel__acp-permission button:focus-visible {
+  border-color: var(--accent-fg);
+  outline: none;
+}
+.agent-panel__acp-status button:disabled,
+.agent-panel__acp-permission button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.agent-panel__acp-config {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 9px 10px;
+  border-top: 1px solid var(--border);
+}
+.agent-panel__acp-config label {
+  display: grid;
+  gap: 4px;
+  min-width: 160px;
+  color: var(--fg-muted);
+}
+.agent-panel__acp-config select {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: inherit;
+}
+.agent-panel__acp-config select:focus-visible {
+  border-color: var(--accent-fg);
+  outline: none;
+}
+.agent-panel__acp-config select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.agent-panel__acp-permissions {
+  border-top: 1px solid var(--border);
+}
+.agent-panel__acp-permission + .agent-panel__acp-permission {
+  border-top: 1px solid var(--border);
+}
+.agent-panel__acp-permission > [role="group"] {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agent-panel__acp-permission .agent-panel__acp-permission-reject {
+  color: var(--danger);
+}
 .agent-panel__workspace {
   min-height: 0;
   display: grid;
