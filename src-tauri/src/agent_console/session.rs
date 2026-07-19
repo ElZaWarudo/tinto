@@ -4,10 +4,11 @@ use std::{
 };
 
 use crate::bus::contract::{
-    AgentRuntimeCatalog, AgentSession, AgentSessionChange, AgentSessionContextSummary,
-    AgentSessionError, AgentSessionFeedback, AgentSessionGoal, AgentSessionGoalStatus,
-    AgentSessionPersonality, AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus,
-    AgentSessionTimelineItem, AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
+    AgentRuntimeCatalog, AgentSession, AgentSessionAcpPermission, AgentSessionAcpRuntime,
+    AgentSessionChange, AgentSessionContextSummary, AgentSessionError, AgentSessionFeedback,
+    AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPersonality, AgentSessionPlanMode,
+    AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
+    AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
     launcher::{request_wsl_agent, windows_path_to_wsl_mount},
@@ -35,6 +36,8 @@ pub struct AgentSessionRecord {
     repo: PathBuf,
     agent_type: String,
     provider_session_id: Option<String>,
+    acp_runtime: Option<AgentSessionAcpRuntime>,
+    acp_permissions: Vec<AgentSessionAcpPermission>,
     status: AgentSessionStatus,
     pid: Option<u32>,
     started_at_ms: u64,
@@ -88,6 +91,8 @@ impl AgentSessionRecord {
             repo,
             agent_type,
             provider_session_id: None,
+            acp_runtime: None,
+            acp_permissions: Vec::new(),
             status: AgentSessionStatus::Starting,
             pid: None,
             started_at_ms,
@@ -137,6 +142,8 @@ impl AgentSessionRecord {
             ));
         }
         self.pid = process.pid();
+        self.acp_runtime = process.acp_runtime();
+        self.acp_permissions = process.acp_permissions();
         self.process = Some(process);
         self.status = AgentSessionStatus::Running;
         self.error = None;
@@ -158,7 +165,15 @@ impl AgentSessionRecord {
             if let Some(provider_session_id) = process.provider_session_id() {
                 self.provider_session_id = Some(provider_session_id);
             }
-            if let Err(error) = process.kill() {
+            self.acp_runtime = process.acp_runtime();
+            self.acp_permissions = process.acp_permissions();
+            let kill_result = process.kill();
+            if let Some(provider_session_id) = process.provider_session_id() {
+                self.provider_session_id = Some(provider_session_id);
+            }
+            self.acp_runtime = process.acp_runtime();
+            self.acp_permissions = process.acp_permissions();
+            if let Err(error) = kill_result {
                 self.status = AgentSessionStatus::Error;
                 self.error = Some(error.clone());
                 return Err(error);
@@ -190,7 +205,6 @@ impl AgentSessionRecord {
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         self.error = None;
-        self.note_turn_activity(now_ms());
         let planned_input = plan_mode_input(self.plan_mode.as_ref(), input);
         let input = planned_input.as_deref().unwrap_or(input);
         let native_goal = self
@@ -204,14 +218,18 @@ impl AgentSessionRecord {
             input,
         );
         let input = contextual_input.as_deref().unwrap_or(input);
-        if let Some(options) = options {
+        let result = if let Some(options) = options {
             self.runtime_options = options.clone();
             let process = self.running_process_mut()?;
             process.write_input_with_options(input, Some(options))
         } else {
             let process = self.running_process_mut()?;
             process.write_input(input)
+        };
+        if result.is_ok() {
+            self.note_turn_activity(now_ms());
         }
+        result
     }
 
     pub fn write_turn(
@@ -221,7 +239,6 @@ impl AgentSessionRecord {
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         self.error = None;
-        self.note_turn_activity(now_ms());
         let mut input = text.as_bytes().to_vec();
         input.push(b'\r');
         let planned_input = plan_mode_input(self.plan_mode.as_ref(), &input);
@@ -259,7 +276,11 @@ impl AgentSessionRecord {
             self.runtime_options = options.clone();
         }
         let process = self.running_process_mut()?;
-        process.write_turn(&text, &runtime_attachments, options)
+        let result = process.write_turn(&text, &runtime_attachments, options);
+        if result.is_ok() {
+            self.note_turn_activity(now_ms());
+        }
+        result
     }
 
     pub fn steer_turn(
@@ -298,6 +319,30 @@ impl AgentSessionRecord {
         process.resize(cols, rows)
     }
 
+    pub fn retry_acp(&mut self, confirmed: bool) -> Result<(), AgentConsoleError> {
+        let turn_idle = self.turn_status == AgentSessionTurnStatus::Waiting;
+        self.running_process_mut()?.retry_acp(confirmed, turn_idle)
+    }
+
+    pub fn respond_acp_permission(
+        &mut self,
+        permission_id: &str,
+        option_id: Option<&str>,
+        deny: bool,
+    ) -> Result<(), AgentConsoleError> {
+        self.running_process_mut()?
+            .respond_acp_permission(permission_id, option_id, deny)
+    }
+
+    pub fn set_acp_config_option(
+        &mut self,
+        config_id: &str,
+        value_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        self.running_process_mut()?
+            .set_acp_config_option(config_id, value_id)
+    }
+
     pub fn runtime_catalog(&self) -> Option<AgentRuntimeCatalog> {
         self.process
             .as_ref()
@@ -318,11 +363,18 @@ impl AgentSessionRecord {
 
         if let Some(process) = self.process.as_mut() {
             let events = process.drain_events();
+            self.pid = process.pid();
             let provider_session_id = process.provider_session_id();
+            let acp_runtime = process.acp_runtime();
+            let acp_permissions = process.acp_permissions();
             let exit_code = process.try_exit_code()?;
             if provider_session_id.is_some() {
                 self.provider_session_id = provider_session_id;
             }
+            if acp_runtime.is_some() {
+                self.acp_runtime = acp_runtime;
+            }
+            self.acp_permissions = acp_permissions;
             for event in events {
                 self.apply_process_event(event)?;
             }
@@ -330,7 +382,9 @@ impl AgentSessionRecord {
                 self.exit_code = Some(exit_code);
                 self.ended_at_ms = Some(now_ms());
                 self.status = status_from_exit_code(self.exit_code);
-                self.error = process_exit_error(exit_code);
+                if self.error.is_none() {
+                    self.error = process_exit_error(exit_code);
+                }
                 self.process = None;
                 self.refresh_turn_checkpoints(now_ms(), true)?;
                 self.refresh_change_log()?;
@@ -361,11 +415,14 @@ impl AgentSessionRecord {
     }
 
     pub fn restore_goal(&mut self, goal: AgentSessionGoal) -> Result<(), AgentConsoleError> {
-        self.running_process_mut()?.update_goal(
-            Some(&goal.text),
-            Some(goal.status),
-            Some(goal.token_budget),
-        )?;
+        let native_goal = self.running_process_mut()?.supports_goals();
+        if native_goal {
+            self.running_process_mut()?.update_goal(
+                Some(&goal.text),
+                Some(goal.status),
+                Some(goal.token_budget),
+            )?;
+        }
         self.goal = Some(goal);
         Ok(())
     }
@@ -455,6 +512,10 @@ impl AgentSessionRecord {
             }
             AgentProcessEvent::GoalCleared => {
                 self.goal = None;
+                Ok(())
+            }
+            AgentProcessEvent::ResumeContextRequired { summary } => {
+                self.context_summary = Some(summary);
                 Ok(())
             }
         }
@@ -581,6 +642,10 @@ impl AgentSessionRecord {
     }
 
     pub fn record_turn_done(&mut self, timestamp_ms: u64) -> Result<(), AgentConsoleError> {
+        if self.turn_started_at_ms.is_none() && self.turn_status == AgentSessionTurnStatus::Waiting
+        {
+            return Ok(());
+        }
         if let Err(error) = self.refresh_turn_checkpoints(timestamp_ms, true) {
             self.pending_turn_signature = None;
             self.pending_turn_seen_at_ms = None;
@@ -742,6 +807,8 @@ impl AgentSessionRecord {
             repo: self.repo.clone(),
             agent_type: self.agent_type.clone(),
             provider_session_id: self.provider_session_id.clone(),
+            acp_runtime: self.acp_runtime.clone(),
+            acp_permissions: self.acp_permissions.clone(),
             wsl_distro: self.wsl_distro.clone(),
             status: self.status,
             pid: self.pid,
@@ -1295,7 +1362,9 @@ fn plan_mode_input(plan_mode: Option<&AgentSessionPlanMode>, input: &[u8]) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::contract::{AgentSessionCheckpoint, AgentSessionCheckpointType};
+    use crate::bus::contract::{
+        AgentSessionCheckpoint, AgentSessionCheckpointType, AgentSessionTimelineKind,
+    };
     use crate::git::test_fixtures::TempRepo;
     use std::io::Read;
     use std::sync::{Arc, Mutex};
@@ -1375,6 +1444,123 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ProjectionClearingProcess {
+        killed: bool,
+    }
+
+    impl AgentProcess for ProjectionClearingProcess {
+        fn pid(&self) -> Option<u32> {
+            Some(7)
+        }
+
+        fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
+            Ok(self.killed.then_some(0))
+        }
+
+        fn kill(&mut self) -> Result<(), AgentConsoleError> {
+            self.killed = true;
+            Ok(())
+        }
+
+        fn write_input(&mut self, _input: &[u8]) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+            None
+        }
+
+        fn provider_session_id(&self) -> Option<String> {
+            Some(
+                if self.killed {
+                    "provider-after-stop"
+                } else {
+                    "provider-before-stop"
+                }
+                .to_string(),
+            )
+        }
+
+        fn acp_runtime(&self) -> Option<AgentSessionAcpRuntime> {
+            Some(
+                serde_json::from_value(if self.killed {
+                    serde_json::json!({
+                        "state": "failed",
+                        "detail": "stopped",
+                        "retry_available": false
+                    })
+                } else {
+                    serde_json::json!({
+                        "state": "acp_ready",
+                        "mode": "acp",
+                        "retry_available": false
+                    })
+                })
+                .unwrap(),
+            )
+        }
+
+        fn acp_permissions(&self) -> Vec<AgentSessionAcpPermission> {
+            if self.killed {
+                return Vec::new();
+            }
+            vec![serde_json::from_value(serde_json::json!({
+                "id": "permission-1",
+                "generation": 1,
+                "provider_session_id": "provider-before-stop",
+                "turn_id": "turn-1",
+                "tool_call_id": "tool-1",
+                "title": "Run command",
+                "options": [],
+                "state": "pending",
+                "expires_at_ms": 10
+            }))
+            .unwrap()]
+        }
+    }
+
+    struct RetryProcess {
+        retries: Arc<Mutex<Vec<(bool, bool)>>>,
+        stopped: bool,
+    }
+
+    impl AgentProcess for RetryProcess {
+        fn pid(&self) -> Option<u32> {
+            Some(7)
+        }
+
+        fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
+            Ok(self.stopped.then_some(0))
+        }
+
+        fn kill(&mut self) -> Result<(), AgentConsoleError> {
+            self.stopped = true;
+            Ok(())
+        }
+
+        fn write_input(&mut self, _input: &[u8]) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+            None
+        }
+
+        fn retry_acp(&mut self, confirmed: bool, turn_idle: bool) -> Result<(), AgentConsoleError> {
+            self.retries.lock().unwrap().push((confirmed, turn_idle));
+            Ok(())
+        }
+    }
+
     fn session_record() -> (tempfile::TempDir, tempfile::TempDir, AgentSessionRecord) {
         let repo = tempfile::tempdir().unwrap();
         let checkpoint_dir = tempfile::tempdir().unwrap();
@@ -1423,6 +1609,61 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.status, AgentSessionStatus::Completed);
         assert_eq!(contract.exit_code, Some(0));
+    }
+
+    #[test]
+    fn acp_retry_preserves_the_session_transcript_and_checkpoint() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        let retries = Arc::new(Mutex::new(Vec::new()));
+        session
+            .start(Box::new(RetryProcess {
+                retries: Arc::clone(&retries),
+                stopped: false,
+            }))
+            .unwrap();
+        session.record_timeline_item(AgentSessionTimelineItem {
+            session_id: "s1".to_owned(),
+            id: "timeline-1".to_owned(),
+            kind: AgentSessionTimelineKind::Lifecycle,
+            text: "PTY transcript".to_owned(),
+            timestamp_ms: 2,
+            attachments: Vec::new(),
+        });
+        let before = session.to_contract();
+
+        session.retry_acp(true).unwrap();
+
+        let after = session.to_contract();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.timeline, before.timeline);
+        assert_eq!(after.checkpoint, before.checkpoint);
+        assert_eq!(*retries.lock().unwrap(), vec![(true, true)]);
+    }
+
+    #[test]
+    fn stop_reloads_acp_projection_after_process_cleanup() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        session
+            .start(Box::new(ProjectionClearingProcess { killed: false }))
+            .unwrap();
+        let running = session.to_contract();
+        assert_eq!(running.acp_permissions.len(), 1);
+
+        session.stop().unwrap();
+
+        let stopped = session.to_contract();
+        assert_eq!(
+            stopped.provider_session_id.as_deref(),
+            Some("provider-after-stop")
+        );
+        assert_eq!(
+            stopped
+                .acp_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.detail.as_deref()),
+            Some("stopped")
+        );
+        assert!(stopped.acp_permissions.is_empty());
     }
 
     #[test]
@@ -1517,6 +1758,38 @@ mod tests {
         assert!(written.starts_with("Tinto plan mode is enabled for this turn:"));
         assert!(written.contains("before editing files"));
         assert!(written.ends_with("implement feature\r"));
+    }
+
+    #[test]
+    fn restored_goal_uses_host_context_when_process_has_no_native_goals() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        session
+            .start(Box::new(FakeProcess {
+                pid: Some(1),
+                exit_code: None,
+                status_error: None,
+                writes: Some(writes.clone()),
+            }))
+            .unwrap();
+        session
+            .restore_goal(AgentSessionGoal {
+                text: "Preserve the archived objective".into(),
+                status: AgentSessionGoalStatus::Active,
+                token_budget: Some(1_000),
+                tokens_used: 100,
+                time_used_seconds: 10,
+                created_at_ms: 1,
+                updated_at_ms: 2,
+            })
+            .unwrap();
+
+        session.write_input(b"continue\r", None).unwrap();
+
+        let writes = writes.lock().unwrap();
+        let written = String::from_utf8(writes[0].clone()).unwrap();
+        assert!(written.contains("Preserve the archived objective"));
+        assert!(written.ends_with("continue\r"));
     }
 
     #[test]

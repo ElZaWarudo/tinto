@@ -1,7 +1,7 @@
 use super::*;
 
 fn injected_failure() -> io::Error {
-    io::Error::new(io::ErrorKind::Other, "fallo inyectado")
+    io::Error::other("fallo inyectado")
 }
 
 fn assert_no_transaction_artifacts(parent: &Path) {

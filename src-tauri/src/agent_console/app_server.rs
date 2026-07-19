@@ -10,6 +10,7 @@ use std::{
     },
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 
 use super::AgentConsoleError;
@@ -1050,7 +1051,7 @@ fn timeline_frame(kind: AgentSessionTimelineKind, text: &str) -> Vec<u8> {
     frame.extend(
         serde_json::to_vec(&json!({
             "kind": kind,
-            "text": text
+            "text_base64": STANDARD.encode(text.as_bytes())
         }))
         .unwrap_or_else(|_| {
             b"{\"kind\":\"lifecycle\",\"text\":\"timeline encode failed\"}".to_vec()
@@ -1164,7 +1165,7 @@ fn send_goal_update(
                 params["objective"] = json!(objective);
             }
             if let Some(status) = status {
-                params["status"] = json!(goal_status_name(status.clone()));
+                params["status"] = json!(goal_status_name(*status));
             }
             if let Some(token_budget) = token_budget {
                 params["tokenBudget"] = token_budget.map_or(Value::Null, |value| json!(value));
@@ -1549,7 +1550,7 @@ mod tests {
 
         let progress = String::from_utf8(rx.recv().unwrap()).unwrap();
         assert!(progress.contains("\"kind\":\"agent_progress\""));
-        assert!(progress.contains("**Hello** world"));
+        assert!(progress.contains(&STANDARD.encode("**Hello** world")));
 
         handle_server_message(
             &json!({"method":"turn/completed","params":{"turn":{"id":"turn-1"}}}),
@@ -1558,7 +1559,7 @@ mod tests {
 
         let final_message = String::from_utf8(rx.recv().unwrap()).unwrap();
         assert!(final_message.contains("\"kind\":\"agent_message\""));
-        assert!(final_message.contains("**Hello** world"));
+        assert!(final_message.contains(&STANDARD.encode("**Hello** world")));
         assert!(matches!(
             event_rx.recv().unwrap(),
             AgentProcessEvent::TurnCompleted { .. }
@@ -1578,7 +1579,10 @@ mod tests {
         let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
         assert!(frame.starts_with("\u{1d}TINTO_TIMELINE "));
         assert!(frame.contains("\"kind\":\"command_output\""));
-        assert!(frame.contains("\"text\":\"cargo test\""));
+        assert!(frame.contains(&format!(
+            "\"text_base64\":\"{}\"",
+            STANDARD.encode("cargo test")
+        )));
     }
 
     #[test]
@@ -1596,7 +1600,7 @@ mod tests {
 
         let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
         assert!(frame.contains("\"kind\":\"activity\""));
-        assert!(frame.contains("Ejecutando npm test"));
+        assert!(frame.contains(&STANDARD.encode("Ejecutando npm test")));
     }
 
     #[test]
@@ -1619,7 +1623,7 @@ mod tests {
 
         let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
         assert!(frame.contains("\"kind\":\"activity\""));
-        assert!(frame.contains("Analizando: Comprobando el contrato del agente"));
+        assert!(frame.contains(&STANDARD.encode("Analizando: Comprobando el contrato del agente")));
         assert!(!frame.contains("contenido privado"));
     }
 

@@ -5,7 +5,7 @@ use std::{env, fs, time::SystemTime};
 
 use super::AgentConsoleError;
 
-pub const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "opencode"];
+pub const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "kimi", "opencode"];
 
 pub fn resolve_agent_binary(agent_type: &str) -> Result<PathBuf, AgentConsoleError> {
     resolve_agent_binary_with_candidates(
@@ -152,6 +152,11 @@ fn fallback_agent_candidates(_agent_type: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_kimi_agent() {
+        assert_eq!(validate_agent_type("kimi").unwrap(), "kimi");
+    }
 
     #[test]
     fn rejects_agents_outside_allowlist() {

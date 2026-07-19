@@ -25,6 +25,7 @@ use crate::bus::{
     commands::write_repo_agents_md_config,
     contract::{
         AgentHostCommandResult, AgentHostCommandStatus, AgentJournalSessionSummary,
+        AgentProviderReadiness, AgentProviderReadinessState, AgentProviderSource,
         AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog, AgentSession,
         AgentSessionAttachment, AgentSessionChangeLog, AgentSessionContextSummary,
         AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput, AgentSessionResumeMode,
@@ -125,7 +126,8 @@ pub async fn resume_agent_journal_session(
     };
     let resolved = ensure_known_agent_repo(&bus, &archived.repo).await?;
     let native_resume_id = archived.provider_session_id.clone();
-    let (started, mode) = {
+    let fallback_context = resume_context_summary(&archived);
+    let (mut started, mut mode) = {
         let mut registry = lock_registry(&registry)?;
         let native = native_resume_id.as_deref().and_then(|provider_session_id| {
             let result = match resolved.source {
@@ -133,6 +135,7 @@ pub async fn resume_agent_journal_session(
                     resolved.path.clone(),
                     archived.agent_type.clone(),
                     provider_session_id.to_string(),
+                    fallback_context.clone(),
                 ),
                 RepoSource::Wsl => registry.resume_wsl_session_with_output(
                     resolved.path.clone(),
@@ -164,17 +167,16 @@ pub async fn resume_agent_journal_session(
         }
     };
 
-    if let Some(output_reader) = started.output_reader {
+    if let Some(output_reader) = started.output_reader.take() {
         spawn_output_reader(app.clone(), started.id.clone(), output_reader);
     }
-
     let resumed_timeline = remap_archived_timeline(&archived.timeline, &started.id);
     {
         let mut registry = lock_registry(&registry)?;
         registry
             .set_session_runtime_options(&started.id, archived.runtime_options.clone())
             .map_err(CommandError::from)?;
-        if mode == AgentSessionResumeMode::ContextBridge && archived.agent_type == "codex" {
+        if should_restore_archived_goal(&archived.agent_type, mode) {
             if let Some(goal) = archived.goal.as_ref() {
                 registry
                     .restore_session_goal(&started.id, goal.clone())
@@ -200,7 +202,44 @@ pub async fn resume_agent_journal_session(
                 .add_session_feedback(&started.id, feedback)
                 .map_err(CommandError::from)?;
         }
+    }
+    for item in resumed_timeline {
+        record_timeline_item(&app, item.clone());
+        let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, item);
+    }
+
+    if let Some(resume_result) = started.resume_result.take() {
+        match tokio::task::spawn_blocking(move || resume_result.recv()).await {
+            Ok(Ok(Ok(resolved_mode))) => mode = resolved_mode,
+            Ok(Ok(Err(error))) => {
+                refresh_and_emit_sessions(&app);
+                return Err(CommandError::from(error));
+            }
+            Ok(Err(_)) => {
+                refresh_and_emit_sessions(&app);
+                return Err(CommandError::new(
+                    "agent_resume_failed",
+                    "la reanudación terminó sin un resultado",
+                ));
+            }
+            Err(_) => {
+                refresh_and_emit_sessions(&app);
+                return Err(CommandError::new(
+                    "agent_resume_failed",
+                    "no se pudo esperar el resultado de la reanudación",
+                ));
+            }
+        }
+    }
+
+    {
+        let mut registry = lock_registry(&registry)?;
         let summary = match mode {
+            AgentSessionResumeMode::Native
+                if matches!(archived.agent_type.as_str(), "kimi" | "opencode") =>
+            {
+                None
+            }
             AgentSessionResumeMode::Native => archived.context_summary.clone(),
             AgentSessionResumeMode::ContextBridge => Some(resume_context_summary(&archived)),
         };
@@ -210,16 +249,12 @@ pub async fn resume_agent_journal_session(
                 .map_err(CommandError::from)?;
         }
     }
-    for item in resumed_timeline {
-        record_timeline_item(&app, item.clone());
-        let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, item);
-    }
     emit_timeline_text(
         &app,
         &started.id,
         AgentSessionTimelineKind::Lifecycle,
         Some(match mode {
-            AgentSessionResumeMode::Native => "Conversacion de Codex retomada".to_string(),
+            AgentSessionResumeMode::Native => "Conversacion nativa retomada".to_string(),
             AgentSessionResumeMode::ContextBridge => {
                 "Conversacion retomada con el contexto archivado".to_string()
             }
@@ -231,6 +266,11 @@ pub async fn resume_agent_journal_session(
         session_id: started.id,
         mode,
     })
+}
+
+fn should_restore_archived_goal(agent_type: &str, mode: AgentSessionResumeMode) -> bool {
+    matches!(agent_type, "kimi" | "opencode")
+        || (agent_type == "codex" && mode == AgentSessionResumeMode::ContextBridge)
 }
 
 fn remap_archived_timeline(
@@ -400,6 +440,21 @@ fn timeline_before_user_message(
 struct TimelineFrame {
     kind: AgentSessionTimelineKind,
     text: String,
+    raw_output: Option<Vec<u8>>,
+    turn_done: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimelineFrameWire {
+    kind: AgentSessionTimelineKind,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    text_base64: Option<String>,
+    #[serde(default)]
+    raw_output_base64: Option<String>,
+    #[serde(default)]
+    turn_done: bool,
 }
 
 #[tauri::command]
@@ -411,6 +466,63 @@ pub fn stop_agent_session(
     let mut registry = lock_registry(&registry)?;
     registry
         .stop_session(&session_id)
+        .map_err(CommandError::from)?;
+    emit_sessions_snapshot(&app, &registry.list_sessions());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn retry_agent_session_acp(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    confirmed: bool,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .retry_session_acp(&session_id, confirmed)
+        .map_err(CommandError::from)?;
+    registry
+        .refresh_session_statuses()
+        .map_err(CommandError::from)?;
+    emit_sessions_snapshot(&app, &registry.list_sessions());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn respond_agent_session_acp_permission(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    permission_id: String,
+    option_id: Option<String>,
+    deny: bool,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .respond_session_acp_permission(&session_id, &permission_id, option_id.as_deref(), deny)
+        .map_err(CommandError::from)?;
+    registry
+        .refresh_session_statuses()
+        .map_err(CommandError::from)?;
+    emit_sessions_snapshot(&app, &registry.list_sessions());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_agent_session_acp_config_option(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    config_id: String,
+    value_id: String,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .set_session_acp_config_option(&session_id, &config_id, &value_id)
+        .map_err(CommandError::from)?;
+    registry
+        .refresh_session_statuses()
         .map_err(CommandError::from)?;
     emit_sessions_snapshot(&app, &registry.list_sessions());
     Ok(())
@@ -540,6 +652,61 @@ pub async fn agent_binary_available_for_repo(
             agent_type,
         ),
     }
+}
+
+#[tauri::command]
+pub async fn agent_provider_readiness_for_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    agent_type: String,
+) -> Result<AgentProviderReadiness, CommandError> {
+    let resolved = ensure_known_agent_repo(&bus, &repo).await?;
+    provider_readiness_for_source(
+        resolved.source,
+        resolved.distro.as_deref(),
+        agent_type,
+        agent_binary_available,
+        wsl_agent_binary_available,
+    )
+}
+
+fn provider_readiness_for_source<HostProbe, WslProbe>(
+    source: RepoSource,
+    distro: Option<&str>,
+    agent_type: String,
+    host_probe: HostProbe,
+    wsl_probe: WslProbe,
+) -> Result<AgentProviderReadiness, CommandError>
+where
+    HostProbe: FnOnce(String) -> Result<bool, CommandError>,
+    WslProbe: FnOnce(&str, String) -> Result<bool, CommandError>,
+{
+    let (source, distro, available) = match source {
+        RepoSource::Local => (
+            AgentProviderSource::Local,
+            None,
+            host_probe(agent_type.clone())?,
+        ),
+        RepoSource::Wsl => {
+            let distro =
+                distro.ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
+            (
+                AgentProviderSource::Wsl,
+                Some(distro.to_string()),
+                wsl_probe(distro, agent_type.clone())?,
+            )
+        }
+    };
+    Ok(AgentProviderReadiness {
+        agent_type,
+        source,
+        distro,
+        state: if available {
+            AgentProviderReadinessState::BinaryAvailable
+        } else {
+            AgentProviderReadinessState::Unavailable
+        },
+    })
 }
 
 #[tauri::command]
@@ -2449,7 +2616,7 @@ fn spawn_output_reader(
     let done = Arc::new(AtomicBool::new(false));
     spawn_output_quiet_monitor(app.clone(), last_output_at.clone(), done.clone());
     std::thread::spawn(move || {
-        let mut buffer = [0u8; 8192];
+        let mut buffer = vec![0u8; 2 * 1024 * 1024];
         loop {
             match output_reader.read(&mut buffer) {
                 Ok(0) => break,
@@ -2491,6 +2658,11 @@ fn emit_output_without_turn_done_marker(
     output: &[u8],
     timestamp_ms: u64,
 ) -> bool {
+    if let Some(frame) = parse_timeline_frame(output) {
+        let turn_done = frame.turn_done;
+        emit_output_chunk(app, session_id, output, timestamp_ms);
+        return turn_done;
+    }
     let marker = TINTO_TURN_DONE_MARKER.as_bytes();
     let mut cursor = 0;
     let mut explicit_turn_done = false;
@@ -2509,6 +2681,14 @@ fn emit_output_chunk(app: &AppHandle, session_id: &str, chunk: &[u8], timestamp_
         return;
     }
     if let Some(frame) = parse_timeline_frame(chunk) {
+        if let Some(raw_output) = frame.raw_output {
+            let payload = AgentSessionOutput {
+                session_id: session_id.to_string(),
+                chunk_base64: STANDARD.encode(&raw_output),
+                timestamp_ms,
+            };
+            let _ = app.emit(EVENT_AGENT_SESSION_OUTPUT, payload);
+        }
         emit_timeline_text(app, session_id, frame.kind, Some(frame.text), timestamp_ms);
         return;
     }
@@ -2530,7 +2710,28 @@ fn emit_output_chunk(app: &AppHandle, session_id: &str, chunk: &[u8], timestamp_
 fn parse_timeline_frame(chunk: &[u8]) -> Option<TimelineFrame> {
     let payload = chunk.strip_prefix(TIMELINE_FRAME_PREFIX)?;
     let payload = payload.strip_suffix(b"\n").unwrap_or(payload);
-    serde_json::from_slice(payload).ok()
+    let wire: TimelineFrameWire = serde_json::from_slice(payload).ok()?;
+    let (text, raw_output) = match (wire.text_base64, wire.text, wire.raw_output_base64) {
+        (Some(encoded), None, None) => (
+            String::from_utf8(STANDARD.decode(encoded).ok()?).ok()?,
+            None,
+        ),
+        (None, Some(text), None) => (text, None),
+        (None, None, Some(encoded)) => {
+            let output = STANDARD.decode(encoded).ok()?;
+            (
+                timeline_text_from_output(&output).unwrap_or_default(),
+                Some(output),
+            )
+        }
+        _ => return None,
+    };
+    Some(TimelineFrame {
+        kind: wire.kind,
+        text,
+        raw_output,
+        turn_done: wire.turn_done,
+    })
 }
 
 fn emit_timeline_text(
@@ -2767,6 +2968,28 @@ mod tests {
     }
 
     #[test]
+    fn acp_providers_restore_archived_goals_for_native_and_context_bridge_resume() {
+        for provider in ["kimi", "opencode"] {
+            assert!(should_restore_archived_goal(
+                provider,
+                AgentSessionResumeMode::Native
+            ));
+            assert!(should_restore_archived_goal(
+                provider,
+                AgentSessionResumeMode::ContextBridge
+            ));
+        }
+        assert!(!should_restore_archived_goal(
+            "codex",
+            AgentSessionResumeMode::Native
+        ));
+        assert!(should_restore_archived_goal(
+            "codex",
+            AgentSessionResumeMode::ContextBridge
+        ));
+    }
+
+    #[test]
     fn goal_command_normalizes_text_and_supports_explicit_clear_aliases() {
         assert_eq!(
             parse_goal_command(Some("  Ship\n  the\tfeature  ")).unwrap(),
@@ -2872,6 +3095,51 @@ mod tests {
 
         assert_eq!(parsed.kind, AgentSessionTimelineKind::CommandOutput);
         assert_eq!(parsed.text, "cargo test");
+        assert!(!parsed.turn_done);
+    }
+
+    #[test]
+    fn framed_pty_output_carries_a_trusted_turn_done_signal() {
+        let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
+        frame.extend(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "agent_message",
+                "raw_output_base64": STANDARD.encode(b"done\r\n"),
+                "turn_done": true
+            }))
+            .unwrap(),
+        );
+        frame.push(b'\n');
+
+        let parsed = parse_timeline_frame(&frame).unwrap();
+        assert_eq!(parsed.raw_output.as_deref(), Some(b"done\r\n".as_slice()));
+        assert!(parsed.turn_done);
+    }
+
+    #[test]
+    fn encoded_timeline_frame_preserves_provider_control_literals_as_text() {
+        let text = format!(
+            "{} {}",
+            TINTO_TURN_DONE_MARKER,
+            String::from_utf8_lossy(TIMELINE_FRAME_PREFIX)
+        );
+        let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
+        frame.extend(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "agent_message",
+                "text_base64": STANDARD.encode(text.as_bytes())
+            }))
+            .unwrap(),
+        );
+        frame.push(b'\n');
+
+        let parsed = parse_timeline_frame(&frame).unwrap();
+        assert_eq!(parsed.kind, AgentSessionTimelineKind::AgentMessage);
+        assert_eq!(parsed.text, text);
+        let payload = frame.strip_prefix(TIMELINE_FRAME_PREFIX).unwrap();
+        assert!(!payload
+            .windows(TINTO_TURN_DONE_MARKER.len())
+            .any(|window| window == TINTO_TURN_DONE_MARKER.as_bytes()));
     }
 
     #[test]
@@ -2906,6 +3174,29 @@ mod tests {
         let error = wsl_agent_binary_available("Ubuntu", "powershell".into()).unwrap_err();
 
         assert_eq!(error.category, "unsupported_agent");
+    }
+
+    #[test]
+    fn wsl_provider_readiness_does_not_fall_back_to_the_host_probe() {
+        let readiness = provider_readiness_for_source(
+            RepoSource::Wsl,
+            Some("Ubuntu-24.04"),
+            "kimi".into(),
+            |_| panic!("the host probe must not run for a WSL repo"),
+            |distro, agent_type| {
+                assert_eq!(distro, "Ubuntu-24.04");
+                assert_eq!(agent_type, "kimi");
+                Ok(true)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(readiness.source, AgentProviderSource::Wsl);
+        assert_eq!(readiness.distro.as_deref(), Some("Ubuntu-24.04"));
+        assert_eq!(
+            readiness.state,
+            AgentProviderReadinessState::BinaryAvailable
+        );
     }
 
     #[test]

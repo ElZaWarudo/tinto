@@ -1,14 +1,20 @@
 use std::{
+    env,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use super::{app_server::CodexAppServerHandle, AgentConsoleError};
 use crate::{
-    bus::contract::{AgentRuntimeCatalog, AgentSessionGoalStatus, AgentSessionRuntimeOptions},
+    bus::contract::{
+        AgentRuntimeCatalog, AgentSessionAcpPermission, AgentSessionAcpRuntime,
+        AgentSessionGoalStatus, AgentSessionRuntimeOptions,
+    },
     wsl_agent::shell_env::agent_console_script,
 };
 
@@ -87,6 +93,39 @@ pub trait AgentProcess: Send {
     fn provider_session_id(&self) -> Option<String> {
         None
     }
+    fn acp_runtime(&self) -> Option<AgentSessionAcpRuntime> {
+        None
+    }
+    fn acp_permissions(&self) -> Vec<AgentSessionAcpPermission> {
+        Vec::new()
+    }
+    fn respond_acp_permission(
+        &mut self,
+        _permission_id: &str,
+        _option_id: Option<&str>,
+        _deny: bool,
+    ) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "acp_permission_unavailable",
+            "esta sesión no tiene permisos ACP pendientes",
+        ))
+    }
+    fn set_acp_config_option(
+        &mut self,
+        _config_id: &str,
+        _value_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "acp_option_unavailable",
+            "esta sesión no tiene esta opción ACP negociada",
+        ))
+    }
+    fn retry_acp(&mut self, _confirmed: bool, _turn_idle: bool) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "acp_retry_unavailable",
+            "esta sesión no admite reintentar ACP",
+        ))
+    }
     fn refresh_runtime_catalog(
         &mut self,
     ) -> Result<Option<AgentRuntimeCatalog>, AgentConsoleError> {
@@ -129,6 +168,9 @@ pub enum AgentProcessEvent {
         goal: crate::bus::contract::AgentSessionGoal,
     },
     GoalCleared,
+    ResumeContextRequired {
+        summary: crate::bus::contract::AgentSessionContextSummary,
+    },
 }
 
 pub trait AgentProcessFactory: Send + Sync {
@@ -267,11 +309,24 @@ pub struct PtyHandle {
     child: Box<dyn Child + Send + Sync>,
     reader: Option<Box<dyn Read + Send>>,
     writer: Box<dyn Write + Send>,
+    exit_code: Option<i32>,
 }
 
 impl PtyHandle {
     pub fn spawn(binary_path: &Path, working_dir: &Path) -> Result<Self, AgentConsoleError> {
         Self::spawn_command_builder(build_agent_command(binary_path, working_dir))
+    }
+
+    pub fn spawn_with_env_allowlist(
+        binary_path: &Path,
+        working_dir: &Path,
+        allowed_env: &[&str],
+    ) -> Result<Self, AgentConsoleError> {
+        Self::spawn_command_builder(build_agent_command_with_env_allowlist(
+            binary_path,
+            working_dir,
+            allowed_env,
+        ))
     }
 
     pub fn spawn_wsl_agent(
@@ -305,6 +360,7 @@ impl PtyHandle {
             child,
             reader: Some(reader),
             writer,
+            exit_code: None,
         })
     }
 
@@ -342,23 +398,45 @@ impl AgentProcess for PtyHandle {
     }
 
     fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
-        self.child
+        if self.exit_code.is_some() {
+            return Ok(self.exit_code);
+        }
+        let exit_code = self
+            .child
             .try_wait()
             .map(|status| status.map(|s| s.exit_code() as i32))
-            .map_err(|e| AgentConsoleError::new("process_status_failed", e.to_string()))
+            .map_err(|e| AgentConsoleError::new("process_status_failed", e.to_string()))?;
+        if exit_code.is_some() {
+            self.exit_code = exit_code;
+        }
+        Ok(exit_code)
     }
 
     fn kill(&mut self) -> Result<(), AgentConsoleError> {
-        if let Some(pid) = self.child.process_id() {
-            if kill_process_tree(pid).is_ok() {
-                let _ = self.child.kill();
-                return Ok(());
+        let tree_result = self
+            .child
+            .process_id()
+            .map(kill_process_tree)
+            .unwrap_or(Ok(()));
+        let _ = self.child.kill();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) | Err(_) => {
+                    return Err(AgentConsoleError::new(
+                        "process_reap_timeout",
+                        "el proceso PTY no terminó dentro del plazo",
+                    ));
+                }
             }
-        }
-
-        self.child
-            .kill()
-            .map_err(|e| AgentConsoleError::new("process_kill_failed", e.to_string()))
+        };
+        self.exit_code = Some(status.exit_code() as i32);
+        tree_result?;
+        Ok(())
     }
 
     fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
@@ -379,6 +457,22 @@ pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> Com
     command.cwd(working_dir.as_os_str());
     for arg in default_agent_args(binary_path) {
         command.arg(arg);
+    }
+    apply_terminal_env(&mut command);
+    command
+}
+
+pub(crate) fn build_agent_command_with_env_allowlist(
+    binary_path: &Path,
+    working_dir: &Path,
+    allowed_env: &[&str],
+) -> CommandBuilder {
+    let mut command = build_agent_command(binary_path, working_dir);
+    command.env_clear();
+    for name in allowed_env {
+        if let Some(value) = env::var_os(name) {
+            command.env(name, value);
+        }
     }
     apply_terminal_env(&mut command);
     command
@@ -453,16 +547,43 @@ fn spawn_error(message: String) -> AgentConsoleError {
 #[cfg(windows)]
 pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
     let mut command = Command::new("taskkill");
-    let output = hide_console(command.args(["/F", "/T", "/PID", &pid.to_string()]))
-        .output()
-        .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(AgentConsoleError::new(
-            "process_tree_kill_failed",
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ))
+    let mut child = hide_console(
+        command
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .spawn()
+    .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(AgentConsoleError::new(
+                    "process_tree_kill_failed",
+                    format!("taskkill terminó con {status}"),
+                ))
+            }
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                return Err(AgentConsoleError::new(
+                    "process_tree_kill_timeout",
+                    "taskkill no terminó dentro del plazo",
+                ));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                return Err(AgentConsoleError::new(
+                    "process_tree_kill_failed",
+                    error.to_string(),
+                ));
+            }
+        }
     }
 }
 
@@ -499,6 +620,9 @@ pub(crate) fn kill_process_tree(_pid: u32) -> Result<(), AgentConsoleError> {
 mod tests {
     use super::*;
     use std::ffi::{OsStr, OsString};
+    use std::sync::Mutex;
+
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn fallback_prompt_mentions_every_attachment_path() {
@@ -548,6 +672,27 @@ mod tests {
             command.get_env("TINTO_TURN_DONE_MARKER"),
             Some(OsStr::new(TINTO_TURN_DONE_MARKER))
         );
+    }
+
+    #[test]
+    fn fallback_allowlist_drops_secret_environment_canary() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
+        const CANARY: &str = "TINTO_ACP_SECRET_CANARY";
+        let previous = env::var_os(CANARY);
+        env::set_var(CANARY, "must-not-reach-fallback");
+        let command = build_agent_command_with_env_allowlist(
+            Path::new("kimi"),
+            Path::new("/tmp/repo"),
+            &["PATH"],
+        );
+        if let Some(previous) = previous {
+            env::set_var(CANARY, previous);
+        } else {
+            env::remove_var(CANARY);
+        }
+
+        assert!(command.get_env(CANARY).is_none());
+        assert_eq!(command.get_env("PATH"), env::var_os("PATH").as_deref());
     }
 
     #[test]
