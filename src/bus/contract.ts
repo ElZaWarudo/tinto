@@ -18,6 +18,85 @@ export const EVENT_AGENT_SESSION_CHANGE_LOG = "tinto://agent-session-change-log"
 export const EVENT_AGENT_SESSION_TIMELINE = "tinto://agent-session-timeline";
 
 // ---- Agent console sessions (ACI-001) ----
+export type AgentProviderSource = "local" | "wsl";
+
+export type AgentProviderReadinessState = "unavailable" | "binary_available";
+
+export interface AgentProviderReadiness {
+  agent_type: string;
+  source: AgentProviderSource;
+  distro?: string | null;
+  state: AgentProviderReadinessState;
+}
+
+export type AgentSessionAcpState =
+  | "unavailable"
+  | "authentication_required"
+  | "connecting_acp"
+  | "acp_ready"
+  | "pty_compatibility"
+  | "failed";
+
+export type AgentSessionAcpMode = "acp" | "pty";
+
+export type AgentSessionAcpConfigCategory = "model" | "mode";
+
+export interface AgentSessionAcpConfigValue {
+  id: string;
+  label: string;
+}
+
+export interface AgentSessionAcpConfigOption {
+  id: string;
+  label: string;
+  category: AgentSessionAcpConfigCategory;
+  current_value: string;
+  values: AgentSessionAcpConfigValue[];
+}
+
+export interface AgentSessionAcpRuntime {
+  state: AgentSessionAcpState;
+  mode?: AgentSessionAcpMode | null;
+  detail?: string | null;
+  lost_capabilities?: string[];
+  retry_available: boolean;
+  image_attachments?: boolean;
+  config_options?: AgentSessionAcpConfigOption[];
+}
+
+export type AgentSessionAcpPermissionKind =
+  | "allow_once"
+  | "allow_always"
+  | "reject_once"
+  | "reject_always";
+
+export type AgentSessionAcpPermissionState =
+  | "pending"
+  | "allowed"
+  | "denied"
+  | "cancelled"
+  | "expired"
+  | "invalidated";
+
+export interface AgentSessionAcpPermissionOption {
+  id: string;
+  label: string;
+  kind: AgentSessionAcpPermissionKind;
+}
+
+export interface AgentSessionAcpPermission {
+  id: string;
+  generation: number;
+  provider_session_id: string;
+  turn_id: string;
+  tool_call_id: string;
+  title: string;
+  options: AgentSessionAcpPermissionOption[];
+  state: AgentSessionAcpPermissionState;
+  reason?: string | null;
+  expires_at_ms: number;
+}
+
 export type AgentSessionStatus =
   | "starting"
   | "running"
@@ -163,6 +242,8 @@ export interface AgentSession {
   id: string;
   repo: string;
   agent_type: string;
+  acp_runtime?: AgentSessionAcpRuntime | null;
+  acp_permissions?: AgentSessionAcpPermission[];
   provider_session_id?: string | null;
   wsl_distro?: string | null;
   status: AgentSessionStatus;
@@ -532,6 +613,19 @@ export interface CuratedBusContractTypeMap {
   DiffLine: DiffLine;
   DiffHunk: DiffHunk;
   FileDiff: FileDiff;
+  AgentProviderSource: AgentProviderSource;
+  AgentProviderReadinessState: AgentProviderReadinessState;
+  AgentProviderReadiness: AgentProviderReadiness;
+  AgentSessionAcpState: AgentSessionAcpState;
+  AgentSessionAcpMode: AgentSessionAcpMode;
+  AgentSessionAcpConfigCategory: AgentSessionAcpConfigCategory;
+  AgentSessionAcpConfigValue: AgentSessionAcpConfigValue;
+  AgentSessionAcpConfigOption: AgentSessionAcpConfigOption;
+  AgentSessionAcpRuntime: AgentSessionAcpRuntime;
+  AgentSessionAcpPermissionKind: AgentSessionAcpPermissionKind;
+  AgentSessionAcpPermissionState: AgentSessionAcpPermissionState;
+  AgentSessionAcpPermissionOption: AgentSessionAcpPermissionOption;
+  AgentSessionAcpPermission: AgentSessionAcpPermission;
   AgentSessionStatus: AgentSessionStatus;
   AgentSessionError: AgentSessionError;
   AgentSessionCheckpointType: AgentSessionCheckpointType;

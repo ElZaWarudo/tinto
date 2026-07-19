@@ -69,6 +69,16 @@ describe("consoleDock", () => {
       ),
     ).toBe("Codex · api · Corrige la autenticación");
   });
+
+  it("labels Kimi conversation tabs without requiring an image asset", () => {
+    expect(
+      agentConversationTabTitle(
+        { sessionId: "sess-kimi", repo: "/work/api", agentType: "kimi" },
+        "Revisa el parser",
+      ),
+    ).toBe("Kimi Code · api · Revisa el parser");
+  });
+
   beforeEach(() => {
     consoleDock.resetForTests();
   });

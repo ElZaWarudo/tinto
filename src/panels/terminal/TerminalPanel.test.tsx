@@ -60,6 +60,18 @@ const stopAgentSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
 });
+const retryAgentSessionAcpMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve();
+});
+const respondAgentSessionAcpPermissionMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve();
+});
+const setAgentSessionAcpConfigOptionMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve();
+});
 const runAgentHostCommandMock = vi.fn((...args: unknown[]): Promise<AgentHostCommandResult> => {
   void args;
   return Promise.resolve({ command: "status", status: "completed", message: "Host command done." });
@@ -86,7 +98,10 @@ vi.mock("../../bus/client", () => ({
   getAgentRuntimeCatalog: (sessionId: string, refresh?: boolean) =>
     getAgentRuntimeCatalogMock(sessionId, refresh),
   listAgentSessions: () => listAgentSessionsMock(),
+  respondAgentSessionAcpPermission: (...a: unknown[]) => respondAgentSessionAcpPermissionMock(...a),
   resumeAgentJournalSession: (sessionId: string) => resumeAgentJournalSessionMock(sessionId),
+  retryAgentSessionAcp: (...a: unknown[]) => retryAgentSessionAcpMock(...a),
+  setAgentSessionAcpConfigOption: (...a: unknown[]) => setAgentSessionAcpConfigOptionMock(...a),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
   restoreSessionTurn: (...a: unknown[]) => restoreSessionTurnMock(...a),
@@ -293,6 +308,9 @@ describe("TerminalPanel", () => {
     revertSessionTurnFileMock.mockClear();
     restoreSessionTurnMock.mockClear();
     stopAgentSessionMock.mockClear();
+    retryAgentSessionAcpMock.mockClear();
+    respondAgentSessionAcpPermissionMock.mockClear();
+    setAgentSessionAcpConfigOptionMock.mockClear();
     confirmMock.mockClear();
     localStorage.removeItem("tinto:runtime-presets:v1");
   });
@@ -348,6 +366,340 @@ describe("TerminalPanel", () => {
     expect(processStatus).toHaveTextContent("Codex está pensando");
     expect(processStatus).toHaveTextContent("RAZONANDO");
     expect(screen.queryByTestId("terminal-surface")).not.toBeInTheDocument();
+  });
+
+  it("renders every ACP state, gates input, and confirms PTY migration", async () => {
+    const acpSession = (state: NonNullable<AgentSession["acp_runtime"]>["state"]) =>
+      sessionFixture({
+        agent_type: "kimi",
+        turn_status: "waiting",
+        acp_runtime: {
+          state,
+          mode: state === "acp_ready" ? "acp" : state === "pty_compatibility" ? "pty" : null,
+          detail:
+            state === "authentication_required"
+              ? "El proveedor solicitó autenticación."
+              : state === "pty_compatibility"
+                ? "El transporte ACP no superó la sonda."
+                : state === "failed"
+                  ? "La conexión terminó de forma inesperada."
+                  : null,
+          lost_capabilities:
+            state === "pty_compatibility" ? ["actualizaciones estructuradas", "permisos ACP"] : [],
+          retry_available: state === "authentication_required" || state === "pty_compatibility",
+          image_attachments: false,
+          config_options: [],
+        },
+        acp_permissions: [],
+      });
+    listAgentSessionsMock.mockResolvedValueOnce([acpSession("connecting_acp")]);
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "kimi" })} />);
+
+    const connecting = await screen.findByRole("status", {
+      name: "Estado ACP de Kimi Code: Conectando mediante ACP…",
+    });
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    expect(conversation).not.toContainElement(connecting);
+    expect(screen.getByLabelText("Mensaje para Kimi Code")).toBeDisabled();
+
+    act(() => agentSessionStore.upsertSession(acpSession("authentication_required")));
+    expect(
+      await screen.findByRole("status", {
+        name: "Estado ACP de Kimi Code: Autenticación necesaria",
+      }),
+    ).toHaveTextContent(
+      "Inicia sesión con Kimi Code desde su CLI y pulsa Reintentar ACP. Tinto no recibe ni guarda credenciales.",
+    );
+    await user.click(screen.getByRole("button", { name: "Reintentar ACP" }));
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(retryAgentSessionAcpMock).toHaveBeenLastCalledWith("sess-1", false);
+
+    act(() => agentSessionStore.upsertSession(acpSession("acp_ready")));
+    expect(
+      await screen.findByRole("status", { name: "Estado ACP de Kimi Code: ACP listo" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Mensaje para Kimi Code")).toBeEnabled();
+
+    act(() => agentSessionStore.upsertSession(acpSession("pty_compatibility")));
+    const compatibility = await screen.findByRole("status", {
+      name: "Estado ACP de Kimi Code: Modo de compatibilidad PTY",
+    });
+    expect(compatibility).toHaveTextContent("actualizaciones estructuradas, permisos ACP");
+    confirmMock.mockResolvedValueOnce(false);
+    await user.click(screen.getByRole("button", { name: "Reintentar ACP" }));
+    expect(retryAgentSessionAcpMock).toHaveBeenCalledTimes(1);
+    confirmMock.mockResolvedValueOnce(true);
+    await user.click(screen.getByRole("button", { name: "Reintentar ACP" }));
+    expect(confirmMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("Se conservará la transcripción y el punto de control"),
+      expect.objectContaining({ okLabel: "Cambiar a ACP", cancelLabel: "Mantener PTY" }),
+    );
+    expect(retryAgentSessionAcpMock).toHaveBeenLastCalledWith("sess-1", true);
+
+    act(() => agentSessionStore.upsertSession(acpSession("failed")));
+    expect(
+      await screen.findByRole("status", { name: "Estado ACP de Kimi Code: ACP falló" }),
+    ).toHaveTextContent("No se reenvió ni reprodujo el turno mediante PTY");
+    expect(screen.getByLabelText("Mensaje para Kimi Code")).toBeDisabled();
+
+    act(() => agentSessionStore.upsertSession(acpSession("unavailable")));
+    expect(
+      await screen.findByRole("status", {
+        name: "Estado ACP de Kimi Code: ACP no disponible",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Mensaje para Kimi Code")).toBeDisabled();
+  });
+
+  it("renders only negotiated ACP model and mode controls and changes the exact option", async () => {
+    const readySession = sessionFixture({
+      agent_type: "kimi",
+      turn_status: "waiting",
+      acp_runtime: {
+        state: "acp_ready",
+        mode: "acp",
+        detail: null,
+        lost_capabilities: [],
+        retry_available: false,
+        image_attachments: false,
+        config_options: [
+          {
+            id: "model",
+            label: "Modelo",
+            category: "model",
+            current_value: "moonshot-v1",
+            values: [
+              { id: "moonshot-v1", label: "Moonshot V1" },
+              { id: "moonshot-v2", label: "Moonshot V2" },
+            ],
+          },
+          {
+            id: "mode",
+            label: "Modo",
+            category: "mode",
+            current_value: "agent",
+            values: [
+              { id: "agent", label: "Agent" },
+              { id: "plan", label: "Plan" },
+            ],
+          },
+        ],
+      },
+      acp_permissions: [],
+    });
+    listAgentSessionsMock.mockResolvedValueOnce([readySession]);
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "kimi" })} />);
+
+    const model = await screen.findByRole("combobox", { name: "Modelo de Kimi Code" });
+    const mode = screen.getByRole("combobox", { name: "Modo de Kimi Code" });
+    expect(model).toHaveValue("moonshot-v1");
+    expect(mode).toHaveValue("agent");
+    expect(model).toBeEnabled();
+    await user.selectOptions(model, "moonshot-v2");
+    expect(setAgentSessionAcpConfigOptionMock).toHaveBeenCalledWith(
+      "sess-1",
+      "model",
+      "moonshot-v2",
+    );
+
+    act(() => agentSessionStore.upsertSession({ ...readySession, turn_status: "working" }));
+    expect(model).toBeDisabled();
+    expect(mode).toBeDisabled();
+
+    act(() =>
+      agentSessionStore.upsertSession({
+        ...readySession,
+        acp_runtime: { ...readySession.acp_runtime!, state: "connecting_acp", mode: null },
+      }),
+    );
+    expect(model).toBeDisabled();
+    expect(mode).toBeDisabled();
+
+    act(() =>
+      agentSessionStore.upsertSession({
+        ...readySession,
+        acp_runtime: { ...readySession.acp_runtime!, config_options: [] },
+      }),
+    );
+    expect(screen.queryByLabelText("Configuración ACP de Kimi Code")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /Kimi Code/ })).not.toBeInTheDocument();
+  });
+
+  it("accepts only negotiated image attachments for ACP", async () => {
+    const readySession = sessionFixture({
+      agent_type: "kimi",
+      turn_status: "waiting",
+      acp_runtime: {
+        state: "acp_ready",
+        mode: "acp",
+        detail: null,
+        lost_capabilities: [],
+        retry_available: false,
+        image_attachments: true,
+        config_options: [],
+      },
+      acp_permissions: [],
+    });
+    listAgentSessionsMock.mockResolvedValueOnce([readySession]);
+    openMock.mockResolvedValueOnce(["C:\\Temp\\screen.png", "C:\\Temp\\brief.pdf"]);
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "kimi" })} />);
+
+    const attach = await screen.findByRole("button", { name: "Adjuntar archivos" });
+    expect(attach).toBeEnabled();
+    await user.click(attach);
+    expect(openMock).toHaveBeenCalledWith({
+      filters: [
+        {
+          name: "Imágenes",
+          extensions: expect.arrayContaining(["png", "jpg", "jpeg", "webp", "gif"]),
+        },
+      ],
+      multiple: true,
+      title: "Adjuntar imágenes",
+    });
+    expect(screen.getByLabelText("Archivos adjuntos")).toHaveTextContent("screen.png");
+    expect(screen.getByLabelText("Archivos adjuntos")).not.toHaveTextContent("brief.pdf");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Este proveedor ACP solo admite imágenes; se omitieron los otros archivos.",
+    );
+
+    await user.type(screen.getByLabelText("Mensaje para Kimi Code"), "Describe la captura");
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() =>
+      expect(writeAgentSessionTurnMock).toHaveBeenCalledWith(
+        "sess-1",
+        "Describe la captura",
+        ["C:\\Temp\\screen.png"],
+        expect.any(Object),
+      ),
+    );
+
+    act(() =>
+      agentSessionStore.upsertSession({
+        ...readySession,
+        acp_runtime: { ...readySession.acp_runtime!, image_attachments: false },
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Adjuntar archivos" })).toBeDisabled();
+  });
+
+  it("renders authoritative ACP permission cards and sends the exact option or cancellation", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        agent_type: "kimi",
+        turn_status: "working",
+        acp_runtime: {
+          state: "acp_ready",
+          mode: "acp",
+          detail: null,
+          lost_capabilities: [],
+          retry_available: false,
+          image_attachments: false,
+          config_options: [],
+        },
+        acp_permissions: [
+          {
+            id: "7:s:p1",
+            generation: 7,
+            provider_session_id: "provider-session",
+            turn_id: "turn-1",
+            tool_call_id: "tool-1",
+            title: "Editar src/app.ts",
+            options: [
+              { id: "allow", label: "Permitir una vez", kind: "allow_once" },
+              { id: "deny", label: "Denegar", kind: "reject_once" },
+            ],
+            state: "pending",
+            reason: null,
+            expires_at_ms: 60_000,
+          },
+          {
+            id: "7:s:p2",
+            generation: 7,
+            provider_session_id: "provider-session",
+            turn_id: "turn-1",
+            tool_call_id: "tool-2",
+            title: "Ejecutar pruebas",
+            options: [{ id: "allow", label: "Permitir", kind: "allow_once" }],
+            state: "pending",
+            reason: null,
+            expires_at_ms: 60_000,
+          },
+          {
+            id: "6:s:old",
+            generation: 6,
+            provider_session_id: "old-provider-session",
+            turn_id: "old-turn",
+            tool_call_id: "old-tool",
+            title: "Permiso anterior",
+            options: [],
+            state: "invalidated",
+            reason: "La conexión ACP terminó antes de responder.",
+            expires_at_ms: 1,
+          },
+        ],
+      }),
+    ]);
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "kimi" })} />);
+
+    const permissions = await screen.findByLabelText("Permisos ACP");
+    const acpRegion = screen.getByRole("region", { name: "Estado ACP de Kimi Code" });
+    const acpStatus = within(acpRegion).getByRole("status");
+    expect(within(acpRegion).getAllByRole("status")).toHaveLength(1);
+    expect(acpStatus).toHaveTextContent("Permiso Editar src/app.ts: Pendiente.");
+    const editPermission = within(permissions).getByRole("article", {
+      name: "Editar src/app.ts",
+    });
+    expect(editPermission).toHaveTextContent("Pendiente");
+    await user.click(within(editPermission).getByRole("button", { name: "Denegar" }));
+    expect(respondAgentSessionAcpPermissionMock).toHaveBeenCalledWith(
+      "sess-1",
+      "7:s:p1",
+      "deny",
+      false,
+    );
+
+    const testPermission = within(permissions).getByRole("article", {
+      name: "Ejecutar pruebas",
+    });
+    await user.click(within(testPermission).getByRole("button", { name: "Denegar" }));
+    expect(respondAgentSessionAcpPermissionMock).toHaveBeenCalledWith(
+      "sess-1",
+      "7:s:p2",
+      undefined,
+      true,
+    );
+    await user.click(within(testPermission).getByRole("button", { name: "Cancelar" }));
+    expect(respondAgentSessionAcpPermissionMock).toHaveBeenCalledWith(
+      "sess-1",
+      "7:s:p2",
+      undefined,
+      false,
+    );
+
+    const invalidated = within(permissions).getByRole("article", {
+      name: "Permiso anterior",
+    });
+    expect(invalidated).toHaveTextContent("Invalidado");
+    expect(invalidated).toHaveTextContent("La conexión ACP terminó antes de responder.");
+    expect(within(invalidated).queryByRole("button")).toBeNull();
+    const current = agentSessionStore.getState().sessions["sess-1"]!;
+    act(() =>
+      agentSessionStore.upsertSession({
+        ...current,
+        acp_permissions: current.acp_permissions?.map((permission) =>
+          permission.id === "7:s:p1" ? { ...permission, state: "allowed" } : permission,
+        ),
+      }),
+    );
+    expect(acpStatus).toHaveTextContent("Permiso Editar src/app.ts: Permitido.");
+    expect(
+      within(screen.getByLabelText("Conversación con Agent")).queryByLabelText("Permisos ACP"),
+    ).toBeNull();
   });
 
   it("confirms a completed turn only when its checkpoint is ready", async () => {
@@ -1182,7 +1534,7 @@ describe("TerminalPanel", () => {
     );
 
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-  });
+  }, 10_000);
 
   it("runs init through the host command backend from the palette", async () => {
     const user = userEvent.setup();

@@ -23,6 +23,7 @@ import {
   type AgentRuntimeCatalog,
   type AgentSessionRuntimeOptions,
   type AgentHostCommandResult,
+  type AgentProviderReadiness,
   type GitleaksSetupStatus,
   type GitleaksInstallResult,
   type CopyResult,
@@ -124,6 +125,22 @@ export const startAgentSession = (repo: string, agentType: string) =>
 
 export const stopAgentSession = (sessionId: string) => invoke("stop_agent_session", { sessionId });
 
+export const retryAgentSessionAcp = (sessionId: string, confirmed: boolean) =>
+  invoke("retry_agent_session_acp", { sessionId, confirmed });
+
+export const respondAgentSessionAcpPermission = (
+  sessionId: string,
+  permissionId: string,
+  optionId?: string,
+  deny = false,
+) => invoke("respond_agent_session_acp_permission", { sessionId, permissionId, optionId, deny });
+
+export const setAgentSessionAcpConfigOption = (
+  sessionId: string,
+  configId: string,
+  valueId: string,
+) => invoke("set_agent_session_acp_config_option", { sessionId, configId, valueId });
+
 export const listAgentSessions = () => invoke<AgentSession[]>("list_agent_sessions");
 
 export const getAgentRuntimeCatalog = (sessionId: string, refresh = false) =>
@@ -202,6 +219,9 @@ export const agentBinaryAvailable = (agentType: string) =>
 
 export const agentBinaryAvailableForRepo = (repo: string, agentType: string) =>
   invoke<boolean>("agent_binary_available_for_repo", { repo, agentType });
+
+export const agentProviderReadinessForRepo = (repo: string, agentType: string) =>
+  invoke<AgentProviderReadiness>("agent_provider_readiness_for_repo", { repo, agentType });
 
 export const writeAgentSessionInput = (
   sessionId: string,

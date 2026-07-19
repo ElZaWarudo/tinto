@@ -1136,6 +1136,8 @@ function agentLabel(agentType: string): string {
       return "Codex";
     case "claude":
       return "Claude Code";
+    case "kimi":
+      return "Kimi Code";
     case "opencode":
       return "OpenCode";
     default:
@@ -1149,6 +1151,8 @@ function agentLogoText(agentType: string): string {
       return "Cx";
     case "claude":
       return "Cl";
+    case "kimi":
+      return "Ki";
     case "opencode":
       return "OC";
     default:

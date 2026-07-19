@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   AgentHostCommandResult,
+  AgentProviderReadiness,
+  AgentSessionAcpRuntime,
   AgentSession,
   AgentSessionChangeLog,
   AgentSessionOutput,
@@ -11,6 +13,56 @@ import type {
   RepoDelta,
   WorkbenchConfig,
 } from "./contract";
+
+describe("agent provider readiness contract", () => {
+  it("keeps binary discovery distinct from later provider connection state", () => {
+    const readiness = JSON.parse(
+      '{"agent_type":"kimi","source":"wsl","distro":"Ubuntu-24.04","state":"binary_available"}',
+    ) as AgentProviderReadiness;
+
+    expect(readiness).toEqual({
+      agent_type: "kimi",
+      source: "wsl",
+      distro: "Ubuntu-24.04",
+      state: "binary_available",
+    });
+  });
+
+  it("pins the six ACP states and the two runtime modes", () => {
+    const states: AgentSessionAcpRuntime[] = [
+      { state: "unavailable", retry_available: false },
+      { state: "authentication_required", retry_available: true },
+      { state: "connecting_acp", retry_available: false },
+      { state: "acp_ready", mode: "acp", retry_available: false },
+      {
+        state: "pty_compatibility",
+        mode: "pty",
+        detail: "ACP v1 no disponible",
+        lost_capabilities: ["structured_updates", "permissions"],
+        retry_available: true,
+      },
+      { state: "failed", detail: "La sesión no está disponible", retry_available: false },
+    ];
+
+    expect(states.map(({ state }) => state)).toEqual([
+      "unavailable",
+      "authentication_required",
+      "connecting_acp",
+      "acp_ready",
+      "pty_compatibility",
+      "failed",
+    ]);
+    expect(states[3].mode).toBe("acp");
+    expect(states[4]).toMatchObject({
+      mode: "pty",
+      detail: "ACP v1 no disponible",
+      lost_capabilities: ["structured_updates", "permissions"],
+      retry_available: true,
+    });
+    expect(states[0]).not.toHaveProperty("detail");
+    expect(states[0]).not.toHaveProperty("lost_capabilities");
+  });
+});
 
 // D-008-5: the TS diff types must match the backend's serde output exactly.
 // The Rust enum `DiffLineKind` derives Serialize with no rename_all, so it
@@ -265,6 +317,7 @@ import {
   getBlob,
   agentBinaryAvailable,
   agentBinaryAvailableForRepo,
+  agentProviderReadinessForRepo,
   addWslRepo,
   forgetRepo,
   getAgentJournalSession,
@@ -293,11 +346,14 @@ import {
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
+  respondAgentSessionAcpPermission,
+  retryAgentSessionAcp,
   resumeAgentJournalSession,
   runAgentHostCommand,
   removeRepoEntry,
   removeWslRepo,
   setSubscriptions,
+  setAgentSessionAcpConfigOption,
   startAgentSession,
   steerAgentSessionTurn,
   stopAgentSession,
@@ -423,6 +479,35 @@ describe("RDM-008 client wrappers", () => {
       sessionId: "sess-1",
     });
 
+    void retryAgentSessionAcp("sess-1", true);
+    expect(invokeMock).toHaveBeenCalledWith("retry_agent_session_acp", {
+      sessionId: "sess-1",
+      confirmed: true,
+    });
+
+    void respondAgentSessionAcpPermission("sess-1", "permission-1", "deny");
+    expect(invokeMock).toHaveBeenCalledWith("respond_agent_session_acp_permission", {
+      sessionId: "sess-1",
+      permissionId: "permission-1",
+      optionId: "deny",
+      deny: false,
+    });
+
+    void respondAgentSessionAcpPermission("sess-1", "permission-2", undefined, true);
+    expect(invokeMock).toHaveBeenCalledWith("respond_agent_session_acp_permission", {
+      sessionId: "sess-1",
+      permissionId: "permission-2",
+      optionId: undefined,
+      deny: true,
+    });
+
+    void setAgentSessionAcpConfigOption("sess-1", "model", "kimi-k2");
+    expect(invokeMock).toHaveBeenCalledWith("set_agent_session_acp_config_option", {
+      sessionId: "sess-1",
+      configId: "model",
+      valueId: "kimi-k2",
+    });
+
     void listAgentSessions();
     expect(invokeMock).toHaveBeenCalledWith("list_agent_sessions");
 
@@ -483,6 +568,12 @@ describe("RDM-008 client wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("agent_binary_available_for_repo", {
       repo: "/r/api",
       agentType: "codex",
+    });
+
+    void agentProviderReadinessForRepo("/home/me/api", "kimi");
+    expect(invokeMock).toHaveBeenCalledWith("agent_provider_readiness_for_repo", {
+      repo: "/home/me/api",
+      agentType: "kimi",
     });
 
     void runAgentHostCommand("sess-1", "goal", "Ship host commands");

@@ -11,6 +11,7 @@ export default defineConfig(async () => ({
 
   test: {
     environment: "jsdom",
+    fileParallelism: false,
     setupFiles: "./src/setupTests.ts",
     globals: false,
   },
