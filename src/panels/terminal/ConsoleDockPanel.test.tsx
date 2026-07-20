@@ -617,7 +617,7 @@ describe("ConsoleDockPanel detach drop", () => {
       await screen.findByRole("complementary", { name: /sesiones de agents/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /mostrar api codex/i })).toBeInTheDocument();
-    expect(screen.getByText("Activa")).toBeInTheDocument();
+    expect(screen.getByText("En curso")).toBeInTheDocument();
     expect(screen.getByText(/codex · api · trabajando/i)).toBeInTheDocument();
     expect(screen.getByText("I am updating the parser")).toBeInTheDocument();
     expect(screen.queryByTestId("console-empty")).toBeNull();
@@ -648,7 +648,7 @@ describe("ConsoleDockPanel detach drop", () => {
     expect(screen.getByRole("button", { name: /mostrar api codex/i })).toBeInTheDocument();
   });
 
-  it("shows active and saved conversations in one list with an active indicator", async () => {
+  it("separates conversations in progress from recent history", async () => {
     consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
     clientMocks.listAgentJournalSessions.mockResolvedValue([
       {
@@ -686,9 +686,8 @@ describe("ConsoleDockPanel detach drop", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("Conversaciones").parentElement).toHaveTextContent("2");
-    expect(screen.queryByText("Activas")).not.toBeInTheDocument();
-    expect(screen.queryByText("Guardadas")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Activa")).toHaveLength(1);
+    expect(screen.getByText("En curso")).toBeInTheDocument();
+    expect(screen.getByText("Recientes")).toBeInTheDocument();
     unmount();
   });
 

@@ -362,9 +362,9 @@ describe("TerminalPanel", () => {
     expect(sessionStatus).toHaveTextContent("En ejecución");
     expect(sessionStatus).toHaveTextContent("Trabajando");
     expect(sessionStatus).toHaveTextContent("1 cambio");
-    const processStatus = screen.getByRole("status", { name: "Codex está pensando" });
-    expect(processStatus).toHaveTextContent("Codex está pensando");
-    expect(processStatus).toHaveTextContent("RAZONANDO");
+    const processStatus = screen.getByRole("status", { name: "Codex está trabajando" });
+    expect(processStatus).toHaveTextContent("Codex está trabajando");
+    expect(processStatus).toHaveTextContent("EN CURSO");
     expect(screen.queryByTestId("terminal-surface")).not.toBeInTheDocument();
   });
 
@@ -760,7 +760,7 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
     await screen.findByTitle(/Estado: En ejecución/);
     expect(
-      screen.queryByRole("status", { name: /Codex está pensando|Codex está revisando cambios/ }),
+      screen.queryByRole("status", { name: /Codex está trabajando|Codex está revisando cambios/ }),
     ).toBeNull();
   });
 
@@ -788,12 +788,87 @@ describe("TerminalPanel", () => {
 
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    const activity = await screen.findByRole("status", { name: "Ejecutando npm test" });
-    expect(activity).toHaveTextContent("ACTIVIDAD");
-    expect(screen.queryByText("Codex está pensando")).toBeNull();
-    expect(screen.getByLabelText("Conversación con Agent")).toHaveTextContent(
-      "Ejecutando npm test",
-    );
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    const activity = await within(conversation).findByText("Actividad en curso");
+    const disclosure = activity.closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(disclosure).toHaveAttribute("data-active", "true");
+    expect(disclosure?.querySelector(".agent-panel__thought-signal")).toBeNull();
+    expect(
+      within(disclosure as HTMLElement).getByText("Ejecutando npm test", {
+        selector: ".agent-panel__thought-summary",
+      }),
+    ).toBeInTheDocument();
+    expect(within(conversation).getAllByText("Ejecutando npm test")).toHaveLength(2);
+    expect(screen.queryByRole("status", { name: "Ejecutando npm test" })).toBeNull();
+    expect(screen.queryByText("Codex está trabajando")).toBeNull();
+
+    act(() => {
+      agentSessionStore.upsertSession(sessionFixture({ turn_status: "waiting" }));
+    });
+    expect(await within(conversation).findByText("Actividad")).toBeInTheDocument();
+    expect(disclosure).not.toHaveAttribute("data-active");
+  });
+
+  it("removes the PowerShell launcher from Codex command activity", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        timeline: [
+          {
+            session_id: "sess-1",
+            id: "user-1",
+            kind: "user_message",
+            text: "Ejecuta las pruebas",
+            timestamp_ms: 10,
+          },
+          {
+            session_id: "sess-1",
+            id: "activity-1",
+            kind: "activity",
+            text: `Ejecutando "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$testTmp="C:\\repo\\tmp"; cargo test'`,
+            timestamp_ms: 11,
+          },
+        ],
+      }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    expect(
+      (await within(conversation).findAllByText('Ejecutando $testTmp="C:\\repo\\tmp"; cargo test'))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(within(conversation).queryByText(/powershell\.exe/i)).not.toBeInTheDocument();
+  });
+
+  it("filters generic progress filler from the visible conversation", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        timeline: [
+          {
+            session_id: "sess-1",
+            id: "user-generic-progress",
+            kind: "user_message",
+            text: "Continúa",
+            timestamp_ms: 10,
+          },
+          {
+            session_id: "sess-1",
+            id: "generic-progress",
+            kind: "agent_progress",
+            text: "Analizando el siguiente paso...",
+            timestamp_ms: 11,
+          },
+        ],
+      }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    expect((await screen.findAllByText("Continúa")).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText("Analizando el siguiente paso...")).toHaveLength(0);
+    expect(screen.getByRole("status", { name: "Codex está trabajando" })).toBeInTheDocument();
   });
 
   it("shows active host context that will steer the next turn", async () => {
@@ -845,6 +920,90 @@ describe("TerminalPanel", () => {
       speed: "standard",
     });
     expect(composer).toHaveValue("");
+  });
+
+  it("resumes an exited live conversation before sending its preserved draft", async () => {
+    const user = userEvent.setup();
+    const openAgentTerminal = vi.fn();
+    listAgentSessionsMock
+      .mockResolvedValueOnce([
+        sessionFixture({
+          status: "exited",
+          pid: null,
+          ended_at_ms: 2500,
+          exit_code: 0,
+          turn_status: "waiting",
+          active_sessions: 0,
+        }),
+      ])
+      .mockResolvedValueOnce([sessionFixture({ id: "sess-resumed", status: "running" })]);
+    renderWithWorkspaceActions(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
+      { openAgentTerminal },
+    );
+
+    const composer = await screen.findByPlaceholderText("Continúa esta conversación");
+    expect(composer).toHaveAttribute(
+      "title",
+      "Entrada de mensajes de Codex para a: el próximo mensaje retomará la conversación archivada.",
+    );
+    await user.type(composer, "Seguimos");
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => expect(resumeAgentJournalSessionMock).toHaveBeenCalledWith("sess-1"));
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-resumed", "Seguimos\r", {
+      speed: "standard",
+    });
+    expect(openAgentTerminal).toHaveBeenCalledWith({
+      sessionId: "sess-resumed",
+      repo: "/r/a",
+      agentType: "codex",
+    });
+    expect(composer).toHaveValue("");
+  });
+
+  it("reuses the resumed conversation when retrying a failed first message", async () => {
+    const user = userEvent.setup();
+    const openAgentTerminal = vi.fn();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        status: "exited",
+        pid: null,
+        ended_at_ms: 2500,
+        exit_code: 0,
+        turn_status: "waiting",
+        active_sessions: 0,
+      }),
+    ]);
+    writeAgentSessionInputMock
+      .mockRejectedValueOnce(new Error("Session is still starting"))
+      .mockResolvedValueOnce(undefined);
+    renderWithWorkspaceActions(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
+      { openAgentTerminal },
+    );
+
+    const composer = await screen.findByPlaceholderText("Continúa esta conversación");
+    await user.type(composer, "Seguimos");
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(await screen.findByTestId("terminal-panel-error")).toBeInTheDocument();
+    expect(composer).toHaveValue("Seguimos");
+
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => expect(writeAgentSessionInputMock).toHaveBeenCalledTimes(2));
+    expect(resumeAgentJournalSessionMock).toHaveBeenCalledTimes(1);
+    expect(writeAgentSessionInputMock).toHaveBeenLastCalledWith("sess-resumed", "Seguimos\r", {
+      speed: "standard",
+    });
+    expect(openAgentTerminal).toHaveBeenCalledWith({
+      sessionId: "sess-resumed",
+      repo: "/r/a",
+      agentType: "codex",
+    });
+    expect(composer).toHaveValue("");
+    consoleError.mockRestore();
   });
 
   it("sends Codex turns with models discovered from the runtime catalog", async () => {
@@ -2357,7 +2516,7 @@ describe("TerminalPanel", () => {
     expect(within(conversation).getAllByText("Agent")).toHaveLength(2);
     expect(within(conversation).getByText("Voy con ello")).toBeInTheDocument();
     expect(within(conversation).getByText("Comando")).toBeInTheDocument();
-    expect(within(conversation).getByText("cargo test")).toBeInTheDocument();
+    expect(within(conversation).getAllByText("cargo test").length).toBeGreaterThan(0);
     expect(within(conversation).getByText("4 mensajes / 1 comando")).toBeInTheDocument();
     const orderedMessages = [...conversation.querySelectorAll(".agent-panel__message")].map(
       (element) => element.textContent,
@@ -2602,7 +2761,11 @@ describe("TerminalPanel", () => {
     const conversation = screen.getByLabelText("Conversación con Agent");
     expect(await within(conversation).findByRole("list")).toBeInTheDocument();
     expect(within(conversation).getByText("src/a.ts")).toBeInTheDocument();
-    expect(within(conversation).getByText("npm test -- --run").tagName).toBe("PRE");
+    expect(
+      within(conversation)
+        .getAllByText("npm test -- --run")
+        .some((element) => element.tagName === "PRE"),
+    ).toBe(true);
   });
 
   it("reconstructs streamed agent markdown without inserting spaces between deltas", async () => {
@@ -2732,7 +2895,7 @@ describe("TerminalPanel", () => {
       });
     });
 
-    const summary = await screen.findByText("Pensamiento");
+    const summary = await screen.findByText("Actividad");
     const disclosure = summary.closest("details");
     expect(disclosure).not.toHaveAttribute("open");
     expect(document.querySelector(".agent-panel__message-activity-signal")).toBeNull();
@@ -2744,10 +2907,48 @@ describe("TerminalPanel", () => {
     expect(screen.getAllByText("Leyendo package.json").length).toBeGreaterThan(0);
   });
 
+  it("follows streamed conversation content until the user scrolls away from the bottom", async () => {
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    const conversation = await screen.findByRole("log", { name: "Conversación con Agent" });
+    Object.defineProperties(conversation, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 600, writable: true },
+    });
+    fireEvent.scroll(conversation);
+
+    await act(async () => {
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:user:auto-follow",
+        kind: "user_message",
+        text: "Sigue abajo",
+        timestamp_ms: 1,
+      });
+    });
+    await waitFor(() => expect(conversation.scrollTop).toBe(1000));
+
+    conversation.scrollTop = 120;
+    fireEvent.scroll(conversation);
+    await act(async () => {
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:activity:auto-follow",
+        kind: "activity",
+        text: "Leyendo src/App.tsx",
+        timestamp_ms: 2,
+      });
+    });
+
+    expect(conversation.scrollTop).toBe(120);
+  });
+
   it("clears the process indicator when the completed session snapshot reaches the UI", async () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
 
-    expect(await screen.findByRole("status", { name: "Codex está pensando" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("status", { name: "Codex está trabajando" }),
+    ).toBeInTheDocument();
     await act(async () => {
       agentSessionStore.upsertSession(sessionFixture({ turn_status: "waiting" }));
     });
@@ -3587,6 +3788,84 @@ describe("TerminalPanel", () => {
     expect(openFile).toHaveBeenCalledWith("/r/a", "src/panels/terminal/TerminalPanel.tsx", true);
   });
 
+  it("offers accessible file actions from Markdown links", async () => {
+    const user = userEvent.setup();
+    const openFile = vi.fn();
+    installClipboardMock();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        timeline: [
+          {
+            session_id: "sess-1",
+            id: "agent-file-actions",
+            kind: "agent_message",
+            text: "Revisa [TerminalPanel.tsx](src/panels/terminal/TerminalPanel.tsx).",
+            timestamp_ms: 2,
+          },
+        ],
+      }),
+    ]);
+    renderWithWorkspaceActions(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
+      { openFile },
+    );
+
+    await screen.findByRole("button", { name: "TerminalPanel.tsx" });
+    const actions = screen.getByRole("button", {
+      name: "Acciones para src/panels/terminal/TerminalPanel.tsx",
+    });
+    actions.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("menu", { name: /Acciones para src\/panels/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Copiar ruta" }));
+    expect(writeClipboardTextMock).toHaveBeenCalledWith("src/panels/terminal/TerminalPanel.tsx");
+
+    await user.click(actions);
+    await user.click(screen.getByRole("menuitem", { name: "Abrir archivo" }));
+    expect(openFile).toHaveBeenCalledWith("/r/a", "src/panels/terminal/TerminalPanel.tsx", true);
+  });
+
+  it("opens encoded absolute Windows Markdown links inside the repository dock", async () => {
+    const openFile = vi.fn();
+    const repo = "C:\\Users\\User\\Documents\\personal\\tinto";
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        repo,
+        timeline: [
+          {
+            session_id: "sess-1",
+            id: "user-absolute-link",
+            kind: "user_message",
+            text: "Abre el protocolo",
+            timestamp_ms: 1,
+          },
+          {
+            session_id: "sess-1",
+            id: "agent-absolute-link",
+            kind: "agent_message",
+            text: "[protocolo](C:%5CUsers%5CUser%5CDocuments%5Cpersonal%5Ctinto%5Cdocs%5Cprotocol.md:12)",
+            timestamp_ms: 2,
+          },
+        ],
+      }),
+    ]);
+    renderWithWorkspaceActions(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo, agentType: "codex" })} />,
+      { openFile },
+    );
+
+    const conversation = await screen.findByRole("log", { name: "Conversación con Agent" });
+    const link = within(conversation).getByRole("button", { name: "protocolo" });
+    expect(link).toHaveAttribute(
+      "data-repo-path",
+      "C:/Users/User/Documents/personal/tinto/docs/protocol.md:12",
+    );
+    fireEvent.click(link);
+
+    expect(openFile).toHaveBeenCalledWith(repo, "docs/protocol.md", true);
+    expect(link).not.toHaveAttribute("href");
+  });
+
   it("summarizes touched artifacts for each turn", async () => {
     listAgentSessionsMock.mockResolvedValueOnce([
       sessionFixture({
@@ -3994,6 +4273,42 @@ describe("TerminalPanel", () => {
     );
     expect(within(lens).getAllByText("src/first.ts").length).toBeGreaterThan(0);
     expect(within(lens).getAllByText("src/second.ts").length).toBeGreaterThan(0);
+  });
+
+  it("aligns legacy checkpoint changes with the focused turn by timestamp", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        change_log: [],
+        turn_checkpoints: [
+          {
+            id: "sess-1:turn-1",
+            index: 1,
+            started_at_ms: 30,
+            ended_at_ms: 31,
+            checkpoint: { checkpoint_type: "fs_snapshot", git_hash: null, snapshot_files: [] },
+            changes: [{ path: "src/third.ts", kind: "modified", timestamp_ms: 31 }],
+          },
+        ],
+      }),
+    ]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await act(async () => {
+      for (const [index, timestamp] of [10, 20, 30].entries()) {
+        agentSessionStore.appendTimelineItem({
+          session_id: "sess-1",
+          id: `sess-1:user:${index + 1}`,
+          kind: "user_message",
+          text: `Task ${index + 1}`,
+          timestamp_ms: timestamp,
+        });
+      }
+    });
+
+    const lens = await screen.findByLabelText("Agent Lens");
+    expect(within(lens).getByText("Turno 3")).toBeInTheDocument();
+    expect(within(lens).getAllByText("src/third.ts").length).toBeGreaterThan(0);
+    expect(within(lens).getByText("1", { selector: ".agent-panel__lens-metrics span" })).toBeInTheDocument();
   });
 
   it("opens focused files and drafts file-specific follow-up prompts", async () => {

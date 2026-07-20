@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, SetStateAction } from "react";
+import { createPortal } from "react-dom";
 import type { IDockviewPanelProps } from "dockview-react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   branchAgentSessionFromMessage,
@@ -385,7 +386,6 @@ type AgentTurnDisplayItem =
       type: "thought";
       id: string;
       events: AgentTurnEventView[];
-      defaultOpen: boolean;
     };
 
 interface EditingAgentMessage {
@@ -518,6 +518,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const { openFile, openAgentTerminal } = useWorkspaceActions();
   const readOnly = mode === "journal";
   const session = useAgentSession(sessionId);
+  const resumesConversation = readOnly || session?.status === "exited";
   const { chunks: sessionOutput } = useAgentSessionOutput(sessionId);
   const timeline = useAgentSessionTimeline(sessionId);
   const [initialComposerDraft] = useState(() => readAgentComposerDraft(sessionId));
@@ -591,6 +592,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [settingAcpConfigId, setSettingAcpConfigId] = useState<string | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptSearchRef = useRef<HTMLInputElement | null>(null);
+  const pendingJournalResumeRef = useRef<JournalResumeTarget | null>(null);
+  const chatRef = useRef<HTMLElement | null>(null);
+  const autoFollowChatRef = useRef(true);
   const runtimeCatalogSessionRef = useRef<string | null>(null);
   const runtimeCatalogRefreshAppliedRef = useRef(0);
 
@@ -665,7 +669,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     !!sessionId &&
     !sending &&
     acpAcceptsInput &&
-    (readOnly
+    (resumesConversation
       ? !!session
       : session?.status !== "completed" &&
         session?.status !== "failed" &&
@@ -675,6 +679,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const canSend = composerEnabled && (draft.trim().length > 0 || attachments.length > 0);
   const turnActive = !readOnly && session?.turn_status === "working";
   const processState = agentProcessState(session, sending, agentType, readOnly, timeline);
+  const fileRepo = repo ?? sessionRepo;
+  const openSessionFile = fileRepo
+    ? (path: string) => {
+        const repoPath = repoRelativeFilePath(fileRepo, path);
+        if (repoPath) openFile(fileRepo, repoPath, true);
+      }
+    : undefined;
   const resumeSync = resumedSessionSync(session);
   const visibleError =
     error ??
@@ -698,6 +709,17 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const canAttachFiles = composerEnabled && (isCodexSession || acpAcceptsImageAttachments);
   const canEditMessages = !readOnly && !turnActive && !sending;
   const composerCommandTrigger = readComposerCommandTrigger(draft);
+
+  useLayoutEffect(() => {
+    autoFollowChatRef.current = true;
+    pendingJournalResumeRef.current = null;
+  }, [sessionId]);
+
+  useLayoutEffect(() => {
+    const chat = chatRef.current;
+    if (!chat || !autoFollowChatRef.current) return;
+    chat.scrollTop = chat.scrollHeight;
+  }, [processState?.label, sessionId, visibleTurns]);
   const composerCommandQuery = composerCommandTrigger?.query ?? "";
   const composerCommandItems = useMemo<AgentComposerCommand[]>(
     () => [
@@ -810,7 +832,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     [composerCommandItems, composerCommandTrigger],
   );
   const commandMenuVisible =
-    !readOnly && slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
+    !resumesConversation && slashMenuOpen && Boolean(composerCommandTrigger) && canCompose;
   const composerCommandListboxId = `composer-command-menu-${sessionId}`;
   const composerHintId = `agent-composer-hint-${sessionId}`;
   const activeComposerCommand = commandMenuVisible
@@ -1106,7 +1128,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     }
     const text = draft.trimEnd();
     const slashCommandHandled =
-      !readOnly &&
+      !resumesConversation &&
       isCodexSession &&
       applyCodexRuntimeSlashCommand(text, {
         setModel: setSelectedModel,
@@ -1119,7 +1141,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       setSlashMenuOpen(false);
       return;
     }
-    if (!readOnly && (await applyComposerSlashCommand(text))) {
+    if (!resumesConversation && (await applyComposerSlashCommand(text))) {
       return;
     }
     if (action === "queue") {
@@ -1135,6 +1157,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       setRuntimeNotice(null);
       return;
     }
+    autoFollowChatRef.current = true;
     setSending(true);
     setError(null);
     try {
@@ -1146,16 +1169,20 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           text,
           attachments.map((attachment) => attachment.path),
         );
-      } else if (readOnly) {
+      } else if (resumesConversation) {
         if (!session) return;
-        const result = await resumeAgentJournalSession(session.id);
-        targetSessionId = result.session_id;
-        journalResume = {
-          sessionId: result.session_id,
-          repo: session.repo,
-          agentType: session.agent_type,
-          resumeMode: result.mode,
-        };
+        journalResume = pendingJournalResumeRef.current;
+        if (!journalResume) {
+          const result = await resumeAgentJournalSession(session.id);
+          journalResume = {
+            sessionId: result.session_id,
+            repo: session.repo,
+            agentType: session.agent_type,
+            resumeMode: result.mode,
+          };
+          pendingJournalResumeRef.current = journalResume;
+        }
+        targetSessionId = journalResume.sessionId;
       }
       if (action !== "steer" && attachments.length > 0) {
         await writeAgentSessionTurn(
@@ -1173,6 +1200,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       setDraft("");
       setAttachments([]);
       setRuntimeNotice(null);
+      pendingJournalResumeRef.current = null;
       if (journalResume && session) {
         if (!agentSessionStore.getState().sessions[journalResume.sessionId]) {
           agentSessionStore.upsertSession(provisionalResumedSession(session, journalResume));
@@ -1980,6 +2008,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 onClick={() => {
                   const latest = visibleTurns[visibleTurns.length - 1];
                   if (latest) {
+                    autoFollowChatRef.current = true;
                     setFocusedTurnIndex(latest.index);
                     scrollToAgentTurn(sessionId, latest.index, "end");
                   }
@@ -2009,6 +2038,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             </div>
           </div>
           <main
+            ref={chatRef}
             className="agent-panel__chat"
             aria-label="Conversación con Agent"
             aria-live="polite"
@@ -2016,12 +2046,17 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             aria-atomic="false"
             role="log"
             onClickCapture={(event) => {
-              if (!sessionRepo || !(event.target instanceof Element)) return;
+              if (!(event.target instanceof Element)) return;
               const target = event.target.closest<HTMLElement>("[data-repo-path]");
               const repoPath = target?.dataset.repoPath;
               if (!repoPath) return;
               event.preventDefault();
-              openFile(sessionRepo, repoPath, true);
+              openSessionFile?.(repoPath);
+            }}
+            onScroll={(event) => {
+              const chat = event.currentTarget;
+              autoFollowChatRef.current =
+                chat.scrollHeight - chat.scrollTop - chat.clientHeight <= 48;
             }}
           >
             {visibleTurns.length > 0 ? (
@@ -2039,7 +2074,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   onCopyMessage={(target, text) => void copyText(target, text)}
                   onCopyTurn={(target, text) => void copyText(target, text)}
                   onEditMessage={canEditMessages ? () => void beginEditingMessage(turn) : undefined}
-                  onOpenFile={sessionRepo ? (path) => openFile(sessionRepo, path, true) : undefined}
+                  activityActive={
+                    turnActive &&
+                    turn.index === turns[turns.length - 1]?.index &&
+                    isOperationalEvent(turn.events[turn.events.length - 1])
+                  }
+                  onOpenFile={openSessionFile}
                   onSubmitEdit={() => void sendEditedMessage()}
                   searchQuery={transcriptQuery}
                   sendingEdit={sending && editingMessage?.id === turn.id}
@@ -2169,7 +2209,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                     canPromptForFile={canCompose}
                     revertingFile={revertingFile}
                     onOpenFile={(path) => {
-                      if (sessionRepo) openFile(sessionRepo, path, true);
+                      openSessionFile?.(path);
                     }}
                     onPromptFile={applyFileActionPrompt}
                     onRevertTurnFile={onRevertTurnFile}
@@ -2228,7 +2268,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           </div>
         )}
         <span className="sr-only" id={composerHintId}>
-          {readOnly
+          {resumesConversation
             ? "Escribe un mensaje para retomar esta conversación archivada."
             : canCompose
               ? "Escribe / para ver comandos o $ para ver habilidades."
@@ -2385,9 +2425,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             value={draft}
             onChange={(event) => onDraftChange(event.currentTarget.value)}
             onKeyDown={onDraftKeyDown}
-            title={agentComposerInputTitle(agentType, repo, readOnly, canCompose)}
+            title={agentComposerInputTitle(agentType, repo, resumesConversation, canCompose)}
             placeholder={
-              readOnly ? "Continúa esta conversación" : `Mensaje para ${agentLabel(agentType)}`
+              resumesConversation
+                ? "Continúa esta conversación"
+                : `Mensaje para ${agentLabel(agentType)}`
             }
             disabled={!canCompose}
             rows={2}
@@ -2401,7 +2443,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               repo,
               canSend,
               sending,
-              readOnly,
+              resumesConversation,
               canCompose,
               draft.trim().length > 0,
             )}
@@ -3807,6 +3849,7 @@ function AgentTurnFocus({
 }
 
 function AgentTurn({
+  activityActive,
   copiedTarget,
   editingMessage,
   firstTurnAtMs,
@@ -3823,6 +3866,7 @@ function AgentTurn({
   turn,
   turnElementId,
 }: {
+  activityActive: boolean;
   copiedTarget: string | null;
   editingMessage: EditingAgentMessage | null;
   firstTurnAtMs: number | null;
@@ -3917,11 +3961,11 @@ function AgentTurn({
           attachments={turn.attachments}
         />
       )}
-      {displayItems.map((item) => {
+      {displayItems.map((item, index) => {
         if (item.type === "thought") {
           return (
             <AgentThoughtDisclosure
-              defaultOpen={item.defaultOpen}
+              active={activityActive && index === displayItems.length - 1}
               events={item.events}
               key={item.id}
               onOpenFile={onOpenFile}
@@ -3978,21 +4022,25 @@ function AgentTurn({
 }
 
 function AgentThoughtDisclosure({
-  defaultOpen,
+  active,
   events,
   onOpenFile,
 }: {
-  defaultOpen: boolean;
+  active: boolean;
   events: AgentTurnEventView[];
   onOpenFile?: (path: string) => void;
 }) {
   const latest = events[events.length - 1];
-  const summary = compactProcessLabel(latest?.text ?? "") ?? "Actividad del agente";
+  const summary = activityEventSummary(latest);
   return (
-    <details className="agent-panel__thought" open={defaultOpen || undefined}>
+    <details className="agent-panel__thought" data-active={active || undefined}>
       <summary>
-        <span>Pensamiento</span>
-        <small>{summary}</small>
+        <span className="agent-panel__thought-label">
+          {active ? "Actividad en curso" : "Actividad"}
+        </span>
+        <small className="agent-panel__thought-summary" key={summary}>
+          {summary}
+        </small>
         <span aria-hidden="true" className="agent-panel__thought-chevron">
           ›
         </span>
@@ -4000,7 +4048,18 @@ function AgentThoughtDisclosure({
       <div className="agent-panel__thought-events">
         {events.map((event) => (
           <div className="agent-panel__thought-event" key={event.id}>
-            <AgentMarkdown onOpenFile={onOpenFile} text={event.text} />
+            {event.kind === "command_output" ? (
+              <details className="agent-panel__thought-command agent-panel__message agent-panel__message--command_output">
+                <summary>
+                  <span>Comando</span>
+                  <strong>{commandOutputSummary(event.text)}</strong>
+                  <small>Mostrar salida</small>
+                </summary>
+                <pre>{event.text}</pre>
+              </details>
+            ) : (
+              <AgentMarkdown onOpenFile={onOpenFile} text={activityDisplayText(event.text)} />
+            )}
           </div>
         ))}
       </div>
@@ -4159,13 +4218,9 @@ function AgentMarkdown({
           const repoPath = markdownRepoPath(href);
           if (repoPath && onOpenFile) {
             return (
-              <button
-                className="agent-panel__markdown-file-link"
-                data-repo-path={repoPath}
-                type="button"
-              >
+              <AgentMarkdownFileLink onOpenFile={onOpenFile} path={repoPath}>
                 {children}
-              </button>
+              </AgentMarkdownFileLink>
             );
           }
           return (
@@ -4176,23 +4231,213 @@ function AgentMarkdown({
         },
       }}
       remarkPlugins={[remarkGfm]}
+      urlTransform={agentMarkdownUrlTransform}
     >
       {text}
     </ReactMarkdown>
   );
 }
 
+function AgentMarkdownFileLink({
+  children,
+  onOpenFile,
+  path,
+}: {
+  children: React.ReactNode;
+  onOpenFile: (path: string) => void;
+  path: string;
+}) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuOriginRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menu, setMenu] = useState<{ left: number; top: number } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const closeMenu = (restoreFocus = false) => {
+    setMenu(null);
+    if (restoreFocus) window.requestAnimationFrame(() => menuOriginRef.current?.focus());
+  };
+
+  const openMenu = (left: number, top: number, origin: HTMLButtonElement | null) => {
+    menuOriginRef.current = origin;
+    setMenu({
+      left: Math.min(left, window.innerWidth - 228),
+      top: Math.min(top, window.innerHeight - 112),
+    });
+  };
+
+  useEffect(() => {
+    if (!menu) return;
+    const frame = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    });
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) closeMenu(false);
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+    };
+  }, [menu]);
+
+  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+    );
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "Escape" || event.key === "Tab") {
+      if (event.key === "Escape") event.preventDefault();
+      closeMenu(event.key === "Escape");
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = (currentIndex + direction + items.length) % items.length;
+    items[nextIndex]?.focus();
+  };
+
+  const copyPath = async () => {
+    closeMenu(false);
+    try {
+      await writeClipboardText(path);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <>
+      <span className="agent-panel__markdown-file-reference">
+        <button
+          ref={triggerRef}
+          className="agent-panel__markdown-file-link"
+          data-repo-path={path}
+          aria-haspopup="menu"
+          title={copied ? "Ruta copiada" : `${path} · Clic para abrir · clic derecho para acciones`}
+          type="button"
+          onPointerDown={(event) => {
+            if (event.button !== 2) return;
+            event.preventDefault();
+            event.stopPropagation();
+            openMenu(event.clientX, event.clientY, event.currentTarget);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openMenu(event.clientX, event.clientY, event.currentTarget);
+          }}
+          onClick={() => onOpenFile(path)}
+          onKeyDown={(event) => {
+            if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const bounds = event.currentTarget.getBoundingClientRect();
+            openMenu(bounds.left, bounds.bottom + 4, event.currentTarget);
+          }}
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16">
+            <path d="M3.5 1.5h5l4 4v9h-9zM8.5 1.5v4h4" />
+          </svg>
+          <span>{children}</span>
+        </button>
+        <button
+          aria-haspopup="menu"
+          aria-label={`Acciones para ${path}`}
+          className="agent-panel__markdown-file-actions"
+          title={`Más acciones para ${path}`}
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const bounds = event.currentTarget.getBoundingClientRect();
+            openMenu(bounds.left, bounds.bottom + 4, event.currentTarget);
+          }}
+        >
+          <span aria-hidden="true">⋯</span>
+        </button>
+        <span aria-live="polite" className="sr-only">
+          {copied ? `Ruta copiada: ${path}` : ""}
+        </span>
+      </span>
+      {menu &&
+        createPortal(
+          <div
+            ref={menuRef}
+            aria-label={`Acciones para ${path}`}
+            className="tree-menu agent-panel__file-menu"
+            role="menu"
+            style={{ left: Math.max(8, menu.left), top: Math.max(8, menu.top) }}
+            onKeyDown={handleMenuKeyDown}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div className="tree-menu__title" title={path}>
+              {path}
+            </div>
+            <button
+              className="tree-menu__item"
+              role="menuitem"
+              tabIndex={-1}
+              type="button"
+              onClick={() => {
+                closeMenu(false);
+                onOpenFile(path);
+              }}
+            >
+              Abrir archivo
+            </button>
+            <div className="tree-menu__sep" role="separator" />
+            <button
+              className="tree-menu__item"
+              role="menuitem"
+              tabIndex={-1}
+              type="button"
+              onClick={() => void copyPath()}
+            >
+              Copiar ruta
+            </button>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+function agentMarkdownUrlTransform(url: string): string {
+  return markdownRepoPath(url) ? url : defaultUrlTransform(url);
+}
+
 function markdownRepoPath(href: string | undefined): string | null {
   if (!href || href === "/" || href.startsWith("#")) return null;
-  const windowsPath = /^[a-z]:[\\/]/i.test(href);
-  if (!windowsPath && /^[a-z][a-z\d+.-]*:/i.test(href)) return null;
-  const withoutLocation = href.split(/[?#]/, 1)[0];
-  if (!withoutLocation) return null;
+  let decodedHref = href;
   try {
-    return decodeURIComponent(withoutLocation).replace(/\\/g, "/").replace(/^\.\//, "");
+    decodedHref = decodeURIComponent(href);
   } catch {
-    return withoutLocation.replace(/\\/g, "/").replace(/^\.\//, "");
+    // Keep malformed percent escapes inert instead of guessing a path.
   }
+  const windowsPath = /^[a-z]:[\\/]/i.test(decodedHref);
+  if (!windowsPath && /^[a-z][a-z\d+.-]*:/i.test(decodedHref)) return null;
+  const withoutLocation = decodedHref.split(/[?#]/, 1)[0];
+  if (!withoutLocation) return null;
+  return withoutLocation.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function repoRelativeFilePath(repo: string, path: string): string | null {
+  const normalizedRepo = repo.replace(/\\/g, "/").replace(/\/$/, "");
+  const normalizedPath = path
+    .replace(/\\/g, "/")
+    .replace(/:(\d+)(?::\d+)?$/, "")
+    .replace(/^\.\//, "");
+  const absolute = normalizedPath.startsWith("/") || /^[a-z]:\//i.test(normalizedPath);
+  if (!absolute) return normalizedPath || null;
+  const windows = /^[a-z]:\//i.test(normalizedRepo);
+  const comparableRepo = windows ? normalizedRepo.toLowerCase() : normalizedRepo;
+  const comparablePath = windows ? normalizedPath.toLowerCase() : normalizedPath;
+  if (!comparablePath.startsWith(`${comparableRepo}/`)) return null;
+  return normalizedPath.slice(normalizedRepo.length + 1) || null;
 }
 
 function AgentMessageAttachments({ attachments }: { attachments: AgentSessionAttachment[] }) {
@@ -4284,10 +4529,8 @@ function agentProcessState(
   }
   if (session.turn_status === "working") {
     const activity = latestAgentActivity(timeline);
-    if (activity) {
-      return { label: activity, phase: "ACTIVIDAD", tone: "thinking" };
-    }
-    return { label: `${name} está pensando`, phase: "RAZONANDO", tone: "thinking" };
+    if (activity) return null;
+    return { label: `${name} está trabajando`, phase: "EN CURSO", tone: "thinking" };
   }
   return null;
 }
@@ -4297,10 +4540,34 @@ function latestAgentActivity(timeline: AgentSessionTimelineItem[]): string | nul
   let activity: AgentSessionTimelineItem | null = null;
   for (const item of timeline) {
     if (item.kind === "user_message") lastUserAt = item.timestamp_ms;
-    if (item.kind === "activity" || item.kind === "agent_progress") activity = item;
+    if (
+      item.kind === "command_output" ||
+      ((item.kind === "activity" || item.kind === "agent_progress") &&
+        !isGenericActivityText(item.text))
+    ) {
+      activity = item;
+    }
   }
   if (!activity || activity.timestamp_ms < lastUserAt) return null;
-  return compactProcessLabel(activity.text);
+  return activity.kind === "command_output"
+    ? commandOutputSummary(activity.text)
+    : compactProcessLabel(activity.text);
+}
+
+function activityEventSummary(event: AgentTurnEventView | undefined): string {
+  if (!event) return "Trabajo en curso";
+  if (event.kind === "command_output") return commandOutputSummary(event.text);
+  return compactProcessLabel(event.text) ?? "Trabajo en curso";
+}
+
+function isGenericActivityText(text: string): boolean {
+  const normalized = text
+    .replace(/[.…]+$/g, "")
+    .trim()
+    .toLocaleLowerCase("es");
+  return /^(analizando|pensando|razonando|procesando)( (el|la|los|las|un|una))? (siguiente )?(paso|respuesta|solicitud|petición)$/.test(
+    normalized,
+  );
 }
 
 function compactProcessLabel(text: string): string | null {
@@ -4309,7 +4576,29 @@ function compactProcessLabel(text: string): string | null {
     .map((line) => line.replace(/^\s*[-*#]+\s*/, "").trim())
     .find(Boolean);
   if (!firstLine) return null;
-  return firstLine.length > 110 ? `${firstLine.slice(0, 107)}...` : firstLine;
+  const display = activityDisplayText(firstLine);
+  return display.length > 110 ? `${display.slice(0, 107)}...` : display;
+}
+
+function activityDisplayText(text: string): string {
+  const match = text.match(/^(Ejecutando\s+)([\s\S]+)$/i);
+  if (!match) return text;
+  const command = match[2].trim();
+  if (!/^(?:"[^"]*(?:powershell|pwsh)\.exe"|\S*(?:powershell|pwsh)(?:\.exe)?)(?:\s|$)/i.test(command)) {
+    return text;
+  }
+  const commandMarker = /\s-(?:Command|CommandWithArgs)\s+/i.exec(command);
+  if (!commandMarker?.index) return text;
+  const script = stripMatchingShellQuotes(command.slice(commandMarker.index + commandMarker[0].length));
+  return script ? `${match[1]}${script}` : text;
+}
+
+function stripMatchingShellQuotes(value: string): string {
+  const trimmed = value.trim();
+  const quote = trimmed[0];
+  return quote && (quote === "'" || quote === '"') && trimmed.endsWith(quote)
+    ? trimmed.slice(1, -1)
+    : trimmed;
 }
 
 function shouldCollapseCommandOutput(text: string): boolean {
@@ -4634,11 +4923,11 @@ function agentComposerRowTitle(agentType: string, repo?: string): string {
 function agentComposerInputTitle(
   agentType: string,
   repo: string | undefined,
-  readOnly: boolean,
+  resumesConversation: boolean,
   canCompose: boolean,
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
-  if (readOnly) {
+  if (resumesConversation) {
     return `Entrada de mensajes de ${agentLabel(agentType)} para ${repoLabel}: el próximo mensaje retomará la conversación archivada.`;
   }
   if (!canCompose) {
@@ -4652,17 +4941,17 @@ function agentComposerSendTitle(
   repo: string | undefined,
   canSend: boolean,
   sending: boolean,
-  readOnly: boolean,
+  resumesConversation: boolean,
   canCompose: boolean,
   hasDraft: boolean,
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (sending) {
-    return readOnly
+    return resumesConversation
       ? `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: retomando la conversación y enviando el borrador.`
       : `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: enviando el borrador.`;
   }
-  if (readOnly) {
+  if (resumesConversation) {
     if (!hasDraft) {
       return `Enviar mensaje a ${agentLabel(agentType)} para ${repoLabel}: escribe un mensaje para retomar la conversación archivada.`;
     }
@@ -4822,6 +5111,7 @@ function AgentLens({
     turnCheckpoints,
     session.change_log ?? [],
     focusedTurnIndex,
+    turns,
   ).map((item) => ({
     ...item,
     artifactKind: agentLensArtifactKind(item.path),
@@ -6310,22 +6600,27 @@ function agentLensFileItems(
   turnCheckpoints: NonNullable<AgentSession["turn_checkpoints"]>,
   changeLog: NonNullable<AgentSession["change_log"]>,
   focusedTurnIndex: number | null,
+  turns: AgentTurnView[],
 ) {
   const firstCheckpointAtMs = turnCheckpoints[0]?.started_at_ms ?? null;
   const checkpointItems = turnCheckpoints
     .slice()
     .reverse()
-    .filter((turn) => focusedTurnIndex == null || turn.index === focusedTurnIndex)
-    .flatMap((turn) =>
-      turn.changes.map((change) => ({
+    .filter(
+      (turn) =>
+        focusedTurnIndex == null || checkpointTurnIndex(turn, turns) === focusedTurnIndex,
+    )
+    .flatMap((turn) => {
+      const turnIndex = checkpointTurnIndex(turn, turns);
+      return turn.changes.map((change) => ({
         id: `${turn.id}:${change.kind}:${change.path}`,
         turnCheckpointId: turn.id,
-        turnIndex: turn.index,
+        turnIndex,
         timeLabel: timeOffsetLabel(turn.started_at_ms, firstCheckpointAtMs),
         path: change.path,
         kind: change.kind,
-      })),
-    );
+      }));
+    });
   if (focusedTurnIndex != null && turnCheckpoints.length > 0) return checkpointItems;
   const checkpointPaths = new Set(checkpointItems.map((item) => item.path));
   const firstChangeAtMs = changeLog[0]?.timestamp_ms ?? null;
@@ -6913,7 +7208,16 @@ function agentActivityThroughputFactTitle(throughput: string): string {
 }
 
 function latestActivityText(turn: AgentTurnView): string | null {
-  return turn.events[turn.events.length - 1]?.text ?? turn.userText ?? null;
+  const latest = [...turn.events]
+    .reverse()
+    .find(
+      (event) =>
+        !(
+          (event.kind === "activity" || event.kind === "agent_progress") &&
+          isGenericActivityText(event.text)
+        ),
+    );
+  return latest?.text ?? turn.userText ?? null;
 }
 
 function turnTimeLabel(turn: AgentTurnView, firstTurnAtMs: number | null): string | null {
@@ -7473,6 +7777,7 @@ function visibleTurnEvents(events: AgentTurnEventView[]): AgentTurnEventView[] {
   const visible: AgentTurnEventView[] = [];
   events.forEach((event, index) => {
     const progress = event.kind === "activity" || event.kind === "agent_progress";
+    if (progress && isGenericActivityText(event.text)) return;
     if (
       event.kind === "agent_progress" &&
       events
@@ -7501,8 +7806,8 @@ function groupTurnEvents(events: AgentTurnEventView[]): AgentTurnDisplayItem[] {
   let index = 0;
   while (index < visible.length) {
     const event = visible[index];
-    const progress = event.kind === "activity" || event.kind === "agent_progress";
-    if (!progress) {
+    const operational = isOperationalEvent(event);
+    if (!operational) {
       items.push({ type: "event", event });
       index += 1;
       continue;
@@ -7510,19 +7815,26 @@ function groupTurnEvents(events: AgentTurnEventView[]): AgentTurnDisplayItem[] {
     const thoughtEvents: AgentTurnEventView[] = [];
     while (index < visible.length) {
       const candidate = visible[index];
-      if (candidate.kind !== "activity" && candidate.kind !== "agent_progress") break;
+      if (!isOperationalEvent(candidate)) break;
       thoughtEvents.push(candidate);
       index += 1;
     }
-    const resolved = visible.slice(index).some((candidate) => candidate.kind === "agent_message");
     items.push({
       type: "thought",
       id: `thought:${thoughtEvents[0]?.id ?? index}`,
       events: thoughtEvents,
-      defaultOpen: !resolved,
     });
   }
   return items;
+}
+
+function isOperationalEvent(event: AgentTurnEventView | undefined): boolean {
+  return Boolean(
+    event &&
+    (event.kind === "activity" ||
+      event.kind === "agent_progress" ||
+      event.kind === "command_output"),
+  );
 }
 
 function attachmentFileName(path: string): string {
@@ -7547,11 +7859,12 @@ function attachCheckpointChanges(
   if (!session?.turn_checkpoints?.length) return turns;
   const next = turns.map((turn) => ({ ...turn, changes: [...turn.changes] }));
   for (const checkpoint of session.turn_checkpoints) {
-    let turn = next.find((candidate) => candidate.index === checkpoint.index);
+    const turnIndex = checkpointTurnIndex(checkpoint, next);
+    let turn = next.find((candidate) => candidate.index === turnIndex);
     if (!turn) {
       turn = {
         id: checkpoint.id,
-        index: checkpoint.index,
+        index: turnIndex,
         startedAtMs: checkpoint.started_at_ms,
         updatedAtMs: checkpoint.ended_at_ms ?? checkpoint.started_at_ms,
         userText: null,
@@ -7579,6 +7892,19 @@ function attachCheckpointChanges(
     turn.restoreReady = Boolean(checkpoint.restore_checkpoint);
   }
   return next.sort((a, b) => a.index - b.index);
+}
+
+function checkpointTurnIndex(
+  checkpoint: NonNullable<AgentSession["turn_checkpoints"]>[number],
+  turns: AgentTurnView[],
+): number {
+  const chronologicalTurn = turns
+    .filter(
+      (turn): turn is AgentTurnView & { startedAtMs: number } =>
+        turn.startedAtMs != null && turn.startedAtMs <= checkpoint.started_at_ms,
+    )
+    .sort((a, b) => b.startedAtMs - a.startedAtMs)[0];
+  return chronologicalTurn?.index ?? checkpoint.index;
 }
 
 function limitRestoredTurns(

@@ -679,13 +679,19 @@ function AgentNavigator({
 }) {
   const [collapsed, setCollapsed] = useState(readNavigatorCollapsed);
   const [compactExpanded, setCompactExpanded] = useState(false);
-  const activeTerminals = openTerminals.filter((terminal) => terminal.mode !== "journal");
-  const activeTerminalIds = new Set(activeTerminals.map((terminal) => terminal.sessionId));
+  const conversationTerminals = openTerminals.filter((terminal) => terminal.mode !== "journal");
+  const activeTerminalIds = new Set(conversationTerminals.map((terminal) => terminal.sessionId));
   const uniqueJournalSessions = journalSessions.filter(
     (session) => !activeTerminalIds.has(session.id),
   );
   const visibleJournalSessions = uniqueJournalSessions.slice(0, 8);
-  const conversationCount = activeTerminals.length + uniqueJournalSessions.length;
+  const runningTerminals = conversationTerminals.filter((terminal) =>
+    isActiveAgentSession(sessions[terminal.sessionId]),
+  );
+  const recentTerminals = conversationTerminals.filter(
+    (terminal) => !isActiveAgentSession(sessions[terminal.sessionId]),
+  );
+  const conversationCount = conversationTerminals.length + uniqueJournalSessions.length;
   const toggleNavigator = () => {
     setCollapsed((current) => {
       const next = !current;
@@ -768,104 +774,170 @@ function AgentNavigator({
           </div>
         )}
         <div className="console-dock-panel__navigator-list" id="agent-conversation-list">
-          {activeTerminals.map((terminal) => {
-            const agentType = terminal.agentType ?? "agent";
-            const logo = agentLogoSrc(agentType);
-            const session = sessions[terminal.sessionId];
-            const preview = activeSessionPreview(session, timeline[terminal.sessionId]);
-            const title = conversationTitle(
-              timeline[terminal.sessionId]?.find((item) => item.kind === "user_message")?.text,
-            );
-            const tone = sessionStatusTone(session);
-            const active = isActiveAgentSession(session);
-            return (
-              <button
-                className={`console-dock-panel__navigator-item console-dock-panel__navigator-item--${tone}`}
-                type="button"
-                key={terminal.sessionId}
-                aria-label={`Mostrar ${busStore.displayName(
-                  terminal.repo ?? terminal.sessionId,
-                )} ${agentLabel(agentType)}: ${title}`}
-                onClick={() => onFocus(terminal)}
+          {runningTerminals.length > 0 && (
+            <div
+              className="console-dock-panel__navigator-group"
+              role="group"
+              aria-labelledby="active-conversations-label"
+            >
+              <div
+                className="console-dock-panel__navigator-group-label"
+                id="active-conversations-label"
               >
-                <span
-                  className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
-                    agentType,
-                  )}`}
-                  aria-hidden="true"
-                >
-                  {logo ? <img src={logo} alt="" /> : <span>{agentLogoText(agentType)}</span>}
-                </span>
-                <span className="console-dock-panel__navigator-main">
-                  <span>{title}</span>
-                  {active && (
-                    <strong className="console-dock-panel__navigator-active-indicator">
-                      <i aria-hidden="true" />
-                      Activa
-                    </strong>
-                  )}
-                  <small>
-                    {agentLabel(agentType)} ·{" "}
-                    {terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"} ·{" "}
-                    {sessionStatusLabel(session)}
-                  </small>
-                  {preview && <em>{preview}</em>}
-                </span>
-              </button>
-            );
-          })}
-          {visibleJournalSessions.map((session) => {
-            const logo = agentLogoSrc(session.agent_type);
-            const title = conversationTitle(session.first_user_message);
-            return (
-              <button
-                className="console-dock-panel__navigator-item"
-                type="button"
-                key={session.id}
-                aria-label={`Abrir la transcripción de ${busStore.displayName(
-                  session.repo,
-                )} con ${agentLabel(session.agent_type)}: ${title}`}
-                disabled={deletingJournalId === session.id}
-                onClick={() => onOpenJournal(session)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onOpenJournalContextMenu(
-                    session,
-                    event.clientX,
-                    event.clientY,
-                    event.currentTarget,
-                  );
-                }}
-                onKeyDown={(event) =>
-                  openJournalMenuFromKeyboard(event, session, onOpenJournalContextMenu)
-                }
+                <span>En curso</span>
+                <small>{runningTerminals.length}</small>
+              </div>
+              {runningTerminals.map((terminal) => {
+                const agentType = terminal.agentType ?? "agent";
+                const logo = agentLogoSrc(agentType);
+                const session = sessions[terminal.sessionId];
+                const preview = activeSessionPreview(session, timeline[terminal.sessionId]);
+                const title = conversationTitle(
+                  timeline[terminal.sessionId]?.find((item) => item.kind === "user_message")?.text,
+                );
+                const tone = sessionStatusTone(session);
+                const active = isActiveAgentSession(session);
+                return (
+                  <button
+                    className={`console-dock-panel__navigator-item console-dock-panel__navigator-item--${tone}`}
+                    type="button"
+                    key={terminal.sessionId}
+                    aria-label={`Mostrar ${busStore.displayName(
+                      terminal.repo ?? terminal.sessionId,
+                    )} ${agentLabel(agentType)}: ${title}`}
+                    onClick={() => onFocus(terminal)}
+                  >
+                    <span
+                      className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                        agentType,
+                      )}`}
+                      aria-hidden="true"
+                    >
+                      {logo ? <img src={logo} alt="" /> : <span>{agentLogoText(agentType)}</span>}
+                    </span>
+                    <span className="console-dock-panel__navigator-main">
+                      <span>{title}</span>
+                      {active && (
+                        <i
+                          className="console-dock-panel__navigator-active-indicator"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <small>
+                        {agentLabel(agentType)} ·{" "}
+                        {terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"} ·{" "}
+                        {sessionStatusLabel(session)}
+                      </small>
+                      {preview && <em>{preview}</em>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {(recentTerminals.length > 0 || visibleJournalSessions.length > 0) && (
+            <div
+              className="console-dock-panel__navigator-group"
+              role="group"
+              aria-labelledby="recent-conversations-label"
+            >
+              <div
+                className="console-dock-panel__navigator-group-label"
+                id="recent-conversations-label"
               >
-                <span
-                  className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
-                    session.agent_type,
-                  )}`}
-                  aria-hidden="true"
-                >
-                  {logo ? (
-                    <img src={logo} alt="" />
-                  ) : (
-                    <span>{agentLogoText(session.agent_type)}</span>
-                  )}
-                </span>
-                <span className="console-dock-panel__navigator-main">
-                  <span>{title}</span>
-                  <small>
-                    {deletingJournalId === session.id
-                      ? "Eliminando…"
-                      : openingJournalId === session.id
-                        ? "Abriendo…"
-                        : `${agentLabel(session.agent_type)} · ${busStore.displayName(session.repo)}`}
-                  </small>
-                </span>
-              </button>
-            );
-          })}
+                <span>Recientes</span>
+                <small>{recentTerminals.length + uniqueJournalSessions.length}</small>
+              </div>
+              {recentTerminals.map((terminal) => {
+                const agentType = terminal.agentType ?? "agent";
+                const logo = agentLogoSrc(agentType);
+                const session = sessions[terminal.sessionId];
+                const title = conversationTitle(
+                  timeline[terminal.sessionId]?.find((item) => item.kind === "user_message")?.text,
+                );
+                return (
+                  <button
+                    className="console-dock-panel__navigator-item console-dock-panel__navigator-item--recent"
+                    type="button"
+                    key={terminal.sessionId}
+                    aria-label={`Mostrar ${busStore.displayName(
+                      terminal.repo ?? terminal.sessionId,
+                    )} ${agentLabel(agentType)}: ${title}`}
+                    onClick={() => onFocus(terminal)}
+                  >
+                    <span
+                      className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                        agentType,
+                      )}`}
+                      aria-hidden="true"
+                    >
+                      {logo ? <img src={logo} alt="" /> : <span>{agentLogoText(agentType)}</span>}
+                    </span>
+                    <span className="console-dock-panel__navigator-main">
+                      <span>{title}</span>
+                      <small>
+                        {agentLabel(agentType)} ·{" "}
+                        {terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"} ·{" "}
+                        {sessionStatusLabel(session)}
+                      </small>
+                    </span>
+                  </button>
+                );
+              })}
+              {visibleJournalSessions.map((session) => {
+                const logo = agentLogoSrc(session.agent_type);
+                const title = conversationTitle(session.first_user_message);
+                return (
+                  <button
+                    className="console-dock-panel__navigator-item console-dock-panel__navigator-item--recent"
+                    type="button"
+                    key={session.id}
+                    aria-label={`Abrir la transcripción de ${busStore.displayName(
+                      session.repo,
+                    )} con ${agentLabel(session.agent_type)}: ${title}`}
+                    disabled={deletingJournalId === session.id}
+                    onClick={() => onOpenJournal(session)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenJournalContextMenu(
+                        session,
+                        event.clientX,
+                        event.clientY,
+                        event.currentTarget,
+                      );
+                    }}
+                    onKeyDown={(event) =>
+                      openJournalMenuFromKeyboard(event, session, onOpenJournalContextMenu)
+                    }
+                  >
+                    <span
+                      className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                        session.agent_type,
+                      )}`}
+                      aria-hidden="true"
+                    >
+                      {logo ? (
+                        <img src={logo} alt="" />
+                      ) : (
+                        <span>{agentLogoText(session.agent_type)}</span>
+                      )}
+                    </span>
+                    <span className="console-dock-panel__navigator-main">
+                      <span>{title}</span>
+                      <small>
+                        {deletingJournalId === session.id
+                          ? "Eliminando…"
+                          : openingJournalId === session.id
+                            ? "Abriendo…"
+                            : `${agentLabel(session.agent_type)} · ${busStore.displayName(session.repo)}`}
+                      </small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </aside>
