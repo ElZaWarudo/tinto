@@ -7,6 +7,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const artifactName = "tinto-agent-linux-x86_64";
 const dryRun = process.argv.includes("--dry-run");
+const forwardedArgs = process.argv.slice(2).filter((arg) => arg !== "--dry-run");
 
 function isLinuxElf(file) {
   let fd;
@@ -93,7 +94,7 @@ if (process.platform !== "win32") {
 }
 
 const command = process.platform === "win32" ? "npx.cmd" : "npx";
-const args = ["tauri", "dev"];
+const args = ["tauri", "dev", ...forwardedArgs];
 
 if (dryRun) {
   console.log(`${command} ${args.join(" ")}`);
