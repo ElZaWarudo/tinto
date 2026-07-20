@@ -167,12 +167,13 @@ pub async fn resume_agent_journal_session(
         }
     };
 
-    if let Some(output_reader) = started.output_reader.take() {
-        spawn_output_reader(app.clone(), started.id.clone(), output_reader);
-    }
     let resumed_timeline = remap_archived_timeline(&archived.timeline, &started.id);
+    let completed_turns = timeline_turn_count(&archived.timeline);
     {
         let mut registry = lock_registry(&registry)?;
+        registry
+            .continue_session_turn_sequence_after(&started.id, completed_turns)
+            .map_err(CommandError::from)?;
         registry
             .set_session_runtime_options(&started.id, archived.runtime_options.clone())
             .map_err(CommandError::from)?;
@@ -202,6 +203,9 @@ pub async fn resume_agent_journal_session(
                 .add_session_feedback(&started.id, feedback)
                 .map_err(CommandError::from)?;
         }
+    }
+    if let Some(output_reader) = started.output_reader.take() {
+        spawn_output_reader(app.clone(), started.id.clone(), output_reader);
     }
     for item in resumed_timeline {
         record_timeline_item(&app, item.clone());
@@ -289,6 +293,19 @@ fn remap_archived_timeline(
             attachments: item.attachments.clone(),
         })
         .collect()
+}
+
+fn timeline_turn_count(timeline: &[AgentSessionTimelineItem]) -> u32 {
+    let user_turns = timeline
+        .iter()
+        .filter(|item| matches!(item.kind, AgentSessionTimelineKind::UserMessage))
+        .count() as u32;
+    if user_turns > 0 {
+        return user_turns;
+    }
+    u32::from(timeline.iter().any(|item| {
+        !matches!(item.kind, AgentSessionTimelineKind::Lifecycle) && !item.text.trim().is_empty()
+    }))
 }
 
 fn resume_context_summary(session: &AgentSession) -> AgentSessionContextSummary {
@@ -390,11 +407,14 @@ pub async fn branch_agent_session_from_message(
             return Err(CommandError::from(error));
         }
     };
-    if let Some(output_reader) = started.output_reader {
-        spawn_output_reader(app.clone(), started.id.clone(), output_reader);
-    }
     {
         let mut registry = lock_registry(&registry)?;
+        registry
+            .continue_session_turn_sequence_after(
+                &started.id,
+                timeline_turn_count(&previous_timeline),
+            )
+            .map_err(CommandError::from)?;
         registry
             .set_session_runtime_options(&started.id, source.runtime_options.clone())
             .map_err(CommandError::from)?;
@@ -404,6 +424,9 @@ pub async fn branch_agent_session_from_message(
                 context_summary_from_timeline(&previous_timeline),
             )
             .map_err(CommandError::from)?;
+    }
+    if let Some(output_reader) = started.output_reader {
+        spawn_output_reader(app.clone(), started.id.clone(), output_reader);
     }
     for item in remap_archived_timeline(&previous_timeline, &started.id) {
         record_timeline_item(&app, item.clone());
@@ -2964,6 +2987,30 @@ mod tests {
                 .unwrap_err()
                 .category,
             "turn_not_found"
+        );
+    }
+
+    #[test]
+    fn resumed_timeline_counts_conversation_turns() {
+        let item = |kind: AgentSessionTimelineKind, text: &str| AgentSessionTimelineItem {
+            session_id: "session-1".to_string(),
+            id: format!("event-{text}"),
+            kind,
+            text: text.to_string(),
+            timestamp_ms: 1,
+            attachments: Vec::new(),
+        };
+        let timeline = vec![
+            item(AgentSessionTimelineKind::Lifecycle, "Session started"),
+            item(AgentSessionTimelineKind::UserMessage, "one"),
+            item(AgentSessionTimelineKind::AgentMessage, "answer one"),
+            item(AgentSessionTimelineKind::UserMessage, "two"),
+        ];
+
+        assert_eq!(timeline_turn_count(&timeline), 2);
+        assert_eq!(
+            timeline_turn_count(&[item(AgentSessionTimelineKind::AgentMessage, "fallback")]),
+            1
         );
     }
 

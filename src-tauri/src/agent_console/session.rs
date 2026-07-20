@@ -134,6 +134,10 @@ impl AgentSessionRecord {
         self.provider_session_id = Some(provider_session_id);
     }
 
+    pub fn continue_turn_sequence_after(&mut self, completed_turns: u32) {
+        self.next_turn_index = self.next_turn_index.max(completed_turns.saturating_add(1));
+    }
+
     pub fn start(&mut self, process: Box<dyn AgentProcess>) -> Result<(), AgentConsoleError> {
         if self.status != AgentSessionStatus::Starting {
             return Err(AgentConsoleError::new(
@@ -693,6 +697,10 @@ impl AgentSessionRecord {
         force_close: bool,
     ) -> Result<(), AgentConsoleError> {
         if self.turn_baseline.is_none() {
+            if force_close && self.turn_started_at_ms.is_some() {
+                self.next_turn_index = self.next_turn_index.saturating_add(1);
+                self.turn_started_at_ms = None;
+            }
             self.turn_status = AgentSessionTurnStatus::Waiting;
             return Ok(());
         }
@@ -720,6 +728,9 @@ impl AgentSessionRecord {
             self.pending_turn_signature = None;
             self.pending_turn_seen_at_ms = None;
             if force_close {
+                if self.turn_started_at_ms.is_some() {
+                    self.next_turn_index = self.next_turn_index.saturating_add(1);
+                }
                 self.turn_started_at_ms = None;
                 self.turn_status = AgentSessionTurnStatus::Waiting;
             }
@@ -2038,6 +2049,14 @@ mod tests {
         let contract = session.to_contract();
         assert!(contract.turn_checkpoints.is_empty());
         assert_eq!(contract.turn_status, AgentSessionTurnStatus::Waiting);
+
+        session.record_output_activity(12);
+        repo.write("base.txt", "second turn\n");
+        session.record_turn_done(13).unwrap();
+
+        let contract = session.to_contract();
+        assert_eq!(contract.turn_checkpoints.len(), 1);
+        assert_eq!(contract.turn_checkpoints[0].index, 2);
     }
 
     #[test]

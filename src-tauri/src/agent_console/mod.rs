@@ -645,6 +645,19 @@ impl AgentSessionRegistry {
         Ok(session.to_contract())
     }
 
+    pub fn continue_session_turn_sequence_after(
+        &mut self,
+        session_id: &str,
+        completed_turns: u32,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.continue_turn_sequence_after(completed_turns);
+        Ok(())
+    }
+
     pub fn clear_session_context_summary(
         &mut self,
         session_id: &str,
