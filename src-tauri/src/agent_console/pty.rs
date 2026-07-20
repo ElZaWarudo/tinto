@@ -2,7 +2,7 @@ use std::{
     env,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     thread,
     time::{Duration, Instant},
 };
@@ -48,6 +48,9 @@ pub fn prompt_with_file_attachments(
 
 #[cfg(windows)]
 use crate::windows_process::hide_console;
+
+#[cfg(windows)]
+use std::process::Stdio;
 
 pub trait AgentProcess: Send {
     fn pid(&self) -> Option<u32>;
