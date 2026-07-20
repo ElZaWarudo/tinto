@@ -594,7 +594,7 @@ pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
 pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
     let process_group = format!("-{pid}");
     let term = Command::new("kill")
-        .args(["-TERM", &process_group])
+        .args(["-TERM", "--", &process_group])
         .status()
         .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
     if !term.success() {
@@ -606,7 +606,7 @@ pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
 
     std::thread::sleep(std::time::Duration::from_millis(100));
     let _ = Command::new("kill")
-        .args(["-KILL", &process_group])
+        .args(["-KILL", "--", &process_group])
         .status();
     Ok(())
 }
