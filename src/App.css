@@ -7671,6 +7671,14 @@ select option {
   white-space: nowrap;
 }
 
+.agent-panel__recovery-status {
+  padding: 5px 10px;
+  border-left: 2px solid var(--accent);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .agent-panel__runtime-inspector {
   position: absolute;
   right: 16px;

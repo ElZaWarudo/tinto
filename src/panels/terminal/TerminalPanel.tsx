@@ -5,6 +5,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { agentErrorCategory, retryAgentRecoveryOperation } from "../../agent/boundedRetry";
 import {
   branchAgentSessionFromMessage,
   getAgentJournalSession,
@@ -590,6 +591,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [retryingAcp, setRetryingAcp] = useState(false);
   const [respondingPermissionId, setRespondingPermissionId] = useState<string | null>(null);
   const [settingAcpConfigId, setSettingAcpConfigId] = useState<string | null>(null);
+  const [recoveryAttempt, setRecoveryAttempt] = useState<{
+    sessionId: string;
+    current: number;
+    total: number;
+  } | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptSearchRef = useRef<HTMLInputElement | null>(null);
   const pendingJournalResumeRef = useRef<JournalResumeTarget | null>(null);
@@ -600,6 +606,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   useLayoutEffect(() => {
     latestSessionIdRef.current = sessionId;
+    pendingJournalResumeRef.current = null;
     if (draftSessionIdRef.current === sessionId) return;
     draftSessionIdRef.current = sessionId;
     const saved = readAgentComposerDraft(sessionId);
@@ -1160,6 +1167,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     autoFollowChatRef.current = true;
     setSending(true);
     setError(null);
+    setRecoveryAttempt(null);
+    const recover = <T,>(operation: () => Promise<T>) =>
+      retryAgentRecoveryOperation(operation, {
+        onRetry: (current, total) => setRecoveryAttempt({ sessionId, current, total }),
+      });
     try {
       let targetSessionId = sessionId;
       let journalResume: JournalResumeTarget | null = null;
@@ -1173,7 +1185,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         if (!session) return;
         journalResume = pendingJournalResumeRef.current;
         if (!journalResume) {
-          const result = await resumeAgentJournalSession(session.id);
+          const result = await recover(() => resumeAgentJournalSession(session.id));
           journalResume = {
             sessionId: result.session_id,
             repo: session.repo,
@@ -1185,14 +1197,20 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         targetSessionId = journalResume.sessionId;
       }
       if (action !== "steer" && attachments.length > 0) {
-        await writeAgentSessionTurn(
-          targetSessionId,
-          text,
-          attachments.map((attachment) => attachment.path),
-          effectiveRuntimeOptions,
-        );
+        const writeTurn = () =>
+          writeAgentSessionTurn(
+            targetSessionId,
+            text,
+            attachments.map((attachment) => attachment.path),
+            effectiveRuntimeOptions,
+          );
+        if (journalResume) await recover(writeTurn);
+        else await writeTurn();
       } else if (action !== "steer") {
-        await writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions);
+        const writeInput = () =>
+          writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions);
+        if (journalResume) await recover(writeInput);
+        else await writeInput();
       }
       if (reviewPromptDraft && text.trim() === reviewPromptDraft.trim()) {
         setReviewPromptState("sent");
@@ -1213,6 +1231,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         void refreshResumedSession(journalResume.sessionId);
       }
     } catch (e) {
+      if (
+        pendingJournalResumeRef.current &&
+        ["session_not_found", "session_not_running", "acp_supervisor_stopped"].includes(
+          agentErrorCategory(e) ?? "",
+        )
+      ) {
+        pendingJournalResumeRef.current = null;
+      }
       setError(
         reportAgentFailure(
           e,
@@ -1220,6 +1246,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         ),
       );
     } finally {
+      setRecoveryAttempt(null);
       setSending(false);
     }
   };
@@ -2320,6 +2347,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               setRuntimeNotice(value === "fast" ? "Perfil rápido para el próximo turno." : null);
             }}
           />
+        )}
+        {recoveryAttempt?.sessionId === sessionId && (
+          <div className="agent-panel__recovery-status" role="status">
+            Reconectando con la sesión · intento {recoveryAttempt.current} de{" "}
+            {recoveryAttempt.total}
+          </div>
         )}
         {commandMenuVisible && (
           <div

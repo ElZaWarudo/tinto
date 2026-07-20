@@ -3565,6 +3565,44 @@ describe("TerminalPanel", () => {
     );
   });
 
+  it("retries a resumed conversation without creating a second session", async () => {
+    const user = userEvent.setup();
+    const openAgentTerminal = vi.fn();
+    getAgentJournalSessionMock.mockResolvedValueOnce(
+      sessionFixture({ status: "completed", pid: null, checkpoint: null }),
+    );
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ id: "sess-resumed", status: "running" }),
+    ]);
+    writeAgentSessionInputMock
+      .mockRejectedValueOnce({ category: "session_not_running", message: "starting" })
+      .mockResolvedValueOnce(undefined);
+    renderWithWorkspaceActions(
+      <TerminalPanel
+        {...props({
+          sessionId: "sess-1",
+          repo: "/r/a",
+          agentType: "codex",
+          mode: "journal",
+        })}
+      />,
+      { openAgentTerminal },
+    );
+
+    const composer = await screen.findByPlaceholderText("Continúa esta conversación");
+    await user.type(composer, "Seguimos");
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => expect(writeAgentSessionInputMock).toHaveBeenCalledTimes(2));
+    expect(resumeAgentJournalSessionMock).toHaveBeenCalledTimes(1);
+    expect(writeAgentSessionInputMock).toHaveBeenLastCalledWith("sess-resumed", "Seguimos\r", {
+      speed: "standard",
+    });
+    expect(openAgentTerminal).toHaveBeenCalledTimes(1);
+    expect(composer).toHaveValue("");
+    expect(screen.queryByTestId("terminal-panel-error")).not.toBeInTheDocument();
+  });
+
   it("shows a resumed-session refresh error and confirms it on retry", async () => {
     const user = userEvent.setup();
     const openAgentTerminal = vi.fn();
