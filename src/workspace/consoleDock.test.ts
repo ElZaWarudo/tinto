@@ -120,6 +120,28 @@ describe("consoleDock", () => {
     expect(panel.api.setActive).toHaveBeenCalledOnce();
   });
 
+  it("replaces a resumed conversation instead of opening a second chat", () => {
+    const api = fakeApi();
+    consoleDock.register(api as never);
+    consoleDock.openTerminal({ sessionId: "sess-archived", repo: "/r/api", agentType: "codex" });
+    const archivedPanel = api._panels[agentTerminalPanelId("sess-archived")];
+
+    consoleDock.openTerminal({
+      sessionId: "sess-resumed",
+      repo: "/r/api",
+      agentType: "codex",
+      replaceSessionId: "sess-archived",
+    });
+
+    expect(api.removePanel).toHaveBeenCalledWith(archivedPanel);
+    expect(api._panels[agentTerminalPanelId("sess-archived")]).toBeUndefined();
+    expect(api._panels[agentTerminalPanelId("sess-resumed")].title).toBe("Codex · api");
+    expect(consoleDock.openTerminalSessionIds()).toEqual(["sess-resumed"]);
+    expect(consoleDock.openTerminalParams()).toEqual([
+      { sessionId: "sess-resumed", repo: "/r/api", agentType: "codex" },
+    ]);
+  });
+
   it("deduplicates queued opens for the same session id", () => {
     const api = fakeApi();
 

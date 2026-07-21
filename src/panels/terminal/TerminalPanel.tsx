@@ -389,6 +389,10 @@ type AgentTurnDisplayItem =
       events: AgentTurnEventView[];
     };
 
+type AgentThoughtDisplayItem =
+  | { type: "narrative"; event: AgentTurnEventView }
+  | { type: "commands"; id: string; events: AgentTurnEventView[] };
+
 interface EditingAgentMessage {
   id: string;
   index: number;
@@ -413,6 +417,11 @@ type ResumedAgentSession = AgentSession & {
 
 const RESUMED_SESSION_SYNC_ERROR =
   "No se pudo confirmar la conversación retomada. El mensaje se envió y la conversación sigue disponible.";
+const RESTARTABLE_RESUMED_SESSION_ERRORS = new Set([
+  "session_not_found",
+  "session_not_running",
+  "acp_supervisor_stopped",
+]);
 const resumedSessionRefreshes = new Map<string, Promise<boolean>>();
 
 function resumedSessionSync(session: AgentSession | undefined): ResumedSessionSync | null {
@@ -518,7 +527,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const mode = params?.mode ?? "live";
   const { openFile, openAgentTerminal } = useWorkspaceActions();
   const readOnly = mode === "journal";
-  const session = useAgentSession(sessionId);
+  const liveSession = useAgentSession(sessionId);
+  const [archivedSession, setArchivedSession] = useState<AgentSession | null>(null);
+  const session = liveSession ?? archivedSession ?? undefined;
   const resumesConversation = readOnly || session?.status === "exited";
   const { chunks: sessionOutput } = useAgentSessionOutput(sessionId);
   const timeline = useAgentSessionTimeline(sessionId);
@@ -609,6 +620,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     pendingJournalResumeRef.current = null;
     if (draftSessionIdRef.current === sessionId) return;
     draftSessionIdRef.current = sessionId;
+    setArchivedSession(null);
     const saved = readAgentComposerDraft(sessionId);
     draftRef.current = saved.text;
     attachmentsRef.current = saved.attachments;
@@ -1064,31 +1076,45 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     if (mode !== "journal" && initialResumeSync) {
       if (initialResumeSync.status === "pending") void refreshResumedSession(sessionId);
     } else {
-      const loadSession =
-        mode === "journal"
-          ? getAgentJournalSession(sessionId).then((session) => (session ? [session] : []))
-          : listAgentSessions();
-      void loadSession
-        .then((sessions) => {
+      void (async () => {
+        if (mode === "journal") {
+          const archived = await getAgentJournalSession(sessionId);
           if (!active) return;
-          if (mode === "journal") {
-            const session = sessions[0];
-            if (session) agentSessionStore.upsertSession(session);
-            else setError("No se encontró la transcripción de la sesión.");
+          if (archived) {
+            setArchivedSession(archived);
+            agentSessionStore.upsertSession(archived);
           } else {
-            agentSessionStore.setSessions(sessions);
+            setError("No se encontró la transcripción de la sesión.");
           }
-        })
-        .catch((e) => {
-          if (active) {
-            setError(
-              reportAgentFailure(
-                e,
-                "No se pudo cargar la conversación. Vuelve a abrirla desde la lista de Agents.",
-              ),
-            );
-          }
-        });
+          return;
+        }
+
+        const sessions = await listAgentSessions();
+        if (!active) return;
+        agentSessionStore.setSessions(sessions);
+        if (sessions.some((candidate) => candidate.id === sessionId)) {
+          setArchivedSession(null);
+          return;
+        }
+
+        // A restored workspace can still contain a live-mode panel after the
+        // backend process has exited. Keep its journal snapshot local so later
+        // active-session refreshes cannot erase the conversation while the
+        // user resumes it.
+        const archived = await getAgentJournalSession(sessionId);
+        if (!active || !archived) return;
+        setArchivedSession(archived);
+        agentSessionStore.upsertSession(archived);
+      })().catch((e) => {
+        if (active) {
+          setError(
+            reportAgentFailure(
+              e,
+              "No se pudo cargar la conversación. Vuelve a abrirla desde la lista de Agents.",
+            ),
+          );
+        }
+      });
     }
     return () => {
       active = false;
@@ -1173,7 +1199,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         onRetry: (current, total) => setRecoveryAttempt({ sessionId, current, total }),
       });
     try {
-      let targetSessionId = sessionId;
       let journalResume: JournalResumeTarget | null = null;
       if (action === "steer") {
         await steerAgentSessionTurn(
@@ -1183,34 +1208,58 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         );
       } else if (resumesConversation) {
         if (!session) return;
-        journalResume = pendingJournalResumeRef.current;
-        if (!journalResume) {
-          const result = await recover(() => resumeAgentJournalSession(session.id));
-          journalResume = {
-            sessionId: result.session_id,
-            repo: session.repo,
-            agentType: session.agent_type,
-            resumeMode: result.mode,
-          };
-          pendingJournalResumeRef.current = journalResume;
-        }
-        targetSessionId = journalResume.sessionId;
-      }
-      if (action !== "steer" && attachments.length > 0) {
-        const writeTurn = () =>
-          writeAgentSessionTurn(
-            targetSessionId,
-            text,
-            attachments.map((attachment) => attachment.path),
-            effectiveRuntimeOptions,
-          );
-        if (journalResume) await recover(writeTurn);
-        else await writeTurn();
-      } else if (action !== "steer") {
-        const writeInput = () =>
-          writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions);
-        if (journalResume) await recover(writeInput);
-        else await writeInput();
+        let restartRequired = false;
+        journalResume = await retryAgentRecoveryOperation(
+          async () => {
+            restartRequired = false;
+            let target = pendingJournalResumeRef.current;
+            if (!target) {
+              const result = await recover(() => resumeAgentJournalSession(session.id));
+              target = {
+                sessionId: result.session_id,
+                repo: session.repo,
+                agentType: session.agent_type,
+                resumeMode: result.mode,
+              };
+              pendingJournalResumeRef.current = target;
+            }
+            const targetSessionId = target.sessionId;
+            try {
+              await recover(() =>
+                attachments.length > 0
+                  ? writeAgentSessionTurn(
+                      targetSessionId,
+                      text,
+                      attachments.map((attachment) => attachment.path),
+                      effectiveRuntimeOptions,
+                    )
+                  : writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions),
+              );
+            } catch (writeError) {
+              restartRequired = RESTARTABLE_RESUMED_SESSION_ERRORS.has(
+                agentErrorCategory(writeError) ?? "",
+              );
+              if (restartRequired) {
+                pendingJournalResumeRef.current = null;
+              }
+              throw writeError;
+            }
+            return target;
+          },
+          {
+            onRetry: (current, total) => setRecoveryAttempt({ sessionId, current, total }),
+            shouldRetry: () => restartRequired,
+          },
+        );
+      } else if (attachments.length > 0) {
+        await writeAgentSessionTurn(
+          sessionId,
+          text,
+          attachments.map((attachment) => attachment.path),
+          effectiveRuntimeOptions,
+        );
+      } else {
+        await writeAgentSessionInput(sessionId, `${text}\r`, effectiveRuntimeOptions);
       }
       if (reviewPromptDraft && text.trim() === reviewPromptDraft.trim()) {
         setReviewPromptState("sent");
@@ -1227,6 +1276,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           sessionId: journalResume.sessionId,
           repo: journalResume.repo,
           agentType: journalResume.agentType,
+          replaceSessionId: sessionId,
         });
         void refreshResumedSession(journalResume.sessionId);
       }
@@ -1403,6 +1453,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (turnActive) {
+      void onStop();
+      return;
+    }
     void sendDraft();
   };
 
@@ -1445,7 +1499,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         return;
       }
     }
-    if (event.key !== "Enter" || event.shiftKey) return;
+    if (event.key !== "Enter" || event.shiftKey || turnActive) return;
     event.preventDefault();
     void sendDraft();
   };
@@ -1893,33 +1947,34 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         <SessionStatus session={session} />
         {!readOnly && (
           <div className="agent-panel__header-actions">
-            <>
+            {!turnActive && (
               <button
+                aria-label="Detener sesión"
                 className="agent-panel__stop"
                 disabled={!canStop}
                 onClick={onStop}
                 title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
                 type="button"
               >
-                <span>{stopping ? "Deteniendo turno" : "Detener turno"}</span>
+                <span>{stopping ? "Deteniendo sesión" : "Detener sesión"}</span>
               </button>
-              <button
-                className="agent-panel__revert"
-                disabled={!canRevert || reverting}
-                onClick={onRevert}
-                title={agentRevertControlTitle(
-                  agentType,
-                  repo,
-                  readOnly,
-                  session ?? null,
-                  canRevert,
-                  reverting,
-                )}
-                type="button"
-              >
-                <span>{reverting ? "Revirtiendo sesión" : "Revertir sesión"}</span>
-              </button>
-            </>
+            )}
+            <button
+              className="agent-panel__revert"
+              disabled={!canRevert || reverting}
+              onClick={onRevert}
+              title={agentRevertControlTitle(
+                agentType,
+                repo,
+                readOnly,
+                session ?? null,
+                canRevert,
+                reverting,
+              )}
+              type="button"
+            >
+              <span>{reverting ? "Revirtiendo sesión" : "Revertir sesión"}</span>
+            </button>
           </div>
         )}
       </header>
@@ -2072,14 +2127,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             aria-relevant="additions text"
             aria-atomic="false"
             role="log"
-            onClickCapture={(event) => {
-              if (!(event.target instanceof Element)) return;
-              const target = event.target.closest<HTMLElement>("[data-repo-path]");
-              const repoPath = target?.dataset.repoPath;
-              if (!repoPath) return;
-              event.preventDefault();
-              openSessionFile?.(repoPath);
-            }}
             onScroll={(event) => {
               const chat = event.currentTarget;
               autoFollowChatRef.current =
@@ -2468,21 +2515,26 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             rows={2}
           />
           <button
-            className="agent-panel__send"
+            aria-label={turnActive ? "Detener respuesta" : undefined}
+            className={`agent-panel__send${turnActive ? " agent-panel__send--stop" : ""}`}
             type="submit"
-            disabled={!canSend}
-            title={agentComposerSendTitle(
-              agentType,
-              repo,
-              canSend,
-              sending,
-              resumesConversation,
-              canCompose,
-              draft.trim().length > 0,
-            )}
+            disabled={turnActive ? !canStop : !canSend}
+            title={
+              turnActive
+                ? agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)
+                : agentComposerSendTitle(
+                    agentType,
+                    repo,
+                    canSend,
+                    sending,
+                    resumesConversation,
+                    canCompose,
+                    draft.trim().length > 0,
+                  )
+            }
           >
-            <span title={agentComposerSendLabelTitle(sending)}>
-              {sending ? "Enviando" : "Enviar"}
+            <span title={turnActive ? undefined : agentComposerSendLabelTitle(sending)}>
+              {turnActive ? (stopping ? "Deteniendo" : "Detener") : sending ? "Enviando" : "Enviar"}
             </span>
           </button>
           {turnActive && (
@@ -2490,8 +2542,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               <button
                 aria-label="Encolar para el siguiente turno"
                 className="agent-panel__queue-action"
-                disabled={!canSend || !turnActive}
-                hidden={!turnActive}
+                disabled={!canSend}
                 onClick={() => void sendDraft("queue")}
                 title="Guardar este mensaje y enviarlo cuando termine el turno actual"
                 type="button"
@@ -2501,10 +2552,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               <button
                 aria-label="Intervenir en el turno activo"
                 className="agent-panel__steer"
-                disabled={!canSend || !turnActive || !isCodexSession}
-                hidden={!turnActive || !isCodexSession}
+                disabled={!canSend || !isCodexSession}
+                hidden={!isCodexSession}
                 onClick={() => void sendDraft("steer")}
-                title="Enviar este mensaje al turno que Codex está ejecutando ahora"
+                title="Incorporar este mensaje al turno activo en la siguiente oportunidad"
                 type="button"
               >
                 Intervenir
@@ -4063,13 +4114,31 @@ function AgentThoughtDisclosure({
   events: AgentTurnEventView[];
   onOpenFile?: (path: string) => void;
 }) {
-  const latest = events[events.length - 1];
-  const summary = activityEventSummary(latest);
+  const [open, setOpen] = useState(active);
+  const previousActiveRef = useRef(active);
+  const narrativeEvents = events.filter((event) => event.kind !== "command_output");
+  const latestNarrative = narrativeEvents[narrativeEvents.length - 1];
+  const summary = latestNarrative
+    ? activityEventSummary(latestNarrative)
+    : `${events.filter((event) => event.kind === "command_output").length} comandos ejecutados`;
+  const displayItems = groupThoughtEvents(events);
+
+  useEffect(() => {
+    if (previousActiveRef.current === active) return;
+    previousActiveRef.current = active;
+    setOpen(active);
+  }, [active]);
+
   return (
-    <details className="agent-panel__thought" data-active={active || undefined}>
+    <details
+      className="agent-panel__thought"
+      data-active={active || undefined}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      open={open}
+    >
       <summary>
         <span className="agent-panel__thought-label">
-          {active ? "Actividad en curso" : "Actividad"}
+          {active ? "Razonamiento en curso" : "Razonamiento"}
         </span>
         <small className="agent-panel__thought-summary" key={summary}>
           {summary}
@@ -4079,22 +4148,44 @@ function AgentThoughtDisclosure({
         </span>
       </summary>
       <div className="agent-panel__thought-events">
-        {events.map((event) => (
-          <div className="agent-panel__thought-event" key={event.id}>
-            {event.kind === "command_output" ? (
-              <details className="agent-panel__thought-command agent-panel__message agent-panel__message--command_output">
-                <summary>
-                  <span>Comando</span>
-                  <strong>{commandOutputSummary(event.text)}</strong>
-                  <small>Mostrar salida</small>
-                </summary>
-                <pre>{event.text}</pre>
-              </details>
-            ) : (
-              <AgentMarkdown onOpenFile={onOpenFile} text={activityDisplayText(event.text)} />
-            )}
-          </div>
-        ))}
+        {displayItems.map((item) =>
+          item.type === "narrative" ? (
+            <div className="agent-panel__thought-event" key={item.event.id}>
+              <AgentMarkdown onOpenFile={onOpenFile} text={activityDisplayText(item.event.text)} />
+            </div>
+          ) : (
+            <details
+              aria-label={`${item.events.length} ${item.events.length === 1 ? "comando ejecutado" : "comandos ejecutados"}`}
+              className="agent-panel__thought-command-group"
+              key={item.id}
+            >
+              <summary>
+                <span>Ejecutó comandos</span>
+                <small>
+                  {item.events.length} {item.events.length === 1 ? "comando" : "comandos"}
+                </small>
+                <span aria-hidden="true" className="agent-panel__thought-chevron">
+                  ›
+                </span>
+              </summary>
+              <div className="agent-panel__thought-command-list">
+                {item.events.map((event) => (
+                  <details
+                    className="agent-panel__thought-command agent-panel__message agent-panel__message--command_output"
+                    key={event.id}
+                  >
+                    <summary>
+                      <span>Comando</span>
+                      <strong>{commandOutputSummary(event.text)}</strong>
+                      <small>Mostrar salida</small>
+                    </summary>
+                    <pre>{event.text}</pre>
+                  </details>
+                ))}
+              </div>
+            </details>
+          ),
+        )}
       </div>
     </details>
   );
@@ -4617,12 +4708,16 @@ function activityDisplayText(text: string): string {
   const match = text.match(/^(Ejecutando\s+)([\s\S]+)$/i);
   if (!match) return text;
   const command = match[2].trim();
-  if (!/^(?:"[^"]*(?:powershell|pwsh)\.exe"|\S*(?:powershell|pwsh)(?:\.exe)?)(?:\s|$)/i.test(command)) {
+  if (
+    !/^(?:"[^"]*(?:powershell|pwsh)\.exe"|\S*(?:powershell|pwsh)(?:\.exe)?)(?:\s|$)/i.test(command)
+  ) {
     return text;
   }
   const commandMarker = /\s-(?:Command|CommandWithArgs)\s+/i.exec(command);
   if (!commandMarker?.index) return text;
-  const script = stripMatchingShellQuotes(command.slice(commandMarker.index + commandMarker[0].length));
+  const script = stripMatchingShellQuotes(
+    command.slice(commandMarker.index + commandMarker[0].length),
+  );
   return script ? `${match[1]}${script}` : text;
 }
 
@@ -5015,15 +5110,15 @@ function agentStopControlTitle(
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (stopping) {
-    return `Detener turno de ${agentLabel(agentType)} en ${repoLabel}: deteniendo el turno.`;
+    return `Detener la respuesta de ${agentLabel(agentType)} en ${repoLabel}: deteniendo.`;
   }
   if (readOnly) {
-    return `Detener turno de ${agentLabel(agentType)} en ${repoLabel}: las transcripciones archivadas son de solo lectura.`;
+    return `Detener la respuesta de ${agentLabel(agentType)} en ${repoLabel}: las transcripciones archivadas son de solo lectura.`;
   }
   if (canStop) {
-    return `Detener el turno en ejecución de ${agentLabel(agentType)} en ${repoLabel}.`;
+    return `Detener la respuesta en curso de ${agentLabel(agentType)} en ${repoLabel}.`;
   }
-  return `Detener turno de ${agentLabel(agentType)} en ${repoLabel}: el turno no está en ejecución.`;
+  return `Detener la respuesta de ${agentLabel(agentType)} en ${repoLabel}: no hay una respuesta en curso.`;
 }
 
 function agentRevertControlTitle(
@@ -6640,8 +6735,7 @@ function agentLensFileItems(
     .slice()
     .reverse()
     .filter(
-      (turn) =>
-        focusedTurnIndex == null || checkpointTurnIndex(turn, turns) === focusedTurnIndex,
+      (turn) => focusedTurnIndex == null || checkpointTurnIndex(turn, turns) === focusedTurnIndex,
     )
     .flatMap((turn) => {
       const turnIndex = checkpointTurnIndex(turn, turns);
@@ -7856,6 +7950,30 @@ function groupTurnEvents(events: AgentTurnEventView[]): AgentTurnDisplayItem[] {
       type: "thought",
       id: `thought:${thoughtEvents[0]?.id ?? index}`,
       events: thoughtEvents,
+    });
+  }
+  return items;
+}
+
+function groupThoughtEvents(events: AgentTurnEventView[]): AgentThoughtDisplayItem[] {
+  const items: AgentThoughtDisplayItem[] = [];
+  let index = 0;
+  while (index < events.length) {
+    const event = events[index];
+    if (event.kind !== "command_output") {
+      items.push({ type: "narrative", event });
+      index += 1;
+      continue;
+    }
+    const commands: AgentTurnEventView[] = [];
+    while (index < events.length && events[index].kind === "command_output") {
+      commands.push(events[index]);
+      index += 1;
+    }
+    items.push({
+      type: "commands",
+      id: `commands:${commands[0]?.id ?? index}`,
+      events: commands,
     });
   }
   return items;

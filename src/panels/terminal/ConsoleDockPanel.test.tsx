@@ -338,6 +338,52 @@ describe("ConsoleDockPanel detach drop", () => {
     unmount();
   });
 
+  it("groups saved conversations by project without repeating the project in each row", async () => {
+    clientMocks.listAgentJournalSessions.mockResolvedValue([
+      {
+        id: "sess-api-1",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        updated_at_ms: 5,
+        event_count: 3,
+        first_user_message: "Corrige la autenticación",
+      },
+      {
+        id: "sess-web-1",
+        repo: "/r/web",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        updated_at_ms: 4,
+        event_count: 2,
+        first_user_message: "Ajusta la navegación",
+      },
+      {
+        id: "sess-api-2",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        updated_at_ms: 3,
+        event_count: 1,
+        first_user_message: "Revisa las sesiones",
+      },
+    ]);
+
+    const { unmount } = render(<ConsoleDockPanel />);
+
+    const apiGroup = await screen.findByRole("group", { name: "api, 2 conversaciones" });
+    const webGroup = screen.getByRole("group", { name: "/r/web, 1 conversación" });
+    expect(within(apiGroup).getByText("Corrige la autenticación")).toBeInTheDocument();
+    expect(within(apiGroup).getByText("Revisa las sesiones")).toBeInTheDocument();
+    expect(within(webGroup).getByText("Ajusta la navegación")).toBeInTheDocument();
+    expect(within(apiGroup).getAllByText(/^Codex · completada/)).toHaveLength(2);
+    expect(within(apiGroup).queryByText(/Codex · api ·/)).toBeNull();
+    unmount();
+  });
+
   it("keeps saved conversations visible while a journal refresh is pending or fails", async () => {
     const savedSessions = [
       {

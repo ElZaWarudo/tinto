@@ -497,116 +497,129 @@ export function ConsoleDockPanel({
       </div>
       {terminalCount === 0 && (
         <div className="console-dock-panel__empty" data-testid="console-empty">
-          <div className="console-dock-panel__empty-title">No hay Agents activos</div>
-          <JournalLoadNotice state={journalLoadState} onRetry={retryJournalLoad} />
-          {quickLaunchGroups.length > 0 ? (
-            <>
-              <div className="console-dock-panel__empty-subtitle">Inicio rápido</div>
-              <div className="console-dock-panel__quick-browser">
-                {quickLaunchGroups.map((group) => {
-                  return (
-                    <div className="console-dock-panel__quick-project" key={group.repo}>
-                      <div className="console-dock-panel__quick-project-title" title={group.repo}>
-                        {busStore.displayName(group.repo)}
-                      </div>
-                      <div className="console-dock-panel__quick-agents">
-                        {group.launches.map((launch) => {
-                          const key = recentLaunchKey(launch);
-                          const logo = agentLogoSrc(launch.agentType);
-                          return (
-                            <div className="console-dock-panel__quick-row" key={key}>
-                              <button
-                                className="console-dock-panel__quick"
-                                type="button"
-                                aria-label={`Iniciar ${busStore.displayName(
-                                  launch.repo,
-                                )} con ${agentLabel(launch.agentType)}`}
-                                disabled={!!launchingKey}
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onMouseDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  launchRecent(launch);
-                                }}
-                              >
-                                <span
-                                  className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
-                                    launch.agentType,
-                                  )}`}
-                                  aria-hidden="true"
-                                >
-                                  {logo ? (
-                                    <img src={logo} alt="" />
-                                  ) : (
-                                    <span>{agentLogoText(launch.agentType)}</span>
-                                  )}
-                                </span>
-                                <span className="console-dock-panel__quick-main">
-                                  <span>{agentLabel(launch.agentType)}</span>
-                                  <small>Reciente</small>
-                                </span>
-                                <span className="console-dock-panel__quick-action">
-                                  {launchingKey === key ? "Iniciando…" : "Ejecutar"}
-                                </span>
-                              </button>
-                              <button
-                                className="console-dock-panel__quick-remove"
-                                type="button"
-                                aria-label={`Quitar ${busStore.displayName(
-                                  launch.repo,
-                                )} con ${agentLabel(launch.agentType)} del inicio rápido`}
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onMouseDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  removeRecent(launch);
-                                }}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
+          <header className="console-dock-panel__empty-head">
+            <div>
+              <div className="console-dock-panel__empty-title">No hay Agents activos</div>
+              <div className="console-dock-panel__empty-subtitle">
+                Inicia uno o retoma una conversación guardada
               </div>
-              {launchError && (
+            </div>
+            <JournalLoadNotice state={journalLoadState} onRetry={retryJournalLoad} />
+          </header>
+          <div
+            className={`console-dock-panel__empty-workspace${
+              quickLaunchGroups.length === 0
+                ? " console-dock-panel__empty-workspace--archive-only"
+                : ""
+            }`}
+          >
+            {quickLaunchGroups.length > 0 ? (
+              <section
+                className="console-dock-panel__quick-launch"
+                aria-label="Inicio rápido de Agents"
+              >
+                <div className="console-dock-panel__section-head">
+                  <span>Inicio rápido</span>
+                  <small>
+                    {quickLaunchGroups.length}{" "}
+                    {quickLaunchGroups.length === 1 ? "proyecto" : "proyectos"}
+                  </small>
+                </div>
+                <div className="console-dock-panel__quick-browser">
+                  {quickLaunchGroups.map((group) => {
+                    return (
+                      <div className="console-dock-panel__quick-project" key={group.repo}>
+                        <div className="console-dock-panel__quick-project-title" title={group.repo}>
+                          {busStore.displayName(group.repo)}
+                        </div>
+                        <div className="console-dock-panel__quick-agents">
+                          {group.launches.map((launch) => {
+                            const key = recentLaunchKey(launch);
+                            const logo = agentLogoSrc(launch.agentType);
+                            return (
+                              <div className="console-dock-panel__quick-row" key={key}>
+                                <button
+                                  className="console-dock-panel__quick"
+                                  type="button"
+                                  aria-label={`Iniciar ${busStore.displayName(
+                                    launch.repo,
+                                  )} con ${agentLabel(launch.agentType)}`}
+                                  disabled={!!launchingKey}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    launchRecent(launch);
+                                  }}
+                                >
+                                  <span
+                                    className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                                      launch.agentType,
+                                    )}`}
+                                    aria-hidden="true"
+                                  >
+                                    {logo ? (
+                                      <img src={logo} alt="" />
+                                    ) : (
+                                      <span>{agentLogoText(launch.agentType)}</span>
+                                    )}
+                                  </span>
+                                  <span className="console-dock-panel__quick-main">
+                                    <span>{agentLabel(launch.agentType)}</span>
+                                    <small>Reciente</small>
+                                  </span>
+                                  <span className="console-dock-panel__quick-action">
+                                    {launchingKey === key ? "Iniciando…" : "Ejecutar"}
+                                  </span>
+                                </button>
+                                <button
+                                  className="console-dock-panel__quick-remove"
+                                  type="button"
+                                  aria-label={`Quitar ${busStore.displayName(
+                                    launch.repo,
+                                  )} con ${agentLabel(launch.agentType)} del inicio rápido`}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    removeRecent(launch);
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {launchError && (
+                  <div className="console-dock-panel__quick-error" role="alert">
+                    {launchError}
+                  </div>
+                )}
+              </section>
+            ) : (
+              launchError && (
                 <div className="console-dock-panel__quick-error" role="alert">
                   {launchError}
                 </div>
-              )}
-              {journalSessions.length > 0 && (
-                <AgentJournalBrowser
-                  sessions={journalSessions}
-                  openingJournalId={openingJournalId}
-                  deletingJournalId={deletingJournalId}
-                  onOpen={openJournalTranscript}
-                  onOpenContextMenu={openJournalContextMenu}
-                />
-              )}
-            </>
-          ) : (
-            <>
-              {journalSessions.length > 0 && (
-                <AgentJournalBrowser
-                  sessions={journalSessions}
-                  openingJournalId={openingJournalId}
-                  deletingJournalId={deletingJournalId}
-                  onOpen={openJournalTranscript}
-                  onOpenContextMenu={openJournalContextMenu}
-                />
-              )}
-              {launchError && (
-                <div className="console-dock-panel__quick-error" role="alert">
-                  {launchError}
-                </div>
-              )}
-            </>
-          )}
+              )
+            )}
+            {journalSessions.length > 0 && (
+              <AgentJournalBrowser
+                sessions={journalSessions}
+                openingJournalId={openingJournalId}
+                deletingJournalId={deletingJournalId}
+                onOpen={openJournalTranscript}
+                onOpenContextMenu={openJournalContextMenu}
+              />
+            )}
+          </div>
         </div>
       )}
       {journalContextMenu && (
@@ -1006,72 +1019,105 @@ function AgentJournalBrowser({
   onOpen: (session: AgentJournalSessionSummary) => void;
   onOpenContextMenu: OpenJournalContextMenu;
 }) {
+  const projectGroups = groupJournalSessionsByProject(sessions);
   return (
     <section className="console-dock-panel__journal" aria-label="Sesiones recientes de Agents">
       <div className="console-dock-panel__journal-head">
         <span>Sesiones recientes</span>
-        <small>Guardadas en este equipo</small>
+        <small>
+          {sessions.length} {sessions.length === 1 ? "guardada" : "guardadas"} ·{" "}
+          {projectGroups.length} {projectGroups.length === 1 ? "proyecto" : "proyectos"}
+        </small>
       </div>
       <div className="console-dock-panel__journal-list">
-        {sessions.map((session) => {
-          const logo = agentLogoSrc(session.agent_type);
-          const title = conversationTitle(session.first_user_message);
-          return (
-            <button
-              className="console-dock-panel__journal-card"
-              type="button"
-              key={session.id}
-              aria-label={`Abrir la transcripción de ${busStore.displayName(
-                session.repo,
-              )} con ${agentLabel(session.agent_type)}: ${title}`}
-              disabled={deletingJournalId === session.id}
-              onPointerDown={(event) => event.stopPropagation()}
-              onMouseDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpen(session);
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpenContextMenu(session, event.clientX, event.clientY, event.currentTarget);
-              }}
-              onKeyDown={(event) => openJournalMenuFromKeyboard(event, session, onOpenContextMenu)}
-            >
-              <span
-                className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
-                  session.agent_type,
-                )}`}
-                aria-hidden="true"
-              >
-                {logo ? (
-                  <img src={logo} alt="" />
-                ) : (
-                  <span>{agentLogoText(session.agent_type)}</span>
-                )}
-              </span>
-              <span className="console-dock-panel__journal-main">
-                <span>{title}</span>
-                <small>
-                  {agentLabel(session.agent_type)} · {busStore.displayName(session.repo)} ·{" "}
-                  {sessionLabel(session)}
-                </small>
-                {session.last_event_text && <em>{session.last_event_text}</em>}
-              </span>
-              <span className="console-dock-panel__journal-action">
-                {deletingJournalId === session.id
-                  ? "Eliminando…"
-                  : openingJournalId === session.id
-                    ? "Abriendo…"
-                    : "Abrir"}
-              </span>
-            </button>
-          );
-        })}
+        {projectGroups.map((group) => (
+          <section
+            aria-label={`${busStore.displayName(group.repo)}, ${group.sessions.length} ${
+              group.sessions.length === 1 ? "conversación" : "conversaciones"
+            }`}
+            className="console-dock-panel__journal-group"
+            key={group.repo}
+            role="group"
+          >
+            <div className="console-dock-panel__journal-project" title={group.repo}>
+              <span>{busStore.displayName(group.repo)}</span>
+              <small>{group.sessions.length}</small>
+            </div>
+            {group.sessions.map((session) => {
+              const logo = agentLogoSrc(session.agent_type);
+              const title = conversationTitle(session.first_user_message);
+              return (
+                <button
+                  className="console-dock-panel__journal-card"
+                  type="button"
+                  key={session.id}
+                  aria-label={`Abrir la transcripción de ${busStore.displayName(
+                    session.repo,
+                  )} con ${agentLabel(session.agent_type)}: ${title}`}
+                  disabled={deletingJournalId === session.id}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpen(session);
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenContextMenu(session, event.clientX, event.clientY, event.currentTarget);
+                  }}
+                  onKeyDown={(event) =>
+                    openJournalMenuFromKeyboard(event, session, onOpenContextMenu)
+                  }
+                >
+                  <span
+                    className={`console-dock-panel__quick-icon console-dock-panel__quick-icon--${agentLogoClass(
+                      session.agent_type,
+                    )}`}
+                    aria-hidden="true"
+                  >
+                    {logo ? (
+                      <img src={logo} alt="" />
+                    ) : (
+                      <span>{agentLogoText(session.agent_type)}</span>
+                    )}
+                  </span>
+                  <span className="console-dock-panel__journal-main">
+                    <span>{title}</span>
+                    <small>
+                      {agentLabel(session.agent_type)} · {sessionLabel(session)}
+                    </small>
+                    {session.last_event_text && <em>{session.last_event_text}</em>}
+                  </span>
+                  <span className="console-dock-panel__journal-action">
+                    {deletingJournalId === session.id
+                      ? "Eliminando…"
+                      : openingJournalId === session.id
+                        ? "Abriendo…"
+                        : "Abrir"}
+                  </span>
+                </button>
+              );
+            })}
+          </section>
+        ))}
       </div>
     </section>
   );
+}
+
+function groupJournalSessionsByProject(sessions: AgentJournalSessionSummary[]) {
+  const groups = new Map<string, AgentJournalSessionSummary[]>();
+  sessions.forEach((session) => {
+    const projectSessions = groups.get(session.repo) ?? [];
+    projectSessions.push(session);
+    groups.set(session.repo, projectSessions);
+  });
+  return Array.from(groups, ([repo, projectSessions]) => ({
+    repo,
+    sessions: projectSessions,
+  }));
 }
 
 function openJournalMenuFromKeyboard(
