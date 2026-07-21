@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::{
+    install::{
+        execute_install, preflight_install, recipe_for, AgentInstallRegistry, PreparedInstall,
+    },
     journal::AgentJournal,
     pty::{AgentTurnAttachment, TINTO_TURN_DONE_MARKER},
     validation::{resolve_agent_binary, validate_agent_type},
@@ -24,7 +27,8 @@ use super::{
 use crate::bus::{
     commands::write_repo_agents_md_config,
     contract::{
-        AgentHostCommandResult, AgentHostCommandStatus, AgentJournalSessionSummary,
+        AgentHostCommandResult, AgentHostCommandStatus, AgentInstallOutcome,
+        AgentInstallOutcomeKind, AgentInstallPreview, AgentJournalSessionSummary,
         AgentProviderReadiness, AgentProviderReadinessState, AgentProviderSource,
         AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog, AgentSession,
         AgentSessionAttachment, AgentSessionChangeLog, AgentSessionContextSummary,
@@ -80,8 +84,17 @@ pub async fn start_agent_session(
     agent_type: String,
 ) -> Result<String, CommandError> {
     let resolved = ensure_known_agent_repo(&bus, &repo).await?;
+    start_resolved_agent_session(&app, &registry, resolved, agent_type)
+}
+
+fn start_resolved_agent_session(
+    app: &AppHandle,
+    registry: &Mutex<AgentSessionRegistry>,
+    resolved: crate::bus::ResolvedRepo,
+    agent_type: String,
+) -> Result<String, CommandError> {
     let started = {
-        let mut registry = lock_registry(&registry)?;
+        let mut registry = lock_registry(registry)?;
         match resolved.source {
             RepoSource::Local => registry.start_session_with_output(resolved.path, agent_type)?,
             RepoSource::Wsl => registry.start_wsl_session_with_output(
@@ -97,14 +110,142 @@ pub async fn start_agent_session(
         spawn_output_reader(app.clone(), started.id.clone(), output_reader);
     }
     emit_timeline_text(
-        &app,
+        app,
         &started.id,
         AgentSessionTimelineKind::Lifecycle,
         Some("Session started".to_string()),
         now_ms(),
     );
-    refresh_and_emit_sessions(&app);
+    refresh_and_emit_sessions(app);
     Ok(started.id)
+}
+
+#[tauri::command]
+pub async fn prepare_agent_install(
+    bus: State<'_, BusHandle>,
+    installs: State<'_, Mutex<AgentInstallRegistry>>,
+    repo: PathBuf,
+    agent_type: String,
+) -> Result<AgentInstallPreview, CommandError> {
+    let resolved = ensure_known_agent_repo(&bus, &repo).await?;
+    let readiness = provider_readiness_for_source(
+        resolved.source,
+        resolved.distro.as_deref(),
+        agent_type.clone(),
+        agent_binary_available,
+        wsl_agent_binary_available,
+    )?;
+    if readiness.state == AgentProviderReadinessState::BinaryAvailable {
+        return Err(CommandError::new(
+            "provider_already_available",
+            "el agente ya esta disponible en el runtime seleccionado",
+        ));
+    }
+    let prepared = PreparedInstall {
+        repo: resolved.path,
+        agent_type: agent_type.clone(),
+        source: readiness.source,
+        distro: readiness.distro,
+        recipe: recipe_for(&agent_type).map_err(CommandError::from)?,
+    };
+    let checked = prepared.clone();
+    tauri::async_runtime::spawn_blocking(move || preflight_install(&checked))
+        .await
+        .map_err(|_| CommandError::new("install_preflight_failed", "fallo el preflight"))?
+        .map_err(CommandError::from)?;
+    let mut installs = lock_install_registry(&installs)?;
+    installs.prepare(prepared).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn confirm_agent_install(
+    app: AppHandle,
+    bus: State<'_, BusHandle>,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    installs: State<'_, Mutex<AgentInstallRegistry>>,
+    attempt_id: String,
+) -> Result<AgentInstallOutcome, CommandError> {
+    let claimed = {
+        let mut installs = lock_install_registry(&installs)?;
+        installs.claim(&attempt_id).map_err(CommandError::from)?
+    };
+    let resolved = match ensure_known_agent_repo(&bus, &claimed.repo).await {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            lock_install_registry(&installs)?.finish(&attempt_id);
+            return Err(error);
+        }
+    };
+    let source = match resolved.source {
+        RepoSource::Local => AgentProviderSource::Local,
+        RepoSource::Wsl => AgentProviderSource::Wsl,
+    };
+    if source != claimed.source
+        || resolved.distro != claimed.distro
+        || resolved.path != claimed.repo
+    {
+        lock_install_registry(&installs)?.finish(&attempt_id);
+        return Err(CommandError::new(
+            "install_authorization_stale",
+            "el runtime del repositorio cambio; revisa la instalacion otra vez",
+        ));
+    }
+    let task_claim = claimed.clone();
+    let task_result =
+        tauri::async_runtime::spawn_blocking(move || execute_install(&task_claim)).await;
+    let mut outcome = match task_result {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            lock_install_registry(&installs)?.finish(&attempt_id);
+            return Err(CommandError::new(
+                "installer_failed",
+                "fallo la tarea de instalacion",
+            ));
+        }
+    };
+    continue_verified_install(&installs, &attempt_id, &mut outcome, || {
+        start_resolved_agent_session(&app, &registry, resolved, claimed.agent_type)
+    })?;
+    lock_install_registry(&installs)?.finish(&attempt_id);
+    Ok(outcome)
+}
+
+fn continue_verified_install(
+    installs: &Mutex<AgentInstallRegistry>,
+    attempt_id: &str,
+    outcome: &mut AgentInstallOutcome,
+    start: impl FnOnce() -> Result<String, CommandError>,
+) -> Result<(), CommandError> {
+    if outcome.outcome != AgentInstallOutcomeKind::Verified {
+        return Ok(());
+    }
+    if !lock_install_registry(installs)?
+        .begin_launch(attempt_id)
+        .map_err(CommandError::from)?
+    {
+        outcome.outcome = AgentInstallOutcomeKind::Cancelled;
+        outcome.verified_version = None;
+        outcome.message = "instalacion cancelada antes de iniciar la sesion".to_string();
+        return Ok(());
+    }
+    match start() {
+        Ok(session_id) => outcome.session_id = Some(session_id),
+        Err(error) => {
+            outcome.outcome = AgentInstallOutcomeKind::LaunchFailed;
+            outcome.message = error.message;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_agent_install(
+    installs: State<'_, Mutex<AgentInstallRegistry>>,
+    attempt_id: String,
+) -> Result<(), CommandError> {
+    lock_install_registry(&installs)?
+        .cancel(&attempt_id)
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -2234,6 +2375,14 @@ fn lock_registry(
         .map_err(|_| CommandError::new("lock_poisoned", "el registro de agentes fallo"))
 }
 
+fn lock_install_registry(
+    registry: &Mutex<AgentInstallRegistry>,
+) -> Result<std::sync::MutexGuard<'_, AgentInstallRegistry>, CommandError> {
+    registry
+        .lock()
+        .map_err(|_| CommandError::new("lock_poisoned", "el registro de instalaciones fallo"))
+}
+
 fn lock_workbenches(
     workbenches: &Mutex<WorkbenchStore>,
 ) -> Result<std::sync::MutexGuard<'_, WorkbenchStore>, CommandError> {
@@ -2946,6 +3095,73 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prepared_install_for_command_test() -> PreparedInstall {
+        PreparedInstall {
+            repo: PathBuf::from("C:/repo"),
+            agent_type: "codex".into(),
+            source: AgentProviderSource::Local,
+            distro: None,
+            recipe: recipe_for("codex").unwrap(),
+        }
+    }
+
+    fn verified_install_outcome() -> AgentInstallOutcome {
+        AgentInstallOutcome {
+            outcome: AgentInstallOutcomeKind::Verified,
+            verified_version: Some("codex-cli 1.2.3".into()),
+            session_id: None,
+            message: "Instalacion verificada".into(),
+        }
+    }
+
+    #[test]
+    fn verified_install_continues_the_original_launch_at_most_once() {
+        let mut registry = AgentInstallRegistry::default();
+        let preview = registry
+            .prepare(prepared_install_for_command_test())
+            .unwrap();
+        registry.claim(&preview.attempt_id).unwrap();
+        let installs = Mutex::new(registry);
+        let starts = std::cell::Cell::new(0);
+        let mut first = verified_install_outcome();
+        continue_verified_install(&installs, &preview.attempt_id, &mut first, || {
+            starts.set(starts.get() + 1);
+            Ok("session-1".into())
+        })
+        .unwrap();
+        assert_eq!(first.session_id.as_deref(), Some("session-1"));
+
+        let mut repeated = verified_install_outcome();
+        assert!(
+            continue_verified_install(&installs, &preview.attempt_id, &mut repeated, || {
+                starts.set(starts.get() + 1);
+                Ok("session-2".into())
+            })
+            .is_err()
+        );
+        assert_eq!(starts.get(), 1);
+    }
+
+    #[test]
+    fn cancelled_install_never_continues_the_launch() {
+        let mut registry = AgentInstallRegistry::default();
+        let preview = registry
+            .prepare(prepared_install_for_command_test())
+            .unwrap();
+        registry.claim(&preview.attempt_id).unwrap();
+        registry.cancel(&preview.attempt_id).unwrap();
+        let installs = Mutex::new(registry);
+        let mut outcome = verified_install_outcome();
+
+        continue_verified_install(&installs, &preview.attempt_id, &mut outcome, || {
+            panic!("cancelled install must not start a session")
+        })
+        .unwrap();
+
+        assert_eq!(outcome.outcome, AgentInstallOutcomeKind::Cancelled);
+        assert!(outcome.session_id.is_none());
+    }
 
     #[test]
     fn journal_delete_requires_explicit_user_consent() {

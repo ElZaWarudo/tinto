@@ -29,6 +29,43 @@ export interface AgentProviderReadiness {
   state: AgentProviderReadinessState;
 }
 
+export type AgentInstallPrivilege = "none";
+
+export type AgentInstallOutcomeKind =
+  | "verified"
+  | "unsupported_recipe"
+  | "missing_prerequisite"
+  | "authorization_declined"
+  | "cancelled"
+  | "spawn_failed"
+  | "installer_failed"
+  | "timeout"
+  | "cleanup_failed"
+  | "verification_failed"
+  | "launch_failed";
+
+export interface AgentInstallPreview {
+  attempt_id: string;
+  agent_type: string;
+  display_name: string;
+  source: AgentProviderSource;
+  distro?: string | null;
+  installer: string;
+  command_display: string;
+  arguments: string[];
+  global_effect: string;
+  privilege: AgentInstallPrivilege;
+  recipe_revision: string;
+  expires_at_ms: number;
+}
+
+export interface AgentInstallOutcome {
+  outcome: AgentInstallOutcomeKind;
+  verified_version?: string | null;
+  session_id?: string | null;
+  message: string;
+}
+
 export type AgentSessionAcpState =
   | "unavailable"
   | "authentication_required"
@@ -616,6 +653,10 @@ export interface CuratedBusContractTypeMap {
   AgentProviderSource: AgentProviderSource;
   AgentProviderReadinessState: AgentProviderReadinessState;
   AgentProviderReadiness: AgentProviderReadiness;
+  AgentInstallPrivilege: AgentInstallPrivilege;
+  AgentInstallOutcomeKind: AgentInstallOutcomeKind;
+  AgentInstallPreview: AgentInstallPreview;
+  AgentInstallOutcome: AgentInstallOutcome;
   AgentSessionAcpState: AgentSessionAcpState;
   AgentSessionAcpMode: AgentSessionAcpMode;
   AgentSessionAcpConfigCategory: AgentSessionAcpConfigCategory;

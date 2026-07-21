@@ -1,6 +1,6 @@
 ---
 title: Agent runtime installation protocol requirements
-status: ready-for-validation
+status: planning-input-review-passed
 date: 2026-07-20
 roadmap_item: RDM-023
 artifact_kind: requirements-brainstorm
@@ -80,7 +80,7 @@ The goal is to define a safe, explicit installation protocol. When the user trie
 5. **Explain or stop:** If no supported recipe exists or a required prerequisite is missing, Tinto does not execute an inferred command. It reports the blocking condition and safe manual guidance.
 6. **Request authorization:** Tinto shows the provider, runtime, official installer/source, exact command and arguments, global-install effect, expected elevation, and cancellation option. The install action remains disabled until this information is available.
 7. **Install:** After explicit authorization, Tinto executes the immutable recipe directly inside the target runtime without shell interpolation. Repository content cannot modify the executable, package identifier, arguments, environment allowlist, or elevation decision.
-8. **Elevate if required:** If the installer reports that elevation is required, Tinto explains the need and invokes the native privilege prompt. Denial or cancellation ends the protocol without starting the agent.
+8. **Elevate if required:** Elevation is selected only by the authorized recipe metadata or by an application-controlled preflight performed before installer execution, never by parsing untrusted installer output. Tinto explains the need and invokes the native privilege prompt before executing the installer. If preflight changes the command, arguments, target runtime, privilege level, or recipe revision, Tinto invalidates the prior authorization and presents the revised recipe again. Denial or cancellation ends the protocol without starting the installer or agent.
 9. **Report progress:** Tinto exposes bounded, sanitized progress and permits cancellation where the installer/runtime can terminate safely. Raw environment values, credentials, tokens, and unrestricted installer output are not persisted.
 10. **Verify:** After a successful installer exit, Tinto invalidates availability caches, resolves the executable again inside the same runtime, and runs a bounded minimal version/health probe.
 11. **Continue once:** If verification succeeds, Tinto records success and resumes exactly the original pending launch once. It must not replay stale or duplicate launch requests.
@@ -95,7 +95,7 @@ The goal is to define a safe, explicit installation protocol. When the user trie
 - **FR5:** The system shall require explicit authorization tied to the displayed provider, runtime, and recipe revision.
 - **FR6:** Changed provider, runtime, command, arguments, source, or recipe revision shall invalidate prior authorization and require confirmation again.
 - **FR7:** The system shall execute the approved recipe inside the target runtime without shell interpolation.
-- **FR8:** When global installation requires elevated privileges, the system shall explain the reason and request elevation through the runtime's native mechanism.
+- **FR8:** When an authorized recipe or application-controlled preflight determines before execution that global installation requires elevated privileges, the system shall explain the reason and request elevation through the runtime's native mechanism; untrusted installer output shall never authorize or select elevation.
 - **FR9:** Denying or cancelling either authorization shall leave the agent unstarted and return control to the launcher without treating cancellation as an application fault.
 - **FR10:** The system shall bound installer runtime, captured output, progress events, and shutdown cleanup.
 - **FR11:** After installer success, the system shall invalidate cached readiness and verify executable resolution plus a minimal bounded provider probe in the same runtime.
@@ -135,7 +135,7 @@ The goal is to define a safe, explicit installation protocol. When the user trie
 - **AC2:** Given an absent binary and an approved recipe, when the confirmation appears, it shows the provider, exact target runtime, official source/installer, exact command and arguments, global-install effect, and privilege expectation.
 - **AC3:** Given an absent binary, when the user declines installation, no installer or agent process starts and the launcher returns to a usable state.
 - **AC4:** Given authorization, when installation does not need elevation, Tinto executes exactly the displayed allowlisted recipe in the target runtime.
-- **AC5:** Given authorization and a genuine elevation requirement, Tinto explains the reason and opens a separate native privilege prompt; declining it starts neither the installer nor the agent.
+- **AC5:** Given an authorized recipe or application-controlled preflight with a genuine elevation requirement, Tinto explains the reason and opens a separate native privilege prompt before installer execution; declining it starts neither the installer nor the agent, and any changed recipe identity requires a new Tinto confirmation first.
 - **AC6:** Given any change to the authorized recipe identity or target runtime, Tinto requires a new confirmation before executing.
 - **AC7:** Given installer success and successful post-install verification, Tinto invalidates readiness caches and starts the original requested agent exactly once.
 - **AC8:** Given installer success but a missing or unhealthy executable, Tinto reports `verification_failed` and does not start the agent.
@@ -160,6 +160,6 @@ The goal is to define a safe, explicit installation protocol. When the user trie
 
 ## Validation status
 
-Requirements status: ready for validation.
+Requirements status: planning-input review passed after reconciling elevation with recipe-bound authorization. No open P0-P2 findings remain.
 
 This is what will be built: a consent-gated, allowlisted global installation flow that operates inside the repository's target runtime, requests native elevation only when required, verifies the installed provider, and resumes the original launch exactly once. Automatic updates, uninstall, credential setup, arbitrary installers, and prerequisite installation remain out of scope.

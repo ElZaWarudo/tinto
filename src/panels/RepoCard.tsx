@@ -4,9 +4,16 @@
 // are drilled into via the project's own explorer, not here.
 
 import { memo, useEffect, useState } from "react";
-import type { AgentProviderReadiness, BranchInfo, RepoDelta } from "../bus/contract";
+import { cancelAgentInstall, confirmAgentInstall, prepareAgentInstall } from "../bus/client";
+import type {
+  AgentInstallOutcome,
+  AgentInstallPreview,
+  AgentProviderReadiness,
+  BranchInfo,
+  RepoDelta,
+} from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
-import { checkAgentAvailabilityForRepo } from "./agentAvailability";
+import { checkAgentAvailabilityForRepo, invalidateAgentAvailability } from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import { RepoSourceBadge } from "./RepoSourceBadge";
 import { SecretScanIndicator } from "./SecretScanIndicator";
@@ -57,6 +64,10 @@ export function RepoAgentLauncher({
   const [forceRecheckToken, setForceRecheckToken] = useState(0);
   const [launching, setLaunching] = useState(false);
   const [launchMessage, setLaunchMessage] = useState<string | null>(null);
+  const [installPreview, setInstallPreview] = useState<AgentInstallPreview | null>(null);
+  const [preparingInstall, setPreparingInstall] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [cancellingInstall, setCancellingInstall] = useState(false);
   const selectedAgent = AGENT_OPTIONS.find((agent) => agent.id === agentType) ?? AGENT_OPTIONS[0];
 
   useEffect(() => {
@@ -104,6 +115,66 @@ export function RepoAgentLauncher({
       .finally(() => setLaunching(false));
   };
 
+  const prepareInstall = () => {
+    if (pending || available !== false || preparingInstall || installing) return;
+    setPreparingInstall(true);
+    setLaunchMessage(null);
+    prepareAgentInstall(repo, agentType)
+      .then(setInstallPreview)
+      .catch((error) =>
+        setLaunchMessage(
+          reportActionFailure(
+            error,
+            `No se puede instalar ${selectedAgent.label} automáticamente. Sigue la guía manual y vuelve a comprobar.`,
+          ),
+        ),
+      )
+      .finally(() => setPreparingInstall(false));
+  };
+
+  const cancelInstall = () => {
+    const attemptId = installPreview?.attempt_id;
+    if (!attemptId || cancellingInstall) return;
+    const wasInstalling = installing;
+    setCancellingInstall(true);
+    if (wasInstalling) setLaunchMessage("Cancelación solicitada…");
+    cancelAgentInstall(attemptId)
+      .then(() => {
+        if (!wasInstalling) setInstallPreview(null);
+      })
+      .catch((error) =>
+        setLaunchMessage(reportActionFailure(error, "No se pudo cancelar la instalación.")),
+      )
+      .finally(() => setCancellingInstall(false));
+  };
+
+  const confirmInstall = () => {
+    if (!installPreview || installing) return;
+    const preview = installPreview;
+    setInstalling(true);
+    setLaunchMessage(`Instalando ${preview.display_name}…`);
+    confirmAgentInstall(preview.attempt_id)
+      .then((outcome) => {
+        if (outcome.outcome === "verified" && outcome.session_id) {
+          invalidateAgentAvailability(availabilityKey, preview.agent_type);
+          setAvailable(true);
+          setAvailabilityMessage(null);
+          setInstallPreview(null);
+          setLaunchMessage(`${preview.display_name} instalado y sesión iniciada.`);
+          return;
+        }
+        setInstallPreview(null);
+        setLaunchMessage(installOutcomeMessage(preview.display_name, outcome));
+      })
+      .catch((error) => {
+        setInstallPreview(null);
+        setLaunchMessage(
+          reportActionFailure(error, `No se completó la instalación de ${preview.display_name}.`),
+        );
+      })
+      .finally(() => setInstalling(false));
+  };
+
   return (
     <div
       className={["repo-card__launcher", className].filter(Boolean).join(" ")}
@@ -116,7 +187,11 @@ export function RepoAgentLauncher({
         className="repo-card__agent-select"
         aria-label="Tipo de Agent"
         value={agentType}
+        disabled={preparingInstall || installing}
         onChange={(event) => {
+          if (installPreview)
+            void cancelAgentInstall(installPreview.attempt_id).catch(() => undefined);
+          setInstallPreview(null);
           setAvailable(null);
           setAvailabilityMessage(null);
           setForceRecheckToken(0);
@@ -148,20 +223,106 @@ export function RepoAgentLauncher({
             (available === null ? "Comprobando disponibilidad…" : "\u00a0"))}
       </span>
       {available === false ? (
-        <button
-          type="button"
-          className="repo-card__availability-recheck"
-          onClick={() => {
-            setAvailable(null);
-            setAvailabilityMessage(null);
-            setForceRecheckToken((token) => token + 1);
+        <span className="repo-card__availability-actions">
+          <button
+            type="button"
+            className="repo-card__install-agent"
+            disabled={preparingInstall || installing}
+            onClick={prepareInstall}
+          >
+            {preparingInstall ? "Preparando…" : `Instalar ${selectedAgent.label}`}
+          </button>
+          <button
+            type="button"
+            className="repo-card__availability-recheck"
+            disabled={preparingInstall || installing}
+            onClick={() => {
+              setAvailable(null);
+              setAvailabilityMessage(null);
+              setForceRecheckToken((token) => token + 1);
+            }}
+          >
+            Volver a comprobar
+          </button>
+        </span>
+      ) : null}
+      {installPreview ? (
+        <div
+          className="agent-install-dialog-backdrop"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") cancelInstall();
           }}
         >
-          Volver a comprobar
-        </button>
+          <section
+            className="agent-install-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-install-title"
+          >
+            <h3 id="agent-install-title">Instalar {installPreview.display_name}</h3>
+            <dl>
+              <div>
+                <dt>Runtime</dt>
+                <dd>{installRuntimeLabel(installPreview)}</dd>
+              </div>
+              <div>
+                <dt>Fuente</dt>
+                <dd>{installPreview.installer} oficial</dd>
+              </div>
+              <div>
+                <dt>Comando exacto</dt>
+                <dd>
+                  <code>{installPreview.command_display}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>Efecto</dt>
+                <dd>{installPreview.global_effect}</dd>
+              </div>
+              <div>
+                <dt>Privilegios</dt>
+                <dd>Sin privilegios elevados</dd>
+              </div>
+            </dl>
+            <p className="agent-install-dialog__notice">
+              Esta autorización sirve una sola vez para esta receta y este runtime.
+            </p>
+            <div className="agent-install-dialog__actions">
+              <button type="button" onClick={cancelInstall} disabled={cancellingInstall}>
+                {cancellingInstall ? "Cancelando…" : "Cancelar"}
+              </button>
+              <button type="button" onClick={confirmInstall} disabled={installing} autoFocus>
+                {installing ? "Instalando…" : "Confirmar instalación"}
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
     </div>
   );
+}
+
+function installRuntimeLabel(preview: AgentInstallPreview): string {
+  return preview.source === "wsl" ? `WSL ${preview.distro ?? "sin distro"}` : "Este equipo";
+}
+
+function installOutcomeMessage(agentLabel: string, outcome: AgentInstallOutcome): string {
+  switch (outcome.outcome) {
+    case "cancelled":
+    case "authorization_declined":
+      return `Instalación de ${agentLabel} cancelada.`;
+    case "missing_prerequisite":
+    case "unsupported_recipe":
+      return `${outcome.message} Instala el requisito manualmente y vuelve a comprobar.`;
+    case "verification_failed":
+      return `${agentLabel} no superó la verificación y no se inició.`;
+    case "launch_failed":
+      return `${agentLabel} se instaló, pero la sesión no pudo iniciarse: ${outcome.message}`;
+    default:
+      return `${outcome.message} No se inició ninguna sesión.`;
+  }
 }
 
 function providerUnavailableMessage(agentLabel: string, readiness: AgentProviderReadiness): string {

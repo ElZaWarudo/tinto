@@ -6,6 +6,7 @@ pub mod acp;
 pub mod app_server;
 pub mod checkpoint;
 pub mod commands;
+pub mod install;
 pub mod journal;
 pub mod pty;
 pub mod session;

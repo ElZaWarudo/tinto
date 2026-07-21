@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ACTIVITY_WINDOW_MS } from "./constants";
-import type { AgentProviderReadiness, RepoDelta } from "../bus/contract";
+import type { AgentInstallPreview, AgentProviderReadiness, RepoDelta } from "../bus/contract";
 
 const NOW = 1_700_000_000_000;
 const clientMocks = vi.hoisted(() => ({
@@ -14,12 +14,18 @@ const clientMocks = vi.hoisted(() => ({
       state: "binary_available",
     });
   }),
+  prepareAgentInstall: vi.fn<(...args: unknown[]) => Promise<AgentInstallPreview>>(),
+  confirmAgentInstall: vi.fn(),
+  cancelAgentInstall: vi.fn(),
 }));
 vi.mock("../bus/client", () => ({
   agentProviderReadinessForRepo: (...args: unknown[]) => {
     void args;
     return clientMocks.agentProviderReadinessForRepo(...args);
   },
+  prepareAgentInstall: (...args: unknown[]) => clientMocks.prepareAgentInstall(...args),
+  confirmAgentInstall: (...args: unknown[]) => clientMocks.confirmAgentInstall(...args),
+  cancelAgentInstall: (...args: unknown[]) => clientMocks.cancelAgentInstall(...args),
 }));
 
 import { RepoCard } from "./RepoCard";
@@ -75,6 +81,30 @@ describe("RepoCard", () => {
       distro: null,
       state: "binary_available",
     });
+    clientMocks.prepareAgentInstall.mockReset();
+    clientMocks.prepareAgentInstall.mockResolvedValue({
+      attempt_id: "attempt-1",
+      agent_type: "codex",
+      display_name: "Codex",
+      source: "wsl",
+      distro: "Ubuntu-24.04",
+      installer: "npm",
+      command_display: "npm install -g @openai/codex",
+      arguments: ["install", "-g", "@openai/codex"],
+      global_effect: "Instala el agente globalmente",
+      privilege: "none",
+      recipe_revision: "npm-v1",
+      expires_at_ms: NOW + 60_000,
+    });
+    clientMocks.confirmAgentInstall.mockReset();
+    clientMocks.confirmAgentInstall.mockResolvedValue({
+      outcome: "verified",
+      verified_version: "codex-cli 1.0.0",
+      session_id: "session-1",
+      message: "Instalacion verificada",
+    });
+    clientMocks.cancelAgentInstall.mockReset();
+    clientMocks.cancelAgentInstall.mockResolvedValue(undefined);
     resetAgentAvailabilityCacheForTests();
   });
 
@@ -263,7 +293,7 @@ describe("RepoCard", () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
-  it("disables launch when the selected agent binary is missing", async () => {
+  it("offers an exact consent dialog when the selected agent binary is missing", async () => {
     clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
       agent_type: "codex",
       source: "wsl",
@@ -276,8 +306,100 @@ describe("RepoCard", () => {
       "No se encontró Codex en WSL Ubuntu-24.04",
     );
     expect(screen.getByTestId("agent-launch")).toBeDisabled();
-    fireEvent.click(screen.getByTestId("agent-launch"));
+    fireEvent.click(screen.getByRole("button", { name: "Instalar Codex" }));
+
+    expect(await screen.findByRole("dialog", { name: "Instalar Codex" })).toBeInTheDocument();
+    expect(screen.getByText("WSL Ubuntu-24.04")).toBeInTheDocument();
+    expect(screen.getByText("npm install -g @openai/codex")).toBeInTheDocument();
+    expect(screen.getByText(/sin privilegios elevados/i)).toBeInTheDocument();
+    expect(clientMocks.prepareAgentInstall).toHaveBeenCalledWith("/r/api", "codex");
     expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it("confirms once and accepts the backend-started session without replaying launch", async () => {
+    clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "unavailable",
+    });
+    const { onLaunch } = renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Instalar Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar instalación" }));
+
+    await waitFor(() => expect(clientMocks.confirmAgentInstall).toHaveBeenCalledTimes(1));
+    expect(clientMocks.confirmAgentInstall).toHaveBeenCalledWith("attempt-1");
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("agent-launch-message")).toHaveTextContent(
+      "Codex instalado y sesión iniciada",
+    );
+  });
+
+  it("declines a prepared installation without starting an installer or session", async () => {
+    clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "unavailable",
+    });
+    const { onLaunch } = renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Instalar Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancelar" }));
+
+    await waitFor(() => expect(clientMocks.cancelAgentInstall).toHaveBeenCalledWith("attempt-1"));
+    expect(clientMocks.confirmAgentInstall).not.toHaveBeenCalled();
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("allows cancelling while the installer is running", async () => {
+    clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "unavailable",
+    });
+    let finishInstall: ((value: unknown) => void) | undefined;
+    clientMocks.confirmAgentInstall.mockReturnValue(
+      new Promise((resolve) => {
+        finishInstall = resolve;
+      }),
+    );
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Instalar Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar instalación" }));
+
+    const cancel = screen.getByRole("button", { name: "Cancelar" });
+    expect(cancel).not.toBeDisabled();
+    fireEvent.click(cancel);
+
+    await waitFor(() => expect(clientMocks.cancelAgentInstall).toHaveBeenCalledWith("attempt-1"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    finishInstall?.({
+      outcome: "cancelled",
+      verified_version: null,
+      session_id: null,
+      message: "instalacion cancelada",
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("discards a consumed preview when confirmation fails", async () => {
+    clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "unavailable",
+    });
+    clientMocks.confirmAgentInstall.mockRejectedValue(new Error("confirm failed"));
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Instalar Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar instalación" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByTestId("agent-launch-message")).toHaveTextContent(
+      "No se completó la instalación de Codex",
+    );
   });
 
   it("allows launch when the availability probe fails", async () => {

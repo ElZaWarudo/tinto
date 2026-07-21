@@ -3399,6 +3399,96 @@ select option {
   color: var(--warn);
   font-size: 11px;
 }
+
+.repo-card__availability-actions {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.repo-card__availability-actions button {
+  min-height: 26px;
+}
+
+.agent-install-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 74%, transparent);
+}
+
+.agent-install-dialog {
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 35%);
+}
+
+.agent-install-dialog h3 {
+  margin: 0 0 16px;
+}
+
+.agent-install-dialog dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.agent-install-dialog dl > div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.agent-install-dialog dt {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.agent-install-dialog dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-install-dialog code {
+  display: block;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  white-space: pre-wrap;
+}
+
+.agent-install-dialog__notice {
+  margin: 16px 0;
+  color: var(--fg-muted);
+}
+
+.agent-install-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 520px) {
+  .agent-install-dialog-backdrop {
+    padding: 12px;
+  }
+
+  .agent-install-dialog dl > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
 .repo-card__foot {
   grid-column: 1 / -1;
   padding-top: 0;

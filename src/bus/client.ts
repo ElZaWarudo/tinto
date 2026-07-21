@@ -24,6 +24,8 @@ import {
   type AgentSessionRuntimeOptions,
   type AgentHostCommandResult,
   type AgentProviderReadiness,
+  type AgentInstallPreview,
+  type AgentInstallOutcome,
   type GitleaksSetupStatus,
   type GitleaksInstallResult,
   type CopyResult,
@@ -222,6 +224,15 @@ export const agentBinaryAvailableForRepo = (repo: string, agentType: string) =>
 
 export const agentProviderReadinessForRepo = (repo: string, agentType: string) =>
   invoke<AgentProviderReadiness>("agent_provider_readiness_for_repo", { repo, agentType });
+
+export const prepareAgentInstall = (repo: string, agentType: string) =>
+  invoke<AgentInstallPreview>("prepare_agent_install", { repo, agentType });
+
+export const confirmAgentInstall = (attemptId: string) =>
+  invoke<AgentInstallOutcome>("confirm_agent_install", { attemptId });
+
+export const cancelAgentInstall = (attemptId: string) =>
+  invoke<void>("cancel_agent_install", { attemptId });
 
 export const writeAgentSessionInput = (
   sessionId: string,

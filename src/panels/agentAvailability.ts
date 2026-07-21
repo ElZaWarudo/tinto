@@ -42,3 +42,7 @@ export function checkAgentAvailabilityForRepo(
 export function resetAgentAvailabilityCacheForTests(): void {
   availabilityCache.clear();
 }
+
+export function invalidateAgentAvailability(environmentKey: string, agentType: string): void {
+  availabilityCache.delete(`${environmentKey}:${agentType}`);
+}
