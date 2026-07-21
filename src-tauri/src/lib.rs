@@ -97,6 +97,9 @@ pub fn run() {
         .manage(std::sync::Mutex::new(
             agent_console::AgentSessionRegistry::new(),
         ))
+        .manage(std::sync::Mutex::new(
+            agent_console::install::AgentInstallRegistry::default(),
+        ))
         .manage(std::sync::Mutex::new(agent_journal))
         .manage(bus_handle)
         .invoke_handler(tauri::generate_handler![
@@ -154,6 +157,9 @@ pub fn run() {
             agent_console::commands::agent_binary_available,
             agent_console::commands::agent_binary_available_for_repo,
             agent_console::commands::agent_provider_readiness_for_repo,
+            agent_console::commands::prepare_agent_install,
+            agent_console::commands::confirm_agent_install,
+            agent_console::commands::cancel_agent_install,
             agent_console::commands::write_agent_session_input,
             agent_console::commands::write_agent_session_turn,
             agent_console::commands::steer_agent_session_turn,
