@@ -43,6 +43,55 @@ pub struct AgentProviderReadiness {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentInstallPrivilege {
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentInstallOutcomeKind {
+    Verified,
+    UnsupportedRecipe,
+    MissingPrerequisite,
+    AuthorizationDeclined,
+    Cancelled,
+    SpawnFailed,
+    InstallerFailed,
+    Timeout,
+    CleanupFailed,
+    VerificationFailed,
+    LaunchFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentInstallPreview {
+    pub attempt_id: String,
+    pub agent_type: String,
+    pub display_name: String,
+    pub source: AgentProviderSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    pub installer: String,
+    pub command_display: String,
+    pub arguments: Vec<String>,
+    pub global_effect: String,
+    pub privilege: AgentInstallPrivilege,
+    pub recipe_revision: String,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentInstallOutcome {
+    pub outcome: AgentInstallOutcomeKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentSessionAcpState {
     Unavailable,
     AuthenticationRequired,
