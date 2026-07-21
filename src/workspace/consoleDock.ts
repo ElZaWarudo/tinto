@@ -146,16 +146,29 @@ class ConsoleDock {
   }
 
   openTerminal(params: AgentTerminalOpenParams) {
-    this.rememberTerminal(params);
-    markRecentAgentLaunch(params);
-    const id = agentTerminalPanelId(params.sessionId);
+    const { replaceSessionId, ...terminalParams } = params;
+    const id = agentTerminalPanelId(terminalParams.sessionId);
+    const replacedId = replaceSessionId ? agentTerminalPanelId(replaceSessionId) : null;
+    if (replacedId && replacedId !== id) {
+      const chatNumber = this.terminalChatNumbers.get(replacedId);
+      this.cancelForgetTerminal(replacedId);
+      this.pending.delete(replacedId);
+      this.terminals.delete(replacedId);
+      this.terminalChatNumbers.delete(replacedId);
+      if (chatNumber !== undefined) this.terminalChatNumbers.set(id, chatNumber);
+      const replacedPanel = this.api?.getPanel(replacedId);
+      if (this.api && replacedPanel) this.api.removePanel(replacedPanel);
+    }
+
+    this.rememberTerminal(terminalParams);
+    if (!replacedId) markRecentAgentLaunch(terminalParams);
     const api = this.api;
     if (!api) {
-      this.pending.set(id, params);
+      this.pending.set(id, terminalParams);
       return;
     }
 
-    this.ensureTerminalPanel(params, { activate: true });
+    this.ensureTerminalPanel(terminalParams, { activate: true });
   }
 
   closeTerminal(sessionId: string) {

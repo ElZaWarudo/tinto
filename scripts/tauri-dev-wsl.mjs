@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const require = createRequire(import.meta.url);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const artifactName = "tinto-agent-linux-x86_64";
@@ -93,8 +95,9 @@ if (process.platform !== "win32") {
   env.WEBKIT_DISABLE_COMPOSITING_MODE ??= "1";
 }
 
-const command = process.platform === "win32" ? "npx.cmd" : "npx";
-const args = ["tauri", "dev", ...forwardedArgs];
+const command = process.execPath;
+const tauriCli = require.resolve("@tauri-apps/cli/tauri.js");
+const args = [tauriCli, "dev", ...forwardedArgs];
 
 if (dryRun) {
   console.log(`${command} ${args.join(" ")}`);
@@ -104,7 +107,6 @@ if (dryRun) {
 const child = spawn(command, args, {
   cwd: repoRoot,
   env,
-  shell: process.platform === "win32",
   stdio: "inherit",
 });
 

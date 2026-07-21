@@ -4,7 +4,9 @@ import type { TerminalPanelParams } from "../panels/terminal/TerminalPanel";
 import { consoleDock } from "./consoleDock";
 import { sendTerminalToDetachedConsoles } from "../panels/terminal/detachTerminalWindow";
 
-export type AgentTerminalOpenParams = TerminalPanelParams;
+export type AgentTerminalOpenParams = TerminalPanelParams & {
+  replaceSessionId?: string;
+};
 
 // Below the same breakpoint used by the agent surface, two independently
 // docked workspace groups no longer leave enough room for both the session

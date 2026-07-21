@@ -13,10 +13,12 @@ import { ConsoleDockPanel } from "../panels/terminal/ConsoleDockPanel";
 import { TerminalPanel, type TerminalPanelParams } from "../panels/terminal/TerminalPanel";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../workspace/actions";
 import { consoleDock } from "../workspace/consoleDock";
+import { markRecentAgentLaunch } from "../workspace/recentAgentLaunches";
 import "../App.css";
 import "./agentLensRestorable.css";
 
 const REPO = "C:\\Users\\User\\Documents\\personal\\digital-product-passport";
+const TINTO_REPO = "C:\\Users\\User\\Documents\\personal\\tinto";
 const SESSION_ID = "demo-restorable-session";
 const NOW = 1_798_800_000_000;
 const QUERY = new URLSearchParams(window.location.search);
@@ -24,6 +26,7 @@ const LIVE_PROCESS = QUERY.get("state") === "working";
 const JOURNAL_MODE = QUERY.get("mode") === "journal";
 const COMPACT_FIXTURE = QUERY.get("viewport") === "compact";
 const NAVIGATOR_FIXTURE = QUERY.get("surface") === "navigator";
+const AGENTS_HOME_FIXTURE = QUERY.get("surface") === "agents-home";
 
 const turnChanges = [
   { path: "src/agent-view.tsx", kind: "modified" as const, timestamp_ms: NOW + 12_000 },
@@ -269,7 +272,7 @@ function installTauriFixture() {
     invoke: async (cmd: string) => {
       if (cmd === "list_agent_sessions") return [session];
       if (cmd === "list_agent_journal_sessions") {
-        return [
+        const savedSessions = [
           {
             id: "demo-saved-session",
             repo: REPO,
@@ -283,6 +286,26 @@ function installTauriFixture() {
             last_event_text: "Cambios verificados y listos.",
             last_event_at_ms: NOW - 60_000,
           },
+        ];
+        if (!AGENTS_HOME_FIXTURE) return savedSessions;
+        return [
+          ...savedSessions,
+          ...[
+            "Replantea el panel de Agents sin cortar el historial",
+            "Corrige la navegación de los archivos del chat",
+            "Conserva el hilo al reanudar una sesión",
+            "Revisa los estados de carga y recuperación",
+            "Pulir el flujo de intervención durante el turno",
+            "Verifica la aplicación en una ventana estrecha",
+          ].map((firstUserMessage, index) => ({
+            ...savedSessions[0],
+            id: `demo-saved-session-${index + 2}`,
+            repo: index >= 3 ? TINTO_REPO : REPO,
+            first_user_message: firstUserMessage,
+            updated_at_ms: NOW - (index + 2) * 60_000,
+            event_count: 18 + index * 7,
+            last_event_text: "Cambios aplicados y verificados en el panel.",
+          })),
         ];
       }
       if (cmd === "get_agent_journal_session") return session;
@@ -312,6 +335,13 @@ agentSessionStore.setSessions([session]);
 busStore.resetAll();
 busStore.setConfig(config);
 busStore.loadSnapshot([repoDelta], { available: true });
+if (AGENTS_HOME_FIXTURE) {
+  markRecentAgentLaunch({ repo: REPO, agentType: "codex" });
+  markRecentAgentLaunch({
+    repo: TINTO_REPO,
+    agentType: "codex",
+  });
+}
 if (NAVIGATOR_FIXTURE) {
   consoleDock.openTerminal({ sessionId: SESSION_ID, repo: REPO, agentType: "codex" });
 }
@@ -350,7 +380,11 @@ createRoot(document.getElementById("root")!).render(
     <WorkspaceActionsContext.Provider value={actions}>
       <div className={`agent-lens-fixture${COMPACT_FIXTURE ? " agent-lens-fixture--compact" : ""}`}>
         <div className="agent-lens-fixture__panel">
-          {NAVIGATOR_FIXTURE ? <ConsoleDockPanel /> : <TerminalPanel {...panelProps} />}
+          {NAVIGATOR_FIXTURE || AGENTS_HOME_FIXTURE ? (
+            <ConsoleDockPanel />
+          ) : (
+            <TerminalPanel {...panelProps} />
+          )}
         </div>
       </div>
     </WorkspaceActionsContext.Provider>
