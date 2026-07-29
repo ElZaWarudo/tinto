@@ -1,3 +1,19 @@
+// <pumarejo:begin>
+#[cfg(all(debug_assertions, feature = "pumarejo"))]
+fn pumarejo_builder<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+) -> tauri::Builder<R> {
+    builder.plugin(tauri_plugin_wdio_webdriver::init())
+}
+
+#[cfg(not(all(debug_assertions, feature = "pumarejo")))]
+fn pumarejo_builder<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+) -> tauri::Builder<R> {
+    builder
+}
+// <pumarejo:end>
+
 pub mod agent_console;
 pub mod bus;
 pub mod file_ops;
@@ -85,7 +101,7 @@ pub fn run() {
     let agent_journal = agent_console::journal::AgentJournal::open_default()
         .expect("no se pudo abrir el diario SQLite de agentes");
 
-    let builder = tauri::Builder::default()
+    let builder = pumarejo_builder(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init());
 

@@ -25,3 +25,6 @@ src-tauri/resources/tinto-agent-linux-x86_64
 *.njsproj
 *.sln
 *.sw?
+# <pumarejo:begin>
+/.pumarejo/
+# <pumarejo:end>

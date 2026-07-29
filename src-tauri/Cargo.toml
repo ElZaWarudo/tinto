@@ -26,6 +26,8 @@ path = "src/bin/tinto-agent.rs"
 [features]
 default = []
 e2e-wdio = ["dep:tauri-plugin-wdio-webdriver"]
+# <pumarejo:cargo-feature-created>
+pumarejo = ["dep:tauri-plugin-wdio-webdriver"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

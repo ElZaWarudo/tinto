@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "launch": {
+    "command": "npm",
+    "args": [
+      "run",
+      "tauri",
+      "--",
+      "dev",
+      "--features",
+      "pumarejo",
+      "--config",
+      "{tauriConfig}"
+    ]
+  },
+  "window": "main",
+  "artifactsDirectory": ".pumarejo/artifacts",
+  "retainArtifacts": false
+}
