@@ -2987,8 +2987,8 @@ select option {
   z-index: 2;
   display: grid;
   grid-template-columns:
-    52px minmax(170px, 1.15fr) minmax(96px, 0.52fr) minmax(116px, 0.56fr)
-    minmax(110px, 0.5fr) minmax(190px, 0.85fr);
+    52px minmax(170px, 1fr) minmax(96px, 0.45fr) minmax(116px, 0.75fr)
+    minmax(110px, 1.1fr) minmax(190px, 0.9fr);
   gap: 0;
   padding: 6px 24px 6px 0;
   border-bottom: 1px solid var(--border);
@@ -3061,8 +3061,8 @@ select option {
 .repo-card {
   display: grid;
   grid-template-columns:
-    52px minmax(170px, 1.15fr) minmax(96px, 0.52fr) minmax(116px, 0.56fr)
-    minmax(110px, 0.5fr) minmax(190px, 0.85fr);
+    52px minmax(170px, 1fr) minmax(96px, 0.45fr) minmax(116px, 0.75fr)
+    minmax(110px, 1.1fr) minmax(190px, 0.9fr);
   align-items: stretch;
   gap: 0;
   min-width: 0;
@@ -3325,7 +3325,7 @@ select option {
 .repo-card__metrics small {
   overflow: hidden;
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1;
   text-overflow: ellipsis;
   text-transform: uppercase;
@@ -3779,7 +3779,7 @@ select option {
   }
 }
 
-@container dashboard (max-width: 760px) {
+@container dashboard (max-width: 820px) {
   .dashboard__status-band {
     position: relative;
     grid-template-columns: minmax(0, 1fr);
@@ -10072,6 +10072,20 @@ select option {
   margin: 0;
   padding: 0;
 }
+.timeline-day__heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 7px 10px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: capitalize;
+}
 .timeline-row {
   display: grid;
   grid-template-columns: 62px minmax(0, 1fr);
@@ -11364,6 +11378,11 @@ a:focus-visible {
 }
 
 /* Nested file-dock tab; the preview slot (single-click) reads as italic. */
+.accessible-dock-tab {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+}
 .file-dock-tab {
   display: inline-flex;
   align-items: center;

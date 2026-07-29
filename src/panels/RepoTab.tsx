@@ -6,6 +6,7 @@
 import { DockviewDefaultTab, type IDockviewPanelHeaderProps } from "dockview-react";
 import type { RepoDelta } from "../bus/contract";
 import { useBusState } from "../bus/store";
+import { useAccessibleDockTab } from "../workspace/useAccessibleDockTab";
 
 function repoHasChanges(delta: RepoDelta | undefined): boolean {
   const s = delta?.status;
@@ -16,9 +17,10 @@ export function RepoTab(props: IDockviewPanelHeaderProps) {
   const repo = (props.params as { repo?: string }).repo;
   const state = useBusState();
   const changed = repoHasChanges(repo ? state.repos[repo] : undefined);
+  const ref = useAccessibleDockTab(props.api);
 
   return (
-    <div className="repo-tab">
+    <div className="repo-tab" ref={ref}>
       {/* The dot slot is always present (fixed width) so the title never shifts
           when the change indicator toggles on/off. */}
       <span

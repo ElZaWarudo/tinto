@@ -218,7 +218,10 @@ describe("RepoCard", () => {
     const onFetch = vi.fn(() => Promise.resolve());
     const { onOpen } = renderCard({}, { source: "local", onFetch });
 
-    fireEvent.click(screen.getByTestId("repo-card-fetch"));
+    const fetchButton = screen.getByRole("button", {
+      name: "Actualizar referencias remotas de api",
+    });
+    fireEvent.click(fetchButton);
 
     expect(onFetch).toHaveBeenCalledOnce();
     expect(onOpen).not.toHaveBeenCalled();
@@ -421,7 +424,7 @@ describe("RepoCard", () => {
   it("launches the selected agent without opening the card", async () => {
     const { onOpen, onLaunch } = renderCard();
 
-    const button = await screen.findByTestId("agent-launch");
+    const button = await screen.findByRole("button", { name: "Iniciar Codex en api" });
     fireEvent.click(button);
 
     expect(onLaunch).toHaveBeenCalledWith("codex");
@@ -431,7 +434,9 @@ describe("RepoCard", () => {
   it("checks availability when the selected agent changes", async () => {
     renderCard();
 
-    fireEvent.change(screen.getByLabelText("Tipo de Agent"), { target: { value: "claude" } });
+    fireEvent.change(screen.getByLabelText("Tipo de Agent para api"), {
+      target: { value: "claude" },
+    });
 
     expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledWith("/r/api", "claude");
   });
@@ -458,7 +463,9 @@ describe("RepoCard", () => {
       });
     renderCard();
 
-    fireEvent.change(screen.getByLabelText("Tipo de Agent"), { target: { value: "kimi" } });
+    fireEvent.change(screen.getByLabelText("Tipo de Agent para api"), {
+      target: { value: "kimi" },
+    });
     expect(await screen.findByText(/No se encontró Kimi Code en este equipo/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Volver a comprobar" }));

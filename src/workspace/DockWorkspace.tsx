@@ -17,6 +17,7 @@ import type {
 import { themeVisualStudio } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { useEffect, useRef } from "react";
+import { AccessibleDockTab } from "./AccessibleDockTab";
 import { applyLayout, loadUiState, saveUiState } from "./layout";
 import { PANEL_DASHBOARD } from "./panels";
 
@@ -103,6 +104,7 @@ export function DockWorkspace({
     <DockviewReact
       components={components}
       tabComponents={tabComponents}
+      defaultTabComponent={AccessibleDockTab}
       dndStrategy="pointer"
       theme={themeVisualStudio}
       onReady={onReady}

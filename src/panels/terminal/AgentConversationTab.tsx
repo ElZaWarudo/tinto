@@ -1,5 +1,6 @@
 import { useEffect, useState, type PointerEvent } from "react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
+import { useAccessibleDockTab } from "../../workspace/useAccessibleDockTab";
 
 function tabParts(title: string | undefined): { context: string; conversation: string } {
   const [agent = "Agent", project = "Proyecto", ...conversation] = (title ?? "").split(" · ");
@@ -11,6 +12,7 @@ function tabParts(title: string | undefined): { context: string; conversation: s
 
 export function AgentConversationTab({ api }: IDockviewPanelHeaderProps) {
   const [title, setTitle] = useState(api.title);
+  const ref = useAccessibleDockTab(api);
 
   useEffect(() => {
     const disposable = api.onDidTitleChange(({ title: nextTitle }) => setTitle(nextTitle));
@@ -23,6 +25,7 @@ export function AgentConversationTab({ api }: IDockviewPanelHeaderProps) {
   return (
     <div
       className="agent-conversation-tab"
+      ref={ref}
       onAuxClick={(event) => {
         if (event.button === 1) api.close();
       }}

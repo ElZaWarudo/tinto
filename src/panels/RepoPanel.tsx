@@ -286,6 +286,7 @@ function RepoOverview({ repo }: { repo: string }) {
 
       <RepoAgentLauncher
         repo={repo}
+        repoName={busStore.displayName(repo)}
         availabilityKey={agentAvailabilityKey(repoEntry?.source, repoEntry?.distro)}
         className="repo-overview__agent-launcher"
         onLaunch={async (agentType) => {

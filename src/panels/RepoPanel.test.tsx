@@ -351,7 +351,9 @@ describe("RepoPanel", () => {
 
     const launcher = screen.getByTestId("agent-launcher-/r/api");
     expect(within(launcher).getByRole("option", { name: "Claude Code" })).toBeInTheDocument();
-    const launchButton = within(launcher).getByRole("button", { name: "Iniciar" });
+    const launchButton = within(launcher).getByRole("button", {
+      name: "Iniciar Codex en api",
+    });
     await waitFor(() => expect(launchButton).toBeEnabled());
     fireEvent.click(launchButton);
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { getCommitDiff, getCommitLog } from "../../bus/client";
 import type { CommitInfo, FileDiff } from "../../bus/contract";
-import { busStore, commitDate, sortedRepoPaths, useBusState } from "../../bus/store";
+import { busStore, sortedRepoPaths, useBusState } from "../../bus/store";
 import {
   filterRepoPaths,
   filterTimelineEntries,
@@ -42,6 +42,30 @@ type TimelineFeedEntry =
       timestampMs: number;
       commitEntry: CommitEntry;
     };
+
+function localDayKey(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dayLabel(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleDateString(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function accessibleDateTime(date: Date): string {
+  return date.toLocaleString(undefined, {
+    dateStyle: "long",
+    timeStyle: "medium",
+  });
+}
 
 function asCmdError(e: unknown): CmdError {
   if (e && typeof e === "object" && "message" in e) {
@@ -239,6 +263,27 @@ export function TimelinePanel(props: IDockviewPanelProps) {
       ].sort((a, b) => b.timestampMs - a.timestampMs || a.id.localeCompare(b.id)),
     [activityEntries, commitEntries],
   );
+  const feedGroups = useMemo(() => {
+    const groups: Array<{
+      key: string;
+      label: string;
+      entries: TimelineFeedEntry[];
+    }> = [];
+    for (const entry of feedEntries) {
+      const key = localDayKey(entry.timestampMs);
+      const current = groups.at(-1);
+      if (current?.key === key) {
+        current.entries.push(entry);
+      } else {
+        groups.push({
+          key,
+          label: dayLabel(entry.timestampMs),
+          entries: [entry],
+        });
+      }
+    }
+    return groups;
+  }, [feedEntries]);
 
   const activeSelected = selected && repoSet.has(selected.repo) ? selected : null;
 
@@ -322,60 +367,83 @@ export function TimelinePanel(props: IDockviewPanelProps) {
               Ninguna entrada de la cronología coincide con los filtros actuales.
             </p>
           ) : feedEntries.length > 0 ? (
-            <ul className="timeline-list" data-testid="timeline-feed">
-              {feedEntries.map((feedEntry) => {
-                if (feedEntry.type === "activity") {
-                  const { activity } = feedEntry;
-                  return (
-                    <li
-                      className={`timeline-row timeline-row--${activity.kind}`}
-                      key={feedEntry.id}
-                    >
-                      <span className="timeline-row__time">
-                        {new Date(activity.timestampMs).toLocaleTimeString()}
-                      </span>
-                      <span className="timeline-row__main">
-                        <strong>{activity.repoName}</strong> · {activity.title}
-                        <small>{activity.detail}</small>
-                      </span>
-                    </li>
-                  );
-                }
+            <div className="timeline-groups" data-testid="timeline-feed">
+              {feedGroups.map((group) => (
+                <section
+                  aria-labelledby={`timeline-day-${group.key}`}
+                  className="timeline-day"
+                  key={group.key}
+                >
+                  <h3 className="timeline-day__heading" id={`timeline-day-${group.key}`}>
+                    <time dateTime={group.key}>{group.label}</time>
+                  </h3>
+                  <ul className="timeline-list">
+                    {group.entries.map((feedEntry) => {
+                      const date = new Date(feedEntry.timestampMs);
+                      if (feedEntry.type === "activity") {
+                        const { activity } = feedEntry;
+                        return (
+                          <li
+                            className={`timeline-row timeline-row--${activity.kind}`}
+                            key={feedEntry.id}
+                          >
+                            <time
+                              aria-label={accessibleDateTime(date)}
+                              className="timeline-row__time"
+                              dateTime={date.toISOString()}
+                            >
+                              {date.toLocaleTimeString()}
+                            </time>
+                            <span className="timeline-row__main">
+                              <strong>{activity.repoName}</strong> · {activity.title}
+                              <small>{activity.detail}</small>
+                            </span>
+                          </li>
+                        );
+                      }
 
-                const { commitEntry } = feedEntry;
-                const isSelected =
-                  activeSelected?.repo === commitEntry.repo &&
-                  activeSelected.commit.id === commitEntry.commit.id;
-                return (
-                  <li
-                    className={`timeline-row timeline-row--commit${
-                      isSelected ? " timeline-row--selected" : ""
-                    }`}
-                    key={feedEntry.id}
-                  >
-                    <span className="timeline-row__time">
-                      {commitDate(commitEntry.commit.timestamp).toLocaleTimeString()}
-                    </span>
-                    <button
-                      aria-controls="timeline-detail"
-                      aria-current={isSelected ? "true" : undefined}
-                      className="timeline-row__commit"
-                      onClick={(event) => {
-                        selectedCommitButtonRef.current = event.currentTarget;
-                        loadCommitDiff(commitEntry);
-                      }}
-                      data-testid={`timeline-commit-${commitEntry.commit.id}`}
-                      type="button"
-                    >
-                      <strong>{commitEntry.repoName}</strong> · commit {commitEntry.commit.summary}
-                      <small>
-                        {commitEntry.commit.author} · {commitEntry.commit.id.slice(0, 8)}
-                      </small>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                      const { commitEntry } = feedEntry;
+                      const isSelected =
+                        activeSelected?.repo === commitEntry.repo &&
+                        activeSelected.commit.id === commitEntry.commit.id;
+                      return (
+                        <li
+                          className={`timeline-row timeline-row--commit${
+                            isSelected ? " timeline-row--selected" : ""
+                          }`}
+                          key={feedEntry.id}
+                        >
+                          <time
+                            aria-label={accessibleDateTime(date)}
+                            className="timeline-row__time"
+                            dateTime={date.toISOString()}
+                          >
+                            {date.toLocaleTimeString()}
+                          </time>
+                          <button
+                            aria-controls="timeline-detail"
+                            aria-current={isSelected ? "true" : undefined}
+                            className="timeline-row__commit"
+                            onClick={(event) => {
+                              selectedCommitButtonRef.current = event.currentTarget;
+                              loadCommitDiff(commitEntry);
+                            }}
+                            data-testid={`timeline-commit-${commitEntry.commit.id}`}
+                            type="button"
+                          >
+                            <strong>{commitEntry.repoName}</strong> · commit{" "}
+                            {commitEntry.commit.summary}
+                            <small>
+                              {commitEntry.commit.author} · {commitEntry.commit.id.slice(0, 8)}
+                            </small>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ))}
+            </div>
           ) : null}
 
           {commitHistoryPending && feedEntries.length > 0 && (

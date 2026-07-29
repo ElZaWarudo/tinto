@@ -102,6 +102,55 @@ describe("TimelinePanel", () => {
     expect(commitButton).not.toHaveAttribute("aria-current");
   });
 
+  it("groups entries by local day and exposes complete machine-readable timestamps", async () => {
+    const newer = new Date(2026, 6, 28, 18, 30, 0);
+    const older = new Date(2026, 6, 27, 9, 15, 0);
+    getCommitLogMock.mockResolvedValue([
+      {
+        id: "newer-day",
+        summary: "newer",
+        author: "me",
+        timestamp: Math.floor(newer.getTime() / 1000),
+      },
+      {
+        id: "older-day",
+        summary: "older",
+        author: "me",
+        timestamp: Math.floor(older.getTime() / 1000),
+      },
+    ]);
+    act(() =>
+      busStore.loadSnapshot(
+        [delta("/r/api", { status: { modified: [], staged: [], untracked: [] } })],
+        { available: true },
+      ),
+    );
+
+    render(<TimelinePanel {...panelProps} />);
+
+    await screen.findByTestId("timeline-commit-newer-day");
+    const expectedNewerLabel = newer.toLocaleDateString(undefined, {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+    const expectedOlderLabel = older.toLocaleDateString(undefined, {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+    expect(screen.getByRole("heading", { level: 3, name: expectedNewerLabel })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: expectedOlderLabel })).toBeInTheDocument();
+
+    const newerRow = screen.getByTestId("timeline-commit-newer-day").closest("li");
+    expect(newerRow?.querySelector("time")).toHaveAttribute("datetime", newer.toISOString());
+    expect(newerRow?.querySelector("time")).toHaveAccessibleName(
+      newer.toLocaleString(undefined, { dateStyle: "long", timeStyle: "medium" }),
+    );
+  });
+
   it("searches commit metadata even when the current repo delta does not match", async () => {
     getCommitLogMock.mockResolvedValue([
       {

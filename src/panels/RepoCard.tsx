@@ -45,6 +45,7 @@ const AGENT_OPTIONS = [
 
 export interface RepoAgentLauncherProps {
   repo: string;
+  repoName?: string;
   pending?: boolean;
   availabilityKey?: string;
   className?: string;
@@ -53,6 +54,7 @@ export interface RepoAgentLauncherProps {
 
 export function RepoAgentLauncher({
   repo,
+  repoName = repo,
   pending = false,
   availabilityKey = `repo:${repo}`,
   className,
@@ -185,7 +187,7 @@ export function RepoAgentLauncher({
       <span className="repo-card__launcher-label">Agent</span>
       <select
         className="repo-card__agent-select"
-        aria-label="Tipo de Agent"
+        aria-label={`Tipo de Agent para ${repoName}`}
         value={agentType}
         disabled={preparingInstall || installing}
         onChange={(event) => {
@@ -207,6 +209,7 @@ export function RepoAgentLauncher({
       <button
         type="button"
         className="repo-card__launch"
+        aria-label={`${launching ? "Iniciando" : "Iniciar"} ${selectedAgent.label} en ${repoName}`}
         data-testid="agent-launch"
         disabled={
           pending || launching || (available == null && !availabilityMessage) || available === false
@@ -480,6 +483,9 @@ function RepoCardImpl({
               type="button"
               className="repo-card__fetch"
               data-testid="repo-card-fetch"
+              aria-label={`${
+                fetching ? "Actualizando" : "Actualizar"
+              } referencias remotas de ${name}`}
               title="Actualizar las referencias remotas de este repo"
               disabled={fetching}
               onClick={(e) => {
@@ -578,6 +584,7 @@ function RepoCardImpl({
 
       <RepoAgentLauncher
         repo={delta.repo}
+        repoName={name}
         pending={pending}
         availabilityKey={availabilityKey}
         onLaunch={onLaunch}
