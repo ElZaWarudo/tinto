@@ -22,8 +22,8 @@ use std::{
 
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionContextSummary, AgentSessionError,
-    AgentSessionFeedback, AgentSessionLimits, AgentSessionResumeMode, AgentSessionRuntimeOptions,
-    AgentSessionTimelineItem,
+    AgentSessionFeedback, AgentSessionLimits, AgentSessionPermissionMode, AgentSessionResumeMode,
+    AgentSessionRuntimeOptions, AgentSessionTimelineItem,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -87,6 +87,21 @@ pub struct AgentSessionRegistry {
 
 type ResumeResultReceiver = Receiver<Result<AgentSessionResumeMode, AgentConsoleError>>;
 
+fn validate_permission_mode(
+    agent_type: &str,
+    permission_mode: AgentSessionPermissionMode,
+) -> Result<(), AgentConsoleError> {
+    if permission_mode == AgentSessionPermissionMode::FullAccess
+        && !agent_type.eq_ignore_ascii_case("codex")
+    {
+        return Err(AgentConsoleError::new(
+            "permission_mode_unsupported",
+            "el acceso completo solo esta disponible para Codex",
+        ));
+    }
+    Ok(())
+}
+
 pub struct StartedAgentSession {
     pub id: String,
     pub output_reader: Option<Box<dyn Read + Send>>,
@@ -124,17 +139,21 @@ impl AgentSessionRegistry {
         repo: PathBuf,
         agent_type: String,
     ) -> Result<String, AgentConsoleError> {
-        Ok(self.start_session_with_output(repo, agent_type)?.id)
+        Ok(self
+            .start_session_with_output(repo, agent_type, AgentSessionPermissionMode::Workspace)?
+            .id)
     }
 
     pub fn start_session_with_output(
         &mut self,
         repo: PathBuf,
         agent_type: String,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
+        validate_permission_mode(&agent_type, permission_mode)?;
         let repo = canonical_repo(&repo)?;
         let binary_path = resolve_agent_binary(&agent_type)?;
-        self.start_session_with_binary_and_output(repo, agent_type, binary_path)
+        self.start_session_with_binary_and_output(repo, agent_type, binary_path, permission_mode)
     }
 
     pub fn resume_session_with_output(
@@ -182,8 +201,12 @@ impl AgentSessionRegistry {
                 (Box::new(supervisor), resume_result)
             } else {
                 (
-                    self.process_factory
-                        .resume_agent(&binary_path, &repo, &provider_session_id)?,
+                    self.process_factory.resume_agent(
+                        &binary_path,
+                        &repo,
+                        &provider_session_id,
+                        AgentSessionPermissionMode::Workspace,
+                    )?,
                     None,
                 )
             };
@@ -192,6 +215,7 @@ impl AgentSessionRegistry {
             id.clone(),
             repo,
             agent_type,
+            AgentSessionPermissionMode::Workspace,
             started_at_ms,
             checkpoint,
             self.checkpoint_config.clone(),
@@ -217,7 +241,12 @@ impl AgentSessionRegistry {
         binary_path: PathBuf,
     ) -> Result<String, AgentConsoleError> {
         Ok(self
-            .start_session_with_binary_and_output(repo, agent_type, binary_path)?
+            .start_session_with_binary_and_output(
+                repo,
+                agent_type,
+                binary_path,
+                AgentSessionPermissionMode::Workspace,
+            )?
             .id)
     }
 
@@ -226,6 +255,7 @@ impl AgentSessionRegistry {
         repo: PathBuf,
         agent_type: String,
         binary_path: PathBuf,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         let repo = canonical_repo(&repo)?;
         self.refresh_session_statuses()?;
@@ -251,13 +281,16 @@ impl AgentSessionRegistry {
                 id.clone(),
                 AcpLaunchIntent::NewSession,
             )?),
-            _ => self.process_factory.spawn_agent(&binary_path, &repo)?,
+            _ => self
+                .process_factory
+                .spawn_agent(&binary_path, &repo, permission_mode)?,
         };
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
             id.clone(),
             repo,
             agent_type,
+            permission_mode,
             started_at_ms,
             checkpoint,
             self.checkpoint_config.clone(),
@@ -277,8 +310,16 @@ impl AgentSessionRegistry {
         repo: PathBuf,
         distro: String,
         agent_type: String,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
-        self.start_wsl_session_with_output_inner(repo, distro, agent_type, true, true)
+        self.start_wsl_session_with_output_inner(
+            repo,
+            distro,
+            agent_type,
+            permission_mode,
+            true,
+            true,
+        )
     }
 
     pub fn resume_wsl_session_with_output(
@@ -301,12 +342,14 @@ impl AgentSessionRegistry {
             &distro,
             &repo,
             &provider_session_id,
+            AgentSessionPermissionMode::Workspace,
         )?;
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
             id.clone(),
             repo,
             agent_type,
+            AgentSessionPermissionMode::Workspace,
             started_at_ms,
             checkpoint,
             self.checkpoint_config.clone(),
@@ -330,7 +373,14 @@ impl AgentSessionRegistry {
         distro: String,
         agent_type: String,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
-        self.start_wsl_session_with_output_inner(repo, distro, agent_type, false, false)
+        self.start_wsl_session_with_output_inner(
+            repo,
+            distro,
+            agent_type,
+            AgentSessionPermissionMode::Workspace,
+            false,
+            false,
+        )
     }
 
     fn start_wsl_session_with_output_inner(
@@ -338,11 +388,13 @@ impl AgentSessionRegistry {
         repo: PathBuf,
         distro: String,
         agent_type: String,
+        permission_mode: AgentSessionPermissionMode,
         check_binary: bool,
         create_remote_checkpoint: bool,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         validate_wsl_repo(&repo)?;
         validate_agent_type(&agent_type)?;
+        validate_permission_mode(&agent_type, permission_mode)?;
         if check_binary {
             ensure_wsl_agent_binary_via_agent(&distro, &agent_type)?;
         }
@@ -355,9 +407,9 @@ impl AgentSessionRegistry {
         } else {
             None
         };
-        let process = self
-            .process_factory
-            .spawn_wsl_agent(&agent_type, &distro, &repo)?;
+        let process =
+            self.process_factory
+                .spawn_wsl_agent(&agent_type, &distro, &repo, permission_mode)?;
         let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
             "kimi" => Box::new(PtyCompatibilityProcess::new(
                 process,
@@ -374,6 +426,7 @@ impl AgentSessionRegistry {
             id.clone(),
             repo,
             agent_type,
+            permission_mode,
             started_at_ms,
             checkpoint,
             self.checkpoint_config.clone(),
@@ -996,6 +1049,14 @@ mod tests {
         },
     };
 
+    #[test]
+    fn full_access_is_only_supported_by_codex() {
+        assert!(validate_permission_mode("codex", AgentSessionPermissionMode::FullAccess).is_ok());
+        let error =
+            validate_permission_mode("claude", AgentSessionPermissionMode::FullAccess).unwrap_err();
+        assert_eq!(error.category, "permission_mode_unsupported");
+    }
+
     #[derive(Default)]
     struct FakeProcessFactory {
         next_pid: AtomicUsize,
@@ -1010,6 +1071,7 @@ mod tests {
             &self,
             binary_path: &Path,
             _working_dir: &Path,
+            _permission_mode: AgentSessionPermissionMode,
         ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
             self.spawned.lock().unwrap().push(binary_path.to_path_buf());
             let pid = self.next_pid.fetch_add(1, Ordering::SeqCst) as u32 + 100;
@@ -1033,6 +1095,7 @@ mod tests {
             agent_type: &str,
             distro: &str,
             working_dir: &Path,
+            _permission_mode: AgentSessionPermissionMode,
         ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
             self.spawned.lock().unwrap().push(PathBuf::from(format!(
                 "{distro}:{agent_type}:{}",
@@ -1313,7 +1376,12 @@ mod tests {
         std::fs::write(&binary, "fake").unwrap();
 
         let mut started = registry
-            .start_session_with_binary_and_output(repo.path().into(), "codex".into(), binary)
+            .start_session_with_binary_and_output(
+                repo.path().into(),
+                "codex".into(),
+                binary,
+                AgentSessionPermissionMode::Workspace,
+            )
             .unwrap();
         let mut output = Vec::new();
         started
@@ -1337,7 +1405,12 @@ mod tests {
         std::fs::write(&binary, "fake").unwrap();
 
         let started = registry
-            .start_session_with_binary_and_output(repo.path().into(), "codex".into(), binary)
+            .start_session_with_binary_and_output(
+                repo.path().into(),
+                "codex".into(),
+                binary,
+                AgentSessionPermissionMode::Workspace,
+            )
             .unwrap();
 
         let session = registry.get_session(&started.id).unwrap();

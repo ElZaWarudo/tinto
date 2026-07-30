@@ -283,6 +283,14 @@ pub struct AgentSessionRuntimeOptions {
     pub speed: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionPermissionMode {
+    #[default]
+    Workspace,
+    FullAccess,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRuntimeCatalogStatus {
@@ -401,6 +409,8 @@ pub struct AgentSession {
     pub id: String,
     pub repo: PathBuf,
     pub agent_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<AgentSessionPermissionMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acp_runtime: Option<AgentSessionAcpRuntime>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -898,6 +908,7 @@ mod tests {
             id: "sess-1".into(),
             repo: "/r/api".into(),
             agent_type: "codex".into(),
+            permission_mode: Some(AgentSessionPermissionMode::Workspace),
             acp_runtime: None,
             acp_permissions: Vec::new(),
             provider_session_id: Some("thread-1".into()),

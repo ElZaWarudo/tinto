@@ -6,8 +6,8 @@ use std::{
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionAcpPermission, AgentSessionAcpRuntime,
     AgentSessionChange, AgentSessionContextSummary, AgentSessionError, AgentSessionFeedback,
-    AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPersonality, AgentSessionPlanMode,
-    AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
+    AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode, AgentSessionPersonality,
+    AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
     AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
@@ -35,6 +35,7 @@ pub struct AgentSessionRecord {
     id: String,
     repo: PathBuf,
     agent_type: String,
+    permission_mode: AgentSessionPermissionMode,
     provider_session_id: Option<String>,
     acp_runtime: Option<AgentSessionAcpRuntime>,
     acp_permissions: Vec<AgentSessionAcpPermission>,
@@ -77,10 +78,12 @@ pub enum CheckpointBackend {
 }
 
 impl AgentSessionRecord {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         repo: PathBuf,
         agent_type: String,
+        permission_mode: AgentSessionPermissionMode,
         started_at_ms: u64,
         checkpoint: Option<CheckpointRecord>,
         checkpoint_config: CheckpointConfig,
@@ -90,6 +93,7 @@ impl AgentSessionRecord {
             id,
             repo,
             agent_type,
+            permission_mode,
             provider_session_id: None,
             acp_runtime: None,
             acp_permissions: Vec::new(),
@@ -817,6 +821,10 @@ impl AgentSessionRecord {
             id: self.id.clone(),
             repo: self.repo.clone(),
             agent_type: self.agent_type.clone(),
+            permission_mode: self
+                .agent_type
+                .eq_ignore_ascii_case("codex")
+                .then_some(self.permission_mode),
             provider_session_id: self.provider_session_id.clone(),
             acp_runtime: self.acp_runtime.clone(),
             acp_permissions: self.acp_permissions.clone(),
@@ -1591,6 +1599,7 @@ mod tests {
             "s1".into(),
             repo.path().to_path_buf(),
             "codex".into(),
+            AgentSessionPermissionMode::Workspace,
             1,
             Some(checkpoint),
             CheckpointConfig::default(),
@@ -1620,6 +1629,18 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.status, AgentSessionStatus::Completed);
         assert_eq!(contract.exit_code, Some(0));
+    }
+
+    #[test]
+    fn contract_exposes_permission_mode_only_for_codex_sessions() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        assert_eq!(
+            session.to_contract().permission_mode,
+            Some(AgentSessionPermissionMode::Workspace)
+        );
+
+        session.agent_type = "kimi".to_string();
+        assert_eq!(session.to_contract().permission_mode, None);
     }
 
     #[test]
@@ -1890,6 +1911,7 @@ mod tests {
             "turn-session".into(),
             repo.path().to_path_buf(),
             "codex".into(),
+            AgentSessionPermissionMode::Workspace,
             1,
             Some(checkpoint),
             CheckpointConfig::default(),
@@ -1972,6 +1994,7 @@ mod tests {
             "explicit-turn-session".into(),
             repo.path().to_path_buf(),
             "codex".into(),
+            AgentSessionPermissionMode::Workspace,
             1,
             Some(checkpoint),
             CheckpointConfig::default(),
@@ -2007,6 +2030,7 @@ mod tests {
             "empty-turn-session".into(),
             repo.path().to_path_buf(),
             "codex".into(),
+            AgentSessionPermissionMode::Workspace,
             1,
             Some(checkpoint),
             CheckpointConfig::default(),
@@ -2037,6 +2061,7 @@ mod tests {
             "explicit-empty-turn-session".into(),
             repo.path().to_path_buf(),
             "codex".into(),
+            AgentSessionPermissionMode::Workspace,
             1,
             Some(checkpoint),
             CheckpointConfig::default(),
@@ -2073,6 +2098,7 @@ mod tests {
             "missing-repo-turn-session".into(),
             repo.path().to_path_buf(),
             "codex".into(),
+            AgentSessionPermissionMode::Workspace,
             1,
             Some(checkpoint),
             CheckpointConfig::default(),

@@ -14,6 +14,7 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use super::{
     install::{
@@ -21,6 +22,7 @@ use super::{
     },
     journal::AgentJournal,
     pty::{AgentTurnAttachment, TINTO_TURN_DONE_MARKER},
+    validate_permission_mode,
     validation::{resolve_agent_binary, validate_agent_type},
     AgentConsoleError, AgentSessionRegistry,
 };
@@ -32,10 +34,11 @@ use crate::bus::{
         AgentProviderReadiness, AgentProviderReadinessState, AgentProviderSource,
         AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog, AgentSession,
         AgentSessionAttachment, AgentSessionChangeLog, AgentSessionContextSummary,
-        AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput, AgentSessionResumeMode,
-        AgentSessionResumeResult, AgentSessionRuntimeOptions, AgentSessionStatus,
-        AgentSessionTimelineItem, AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED,
-        EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
+        AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput,
+        AgentSessionPermissionMode, AgentSessionResumeMode, AgentSessionResumeResult,
+        AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
+        AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG,
+        EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
     },
     BusHandle, RepoResolveError,
 };
@@ -82,9 +85,51 @@ pub async fn start_agent_session(
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     repo: PathBuf,
     agent_type: String,
+    permission_mode: Option<AgentSessionPermissionMode>,
 ) -> Result<String, CommandError> {
     let resolved = ensure_known_agent_repo(&bus, &repo).await?;
-    start_resolved_agent_session(&app, &registry, resolved, agent_type)
+    let permission_mode = permission_mode.unwrap_or_default();
+    validate_permission_mode(&agent_type, permission_mode).map_err(CommandError::from)?;
+    if permission_mode == AgentSessionPermissionMode::FullAccess {
+        confirm_full_access_launch(&app, &resolved.path).await?;
+    }
+    start_resolved_agent_session(&app, &registry, resolved, agent_type, permission_mode)
+}
+
+async fn confirm_full_access_launch(app: &AppHandle, repo: &Path) -> Result<(), CommandError> {
+    let app = app.clone();
+    let repo = repo.display().to_string();
+    let confirmed = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(format!(
+                "Codex podrá leer y modificar archivos fuera del workspace y ejecutar comandos del sistema sin pedir aprobación durante esta sesión.\n\nRepositorio: {repo}"
+            ))
+            .title("Dar acceso completo a Codex")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Dar acceso completo".to_string(),
+                "Cancelar".to_string(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| ());
+    require_full_access_confirmation(confirmed)
+}
+
+fn require_full_access_confirmation(confirmed: Result<bool, ()>) -> Result<(), CommandError> {
+    let confirmed = confirmed.map_err(|_| {
+        CommandError::new(
+            "full_access_confirmation_failed",
+            "no se pudo mostrar la confirmación de acceso completo",
+        )
+    })?;
+    if !confirmed {
+        return Err(CommandError::new(
+            "full_access_declined",
+            "se canceló el inicio con acceso completo",
+        ));
+    }
+    Ok(())
 }
 
 fn start_resolved_agent_session(
@@ -92,17 +137,21 @@ fn start_resolved_agent_session(
     registry: &Mutex<AgentSessionRegistry>,
     resolved: crate::bus::ResolvedRepo,
     agent_type: String,
+    permission_mode: AgentSessionPermissionMode,
 ) -> Result<String, CommandError> {
     let started = {
         let mut registry = lock_registry(registry)?;
         match resolved.source {
-            RepoSource::Local => registry.start_session_with_output(resolved.path, agent_type)?,
+            RepoSource::Local => {
+                registry.start_session_with_output(resolved.path, agent_type, permission_mode)?
+            }
             RepoSource::Wsl => registry.start_wsl_session_with_output(
                 resolved.path,
                 resolved
                     .distro
                     .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?,
                 agent_type,
+                permission_mode,
             )?,
         }
     };
@@ -126,8 +175,11 @@ pub async fn prepare_agent_install(
     installs: State<'_, Mutex<AgentInstallRegistry>>,
     repo: PathBuf,
     agent_type: String,
+    permission_mode: Option<AgentSessionPermissionMode>,
 ) -> Result<AgentInstallPreview, CommandError> {
     let resolved = ensure_known_agent_repo(&bus, &repo).await?;
+    let permission_mode = permission_mode.unwrap_or_default();
+    validate_permission_mode(&agent_type, permission_mode).map_err(CommandError::from)?;
     let readiness = provider_readiness_for_source(
         resolved.source,
         resolved.distro.as_deref(),
@@ -144,6 +196,7 @@ pub async fn prepare_agent_install(
     let prepared = PreparedInstall {
         repo: resolved.path,
         agent_type: agent_type.clone(),
+        permission_mode,
         source: readiness.source,
         distro: readiness.distro,
         recipe: recipe_for(&agent_type).map_err(CommandError::from)?,
@@ -203,8 +256,22 @@ pub async fn confirm_agent_install(
             ));
         }
     };
+    if outcome.outcome == AgentInstallOutcomeKind::Verified
+        && claimed.permission_mode == AgentSessionPermissionMode::FullAccess
+    {
+        if let Err(error) = confirm_full_access_launch(&app, &resolved.path).await {
+            lock_install_registry(&installs)?.finish(&attempt_id);
+            return Err(error);
+        }
+    }
     continue_verified_install(&installs, &attempt_id, &mut outcome, || {
-        start_resolved_agent_session(&app, &registry, resolved, claimed.agent_type)
+        start_resolved_agent_session(
+            &app,
+            &registry,
+            resolved,
+            claimed.agent_type,
+            claimed.permission_mode,
+        )
     })?;
     lock_install_registry(&installs)?.finish(&attempt_id);
     Ok(outcome)
@@ -294,6 +361,7 @@ pub async fn resume_agent_journal_session(
                     RepoSource::Local => registry.start_session_with_output(
                         resolved.path.clone(),
                         archived.agent_type.clone(),
+                        AgentSessionPermissionMode::Workspace,
                     )?,
                     RepoSource::Wsl => registry.start_wsl_session_with_output(
                         resolved.path.clone(),
@@ -301,6 +369,7 @@ pub async fn resume_agent_journal_session(
                             CommandError::new("missing_distro", "repo WSL sin distro")
                         })?,
                         archived.agent_type.clone(),
+                        AgentSessionPermissionMode::Workspace,
                     )?,
                 };
                 (started, AgentSessionResumeMode::ContextBridge)
@@ -518,29 +587,33 @@ pub async fn branch_agent_session_from_message(
     };
     let previous_timeline = timeline_before_user_message(&source.timeline, &message_id)?;
     let resolved = ensure_known_agent_repo(&bus, &source.repo).await?;
-    let started_result =
-        {
-            let mut registry = lock_registry(&registry)?;
-            if matches!(
-                source.status,
-                AgentSessionStatus::Starting | AgentSessionStatus::Running
-            ) {
-                registry
-                    .stop_session(&session_id)
-                    .map_err(CommandError::from)?;
-            }
-            match resolved.source {
-                RepoSource::Local => registry
-                    .start_session_with_output(resolved.path.clone(), source.agent_type.clone()),
-                RepoSource::Wsl => registry.start_wsl_session_with_output(
-                    resolved.path.clone(),
-                    resolved.distro.clone().ok_or_else(|| {
-                        CommandError::new("missing_distro", "repo WSL sin distro")
-                    })?,
-                    source.agent_type.clone(),
-                ),
-            }
-        };
+    let started_result = {
+        let mut registry = lock_registry(&registry)?;
+        if matches!(
+            source.status,
+            AgentSessionStatus::Starting | AgentSessionStatus::Running
+        ) {
+            registry
+                .stop_session(&session_id)
+                .map_err(CommandError::from)?;
+        }
+        match resolved.source {
+            RepoSource::Local => registry.start_session_with_output(
+                resolved.path.clone(),
+                source.agent_type.clone(),
+                AgentSessionPermissionMode::Workspace,
+            ),
+            RepoSource::Wsl => registry.start_wsl_session_with_output(
+                resolved.path.clone(),
+                resolved
+                    .distro
+                    .clone()
+                    .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?,
+                source.agent_type.clone(),
+                AgentSessionPermissionMode::Workspace,
+            ),
+        }
+    };
     let started = match started_result {
         Ok(started) => started,
         Err(error) => {
@@ -1452,7 +1525,11 @@ async fn run_fork_host_command(
         let mut registry = lock_registry(registry)?;
         match resolved.source {
             RepoSource::Local => registry
-                .start_session_with_output(launch_repo.clone(), session.agent_type.clone())
+                .start_session_with_output(
+                    launch_repo.clone(),
+                    session.agent_type.clone(),
+                    AgentSessionPermissionMode::Workspace,
+                )
                 .map_err(CommandError::from),
             RepoSource::Wsl => {
                 let distro = resolved
@@ -1464,6 +1541,7 @@ async fn run_fork_host_command(
                         launch_repo.clone(),
                         distro,
                         session.agent_type.clone(),
+                        AgentSessionPermissionMode::Workspace,
                     )
                     .map_err(CommandError::from)
             }
@@ -3100,6 +3178,7 @@ mod tests {
         PreparedInstall {
             repo: PathBuf::from("C:/repo"),
             agent_type: "codex".into(),
+            permission_mode: AgentSessionPermissionMode::Workspace,
             source: AgentProviderSource::Local,
             distro: None,
             recipe: recipe_for("codex").unwrap(),
@@ -3161,6 +3240,17 @@ mod tests {
 
         assert_eq!(outcome.outcome, AgentInstallOutcomeKind::Cancelled);
         assert!(outcome.session_id.is_none());
+    }
+
+    #[test]
+    fn full_access_confirmation_must_succeed_before_launch() {
+        let declined = require_full_access_confirmation(Ok(false)).unwrap_err();
+        assert_eq!(declined.category, "full_access_declined");
+
+        let failed = require_full_access_confirmation(Err(())).unwrap_err();
+        assert_eq!(failed.category, "full_access_confirmation_failed");
+
+        assert!(require_full_access_confirmation(Ok(true)).is_ok());
     }
 
     #[test]

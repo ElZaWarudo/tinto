@@ -3352,7 +3352,7 @@ select option {
   grid-column: 6;
   grid-row: 1;
   display: grid;
-  grid-template-columns: auto minmax(72px, 1fr) minmax(68px, auto);
+  grid-template-columns: auto minmax(72px, 1fr) minmax(96px, 1fr) minmax(68px, auto);
   grid-template-rows: 28px 16px;
   gap: 6px;
   align-items: center;
@@ -3378,6 +3378,7 @@ select option {
   padding: 2px 28px 2px 8px;
 }
 .repo-card__launch {
+  grid-column: 4;
   padding: 2px 10px;
   cursor: pointer;
 }

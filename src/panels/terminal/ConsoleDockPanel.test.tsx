@@ -254,7 +254,7 @@ describe("ConsoleDockPanel detach drop", () => {
     fireEvent.click(screen.getByRole("button", { name: /iniciar api con codex/i }));
 
     await waitFor(() =>
-      expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/api", "codex"),
+      expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/api", "codex", "workspace"),
     );
     await waitFor(() =>
       expect(openSpy).toHaveBeenCalledWith({

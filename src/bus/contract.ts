@@ -193,6 +193,8 @@ export interface AgentSessionRuntimeOptions {
   speed?: string | null;
 }
 
+export type AgentSessionPermissionMode = "workspace" | "full_access";
+
 export type AgentRuntimeCatalogStatus = "loading" | "ready" | "error";
 
 export interface AgentRuntimeReasoningEffort {
@@ -279,6 +281,7 @@ export interface AgentSession {
   id: string;
   repo: string;
   agent_type: string;
+  permission_mode?: AgentSessionPermissionMode | null;
   acp_runtime?: AgentSessionAcpRuntime | null;
   acp_permissions?: AgentSessionAcpPermission[];
   provider_session_id?: string | null;
@@ -678,6 +681,7 @@ export interface CuratedBusContractTypeMap {
   AgentSessionTurnCheckpoint: AgentSessionTurnCheckpoint;
   AgentSessionLimits: AgentSessionLimits;
   AgentSessionRuntimeOptions: AgentSessionRuntimeOptions;
+  AgentSessionPermissionMode: AgentSessionPermissionMode;
   AgentRuntimeCatalogStatus: AgentRuntimeCatalogStatus;
   AgentRuntimeReasoningEffort: AgentRuntimeReasoningEffort;
   AgentRuntimeServiceTier: AgentRuntimeServiceTier;

@@ -14,7 +14,7 @@ use std::{
 
 use crate::bus::contract::{
     AgentInstallOutcome, AgentInstallOutcomeKind, AgentInstallPreview, AgentInstallPrivilege,
-    AgentProviderSource,
+    AgentProviderSource, AgentSessionPermissionMode,
 };
 
 use super::{validation::validate_agent_type, AgentConsoleError};
@@ -180,6 +180,7 @@ fn runtime_launch(
 pub struct PreparedInstall {
     pub repo: PathBuf,
     pub agent_type: String,
+    pub permission_mode: AgentSessionPermissionMode,
     pub source: AgentProviderSource,
     pub distro: Option<String>,
     pub recipe: InstallRecipe,
@@ -189,6 +190,7 @@ pub struct PreparedInstall {
 pub struct ClaimedInstall {
     pub repo: PathBuf,
     pub agent_type: String,
+    pub permission_mode: AgentSessionPermissionMode,
     pub source: AgentProviderSource,
     pub distro: Option<String>,
     pub recipe: InstallRecipe,
@@ -272,6 +274,7 @@ impl AgentInstallRegistry {
         Ok(ClaimedInstall {
             repo: attempt.prepared.repo.clone(),
             agent_type: attempt.prepared.agent_type.clone(),
+            permission_mode: attempt.prepared.permission_mode,
             source: attempt.prepared.source,
             distro: attempt.prepared.distro.clone(),
             recipe: attempt.prepared.recipe.clone(),
@@ -900,6 +903,7 @@ mod tests {
             .prepare(PreparedInstall {
                 repo: PathBuf::from("C:/repo"),
                 agent_type: "codex".into(),
+                permission_mode: AgentSessionPermissionMode::Workspace,
                 source: AgentProviderSource::Local,
                 distro: None,
                 recipe: recipe_for("codex").unwrap(),
@@ -920,6 +924,7 @@ mod tests {
             .prepare(PreparedInstall {
                 repo: PathBuf::from("/repo"),
                 agent_type: "kimi".into(),
+                permission_mode: AgentSessionPermissionMode::Workspace,
                 source: AgentProviderSource::Wsl,
                 distro: Some("Ubuntu-24.04".into()),
                 recipe: recipe_for("kimi").unwrap(),
@@ -937,6 +942,7 @@ mod tests {
             .prepare(PreparedInstall {
                 repo: PathBuf::from("/repo"),
                 agent_type: "codex".into(),
+                permission_mode: AgentSessionPermissionMode::Workspace,
                 source: AgentProviderSource::Local,
                 distro: None,
                 recipe: recipe_for("codex").unwrap(),
@@ -950,12 +956,17 @@ mod tests {
             .prepare(PreparedInstall {
                 repo: PathBuf::from("/repo"),
                 agent_type: "codex".into(),
+                permission_mode: AgentSessionPermissionMode::FullAccess,
                 source: AgentProviderSource::Local,
                 distro: None,
                 recipe: recipe_for("codex").unwrap(),
             })
             .unwrap();
-        registry.claim(&second.attempt_id).unwrap();
+        let claimed = registry.claim(&second.attempt_id).unwrap();
+        assert_eq!(
+            claimed.permission_mode,
+            AgentSessionPermissionMode::FullAccess
+        );
         assert!(registry.begin_launch(&second.attempt_id).unwrap());
         assert_eq!(
             registry.cancel(&second.attempt_id).unwrap_err().category,
@@ -970,6 +981,7 @@ mod tests {
             .prepare(PreparedInstall {
                 repo: PathBuf::from("/repo"),
                 agent_type: "codex".into(),
+                permission_mode: AgentSessionPermissionMode::Workspace,
                 source: AgentProviderSource::Local,
                 distro: None,
                 recipe: recipe_for("codex").unwrap(),
@@ -1010,6 +1022,7 @@ mod tests {
         let prepared = PreparedInstall {
             repo: PathBuf::from("/repo"),
             agent_type: "kimi".into(),
+            permission_mode: AgentSessionPermissionMode::Workspace,
             source: AgentProviderSource::Wsl,
             distro: Some("Ubuntu-24.04".into()),
             recipe: recipe_for("kimi").unwrap(),
@@ -1031,6 +1044,7 @@ mod tests {
         let claimed = ClaimedInstall {
             repo: prepared.repo,
             agent_type: prepared.agent_type,
+            permission_mode: prepared.permission_mode,
             source: prepared.source,
             distro: prepared.distro,
             recipe: prepared.recipe,
@@ -1068,6 +1082,7 @@ mod tests {
         let claimed = ClaimedInstall {
             repo: PathBuf::from("/repo"),
             agent_type: "codex".into(),
+            permission_mode: AgentSessionPermissionMode::Workspace,
             source: AgentProviderSource::Wsl,
             distro: Some("Ubuntu".into()),
             recipe: recipe_for("codex").unwrap(),
@@ -1087,6 +1102,7 @@ mod tests {
         let prepared = PreparedInstall {
             repo: PathBuf::from("/repo"),
             agent_type: "codex".into(),
+            permission_mode: AgentSessionPermissionMode::Workspace,
             source: AgentProviderSource::Local,
             distro: None,
             recipe: recipe_for("codex").unwrap(),
@@ -1098,6 +1114,7 @@ mod tests {
         let claimed = ClaimedInstall {
             repo: prepared.repo,
             agent_type: prepared.agent_type,
+            permission_mode: prepared.permission_mode,
             source: prepared.source,
             distro: prepared.distro,
             recipe: prepared.recipe,
