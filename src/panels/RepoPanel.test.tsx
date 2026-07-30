@@ -358,7 +358,7 @@ describe("RepoPanel", () => {
     fireEvent.click(launchButton);
 
     await waitFor(() => {
-      expect(startAgentSessionMock).toHaveBeenCalledWith("/r/api", "codex");
+      expect(startAgentSessionMock).toHaveBeenCalledWith("/r/api", "codex", "workspace");
       expect(openAgentTerminal).toHaveBeenCalledWith({
         sessionId: "sess-new",
         repo: "/r/api",

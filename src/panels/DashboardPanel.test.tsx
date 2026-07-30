@@ -360,7 +360,7 @@ describe("DashboardPanel", () => {
     fireEvent.click(await screen.findByTestId("agent-launch"));
 
     await waitFor(() =>
-      expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/a", "codex"),
+      expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/a", "codex", "workspace"),
     );
     await waitFor(() =>
       expect(openAgentTerminal).toHaveBeenCalledWith({
