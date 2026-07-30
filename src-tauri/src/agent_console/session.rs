@@ -5,8 +5,9 @@ use std::{
 
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionAcpPermission, AgentSessionAcpRuntime,
-    AgentSessionChange, AgentSessionContextSummary, AgentSessionError, AgentSessionFeedback,
-    AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode, AgentSessionPersonality,
+    AgentSessionChange, AgentSessionContextSummary, AgentSessionContextUsage, AgentSessionError,
+    AgentSessionFeedback, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode,
+    AgentSessionPersonality,
     AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
     AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
@@ -67,6 +68,7 @@ pub struct AgentSessionRecord {
     plan_mode: Option<AgentSessionPlanMode>,
     feedback: Vec<AgentSessionFeedback>,
     context_summary: Option<AgentSessionContextSummary>,
+    context_usage: Option<AgentSessionContextUsage>,
     reverted_at_ms: Option<u64>,
     restored_to_turn_index: Option<u32>,
 }
@@ -125,6 +127,7 @@ impl AgentSessionRecord {
             plan_mode: None,
             feedback: Vec::new(),
             context_summary: None,
+            context_usage: None,
             reverted_at_ms: None,
             restored_to_turn_index: None,
         }
@@ -320,6 +323,35 @@ impl AgentSessionRecord {
         };
         self.running_process_mut()?
             .steer_turn(text, &runtime_attachments)
+    }
+
+    pub fn interrupt_turn(&mut self) -> Result<(), AgentConsoleError> {
+        self.error = None;
+        if self.turn_status == AgentSessionTurnStatus::Waiting {
+            return Err(AgentConsoleError::new(
+                "interrupt_unavailable",
+                "no hay un turno activo que interrumpir",
+            ));
+        }
+        self.running_process_mut()?.interrupt_turn()
+    }
+
+    pub fn supports_context_compaction(&self) -> bool {
+        self.status == AgentSessionStatus::Running
+            && self
+                .process
+                .as_ref()
+                .is_some_and(|process| process.supports_context_compaction())
+    }
+
+    pub fn compact_context(&mut self) -> Result<(), AgentConsoleError> {
+        if self.turn_status != AgentSessionTurnStatus::Waiting {
+            return Err(AgentConsoleError::new(
+                "compact_unavailable",
+                "espera a que termine el turno activo antes de compactar",
+            ));
+        }
+        self.running_process_mut()?.compact_context()
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
@@ -524,6 +556,16 @@ impl AgentSessionRecord {
             }
             AgentProcessEvent::ResumeContextRequired { summary } => {
                 self.context_summary = Some(summary);
+                Ok(())
+            }
+            AgentProcessEvent::ContextUsageUpdated {
+                used_tokens,
+                model_context_window,
+            } => {
+                self.context_usage = Some(AgentSessionContextUsage {
+                    used_tokens,
+                    model_context_window,
+                });
                 Ok(())
             }
         }
@@ -853,6 +895,12 @@ impl AgentSessionRecord {
             plan_mode: self.plan_mode.clone(),
             feedback: self.feedback.clone(),
             context_summary: self.context_summary.clone(),
+            context_usage: self.context_usage.clone(),
+            turn_interrupt_supported: self.status == AgentSessionStatus::Running
+                && self
+                    .process
+                    .as_ref()
+                    .is_some_and(|process| process.supports_turn_interrupt()),
             reverted_at_ms: self.reverted_at_ms,
             restored_to_turn_index: self.restored_to_turn_index,
             active_sessions,
@@ -2082,6 +2130,27 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.turn_checkpoints.len(), 1);
         assert_eq!(contract.turn_checkpoints[0].index, 2);
+    }
+
+    #[test]
+    fn process_context_usage_is_projected() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+
+        session
+            .apply_process_event(AgentProcessEvent::ContextUsageUpdated {
+                used_tokens: 150_000,
+                model_context_window: 128_000,
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.to_contract().context_usage,
+            Some(AgentSessionContextUsage {
+                used_tokens: 150_000,
+                model_context_window: 128_000,
+            })
+        );
+        assert!(!session.to_contract().turn_interrupt_supported);
     }
 
     #[test]

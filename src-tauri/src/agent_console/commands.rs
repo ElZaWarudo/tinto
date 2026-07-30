@@ -1107,6 +1107,18 @@ pub fn steer_agent_session_turn(
 }
 
 #[tauri::command]
+pub fn interrupt_agent_session_turn(
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .interrupt_session_turn(&session_id)
+        .map_err(CommandError::from)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_agent_image_preview(path: String) -> Result<Option<String>, CommandError> {
     let attachment = validate_agent_attachment_path(PathBuf::from(path))?;
     if !attachment.is_image {
@@ -1898,11 +1910,31 @@ fn run_compact_host_command(
 ) -> Result<AgentHostCommandResult, CommandError> {
     let raw = argument.unwrap_or_default();
     let argument = raw.trim();
-    let mut registry = lock_registry(registry)?;
-    let updated = if matches!(
+    let clears_summary = matches!(
         argument.to_lowercase().as_str(),
         "clear" | "reset" | "none" | "off"
-    ) {
+    );
+    let mut registry = lock_registry(registry)?;
+    if !clears_summary
+        && registry
+            .session_supports_context_compaction(&session.id)
+            .map_err(CommandError::from)?
+    {
+        registry
+            .compact_session_context(&session.id)
+            .map_err(CommandError::from)?;
+        return Ok(AgentHostCommandResult {
+            command: "compact".to_string(),
+            status: AgentHostCommandStatus::Completed,
+            message: "Compactación nativa del contexto iniciada.".to_string(),
+            session_id: None,
+            repo: None,
+            agent_type: None,
+            review_summary: None,
+            review_findings: None,
+        });
+    }
+    let updated = if clears_summary {
         registry
             .clear_session_context_summary(&session.id)
             .map_err(CommandError::from)?

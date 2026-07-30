@@ -236,7 +236,7 @@ export function AgentRuntimeControls({
   return (
     <div
       className="agent-panel__runtime"
-      aria-label={`Ejecución de ${providerLabel} para el próximo turno`}
+      aria-label={`Ejecución de ${providerLabel} para el próximo envío`}
       data-runtime-provider={providerLabel.toLocaleLowerCase()}
       ref={rootRef}
     >
@@ -918,8 +918,8 @@ function PresetIcon({ icon }: { icon: RuntimePresetIcon }) {
 
 function runtimeInspectorTitle(menu: Exclude<CodexRuntimeMenu, null>): string {
   if (menu === "presets") return "Configuraciones guardadas de ejecución";
-  if (menu === "summary") return "Ejecución del próximo turno";
-  if (menu === "model") return "Modelo del próximo turno";
-  if (menu === "reasoning") return "Razonamiento del próximo turno";
-  return "Perfil del próximo turno";
+  if (menu === "summary") return "Ejecución del próximo envío";
+  if (menu === "model") return "Modelo del próximo envío";
+  if (menu === "reasoning") return "Razonamiento del próximo envío";
+  return "Perfil del próximo envío";
 }

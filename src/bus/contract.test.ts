@@ -337,6 +337,7 @@ import {
   createRepoGitleaksConfig,
   listAgentJournalSessions,
   listAgentSessions,
+  interruptAgentSessionTurn,
   listRepoTree,
   listWslDirectory,
   listWslDistros,
@@ -590,6 +591,11 @@ describe("RDM-008 client wrappers", () => {
       sessionId: "sess-1",
       command: "goal",
       argument: "Ship host commands",
+    });
+
+    void interruptAgentSessionTurn("sess-1");
+    expect(invokeMock).toHaveBeenCalledWith("interrupt_agent_session_turn", {
+      sessionId: "sess-1",
     });
   });
 

@@ -114,6 +114,7 @@ function makeSession(id: string): AgentSession {
     exit_code: null,
     error: null,
     turn_status: "working",
+    turn_interrupt_supported: true,
     active_sessions: 1,
     age_ms: 10,
   };

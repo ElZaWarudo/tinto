@@ -270,6 +270,11 @@ export interface AgentSessionContextSummary {
   source_turns: number;
 }
 
+export interface AgentSessionContextUsage {
+  used_tokens: number;
+  model_context_window: number;
+}
+
 export type AgentSessionResumeMode = "native" | "context_bridge";
 
 export interface AgentSessionResumeResult {
@@ -303,6 +308,8 @@ export interface AgentSession {
   plan_mode?: AgentSessionPlanMode | null;
   feedback?: AgentSessionFeedback[];
   context_summary?: AgentSessionContextSummary | null;
+  context_usage?: AgentSessionContextUsage | null;
+  turn_interrupt_supported: boolean;
   reverted_at_ms?: number | null;
   restored_to_turn_index?: number | null;
   active_sessions: number;
@@ -693,6 +700,7 @@ export interface CuratedBusContractTypeMap {
   AgentSessionPlanMode: AgentSessionPlanMode;
   AgentSessionFeedback: AgentSessionFeedback;
   AgentSessionContextSummary: AgentSessionContextSummary;
+  AgentSessionContextUsage: AgentSessionContextUsage;
   AgentSession: AgentSession;
   AgentSessionOutput: AgentSessionOutput;
   AgentSessionTimelineKind: AgentSessionTimelineKind;

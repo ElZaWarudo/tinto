@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -8,6 +8,7 @@ use std::{
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
+    time::{Duration, Instant},
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -36,6 +37,8 @@ const THREAD_REQUEST_ID: u64 = 2;
 const FS_WATCH_REQUEST_ID: u64 = 3;
 const MODEL_LIST_REQUEST_ID: u64 = 4;
 const FIRST_TURN_REQUEST_ID: u64 = 100;
+const CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const TURN_START_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct CodexAppServerHandle {
     child: Child,
@@ -51,6 +54,7 @@ pub struct CodexAppServerHandle {
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
+    pending_control_requests: Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
@@ -166,6 +170,7 @@ impl CodexAppServerHandle {
             updated_at_ms: now_ms(),
         }));
         let pending_model_requests = Arc::new(Mutex::new(HashSet::from([MODEL_LIST_REQUEST_ID])));
+        let pending_control_requests = Arc::new(Mutex::new(HashMap::new()));
         let next_request_id = Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID));
         let cwd = working_dir.to_path_buf();
 
@@ -183,6 +188,7 @@ impl CodexAppServerHandle {
                 pending_goal_updates: Arc::clone(&pending_goal_updates),
                 runtime_catalog: Arc::clone(&runtime_catalog),
                 pending_model_requests: Arc::clone(&pending_model_requests),
+                pending_control_requests: Arc::clone(&pending_control_requests),
                 next_request_id: Arc::clone(&next_request_id),
                 cwd: cwd.clone(),
             },
@@ -202,6 +208,7 @@ impl CodexAppServerHandle {
             pending_goal_updates,
             runtime_catalog,
             pending_model_requests,
+            pending_control_requests,
             next_request_id,
             cwd,
         })
@@ -368,6 +375,47 @@ impl AgentProcess for CodexAppServerHandle {
         )
     }
 
+    fn supports_turn_interrupt(&self) -> bool {
+        true
+    }
+
+    fn interrupt_turn(&mut self) -> Result<(), AgentConsoleError> {
+        let thread_id = self
+            .thread_id
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .ok_or_else(|| {
+                AgentConsoleError::new("interrupt_unavailable", "Codex aún está iniciando")
+            })?;
+        let turn_id = self.wait_for_active_turn_id()?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        self.send_control_request(
+            request_id,
+            turn_interrupt_message(request_id, &thread_id, &turn_id),
+        )
+    }
+
+    fn supports_context_compaction(&self) -> bool {
+        true
+    }
+
+    fn compact_context(&mut self) -> Result<(), AgentConsoleError> {
+        let thread_id = self
+            .thread_id
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .ok_or_else(|| {
+                AgentConsoleError::new("compact_unavailable", "Codex aún está iniciando")
+            })?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        self.send_control_request(
+            request_id,
+            thread_compact_start_message(request_id, &thread_id),
+        )
+    }
+
     fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
         Ok(())
     }
@@ -430,6 +478,63 @@ impl AgentProcess for CodexAppServerHandle {
 
     fn clear_goal(&mut self) -> Result<(), AgentConsoleError> {
         self.submit_goal_update(PendingGoalUpdate::Clear)
+    }
+}
+
+impl CodexAppServerHandle {
+    fn wait_for_active_turn_id(&self) -> Result<String, AgentConsoleError> {
+        let deadline = Instant::now() + TURN_START_WAIT_TIMEOUT;
+        loop {
+            if let Some(turn_id) = self
+                .active_turn_id
+                .lock()
+                .ok()
+                .and_then(|value| value.clone())
+            {
+                return Ok(turn_id);
+            }
+            if Instant::now() >= deadline {
+                return Err(AgentConsoleError::new(
+                    "interrupt_unavailable",
+                    "Codex no confirmó el inicio del turno",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn send_control_request(
+        &self,
+        request_id: u64,
+        message: Value,
+    ) -> Result<(), AgentConsoleError> {
+        let (result_tx, result_rx) = mpsc::channel();
+        let mut pending = self.pending_control_requests.lock().map_err(|_| {
+            AgentConsoleError::new(
+                "app_server_lock_poisoned",
+                "pending control requests lock failed",
+            )
+        })?;
+        pending.retain(|pending_id, _| pending_id.saturating_add(64) >= request_id);
+        pending.insert(request_id, result_tx);
+        drop(pending);
+        if let Err(error) = write_json(&self.stdin, &message) {
+            if let Ok(mut pending) = self.pending_control_requests.lock() {
+                pending.remove(&request_id);
+            }
+            return Err(error);
+        }
+        match result_rx.recv_timeout(CONTROL_RESPONSE_TIMEOUT) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(AgentConsoleError::new(
+                "provider_control_timeout",
+                "Codex no confirmó la operación de control",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(AgentConsoleError::new(
+                "provider_control_failed",
+                "Codex cerró la operación de control sin responder",
+            )),
+        }
     }
 }
 
@@ -596,6 +701,7 @@ struct ServerRuntimeContext {
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
+    pending_control_requests: Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
@@ -618,6 +724,9 @@ enum PendingGoalUpdate {
 
 fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
     if handle_model_catalog_response(message, context) {
+        return;
+    }
+    if handle_control_response(message, context) {
         return;
     }
 
@@ -768,6 +877,16 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 timestamp_ms: now_ms(),
             });
         }
+        "thread/tokenUsage/updated" => {
+            if let Some((used_tokens, model_context_window)) = context_usage_from_message(message) {
+                let _ = context
+                    .event_tx
+                    .send(AgentProcessEvent::ContextUsageUpdated {
+                        used_tokens,
+                        model_context_window,
+                    });
+            }
+        }
         "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
             let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
                 timestamp_ms: now_ms(),
@@ -775,6 +894,29 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         }
         _ => {}
     }
+}
+
+fn handle_control_response(message: &Value, context: &ServerRuntimeContext) -> bool {
+    let Some(request_id) = message.get("id").and_then(Value::as_u64) else {
+        return false;
+    };
+    let sender = context
+        .pending_control_requests
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(&request_id));
+    let Some(sender) = sender else {
+        return false;
+    };
+    let result = match message.pointer("/error/message").and_then(Value::as_str) {
+        Some(error) => Err(AgentConsoleError::new(
+            "provider_control_failed",
+            error.to_string(),
+        )),
+        None => Ok(()),
+    };
+    let _ = sender.send(result);
+    true
 }
 
 fn activity_text_from_item(item: &Value, completed: bool) -> Option<String> {
@@ -804,6 +946,7 @@ fn activity_text_from_item(item: &Value, completed: bool) -> Option<String> {
                 None => format!("Usando {tool}"),
             }
         }
+        "contextcompaction" if !completed => "Compactando el contexto".to_string(),
         "websearch" if !completed => "Buscando en la web".to_string(),
         "filechange" if !completed => "Aplicando cambios en archivos".to_string(),
         "plan" | "planupdate" if !completed => "Actualizando el plan".to_string(),
@@ -1363,6 +1506,38 @@ fn turn_steer_message(
     })
 }
 
+fn turn_interrupt_message(request_id: u64, thread_id: &str, turn_id: &str) -> Value {
+    json!({
+        "method": "turn/interrupt",
+        "id": request_id,
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+        }
+    })
+}
+
+fn thread_compact_start_message(request_id: u64, thread_id: &str) -> Value {
+    json!({
+        "method": "thread/compact/start",
+        "id": request_id,
+        "params": {
+            "threadId": thread_id,
+        }
+    })
+}
+
+fn context_usage_from_message(message: &Value) -> Option<(u64, u64)> {
+    Some((
+        message
+            .pointer("/params/tokenUsage/last/totalTokens")?
+            .as_u64()?,
+        message
+            .pointer("/params/tokenUsage/modelContextWindow")?
+            .as_u64()?,
+    ))
+}
+
 fn write_json(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), AgentConsoleError> {
     let mut line = serde_json::to_vec(value)
         .map_err(|e| AgentConsoleError::new("app_server_encode_failed", e.to_string()))?;
@@ -1457,6 +1632,7 @@ mod tests {
                 updated_at_ms: 0,
             })),
             pending_model_requests: Arc::new(Mutex::new(HashSet::new())),
+            pending_control_requests: Arc::new(Mutex::new(HashMap::new())),
             next_request_id: Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID)),
             cwd: PathBuf::from("/tmp/repo"),
         }
@@ -1506,6 +1682,113 @@ mod tests {
         assert_eq!(message["params"]["threadId"], "thread-1");
         assert_eq!(message["params"]["expectedTurnId"], "turn-7");
         assert_eq!(message["params"]["input"][0]["text"], "Ajusta también esto");
+    }
+
+    #[test]
+    fn interrupt_message_targets_the_active_thread_and_turn() {
+        let message = turn_interrupt_message(102, "thread-1", "turn-7");
+        assert_eq!(message["method"], "turn/interrupt");
+        assert_eq!(message["params"]["threadId"], "thread-1");
+        assert_eq!(message["params"]["turnId"], "turn-7");
+    }
+
+    #[test]
+    fn compact_message_targets_the_active_thread() {
+        let message = thread_compact_start_message(103, "thread-1");
+        assert_eq!(message["method"], "thread/compact/start");
+        assert_eq!(message["params"]["threadId"], "thread-1");
+    }
+
+    #[test]
+    fn control_response_resolves_only_the_matching_request() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        let (result_tx, result_rx) = mpsc::channel();
+        context
+            .pending_control_requests
+            .lock()
+            .unwrap()
+            .insert(103, result_tx);
+
+        handle_server_message(&json!({"id": 103, "result": {}}), &context);
+
+        assert_eq!(result_rx.recv().unwrap(), Ok(()));
+        assert!(context.pending_control_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rejected_control_response_does_not_emit_a_session_error() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        let (result_tx, result_rx) = mpsc::channel();
+        context
+            .pending_control_requests
+            .lock()
+            .unwrap()
+            .insert(104, result_tx);
+
+        handle_server_message(
+            &json!({"id": 104, "error": {"message": "turn already completed"}}),
+            &context,
+        );
+
+        assert_eq!(
+            result_rx.recv().unwrap(),
+            Err(AgentConsoleError::new(
+                "provider_control_failed",
+                "turn already completed"
+            ))
+        );
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn token_usage_update_emits_context_usage() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+
+        handle_server_message(
+            &json!({
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "tokenUsage": {
+                        "last": { "totalTokens": 120_000 },
+                        "modelContextWindow": 100_000
+                    }
+                }
+            }),
+            &context,
+        );
+
+        assert_eq!(
+            event_rx.recv().unwrap(),
+            AgentProcessEvent::ContextUsageUpdated {
+                used_tokens: 120_000,
+                model_context_window: 100_000,
+            }
+        );
+    }
+
+    #[test]
+    fn context_compaction_is_visible_activity() {
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+
+        handle_server_message(
+            &json!({
+                "method": "item/started",
+                "params": { "item": { "type": "contextCompaction" } }
+            }),
+            &context,
+        );
+
+        let frame = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(frame.contains("\"kind\":\"activity\""));
+        assert!(frame.contains(&STANDARD.encode("Compactando el contexto")));
     }
 
     #[test]

@@ -60,6 +60,7 @@ const INCLUDE = new Set([
   "AgentSessionPlanMode",
   "AgentSessionFeedback",
   "AgentSessionContextSummary",
+  "AgentSessionContextUsage",
   "AgentSession",
   "AgentSessionOutput",
   "AgentSessionTimelineKind",

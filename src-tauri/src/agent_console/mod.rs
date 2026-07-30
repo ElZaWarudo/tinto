@@ -539,6 +539,33 @@ impl AgentSessionRegistry {
         session.steer_turn(text, attachments)
     }
 
+    pub fn interrupt_session_turn(&mut self, session_id: &str) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.interrupt_turn()
+    }
+
+    pub fn session_supports_context_compaction(
+        &self,
+        session_id: &str,
+    ) -> Result<bool, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        Ok(session.supports_context_compaction())
+    }
+
+    pub fn compact_session_context(&mut self, session_id: &str) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.compact_context()
+    }
+
     pub fn session_runtime_catalog(
         &mut self,
         session_id: &str,
@@ -1044,7 +1071,7 @@ mod tests {
     use std::{
         io::{Cursor, Read},
         sync::{
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc, Mutex,
         },
     };
@@ -1064,6 +1091,9 @@ mod tests {
         writes: Arc<Mutex<Vec<Vec<u8>>>>,
         resizes: Arc<Mutex<Vec<(u16, u16)>>>,
         output: Mutex<Option<Vec<u8>>>,
+        supports_controls: AtomicBool,
+        interrupts: Arc<AtomicUsize>,
+        compactions: Arc<AtomicUsize>,
     }
 
     impl AgentProcessFactory for FakeProcessFactory {
@@ -1081,6 +1111,9 @@ mod tests {
                 killed: false,
                 writes: Arc::clone(&self.writes),
                 resizes: Arc::clone(&self.resizes),
+                supports_controls: self.supports_controls.load(Ordering::SeqCst),
+                interrupts: Arc::clone(&self.interrupts),
+                compactions: Arc::clone(&self.compactions),
                 output: self
                     .output
                     .lock()
@@ -1108,6 +1141,9 @@ mod tests {
                 killed: false,
                 writes: Arc::clone(&self.writes),
                 resizes: Arc::clone(&self.resizes),
+                supports_controls: self.supports_controls.load(Ordering::SeqCst),
+                interrupts: Arc::clone(&self.interrupts),
+                compactions: Arc::clone(&self.compactions),
                 output: self
                     .output
                     .lock()
@@ -1124,6 +1160,9 @@ mod tests {
         killed: bool,
         writes: Arc<Mutex<Vec<Vec<u8>>>>,
         resizes: Arc<Mutex<Vec<(u16, u16)>>>,
+        supports_controls: bool,
+        interrupts: Arc<AtomicUsize>,
+        compactions: Arc<AtomicUsize>,
         output: Option<Box<dyn Read + Send>>,
     }
 
@@ -1144,6 +1183,24 @@ mod tests {
 
         fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
             self.writes.lock().unwrap().push(input.to_vec());
+            Ok(())
+        }
+
+        fn supports_turn_interrupt(&self) -> bool {
+            self.supports_controls
+        }
+
+        fn interrupt_turn(&mut self) -> Result<(), AgentConsoleError> {
+            self.interrupts.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn supports_context_compaction(&self) -> bool {
+            self.supports_controls
+        }
+
+        fn compact_context(&mut self) -> Result<(), AgentConsoleError> {
+            self.compactions.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -1332,6 +1389,31 @@ mod tests {
             &[b"hello\r".to_vec()]
         );
         assert_eq!(factory.resizes.lock().unwrap().as_slice(), &[(120, 36)]);
+    }
+
+    #[test]
+    fn registry_routes_interrupt_and_native_compaction_with_truthful_capability() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        factory.supports_controls.store(true, Ordering::SeqCst);
+        let mut registry = AgentSessionRegistry::with_process_factory(factory.clone());
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+
+        assert!(registry.get_session(&id).unwrap().turn_interrupt_supported);
+        assert!(registry.session_supports_context_compaction(&id).unwrap());
+
+        registry.compact_session_context(&id).unwrap();
+        registry
+            .write_session_input(&id, b"working\r", None)
+            .unwrap();
+        registry.interrupt_session_turn(&id).unwrap();
+
+        assert_eq!(factory.interrupts.load(Ordering::SeqCst), 1);
+        assert_eq!(factory.compactions.load(Ordering::SeqCst), 1);
     }
 
     #[test]
