@@ -78,6 +78,7 @@ pub enum CheckpointBackend {
 }
 
 impl AgentSessionRecord {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         repo: PathBuf,
