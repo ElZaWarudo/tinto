@@ -175,6 +175,7 @@ pub fn run() {
             agent_console::commands::write_agent_session_input,
             agent_console::commands::write_agent_session_turn,
             agent_console::commands::steer_agent_session_turn,
+            agent_console::commands::interrupt_agent_session_turn,
             agent_console::commands::run_agent_host_command,
             agent_console::commands::resize_agent_session,
             agent_console::commands::revert_session,

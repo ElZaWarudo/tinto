@@ -123,6 +123,11 @@ const session: AgentSession = {
   },
   change_log: turnChanges,
   turn_status: LIVE_PROCESS ? "working" : "waiting",
+  turn_interrupt_supported: true,
+  context_usage: {
+    used_tokens: 80_000,
+    model_context_window: 128_000,
+  },
   turn_checkpoints: [
     {
       id: `${SESSION_ID}:turn-1`,

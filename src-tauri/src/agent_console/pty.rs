@@ -85,6 +85,24 @@ pub trait AgentProcess: Send {
             "este runtime no admite intervenir en el turno activo",
         ))
     }
+    fn supports_turn_interrupt(&self) -> bool {
+        false
+    }
+    fn interrupt_turn(&mut self) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "interrupt_unsupported",
+            "este runtime no admite interrumpir el turno activo",
+        ))
+    }
+    fn supports_context_compaction(&self) -> bool {
+        false
+    }
+    fn compact_context(&mut self) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "compact_unsupported",
+            "este runtime no admite compactar el contexto de forma nativa",
+        ))
+    }
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
@@ -173,6 +191,10 @@ pub enum AgentProcessEvent {
     GoalCleared,
     ResumeContextRequired {
         summary: crate::bus::contract::AgentSessionContextSummary,
+    },
+    ContextUsageUpdated {
+        used_tokens: u64,
+        model_context_window: u64,
     },
 }
 

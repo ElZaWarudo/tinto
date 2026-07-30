@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import type { IDockviewPanelProps } from "dockview-react";
@@ -11,6 +11,7 @@ import {
   getAgentJournalSession,
   getAgentImagePreview,
   getAgentRuntimeCatalog,
+  interruptAgentSessionTurn,
   listAgentSessions,
   respondAgentSessionAcpPermission,
   resumeAgentJournalSession,
@@ -47,16 +48,11 @@ import type {
   RepoStatus,
 } from "../../bus/contract";
 import { useBusState } from "../../bus/store";
-import codexLogo from "../../assets/agents/codex.svg";
-import claudeLogo from "../../assets/agents/claude.svg";
-import opencodeLogo from "../../assets/agents/opencode.svg";
 import { useWorkspaceActions } from "../../workspace/actions";
 import { consoleDock } from "../../workspace/consoleDock";
 import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
 import { AgentRuntimeControls, type CodexRuntimeMenu } from "./AgentRuntimeControls";
 import {
-  codexModelLabel,
-  codexReasoningLabel,
   reasoningSupportedByModel,
   speedSupportedByModel,
   type CodexModelSelection,
@@ -128,30 +124,68 @@ interface QueuedAgentMessage {
   id: string;
   text: string;
   attachments: AgentAttachment[];
-  runtimeOptions: AgentSessionRuntimeOptions;
 }
 
-const AGENT_QUEUE_STORAGE_KEY = "tinto.agent-message-queues.v1";
+interface AgentMessageQueue {
+  messages: QueuedAgentMessage[];
+  paused: boolean;
+}
 
-function loadAgentMessageQueue(sessionId: string): QueuedAgentMessage[] {
+interface AgentMessageQueueState extends AgentMessageQueue {
+  sessionId: string;
+}
+
+const AGENT_QUEUE_STORAGE_KEY = "tinto.agent-message-queues.v2";
+const LEGACY_AGENT_QUEUE_STORAGE_KEY = "tinto.agent-message-queues.v1";
+const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat("es-ES", { notation: "compact" });
+
+function loadAgentMessageQueue(sessionId: string): AgentMessageQueue {
   try {
     const queues = JSON.parse(localStorage.getItem(AGENT_QUEUE_STORAGE_KEY) ?? "{}") as Record<
       string,
-      QueuedAgentMessage[]
+      AgentMessageQueue
     >;
-    return Array.isArray(queues[sessionId]) ? queues[sessionId] : [];
+    const saved = queues[sessionId];
+    if (saved && Array.isArray(saved.messages)) {
+      return { messages: saved.messages, paused: saved.paused === true };
+    }
+    const legacyQueues = JSON.parse(
+      localStorage.getItem(LEGACY_AGENT_QUEUE_STORAGE_KEY) ?? "{}",
+    ) as Record<string, QueuedAgentMessage[]>;
+    const legacyMessages = legacyQueues[sessionId];
+    if (!Array.isArray(legacyMessages)) return { messages: [], paused: false };
+    delete legacyQueues[sessionId];
+    try {
+      localStorage.setItem(LEGACY_AGENT_QUEUE_STORAGE_KEY, JSON.stringify(legacyQueues));
+    } catch {
+      // La cola migrada sigue disponible en memoria aunque no se pueda limpiar v1.
+    }
+    const migrated = { messages: legacyMessages, paused: false };
+    saveAgentMessageQueue(sessionId, migrated);
+    return migrated;
   } catch {
-    return [];
+    return { messages: [], paused: false };
   }
 }
 
-function saveAgentMessageQueue(sessionId: string, messages: QueuedAgentMessage[]) {
+function nextQueuedMessageId(sessionId: string, messages: QueuedAgentMessage[]): number {
+  const prefix = `${sessionId}:queued:`;
+  return (
+    messages.reduce((maximum, message) => {
+      if (!message.id.startsWith(prefix)) return maximum;
+      const suffix = Number.parseInt(message.id.slice(prefix.length), 10);
+      return Number.isFinite(suffix) ? Math.max(maximum, suffix) : maximum;
+    }, 0) + 1
+  );
+}
+
+function saveAgentMessageQueue(sessionId: string, queue: AgentMessageQueue) {
   try {
     const queues = JSON.parse(localStorage.getItem(AGENT_QUEUE_STORAGE_KEY) ?? "{}") as Record<
       string,
-      QueuedAgentMessage[]
+      AgentMessageQueue
     >;
-    if (messages.length > 0) queues[sessionId] = messages;
+    if (queue.messages.length > 0) queues[sessionId] = queue;
     else delete queues[sessionId];
     localStorage.setItem(AGENT_QUEUE_STORAGE_KEY, JSON.stringify(queues));
   } catch {
@@ -565,13 +599,46 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [transcriptQuery, setTranscriptQuery] = useState("");
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  const [queuedMessages, setQueuedMessages] = useState<QueuedAgentMessage[]>(() =>
-    loadAgentMessageQueue(sessionId),
+  const [queueState, setQueueState] = useState<AgentMessageQueueState>(() => ({
+    sessionId,
+    ...loadAgentMessageQueue(sessionId),
+  }));
+  const visibleQueue =
+    queueState.sessionId === sessionId
+      ? queueState
+      : { sessionId, ...loadAgentMessageQueue(sessionId) };
+  const queuedMessages = visibleQueue.messages;
+  const queuePaused = visibleQueue.paused;
+  const setQueuedMessages = useCallback(
+    (update: SetStateAction<QueuedAgentMessage[]>) => {
+      setQueueState((current) => {
+        const queue =
+          current.sessionId === sessionId
+            ? current
+            : { sessionId, ...loadAgentMessageQueue(sessionId) };
+        const messages = typeof update === "function" ? update(queue.messages) : update;
+        return { ...queue, messages };
+      });
+    },
+    [sessionId],
+  );
+  const setQueuePaused = useCallback(
+    (paused: boolean) => {
+      setQueueState((current) => {
+        const queue =
+          current.sessionId === sessionId
+            ? current
+            : { sessionId, ...loadAgentMessageQueue(sessionId) };
+        return { ...queue, paused };
+      });
+    },
+    [sessionId],
   );
   const queueDispatchingRef = useRef(false);
   const queueAwaitingTurnStartRef = useRef(false);
-  const nextQueuedMessageIdRef = useRef(queuedMessages.length + 1);
+  const nextQueuedMessageIdRef = useRef(nextQueuedMessageId(sessionId, queuedMessages));
   const [stopping, setStopping] = useState(false);
+  const [interrupting, setInterrupting] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [revertingFile, setRevertingFile] = useState<string | null>(null);
   const [restoringTurnId, setRestoringTurnId] = useState<string | null>(null);
@@ -590,6 +657,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [selectedSpeed, setSelectedSpeed] = useState<CodexSpeedSelection>(
     initialRuntimePreset?.speed ?? "standard",
   );
+  const [runtimeOptionsHydratedSessionId, setRuntimeOptionsHydratedSessionId] = useState<
+    string | null
+  >(null);
   const [runtimeCatalog, setRuntimeCatalog] = useState<AgentRuntimeCatalog | null>(null);
   const [runtimeCatalogRefreshKey, setRuntimeCatalogRefreshKey] = useState(0);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
@@ -614,6 +684,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const autoFollowChatRef = useRef(true);
   const runtimeCatalogSessionRef = useRef<string | null>(null);
   const runtimeCatalogRefreshAppliedRef = useRef(0);
+  const runtimeOptionsHydratedSessionRef = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     latestSessionIdRef.current = sessionId;
@@ -626,6 +697,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     attachmentsRef.current = saved.attachments;
     setDraftState(saved.text);
     setAttachmentsState(saved.attachments);
+    const savedQueue = loadAgentMessageQueue(sessionId);
+    setQueueState({ sessionId, ...savedQueue });
+    nextQueuedMessageIdRef.current = nextQueuedMessageId(sessionId, savedQueue.messages);
+    queueDispatchingRef.current = false;
+    queueAwaitingTurnStartRef.current = false;
   }, [sessionId]);
 
   const turns = useMemo(
@@ -866,8 +942,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   );
 
   useEffect(() => {
-    saveAgentMessageQueue(sessionId, queuedMessages);
-  }, [queuedMessages, sessionId]);
+    saveAgentMessageQueue(queueState.sessionId, queueState);
+  }, [queueState]);
 
   useEffect(() => {
     if (session?.error) console.error("tinto: agent session reported failure", session.error);
@@ -876,18 +952,28 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   useEffect(() => {
     if (session?.turn_status === "working") {
       queueAwaitingTurnStartRef.current = false;
+      return;
     }
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setInterrupting(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [session?.turn_status]);
 
   useEffect(() => {
     const next = queuedMessages[0];
     if (
       !next ||
+      queuePaused ||
       readOnly ||
       sending ||
       !acpAcceptsInput ||
       queueDispatchingRef.current ||
       queueAwaitingTurnStartRef.current ||
+      runtimeOptionsHydratedSessionId !== sessionId ||
       session?.status !== "running" ||
       session.turn_status !== "waiting"
     ) {
@@ -900,7 +986,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       sessionId,
       next.text,
       next.attachments.map((attachment) => attachment.path),
-      next.runtimeOptions,
+      effectiveRuntimeOptions,
     )
       .then(() => {
         queueAwaitingTurnStartRef.current = true;
@@ -920,33 +1006,41 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       });
   }, [
     acpAcceptsInput,
+    effectiveRuntimeOptions,
+    queuePaused,
     queuedMessages,
     readOnly,
+    runtimeOptionsHydratedSessionId,
     sending,
+    setQueuedMessages,
     session?.status,
     session?.turn_status,
     sessionId,
   ]);
 
   useEffect(() => {
-    if (
-      !session?.runtime_options ||
-      !isCodexSession ||
-      !runtimeOptionsHaveSelection(session.runtime_options)
-    )
-      return;
-    const restored = runtimeSelectionsFromOptions(session.runtime_options);
+    if (!session || runtimeOptionsHydratedSessionRef.current === session.id) return;
+    const restored =
+      isCodexSession &&
+      session.runtime_options &&
+      runtimeOptionsHaveSelection(session.runtime_options)
+        ? runtimeSelectionsFromOptions(session.runtime_options)
+        : null;
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setSelectedModel(restored.model);
-      setSelectedReasoning(restored.reasoning);
-      setSelectedSpeed(restored.speed);
+      if (restored) {
+        setSelectedModel(restored.model);
+        setSelectedReasoning(restored.reasoning);
+        setSelectedSpeed(restored.speed);
+      }
+      runtimeOptionsHydratedSessionRef.current = session.id;
+      setRuntimeOptionsHydratedSessionId(session.id);
     });
     return () => {
       cancelled = true;
     };
-  }, [isCodexSession, session?.id, session?.runtime_options]);
+  }, [isCodexSession, session]);
 
   useEffect(() => {
     if (!isCodexSession || !session?.id || readOnly) return;
@@ -1148,6 +1242,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     !readOnly &&
     !stopping &&
     (session.status === "running" || session.status === "starting");
+  const canInterrupt = turnActive && session?.turn_interrupt_supported === true && !interrupting;
 
   const sendDraft = async (action: "send" | "queue" | "steer" = "send") => {
     if (!canSend) return;
@@ -1167,11 +1262,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         setModel: setSelectedModel,
         setReasoning: setSelectedReasoning,
         setSpeed: setSelectedSpeed,
-        setNotice: setRuntimeNotice,
       });
     if (slashCommandHandled) {
       setDraft("");
       setSlashMenuOpen(false);
+      setRuntimeNotice(null);
       return;
     }
     if (!resumesConversation && (await applyComposerSlashCommand(text))) {
@@ -1182,7 +1277,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         id: `${sessionId}:queued:${nextQueuedMessageIdRef.current++}`,
         text: text.trim().length > 0 ? text : "Revisa los archivos adjuntos.",
         attachments: attachments.map((attachment) => ({ ...attachment, previewUrl: null })),
-        runtimeOptions: effectiveRuntimeOptions,
       };
       setQueuedMessages((current) => [...current, queued]);
       setDraft("");
@@ -1453,11 +1547,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (turnActive) {
-      void onStop();
-      return;
-    }
-    void sendDraft();
+    void sendDraft(turnActive ? "queue" : "send");
   };
 
   const onDraftKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1499,9 +1589,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         return;
       }
     }
-    if (event.key !== "Enter" || event.shiftKey || turnActive) return;
+    if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
-    void sendDraft();
+    void sendDraft(turnActive ? "queue" : "send");
   };
 
   const onDraftChange = (value: string) => {
@@ -1807,8 +1897,18 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     }
   };
 
-  const onStop = async () => {
+  const onStopSession = async () => {
     if (!sessionId || !canStop) return;
+    const ok = await confirm(
+      "Se detendrá la sesión completa. La conversación se conservará, pero no podrás continuar este proceso. ¿Quieres continuar?",
+      {
+        title: "Detener sesión de Agent",
+        kind: "warning",
+        okLabel: "Detener sesión",
+        cancelLabel: "Cancelar",
+      },
+    );
+    if (!ok) return;
     setStopping(true);
     setError(null);
     try {
@@ -1824,6 +1924,24 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       );
     } finally {
       setStopping(false);
+    }
+  };
+
+  const onInterruptTurn = async () => {
+    if (!sessionId || !canInterrupt) return;
+    setQueuePaused(true);
+    setInterrupting(true);
+    setError(null);
+    try {
+      await interruptAgentSessionTurn(sessionId);
+    } catch (e) {
+      setInterrupting(false);
+      setError(
+        reportAgentFailure(
+          e,
+          "No se interrumpió la respuesta. La conversación y la cola permanecen intactas.",
+        ),
+      );
     }
   };
 
@@ -1930,52 +2048,54 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   return (
     <div className="agent-panel" data-testid={`terminal-panel-${sessionId}`}>
       <header className="agent-panel__header">
-        <span
-          className={`agent-panel__logo agent-panel__logo--${agentLogoClass(agentType)}`}
-          aria-hidden="true"
-        >
-          {agentLogoSrc(agentType) ? (
-            <img src={agentLogoSrc(agentType) ?? ""} alt="" />
-          ) : (
-            <span>{agentLogoText(agentType)}</span>
-          )}
-        </span>
         <div className="agent-panel__identity">
           <span className="agent-panel__agent">{agentLabel(agentType)}</span>
+          <span aria-hidden="true" className="agent-panel__identity-separator">
+            ·
+          </span>
           <span className="agent-panel__repo">{repo ? repoName(repo) : "Sesión de Agent"}</span>
         </div>
         <SessionStatus session={session} />
+        <AgentContextRemaining usage={session?.context_usage ?? null} />
         {!readOnly && (
-          <div className="agent-panel__header-actions">
-            {!turnActive && (
+          <details className="agent-panel__session-menu">
+            <summary aria-label="Acciones de sesión" role="button" title="Acciones de sesión">
+              <span aria-hidden="true">•••</span>
+            </summary>
+            <div className="agent-panel__session-menu-popover">
+              {session?.permission_mode && (
+                <span title="Permisos efectivos de esta sesión">
+                  {session.permission_mode === "full_access" ? "Acceso completo" : "Workspace"}
+                </span>
+              )}
               <button
                 aria-label="Detener sesión"
                 className="agent-panel__stop"
                 disabled={!canStop}
-                onClick={onStop}
+                onClick={onStopSession}
                 title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
                 type="button"
               >
                 <span>{stopping ? "Deteniendo sesión" : "Detener sesión"}</span>
               </button>
-            )}
-            <button
-              className="agent-panel__revert"
-              disabled={!canRevert || reverting}
-              onClick={onRevert}
-              title={agentRevertControlTitle(
-                agentType,
-                repo,
-                readOnly,
-                session ?? null,
-                canRevert,
-                reverting,
-              )}
-              type="button"
-            >
-              <span>{reverting ? "Revirtiendo sesión" : "Revertir sesión"}</span>
-            </button>
-          </div>
+              <button
+                className="agent-panel__revert"
+                disabled={!canRevert || reverting}
+                onClick={onRevert}
+                title={agentRevertControlTitle(
+                  agentType,
+                  repo,
+                  readOnly,
+                  session ?? null,
+                  canRevert,
+                  reverting,
+                )}
+                type="button"
+              >
+                <span>{reverting ? "Revirtiendo sesión" : "Revertir sesión"}</span>
+              </button>
+            </div>
+          </details>
         )}
       </header>
 
@@ -2318,8 +2438,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         title={agentComposerTitle(agentType, repo)}
       >
         {queuedMessages.length > 0 && (
-          <div className="agent-panel__queue" aria-label="Mensajes en cola">
-            <span>{queuedMessages.length} en cola</span>
+          <div
+            className="agent-panel__queue"
+            aria-label="Mensajes en cola"
+            aria-live="polite"
+            data-paused={queuePaused || undefined}
+          >
+            <span>{queuePaused ? "Cola pausada" : `${queuedMessages.length} en cola`}</span>
             <div className="agent-panel__queue-items">
               {queuedMessages.map((message, index) => (
                 <div className="agent-panel__queue-item" key={message.id}>
@@ -2339,6 +2464,15 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 </div>
               ))}
             </div>
+            {queuePaused && (
+              <button
+                className="agent-panel__queue-resume"
+                onClick={() => setQueuePaused(false)}
+                type="button"
+              >
+                Reanudar cola
+              </button>
+            )}
           </div>
         )}
         <span className="sr-only" id={composerHintId}>
@@ -2371,9 +2505,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               if (reasoningInvalid) setSelectedReasoning("auto");
               if (fastInvalid) setSelectedSpeed("standard");
               setRuntimeNotice(
-                `Modelo para el próximo turno: ${codexModelLabel(runtimeCatalog, value)}.${
-                  reasoningInvalid || fastInvalid ? " Ajustes incompatibles restablecidos." : ""
-                }`,
+                reasoningInvalid || fastInvalid
+                  ? "Se restablecieron ajustes incompatibles con el modelo."
+                  : null,
               );
             }}
             onPresetApply={(preset) => {
@@ -2384,14 +2518,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             }}
             onReasoningChange={(value) => {
               setSelectedReasoning(value);
-              setRuntimeNotice(
-                `Razonamiento para el próximo turno: ${codexReasoningLabel(value)}.`,
-              );
+              setRuntimeNotice(null);
             }}
             onRefreshCatalog={() => setRuntimeCatalogRefreshKey((current) => current + 1)}
             onSpeedChange={(value) => {
               setSelectedSpeed(value);
-              setRuntimeNotice(value === "fast" ? "Perfil rápido para el próximo turno." : null);
+              setRuntimeNotice(null);
             }}
           />
         )}
@@ -2515,13 +2647,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             rows={2}
           />
           <button
-            aria-label={turnActive ? "Detener respuesta" : undefined}
-            className={`agent-panel__send${turnActive ? " agent-panel__send--stop" : ""}`}
+            aria-label="Enviar"
+            className="agent-panel__send"
             type="submit"
-            disabled={turnActive ? !canStop : !canSend}
+            disabled={!canSend}
             title={
               turnActive
-                ? agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)
+                ? "Añadir este mensaje a la cola"
                 : agentComposerSendTitle(
                     agentType,
                     repo,
@@ -2533,22 +2665,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   )
             }
           >
-            <span title={turnActive ? undefined : agentComposerSendLabelTitle(sending)}>
-              {turnActive ? (stopping ? "Deteniendo" : "Detener") : sending ? "Enviando" : "Enviar"}
+            <span title={agentComposerSendLabelTitle(sending)}>
+              {sending ? "Enviando" : "Enviar"}
             </span>
           </button>
           {turnActive && (
             <div className="agent-panel__active-turn-actions">
-              <button
-                aria-label="Encolar para el siguiente turno"
-                className="agent-panel__queue-action"
-                disabled={!canSend}
-                onClick={() => void sendDraft("queue")}
-                title="Guardar este mensaje y enviarlo cuando termine el turno actual"
-                type="button"
-              >
-                Encolar
-              </button>
               <button
                 aria-label="Intervenir en el turno activo"
                 className="agent-panel__steer"
@@ -2559,6 +2681,20 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 type="button"
               >
                 Intervenir
+              </button>
+              <button
+                aria-label="Detener respuesta"
+                className="agent-panel__interrupt"
+                disabled={!canInterrupt}
+                onClick={() => void onInterruptTurn()}
+                title={
+                  session?.turn_interrupt_supported
+                    ? "Interrumpir únicamente la respuesta actual"
+                    : "Este runtime no admite interrumpir solo la respuesta"
+                }
+                type="button"
+              >
+                {interrupting ? "Deteniendo" : "Detener"}
               </button>
             </div>
           )}
@@ -3597,7 +3733,7 @@ function AgentHostContextStrip({ session }: { session: AgentSession }) {
 }
 
 type AgentHostContextItem = {
-  kind: "goal" | "personality" | "plan" | "compact";
+  kind: "goal" | "personality" | "plan";
   label: string;
   value: string;
 };
@@ -3611,11 +3747,56 @@ function agentHostContextItems(session: AgentSession): AgentHostContextItem[] {
   if (session.plan_mode?.enabled) {
     items.push({ kind: "plan", label: "Plan", value: "Activo" });
   }
-  const summary = compactContextValue(session.context_summary?.text ?? null);
-  if (summary) {
-    items.push({ kind: "compact", label: "Resumen", value: summary });
-  }
   return items;
+}
+
+function AgentContextRemaining({
+  usage,
+}: {
+  usage: AgentSession["context_usage"] | null | undefined;
+}) {
+  if (!usage || usage.model_context_window <= 0) {
+    return (
+      <div
+        aria-label="Contexto restante no disponible"
+        className="agent-panel__context-remaining"
+        data-unavailable
+        title="Este runtime todavía no ha informado su capacidad de contexto"
+      >
+        <span>Contexto</span>
+        <strong>—</strong>
+      </div>
+    );
+  }
+  const remainingTokens = Math.max(0, usage.model_context_window - usage.used_tokens);
+  const remainingPercent = Math.max(
+    0,
+    Math.min(100, Math.round((remainingTokens / usage.model_context_window) * 100)),
+  );
+  const pressure = remainingPercent <= 10 ? "critical" : remainingPercent <= 25 ? "low" : "normal";
+  const remainingLabel = COMPACT_TOKEN_FORMATTER.format(remainingTokens);
+  return (
+    <div
+      aria-label={`Contexto restante: ${remainingPercent}%`}
+      className="agent-panel__context-remaining"
+      data-pressure={pressure}
+      role="progressbar"
+      aria-valuemax={100}
+      aria-valuemin={0}
+      aria-valuenow={remainingPercent}
+      title={`${remainingLabel} tokens disponibles de ${COMPACT_TOKEN_FORMATTER.format(
+        usage.model_context_window,
+      )}`}
+    >
+      <span>Contexto</span>
+      <strong>
+        {remainingPercent}% · {remainingLabel}
+      </strong>
+      <i aria-hidden="true">
+        <span style={{ width: `${remainingPercent}%` }} />
+      </i>
+    </div>
+  );
 }
 
 function AgentGoalBar({
@@ -4114,20 +4295,9 @@ function AgentThoughtDisclosure({
   events: AgentTurnEventView[];
   onOpenFile?: (path: string) => void;
 }) {
-  const [open, setOpen] = useState(active);
-  const previousActiveRef = useRef(active);
-  const narrativeEvents = events.filter((event) => event.kind !== "command_output");
-  const latestNarrative = narrativeEvents[narrativeEvents.length - 1];
-  const summary = latestNarrative
-    ? activityEventSummary(latestNarrative)
-    : `${events.filter((event) => event.kind === "command_output").length} comandos ejecutados`;
+  const [open, setOpen] = useState(false);
+  const summary = activityDisclosureSummary(events);
   const displayItems = groupThoughtEvents(events);
-
-  useEffect(() => {
-    if (previousActiveRef.current === active) return;
-    previousActiveRef.current = active;
-    setOpen(active);
-  }, [active]);
 
   return (
     <details
@@ -4138,7 +4308,7 @@ function AgentThoughtDisclosure({
     >
       <summary>
         <span className="agent-panel__thought-label">
-          {active ? "Razonamiento en curso" : "Razonamiento"}
+          {active ? "Actividad en curso" : "Actividad"}
         </span>
         <small className="agent-panel__thought-summary" key={summary}>
           {summary}
@@ -4160,7 +4330,7 @@ function AgentThoughtDisclosure({
               key={item.id}
             >
               <summary>
-                <span>Ejecutó comandos</span>
+                <span>{commandOutputSummary(item.events[item.events.length - 1].text)}</span>
                 <small>
                   {item.events.length} {item.events.length === 1 ? "comando" : "comandos"}
                 </small>
@@ -4684,6 +4854,16 @@ function activityEventSummary(event: AgentTurnEventView | undefined): string {
   return compactProcessLabel(event.text) ?? "Trabajo en curso";
 }
 
+function activityDisclosureSummary(events: AgentTurnEventView[]): string {
+  const latestEvent = events[events.length - 1];
+  if (!latestEvent) return "Actividad";
+  if (latestEvent.kind !== "command_output") return activityEventSummary(latestEvent);
+  const commandActivity = [...events]
+    .reverse()
+    .find((event) => event.kind === "activity" && event.text.trimStart().startsWith("Ejecutando "));
+  return activityEventSummary(commandActivity ?? latestEvent);
+}
+
 function isGenericActivityText(text: string): boolean {
   const normalized = text
     .replace(/[.…]+$/g, "")
@@ -4967,7 +5147,6 @@ function applyCodexRuntimeSlashCommand(
   text: string,
   setters: {
     setModel: (value: CodexModelSelection) => void;
-    setNotice: (value: string) => void;
     setReasoning: (value: CodexReasoningSelection) => void;
     setSpeed: (value: CodexSpeedSelection) => void;
   },
@@ -4985,15 +5164,11 @@ function applyCodexRuntimeSlashCommand(
   ) {
     const next = normalizeCodexSpeed(rawValue);
     setters.setSpeed(next);
-    setters.setNotice(next === "fast" ? "Modo rápido activado." : "Modo rápido desactivado.");
     return true;
   }
   if (command === "model" || command === "modelo") {
     const model = normalizeCodexModel(rawValue);
     setters.setModel(model);
-    setters.setNotice(
-      `Modelo para el próximo turno: ${model === "auto" ? "Predeterminado" : model}.`,
-    );
     return true;
   }
   if (command !== "reasoning" && command !== "razonamiento" && command !== "effort") {
@@ -5001,7 +5176,6 @@ function applyCodexRuntimeSlashCommand(
   }
   const reasoning = normalizeCodexReasoning(rawValue);
   setters.setReasoning(reasoning);
-  setters.setNotice(`Razonamiento cambiado a ${codexReasoningLabel(reasoning)}.`);
   return true;
 }
 
@@ -5110,15 +5284,15 @@ function agentStopControlTitle(
 ): string {
   const repoLabel = repo ? repoName(repo) : "la sesión de Agent";
   if (stopping) {
-    return `Detener la respuesta de ${agentLabel(agentType)} en ${repoLabel}: deteniendo.`;
+    return `Detener la sesión de ${agentLabel(agentType)} en ${repoLabel}: deteniendo.`;
   }
   if (readOnly) {
-    return `Detener la respuesta de ${agentLabel(agentType)} en ${repoLabel}: las transcripciones archivadas son de solo lectura.`;
+    return `Detener la sesión de ${agentLabel(agentType)} en ${repoLabel}: las transcripciones archivadas son de solo lectura.`;
   }
   if (canStop) {
-    return `Detener la respuesta en curso de ${agentLabel(agentType)} en ${repoLabel}.`;
+    return `Detener toda la sesión de ${agentLabel(agentType)} en ${repoLabel}.`;
   }
-  return `Detener la respuesta de ${agentLabel(agentType)} en ${repoLabel}: no hay una respuesta en curso.`;
+  return `Detener la sesión de ${agentLabel(agentType)} en ${repoLabel}: la sesión ya no está activa.`;
 }
 
 function agentRevertControlTitle(
@@ -5176,24 +5350,6 @@ function SessionStatus({ session }: { session: AgentSession | undefined }) {
       >
         {sessionCompletionLabel(session)}
       </span>
-      <span title={turnStatusFacetTitle(session.turn_status ?? "waiting")}>
-        {turnStatusLabel(session.turn_status ?? "waiting")}
-      </span>
-      {session.permission_mode && (
-        <span title="Permisos efectivos de esta sesión">
-          {session.permission_mode === "full_access" ? "Acceso completo" : "Workspace"}
-        </span>
-      )}
-      <span title={checkpointStatusFacetTitle(session.checkpoint?.checkpoint_type)}>
-        {session.checkpoint
-          ? checkpointLabel(session.checkpoint.checkpoint_type)
-          : "Sin punto de control"}
-      </span>
-      {(session.change_log?.length ?? 0) > 0 && (
-        <span title={changeLogStatusFacetTitle(session.change_log?.length ?? 0)}>
-          {session.change_log?.length} {session.change_log?.length === 1 ? "cambio" : "cambios"}
-        </span>
-      )}
     </div>
   );
 }
@@ -8173,38 +8329,6 @@ function agentLabel(agentType: string): string {
   }
 }
 
-function agentLogoText(agentType: string): string {
-  switch (agentType) {
-    case "codex":
-      return "Cx";
-    case "claude":
-      return "Cl";
-    case "kimi":
-      return "Ki";
-    case "opencode":
-      return "OC";
-    default:
-      return agentType.slice(0, 2).toUpperCase();
-  }
-}
-
-function agentLogoSrc(agentType: string): string | null {
-  switch (agentType) {
-    case "codex":
-      return codexLogo;
-    case "claude":
-      return claudeLogo;
-    case "opencode":
-      return opencodeLogo;
-    default:
-      return null;
-  }
-}
-
-function agentLogoClass(agentType: string): string {
-  return agentType.replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "agent";
-}
-
 function repoName(repo: string): string {
   const parts = repo.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? repo;
@@ -8226,20 +8350,6 @@ function auditTitle(session: AgentSession): string {
 
 function sessionStatusFacetTitle(session: AgentSession): string {
   return `Indicador de estado de la sesión de Agent: ${sessionCompletionLabel(session)}.`;
-}
-
-function turnStatusFacetTitle(turnStatus: string): string {
-  return `Indicador de estado del turno de Agent: ${turnStatusLabel(turnStatus)}.`;
-}
-
-function checkpointStatusFacetTitle(checkpointType: string | null | undefined): string {
-  return checkpointType
-    ? `Indicador de estado del punto de control de Agent: ${checkpointLabel(checkpointType)}.`
-    : "Indicador de estado del punto de control de Agent: sin punto de control.";
-}
-
-function changeLogStatusFacetTitle(count: number): string {
-  return `Indicador del registro de cambios de Agent: ${countLabel(count, "cambio", "cambios")}.`;
 }
 
 function loadingSessionStatusTitle(): string {

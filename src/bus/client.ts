@@ -272,6 +272,9 @@ export const steerAgentSessionTurn = (sessionId: string, text: string, attachmen
     attachmentPaths,
   });
 
+export const interruptAgentSessionTurn = (sessionId: string) =>
+  invoke("interrupt_agent_session_turn", { sessionId });
+
 export const getAgentImagePreview = (path: string) =>
   invoke<string | null>("get_agent_image_preview", { path });
 

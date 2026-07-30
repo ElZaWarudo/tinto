@@ -525,6 +525,8 @@ impl AgentJournal {
                 source_events: context_summary_source_events.unwrap_or(0).max(0) as usize,
                 source_turns: context_summary_source_turns.unwrap_or(0).max(0) as usize,
             }),
+            context_usage: None,
+            turn_interrupt_supported: false,
             reverted_at_ms: None,
             restored_to_turn_index: restored_to_turn_index.map(|value| value as u32),
             active_sessions: 0,
@@ -627,6 +629,8 @@ mod tests {
             plan_mode: None,
             feedback: Vec::new(),
             context_summary: None,
+            context_usage: None,
+            turn_interrupt_supported: false,
             reverted_at_ms: None,
             restored_to_turn_index: None,
             active_sessions: 1,
@@ -896,6 +900,11 @@ mod tests {
     fn journal_reconstructs_archived_session_with_timeline() {
         let journal = AgentJournal::open_in_memory().expect("journal");
         let mut live = session("sess-1");
+        live.context_usage = Some(crate::bus::contract::AgentSessionContextUsage {
+            used_tokens: 80_000,
+            model_context_window: 128_000,
+        });
+        live.turn_interrupt_supported = true;
         live.acp_runtime = Some(AgentSessionAcpRuntime {
             state: AgentSessionAcpState::AcpReady,
             mode: Some(AgentSessionAcpMode::Acp),
@@ -943,5 +952,7 @@ mod tests {
         assert_eq!(archived.timeline.len(), 1);
         assert_eq!(archived.active_sessions, 0);
         assert!(archived.checkpoint.is_none());
+        assert!(archived.context_usage.is_none());
+        assert!(!archived.turn_interrupt_supported);
     }
 }

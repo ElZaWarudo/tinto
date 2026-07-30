@@ -390,6 +390,12 @@ pub struct AgentSessionContextSummary {
     pub source_turns: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionContextUsage {
+    pub used_tokens: u64,
+    pub model_context_window: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionResumeMode {
@@ -447,6 +453,9 @@ pub struct AgentSession {
     pub feedback: Vec<AgentSessionFeedback>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_summary: Option<AgentSessionContextSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_usage: Option<AgentSessionContextUsage>,
+    pub turn_interrupt_supported: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -995,6 +1004,11 @@ mod tests {
                 source_events: 4,
                 source_turns: 2,
             }),
+            context_usage: Some(AgentSessionContextUsage {
+                used_tokens: 80_000,
+                model_context_window: 128_000,
+            }),
+            turn_interrupt_supported: true,
             reverted_at_ms: None,
             restored_to_turn_index: None,
             active_sessions: 1,
@@ -1041,6 +1055,9 @@ mod tests {
         assert_eq!(json["context_summary"]["created_at_ms"], 1760000000300u64);
         assert_eq!(json["context_summary"]["source_events"], 4);
         assert_eq!(json["context_summary"]["source_turns"], 2);
+        assert_eq!(json["context_usage"]["used_tokens"], 80_000);
+        assert_eq!(json["context_usage"]["model_context_window"], 128_000);
+        assert_eq!(json["turn_interrupt_supported"], true);
         assert_eq!(json["active_sessions"], 1);
         assert_eq!(json["age_ms"], 42);
     }
