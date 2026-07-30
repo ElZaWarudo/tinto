@@ -23,8 +23,8 @@ use super::{
 };
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentRuntimeCatalogStatus, AgentRuntimeModel, AgentRuntimeReasoningEffort,
-    AgentRuntimeServiceTier, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionRuntimeOptions,
-    AgentSessionTimelineKind,
+    AgentRuntimeServiceTier, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode,
+    AgentSessionRuntimeOptions, AgentSessionTimelineKind,
 };
 use crate::wsl_agent::shell_env::agent_console_script;
 
@@ -56,15 +56,26 @@ pub struct CodexAppServerHandle {
 }
 
 impl CodexAppServerHandle {
-    pub fn spawn(binary_path: &Path, working_dir: &Path) -> Result<Self, AgentConsoleError> {
+    pub fn spawn(
+        binary_path: &Path,
+        working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<Self, AgentConsoleError> {
         let child = spawn_command(build_app_server_command(binary_path, working_dir))?;
-        Self::from_child(child, working_dir, "codex_app_server", None)
+        Self::from_child(
+            child,
+            working_dir,
+            "codex_app_server",
+            None,
+            permission_mode,
+        )
     }
 
     pub fn resume(
         binary_path: &Path,
         working_dir: &Path,
         provider_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
         let child = spawn_command(build_app_server_command(binary_path, working_dir))?;
         Self::from_child(
@@ -72,13 +83,24 @@ impl CodexAppServerHandle {
             working_dir,
             "codex_app_server",
             Some(provider_session_id),
+            permission_mode,
         )
     }
 
-    pub fn spawn_wsl(distro: &str, working_dir: &Path) -> Result<Self, AgentConsoleError> {
+    pub fn spawn_wsl(
+        distro: &str,
+        working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<Self, AgentConsoleError> {
         let command = build_wsl_app_server_command(distro, working_dir)?;
         let child = spawn_command(command)?;
-        let mut handle = Self::from_child(child, working_dir, "codex_app_server_wsl", None)?;
+        let mut handle = Self::from_child(
+            child,
+            working_dir,
+            "codex_app_server_wsl",
+            None,
+            permission_mode,
+        )?;
         std::thread::sleep(std::time::Duration::from_millis(50));
         if let Some(status) = handle.child.try_wait().map_err(|error| {
             AgentConsoleError::new("app_server_status_failed", error.to_string())
@@ -95,6 +117,7 @@ impl CodexAppServerHandle {
         distro: &str,
         working_dir: &Path,
         provider_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
         let command = build_wsl_app_server_command(distro, working_dir)?;
         let child = spawn_command(command)?;
@@ -103,6 +126,7 @@ impl CodexAppServerHandle {
             working_dir,
             "codex_app_server_wsl",
             Some(provider_session_id),
+            permission_mode,
         )
     }
 
@@ -111,6 +135,7 @@ impl CodexAppServerHandle {
         working_dir: &Path,
         catalog_source: &str,
         resume_thread_id: Option<&str>,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
         let stdin = child.stdin.take().ok_or_else(|| {
             AgentConsoleError::new(
@@ -144,7 +169,7 @@ impl CodexAppServerHandle {
         let next_request_id = Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID));
         let cwd = working_dir.to_path_buf();
 
-        send_initial_requests(&stdin, &cwd, resume_thread_id)?;
+        send_initial_requests(&stdin, &cwd, resume_thread_id, permission_mode)?;
         spawn_stdout_thread(
             stdout,
             ServerRuntimeContext {
@@ -462,6 +487,7 @@ fn send_initial_requests(
     stdin: &Arc<Mutex<ChildStdin>>,
     cwd: &Path,
     resume_thread_id: Option<&str>,
+    permission_mode: AgentSessionPermissionMode,
 ) -> Result<(), AgentConsoleError> {
     write_json(
         stdin,
@@ -491,7 +517,10 @@ fn send_initial_requests(
             }
         }),
     )?;
-    write_json(stdin, &thread_request_message(cwd, resume_thread_id))?;
+    write_json(
+        stdin,
+        &thread_request_message(cwd, resume_thread_id, permission_mode),
+    )?;
     write_json(
         stdin,
         &json!({
@@ -505,7 +534,15 @@ fn send_initial_requests(
     )
 }
 
-fn thread_request_message(cwd: &Path, resume_thread_id: Option<&str>) -> Value {
+fn thread_request_message(
+    cwd: &Path,
+    resume_thread_id: Option<&str>,
+    permission_mode: AgentSessionPermissionMode,
+) -> Value {
+    let sandbox = match permission_mode {
+        AgentSessionPermissionMode::Workspace => "workspaceWrite",
+        AgentSessionPermissionMode::FullAccess => "dangerFullAccess",
+    };
     match resume_thread_id {
         Some(thread_id) => json!({
             "method": "thread/resume",
@@ -513,7 +550,9 @@ fn thread_request_message(cwd: &Path, resume_thread_id: Option<&str>) -> Value {
             "params": {
                 "threadId": thread_id,
                 "cwd": cwd.to_string_lossy(),
-                "runtimeWorkspaceRoots": [cwd.to_string_lossy()]
+                "runtimeWorkspaceRoots": [cwd.to_string_lossy()],
+                "approvalPolicy": "never",
+                "sandbox": sandbox
             }
         }),
         None => json!({
@@ -522,6 +561,8 @@ fn thread_request_message(cwd: &Path, resume_thread_id: Option<&str>) -> Value {
             "params": {
                 "cwd": cwd.to_string_lossy(),
                 "runtimeWorkspaceRoots": [cwd.to_string_lossy()],
+                "approvalPolicy": "never",
+                "sandbox": sandbox,
                 "ephemeral": false
             }
         }),
@@ -1817,15 +1858,37 @@ mod tests {
 
     #[test]
     fn starts_persistent_threads_for_future_resume() {
-        let message = thread_request_message(Path::new("/tmp/repo"), None);
+        let message = thread_request_message(
+            Path::new("/tmp/repo"),
+            None,
+            AgentSessionPermissionMode::Workspace,
+        );
 
         assert_eq!(message["method"], "thread/start");
         assert_eq!(message["params"]["ephemeral"], false);
+        assert_eq!(message["params"]["approvalPolicy"], "never");
+        assert_eq!(message["params"]["sandbox"], "workspaceWrite");
+    }
+
+    #[test]
+    fn starts_full_access_threads_only_when_selected() {
+        let message = thread_request_message(
+            Path::new("/tmp/repo"),
+            None,
+            AgentSessionPermissionMode::FullAccess,
+        );
+
+        assert_eq!(message["params"]["approvalPolicy"], "never");
+        assert_eq!(message["params"]["sandbox"], "dangerFullAccess");
     }
 
     #[test]
     fn resumes_the_provider_thread_in_the_current_workspace() {
-        let message = thread_request_message(Path::new("/tmp/repo"), Some("thread-42"));
+        let message = thread_request_message(
+            Path::new("/tmp/repo"),
+            Some("thread-42"),
+            AgentSessionPermissionMode::Workspace,
+        );
 
         assert_eq!(message["method"], "thread/resume");
         assert_eq!(message["params"]["threadId"], "thread-42");
@@ -1833,6 +1896,8 @@ mod tests {
             message["params"]["cwd"],
             Path::new("/tmp/repo").to_string_lossy().as_ref()
         );
+        assert_eq!(message["params"]["approvalPolicy"], "never");
+        assert_eq!(message["params"]["sandbox"], "workspaceWrite");
     }
 
     #[test]

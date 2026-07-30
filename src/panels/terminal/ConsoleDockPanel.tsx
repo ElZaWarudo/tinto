@@ -332,7 +332,7 @@ export function ConsoleDockPanel({
     if (launchingKey) return;
     setLaunchingKey(key);
     setLaunchError(null);
-    void startAgentSession(launch.repo, launch.agentType)
+    void startAgentSession(launch.repo, launch.agentType, "workspace")
       .then((sessionId) => {
         consoleDock.openTerminal({
           sessionId,

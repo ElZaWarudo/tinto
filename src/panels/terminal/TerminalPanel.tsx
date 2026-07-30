@@ -5179,6 +5179,11 @@ function SessionStatus({ session }: { session: AgentSession | undefined }) {
       <span title={turnStatusFacetTitle(session.turn_status ?? "waiting")}>
         {turnStatusLabel(session.turn_status ?? "waiting")}
       </span>
+      {session.permission_mode && (
+        <span title="Permisos efectivos de esta sesión">
+          {session.permission_mode === "full_access" ? "Acceso completo" : "Workspace"}
+        </span>
+      )}
       <span title={checkpointStatusFacetTitle(session.checkpoint?.checkpoint_type)}>
         {session.checkpoint
           ? checkpointLabel(session.checkpoint.checkpoint_type)

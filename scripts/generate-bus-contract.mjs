@@ -48,6 +48,7 @@ const INCLUDE = new Set([
   "AgentSessionTurnCheckpoint",
   "AgentSessionLimits",
   "AgentSessionRuntimeOptions",
+  "AgentSessionPermissionMode",
   "AgentRuntimeCatalogStatus",
   "AgentRuntimeReasoningEffort",
   "AgentRuntimeServiceTier",

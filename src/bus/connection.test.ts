@@ -107,6 +107,7 @@ function makeSession(id: string): AgentSession {
     id,
     repo: "/r/a",
     agent_type: "codex",
+    permission_mode: "workspace",
     status: "running",
     pid: 123,
     started_at_ms: 1,

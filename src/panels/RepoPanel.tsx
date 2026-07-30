@@ -289,8 +289,8 @@ function RepoOverview({ repo }: { repo: string }) {
         repoName={busStore.displayName(repo)}
         availabilityKey={agentAvailabilityKey(repoEntry?.source, repoEntry?.distro)}
         className="repo-overview__agent-launcher"
-        onLaunch={async (agentType) => {
-          const sessionId = await startAgentSession(repo, agentType);
+        onLaunch={async (agentType, permissionMode) => {
+          const sessionId = await startAgentSession(repo, agentType, permissionMode);
           const sessions = await listAgentSessions();
           agentSessionStore.setSessions(sessions);
           openAgentTerminal({ sessionId, repo, agentType });

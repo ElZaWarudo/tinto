@@ -133,6 +133,7 @@ function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
     id: "sess-1",
     repo: "/r/a",
     agent_type: "codex",
+    permission_mode: "workspace",
     status: "running",
     pid: 123,
     started_at_ms: 1,
@@ -324,6 +325,10 @@ describe("TerminalPanel", () => {
     expect(loading).toHaveAttribute("aria-live", "polite");
     expect(loading).toHaveTextContent("Cargando sesión");
     expect(await screen.findByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("Workspace")).toHaveAttribute(
+      "title",
+      "Permisos efectivos de esta sesión",
+    );
     expect(screen.getByRole("button", { name: "Detener respuesta" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Revertir sesión" })).toBeDisabled();
     expect(screen.getByText("a")).toBeInTheDocument();
@@ -366,6 +371,19 @@ describe("TerminalPanel", () => {
     expect(processStatus).toHaveTextContent("Codex está trabajando");
     expect(processStatus).toHaveTextContent("EN CURSO");
     expect(screen.queryByTestId("terminal-surface")).not.toBeInTheDocument();
+  });
+
+  it("shows full access as the effective session permission", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ permission_mode: "full_access" }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    expect(await screen.findByText("Acceso completo")).toHaveAttribute(
+      "title",
+      "Permisos efectivos de esta sesión",
+    );
   });
 
   it("renders every ACP state, gates input, and confirms PTY migration", async () => {

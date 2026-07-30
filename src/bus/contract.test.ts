@@ -342,6 +342,7 @@ import {
   listWslDistros,
   onAgentSessionOutput,
   onAgentSessionChangeLog,
+  prepareAgentInstall,
   resizeAgentSession,
   revertSession,
   revertSessionTurnFile,
@@ -472,6 +473,14 @@ describe("RDM-008 client wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
       repo: "/r/api",
       agentType: "codex",
+      permissionMode: "workspace",
+    });
+
+    void prepareAgentInstall("/r/api", "codex", "full_access");
+    expect(invokeMock).toHaveBeenCalledWith("prepare_agent_install", {
+      repo: "/r/api",
+      agentType: "codex",
+      permissionMode: "full_access",
     });
 
     void stopAgentSession("sess-1");

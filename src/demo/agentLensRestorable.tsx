@@ -108,6 +108,7 @@ const session: AgentSession = {
   id: SESSION_ID,
   repo: REPO,
   agent_type: "codex",
+  permission_mode: "workspace",
   wsl_distro: "Ubuntu",
   status: LIVE_PROCESS ? "running" : "completed",
   pid: LIVE_PROCESS ? 4_242 : null,

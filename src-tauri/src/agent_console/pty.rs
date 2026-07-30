@@ -13,7 +13,7 @@ use super::{app_server::CodexAppServerHandle, AgentConsoleError};
 use crate::{
     bus::contract::{
         AgentRuntimeCatalog, AgentSessionAcpPermission, AgentSessionAcpRuntime,
-        AgentSessionGoalStatus, AgentSessionRuntimeOptions,
+        AgentSessionGoalStatus, AgentSessionPermissionMode, AgentSessionRuntimeOptions,
     },
     wsl_agent::shell_env::agent_console_script,
 };
@@ -181,6 +181,7 @@ pub trait AgentProcessFactory: Send + Sync {
         &self,
         binary_path: &Path,
         working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError>;
 
     fn spawn_wsl_agent(
@@ -188,8 +189,9 @@ pub trait AgentProcessFactory: Send + Sync {
         agent_type: &str,
         distro: &str,
         working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
-        let _ = (agent_type, distro, working_dir);
+        let _ = (agent_type, distro, working_dir, permission_mode);
         Err(AgentConsoleError::new(
             "wsl_agent_unsupported",
             "este runtime no soporta sesiones WSL",
@@ -201,8 +203,14 @@ pub trait AgentProcessFactory: Send + Sync {
         binary_path: &Path,
         working_dir: &Path,
         provider_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
-        let _ = (binary_path, working_dir, provider_session_id);
+        let _ = (
+            binary_path,
+            working_dir,
+            provider_session_id,
+            permission_mode,
+        );
         Err(AgentConsoleError::new(
             "agent_resume_unsupported",
             "este runtime no puede reanudar conversaciones nativas",
@@ -215,8 +223,15 @@ pub trait AgentProcessFactory: Send + Sync {
         distro: &str,
         working_dir: &Path,
         provider_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
-        let _ = (agent_type, distro, working_dir, provider_session_id);
+        let _ = (
+            agent_type,
+            distro,
+            working_dir,
+            provider_session_id,
+            permission_mode,
+        );
         Err(AgentConsoleError::new(
             "agent_resume_unsupported",
             "este runtime WSL no puede reanudar conversaciones nativas",
@@ -232,9 +247,10 @@ impl AgentProcessFactory for PortablePtyFactory {
         &self,
         binary_path: &Path,
         working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         if is_codex_binary(binary_path) {
-            match CodexAppServerHandle::spawn(binary_path, working_dir) {
+            match CodexAppServerHandle::spawn(binary_path, working_dir, permission_mode) {
                 Ok(handle) => return Ok(Box::new(handle)),
                 Err(_error) => {
                     // App-server is the preferred Codex runtime, but it is experimental.
@@ -242,7 +258,11 @@ impl AgentProcessFactory for PortablePtyFactory {
                 }
             }
         }
-        Ok(Box::new(PtyHandle::spawn(binary_path, working_dir)?))
+        Ok(Box::new(PtyHandle::spawn_with_permission(
+            binary_path,
+            working_dir,
+            permission_mode,
+        )?))
     }
 
     fn spawn_wsl_agent(
@@ -250,9 +270,10 @@ impl AgentProcessFactory for PortablePtyFactory {
         agent_type: &str,
         distro: &str,
         working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         if agent_type.eq_ignore_ascii_case("codex") {
-            match CodexAppServerHandle::spawn_wsl(distro, working_dir) {
+            match CodexAppServerHandle::spawn_wsl(distro, working_dir, permission_mode) {
                 Ok(handle) => return Ok(Box::new(handle)),
                 Err(_error) => {
                     // Keep the WSL-native terminal path as a compatibility fallback for
@@ -264,6 +285,7 @@ impl AgentProcessFactory for PortablePtyFactory {
             agent_type,
             distro,
             working_dir,
+            permission_mode,
         )?))
     }
 
@@ -272,6 +294,7 @@ impl AgentProcessFactory for PortablePtyFactory {
         binary_path: &Path,
         working_dir: &Path,
         provider_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         if !is_codex_binary(binary_path) {
             return Err(AgentConsoleError::new(
@@ -283,6 +306,7 @@ impl AgentProcessFactory for PortablePtyFactory {
             binary_path,
             working_dir,
             provider_session_id,
+            permission_mode,
         )?))
     }
 
@@ -292,6 +316,7 @@ impl AgentProcessFactory for PortablePtyFactory {
         distro: &str,
         working_dir: &Path,
         provider_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         if !agent_type.eq_ignore_ascii_case("codex") {
             return Err(AgentConsoleError::new(
@@ -303,6 +328,7 @@ impl AgentProcessFactory for PortablePtyFactory {
             distro,
             working_dir,
             provider_session_id,
+            permission_mode,
         )?))
     }
 }
@@ -317,7 +343,23 @@ pub struct PtyHandle {
 
 impl PtyHandle {
     pub fn spawn(binary_path: &Path, working_dir: &Path) -> Result<Self, AgentConsoleError> {
-        Self::spawn_command_builder(build_agent_command(binary_path, working_dir))
+        Self::spawn_with_permission(
+            binary_path,
+            working_dir,
+            AgentSessionPermissionMode::Workspace,
+        )
+    }
+
+    pub fn spawn_with_permission(
+        binary_path: &Path,
+        working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<Self, AgentConsoleError> {
+        Self::spawn_command_builder(build_agent_command_with_permission(
+            binary_path,
+            working_dir,
+            permission_mode,
+        ))
     }
 
     pub fn spawn_with_env_allowlist(
@@ -336,8 +378,14 @@ impl PtyHandle {
         agent_type: &str,
         distro: &str,
         working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
-        Self::spawn_command_builder(build_wsl_agent_command(distro, agent_type, working_dir)?)
+        Self::spawn_command_builder(build_wsl_agent_command(
+            distro,
+            agent_type,
+            working_dir,
+            permission_mode,
+        )?)
     }
 
     fn spawn_command_builder(command: CommandBuilder) -> Result<Self, AgentConsoleError> {
@@ -456,11 +504,24 @@ impl AgentProcess for PtyHandle {
 }
 
 pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> CommandBuilder {
+    build_agent_command_with_permission(
+        binary_path,
+        working_dir,
+        AgentSessionPermissionMode::Workspace,
+    )
+}
+
+pub(crate) fn build_agent_command_with_permission(
+    binary_path: &Path,
+    working_dir: &Path,
+    permission_mode: AgentSessionPermissionMode,
+) -> CommandBuilder {
     let mut command = CommandBuilder::new(binary_path.as_os_str());
     command.cwd(working_dir.as_os_str());
     for arg in default_agent_args(binary_path) {
         command.arg(arg);
     }
+    append_codex_permission_args(&mut command, is_codex_binary(binary_path), permission_mode);
     apply_terminal_env(&mut command);
     command
 }
@@ -485,6 +546,7 @@ pub(crate) fn build_wsl_agent_command(
     distro: &str,
     agent_type: &str,
     working_dir: &Path,
+    permission_mode: AgentSessionPermissionMode,
 ) -> Result<CommandBuilder, AgentConsoleError> {
     if distro.trim().is_empty() {
         return Err(AgentConsoleError::new(
@@ -505,8 +567,30 @@ pub(crate) fn build_wsl_agent_command(
     for arg in default_agent_args_for_name(agent_type) {
         command.arg(arg);
     }
+    append_codex_permission_args(
+        &mut command,
+        agent_type.eq_ignore_ascii_case("codex"),
+        permission_mode,
+    );
     apply_terminal_env(&mut command);
     Ok(command)
+}
+
+fn append_codex_permission_args(
+    command: &mut CommandBuilder,
+    is_codex: bool,
+    permission_mode: AgentSessionPermissionMode,
+) {
+    if !is_codex {
+        return;
+    }
+    command.arg("--ask-for-approval");
+    command.arg("never");
+    command.arg("--sandbox");
+    command.arg(match permission_mode {
+        AgentSessionPermissionMode::Workspace => "workspace-write",
+        AgentSessionPermissionMode::FullAccess => "danger-full-access",
+    });
 }
 
 fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
@@ -655,7 +739,14 @@ mod tests {
 
         assert_eq!(
             command.get_argv(),
-            &[OsString::from("codex"), OsString::from("--no-alt-screen")]
+            &[
+                OsString::from("codex"),
+                OsString::from("--no-alt-screen"),
+                OsString::from("--ask-for-approval"),
+                OsString::from("never"),
+                OsString::from("--sandbox"),
+                OsString::from("workspace-write"),
+            ]
         );
         assert_eq!(command.get_cwd(), Some(&OsString::from("/tmp/repo")));
     }
@@ -709,8 +800,13 @@ mod tests {
 
     #[test]
     fn build_wsl_agent_command_passes_repo_and_agent_as_argv() {
-        let command =
-            build_wsl_agent_command("Ubuntu", "codex", Path::new("/home/me/repo")).unwrap();
+        let command = build_wsl_agent_command(
+            "Ubuntu",
+            "codex",
+            Path::new("/home/me/repo"),
+            AgentSessionPermissionMode::Workspace,
+        )
+        .unwrap();
 
         let argv = command.get_argv();
         assert_eq!(
@@ -735,6 +831,10 @@ mod tests {
                 OsString::from("/home/me/repo"),
                 OsString::from("codex"),
                 OsString::from("--no-alt-screen"),
+                OsString::from("--ask-for-approval"),
+                OsString::from("never"),
+                OsString::from("--sandbox"),
+                OsString::from("workspace-write"),
             ]
         );
         assert!(command.get_cwd().is_none());
@@ -744,6 +844,46 @@ mod tests {
         assert_eq!(
             command.get_env("TINTO_TURN_DONE_MARKER"),
             Some(OsStr::new(TINTO_TURN_DONE_MARKER))
+        );
+    }
+
+    #[test]
+    fn full_access_fallback_uses_explicit_codex_flags() {
+        let command = build_agent_command_with_permission(
+            Path::new("codex"),
+            Path::new("/tmp/repo"),
+            AgentSessionPermissionMode::FullAccess,
+        );
+
+        assert_eq!(
+            &command.get_argv()[2..],
+            [
+                OsString::from("--ask-for-approval"),
+                OsString::from("never"),
+                OsString::from("--sandbox"),
+                OsString::from("danger-full-access"),
+            ]
+        );
+    }
+
+    #[test]
+    fn wsl_full_access_fallback_uses_explicit_codex_flags() {
+        let command = build_wsl_agent_command(
+            "Ubuntu",
+            "codex",
+            Path::new("/home/me/repo"),
+            AgentSessionPermissionMode::FullAccess,
+        )
+        .unwrap();
+
+        assert_eq!(
+            &command.get_argv()[11..],
+            [
+                OsString::from("--ask-for-approval"),
+                OsString::from("never"),
+                OsString::from("--sandbox"),
+                OsString::from("danger-full-access"),
+            ]
         );
     }
 }

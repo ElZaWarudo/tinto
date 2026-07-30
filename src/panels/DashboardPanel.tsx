@@ -427,8 +427,8 @@ export function DashboardPanel() {
                   onRetry={() => void retryRepo(p)}
                   onRemove={() => removeRepo(p)}
                   onFetch={() => fetchRepoFlow(p)}
-                  onLaunch={async (agentType) => {
-                    const sessionId = await startAgentSession(p, agentType);
+                  onLaunch={async (agentType, permissionMode) => {
+                    const sessionId = await startAgentSession(p, agentType, permissionMode);
                     const sessions = await listAgentSessions();
                     agentSessionStore.setSessions(sessions);
                     openAgentTerminal({ sessionId, repo: p, agentType });
