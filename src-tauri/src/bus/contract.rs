@@ -417,6 +417,8 @@ pub struct AgentSession {
     pub agent_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<AgentSessionPermissionMode>,
+    #[serde(default)]
+    pub permission_mode_change_supported: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acp_runtime: Option<AgentSessionAcpRuntime>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -918,6 +920,7 @@ mod tests {
             repo: "/r/api".into(),
             agent_type: "codex".into(),
             permission_mode: Some(AgentSessionPermissionMode::Workspace),
+            permission_mode_change_supported: false,
             acp_runtime: None,
             acp_permissions: Vec::new(),
             provider_session_id: Some("thread-1".into()),
@@ -1020,6 +1023,7 @@ mod tests {
         assert_eq!(json["id"], "sess-1");
         assert_eq!(json["repo"], "/r/api");
         assert_eq!(json["agent_type"], "codex");
+        assert_eq!(json["permission_mode_change_supported"], false);
         assert!(json.get("acp_runtime").is_none());
         assert_eq!(json["status"], "running");
         assert_eq!(json["pid"], 42);

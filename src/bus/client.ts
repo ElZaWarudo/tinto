@@ -131,6 +131,15 @@ export const startAgentSession = (
 
 export const stopAgentSession = (sessionId: string) => invoke("stop_agent_session", { sessionId });
 
+export const setAgentSessionPermissionMode = (
+  sessionId: string,
+  permissionMode: AgentSessionPermissionMode,
+) =>
+  invoke<AgentSession>("set_agent_session_permission_mode", {
+    sessionId,
+    permissionMode,
+  });
+
 export const retryAgentSessionAcp = (sessionId: string, confirmed: boolean) =>
   invoke("retry_agent_session_acp", { sessionId, confirmed });
 

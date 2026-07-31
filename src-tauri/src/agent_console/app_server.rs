@@ -14,18 +14,18 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 
-use super::AgentConsoleError;
 use super::{
     commands::TIMELINE_FRAME_PREFIX,
     pty::{
         kill_process_tree, prompt_with_file_attachments, AgentProcess, AgentProcessEvent,
         AgentTurnAttachment,
     },
+    AgentConsoleError, ResumeResultReceiver,
 };
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentRuntimeCatalogStatus, AgentRuntimeModel, AgentRuntimeReasoningEffort,
     AgentRuntimeServiceTier, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode,
-    AgentSessionRuntimeOptions, AgentSessionTimelineKind,
+    AgentSessionResumeMode, AgentSessionRuntimeOptions, AgentSessionTimelineKind,
 };
 use crate::wsl_agent::shell_env::agent_console_script;
 
@@ -46,8 +46,10 @@ pub struct CodexAppServerHandle {
     output_tx: Sender<Vec<u8>>,
     event_rx: Receiver<AgentProcessEvent>,
     output_reader: Option<ChannelReader>,
+    resume_result: Option<ResumeResultReceiver>,
     line_buffer: Vec<u8>,
     pending_options: Option<AgentSessionRuntimeOptions>,
+    permission_mode: Arc<Mutex<AgentSessionPermissionMode>>,
     thread_id: Arc<Mutex<Option<String>>>,
     active_turn_id: Arc<Mutex<Option<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
@@ -173,8 +175,15 @@ impl CodexAppServerHandle {
         let pending_control_requests = Arc::new(Mutex::new(HashMap::new()));
         let next_request_id = Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID));
         let cwd = working_dir.to_path_buf();
+        let (resume_tx, resume_result) = if resume_thread_id.is_some() {
+            let (tx, rx) = mpsc::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
 
         send_initial_requests(&stdin, &cwd, resume_thread_id, permission_mode)?;
+        let permission_mode = Arc::new(Mutex::new(permission_mode));
         spawn_stdout_thread(
             stdout,
             ServerRuntimeContext {
@@ -189,6 +198,7 @@ impl CodexAppServerHandle {
                 runtime_catalog: Arc::clone(&runtime_catalog),
                 pending_model_requests: Arc::clone(&pending_model_requests),
                 pending_control_requests: Arc::clone(&pending_control_requests),
+                resume_tx: Mutex::new(resume_tx),
                 next_request_id: Arc::clone(&next_request_id),
                 cwd: cwd.clone(),
             },
@@ -200,8 +210,10 @@ impl CodexAppServerHandle {
             output_tx,
             event_rx,
             output_reader: Some(ChannelReader::new(output_rx)),
+            resume_result,
             line_buffer: Vec::new(),
             pending_options: None,
+            permission_mode,
             thread_id,
             active_turn_id,
             pending_turns,
@@ -220,6 +232,9 @@ impl CodexAppServerHandle {
         attachments: Vec<AgentTurnAttachment>,
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
+        let permission_mode = self.permission_mode.lock().map(|mode| *mode).map_err(|_| {
+            AgentConsoleError::new("app_server_lock_poisoned", "permission mode lock failed")
+        })?;
         let thread = self.thread_id.lock().ok().and_then(|thread| thread.clone());
         if let Some(thread_id) = thread {
             let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
@@ -231,12 +246,14 @@ impl CodexAppServerHandle {
                 &attachments,
                 &self.cwd,
                 options.as_ref(),
+                permission_mode,
             )?;
         } else if let Ok(mut pending) = self.pending_turns.lock() {
             pending.push_back(PendingTurn {
                 text,
                 attachments,
                 options,
+                permission_mode,
             });
             let _ = self
                 .output_tx
@@ -342,6 +359,29 @@ impl AgentProcess for CodexAppServerHandle {
         self.submit_turn(text.to_string(), attachments.to_vec(), options)
     }
 
+    fn supports_permission_mode_change(&self) -> bool {
+        true
+    }
+
+    fn set_permission_mode(
+        &mut self,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<(), AgentConsoleError> {
+        if let Some(status) = self.child.try_wait().map_err(|error| {
+            AgentConsoleError::new("app_server_status_failed", error.to_string())
+        })? {
+            return Err(AgentConsoleError::new(
+                "permission_mode_unavailable",
+                format!("Codex app-server ya terminó ({status})"),
+            ));
+        }
+        let mut selected = self.permission_mode.lock().map_err(|_| {
+            AgentConsoleError::new("app_server_lock_poisoned", "permission mode lock failed")
+        })?;
+        *selected = permission_mode;
+        Ok(())
+    }
+
     fn steer_turn(
         &mut self,
         text: &str,
@@ -424,6 +464,10 @@ impl AgentProcess for CodexAppServerHandle {
         self.output_reader
             .take()
             .map(|reader| Box::new(reader) as Box<dyn Read + Send>)
+    }
+
+    fn take_resume_result(&mut self) -> Option<ResumeResultReceiver> {
+        self.resume_result.take()
     }
 
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
@@ -645,8 +689,8 @@ fn thread_request_message(
     permission_mode: AgentSessionPermissionMode,
 ) -> Value {
     let sandbox = match permission_mode {
-        AgentSessionPermissionMode::Workspace => "workspaceWrite",
-        AgentSessionPermissionMode::FullAccess => "dangerFullAccess",
+        AgentSessionPermissionMode::Workspace => "workspace-write",
+        AgentSessionPermissionMode::FullAccess => "danger-full-access",
     };
     match resume_thread_id {
         Some(thread_id) => json!({
@@ -702,6 +746,7 @@ struct ServerRuntimeContext {
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
     pending_control_requests: Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>,
+    resume_tx: Mutex<Option<Sender<Result<AgentSessionResumeMode, AgentConsoleError>>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
@@ -710,6 +755,7 @@ struct PendingTurn {
     text: String,
     attachments: Vec<AgentTurnAttachment>,
     options: Option<AgentSessionRuntimeOptions>,
+    permission_mode: AgentSessionPermissionMode,
 }
 
 #[derive(Debug, Clone)]
@@ -758,6 +804,12 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 &id,
                 &context.cwd,
                 &context.output_tx,
+            );
+            resolve_resume_result(context, Ok(AgentSessionResumeMode::Native));
+        } else if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
+            resolve_resume_result(
+                context,
+                Err(AgentConsoleError::new("agent_resume_failed", error)),
             );
         }
     }
@@ -893,6 +945,17 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             });
         }
         _ => {}
+    }
+}
+
+fn resolve_resume_result(
+    context: &ServerRuntimeContext,
+    result: Result<AgentSessionResumeMode, AgentConsoleError>,
+) {
+    if let Ok(mut resume_tx) = context.resume_tx.lock() {
+        if let Some(resume_tx) = resume_tx.take() {
+            let _ = resume_tx.send(result);
+        }
     }
 }
 
@@ -1411,6 +1474,7 @@ fn flush_pending_turns(
             &text.attachments,
             cwd,
             text.options.as_ref(),
+            text.permission_mode,
         ) {
             let _ = output_tx
                 .send(format!("\r\nCodex app-server error: {}\r\n> ", error.message).into_bytes());
@@ -1427,13 +1491,23 @@ fn send_turn_start(
     attachments: &[AgentTurnAttachment],
     cwd: &Path,
     options: Option<&AgentSessionRuntimeOptions>,
+    permission_mode: AgentSessionPermissionMode,
 ) -> Result<(), AgentConsoleError> {
     write_json(
         stdin,
-        &turn_start_message(request_id, thread_id, text, attachments, cwd, options),
+        &turn_start_message_with_permission(
+            request_id,
+            thread_id,
+            text,
+            attachments,
+            cwd,
+            options,
+            permission_mode,
+        ),
     )
 }
 
+#[cfg(test)]
 fn turn_start_message(
     request_id: u64,
     thread_id: &str,
@@ -1441,6 +1515,26 @@ fn turn_start_message(
     attachments: &[AgentTurnAttachment],
     cwd: &Path,
     options: Option<&AgentSessionRuntimeOptions>,
+) -> Value {
+    turn_start_message_with_permission(
+        request_id,
+        thread_id,
+        text,
+        attachments,
+        cwd,
+        options,
+        AgentSessionPermissionMode::Workspace,
+    )
+}
+
+fn turn_start_message_with_permission(
+    request_id: u64,
+    thread_id: &str,
+    text: &str,
+    attachments: &[AgentTurnAttachment],
+    cwd: &Path,
+    options: Option<&AgentSessionRuntimeOptions>,
+    permission_mode: AgentSessionPermissionMode,
 ) -> Value {
     let mut input = attachments
         .iter()
@@ -1470,6 +1564,13 @@ fn turn_start_message(
     {
         params["serviceTier"] = json!(service_tier);
     }
+    params["approvalPolicy"] = json!("never");
+    params["sandboxPolicy"] = json!({
+        "type": match permission_mode {
+            AgentSessionPermissionMode::Workspace => "workspaceWrite",
+            AgentSessionPermissionMode::FullAccess => "dangerFullAccess",
+        }
+    });
     json!({
         "method": "turn/start",
         "id": request_id,
@@ -1633,6 +1734,7 @@ mod tests {
             })),
             pending_model_requests: Arc::new(Mutex::new(HashSet::new())),
             pending_control_requests: Arc::new(Mutex::new(HashMap::new())),
+            resume_tx: Mutex::new(None),
             next_request_id: Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID)),
             cwd: PathBuf::from("/tmp/repo"),
         }
@@ -1653,6 +1755,64 @@ mod tests {
             AgentProcessEvent::TurnCompleted { .. }
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn accepted_thread_resume_resolves_only_after_the_provider_response() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        *context.resume_tx.lock().unwrap() = Some(resume_tx);
+
+        assert!(resume_rx.try_recv().is_err());
+        handle_server_message(
+            &json!({
+                "id": THREAD_REQUEST_ID,
+                "result": {"thread": {"id": "thread-42"}}
+            }),
+            &context,
+        );
+
+        assert_eq!(
+            resume_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Ok(crate::bus::contract::AgentSessionResumeMode::Native)
+        );
+        handle_server_message(
+            &json!({
+                "id": THREAD_REQUEST_ID,
+                "error": {"message": "duplicate response"}
+            }),
+            &context,
+        );
+        assert!(matches!(
+            resume_rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn rejected_thread_resume_reports_failure_instead_of_native_success() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        *context.resume_tx.lock().unwrap() = Some(resume_tx);
+
+        handle_server_message(
+            &json!({
+                "id": THREAD_REQUEST_ID,
+                "error": {"message": "invalid sandbox"}
+            }),
+            &context,
+        );
+
+        let error = resume_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.category, "agent_resume_failed");
+        assert_eq!(error.message, "invalid sandbox");
     }
 
     #[test]
@@ -1682,6 +1842,67 @@ mod tests {
         assert_eq!(message["params"]["threadId"], "thread-1");
         assert_eq!(message["params"]["expectedTurnId"], "turn-7");
         assert_eq!(message["params"]["input"][0]["text"], "Ajusta también esto");
+        assert!(message["params"].get("sandboxPolicy").is_none());
+        assert!(message["params"].get("approvalPolicy").is_none());
+    }
+
+    #[test]
+    fn turn_start_uses_camel_case_sandbox_policy_for_each_permission_mode() {
+        let workspace = turn_start_message_with_permission(
+            100,
+            "thread-1",
+            "workspace turn",
+            &[],
+            Path::new("/tmp/repo"),
+            None,
+            AgentSessionPermissionMode::Workspace,
+        );
+        assert_eq!(workspace["params"]["approvalPolicy"], "never");
+        assert_eq!(
+            workspace["params"]["sandboxPolicy"]["type"],
+            "workspaceWrite"
+        );
+
+        let full_access = turn_start_message_with_permission(
+            101,
+            "thread-1",
+            "full access turn",
+            &[],
+            Path::new("/tmp/repo"),
+            None,
+            AgentSessionPermissionMode::FullAccess,
+        );
+        assert_eq!(full_access["params"]["approvalPolicy"], "never");
+        assert_eq!(
+            full_access["params"]["sandboxPolicy"]["type"],
+            "dangerFullAccess"
+        );
+    }
+
+    #[test]
+    fn queued_turn_keeps_the_mode_captured_when_it_was_enqueued() {
+        let queued = PendingTurn {
+            text: "queued".into(),
+            attachments: Vec::new(),
+            options: None,
+            permission_mode: AgentSessionPermissionMode::Workspace,
+        };
+        let selected_after_enqueue = AgentSessionPermissionMode::FullAccess;
+        let message = turn_start_message_with_permission(
+            100,
+            "thread-1",
+            &queued.text,
+            &queued.attachments,
+            Path::new("/tmp/repo"),
+            queued.options.as_ref(),
+            queued.permission_mode,
+        );
+
+        assert_eq!(
+            selected_after_enqueue,
+            AgentSessionPermissionMode::FullAccess
+        );
+        assert_eq!(message["params"]["sandboxPolicy"]["type"], "workspaceWrite");
     }
 
     #[test]
@@ -2150,7 +2371,7 @@ mod tests {
         assert_eq!(message["method"], "thread/start");
         assert_eq!(message["params"]["ephemeral"], false);
         assert_eq!(message["params"]["approvalPolicy"], "never");
-        assert_eq!(message["params"]["sandbox"], "workspaceWrite");
+        assert_eq!(message["params"]["sandbox"], "workspace-write");
     }
 
     #[test]
@@ -2162,7 +2383,7 @@ mod tests {
         );
 
         assert_eq!(message["params"]["approvalPolicy"], "never");
-        assert_eq!(message["params"]["sandbox"], "dangerFullAccess");
+        assert_eq!(message["params"]["sandbox"], "danger-full-access");
     }
 
     #[test]
@@ -2180,7 +2401,7 @@ mod tests {
             Path::new("/tmp/repo").to_string_lossy().as_ref()
         );
         assert_eq!(message["params"]["approvalPolicy"], "never");
-        assert_eq!(message["params"]["sandbox"], "workspaceWrite");
+        assert_eq!(message["params"]["sandbox"], "workspace-write");
     }
 
     #[test]

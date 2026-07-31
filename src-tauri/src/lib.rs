@@ -155,6 +155,7 @@ pub fn run() {
             bus::commands::fetch_repo,
             agent_console::commands::start_agent_session,
             agent_console::commands::stop_agent_session,
+            agent_console::commands::set_agent_session_permission_mode,
             agent_console::commands::retry_agent_session_acp,
             agent_console::commands::respond_agent_session_acp_permission,
             agent_console::commands::set_agent_session_acp_config_option,

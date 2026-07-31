@@ -211,6 +211,8 @@ describe("agent session contract types", () => {
       id: "sess-1",
       repo: "/r/api",
       agent_type: "codex",
+      permission_mode: "workspace",
+      permission_mode_change_supported: true,
       status: "running",
       pid: 42,
       started_at_ms: 1760000000000,
@@ -262,6 +264,8 @@ describe("agent session contract types", () => {
     const session = JSON.parse(wire) as AgentSession;
     expect(session.status).toEqual<AgentSessionStatus>("running");
     expect(session.agent_type).toBe("codex");
+    expect(session.permission_mode).toBe("workspace");
+    expect(session.permission_mode_change_supported).toBe(true);
     expect(session.error?.category).toBe("spawn_failed");
     expect(session.checkpoint?.checkpoint_type).toBe("git_ref");
     expect(session.change_log?.[0].kind).toBe("modified");
@@ -356,6 +360,7 @@ import {
   removeWslRepo,
   setSubscriptions,
   setAgentSessionAcpConfigOption,
+  setAgentSessionPermissionMode,
   startAgentSession,
   steerAgentSessionTurn,
   stopAgentSession,
@@ -487,6 +492,12 @@ describe("RDM-008 client wrappers", () => {
     void stopAgentSession("sess-1");
     expect(invokeMock).toHaveBeenCalledWith("stop_agent_session", {
       sessionId: "sess-1",
+    });
+
+    void setAgentSessionPermissionMode("sess-1", "full_access");
+    expect(invokeMock).toHaveBeenCalledWith("set_agent_session_permission_mode", {
+      sessionId: "sess-1",
+      permissionMode: "full_access",
     });
 
     void retryAgentSessionAcp("sess-1", true);

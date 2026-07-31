@@ -62,7 +62,6 @@ export function RepoAgentLauncher({
   onLaunch,
 }: RepoAgentLauncherProps) {
   const [agentType, setAgentType] = useState("codex");
-  const [permissionMode, setPermissionMode] = useState<AgentSessionPermissionMode>("workspace");
   const [available, setAvailable] = useState<boolean | null>(null);
   const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
   const [forceRecheckToken, setForceRecheckToken] = useState(0);
@@ -84,7 +83,6 @@ export function RepoAgentLauncher({
         if (!alive) return;
         const ok = readiness.state === "binary_available";
         setAvailable(ok);
-        if (!ok) setPermissionMode("workspace");
         setAvailabilityMessage(
           ok ? null : providerUnavailableMessage(selectedAgent.label, readiness),
         );
@@ -121,14 +119,14 @@ export function RepoAgentLauncher({
   };
 
   const launch = () => {
-    runLaunch(agentType === "codex" ? permissionMode : "workspace");
+    runLaunch("workspace");
   };
 
   const prepareInstall = () => {
     if (pending || available !== false || preparingInstall || installing) return;
     setPreparingInstall(true);
     setLaunchMessage(null);
-    prepareAgentInstall(repo, agentType, agentType === "codex" ? permissionMode : "workspace")
+    prepareAgentInstall(repo, agentType, "workspace")
       .then(setInstallPreview)
       .catch((error) =>
         setLaunchMessage(
@@ -205,7 +203,6 @@ export function RepoAgentLauncher({
           setAvailabilityMessage(null);
           setForceRecheckToken(0);
           setAgentType(event.target.value);
-          setPermissionMode("workspace");
         }}
       >
         {AGENT_OPTIONS.map((agent) => (
@@ -214,18 +211,6 @@ export function RepoAgentLauncher({
           </option>
         ))}
       </select>
-      {agentType === "codex" ? (
-        <select
-          className="repo-card__agent-select repo-card__permission-select"
-          aria-label={`Permisos de Codex para ${repoName}`}
-          value={permissionMode}
-          disabled={available === false || preparingInstall || installing || launching}
-          onChange={(event) => setPermissionMode(event.target.value as AgentSessionPermissionMode)}
-        >
-          <option value="workspace">Workspace</option>
-          <option value="full_access">Acceso completo</option>
-        </select>
-      ) : null}
       <button
         type="button"
         className="repo-card__launch"

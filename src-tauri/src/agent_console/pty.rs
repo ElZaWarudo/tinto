@@ -9,7 +9,7 @@ use std::{
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
-use super::{app_server::CodexAppServerHandle, AgentConsoleError};
+use super::{app_server::CodexAppServerHandle, AgentConsoleError, ResumeResultReceiver};
 use crate::{
     bus::contract::{
         AgentRuntimeCatalog, AgentSessionAcpPermission, AgentSessionAcpRuntime,
@@ -103,8 +103,23 @@ pub trait AgentProcess: Send {
             "este runtime no admite compactar el contexto de forma nativa",
         ))
     }
+    fn supports_permission_mode_change(&self) -> bool {
+        false
+    }
+    fn set_permission_mode(
+        &mut self,
+        _permission_mode: AgentSessionPermissionMode,
+    ) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "permission_mode_unsupported",
+            "este runtime no admite cambiar el acceso por turno",
+        ))
+    }
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError>;
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>>;
+    fn take_resume_result(&mut self) -> Option<ResumeResultReceiver> {
+        None
+    }
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
         Vec::new()
     }
@@ -907,5 +922,43 @@ mod tests {
                 OsString::from("danger-full-access"),
             ]
         );
+    }
+
+    #[test]
+    fn default_process_permission_change_is_explicitly_unsupported() {
+        struct CapabilityProbe;
+
+        impl AgentProcess for CapabilityProbe {
+            fn pid(&self) -> Option<u32> {
+                None
+            }
+
+            fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
+                Ok(None)
+            }
+
+            fn kill(&mut self) -> Result<(), AgentConsoleError> {
+                Ok(())
+            }
+
+            fn write_input(&mut self, _input: &[u8]) -> Result<(), AgentConsoleError> {
+                Ok(())
+            }
+
+            fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
+                Ok(())
+            }
+
+            fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+                None
+            }
+        }
+
+        let mut process = CapabilityProbe;
+        assert!(!process.supports_permission_mode_change());
+        let error = process
+            .set_permission_mode(AgentSessionPermissionMode::FullAccess)
+            .unwrap_err();
+        assert_eq!(error.category, "permission_mode_unsupported");
     }
 }

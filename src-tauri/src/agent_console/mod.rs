@@ -85,7 +85,7 @@ pub struct AgentSessionRegistry {
     limits: AgentSessionLimits,
 }
 
-type ResumeResultReceiver = Receiver<Result<AgentSessionResumeMode, AgentConsoleError>>;
+pub(crate) type ResumeResultReceiver = Receiver<Result<AgentSessionResumeMode, AgentConsoleError>>;
 
 fn validate_permission_mode(
     agent_type: &str,
@@ -162,7 +162,14 @@ impl AgentSessionRegistry {
         agent_type: String,
         provider_session_id: String,
         fallback_context: AgentSessionContextSummary,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
+        validate_permission_mode(&agent_type, permission_mode)?;
+        let permission_mode = if agent_type.eq_ignore_ascii_case("codex") {
+            permission_mode
+        } else {
+            AgentSessionPermissionMode::Workspace
+        };
         let repo = canonical_repo(&repo)?;
         let binary_path = resolve_agent_binary(&agent_type)?;
         self.refresh_session_statuses()?;
@@ -176,46 +183,42 @@ impl AgentSessionRegistry {
             &self.checkpoint_config,
         )?);
         let acp_provider = matches!(agent_type.as_str(), "kimi" | "opencode");
-        let (mut process, resume_result): (Box<dyn AgentProcess>, Option<ResumeResultReceiver>) =
-            if acp_provider {
-                let intent = AcpLaunchIntent::LoadSession {
-                    provider_session_id: provider_session_id.clone(),
-                    fallback_context,
-                };
-                let mut supervisor = match agent_type.as_str() {
-                    "kimi" => AcpProcessSupervisor::spawn(
-                        binary_path.clone(),
-                        repo.clone(),
-                        id.clone(),
-                        intent,
-                    )?,
-                    "opencode" => AcpProcessSupervisor::spawn_opencode(
-                        binary_path.clone(),
-                        repo.clone(),
-                        id.clone(),
-                        intent,
-                    )?,
-                    _ => unreachable!("ACP provider checked above"),
-                };
-                let resume_result = supervisor.take_resume_result();
-                (Box::new(supervisor), resume_result)
-            } else {
-                (
-                    self.process_factory.resume_agent(
-                        &binary_path,
-                        &repo,
-                        &provider_session_id,
-                        AgentSessionPermissionMode::Workspace,
-                    )?,
-                    None,
-                )
+        let mut process: Box<dyn AgentProcess> = if acp_provider {
+            let intent = AcpLaunchIntent::LoadSession {
+                provider_session_id: provider_session_id.clone(),
+                fallback_context,
             };
+            let supervisor = match agent_type.as_str() {
+                "kimi" => AcpProcessSupervisor::spawn(
+                    binary_path.clone(),
+                    repo.clone(),
+                    id.clone(),
+                    intent,
+                )?,
+                "opencode" => AcpProcessSupervisor::spawn_opencode(
+                    binary_path.clone(),
+                    repo.clone(),
+                    id.clone(),
+                    intent,
+                )?,
+                _ => unreachable!("ACP provider checked above"),
+            };
+            Box::new(supervisor)
+        } else {
+            self.process_factory.resume_agent(
+                &binary_path,
+                &repo,
+                &provider_session_id,
+                permission_mode,
+            )?
+        };
+        let resume_result = process.take_resume_result();
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
             id.clone(),
             repo,
             agent_type,
-            AgentSessionPermissionMode::Workspace,
+            permission_mode,
             started_at_ms,
             checkpoint,
             self.checkpoint_config.clone(),
@@ -328,7 +331,14 @@ impl AgentSessionRegistry {
         distro: String,
         agent_type: String,
         provider_session_id: String,
+        permission_mode: AgentSessionPermissionMode,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
+        validate_permission_mode(&agent_type, permission_mode)?;
+        let permission_mode = if agent_type.eq_ignore_ascii_case("codex") {
+            permission_mode
+        } else {
+            AgentSessionPermissionMode::Workspace
+        };
         validate_wsl_repo(&repo)?;
         validate_agent_type(&agent_type)?;
         ensure_wsl_agent_binary_via_agent(&distro, &agent_type)?;
@@ -342,14 +352,15 @@ impl AgentSessionRegistry {
             &distro,
             &repo,
             &provider_session_id,
-            AgentSessionPermissionMode::Workspace,
+            permission_mode,
         )?;
+        let resume_result = process.take_resume_result();
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
             id.clone(),
             repo,
             agent_type,
-            AgentSessionPermissionMode::Workspace,
+            permission_mode,
             started_at_ms,
             checkpoint,
             self.checkpoint_config.clone(),
@@ -362,7 +373,7 @@ impl AgentSessionRegistry {
         Ok(StartedAgentSession {
             id,
             output_reader,
-            resume_result: None,
+            resume_result,
         })
     }
 
@@ -723,6 +734,19 @@ impl AgentSessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         session.set_runtime_options(options);
+        Ok(session.to_contract())
+    }
+
+    pub fn set_session_permission_mode(
+        &mut self,
+        session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<AgentSession, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.set_permission_mode(permission_mode)?;
         Ok(session.to_contract())
     }
 
@@ -1389,6 +1413,30 @@ mod tests {
             &[b"hello\r".to_vec()]
         );
         assert_eq!(factory.resizes.lock().unwrap().as_slice(), &[(120, 36)]);
+    }
+
+    #[test]
+    fn registry_rejects_permission_change_when_process_cannot_apply_it() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+
+        let error = registry
+            .set_session_permission_mode(&id, AgentSessionPermissionMode::FullAccess)
+            .unwrap_err();
+
+        assert_eq!(error.category, "permission_mode_unsupported");
+        let session = registry.get_session(&id).unwrap();
+        assert_eq!(
+            session.permission_mode,
+            Some(AgentSessionPermissionMode::Workspace)
+        );
+        assert!(!session.permission_mode_change_supported);
     }
 
     #[test]

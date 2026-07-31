@@ -16,6 +16,7 @@ import {
   respondAgentSessionAcpPermission,
   resumeAgentJournalSession,
   retryAgentSessionAcp,
+  setAgentSessionPermissionMode,
   setAgentSessionAcpConfigOption,
   revertSession,
   revertSessionTurnFile,
@@ -40,6 +41,7 @@ import type {
   AgentSessionAcpRuntime,
   AgentSessionAttachment,
   AgentSession,
+  AgentSessionPermissionMode,
   AgentSessionResumeMode,
   AgentSessionRuntimeOptions,
   AgentSessionOutput,
@@ -663,6 +665,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   const [runtimeCatalog, setRuntimeCatalog] = useState<AgentRuntimeCatalog | null>(null);
   const [runtimeCatalogRefreshKey, setRuntimeCatalogRefreshKey] = useState(0);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [permissionModeChanging, setPermissionModeChanging] = useState(false);
   const [mascotAwake, setMascotAwake] = useState(false);
   const [reviewSummary, setReviewSummary] = useState<AgentReviewSummary | null>(null);
   const [reviewFindings, setReviewFindings] = useState<AgentReviewFinding[]>([]);
@@ -2019,6 +2022,33 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     }
   };
 
+  const onPermissionModeChange = async (permissionMode: AgentSessionPermissionMode) => {
+    if (
+      !sessionId ||
+      !session ||
+      permissionModeChanging ||
+      session.permission_mode_change_supported !== true ||
+      session.permission_mode === permissionMode
+    ) {
+      return;
+    }
+    setPermissionModeChanging(true);
+    setRuntimeNotice(null);
+    try {
+      const updated = await setAgentSessionPermissionMode(sessionId, permissionMode);
+      agentSessionStore.upsertSession(updated);
+    } catch (permissionError) {
+      setRuntimeNotice(
+        reportAgentFailure(
+          permissionError,
+          "No se pudo cambiar el acceso; la sesión conserva el modo anterior.",
+        ),
+      );
+    } finally {
+      setPermissionModeChanging(false);
+    }
+  };
+
   const onRevertTurnFile = async (turnCheckpointId: string, path: string) => {
     if (!sessionId || !canRevertTurnFile || revertingFile) return;
     const ok = await confirm(`¿Revertir el archivo ${path} al punto de control de este turno?`, {
@@ -2489,6 +2519,12 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             providerLabel={runtimeProvider.label}
             menu={runtimeMenu}
             model={selectedModel}
+            onPermissionModeChange={onPermissionModeChange}
+            permissionMode={session?.permission_mode ?? "workspace"}
+            permissionModeChangeSupported={
+              isCodexSession && session?.permission_mode_change_supported === true
+            }
+            permissionModeChanging={permissionModeChanging}
             reasoning={selectedReasoning}
             speed={selectedSpeed}
             disabled={!composerEnabled}

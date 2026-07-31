@@ -335,6 +335,8 @@ pub async fn resume_agent_journal_session(
     let resolved = ensure_known_agent_repo(&bus, &archived.repo).await?;
     let native_resume_id = archived.provider_session_id.clone();
     let fallback_context = resume_context_summary(&archived);
+    let archived_permission_mode =
+        permission_mode_for_resume(&archived.agent_type, archived.permission_mode);
     let (mut started, mut mode) = {
         let mut registry = lock_registry(&registry)?;
         let native = native_resume_id.as_deref().and_then(|provider_session_id| {
@@ -344,12 +346,14 @@ pub async fn resume_agent_journal_session(
                     archived.agent_type.clone(),
                     provider_session_id.to_string(),
                     fallback_context.clone(),
+                    archived_permission_mode,
                 ),
                 RepoSource::Wsl => registry.resume_wsl_session_with_output(
                     resolved.path.clone(),
                     resolved.distro.clone()?,
                     archived.agent_type.clone(),
                     provider_session_id.to_string(),
+                    archived_permission_mode,
                 ),
             };
             result.ok()
@@ -361,7 +365,7 @@ pub async fn resume_agent_journal_session(
                     RepoSource::Local => registry.start_session_with_output(
                         resolved.path.clone(),
                         archived.agent_type.clone(),
-                        AgentSessionPermissionMode::Workspace,
+                        archived_permission_mode,
                     )?,
                     RepoSource::Wsl => registry.start_wsl_session_with_output(
                         resolved.path.clone(),
@@ -369,7 +373,7 @@ pub async fn resume_agent_journal_session(
                             CommandError::new("missing_distro", "repo WSL sin distro")
                         })?,
                         archived.agent_type.clone(),
-                        AgentSessionPermissionMode::Workspace,
+                        archived_permission_mode,
                     )?,
                 };
                 (started, AgentSessionResumeMode::ContextBridge)
@@ -480,6 +484,17 @@ pub async fn resume_agent_journal_session(
         session_id: started.id,
         mode,
     })
+}
+
+fn permission_mode_for_resume(
+    agent_type: &str,
+    archived_mode: Option<AgentSessionPermissionMode>,
+) -> AgentSessionPermissionMode {
+    if agent_type.eq_ignore_ascii_case("codex") {
+        archived_mode.unwrap_or_default()
+    } else {
+        AgentSessionPermissionMode::Workspace
+    }
 }
 
 fn should_restore_archived_goal(agent_type: &str, mode: AgentSessionResumeMode) -> bool {
@@ -706,6 +721,57 @@ pub fn stop_agent_session(
         .map_err(CommandError::from)?;
     emit_sessions_snapshot(&app, &registry.list_sessions());
     Ok(())
+}
+
+#[tauri::command]
+pub async fn set_agent_session_permission_mode(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    permission_mode: AgentSessionPermissionMode,
+) -> Result<AgentSession, CommandError> {
+    let (repo, current_mode, status, supported) = {
+        let registry = lock_registry(&registry)?;
+        let session = registry
+            .get_session(&session_id)
+            .ok_or_else(|| CommandError::from(AgentConsoleError::session_not_found(&session_id)))?;
+        (
+            session.repo,
+            session.permission_mode,
+            session.status,
+            session.permission_mode_change_supported,
+        )
+    };
+    if current_mode.is_none() {
+        return Err(CommandError::new(
+            "permission_mode_unsupported",
+            "el acceso dinamico solo esta disponible para Codex",
+        ));
+    }
+    if !matches!(status, AgentSessionStatus::Running) {
+        return Err(CommandError::new(
+            "session_not_running",
+            "la sesion no esta ejecutandose",
+        ));
+    }
+    if !supported {
+        return Err(CommandError::new(
+            "permission_mode_unsupported",
+            "este runtime no admite cambiar el acceso por turno",
+        ));
+    }
+    if permission_mode == AgentSessionPermissionMode::FullAccess {
+        confirm_full_access_launch(&app, &repo).await?;
+    }
+
+    let session = {
+        let mut registry = lock_registry(&registry)?;
+        registry
+            .set_session_permission_mode(&session_id, permission_mode)
+            .map_err(CommandError::from)?
+    };
+    refresh_and_emit_sessions(&app);
+    Ok(session)
 }
 
 #[tauri::command]
@@ -3286,6 +3352,13 @@ mod tests {
     }
 
     #[test]
+    fn permission_change_reuses_full_access_confirmation_contract() {
+        let declined = require_full_access_confirmation(Ok(false)).unwrap_err();
+        assert_eq!(declined.category, "full_access_declined");
+        assert!(require_full_access_confirmation(Ok(true)).is_ok());
+    }
+
+    #[test]
     fn journal_delete_requires_explicit_user_consent() {
         let error = require_journal_delete_user_consent(false).unwrap_err();
 
@@ -3372,6 +3445,22 @@ mod tests {
             "codex",
             AgentSessionResumeMode::ContextBridge
         ));
+    }
+
+    #[test]
+    fn resume_uses_archived_codex_permission_without_exposing_it_for_acp() {
+        assert_eq!(
+            permission_mode_for_resume("codex", Some(AgentSessionPermissionMode::FullAccess)),
+            AgentSessionPermissionMode::FullAccess
+        );
+        assert_eq!(
+            permission_mode_for_resume("codex", None),
+            AgentSessionPermissionMode::Workspace
+        );
+        assert_eq!(
+            permission_mode_for_resume("kimi", Some(AgentSessionPermissionMode::FullAccess)),
+            AgentSessionPermissionMode::Workspace
+        );
     }
 
     #[test]

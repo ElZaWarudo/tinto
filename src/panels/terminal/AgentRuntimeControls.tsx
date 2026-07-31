@@ -9,6 +9,7 @@ import type {
   AgentRuntimeCatalog,
   AgentRuntimeModel,
   AgentRuntimeReasoningEffort,
+  AgentSessionPermissionMode,
 } from "../../bus/contract";
 import {
   codexModelLabel,
@@ -48,6 +49,7 @@ export function AgentRuntimeControls({
   menu,
   model,
   notice,
+  onPermissionModeChange = () => {},
   onMenuChange,
   onModelChange,
   onPresetApply,
@@ -55,6 +57,9 @@ export function AgentRuntimeControls({
   onRefreshCatalog,
   onSpeedChange,
   providerLabel,
+  permissionMode = "workspace",
+  permissionModeChangeSupported = false,
+  permissionModeChanging = false,
   reasoning,
   speed,
 }: {
@@ -64,6 +69,7 @@ export function AgentRuntimeControls({
   menu: CodexRuntimeMenu;
   model: CodexModelSelection;
   notice: string | null;
+  onPermissionModeChange?: (value: AgentSessionPermissionMode) => void;
   onMenuChange: (menu: CodexRuntimeMenu) => void;
   onModelChange: (value: CodexModelSelection) => void;
   onPresetApply: (preset: RuntimePreset) => void;
@@ -71,6 +77,9 @@ export function AgentRuntimeControls({
   onRefreshCatalog: () => void;
   onSpeedChange: (value: CodexSpeedSelection) => void;
   providerLabel: string;
+  permissionMode?: AgentSessionPermissionMode;
+  permissionModeChangeSupported?: boolean;
+  permissionModeChanging?: boolean;
   reasoning: CodexReasoningSelection;
   speed: CodexSpeedSelection;
 }) {
@@ -223,6 +232,7 @@ export function AgentRuntimeControls({
   const showReasoning = menu === "reasoning" || menu === "summary";
   const showSpeed = menu === "speed" || menu === "summary";
   const showPresets = menu === "presets";
+  const showPermission = menu === "summary" && permissionModeChangeSupported;
   const resolvedModel = effectiveRuntimeModel(catalog, model);
   const modelDisplay =
     model === "auto" && resolvedModel
@@ -311,6 +321,15 @@ export function AgentRuntimeControls({
             </div>
           </header>
           <div className="agent-panel__runtime-inspector-body">
+            {showPermission && (
+              <RuntimeChoiceGroup
+                choices={permissionModeChoices(permissionMode, permissionModeChanging)}
+                legend="Acceso"
+                name={`${idBase}-permission-mode`}
+                onChange={(value) => onPermissionModeChange(value as AgentSessionPermissionMode)}
+                value={permissionMode}
+              />
+            )}
             {showPresets && (
               <RuntimePresetPanel
                 activePresetId={activePreset?.id ?? null}
@@ -797,6 +816,29 @@ function runtimeSpeedChoices(
         ]
       : []),
   ];
+}
+
+function permissionModeChoices(
+  selected: AgentSessionPermissionMode,
+  disabled: boolean,
+): RuntimeChoice[] {
+  return [
+    {
+      value: "workspace",
+      label: "Workspace",
+      meta: "Solo el repositorio y sus archivos permitidos",
+      disabled,
+    },
+    {
+      value: "full_access",
+      label: "Acceso completo",
+      meta: "Fuera del workspace y comandos del sistema",
+      disabled,
+    },
+  ].map((choice) => ({
+    ...choice,
+    mark: choice.value === selected ? "ACTIVO" : undefined,
+  }));
 }
 
 function reasoningChoice(effort: AgentRuntimeReasoningEffort): RuntimeChoice {

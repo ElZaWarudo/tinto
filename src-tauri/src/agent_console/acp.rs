@@ -1599,12 +1599,6 @@ impl AcpProcessSupervisor {
         })
     }
 
-    pub(crate) fn take_resume_result(
-        &mut self,
-    ) -> Option<Receiver<Result<AgentSessionResumeMode, AgentConsoleError>>> {
-        self.resume_result.take()
-    }
-
     fn send_prompt(
         &self,
         text: String,
@@ -1785,6 +1779,12 @@ impl AgentProcess for AcpProcessSupervisor {
         self.output_reader
             .take()
             .map(|reader| Box::new(reader) as Box<dyn Read + Send>)
+    }
+
+    fn take_resume_result(
+        &mut self,
+    ) -> Option<Receiver<Result<AgentSessionResumeMode, AgentConsoleError>>> {
+        self.resume_result.take()
     }
 
     fn drain_events(&mut self) -> Vec<AgentProcessEvent> {

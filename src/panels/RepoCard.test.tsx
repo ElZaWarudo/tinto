@@ -315,8 +315,7 @@ describe("RepoCard", () => {
     expect(screen.getByText("WSL Ubuntu-24.04")).toBeInTheDocument();
     expect(screen.getByText("npm install -g @openai/codex")).toBeInTheDocument();
     expect(screen.getByText(/sin privilegios elevados/i)).toBeInTheDocument();
-    expect(screen.getByLabelText("Permisos de Codex para api")).toHaveValue("workspace");
-    expect(screen.getByLabelText("Permisos de Codex para api")).toBeDisabled();
+    expect(screen.queryByLabelText("Permisos de Codex para api")).not.toBeInTheDocument();
     expect(clientMocks.prepareAgentInstall).toHaveBeenCalledWith("/r/api", "codex", "workspace");
     expect(onLaunch).not.toHaveBeenCalled();
   });
@@ -433,16 +432,13 @@ describe("RepoCard", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("requests a backend-confirmed Codex launch with full access", async () => {
+  it("does not expose an access selector in the launcher and starts Codex in workspace", async () => {
     const { onLaunch } = renderCard();
     await screen.findByRole("button", { name: "Iniciar Codex en api" });
-    fireEvent.change(screen.getByLabelText("Permisos de Codex para api"), {
-      target: { value: "full_access" },
-    });
-
+    expect(screen.queryByLabelText("Permisos de Codex para api")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("agent-launch"));
 
-    expect(onLaunch).toHaveBeenCalledWith("codex", "full_access");
+    expect(onLaunch).toHaveBeenCalledWith("codex", "workspace");
   });
 
   it("checks availability when the selected agent changes", async () => {

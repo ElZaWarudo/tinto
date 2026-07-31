@@ -7,8 +7,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::bus::contract::{
     AgentJournalSessionSummary, AgentSession, AgentSessionContextSummary, AgentSessionFeedback,
-    AgentSessionGoal, AgentSessionPersonality, AgentSessionPlanMode, AgentSessionStatus,
-    AgentSessionTimelineItem, AgentSessionTurnStatus,
+    AgentSessionGoal, AgentSessionPermissionMode, AgentSessionPersonality, AgentSessionPlanMode,
+    AgentSessionStatus, AgentSessionTimelineItem, AgentSessionTurnStatus,
 };
 
 #[derive(Debug)]
@@ -64,6 +64,7 @@ impl AgentJournal {
               repo TEXT NOT NULL,
               agent_type TEXT NOT NULL,
               provider_session_id TEXT,
+              permission_mode TEXT,
               source_kind TEXT NOT NULL DEFAULT 'local',
               distro TEXT,
               status TEXT NOT NULL,
@@ -115,6 +116,7 @@ impl AgentJournal {
         )?;
         self.ensure_agent_sessions_column("restored_to_turn_index", "INTEGER")?;
         self.ensure_agent_sessions_column("provider_session_id", "TEXT")?;
+        self.ensure_agent_sessions_column("permission_mode", "TEXT")?;
         self.ensure_agent_sessions_column("goal_text", "TEXT")?;
         self.ensure_agent_sessions_column("goal_updated_at_ms", "INTEGER")?;
         self.ensure_agent_sessions_column("goal_json", "TEXT")?;
@@ -198,6 +200,12 @@ impl AgentJournal {
             .context_summary
             .as_ref()
             .map(|summary| summary.source_turns as i64);
+        let permission_mode = session
+            .agent_type
+            .eq_ignore_ascii_case("codex")
+            .then_some(session.permission_mode)
+            .flatten()
+            .map(permission_mode_name);
         let updated_at_ms = now_ms() as i64;
         self.conn.execute(
             r#"
@@ -207,8 +215,8 @@ impl AgentJournal {
               goal_text, goal_updated_at_ms, goal_json, personality_name,
               personality_updated_at_ms, plan_mode_enabled, plan_mode_updated_at_ms,
               feedback_json, context_summary_text, context_summary_created_at_ms,
-              context_summary_source_events, context_summary_source_turns
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+              context_summary_source_events, context_summary_source_turns, permission_mode
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
             ON CONFLICT(id) DO UPDATE SET
               repo = excluded.repo,
               agent_type = excluded.agent_type,
@@ -230,7 +238,8 @@ impl AgentJournal {
               context_summary_text = excluded.context_summary_text,
               context_summary_created_at_ms = excluded.context_summary_created_at_ms,
               context_summary_source_events = excluded.context_summary_source_events,
-              context_summary_source_turns = excluded.context_summary_source_turns
+              context_summary_source_turns = excluded.context_summary_source_turns,
+              permission_mode = excluded.permission_mode
             "#,
             params![
                 &session.id,
@@ -260,6 +269,7 @@ impl AgentJournal {
                 context_summary_created_at_ms,
                 context_summary_source_events,
                 context_summary_source_turns,
+                permission_mode,
             ],
         )?;
         Ok(())
@@ -410,7 +420,8 @@ impl AgentJournal {
                   plan_mode_enabled, plan_mode_updated_at_ms,
                   feedback_json,
                   context_summary_text, context_summary_created_at_ms,
-                  context_summary_source_events, context_summary_source_turns
+                  context_summary_source_events, context_summary_source_turns,
+                  permission_mode
                 FROM agent_sessions
                 WHERE id = ?1
                 "#,
@@ -438,6 +449,7 @@ impl AgentJournal {
                         row.get::<_, Option<i64>>(18)?,
                         row.get::<_, Option<i64>>(19)?,
                         row.get::<_, Option<i64>>(20)?,
+                        row.get::<_, Option<String>>(21)?,
                     ))
                 },
             )
@@ -464,6 +476,7 @@ impl AgentJournal {
             context_summary_created_at_ms,
             context_summary_source_events,
             context_summary_source_turns,
+            permission_mode,
         )) = session
         else {
             return Ok(None);
@@ -475,11 +488,17 @@ impl AgentJournal {
             .unwrap_or_default();
         let ended_at_ms = ended_at_ms.map(|value| value as u64);
         let status = archived_status(status_from_name(&status), ended_at_ms);
+        let permission_mode = if agent_type.eq_ignore_ascii_case("codex") {
+            Some(permission_mode_from_name(permission_mode.as_deref()))
+        } else {
+            None
+        };
         Ok(Some(AgentSession {
             id,
             repo: PathBuf::from(repo),
             agent_type,
-            permission_mode: None,
+            permission_mode,
+            permission_mode_change_supported: false,
             provider_session_id,
             acp_runtime: None,
             acp_permissions: Vec::new(),
@@ -562,6 +581,20 @@ fn status_name(status: AgentSessionStatus) -> &'static str {
     }
 }
 
+fn permission_mode_name(mode: AgentSessionPermissionMode) -> &'static str {
+    match mode {
+        AgentSessionPermissionMode::Workspace => "workspace",
+        AgentSessionPermissionMode::FullAccess => "full_access",
+    }
+}
+
+fn permission_mode_from_name(mode: Option<&str>) -> AgentSessionPermissionMode {
+    match mode {
+        Some("full_access") => AgentSessionPermissionMode::FullAccess,
+        _ => AgentSessionPermissionMode::Workspace,
+    }
+}
+
 fn status_from_name(status: &str) -> AgentSessionStatus {
     match status {
         "starting" => AgentSessionStatus::Starting,
@@ -599,7 +632,7 @@ mod tests {
     use crate::bus::contract::{
         AgentSession, AgentSessionAcpMode, AgentSessionAcpPermission,
         AgentSessionAcpPermissionState, AgentSessionAcpRuntime, AgentSessionAcpState,
-        AgentSessionTimelineKind,
+        AgentSessionPermissionMode, AgentSessionTimelineKind,
     };
 
     fn session(id: &str) -> AgentSession {
@@ -608,6 +641,7 @@ mod tests {
             repo: PathBuf::from("/repo"),
             agent_type: "codex".to_string(),
             permission_mode: None,
+            permission_mode_change_supported: false,
             provider_session_id: Some("thread-1".to_string()),
             acp_runtime: None,
             acp_permissions: Vec::new(),
@@ -954,5 +988,65 @@ mod tests {
         assert!(archived.checkpoint.is_none());
         assert!(archived.context_usage.is_none());
         assert!(!archived.turn_interrupt_supported);
+    }
+
+    #[test]
+    fn journal_roundtrips_codex_permission_mode_but_archived_capability_stays_false() {
+        for (index, mode) in [
+            AgentSessionPermissionMode::Workspace,
+            AgentSessionPermissionMode::FullAccess,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let journal = AgentJournal::open_in_memory().expect("journal");
+            let mut live = session(&format!("sess-{index}"));
+            live.permission_mode = Some(mode);
+            journal.record_session(&live).expect("session");
+
+            let archived = journal
+                .session_from_journal(&format!("sess-{index}"))
+                .expect("read")
+                .expect("session");
+
+            assert_eq!(archived.permission_mode, Some(mode));
+            assert!(!archived.permission_mode_change_supported);
+        }
+    }
+
+    #[test]
+    fn journal_uses_workspace_for_legacy_codex_rows_and_hides_non_codex_modes() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut legacy = session("legacy-codex");
+        legacy.permission_mode = None;
+        journal.record_session(&legacy).expect("session");
+        journal
+            .conn
+            .execute(
+                "UPDATE agent_sessions SET permission_mode = NULL WHERE id = ?1",
+                params!["legacy-codex"],
+            )
+            .expect("legacy mode");
+
+        let archived = journal
+            .session_from_journal("legacy-codex")
+            .expect("read")
+            .expect("session");
+        assert_eq!(
+            archived.permission_mode,
+            Some(AgentSessionPermissionMode::Workspace)
+        );
+        assert!(!archived.permission_mode_change_supported);
+
+        let mut acp = session("acp");
+        acp.agent_type = "kimi".to_string();
+        acp.permission_mode = Some(AgentSessionPermissionMode::FullAccess);
+        journal.record_session(&acp).expect("acp session");
+        let archived_acp = journal
+            .session_from_journal("acp")
+            .expect("read acp")
+            .expect("acp session");
+        assert_eq!(archived_acp.permission_mode, None);
+        assert!(!archived_acp.permission_mode_change_supported);
     }
 }

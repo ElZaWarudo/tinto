@@ -7,6 +7,7 @@ import type {
   AgentHostCommandResult,
   AgentRuntimeCatalog,
   AgentSession,
+  AgentSessionPermissionMode,
   FileDiff,
   RepoDelta,
 } from "../../bus/contract";
@@ -60,6 +61,8 @@ const stopAgentSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
 });
+const setAgentSessionPermissionModeMock =
+  vi.fn<(sessionId: string, permissionMode: AgentSessionPermissionMode) => Promise<AgentSession>>();
 const interruptAgentSessionTurnMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
@@ -106,6 +109,8 @@ vi.mock("../../bus/client", () => ({
   resumeAgentJournalSession: (sessionId: string) => resumeAgentJournalSessionMock(sessionId),
   retryAgentSessionAcp: (...a: unknown[]) => retryAgentSessionAcpMock(...a),
   setAgentSessionAcpConfigOption: (...a: unknown[]) => setAgentSessionAcpConfigOptionMock(...a),
+  setAgentSessionPermissionMode: (sessionId: string, permissionMode: AgentSessionPermissionMode) =>
+    setAgentSessionPermissionModeMock(sessionId, permissionMode),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
   restoreSessionTurn: (...a: unknown[]) => restoreSessionTurnMock(...a),
@@ -316,6 +321,7 @@ describe("TerminalPanel", () => {
     revertSessionTurnFileMock.mockClear();
     restoreSessionTurnMock.mockClear();
     stopAgentSessionMock.mockClear();
+    setAgentSessionPermissionModeMock.mockReset();
     retryAgentSessionAcpMock.mockClear();
     respondAgentSessionAcpPermissionMock.mockClear();
     setAgentSessionAcpConfigOptionMock.mockClear();
@@ -389,6 +395,60 @@ describe("TerminalPanel", () => {
       "title",
       "Permisos efectivos de esta sesión",
     );
+  });
+
+  it("shows the Codex access selector only when the session supports dynamic changes", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ permission_mode_change_supported: true }),
+    ]);
+    setAgentSessionPermissionModeMock.mockResolvedValueOnce(
+      sessionFixture({ permission_mode: "full_access", permission_mode_change_supported: true }),
+    );
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await user.click(await screen.findByRole("button", { name: /Configuración guardada/ }));
+    await user.click(screen.getByRole("button", { name: /Configurar ejecuci/ }));
+    const access = screen.getByRole("radio", { name: /^Acceso completo/ });
+    expect(access).not.toBeChecked();
+    await user.click(access);
+
+    await waitFor(() =>
+      expect(setAgentSessionPermissionModeMock).toHaveBeenCalledWith("sess-1", "full_access"),
+    );
+    expect(access).toBeChecked();
+  });
+
+  it("does not offer an access selector for Codex sessions without dynamic support", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await user.click(await screen.findByRole("button", { name: /Configuración guardada/ }));
+    await user.click(screen.getByRole("button", { name: /Configurar ejecuci/ }));
+    expect(screen.queryByRole("radio", { name: "Acceso completo" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the previous access and shows a notice when the backend rejects a change", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ permission_mode_change_supported: true }),
+    ]);
+    setAgentSessionPermissionModeMock.mockRejectedValueOnce(new Error("full access declined"));
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await user.click(await screen.findByRole("button", { name: /Configuración guardada/ }));
+    await user.click(screen.getByRole("button", { name: /Configurar ejecuci/ }));
+    const workspace = screen.getByRole("radio", { name: /^Workspace/ });
+    await user.click(screen.getByRole("radio", { name: /^Acceso completo/ }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/No se pudo cambiar el acceso/)).toBeInTheDocument(),
+    );
+    expect(workspace).toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Acceso completo/ })).not.toBeChecked();
   });
 
   it("renders every ACP state, gates input, and confirms PTY migration", async () => {
@@ -1333,12 +1393,14 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
     await screen.findByText("1 en cola");
 
-    expect(JSON.parse(localStorage.getItem("tinto.agent-message-queues.v1") ?? "{}")).not.toHaveProperty(
-      "sess-1",
+    expect(
+      JSON.parse(localStorage.getItem("tinto.agent-message-queues.v1") ?? "{}"),
+    ).not.toHaveProperty("sess-1");
+    expect(JSON.parse(localStorage.getItem("tinto.agent-message-queues.v2") ?? "{}")).toMatchObject(
+      {
+        "sess-1": { messages: [legacyMessage], paused: false },
+      },
     );
-    expect(JSON.parse(localStorage.getItem("tinto.agent-message-queues.v2") ?? "{}")).toMatchObject({
-      "sess-1": { messages: [legacyMessage], paused: false },
-    });
   });
 
   it("continues restored queue ids after the highest persisted suffix", async () => {
@@ -1397,12 +1459,9 @@ describe("TerminalPanel", () => {
     );
 
     await waitFor(() =>
-      expect(writeAgentSessionTurnMock).toHaveBeenCalledWith(
-        "sess-1",
-        "Usa rápido",
-        [],
-        { speed: "fast" },
-      ),
+      expect(writeAgentSessionTurnMock).toHaveBeenCalledWith("sess-1", "Usa rápido", [], {
+        speed: "fast",
+      }),
     );
   });
 

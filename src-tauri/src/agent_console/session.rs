@@ -7,9 +7,8 @@ use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionAcpPermission, AgentSessionAcpRuntime,
     AgentSessionChange, AgentSessionContextSummary, AgentSessionContextUsage, AgentSessionError,
     AgentSessionFeedback, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode,
-    AgentSessionPersonality,
-    AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
-    AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
+    AgentSessionPersonality, AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus,
+    AgentSessionTimelineItem, AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
 };
 use crate::wsl_agent::{
     launcher::{request_wsl_agent, windows_path_to_wsl_mount},
@@ -292,6 +291,39 @@ impl AgentSessionRecord {
             self.note_turn_activity(now_ms());
         }
         result
+    }
+
+    pub fn set_permission_mode(
+        &mut self,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<(), AgentConsoleError> {
+        self.error = None;
+        if permission_mode == AgentSessionPermissionMode::FullAccess
+            && !self.agent_type.eq_ignore_ascii_case("codex")
+        {
+            return Err(AgentConsoleError::new(
+                "permission_mode_unsupported",
+                "el acceso completo solo esta disponible para Codex",
+            ));
+        }
+        if self.status != AgentSessionStatus::Running {
+            return Err(AgentConsoleError::new(
+                "session_not_running",
+                "la sesion no esta ejecutandose",
+            ));
+        }
+        let process = self.process.as_mut().ok_or_else(|| {
+            AgentConsoleError::new("session_not_running", "la sesion no esta ejecutandose")
+        })?;
+        if !process.supports_permission_mode_change() {
+            return Err(AgentConsoleError::new(
+                "permission_mode_unsupported",
+                "este runtime no admite cambiar el acceso por turno",
+            ));
+        }
+        process.set_permission_mode(permission_mode)?;
+        self.permission_mode = permission_mode;
+        Ok(())
     }
 
     pub fn steer_turn(
@@ -867,6 +899,11 @@ impl AgentSessionRecord {
                 .agent_type
                 .eq_ignore_ascii_case("codex")
                 .then_some(self.permission_mode),
+            permission_mode_change_supported: self.status == AgentSessionStatus::Running
+                && self
+                    .process
+                    .as_ref()
+                    .is_some_and(|process| process.supports_permission_mode_change()),
             provider_session_id: self.provider_session_id.clone(),
             acp_runtime: self.acp_runtime.clone(),
             acp_permissions: self.acp_permissions.clone(),
@@ -1628,6 +1665,47 @@ mod tests {
         }
     }
 
+    struct PermissionProcess {
+        result: Option<AgentConsoleError>,
+    }
+
+    impl AgentProcess for PermissionProcess {
+        fn pid(&self) -> Option<u32> {
+            Some(42)
+        }
+
+        fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
+            Ok(None)
+        }
+
+        fn kill(&mut self) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn write_input(&mut self, _input: &[u8]) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+            None
+        }
+
+        fn supports_permission_mode_change(&self) -> bool {
+            true
+        }
+
+        fn set_permission_mode(
+            &mut self,
+            _permission_mode: AgentSessionPermissionMode,
+        ) -> Result<(), AgentConsoleError> {
+            self.result.take().map_or(Ok(()), Err)
+        }
+    }
+
     fn session_record() -> (tempfile::TempDir, tempfile::TempDir, AgentSessionRecord) {
         let repo = tempfile::tempdir().unwrap();
         let checkpoint_dir = tempfile::tempdir().unwrap();
@@ -1677,6 +1755,45 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.status, AgentSessionStatus::Completed);
         assert_eq!(contract.exit_code, Some(0));
+    }
+
+    #[test]
+    fn permission_mode_changes_only_after_process_accepts_it() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        session
+            .start(Box::new(PermissionProcess { result: None }))
+            .unwrap();
+
+        assert!(session.to_contract().permission_mode_change_supported);
+        session
+            .set_permission_mode(AgentSessionPermissionMode::FullAccess)
+            .unwrap();
+        assert_eq!(
+            session.to_contract().permission_mode,
+            Some(AgentSessionPermissionMode::FullAccess)
+        );
+    }
+
+    #[test]
+    fn rejected_permission_mode_change_does_not_mutate_session() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        session
+            .start(Box::new(PermissionProcess {
+                result: Some(AgentConsoleError::new(
+                    "provider_control_failed",
+                    "rejected",
+                )),
+            }))
+            .unwrap();
+
+        let error = session
+            .set_permission_mode(AgentSessionPermissionMode::FullAccess)
+            .unwrap_err();
+        assert_eq!(error.category, "provider_control_failed");
+        assert_eq!(
+            session.to_contract().permission_mode,
+            Some(AgentSessionPermissionMode::Workspace)
+        );
     }
 
     #[test]
