@@ -2,7 +2,8 @@
   "version": 1,
   "launch": {
     "command": "npm",
-    "args": ["run", "tauri", "--", "dev", "--features", "pumarejo", "--config", "{tauriConfig}"]
+    "args": ["run", "tauri", "--", "dev", "--features", "pumarejo", "--config", "{tauriConfig}"],
+    "pathPrepend": ["C:\\Users\\User\\.cargo\\bin"]
   },
   "window": "main",
   "artifactsDirectory": ".pumarejo/artifacts",
