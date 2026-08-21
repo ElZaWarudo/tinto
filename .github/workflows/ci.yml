@@ -179,7 +179,7 @@ jobs:
         run: npm ci
 
       - name: Download WSL agent resource
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tinto-agent-linux-x86_64
           path: src-tauri/resources
@@ -218,7 +218,7 @@ jobs:
         run: npm ci
 
       - name: Download WSL agent resource
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tinto-agent-linux-x86_64
           path: src-tauri/resources
