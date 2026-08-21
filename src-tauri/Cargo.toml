@@ -48,7 +48,7 @@ uuid = { version = "1", features = ["v4"] }
 which = "6"
 # Capa de lectura de git: libgit2 vendored (build estático, sin red — no se necesitan
 # features ssh/https porque Tinto nunca hace fetch/push)
-git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 thiserror = "2"
 # Clasificación de paths: reglas .gitignore (crate de ripgrep) + globs de watchlist
 ignore = "0.4"
