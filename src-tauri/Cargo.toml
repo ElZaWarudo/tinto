@@ -65,7 +65,7 @@ tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 flate2 = "1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
