@@ -26,10 +26,26 @@ export default defineConfig(async () => ({
         // Keep the large, stable UI runtimes out of the application chunk.
         // Besides avoiding a monolithic entry bundle, this lets WebView reuse
         // vendor chunks when Tinto's own code changes between releases.
-        manualChunks: {
-          "vendor-dockview": ["dockview-react"],
-          "vendor-markdown": ["react-markdown", "remark-gfm"],
-          "vendor-shiki": ["shiki/core", "shiki/engine/oniguruma"],
+        manualChunks(id) {
+          const normalized = id.replaceAll("\\", "/");
+          if (
+            normalized.includes("/node_modules/dockview-react/") ||
+            normalized.includes("/node_modules/dockview-core/")
+          ) {
+            return "vendor-dockview";
+          }
+          if (
+            normalized.includes("/node_modules/react-markdown/") ||
+            normalized.includes("/node_modules/remark-gfm/")
+          ) {
+            return "vendor-markdown";
+          }
+          if (
+            normalized.endsWith("/node_modules/shiki/dist/core.mjs") ||
+            normalized.includes("/node_modules/@shikijs/core/")
+          ) {
+            return "vendor-shiki";
+          }
         },
       },
     },
