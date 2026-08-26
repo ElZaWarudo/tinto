@@ -1483,6 +1483,7 @@ enum SupervisorControl {
         reply: mpsc::Sender<Result<(), AgentConsoleError>>,
     },
     Retry {
+        generation: u64,
         confirmed: bool,
         turn_idle: bool,
         reply: mpsc::Sender<Result<(), AgentConsoleError>>,
@@ -1828,7 +1829,18 @@ impl AgentProcess for AcpProcessSupervisor {
 
     fn retry_acp(&mut self, confirmed: bool, turn_idle: bool) -> Result<(), AgentConsoleError> {
         let (reply_tx, reply_rx) = mpsc::channel();
+        let generation = self
+            .shared
+            .lock()
+            .map_err(|_| {
+                AgentConsoleError::new(
+                    "agent_session_lock_poisoned",
+                    "no se pudo leer la generación de la sesión ACP",
+                )
+            })?
+            .generation;
         self.try_send_control(SupervisorControl::Retry {
+            generation,
             confirmed,
             turn_idle,
             reply: reply_tx,
@@ -2938,7 +2950,19 @@ fn wait_for_auth_retry(
 ) -> bool {
     loop {
         match control_rx.recv() {
-            Ok(SupervisorControl::Retry { reply, .. }) => {
+            Ok(SupervisorControl::Retry {
+                generation, reply, ..
+            }) => {
+                if shared
+                    .lock()
+                    .map_or(true, |state| state.generation != generation)
+                {
+                    let _ = reply.send(Err(AgentConsoleError::new(
+                        "acp_retry_stale",
+                        "el reintento pertenece a una generación ACP anterior",
+                    )));
+                    continue;
+                }
                 set_connecting_runtime(shared);
                 let _ = reply.send(Ok(()));
                 return true;
@@ -3011,10 +3035,21 @@ fn run_pty_fallback(
                 let _ = reply.send(pty.resize(cols, rows));
             }
             Ok(SupervisorControl::Retry {
+                generation,
                 confirmed,
                 turn_idle,
                 reply,
             }) => {
+                if shared
+                    .lock()
+                    .map_or(true, |state| state.generation != generation)
+                {
+                    let _ = reply.send(Err(AgentConsoleError::new(
+                        "acp_retry_stale",
+                        "el reintento pertenece a una generación ACP anterior",
+                    )));
+                    continue;
+                }
                 if !confirmed {
                     let _ = reply.send(Err(AgentConsoleError::new(
                         "acp_retry_confirmation_required",
@@ -4856,6 +4891,7 @@ mod tests {
         let state_guard = supervisor.shared.lock().unwrap();
         supervisor
             .try_send_control(SupervisorControl::Retry {
+                generation: initial_generation,
                 confirmed: true,
                 turn_idle: true,
                 reply: first_reply_tx,
@@ -4863,6 +4899,7 @@ mod tests {
             .unwrap();
         supervisor
             .try_send_control(SupervisorControl::Retry {
+                generation: initial_generation,
                 confirmed: true,
                 turn_idle: true,
                 reply: second_reply_tx,
