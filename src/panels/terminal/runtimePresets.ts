@@ -111,20 +111,18 @@ function cloneDefaults(): RuntimePreset[] {
 function parseRuntimePreset(value: unknown): RuntimePreset | null {
   if (!value || typeof value !== "object") return null;
   const preset = value as Partial<RuntimePreset> & { accent?: string };
-  if (
-    !(
-      typeof preset.id === "string" &&
-      preset.id.length > 0 &&
-      typeof preset.name === "string" &&
-      preset.name.trim().length > 0 &&
-      preset.name.length <= 40 &&
-      typeof preset.model === "string" &&
-      preset.model.length > 0 &&
-      typeof preset.reasoning === "string" &&
-      preset.reasoning.length > 0 &&
-      (preset.speed === "standard" || preset.speed === "fast")
-    )
-  )
+  if (!(
+    typeof preset.id === "string" &&
+    preset.id.length > 0 &&
+    typeof preset.name === "string" &&
+    preset.name.trim().length > 0 &&
+    preset.name.length <= 40 &&
+    typeof preset.model === "string" &&
+    preset.model.length > 0 &&
+    typeof preset.reasoning === "string" &&
+    preset.reasoning.length > 0 &&
+    (preset.speed === "standard" || preset.speed === "fast")
+  ))
     return null;
   const icons: RuntimePresetIcon[] = ["calendar", "target", "bolt", "code", "compass", "spark"];
   const legacyColors: Record<string, string> = {
