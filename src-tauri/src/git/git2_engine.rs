@@ -40,7 +40,12 @@ impl Git2Engine {
     fn commit_info(commit: &git2::Commit<'_>) -> CommitInfo {
         CommitInfo {
             id: commit.id().to_string(),
-            summary: commit.summary().unwrap_or_default().to_string(),
+            summary: commit
+                .summary()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .to_string(),
             author: commit.author().name().unwrap_or_default().to_string(),
             timestamp: commit.time().seconds(),
         }
@@ -145,7 +150,7 @@ impl GitEngine for Git2Engine {
         let statuses = repo.statuses(Some(&mut opts))?;
         let mut result = RepoStatus::default();
         for entry in statuses.iter() {
-            let Some(path) = entry.path() else { continue };
+            let Ok(path) = entry.path() else { continue };
             let path = PathBuf::from(path);
             let s = entry.status();
             if s.is_wt_new() {
@@ -178,7 +183,7 @@ impl GitEngine for Git2Engine {
                 let name = repo
                     .find_reference("HEAD")
                     .ok()
-                    .and_then(|r| r.symbolic_target().map(str::to_string))
+                    .and_then(|r| r.symbolic_target().ok().flatten().map(str::to_string))
                     .and_then(|t| t.strip_prefix("refs/heads/").map(str::to_string));
                 return Ok(BranchInfo {
                     name,
@@ -195,7 +200,7 @@ impl GitEngine for Git2Engine {
         let name = if detached {
             None
         } else {
-            head.shorthand().map(str::to_string)
+            head.shorthand().ok().map(str::to_string)
         };
 
         let (ahead, behind) = match (&name, head.target()) {

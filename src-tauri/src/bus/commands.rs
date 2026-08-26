@@ -341,7 +341,7 @@ pub(crate) fn repo_fetch_preview(
     })?;
     let url = git_remote
         .url()
-        .ok_or_else(|| CommandError::new("remote-url-missing", "remote sin URL"))?;
+        .map_err(|_| CommandError::new("remote-url-missing", "remote sin URL"))?;
     let host = remote_host(url).ok_or_else(|| {
         CommandError::new(
             "remote-without-host",
@@ -359,7 +359,7 @@ fn current_fetch_remote(repo: &git2::Repository) -> Result<String, CommandError>
     let head = repo.head().map_err(GitError::Internal)?;
     let branch = head
         .shorthand()
-        .ok_or_else(|| CommandError::new("detached-head", "HEAD detached no tiene upstream"))?;
+        .map_err(|_| CommandError::new("detached-head", "HEAD detached no tiene upstream"))?;
     let config = repo.config().map_err(GitError::Internal)?;
     config
         .get_string(&format!("branch.{branch}.remote"))
