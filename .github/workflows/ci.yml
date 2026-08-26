@@ -130,7 +130,7 @@ jobs:
           cp target/release/tinto-agent ../tinto-agent-linux-x86_64
 
       - name: Upload WSL agent artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tinto-agent-linux-x86_64
           path: tinto-agent-linux-x86_64
@@ -234,7 +234,7 @@ jobs:
         run: npm run tauri build
 
       - name: Upload Windows bundle artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tinto-windows-bundle
           path: |
