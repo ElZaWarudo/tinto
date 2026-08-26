@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { dirname, relative, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { format, resolveConfig } from "prettier";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SCRIPT_PATH), "..");
@@ -99,9 +100,10 @@ const INCLUDE = new Set([
   "WorkbenchSnapshot",
 ]);
 
-function main() {
-  const generated = generate();
+async function main() {
   const outPath = resolve(ROOT, OUT);
+  const prettierConfig = (await resolveConfig(outPath)) ?? {};
+  const generated = await format(generate(), { ...prettierConfig, filepath: outPath });
   if (process.argv.includes("--check")) {
     const existing = readFileSync(outPath, "utf8");
     if (normalizeLineEndings(existing) !== normalizeLineEndings(generated)) {
@@ -275,7 +277,7 @@ function genericInner(type, name) {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   const location = relative(process.cwd(), SCRIPT_PATH);
   console.error(`${location}: ${error instanceof Error ? error.message : String(error)}`);
