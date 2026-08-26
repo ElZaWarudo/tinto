@@ -271,12 +271,12 @@ fn ensure_ephemeral_checkpoint_supported(repo: &Path) -> Result<(), AgentConsole
         .map_err(|error| AgentConsoleError::new("checkpoint_git_failed", error.to_string()))?;
     for entry in statuses.iter() {
         let status = entry.status();
-        let Some(path) = entry.path() else {
-            return Err(AgentConsoleError::new(
+        let path = entry.path().map_err(|_| {
+            AgentConsoleError::new(
                 "checkpoint_unsupported",
                 "the safety checkpoint cannot preserve a non-UTF-8 Git path",
-            ));
-        };
+            )
+        })?;
         let relative = Path::new(path);
         if status.is_index_typechange() || status.is_wt_typechange() {
             return Err(ephemeral_symlink_error(relative));
@@ -473,7 +473,7 @@ fn git_checkpoint_state(repo: &Path) -> Result<Option<GitCheckpointState>, Agent
     let mut created_files = HashSet::new();
     let mut deleted_files = HashSet::new();
     for entry in statuses.iter() {
-        let Some(path) = entry.path() else { continue };
+        let Ok(path) = entry.path() else { continue };
         let rel = PathBuf::from(path);
         let status = entry.status();
         if status.is_index_renamed()
@@ -720,7 +720,7 @@ fn scan_git_changes(
 
     let mut changes = Vec::new();
     for entry in statuses.iter() {
-        let Some(path) = entry.path() else { continue };
+        let Ok(path) = entry.path() else { continue };
         let status = entry.status();
         let kind = if status.is_wt_new() || status.is_index_new() {
             AgentSessionChangeKind::Created
