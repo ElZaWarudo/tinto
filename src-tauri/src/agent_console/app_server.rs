@@ -40,6 +40,8 @@ const FIRST_TURN_REQUEST_ID: u64 = 100;
 const CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const TURN_START_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
+type PendingControlRequests = Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>;
+
 pub struct CodexAppServerHandle {
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -56,7 +58,7 @@ pub struct CodexAppServerHandle {
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
-    pending_control_requests: Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>,
+    pending_control_requests: PendingControlRequests,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
@@ -236,25 +238,17 @@ impl CodexAppServerHandle {
             AgentConsoleError::new("app_server_lock_poisoned", "permission mode lock failed")
         })?;
         let thread = self.thread_id.lock().ok().and_then(|thread| thread.clone());
+        let turn = PendingTurn {
+            text,
+            attachments,
+            options,
+            permission_mode,
+        };
         if let Some(thread_id) = thread {
             let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
-            send_turn_start(
-                &self.stdin,
-                request_id,
-                &thread_id,
-                &text,
-                &attachments,
-                &self.cwd,
-                options.as_ref(),
-                permission_mode,
-            )?;
+            send_turn_start(&self.stdin, request_id, &thread_id, &turn, &self.cwd)?;
         } else if let Ok(mut pending) = self.pending_turns.lock() {
-            pending.push_back(PendingTurn {
-                text,
-                attachments,
-                options,
-                permission_mode,
-            });
+            pending.push_back(turn);
             let _ = self
                 .output_tx
                 .send(b"\r\nCodex app-server is still initializing; queued turn.\r\n".to_vec());
@@ -745,7 +739,7 @@ struct ServerRuntimeContext {
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
-    pending_control_requests: Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>,
+    pending_control_requests: PendingControlRequests,
     resume_tx: Mutex<Option<Sender<Result<AgentSessionResumeMode, AgentConsoleError>>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
@@ -1464,18 +1458,9 @@ fn flush_pending_turns(
     let Some(mut pending) = pending_turns.lock().ok() else {
         return;
     };
-    while let Some(text) = pending.pop_front() {
+    while let Some(turn) = pending.pop_front() {
         let request_id = next_request_id.fetch_add(1, Ordering::SeqCst);
-        if let Err(error) = send_turn_start(
-            stdin,
-            request_id,
-            thread_id,
-            &text.text,
-            &text.attachments,
-            cwd,
-            text.options.as_ref(),
-            text.permission_mode,
-        ) {
+        if let Err(error) = send_turn_start(stdin, request_id, thread_id, &turn, cwd) {
             let _ = output_tx
                 .send(format!("\r\nCodex app-server error: {}\r\n> ", error.message).into_bytes());
             break;
@@ -1487,22 +1472,19 @@ fn send_turn_start(
     stdin: &Arc<Mutex<ChildStdin>>,
     request_id: u64,
     thread_id: &str,
-    text: &str,
-    attachments: &[AgentTurnAttachment],
+    turn: &PendingTurn,
     cwd: &Path,
-    options: Option<&AgentSessionRuntimeOptions>,
-    permission_mode: AgentSessionPermissionMode,
 ) -> Result<(), AgentConsoleError> {
     write_json(
         stdin,
         &turn_start_message_with_permission(
             request_id,
             thread_id,
-            text,
-            attachments,
+            &turn.text,
+            &turn.attachments,
             cwd,
-            options,
-            permission_mode,
+            turn.options.as_ref(),
+            turn.permission_mode,
         ),
     )
 }

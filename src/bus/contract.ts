@@ -102,10 +102,18 @@ export interface AgentSessionAcpRuntime {
 }
 
 export type AgentSessionAcpPermissionKind =
-  "allow_once" | "allow_always" | "reject_once" | "reject_always";
+  | "allow_once"
+  | "allow_always"
+  | "reject_once"
+  | "reject_always";
 
 export type AgentSessionAcpPermissionState =
-  "pending" | "allowed" | "denied" | "cancelled" | "expired" | "invalidated";
+  | "pending"
+  | "allowed"
+  | "denied"
+  | "cancelled"
+  | "expired"
+  | "invalidated";
 
 export interface AgentSessionAcpPermissionOption {
   id: string;
@@ -127,7 +135,13 @@ export interface AgentSessionAcpPermission {
 }
 
 export type AgentSessionStatus =
-  "starting" | "running" | "exited" | "error" | "completed" | "failed" | "reverted";
+  | "starting"
+  | "running"
+  | "exited"
+  | "error"
+  | "completed"
+  | "failed"
+  | "reverted";
 
 export interface AgentSessionError {
   category: string;
@@ -216,7 +230,12 @@ export interface AgentRuntimeCatalog {
 }
 
 export type AgentSessionGoalStatus =
-  "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
 
 export interface AgentSessionGoal {
   text: string;
@@ -415,7 +434,11 @@ export interface RepoErrorState {
 export type SignalSeverity = "info" | "warning" | "critical";
 
 export type PassiveSignalKind =
-  "sensitive_path" | "possible_secret" | "large_delete" | "config_change" | "test_change";
+  | "sensitive_path"
+  | "possible_secret"
+  | "large_delete"
+  | "config_change"
+  | "test_change";
 
 export interface PassiveSignal {
   kind: PassiveSignalKind;

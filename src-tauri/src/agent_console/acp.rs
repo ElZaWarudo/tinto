@@ -1360,7 +1360,7 @@ pub fn read_bounded_ndjson_frame<R: BufRead>(
             };
         }
         let newline = buffer.iter().position(|byte| *byte == b'\n');
-        let take = newline.map_or(buffer.len(), |index| index);
+        let take = newline.unwrap_or(buffer.len());
         let trailing_cr = take > 0 && buffer[take - 1] == b'\r';
         let payload_take = take - usize::from(newline.is_some() && trailing_cr);
         if frame.len().saturating_add(payload_take) > max_bytes {
