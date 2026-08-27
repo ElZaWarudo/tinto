@@ -1,0 +1,26 @@
+{
+  "approval_event_digest": "sha256:8af08d741b31f5a2192f16914c5cfa109072a010c0e8206bf3d55e134f82f1a8",
+  "approved_at": "2026-08-27T06:50:47Z",
+  "approved_by": "user",
+  "artifacts": [
+    {
+      "digest": "sha256:103a8892045067b1ad64926e70a23daf5464dfecd09f43ef73cb7bfdd0772e28",
+      "path": "docs/jira/seed-plan.md"
+    },
+    {
+      "digest": "sha256:0e29727ccc6887c634b59d0b4d8d6c05a6b4644221e03ae9453725c11c8e1742",
+      "path": "docs/plans/tinto-gap-closure/initiative-requirements.md"
+    },
+    {
+      "digest": "sha256:be516973aee0d0514f07092b72185bf55ce9e1384219950936403d24c2c052d2",
+      "path": "docs/product/roadmap.md"
+    },
+    {
+      "digest": "sha256:46a6d6dc06322f40f33959a26c453828d69703e6be953a8d8efb0f79af6d332f",
+      "path": "docs/swarm/swarm-startup.md"
+    }
+  ],
+  "packet_digest": "sha256:514eaffc690d80ad1920561bc21e4329c2a110ee467eb427381bb734d47ef5d8",
+  "receipt_digest": "sha256:c0db67a19383c2fe4592d340ebf938d8febc29c07a2d92ecb7dc1ff5a6bb0365",
+  "schema_version": 1
+}

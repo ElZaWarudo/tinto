@@ -2,9 +2,10 @@
 artifact_kind: roadmap
 artifact_path: docs/roadmaps/2026-07-21-010-provider-neutral-mcp-layer-roadmap.md
 title: Tinto - Capa MCP neutral al proveedor
-status: active
+status: completed
 date: 2026-07-21
 initiative: provider-neutral-mcp-layer
+roadmap_item: RDM-024
 production_posture: unknown
 source_docs:
   - AGENTS.md
@@ -22,15 +23,20 @@ source_docs:
   - src/workbench/AddonsManager.tsx
 ---
 
-# Tinto - Capa MCP neutral al proveedor
+# Tinto - Capa MCP neutral al proveedor (RDM-024)
 
 ## Context Sufficiency Summary
 
-- La intención de producto es suficiente para abrir el ciclo de descubrimiento: Tinto debe pasar de un `/mcp` informativo y específico de la configuración de Codex a una capa MCP neutral al proveedor, con inventario/estado, adaptadores, actividad estructurada y una superficie de gestión utilizable.
+- La intención de producto y el focused item contract son suficientes para la
+  ejecución del primer slice: Tinto puede pasar de un `/mcp` informativo y
+  específico de Codex a un inventario seguro, source-bound, con perfiles
+  project-locales y actividad explícitamente atribuida.
 - El sistema actual ofrece límites reutilizables: Rust mantiene la autoridad sobre procesos y sesiones; el bus Tauri publica contratos provider-neutral; Codex app-server y ACP ya traducen actividad de proveedores a timeline; React consume esas formas sin depender del protocolo interno.
 - El punto de partida MCP es verificable pero estrecho. `/mcp` lee únicamente `config.toml` de Codex, enumera nombres y disponibilidad de comandos sin revelar argumentos o entorno, y no inicia servidores para probarlos.
 - El repositorio documenta comandos de build, test, contrato y formato; la entrega parte de `develop`, conserva PTY y los adaptadores actuales, y mantiene Jira como trazabilidad opcional.
-- Las decisiones de producto finas —qué se puede editar, qué estados operativos se prometen y dónde vive la gestión— pertenecen al brainstorm de RDM-023. El roadmap no las convierte en comportamiento asumido.
+- Las decisiones de producto finas están cerradas en el focused requirements
+  artifact de RDM-024. Synchronization, launcher application, active
+  connectivity y targets sin evidencia permanecen fuera del primer slice.
 
 ## Source Inventory
 
@@ -49,57 +55,115 @@ source_docs:
 
 ## Roadmap Items
 
-- RDM-023. **Control plane MCP neutral al proveedor**
-  - Outcome: el usuario puede conocer qué servidores MCP están configurados para cada runtime compatible, distinguir su procedencia y estado seguro, y entender cuándo una sesión usa herramientas MCP sólo cuando el proveedor ofrece atribución explícita y verificable. Cuando esa procedencia no exista, Tinto muestra actividad de herramienta genérica con atribución MCP desconocida o no soportada, sin inferirla por nombres. Las únicas acciones de gestión disponibles son las explícitamente permitidas, sin que Tinto exponga secretos ni ejecute servidores arbitrarios en segundo plano.
-  - Why now: Tinto ya presenta `/mcp` como comando disponible, pero el resultado sólo refleja Codex y no participa en el contrato de capacidades, actividad ni gestión compartido por Codex, Kimi y OpenCode. La infraestructura provider-neutral ya existe y evita justificar otra jerarquía de runtime paralela.
-  - Scope boundary: incluir un modelo público MCP mínimo y provider-neutral; descubrimiento mediante adaptadores por runtime/fuente local o WSL; inventario y estados con errores recuperables; correlación con sesión/turno sólo cuando el adaptador obtenga procedencia MCP verificable; actividad de herramienta genérica cuando la procedencia sea desconocida; superficie accesible de inspección y revalidación; redacción de secretos; normalización de metadatos y errores no confiables antes de bus, UI, logs o persistencia; límites de esquema, tamaño y tiempo; contratos, fixtures y pruebas de consumidores. Conservar `/mcp` como entrada compatible. Excluir inferencia por nombres, un cliente MCP propio de Tinto, proxy de tráfico, marketplace, sincronización cloud, captura de credenciales, autoarranque o autoaprobación de servidores, edición genérica de archivos de terceros y promesas de health check que requieran ejecutar comandos arbitrarios.
-  - Hard depends on: la frontera provider-neutral de RDM-016/RDM-022 y el bus Tauri actual.
-  - Soft sequencing preference: ejecutar primero una matriz de evidencia local/WSL y por proveedor que identifique conceptos realmente comunes, capacidades opcionales y condiciones que obligarían a extender o abandonar el modelo neutral. Fijar el contrato e inventario seguro sólo después de pasar esa puerta; después proyectar actividad estructurada y cerrar con la superficie de gestión sobre límites ya probados.
-  - Blocks/enables: habilita paridad MCP entre runtimes soportados y una futura administración más profunda sin comprometerla en este corte.
-  - Risk: high; toca configuración potencialmente sensible, diferencias entre proveedores/host/WSL, eventos no confiables y una UI que no debe confundir “configurado”, “disponible” y “activo”.
-  - Expected brainstorm: `docs/brainstorms/2026-07-21-023-provider-neutral-mcp-layer.md`
-  - Expected plan: `docs/plans/2026-07-21-023-feat-provider-neutral-mcp-layer-plan.md`
-  - Suggested package: un work package RDM-023 con hasta tres review units, que el Reviewability Gate puede coarsen: RU1 contrato + inventario/adaptadores; RU2 actividad estructurada; RU3 superficie de gestión y cierre de compatibilidad. Ninguna unidad debe abrirse como PR separada si no entrega valor y verificación independiente.
-  - Exit evidence: puerta de evidencia provider/local/WSL cerrada antes de consolidar el contrato; parsers/adaptadores sin fuga de args/env/headers; matriz de capacidades que distingue atribución MCP verificable de actividad genérica; contrato generado sin drift; timeline correlacionado sin payloads sensibles; metadatos y errores acotados, sin caracteres de control, redactados y renderizados como texto; cobertura de los estados operativos definidos durante el brainstorm; nombres/estados accesibles, anuncios asíncronos, orden y restauración de foco, indicadores no dependientes sólo del color, navegación por teclado y uso con zoom o ventana reducida; pruebas de backend y consumidores; build y suites naturales afectadas.
+- RDM-024. **Control plane MCP neutral al proveedor**
+  - Outcome: el usuario puede inspeccionar desde Agents el inventario MCP
+    no sensible que Tinto puede probar de forma segura, conservar la
+    procedencia por provider/target, y elegir un perfil project-local de
+    enablement. MCP activity se etiqueta sólo cuando el provider emite
+    atribución explícita; en todos los demás casos permanece genérica.
+  - Why now: Tinto ya presenta `/mcp`, pero el resultado sólo refleja Codex y
+    no participa en un contrato de catálogo, perfil y actividad compartido.
+    La implementación queda acotada al Codex Windows read-only path y a los
+    seams existentes; no se justifica otra jerarquía de runtimes.
+  - Scope boundary: incluir el modelo público mínimo y additive de MCP para el
+    slice admitido; inventario Codex local Windows mediante el parser probado;
+    estados empty/success/partial/error; source/target attribution;
+    project-local profiles; explicit MCP activity projection; safe
+    normalization/redaction before bus, UI, journal, or logs; bounded schema,
+    size, and path checks; accessible Agents controls; consumer fixtures; and
+    `/mcp` compatibility. Exclude provider-file writes, WSL/non-Codex imports,
+    inferred attribution, active connectivity checks, automatic launch or
+    approval, MCP client/proxy behavior, marketplace/cloud sync, credential
+    storage, and generic provider abstractions unsupported by evidence.
+  - Hard depends on: la frontera provider-neutral de RDM-016/RDM-022 y el bus
+    Tauri actual.
+  - Evidence gate: Codex Windows inventory/import, neutral project profiles,
+    and explicit Codex `mcptoolcall` activity are GO for the first slice.
+    Synchronization, launcher application, active connectivity, WSL and
+    Claude/Kimi/OpenCode config import are NO-GO until target-specific
+    parser/root/identity/rollback evidence exists.
+  - Blocks/enables: habilita un catálogo y perfiles seguros; no habilita
+    provider synchronization or a neutral adapter until the relevant evidence
+    gate passes.
+  - Risk: high; touches potentially sensitive configuration, provider/host/WSL
+    trust boundaries, untrusted event metadata, additive contracts, and a UI
+    that must not confuse configured, available, synced, and active.
+  - Requirements: `docs/plans/tinto-gap-closure/rdm-024-provider-neutral-mcp-requirements.md`
+  - Plan: `docs/plans/tinto-gap-closure/rdm-024-provider-neutral-mcp-plan.md`
+  - Work package: `docs/work-packages/RDM-024-provider-neutral-mcp/2026-08-27-001-provider-neutral-mcp-work-package.md`
+  - Review: `docs/review-findings/2026-08-27-rdm-024-artifact-review.md`
+  - Exit evidence: accepted provider matrix; no args/env/headers/credentials
+    leakage; generated contract without drift; explicit-vs-generic activity
+    tests; bounded and inert metadata/errors; profile lifecycle tests; async
+    and accessibility coverage; consumer tests; and root-owned build/lint/
+    Rust/frontend/native evidence before release.
 
 ## Dependency Graph
 
 ```mermaid
 flowchart LR
-  BASE["RDM-016/RDM-022: runtime provider-neutral"] --> CONTRACT["RU1: contrato e inventario MCP"]
-  CONTRACT --> ACTIVITY["RU2: actividad MCP estructurada"]
-  CONTRACT --> UI["RU3: inspección y gestión"]
-  ACTIVITY --> UI
+  BASE["RDM-016/RDM-022: runtime provider-neutral"] --> CONTRACT["RU1: catálogo e inventario seguro"]
+  CONTRACT --> PROFILE["RU2: perfiles project-locales"]
+  PROFILE --> UI["RU3: Agents y estados"]
 ```
 
 ## Parallelization Waves
 
-- Wave A - artefactos: brainstorm, revisión, plan, revisión y work package; serial por dependencia de decisiones.
-- Wave B - RU1: contrato, descubrimiento seguro y adaptadores; serial en el checkout actual.
-- Wave C - RU2 y RU3: mantener serial mientras compartan contratos y `TerminalPanel`; sólo separar si el Reviewability Gate demuestra independencia real.
+- Wave A - artefactos: requirements, revisión, plan, revisión y work package;
+  serial por dependencia de decisiones.
+- Wave B - RU1: catálogo Codex local, contrato aditivo y actividad explícita;
+  serial en el checkout actual.
+- Wave C - RU2: perfiles project-locales y RU3: Agents; mantener serial porque
+  comparten persistencia, contrato y `TerminalPanel`.
+- Future evidence waves: WSL/non-Codex inventory, synchronization, launcher
+  application, and active connectivity only after their explicit gates pass.
 
 ## Branch And PR Strategy
 
 | Package candidate | Base branch | PR type | Dependency | Notes |
 |---|---|---|---|---|
-| RDM-023 control plane MCP | `develop` reconciliado | capability slice | RDM-016/RDM-022 integrados | Rama sugerida al iniciar ejecución: `codex/feature/rdm-023-mcp-control-plane`. Los artefactos viajan con implementación; no se crea una PR sólo documental. |
+| RDM-024 control plane MCP | `develop` reconciliado | capability slice | RDM-016/RDM-022 integrados | RU1 starts from `develop`; RU2/RU3 refresh `develop` after the prior capability slice. Los artefactos viajan con implementación; no se crea una PR sólo documental. |
 
-- Granularidad inicial `auto`: preferir una sola capability slice si dividir contrato, actividad y UI fuerza un stack mental o rompe la verificabilidad independiente.
-- Si el paquete justifica más de una PR, mantener objetivo de una y máximo de dos abiertas, con base actualizada entre unidades.
+- Granularidad `auto`: dos capability slices porque parser/public contract risk
+  and profile/UI risk are independently reviewable; a third micro-PR would not
+  deliver independent value.
+- Mantener un objetivo de una y máximo de dos PR abiertas, con base actualizada
+  entre unidades y sin stack profundo.
 - Jira permanece opcional. Si existe contexto durante Release Marshal, conservar una subtask por review unit incluso cuando una PR agrupe varias.
 
 ## Blockers And User Decisions
 
-- No hay bloqueadores para iniciar el brainstorm interactivo de RDM-023.
-- El brainstorm debe cerrar: fuentes configurables por runtime; taxonomía exacta de estados; alcance de lectura frente a edición; ubicación/navegación de la superficie; granularidad y retención de actividad MCP; compatibilidad de `/mcp`; contrato de accesibilidad; y política de confianza local/WSL que delimite distribuciones, identidad de usuario, raíces permitidas y tratamiento de rutas o enlaces que escapen de ellas.
-- Antes de fijar el contrato, el brainstorm/plan debe comprobar payloads y capacidades reales de Codex, Kimi y OpenCode, definir el estado degradado de actividad no atribuible y registrar qué evidencia falsaría la neutralidad propuesta. No se etiquetará actividad como MCP sin procedencia explícita del proveedor.
-- Cualquier decisión que implique escribir configuración de proveedor, lanzar procesos, gestionar credenciales o aprobar herramientas requiere autorización explícita y no se infiere de este roadmap.
+- No hay bloqueadores para el slice de RDM-024 admitido por la matriz.
+- La matriz ya cierra fuentes, estados, lectura, ubicación, compatibilidad de
+  `/mcp`, accesibilidad y confianza local/WSL para esta fase.
+- Synchronization, launcher application, active connectivity, WSL and
+  non-Codex import remain explicit NO-GO decisions until provider/target
+  payloads, roots, identity, rollback, and attribution evidence are recorded.
+- Cualquier decisión que implique escribir configuración de proveedor, lanzar
+  procesos, gestionar credenciales o aprobar herramientas requiere autorización
+  explícita y no se infiere de este roadmap.
 
 ## Roadmap Generator Closeout
+
+## Delivery evidence — 2026-08-27
+
+The evidence-admitted RDM-024 slice is implemented locally. It delivers a
+bounded Codex Windows/local read-only inventory, source-bound project-local
+profiles, explicit sanitized `mcptoolcall` attribution, additive generated
+contracts, and an accessible Agents management surface. Provider-file writes,
+credentials, active probes, launch overrides, synchronization, WSL import and
+non-Codex import remain outside this slice.
+
+Aggregate verification passed: 448 Rust tests, Rust format and Clippy, contract
+generation/check, TypeScript, production build, root-only frontend tests, the
+native Tauri IPC E2E, and bounded Pumarejo lifecycle observation. Detailed
+evidence is recorded in the child Compound Master state and the 2026-08-27
+Windows native audit. No commit, PR, Jira or release action was requested.
 
 ```text
 artifact_kind: roadmap
 artifact_path: docs/roadmaps/2026-07-21-010-provider-neutral-mcp-layer-roadmap.md
-blockers: No blockers.
-recommended_next_action: Review this roadmap with ce-doc-review, then continue to the interactive RDM-023 brainstorm gate.
+status: completed
+blockers: No blockers for the evidence-admitted first slice; future target expansions remain gated.
+recommended_next_action: Keep D1-D5 closed until new provider/target evidence justifies a separately reviewed increment.
 ```

@@ -14,6 +14,16 @@ This atlas is a stale working-tree update over the reduced-scope baseline valida
 
 Remediation update, 2026-07-29: Code/Tests now cover accessible and keyboard-operable Dockview tabs, day-grouped Timeline entries with full machine-readable timestamps, and repository/provider-specific accessible names on repeated Dashboard actions. The complete frontend suite passes (55 files/718 tests), as do TypeScript, focused ESLint and the production build. A native re-observation with the updated Pumarejo MCP was attempted, but its owned launch returned `APP_START_FAILED` before a Tinto process existed; these remediations therefore remain Code/Tests rather than new Observed evidence. See `docs/audits/2026-07-29-product-polish-regression-evidence.md`.
 
+Gap-closure update, 2026-08-27: RDM-024 adds a bounded Codex Windows/local
+read-only MCP inventory, source-bound project-local profiles, explicit safe
+MCP activity attribution, and an Agents MCP Details surface [Code/Tests]. The
+combined native IPC E2E passes and Pumarejo observed launch, Timeline content,
+800x600 rendering and clean close on the current working tree. The MCP Details
+content, live Agent launch, detached windows and a second responsive size were
+not directly observed. This atlas remains `stale`: the delivery is uncommitted,
+so the baseline commit and fingerprint are intentionally unchanged. See
+`docs/audits/2026-08-27-windows-native-regression-evidence.md`.
+
 Evidence labels are `Declared`, `Observed`, `Code`, `Inferred` and `Unverified`.
 
 ## 1. Intent
@@ -91,6 +101,7 @@ No authentication, plan, tenant, collaboration or differentiated human-role mode
 | `SURF-031` | Detached consoles | Detach consoles | Reattach/close | ROLE-001/002 | `consoles` | Drag reattach plus explicit `Reanexar Agents` button usable by click/keyboard (`DetachedConsolesApp.tsx:48-75`) [Code/Tests] |
 | `SURF-032` | Native notification | Relevant event | Open/dismiss | ROLE-001 | OS | `notifications.ts:23-168` [Code/Unverified] |
 | `SURF-033` | Generic integrated shell (retired declaration) | None | None | ROLE-001 | Retired; ID not reusable | README now describes Agent session consoles rather than a generic terminal; no current product surface [Declared/Code] |
+| `SURF-034` | MCP inventory and project profiles | Agent conversation Details | Refresh/import/manage local profile/close | ROLE-001 | complementary panel | Codex Windows/local read-only inventory, source-bound definitions, truthful unsupported delivery and accessible controls [Code/Tests]; post-change native content Unverified |
 | `SURF-900` | Browser review launchpad and fixtures | Browser-only `/` or direct fixture URL | Dashboard, Agents/Lens, Agent runtime or ruler fixture | ROLE-001 | Vite pages | `BrowserReviewHome.tsx` links `dashboard-review.html`, `agent-lens-restorable.html`, `agent-runtime.html` and `demo.html`, and states the no-IPC/no-real-Agent boundary [Code/Tests] |
 
 Navigation is panel/dock based, not URL-router based. The shell opens Dashboard, Timeline, workbenches, repos, add-ons, shortcuts, Glance and Agents. Dashboard/Timeline/Glance open a repo; a repo opens files; Agents opens conversations and optional detached windows [Code].
@@ -131,6 +142,7 @@ Navigation is panel/dock based, not URL-router based. The shell opens Dashboard,
 | `FLOW-030` | Glance/zoom/shortcuts | ROLE-001 | frequent | medium | menu/keys | view/state updated | 004/024 | F10/isolated Alt entry and modal shortcut suspension [Code/Tests]; baseline partial keyboard Observed |
 | `FLOW-031` | Enable/use notification | ROLE-001 | occasional | medium | menu/event | permission/status/notification | 032 | Code/Unverified |
 | `FLOW-032` | Launch, observe and close Pumarejo audit session | ROLE-005 | development only | high | explicit debug-feature launch | sampled evidence captured and driver resources released | 004-006/010-011/014/017/023/025 | Read-only/navigation subset [Observed]; integration [Code] |
+| `FLOW-033` | Inspect/import/manage project MCP profile | ROLE-001 | occasional | high | conversation Details | safe inventory shown and explicit local profile state updated | 026/028/034 | Code/Tests; post-change native detail Unverified |
 
 ### FLOW-001 — Native bootstrap, browser review entry and failure recovery
 

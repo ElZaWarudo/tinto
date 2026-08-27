@@ -1,13 +1,13 @@
 ---
 title: Compound Master State - Tinto MCP Layer
-status: in-progress
+status: completed
 date: 2026-07-21
 initiative: provider-neutral-mcp-layer
 mode: full
 production_posture: unknown
 state_format: compact
-last_reconciled: 2026-07-21
-verification_status: not-started
+last_reconciled: 2026-08-27
+verification_status: passed
 archive_snapshot: docs/orchestration/archive/compound-master-state/2026-07-13-codex-app-server-runtime-full-state.md
 ---
 
@@ -15,11 +15,22 @@ archive_snapshot: docs/orchestration/archive/compound-master-state/2026-07-13-co
 
 ## Current Resume Snapshot
 
-- Initiative: implement a provider-neutral MCP layer in Tinto, including inventory/status, provider adapters, structured runtime activity and a usable management surface.
+- Initiative: deliver the evidence-admitted first provider-neutral MCP control-plane slice.
 - Requested pipeline: `mode:full`, `production:unknown`, `jira-policy:optional`, `parallel:false`, `delegation:auto`, `worktree-policy:avoid`, `autonomy:guarded`, `review-threshold:P0-P2`.
-- Current phase: interactive RDM-023 brainstorm in progress; repository grounding is complete and product decisions are being settled one at a time.
+- Current phase: RDM-024 implementation, review and aggregate verification are complete locally. RDM-023 remains the completed installation protocol.
 - Branch/worktree: existing `develop` checkout; no branch or worktree was created. Existing user changes remain untouched.
+- Delivered boundary: Codex Windows/local read-only inventory, source-bound
+  project profiles, explicit sanitized MCP activity and Agents management UI.
+  Synchronization, provider-file writes, active probes, WSL/non-Codex import
+  and launcher application remain gated.
+- Verification: full Rust 448, Clippy, format, generated-contract parity,
+  TypeScript, production build, root-only frontend tests, real native IPC E2E,
+  and bounded Pumarejo lifecycle passed. The MCP Details content remains
+  Code/Tests rather than post-change native observation.
 - External mutation: none. No Jira, commit, branch, push, PR, reviewer, merge, deployment or release action is authorized or performed.
+
+The canonical closeout is
+`docs/orchestration/compound-master/gap-closure-rdm-024-mcp/summary.md`.
 
 ## Role Resolution
 

@@ -1,0 +1,415 @@
+schema_version: 2
+updated_at: '2026-08-27'
+mode: autonomous-team-flow
+documentation_gate:
+  status: approved
+  approved_by: user
+  approved_at: '2026-08-27T06:50:47Z'
+  initiative_contract: docs/plans/tinto-gap-closure/initiative-requirements.md
+  source_artifacts:
+  - docs/plans/tinto-gap-closure/initiative-requirements.md
+  - docs/product/roadmap.md
+  - docs/jira/seed-plan.md
+  - docs/swarm/swarm-startup.md
+  - docs/swarm/queue-state.yaml
+  - docs/swarm/blockers.yaml
+  approval_artifacts:
+  - docs/plans/tinto-gap-closure/initiative-requirements.md
+  - docs/product/roadmap.md
+  - docs/jira/seed-plan.md
+  - docs/swarm/swarm-startup.md
+  approval_receipt: docs/orchestration/approval-receipts/tinto-gap-closure-2026-08-27.json
+  approved_packet_digest: sha256:514eaffc690d80ad1920561bc21e4329c2a110ee467eb427381bb734d47ef5d8
+  approval_receipt_digest: sha256:c0db67a19383c2fe4592d340ebf938d8febc29c07a2d92ecb7dc1ff5a6bb0365
+  feedback_log:
+  - at: '2026-08-27T06:40:16Z'
+    by: document-review
+    summary: Made provider evidence a real go/no-go gate and added bounded security,
+      interaction-state, outcome, and accessibility requirements without adding infrastructure.
+    affected_artifacts:
+    - docs/plans/tinto-gap-closure/initiative-requirements.md
+    - docs/product/roadmap.md
+    - docs/swarm/queue-state.yaml
+initiative:
+  contract_path: docs/plans/tinto-gap-closure/initiative-requirements.md
+  artifact_contract: ce-unified-plan/v1
+  artifact_readiness: requirements-only
+  shared_revision: null
+  shared_decisions:
+  - Rename the unfinished MCP initiative to RDM-024.
+  - Keep mutable implementation concurrency at one unless evidence proves isolation.
+  - Reuse existing runtime, bus, session, and UI seams; add no new infrastructure.
+compound_runs:
+  gap-closure-rdm-024-mcp:
+    run_id: gap-closure-rdm-024-mcp
+    state_path: docs/orchestration/compound-master/gap-closure-rdm-024-mcp/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-gap-closure/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: GC-001/RDM-024
+    artifact_namespace: tinto-gap-closure/RDM-024-provider-neutral-mcp
+    status: completed
+    observed_at: '2026-08-27T09:07:01Z'
+    artifact_revision: sha256:452003b2a4f43374834ee5323b1665fb82a1388aef928f2f17a586db6ca36d2b
+autonomy:
+  mode: autonomous
+  ledger_path: docs/orchestration/autonomy-ledgers/tinto-rdm024-release-2026-08-27.json
+  resume_snapshot:
+    authority: false
+    schema_version: 1
+    contract_id: tinto-rdm024-release-2026-08-27
+    contract_status: active
+    contract_hash: 8c794a48966ddb7c6cbe3e8bde8c16136f40f97e61b2f6f6dc879c67f2ff3791
+    latest_audit_event: GENESIS
+    captured_at: '2026-08-27T09:56:48.3215398Z'
+jira:
+  provider: null
+  project_key: null
+  base_url: null
+  last_read_at: null
+source_artifacts:
+- path: docs/orchestration/compound-master-state.md
+  kind: compound-state
+- path: docs/roadmaps/2026-07-21-010-provider-neutral-mcp-layer-roadmap.md
+  kind: roadmap
+- path: docs/audits/2026-07-29-product-polish-regression-evidence.md
+  kind: audit
+jira_issue_map: {}
+proposed_jira:
+  epics: []
+  parents: []
+  subtasks: []
+units:
+  gc-001-rdm-024-artifacts:
+    title: Complete the RDM-024 artifact and quality pipeline
+    jira_key: null
+    source: docs/product/roadmap.md
+    status: release-ready
+    depends_on: []
+    blocked_by: []
+    affects_dependents:
+    - gc-002-rdm-024-implementation
+    scope:
+      included:
+      - Reconcile the MCP identifier.
+      - Produce focused requirements, plan, work package, and inner reviews.
+      excluded:
+      - Product-code implementation.
+      - Shipping or Jira mutation.
+    acceptance_criteria:
+    - Canonical child state and artifacts agree on RDM-024.
+    - The child reaches execution-ready with no unresolved P0-P2 or security decision.
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs:
+      - docs/brainstorms
+      - docs/plans
+      - docs/work-packages
+      - docs/orchestration/compound-master/gap-closure-rdm-024-mcp
+      tests: []
+      config: []
+      generated: []
+    dependencies: []
+    execution:
+      route: swarm
+      lane: deep
+      discovery_profile: null
+      worker_profile: null
+      reasoning_effort: null
+      lane_trigger: incomplete-artifact-and-security-pipeline
+      role_triggers:
+        compound-master: provider-configuration-public-contract-and-security
+      worker_contract_hash: null
+      worker_contract_path: docs/orchestration/runs/gap-closure-rdm-024-mcp/gc-001-rdm-024-artifacts-worker-contract.json
+      evidence_trust: reviewed
+    risk:
+      production: unknown
+      security: elevated
+      compliance: low
+      overlap: elevated
+    verification:
+      focused_commands: []
+      focused_evidence:
+      - docs/review-findings/2026-08-27-rdm-024-artifact-review.md
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
+      fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-fingerprint.json
+      evidence_registry: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-registry.json
+      reuse_decision: run:evidence-missing
+    isolation:
+      type: current-checkout
+      branch: develop
+      path: null
+      thread: null
+    compound:
+      run_id: gap-closure-rdm-024-mcp
+      state_path: docs/orchestration/compound-master/gap-closure-rdm-024-mcp/state.md
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-27T09:07:01Z'
+      artifact_revision: sha256:452003b2a4f43374834ee5323b1665fb82a1388aef928f2f17a586db6ca36d2b
+    handoff:
+      intended_base: develop
+      pr_grouping: with-implementation
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  gc-002-rdm-024-implementation:
+    title: Implement the execution-ready RDM-024 work package
+    jira_key: null
+    source: docs/product/roadmap.md
+    status: release-ready
+    depends_on:
+    - gc-001-rdm-024-artifacts
+    blocked_by: []
+    affects_dependents:
+    - gc-004-roadmap-reconciliation
+    scope:
+      included:
+      - Units admitted by the RDM-024 provider evidence gate and derived by its approved
+        work package.
+      excluded:
+      - New infrastructure or capabilities outside the initiative contract.
+    acceptance_criteria:
+    - Every work-package requirement is implemented and verified.
+    - Existing runtime and /mcp compatibility remains intact.
+    - No shared provider abstraction exists without evidence from two current providers.
+    surfaces:
+      code:
+      - src-tauri/src/agent_console
+      - src/panels/terminal
+      contracts:
+      - src/bus
+      - src-tauri/src/bus
+      - docs/contracts/bus-contract.md
+      data: []
+      auth: []
+      docs: []
+      tests:
+      - src/**/*.test.ts
+      - src/**/*.test.tsx
+      - src-tauri/src/**/*.rs
+      config: []
+      generated:
+      - src/bus/contract.generated.ts
+    dependencies:
+    - gc-001-rdm-024-artifacts
+    execution:
+      route: swarm
+      lane: deep
+      discovery_profile: luna_xhigh_discovery
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: provider-configuration-public-contract-security-and-concurrency
+      role_triggers:
+        reviewer: behavior-contract-and-compatibility-change
+        security: provider-config-secrets-and-trust-boundaries
+      worker_contract_path: docs/orchestration/runs/gap-closure-rdm-024-mcp/gc-002-rdm-024-implementation-worker-contract.json
+      worker_contract_hash: sha256:452003b2a4f43374834ee5323b1665fb82a1388aef928f2f17a586db6ca36d2b
+      evidence_trust: reviewed-and-aggregate-passed
+    risk:
+      production: unknown
+      security: high
+      compliance: low
+      overlap: high
+    verification:
+      focused_commands: []
+      focused_evidence:
+      - Full Rust suite 448 passed; focused bus 8, agent_console 208, workbench 40.
+      - Root-only MCP frontend contract and panel tests passed.
+      - Final bounded code-review round returned no P0-P2 findings.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
+      fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-fingerprint.json
+      evidence_registry: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-registry.json
+      reuse_decision: run:evidence-missing
+    isolation:
+      type: worktree
+      branch: null
+      path: null
+      thread: null
+    compound:
+      run_id: gap-closure-rdm-024-mcp
+      state_path: docs/orchestration/compound-master/gap-closure-rdm-024-mcp/state.md
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-27T09:07:01Z'
+      artifact_revision: sha256:452003b2a4f43374834ee5323b1665fb82a1388aef928f2f17a586db6ca36d2b
+    handoff:
+      intended_base: develop
+      pr_grouping: auto-after-reviewability-gate
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  gc-003-native-regression:
+    title: Re-run Windows-native product regression
+    jira_key: null
+    source: docs/audits/2026-08-27-windows-native-regression-evidence.md
+    status: release-ready
+    depends_on: []
+    blocked_by: []
+    affects_dependents:
+    - gc-004-roadmap-reconciliation
+    scope:
+      included:
+      - Exercise the named native flows on the current commit.
+      - Record observed, failed, and unverified evidence.
+      excluded:
+      - Unrelated product fixes or Pumarejo redesign.
+    acceptance_criteria:
+    - Evidence names the exact commit and environment.
+    - Keyboard, responsive, Timeline, Dashboard, Agent, and detached-window dispositions
+      are recorded.
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs:
+      - docs/audits
+      tests:
+      - e2e/native-shell.e2e.ts
+      config:
+      - .pumarejo.json
+      - wdio.conf.ts
+      generated: []
+    dependencies: []
+    execution:
+      route: root-direct
+      lane: standard
+      discovery_profile: null
+      worker_profile: null
+      reasoning_effort: high
+      lane_trigger: bounded-native-qa-with-no-authorized-product-edit
+      role_triggers: {}
+      worker_contract_path: null
+      worker_contract_hash: null
+      evidence_trust: runtime-audited
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: low
+    verification:
+      focused_commands:
+      - npm run test:e2e:tauri
+      focused_evidence:
+      - Native Tauri IPC E2E passed with cleanup exit 0.
+      - Current Pumarejo launch, Timeline, 800x600 render and close were observed.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
+      fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-fingerprint.json
+      evidence_registry: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-registry.json
+      reuse_decision: run:evidence-missing
+    isolation:
+      type: current-checkout
+      branch: develop
+      path: null
+      thread: null
+    compound:
+      run_id: null
+      state_path: null
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-27T09:07:01Z'
+      artifact_revision: sha256:6e52e3289376129dc261b11293d4ef1ff27dfcc7ce90431ee41e71931197ee79
+    handoff:
+      intended_base: develop
+      pr_grouping: documentation-with-gap-closure
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  gc-004-roadmap-reconciliation:
+    title: Refresh the application atlas and roadmap statuses
+    jira_key: null
+    source: docs/product/application-atlas.md
+    status: release-ready
+    depends_on:
+    - gc-001-rdm-024-artifacts
+    - gc-003-native-regression
+    blocked_by: []
+    affects_dependents: []
+    scope:
+      included:
+      - Update atlas evidence and active roadmap identifiers/statuses.
+      excluded:
+      - New product requirements or speculative roadmap items.
+    acceptance_criteria:
+    - Atlas status is supported by current observed evidence.
+    - Active roadmap identifiers no longer collide and delivered work is not marked
+      pending.
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs:
+      - docs/product/application-atlas.md
+      - docs/roadmaps
+      - docs/orchestration
+      tests: []
+      config: []
+      generated: []
+    dependencies:
+    - gc-001-rdm-024-artifacts
+    - gc-003-native-regression
+    execution:
+      route: root-direct
+      lane: fast
+      discovery_profile: null
+      worker_profile: null
+      reasoning_effort: xhigh
+      lane_trigger: decision-closed-documentation-reconciliation
+      role_triggers: {}
+      worker_contract_path: null
+      worker_contract_hash: null
+      evidence_trust: root-observed
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: low
+    verification:
+      focused_commands:
+      - 'rg -n "RDM-023|RDM-024|status: active|status: stale" docs'
+      focused_evidence:
+      - docs/product/application-atlas.md remains explicitly stale with a precise uncommitted-tree boundary.
+      - RDM-024 is completed; older RDM-018/RDM-020/RDM-021 and Claude RDM-019 remain deferred.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
+      fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-fingerprint.json
+      evidence_registry: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-registry.json
+      reuse_decision: run:evidence-missing
+    isolation:
+      type: current-checkout
+      branch: develop
+      path: null
+      thread: null
+    compound:
+      run_id: null
+      state_path: null
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-27T09:07:01Z'
+      artifact_revision: sha256:6e52e3289376129dc261b11293d4ef1ff27dfcc7ce90431ee41e71931197ee79
+    handoff:
+      intended_base: develop
+      pr_grouping: documentation-with-gap-closure
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+wave_history:
+- wave: gap-closure-2026-08-27
+  status: release-ready
+  observed_at: '2026-08-27T09:07:01Z'
+  units:
+  - gc-001-rdm-024-artifacts
+  - gc-002-rdm-024-implementation
+  - gc-003-native-regression
+  - gc-004-roadmap-reconciliation
+  aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
+  aggregate_record_digest: sha256:1734c5934d3dfa756a9948a6a81f4ebd65f0e7bae4de2dd9d65c21d9b8e5c1c2
+  release_handoff: not-requested

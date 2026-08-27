@@ -59,6 +59,16 @@ source_docs:
 | `docs/build-guide.md`, `.github/workflows/ci.yml` y `package.json` | Definen toolchain, gates, bundles multiplataforma y empaquetado del agente WSL. | High |
 | `docs/orchestration/compound-master-state.md` y su archivo enlazado | El estado compacto curado conserva el handoff operativo actual; el snapshot enlazado mantiene el historial completo sin gobernar el alcance de este roadmap. | High para el estado actual; Low para decisiones históricas |
 
+## Reconciliation — 2026-08-27
+
+This roadmap remains active only for its still-deferred product work. RDM-018,
+RDM-020 and RDM-021 have not been implemented. The OpenCode/Kimi portion of
+RDM-019 was refined and delivered by the completed RDM-022 roadmap; Claude
+remains deferred in RDM-019. RDM-017's WSL evidence gate was resolved by
+retaining the truthful PTY limitation, not by claiming structured WSL runtime
+parity. RDM-024 is a separate completed MCP gap-closure slice and does not
+reuse the completed RDM-023 installation-protocol identifier.
+
 ## Entry Gate
 
 Antes de iniciar RDM-017 debe cerrarse e integrarse la rama `codex/feature/ux-hardening-completion` sobre `develop`, con sus pruebas, contrato generado, documentación y smoke Tauri/WSL. Este gate evita construir las nuevas olas sobre una base UX o contractual todavía móvil; no añade otro roadmap item ni reabre el diagnóstico ya implementado.
