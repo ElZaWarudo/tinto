@@ -45,7 +45,7 @@ tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
 notify = "8"
 portable-pty = "0.9.0"
 uuid = { version = "1", features = ["v4"] }
-which = "6"
+which = "8"
 # Capa de lectura de git: libgit2 vendored (build estático, sin red — no se necesitan
 # features ssh/https porque Tinto nunca hace fetch/push)
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
