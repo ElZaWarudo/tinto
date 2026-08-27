@@ -4373,13 +4373,22 @@ select option:checked {
   padding: 0;
 }
 
+.console-dock-panel__quick-project-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  background: #18191b;
+}
+
 .console-dock-panel__quick-project-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 7px 14px;
-  border-bottom: 1px solid var(--border);
-  background: #18191b;
+  border-bottom: 0;
   color: var(--fg);
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
@@ -4389,6 +4398,94 @@ select option:checked {
   text-transform: uppercase;
 }
 
+.console-dock-panel__mcp-link,
+.console-dock-panel__quick-retry {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid rgba(20, 184, 166, 0.36);
+  border-radius: 4px;
+  background: rgba(20, 184, 166, 0.08);
+  color: #ccfbf1;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.console-dock-panel__mcp-link {
+  margin-right: 8px;
+}
+
+.console-dock-panel__quick-retry {
+  min-width: 70px;
+  border-color: var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-muted);
+}
+
+.console-dock-panel__mcp-link:hover,
+.console-dock-panel__mcp-link:focus-visible,
+.console-dock-panel__quick-retry:hover,
+.console-dock-panel__quick-retry:focus-visible {
+  background: rgba(20, 184, 166, 0.18);
+  color: var(--fg);
+  outline: 2px solid var(--accent-fg);
+  outline-offset: -2px;
+}
+
+.console-dock-panel__mcp-browser {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #161616;
+}
+
+.console-dock-panel__mcp-browser-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: #18191b;
+  color: var(--fg);
+}
+
+.console-dock-panel__mcp-browser-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.console-dock-panel__mcp-browser-head strong,
+.console-dock-panel__mcp-browser-head small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-dock-panel__mcp-browser-head strong {
+  font-size: 12px;
+}
+
+.console-dock-panel__mcp-browser-head small {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.console-dock-panel__mcp-browser-head button {
+  flex: none;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
 .console-dock-panel__quick-agents {
   display: grid;
   gap: 0;
@@ -4396,7 +4493,7 @@ select option:checked {
 
 .console-dock-panel__quick-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) auto 32px;
   gap: 0;
   border-bottom: 1px solid var(--border);
 }

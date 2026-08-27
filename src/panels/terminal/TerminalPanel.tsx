@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import type { IDockviewPanelProps } from "dockview-react";
@@ -3592,7 +3592,8 @@ function AgentDetailsHeader({
   );
 }
 
-function AgentMcpPanel({ readOnly, repo }: { readOnly: boolean; repo: string }) {
+export function AgentMcpPanel({ readOnly, repo }: { readOnly: boolean; repo: string }) {
+  const titleId = useId();
   const [workbench, setWorkbench] = useState<string | null>(null);
   const [inventory, setInventory] = useState<McpInventory | null>(null);
   const [catalogDefinitions, setCatalogDefinitions] = useState<McpDefinition[] | null>(null);
@@ -3715,11 +3716,11 @@ function AgentMcpPanel({ readOnly, repo }: { readOnly: boolean; repo: string }) 
     : "Cargando";
 
   return (
-    <section className="agent-panel__mcp" aria-labelledby="agent-mcp-title">
+    <section className="agent-panel__mcp" aria-labelledby={titleId}>
       <div className="agent-panel__mcp-head">
         <div>
-          <h3 id="agent-mcp-title">MCP del proyecto</h3>
-          <p>Inventario local de Codex · sin sincronización de proveedor.</p>
+          <h3 id={titleId}>MCP del proyecto</h3>
+          <p title={repo}>Proyecto: {repoName(repo)} · inventario local de Codex</p>
         </div>
         <button
           aria-label="Actualizar inventario MCP"
@@ -8638,6 +8639,13 @@ function sessionStatusLabel(status: string): string {
       return "Fallida";
     case "reverted":
       return "Revertida";
+    case "exited":
+      return "Archivada";
+    case "cancelled":
+    case "canceled":
+      return "Cancelada";
+    case "waiting":
+      return "En espera";
     case "error":
       return "Error";
     default:

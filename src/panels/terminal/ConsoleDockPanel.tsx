@@ -21,9 +21,11 @@ import {
 import { agentSessionStore, useAgentSessionState } from "../../agent/sessionStore";
 import { busStore, useBusState } from "../../bus/store";
 import type {
+  AgentProviderReadiness,
   AgentJournalSessionSummary,
   AgentSession,
   AgentSessionTimelineItem,
+  WorkbenchConfig,
 } from "../../bus/contract";
 import codexLogo from "../../assets/agents/codex.svg";
 import claudeLogo from "../../assets/agents/claude.svg";
@@ -47,9 +49,10 @@ import {
   readRecentAgentLaunches,
   type RecentAgentLaunch,
 } from "../../workspace/recentAgentLaunches";
-import { TerminalPanel, type TerminalPanelParams } from "./TerminalPanel";
+import { AgentMcpPanel, TerminalPanel, type TerminalPanelParams } from "./TerminalPanel";
 import { AgentConversationTab } from "./AgentConversationTab";
 import { detachTerminalFromConsoleDrop, detachTerminalPanel } from "./detachTerminalPanel";
+import { agentAvailabilityKey, checkAgentAvailabilityForRepo } from "../agentAvailability";
 
 const consoleComponents = {
   [PANEL_AGENT_TERMINAL]: TerminalPanel,
@@ -72,6 +75,13 @@ interface JournalContextMenuState {
   left: number;
   top: number;
   trigger: HTMLElement;
+}
+
+type QuickLaunchAvailabilityState = "checking" | "available" | "unavailable" | "unknown";
+
+interface QuickLaunchAvailability {
+  state: QuickLaunchAvailabilityState;
+  readiness?: AgentProviderReadiness;
 }
 
 type OpenJournalContextMenu = (
@@ -108,7 +118,7 @@ export function ConsoleDockPanel({
   containerApi,
   restoreTransferLayout = false,
 }: ConsoleDockPanelProps) {
-  const { repos } = useBusState();
+  const { repos, config } = useBusState();
   const agentState = useAgentSessionState();
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -135,6 +145,10 @@ export function ConsoleDockPanel({
   const [workspaceExpanded, setWorkspaceExpanded] = useState(
     () => workspacePanelApi?.isMaximized() ?? false,
   );
+  const [mcpRepo, setMcpRepo] = useState<string | null>(null);
+  const [quickLaunchAvailability, setQuickLaunchAvailability] = useState<
+    Record<string, QuickLaunchAvailability>
+  >({});
 
   const scheduleConsoleDockLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) {
@@ -284,6 +298,54 @@ export function ConsoleDockPanel({
     return repoKeys.length === 0 || repoKeys.includes(launch.repo);
   });
   const quickLaunchGroups = groupRecentLaunches(visibleQuickLaunches);
+  const visibleProjectRepos =
+    Object.keys(repos).length > 0
+      ? Object.keys(repos)
+      : quickLaunchGroups.map((group) => group.repo);
+  const quickLaunchProjects = mergeVisibleProjectGroups(quickLaunchGroups, visibleProjectRepos);
+  const quickLaunchSignature = visibleQuickLaunches.map(recentLaunchKey).join("\n");
+
+  useEffect(() => {
+    const launches = visibleQuickLaunches;
+    if (launches.length === 0) return;
+    let alive = true;
+    setQuickLaunchAvailability((current) => {
+      const next = { ...current };
+      for (const launch of launches) {
+        next[recentLaunchKey(launch)] = { state: "checking" };
+      }
+      return next;
+    });
+    for (const launch of launches) {
+      void checkAgentAvailabilityForRepo(
+        launch.repo,
+        availabilityKeyForRepo(launch.repo, config),
+        launch.agentType,
+      )
+        .then((readiness) => {
+          if (!alive) return;
+          setQuickLaunchAvailability((current) => ({
+            ...current,
+            [recentLaunchKey(launch)]: {
+              state: readiness.state === "binary_available" ? "available" : "unavailable",
+              readiness,
+            },
+          }));
+        })
+        .catch(() => {
+          if (!alive) return;
+          setQuickLaunchAvailability((current) => ({
+            ...current,
+            [recentLaunchKey(launch)]: { state: "unknown" },
+          }));
+        });
+    }
+    return () => {
+      alive = false;
+    };
+    // The signature keeps this effect scoped to the currently visible launch entries.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickLaunchSignature, config]);
 
   const ensureTerminalPanelVisible = (params: TerminalPanelParams) => {
     if (containerApi) {
@@ -330,6 +392,9 @@ export function ConsoleDockPanel({
   const launchRecent = (launch: RecentAgentLaunch) => {
     const key = recentLaunchKey(launch);
     if (launchingKey) return;
+    if (["checking", "unavailable"].includes(quickLaunchAvailability[key]?.state ?? "checking")) {
+      return;
+    }
     setLaunchingKey(key);
     setLaunchError(null);
     void startAgentSession(launch.repo, launch.agentType, "workspace")
@@ -359,6 +424,32 @@ export function ConsoleDockPanel({
       .finally(() => {
         setLaunchingKey(null);
       });
+  };
+
+  const retryQuickLaunchAvailability = (launch: RecentAgentLaunch) => {
+    const key = recentLaunchKey(launch);
+    setQuickLaunchAvailability((current) => ({ ...current, [key]: { state: "checking" } }));
+    void checkAgentAvailabilityForRepo(
+      launch.repo,
+      availabilityKeyForRepo(launch.repo, config),
+      launch.agentType,
+      { force: true },
+    )
+      .then((readiness) =>
+        setQuickLaunchAvailability((current) => ({
+          ...current,
+          [key]: {
+            state: readiness.state === "binary_available" ? "available" : "unavailable",
+            readiness,
+          },
+        })),
+      )
+      .catch(() =>
+        setQuickLaunchAvailability((current) => ({
+          ...current,
+          [key]: { state: "unknown" },
+        })),
+      );
   };
 
   const removeRecent = (launch: RecentAgentLaunch) => {
@@ -508,12 +599,12 @@ export function ConsoleDockPanel({
           </header>
           <div
             className={`console-dock-panel__empty-workspace${
-              quickLaunchGroups.length === 0
+              quickLaunchProjects.length === 0
                 ? " console-dock-panel__empty-workspace--archive-only"
                 : ""
             }`}
           >
-            {quickLaunchGroups.length > 0 ? (
+            {quickLaunchProjects.length > 0 ? (
               <section
                 className="console-dock-panel__quick-launch"
                 aria-label="Inicio rápido de Agents"
@@ -521,21 +612,37 @@ export function ConsoleDockPanel({
                 <div className="console-dock-panel__section-head">
                   <span>Inicio rápido</span>
                   <small>
-                    {quickLaunchGroups.length}{" "}
-                    {quickLaunchGroups.length === 1 ? "proyecto" : "proyectos"}
+                    {quickLaunchProjects.length}{" "}
+                    {quickLaunchProjects.length === 1 ? "proyecto" : "proyectos"}
                   </small>
                 </div>
                 <div className="console-dock-panel__quick-browser">
-                  {quickLaunchGroups.map((group) => {
+                  {quickLaunchProjects.map((group) => {
                     return (
                       <div className="console-dock-panel__quick-project" key={group.repo}>
-                        <div className="console-dock-panel__quick-project-title" title={group.repo}>
-                          {busStore.displayName(group.repo)}
+                        <div className="console-dock-panel__quick-project-head">
+                          <div className="console-dock-panel__quick-project-title" title={group.repo}>
+                            {busStore.displayName(group.repo)}
+                          </div>
+                          <button
+                            className="console-dock-panel__mcp-link"
+                            type="button"
+                            aria-label={`Configurar MCP del proyecto ${busStore.displayName(
+                              group.repo,
+                            )}`}
+                            onClick={() => setMcpRepo(group.repo)}
+                          >
+                            Configurar MCP
+                          </button>
                         </div>
                         <div className="console-dock-panel__quick-agents">
                           {group.launches.map((launch) => {
                             const key = recentLaunchKey(launch);
                             const logo = agentLogoSrc(launch.agentType);
+                            const availability = quickLaunchAvailability[key] ?? {
+                              state: "checking" as const,
+                            };
+                            const unavailable = availability.state === "unavailable";
                             return (
                               <div className="console-dock-panel__quick-row" key={key}>
                                 <button
@@ -544,7 +651,11 @@ export function ConsoleDockPanel({
                                   aria-label={`Iniciar ${busStore.displayName(
                                     launch.repo,
                                   )} con ${agentLabel(launch.agentType)}`}
-                                  disabled={!!launchingKey}
+                                  disabled={
+                                    !!launchingKey ||
+                                    unavailable ||
+                                    availability.state === "checking"
+                                  }
                                   onPointerDown={(event) => event.stopPropagation()}
                                   onMouseDown={(event) => event.stopPropagation()}
                                   onClick={(event) => {
@@ -567,12 +678,26 @@ export function ConsoleDockPanel({
                                   </span>
                                   <span className="console-dock-panel__quick-main">
                                     <span>{agentLabel(launch.agentType)}</span>
-                                    <small>Reciente</small>
+                                    <small>
+                                      {quickLaunchAvailabilityLabel(availability, launch.agentType)}
+                                    </small>
                                   </span>
                                   <span className="console-dock-panel__quick-action">
                                     {launchingKey === key ? "Iniciando…" : "Ejecutar"}
                                   </span>
                                 </button>
+                                {(availability.state === "unknown" || unavailable) && (
+                                  <button
+                                    className="console-dock-panel__quick-retry"
+                                    type="button"
+                                    aria-label={`Volver a comprobar disponibilidad de ${agentLabel(
+                                      launch.agentType,
+                                    )} para ${busStore.displayName(launch.repo)}`}
+                                    onClick={() => retryQuickLaunchAvailability(launch)}
+                                  >
+                                    Comprobar
+                                  </button>
+                                )}
                                 <button
                                   className="console-dock-panel__quick-remove"
                                   type="button"
@@ -610,15 +735,36 @@ export function ConsoleDockPanel({
                 </div>
               )
             )}
-            {journalSessions.length > 0 && (
+            {mcpRepo ? (
+              <section
+                className="console-dock-panel__mcp-browser"
+                aria-label={`Configuración MCP del proyecto ${busStore.displayName(mcpRepo)}`}
+              >
+                <div className="console-dock-panel__mcp-browser-head">
+                  <div>
+                    <strong>Configuración MCP del proyecto</strong>
+                    <small title={mcpRepo}>{busStore.displayName(mcpRepo)}</small>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Cerrar configuración MCP"
+                    onClick={() => setMcpRepo(null)}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+                <AgentMcpPanel readOnly={false} repo={mcpRepo} />
+              </section>
+            ) : journalSessions.length > 0 ? (
               <AgentJournalBrowser
                 sessions={journalSessions}
+                liveSessions={agentState.sessions}
                 openingJournalId={openingJournalId}
                 deletingJournalId={deletingJournalId}
                 onOpen={openJournalTranscript}
                 onOpenContextMenu={openJournalContextMenu}
               />
-            )}
+            ) : null}
           </div>
         </div>
       )}
@@ -958,7 +1104,7 @@ function AgentNavigator({
 }
 
 function isActiveAgentSession(session: AgentSession | undefined): boolean {
-  return !session || session.status === "starting" || session.status === "running";
+  return !!session && (session.status === "starting" || session.status === "running");
 }
 
 function activeSessionPreview(
@@ -1008,12 +1154,14 @@ function sessionStatusTone(session: AgentSession | undefined): "live" | "settlin
 
 function AgentJournalBrowser({
   sessions,
+  liveSessions,
   openingJournalId,
   deletingJournalId,
   onOpen,
   onOpenContextMenu,
 }: {
   sessions: AgentJournalSessionSummary[];
+  liveSessions: Record<string, AgentSession>;
   openingJournalId: string | null;
   deletingJournalId: string | null;
   onOpen: (session: AgentJournalSessionSummary) => void;
@@ -1086,9 +1234,16 @@ function AgentJournalBrowser({
                   <span className="console-dock-panel__journal-main">
                     <span>{title}</span>
                     <small>
-                      {agentLabel(session.agent_type)} · {sessionLabel(session)}
+                      {agentLabel(session.agent_type)} · {sessionLabel(session, liveSessions[session.id])}
                     </small>
-                    {session.last_event_text && <em>{session.last_event_text}</em>}
+                    {session.last_event_text && (
+                      <em
+                        aria-label={`Último evento: ${session.last_event_text}`}
+                        title={session.last_event_text}
+                      >
+                        {session.last_event_text}
+                      </em>
+                    )}
                   </span>
                   <span className="console-dock-panel__journal-action">
                     {deletingJournalId === session.id
@@ -1220,8 +1375,50 @@ function recentLaunchKey(launch: RecentAgentLaunch): string {
   return `${launch.repo}\u0000${launch.agentType}`;
 }
 
-function sessionLabel(session: AgentJournalSessionSummary): string {
-  const status = localizedSessionStatus(session.status);
+function mergeVisibleProjectGroups(
+  groups: RecentAgentLaunchGroup[],
+  visibleRepos: string[],
+): RecentAgentLaunchGroup[] {
+  const byRepo = new Map(groups.map((group) => [group.repo, group]));
+  return visibleRepos.map(
+    (repo) =>
+      byRepo.get(repo) ?? {
+        repo,
+        launches: [],
+        lastUsedAt: 0,
+      },
+  );
+}
+
+function availabilityKeyForRepo(repo: string, config: WorkbenchConfig | null | undefined): string {
+  const workbenches = config?.workbenches ?? [];
+  const active = config?.active ?? null;
+  const entry =
+    workbenches.find((workbench) => workbench.name === active)?.repos.find((item) => item.path === repo) ??
+    workbenches.flatMap((workbench) => workbench.repos).find((item) => item.path === repo);
+  return agentAvailabilityKey(entry?.source, entry?.distro);
+}
+
+function quickLaunchAvailabilityLabel(
+  availability: QuickLaunchAvailability,
+  agentType: string,
+): string {
+  if (availability.state === "checking") return "Comprobando disponibilidad…";
+  if (availability.state === "available") return "Disponible · reciente";
+  if (availability.state === "unknown") return "No se pudo comprobar · puedes intentarlo";
+  if (availability.readiness?.source === "wsl") {
+    return `No disponible en WSL ${availability.readiness.distro ?? "seleccionado"}`;
+  }
+  return `No disponible · ${agentLabel(agentType)}`;
+}
+
+function sessionLabel(
+  session: AgentJournalSessionSummary,
+  liveSession: AgentSession | undefined,
+): string {
+  const savedStatusIsActive = session.status === "running" || session.status === "starting";
+  const isLive = isActiveAgentSession(liveSession);
+  const status = localizedSessionStatus(savedStatusIsActive && !isLive ? "exited" : session.status);
   const count = session.event_count === 1 ? "1 evento" : `${session.event_count} eventos`;
   return `${status} / ${count}`;
 }

@@ -901,6 +901,17 @@ describe("TerminalPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("localizes an exited transcript status instead of exposing the raw lifecycle value", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ status: "exited", pid: null, ended_at_ms: 2, turn_status: "waiting" }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    expect(await screen.findByTitle(/Estado: Archivada/)).toHaveTextContent("Archivada");
+    expect(screen.getByText("En espera")).toBeInTheDocument();
+  });
+
   it("shows distinct live process states without exposing private reasoning", async () => {
     listAgentSessionsMock.mockResolvedValueOnce([
       sessionFixture({ turn_status: "settling", output_bytes_per_second: 42 }),

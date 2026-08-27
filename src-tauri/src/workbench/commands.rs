@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use serde::Serialize;
 use tauri::State;
 
 use super::{
@@ -61,9 +62,33 @@ pub(crate) fn list_workbenches_from_store(store: &WorkbenchStore) -> WorkbenchCo
     store.runtime_config()
 }
 
+/// Respuesta pública de `list_workbenches`.
+///
+/// `WorkbenchConfig` conserva la clave singular `workbench` porque también es
+/// el modelo de persistencia TOML. La frontera Tauri usa este DTO para exponer
+/// el contrato JSON plural que consume el frontend sin cambiar los datos
+/// guardados.
+#[derive(Debug, Clone, Serialize)]
+pub struct ListWorkbenchesResponse {
+    pub version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    pub workbenches: Vec<Workbench>,
+}
+
+impl From<WorkbenchConfig> for ListWorkbenchesResponse {
+    fn from(config: WorkbenchConfig) -> Self {
+        Self {
+            version: config.version,
+            active: config.active,
+            workbenches: config.workbenches,
+        }
+    }
+}
+
 #[tauri::command]
-pub fn list_workbenches(store: Store<'_>) -> Result<WorkbenchConfig, WorkbenchError> {
-    locked(&store, |s| Ok(list_workbenches_from_store(s)))
+pub fn list_workbenches(store: Store<'_>) -> Result<ListWorkbenchesResponse, WorkbenchError> {
+    locked(&store, |s| Ok(list_workbenches_from_store(s).into()))
 }
 
 #[tauri::command]
@@ -356,6 +381,31 @@ name = "A"
         assert_eq!(visible.workbenches[0].repos.len(), expected_visible);
         assert_eq!(visible.workbenches[0].repos[0].source, RepoSource::Local);
         assert_eq!(store.config().workbenches[0].repos.len(), 2);
+    }
+
+    #[test]
+    fn list_workbenches_response_serializa_plural_sin_cambiar_la_persistencia() {
+        let (_dir, store) = store_with_config(
+            r#"
+version = 1
+active = "A"
+
+[[workbench]]
+name = "A"
+"#,
+        );
+
+        let response = ListWorkbenchesResponse::from(list_workbenches_from_store(&store));
+        let json = serde_json::to_value(response).expect("serialize command response");
+
+        assert!(json.get("workbenches").is_some());
+        assert!(json.get("workbench").is_none());
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["active"], "A");
+
+        let persisted = toml::to_string(store.config()).expect("serialize persisted config");
+        assert!(persisted.contains("[[workbench]]"));
+        assert!(!persisted.contains("[[workbenches]]"));
     }
 
     #[test]

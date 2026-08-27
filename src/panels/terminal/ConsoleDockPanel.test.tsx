@@ -19,7 +19,7 @@ const dockviewMocks = vi.hoisted(() => ({
 }));
 
 const busMocks = vi.hoisted(() => ({
-  repos: { "/r/api": {} },
+  repos: { "/r/api": {} } as Record<string, unknown>,
   displayName: vi.fn((path: string) => (path === "/r/api" ? "api" : path)),
 }));
 
@@ -29,6 +29,37 @@ const clientMocks = vi.hoisted(() => ({
   listAgentJournalSessions: vi.fn<() => Promise<unknown[]>>(() => Promise.resolve([])),
   getAgentJournalSession: vi.fn<() => Promise<unknown | null>>(() => Promise.resolve(null)),
   deleteAgentJournalSession: vi.fn(() => Promise.resolve(true)),
+  getCodexMcpInventory: vi.fn(() =>
+    Promise.resolve({
+      provider: "codex",
+      target: "windows_local",
+      status: "empty",
+      definitions: [],
+      checked_at_ms: 1,
+    }),
+  ),
+  listMcpProfiles: vi.fn(() =>
+    Promise.resolve({ profiles: [], active_profile_id: null, delivery_status: "unknown" }),
+  ),
+  listWorkbenches: vi.fn(() =>
+    Promise.resolve({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [{ path: "/r/api", alias: null, fs_watch: [] }] }],
+    }),
+  ),
+}));
+
+const availabilityMocks = vi.hoisted(() => ({
+  agentAvailabilityKey: vi.fn(() => "host"),
+  checkAgentAvailabilityForRepo: vi.fn(() =>
+    Promise.resolve({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "binary_available",
+    }),
+  ),
 }));
 
 const sessionStoreMocks = vi.hoisted(() => ({
@@ -72,7 +103,12 @@ vi.mock("../../bus/client", () => ({
   listAgentJournalSessions: clientMocks.listAgentJournalSessions,
   getAgentJournalSession: clientMocks.getAgentJournalSession,
   deleteAgentJournalSession: clientMocks.deleteAgentJournalSession,
+  getCodexMcpInventory: clientMocks.getCodexMcpInventory,
+  listMcpProfiles: clientMocks.listMcpProfiles,
+  listWorkbenches: clientMocks.listWorkbenches,
 }));
+
+vi.mock("../agentAvailability", () => availabilityMocks);
 
 vi.mock("../../agent/sessionStore", () => ({
   agentSessionStore: {
@@ -163,6 +199,16 @@ describe("ConsoleDockPanel detach drop", () => {
     clientMocks.getAgentJournalSession.mockResolvedValue(null);
     clientMocks.deleteAgentJournalSession.mockClear();
     clientMocks.deleteAgentJournalSession.mockResolvedValue(true);
+    clientMocks.getCodexMcpInventory.mockClear();
+    clientMocks.listMcpProfiles.mockClear();
+    clientMocks.listWorkbenches.mockClear();
+    availabilityMocks.checkAgentAvailabilityForRepo.mockClear();
+    availabilityMocks.checkAgentAvailabilityForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "binary_available",
+    });
     sessionStoreMocks.setSessions.mockClear();
     sessionStoreMocks.upsertSession.mockClear();
     sessionStoreMocks.removeSession.mockClear();
@@ -246,12 +292,83 @@ describe("ConsoleDockPanel detach drop", () => {
     unmount();
   });
 
+  it("exposes project MCP configuration without starting a provider", async () => {
+    markRecentAgentLaunch({ repo: "/r/api", agentType: "codex" });
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    const configure = await screen.findByRole("button", {
+      name: "Configurar MCP del proyecto api",
+    });
+    fireEvent.click(configure);
+
+    expect(await screen.findByRole("heading", { name: "MCP del proyecto" })).toBeInTheDocument();
+    expect(screen.getByText("Proyecto: api · inventario local de Codex")).toBeInTheDocument();
+    expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
+    expect(clientMocks.getCodexMcpInventory).toHaveBeenCalledWith();
+    unmount();
+  });
+
+  it("exposes MCP for a registered project without a recent launch", async () => {
+    busMocks.repos = { "/r/registered": {} };
+    clientMocks.listWorkbenches.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        { name: "Work", repos: [{ path: "/r/registered", alias: null, fs_watch: [] }] },
+      ],
+    });
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    const configure = await screen.findByRole("button", {
+      name: "Configurar MCP del proyecto /r/registered",
+    });
+    fireEvent.click(configure);
+
+    expect(await screen.findByRole("heading", { name: "MCP del proyecto" })).toBeInTheDocument();
+    expect(screen.getByText("Proyecto: registered · inventario local de Codex")).toBeInTheDocument();
+    expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("keeps a stale terminal in recent history instead of claiming it is active", async () => {
+    consoleDock.openTerminal({ sessionId: "sess-stale", repo: "/r/api", agentType: "codex" });
+
+    const { unmount } = render(<ConsoleDockPanel />);
+
+    expect(await screen.findByText("Recientes")).toBeInTheDocument();
+    expect(screen.queryByText("En curso")).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it("blocks a known-unavailable quick launch and offers a retry", async () => {
+    availabilityMocks.checkAgentAvailabilityForRepo.mockResolvedValueOnce({
+      agent_type: "codex",
+      source: "local",
+      distro: null,
+      state: "unavailable",
+    });
+    markRecentAgentLaunch({ repo: "/r/api", agentType: "codex" });
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    const launch = await screen.findByRole("button", { name: /iniciar api con codex/i });
+    await waitFor(() => expect(launch).toBeDisabled());
+    expect(screen.getByText("No disponible · Codex")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /volver a comprobar disponibilidad/i }),
+    ).toBeInTheDocument();
+    fireEvent.click(launch);
+    expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it("starts a new session from a recent launch shortcut", async () => {
     markRecentAgentLaunch({ repo: "/r/api", agentType: "codex" });
     const openSpy = vi.spyOn(consoleDock, "openTerminal");
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /iniciar api con codex/i }));
+    const launch = await screen.findByRole("button", { name: /iniciar api con codex/i });
+    await waitFor(() => expect(launch).toBeEnabled());
+    fireEvent.click(launch);
 
     await waitFor(() =>
       expect(clientMocks.startAgentSession).toHaveBeenCalledWith("/r/api", "codex", "workspace"),
@@ -280,7 +397,9 @@ describe("ConsoleDockPanel detach drop", () => {
     const openSpy = vi.spyOn(consoleDock, "openTerminal");
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /iniciar api con codex/i }));
+    const launch = await screen.findByRole("button", { name: /iniciar api con codex/i });
+    await waitFor(() => expect(launch).toBeEnabled());
+    fireEvent.click(launch);
 
     await waitFor(() =>
       expect(openSpy).toHaveBeenCalledWith({
@@ -291,6 +410,36 @@ describe("ConsoleDockPanel detach drop", () => {
     );
 
     openSpy.mockRestore();
+    unmount();
+  });
+
+  it("keeps quick launch disabled until readiness resolves", async () => {
+    const readiness = deferred<{
+      agent_type: string;
+      source: "local";
+      distro: null;
+      state: "binary_available";
+    }>();
+    availabilityMocks.checkAgentAvailabilityForRepo.mockReturnValueOnce(readiness.promise);
+    markRecentAgentLaunch({ repo: "/r/api", agentType: "codex" });
+
+    const { unmount } = render(<ConsoleDockPanel />);
+    const launch = await screen.findByRole("button", { name: /iniciar api con codex/i });
+    expect(launch).toBeDisabled();
+    fireEvent.click(launch);
+    expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      readiness.resolve({
+        agent_type: "codex",
+        source: "local",
+        distro: null,
+        state: "binary_available",
+      });
+    });
+    await waitFor(() => expect(launch).toBeEnabled());
+    fireEvent.click(launch);
+    await waitFor(() => expect(clientMocks.startAgentSession).toHaveBeenCalled());
     unmount();
   });
 
@@ -335,6 +484,31 @@ describe("ConsoleDockPanel detach drop", () => {
     expect(
       screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
     ).toBeInTheDocument();
+    unmount();
+  });
+
+  it("labels a saved active-status journal as archived when no live session matches", async () => {
+    clientMocks.listAgentJournalSessions.mockResolvedValue([
+      {
+        id: "sess-stale-running",
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "running",
+        started_at_ms: 1,
+        updated_at_ms: 3,
+        event_count: 1,
+        first_user_message: "Sesión guardada sin proceso vivo",
+      },
+    ]);
+
+    const { unmount } = render(<ConsoleDockPanel />);
+
+    const card = await screen.findByRole("button", {
+      name: /abrir la transcripción de api con codex/i,
+    });
+    expect(card).toHaveTextContent("Codex · archivada / 1 evento");
+    expect(card).not.toHaveTextContent(/en ejecución|iniciando/i);
+    expect(screen.queryByText("En curso")).not.toBeInTheDocument();
     unmount();
   });
 
@@ -696,6 +870,26 @@ describe("ConsoleDockPanel detach drop", () => {
 
   it("separates conversations in progress from recent history", async () => {
     consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
+    sessionStoreMocks.state = {
+      sessions: {
+        "sess-live": {
+          id: "sess-live",
+          repo: "/r/api",
+          agent_type: "codex",
+          status: "running",
+          pid: 1,
+          started_at_ms: 1,
+          exit_code: null,
+          error: null,
+          turn_status: "working",
+          active_sessions: 1,
+          age_ms: 4,
+        },
+      },
+      output: {},
+      outputTotal: {},
+      timeline: {},
+    };
     clientMocks.listAgentJournalSessions.mockResolvedValue([
       {
         id: "sess-old",
