@@ -33,7 +33,7 @@ jira_provider: none
 - Title: `feat: add provider-neutral MCP control plane`
 - Base: `develop`
 - Head: `codex/provider-neutral-mcp-control-plane`
-- Body: the validated file at machine-local path `C:/Users/User/AppData/Local/Temp/tinto-rdm024-pr-body.md`.
+- Body: `docs/orchestration/release-handoffs/2026-08-27-provider-neutral-mcp-control-plane-pr-body.md` (formatter and checker passed).
 - Exact first push: `git push -u origin codex/provider-neutral-mcp-control-plane`.
 - Reviewer: none inferred from the three most recent merged pull requests.
 - Merge: excluded from this release handoff.
