@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 
 import { removeWithRetry } from "./remove-with-retry.mjs";
 
@@ -16,14 +15,14 @@ test("retries a transient Windows removal error", async () => {
       if (removals === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
     },
   });
-  assert.equal(removals, 2);
-  assert.equal(delays, 1);
+  expect(removals).toBe(2);
+  expect(delays).toBe(1);
 });
 
 test("propagates non-retryable failures immediately", async () => {
   let removals = 0;
   const failure = Object.assign(new Error("denied"), { code: "EACCES" });
-  await assert.rejects(
+  await expect(
     removeWithRetry({
       attempts: 3,
       delay: async () => {},
@@ -32,15 +31,14 @@ test("propagates non-retryable failures immediately", async () => {
         throw failure;
       },
     }),
-    failure,
-  );
-  assert.equal(removals, 1);
+  ).rejects.toBe(failure);
+  expect(removals).toBe(1);
 });
 
 test("propagates the final retryable failure", async () => {
   let removals = 0;
   const failure = Object.assign(new Error("locked"), { code: "EPERM" });
-  await assert.rejects(
+  await expect(
     removeWithRetry({
       attempts: 2,
       delay: async () => {},
@@ -49,7 +47,6 @@ test("propagates the final retryable failure", async () => {
         throw failure;
       },
     }),
-    failure,
-  );
-  assert.equal(removals, 2);
+  ).rejects.toBe(failure);
+  expect(removals).toBe(2);
 });
