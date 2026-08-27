@@ -26,6 +26,8 @@ use super::{
     validation::{resolve_agent_binary, validate_agent_type},
     AgentConsoleError, AgentSessionRegistry,
 };
+#[cfg(any(target_os = "windows", test))]
+use crate::bus::contract::McpDefinition;
 use crate::bus::{
     commands::write_repo_agents_md_config,
     contract::{
@@ -37,9 +39,9 @@ use crate::bus::{
         AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput,
         AgentSessionPermissionMode, AgentSessionResumeMode, AgentSessionResumeResult,
         AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
-        AgentSessionTimelineKind, McpDefinition, McpInventory, McpInventoryStatus, McpProvider,
-        McpTarget, EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG,
-        EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
+        AgentSessionTimelineKind, McpInventory, McpInventoryStatus, McpProvider, McpTarget,
+        EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT,
+        EVENT_AGENT_SESSION_TIMELINE,
     },
     BusHandle, RepoResolveError,
 };
@@ -56,6 +58,7 @@ const SESSION_OUTPUT_QUIET_REFRESH_MS: u64 = 2_500;
 const SESSION_OUTPUT_MONITOR_TICK_MS: u64 = 500;
 const MAX_SESSION_GOAL_CHARS: usize = 4_000;
 const MAX_MCP_CONFIG_BYTES: u64 = 512 * 1024;
+#[cfg(any(target_os = "windows", test))]
 const MAX_MCP_DEFINITIONS: usize = 128;
 const MAX_MCP_NAME_CHARS: usize = 120;
 pub(crate) const TIMELINE_FRAME_PREFIX: &[u8] = b"\x1dTINTO_TIMELINE ";
@@ -2000,22 +2003,25 @@ fn command_availability(command: &str) -> Option<bool> {
 /// Shared implementation for the public Codex inventory command.  The
 /// compatibility `/mcp` command intentionally keeps its historical summary;
 /// this richer projection is the only path that is persisted into profiles.
+#[cfg(not(target_os = "windows"))]
 pub fn read_codex_mcp_inventory() -> McpInventory {
     let checked_at_ms = now_ms();
-    #[cfg(not(target_os = "windows"))]
-    {
-        return McpInventory {
-            provider: McpProvider::Codex,
-            target: McpTarget::WindowsLocal,
-            status: McpInventoryStatus::Unsupported,
-            definitions: Vec::new(),
-            error: Some(
-                "El inventario MCP de Codex solo está disponible en Windows/local.".to_string(),
-            ),
-            checked_at_ms,
-        };
+    McpInventory {
+        provider: McpProvider::Codex,
+        target: McpTarget::WindowsLocal,
+        status: McpInventoryStatus::Unsupported,
+        definitions: Vec::new(),
+        error: Some(
+            "El inventario MCP de Codex solo está disponible en Windows/local.".to_string(),
+        ),
+        checked_at_ms,
     }
+}
 
+/// Reads the bounded Codex MCP projection from the local Windows configuration.
+#[cfg(target_os = "windows")]
+pub fn read_codex_mcp_inventory() -> McpInventory {
+    let checked_at_ms = now_ms();
     let error_inventory = |message: &str| McpInventory {
         provider: McpProvider::Codex,
         target: McpTarget::WindowsLocal,
@@ -2067,6 +2073,7 @@ pub fn read_codex_mcp_inventory() -> McpInventory {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn safe_codex_config_path(config_path: &Path) -> bool {
     let Some(root) = config_path.parent() else {
         return false;
@@ -2089,6 +2096,7 @@ fn safe_codex_config_path(config_path: &Path) -> bool {
     canonical_config.parent() == Some(canonical_root.as_path())
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn mcp_definitions_from_codex_value(value: &toml::Value) -> (Vec<McpDefinition>, bool) {
     let mut definitions = Vec::new();
     let mut had_invalid_entries = false;
