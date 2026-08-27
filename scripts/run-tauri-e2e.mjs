@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
+
+import { removeWithRetry } from "./remove-with-retry.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = mkdtempSync(join(tmpdir(), "tinto-e2e-"));
@@ -51,7 +54,7 @@ function run(command, args) {
   }
 }
 
-function removeIsolatedState() {
+async function removeIsolatedState() {
   const resolvedStateDir = resolve(stateDir);
   const resolvedTempDir = resolve(tmpdir());
   const isDirectTempChild = dirname(resolvedStateDir) === resolvedTempDir;
@@ -59,11 +62,10 @@ function removeIsolatedState() {
   if (!isDirectTempChild || !hasExpectedPrefix) {
     throw new Error(`Refusing to remove unexpected E2E state directory: ${resolvedStateDir}`);
   }
-  rmSync(resolvedStateDir, {
-    recursive: true,
-    force: true,
-    maxRetries: 50,
-    retryDelay: 100,
+  await removeWithRetry({
+    attempts: process.platform === "win32" ? 10 : 1,
+    delay: () => delay(250),
+    remove: () => rmSync(resolvedStateDir, { recursive: true, force: true }),
   });
 }
 
@@ -121,7 +123,7 @@ try {
   cleanupFailures.push(error);
 }
 try {
-  removeIsolatedState();
+  await removeIsolatedState();
 } catch (error) {
   cleanupFailures.push(error);
 }
