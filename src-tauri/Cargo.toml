@@ -54,7 +54,7 @@ thiserror = "2"
 ignore = "0.4"
 globset = "0.4"
 # Contenido binario de FileContent en el contrato del bus
-base64 = "0.22"
+base64 = "0.23"
 # Persistencia de workbenches: TOML en el config dir del SO
 toml = "1.1"
 dirs = "6"
