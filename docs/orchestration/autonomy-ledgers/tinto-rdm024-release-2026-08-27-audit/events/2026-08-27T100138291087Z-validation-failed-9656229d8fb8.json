@@ -1,0 +1,21 @@
+{
+  "block_reasons": [
+    "execution-template-unavailable"
+  ],
+  "command_result": null,
+  "contract_id": "tinto-rdm024-release-2026-08-27",
+  "event_hash": "9656229d8fb854a18f335005fc1ad6379a4a263b06c46fb7117a29a22bf532d5",
+  "execution_mode": "validation-only",
+  "mutation_class": "branch_push",
+  "payload_hash": null,
+  "planned_event_hash": "f45f40b89ac38e35f13cf6aa227438d847a34c1da5e8898f1a610cecdc785e3c",
+  "previous_event_hash": "f45f40b89ac38e35f13cf6aa227438d847a34c1da5e8898f1a610cecdc785e3c",
+  "stage": "validation-failed",
+  "target": {
+    "branch": "codex/provider-neutral-mcp-control-plane",
+    "new_sha": "d2b8d3d601ac71973c93bdfc274be359d113f9c8",
+    "old_sha": "0000000000000000000000000000000000000000",
+    "repository": "ElZaWarudo/tinto"
+  },
+  "timestamp": "2026-08-27T10:01:38.291087Z"
+}

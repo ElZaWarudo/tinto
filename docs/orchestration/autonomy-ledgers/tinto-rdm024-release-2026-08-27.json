@@ -42,7 +42,7 @@
   ],
   "audit": {
     "path": "docs/orchestration/autonomy-ledgers/tinto-rdm024-release-2026-08-27-audit",
-    "head_hash": "GENESIS"
+    "head_hash": "9656229d8fb854a18f335005fc1ad6379a4a263b06c46fb7117a29a22bf532d5"
   },
-  "contract_hash": "8c794a48966ddb7c6cbe3e8bde8c16136f40f97e61b2f6f6dc879c67f2ff3791"
+  "contract_hash": "915852d736feea1844f14ec8d9671d3e186b9d26825828d73c1d3be59e14d2ec"
 }

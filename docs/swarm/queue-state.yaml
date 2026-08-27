@@ -59,9 +59,9 @@ autonomy:
     schema_version: 1
     contract_id: tinto-rdm024-release-2026-08-27
     contract_status: active
-    contract_hash: 8c794a48966ddb7c6cbe3e8bde8c16136f40f97e61b2f6f6dc879c67f2ff3791
-    latest_audit_event: GENESIS
-    captured_at: '2026-08-27T09:56:48.3215398Z'
+    contract_hash: 915852d736feea1844f14ec8d9671d3e186b9d26825828d73c1d3be59e14d2ec
+    latest_audit_event: 9656229d8fb854a18f335005fc1ad6379a4a263b06c46fb7117a29a22bf532d5
+    captured_at: '2026-08-27T10:01:38.291087Z'
 jira:
   provider: null
   project_key: null
@@ -156,7 +156,7 @@ units:
       pr_grouping: with-implementation
       release_notes: []
       suggested_jira_transition: null
-      release_marshal_packet: null
+      release_marshal_packet: docs/orchestration/release-handoffs/2026-08-27-provider-neutral-mcp-control-plane.md
   gc-002-rdm-024-implementation:
     title: Implement the execution-ready RDM-024 work package
     jira_key: null
@@ -243,7 +243,7 @@ units:
       pr_grouping: auto-after-reviewability-gate
       release_notes: []
       suggested_jira_transition: null
-      release_marshal_packet: null
+      release_marshal_packet: docs/orchestration/release-handoffs/2026-08-27-provider-neutral-mcp-control-plane.md
   gc-003-native-regression:
     title: Re-run Windows-native product regression
     jira_key: null
@@ -321,7 +321,7 @@ units:
       pr_grouping: documentation-with-gap-closure
       release_notes: []
       suggested_jira_transition: null
-      release_marshal_packet: null
+      release_marshal_packet: docs/orchestration/release-handoffs/2026-08-27-provider-neutral-mcp-control-plane.md
   gc-004-roadmap-reconciliation:
     title: Refresh the application atlas and roadmap statuses
     jira_key: null
@@ -400,7 +400,7 @@ units:
       pr_grouping: documentation-with-gap-closure
       release_notes: []
       suggested_jira_transition: null
-      release_marshal_packet: null
+      release_marshal_packet: docs/orchestration/release-handoffs/2026-08-27-provider-neutral-mcp-control-plane.md
 wave_history:
 - wave: gap-closure-2026-08-27
   status: release-ready
@@ -412,4 +412,4 @@ wave_history:
   - gc-004-roadmap-reconciliation
   aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
   aggregate_record_digest: sha256:1734c5934d3dfa756a9948a6a81f4ebd65f0e7bae4de2dd9d65c21d9b8e5c1c2
-  release_handoff: not-requested
+  release_handoff: validation-only/manual-required
