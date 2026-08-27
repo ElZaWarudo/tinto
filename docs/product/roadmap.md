@@ -56,12 +56,16 @@ GC-003 may run while the RDM-024 artifact pipeline is active because it does
 not touch MCP contracts or implementation surfaces. Mutable product-code work
 remains serial.
 
-## Deferred work
+## Future scope
 
 - Guided authoring refinements beyond the minimum profile/import/sync flow.
 - Additional providers not already represented by Tinto.
-- RDM-018 agent memory, RDM-020 content search, and RDM-021 mobile companion.
 - Release/tag work and dependency-maintenance batching.
+- RDM-021 mobile companion remains backlog-only and is not the next initiative.
+
+RDM-018 agent memory, the remaining RDM-019 adapter work, and RDM-020 content
+search were retired from the product roadmap on 2026-08-27. Existing code and
+historical artifacts are preserved, but no future implementation is planned.
 
 ## Risks and controls
 

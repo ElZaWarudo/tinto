@@ -29,7 +29,7 @@ production_posture: prototype
 
 - **Outcome:** Turn the right-side file overview ruler (currently alert-only) into a true whole-file navigation/follow surface synced to the full document, matching the Visual Studio Code overview-ruler experience: always-visible track, scroll-synced caret, click-to-jump on the full track, configurable width and density, and the same marker style for alerts, diff hunks, and (future) search matches.
 - **Scope surfaces:** `src/panels/file/FileOverviewRuler.tsx`, `src/panels/file/useOverviewScrollSync.ts` (new), `src/panels/file/FileOverviewRuler.test.tsx` (new), `src/panels/file/useOverviewScrollSync.test.tsx` (new), `src/panels/diff/DiffView.tsx`, `src/panels/diff/FullFileView.tsx`, `src/panels/file/FileView.tsx`, `src/App.css`, `demo.html` (new), `src/demo/main.tsx` (new), `src/demo/demo.css` (new), and corresponding test updates in `src/panels/diff/*View.test.tsx` and `src/panels/file/FileView.test.tsx`.
-- **Out of scope (deferred):** Adding a new file-content search feature is deferred. Search-result markers in the rail are blocked on a separate search initiative. WSL2 watcher fallback, file/tree UX polish, delete undo/redo, file operations, and Gitleaks addon/configuration flows are already shipped (see state file "Post-Closeout Iteration" sections) and not in scope here.
+- **Out of scope:** The separate file-content search initiative was retired on 2026-08-27. Search-result markers remain an unused compatibility seam, not planned work. WSL2 watcher fallback, file/tree UX polish, delete undo/redo, file operations, and Gitleaks addon/configuration flows are already shipped (see state file "Post-Closeout Iteration" sections) and not in scope here.
 - **Dependencies:** none in code. The RUL-001 package depends only on the existing `FileOverviewRuler` and the three view components shipped in `233bd41` and earlier commits.
 - **Verification criteria:** see the work package "What to test (user review checklist)" and the state file RUL-001 section.
 
@@ -42,7 +42,7 @@ The following residual backlog items are intentionally **not** in this iteration
 - TypeScript/Rust contract code generation.
 - Keyboard arrow navigation / Escape polish (in the file body itself; the rail's own keyboard nav is in scope for RUL-001).
 - Diff viewer hardening / polish.
-- File-content search feature and search-result markers in the rail (RUL-001 includes the rail foundation and hunk-marker style placeholder; the search markers themselves are deferred).
+- File-content search and search-result markers in the rail are retired from the roadmap; RUL-001 retains only the delivered compatibility seam.
 - Rail in `FileView` itself (markdown/media surfaces). The rail stays inside `DiffView` and `FullFileView` for now.
 
 ## Delivery Strategy

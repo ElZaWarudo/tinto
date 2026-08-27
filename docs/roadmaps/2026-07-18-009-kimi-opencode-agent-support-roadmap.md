@@ -45,8 +45,8 @@ source_docs:
 ## Relationship To The Active Roadmap
 
 - Este roadmap es un refinamiento focalizado de RDM-019 en `docs/roadmaps/2026-07-13-008-post-ux-agent-platform-roadmap.md`.
-- Sustituye de forma canónica la parte OpenCode de RDM-019 por una dirección confirmada por fuentes actuales: ACP v1 como runtime preferido y PTY como fallback. RDM-019 conserva únicamente la futura entrega de Claude; no debe originar un segundo paquete OpenCode.
-- Añade Kimi Code al alcance solicitado sin retirar Claude. El adaptador de Claude continúa diferido bajo el roadmap anterior.
+- Sustituye de forma canónica la parte OpenCode de RDM-019 por una dirección confirmada por fuentes actuales: ACP v1 como runtime preferido y PTY como fallback.
+- Reconciliación 2026-08-27: el trabajo restante de RDM-019, incluido el adaptador Claude, fue retirado del roadmap. Las referencias posteriores de este documento conservan únicamente el contexto histórico de la entrega RDM-022; no representan trabajo diferido ni futuro.
 - No reabre ni sustituye el alcance de RDM-016/RDM-017. Reutiliza su frontera de runtime ya integrada; la evidencia WSL no ejecutada queda confinada a la limitación R18/AE8 y no se usa para declarar soporte estructurado.
 
 ## Source Inventory

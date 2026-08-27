@@ -377,7 +377,7 @@ units:
       - 'rg -n "RDM-023|RDM-024|status: active|status: stale" docs'
       focused_evidence:
       - docs/product/application-atlas.md remains explicitly stale with a precise uncommitted-tree boundary.
-      - RDM-024 is completed; older RDM-018/RDM-020/RDM-021 and Claude RDM-019 remain deferred.
+      - RDM-024 is completed; RDM-018/RDM-019/RDM-020 are retired and RDM-021 remains backlog-only, not the next initiative.
       aggregate_owner: wave-root
       aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
       fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-fingerprint.json
