@@ -24,6 +24,8 @@ import {
   type AgentSessionRuntimeOptions,
   type AgentSessionPermissionMode,
   type AgentHostCommandResult,
+  type McpInventory,
+  type McpProfileState,
   type AgentProviderReadiness,
   type AgentInstallPreview,
   type AgentInstallOutcome,
@@ -58,6 +60,38 @@ export const renameWorkbench = (from: string, to: string) =>
   invoke("rename_workbench", { from, to });
 
 export const deleteWorkbench = (name: string) => invoke("delete_workbench", { name });
+
+export const getCodexMcpInventory = () => invoke<McpInventory>("get_codex_mcp_inventory");
+
+export const listMcpProfiles = (workbench: string) =>
+  invoke<McpProfileState>("list_mcp_profiles", { workbench });
+
+export const importCodexMcpProfile = (workbench: string) =>
+  invoke<McpProfileState>("import_codex_mcp_profile", { workbench });
+
+export const createMcpProfile = (workbench: string, name: string) =>
+  invoke<McpProfileState>("create_mcp_profile", { workbench, name });
+
+export const renameMcpProfile = (workbench: string, profileId: string, name: string) =>
+  invoke<McpProfileState>("rename_mcp_profile", {
+    workbench,
+    profileId,
+    name,
+  });
+
+export const deleteMcpProfile = (
+  workbench: string,
+  profileId: string,
+  replacementId?: string | null,
+) =>
+  invoke<McpProfileState>("delete_mcp_profile", {
+    workbench,
+    profileId,
+    replacementId: replacementId ?? null,
+  });
+
+export const setMcpDefaultProfile = (workbench: string, profileId: string) =>
+  invoke<McpProfileState>("set_mcp_default_profile", { workbench, profileId });
 
 /** Adds a repo and resolves to the stored canonical path (the key the bus
  * reports it under), so the caller can open its project tab. */

@@ -37,7 +37,8 @@ use crate::bus::{
         AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput,
         AgentSessionPermissionMode, AgentSessionResumeMode, AgentSessionResumeResult,
         AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
-        AgentSessionTimelineKind, EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG,
+        AgentSessionTimelineKind, McpDefinition, McpInventory, McpInventoryStatus, McpProvider,
+        McpTarget, EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG,
         EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
     },
     BusHandle, RepoResolveError,
@@ -54,6 +55,9 @@ use crate::wsl_agent::{
 const SESSION_OUTPUT_QUIET_REFRESH_MS: u64 = 2_500;
 const SESSION_OUTPUT_MONITOR_TICK_MS: u64 = 500;
 const MAX_SESSION_GOAL_CHARS: usize = 4_000;
+const MAX_MCP_CONFIG_BYTES: u64 = 512 * 1024;
+const MAX_MCP_DEFINITIONS: usize = 128;
+const MAX_MCP_NAME_CHARS: usize = 120;
 pub(crate) const TIMELINE_FRAME_PREFIX: &[u8] = b"\x1dTINTO_TIMELINE ";
 static TIMELINE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -1362,6 +1366,14 @@ pub async fn run_agent_host_command(
     Ok(result)
 }
 
+/// Reads only the bounded, non-sensitive Codex MCP projection.  This command
+/// never executes a configured command and deliberately reports safe outcome
+/// states instead of leaking provider paths or parser details.
+#[tauri::command]
+pub fn get_codex_mcp_inventory() -> McpInventory {
+    read_codex_mcp_inventory()
+}
+
 #[tauri::command]
 pub fn resize_agent_session(
     registry: State<'_, Mutex<AgentSessionRegistry>>,
@@ -1885,10 +1897,18 @@ fn codex_mcp_status_message() -> Result<String, CommandError> {
     if !config_path.is_file() {
         return Ok("No Codex MCP config was found.".to_string());
     }
-    let raw = std::fs::read_to_string(&config_path)
-        .map_err(|error| CommandError::new("mcp_config_read_failed", error.to_string()))?;
-    let servers = mcp_servers_from_codex_config(&raw)
-        .map_err(|error| CommandError::new("mcp_config_invalid", error.to_string()))?;
+    let raw = read_bounded_codex_config(&config_path).map_err(|_| {
+        CommandError::new(
+            "mcp_config_read_failed",
+            "No se pudo leer la configuración MCP de Codex.",
+        )
+    })?;
+    let servers = mcp_servers_from_codex_config(&raw).map_err(|_| {
+        CommandError::new(
+            "mcp_config_invalid",
+            "La configuración MCP de Codex no tiene un formato válido.",
+        )
+    })?;
     if servers.is_empty() {
         return Ok("No MCP servers are configured in Codex config.".to_string());
     }
@@ -1904,10 +1924,13 @@ fn codex_mcp_status_message() -> Result<String, CommandError> {
     let names = servers
         .iter()
         .take(8)
-        .map(|server| match server.command_found {
-            Some(true) => format!("{}: command found", server.name),
-            Some(false) => format!("{}: command missing", server.name),
-            None => format!("{}: command unchecked", server.name),
+        .filter_map(|server| {
+            let name = normalize_mcp_text(&server.name, MAX_MCP_NAME_CHARS)?;
+            Some(match server.command_found {
+                Some(true) => format!("{name}: command found"),
+                Some(false) => format!("{name}: command missing"),
+                None => format!("{name}: command unchecked"),
+            })
         })
         .collect::<Vec<_>>()
         .join("; ");
@@ -1942,12 +1965,18 @@ fn mcp_servers_from_codex_config(raw: &str) -> Result<Vec<McpServerSummary>, tom
         let Some(table) = value.get(table_name).and_then(toml::Value::as_table) else {
             continue;
         };
-        for (name, server) in table {
+        for (raw_name, server) in table {
+            let Some(name) = normalize_mcp_identifier(raw_name, MAX_MCP_NAME_CHARS) else {
+                continue;
+            };
+            if !server.is_table() {
+                continue;
+            }
             let command_found = server
                 .get("command")
                 .and_then(toml::Value::as_str)
                 .and_then(command_availability);
-            servers.entry(name.clone()).or_insert(McpServerSummary {
+            servers.entry(name.to_string()).or_insert(McpServerSummary {
                 name: name.to_string(),
                 command_found,
             });
@@ -1966,6 +1995,225 @@ fn command_availability(command: &str) -> Option<bool> {
         return Some(path.is_file());
     }
     None
+}
+
+/// Shared implementation for the public Codex inventory command.  The
+/// compatibility `/mcp` command intentionally keeps its historical summary;
+/// this richer projection is the only path that is persisted into profiles.
+pub fn read_codex_mcp_inventory() -> McpInventory {
+    let checked_at_ms = now_ms();
+    #[cfg(not(target_os = "windows"))]
+    {
+        return McpInventory {
+            provider: McpProvider::Codex,
+            target: McpTarget::WindowsLocal,
+            status: McpInventoryStatus::Unsupported,
+            definitions: Vec::new(),
+            error: Some(
+                "El inventario MCP de Codex solo está disponible en Windows/local.".to_string(),
+            ),
+            checked_at_ms,
+        };
+    }
+
+    let error_inventory = |message: &str| McpInventory {
+        provider: McpProvider::Codex,
+        target: McpTarget::WindowsLocal,
+        status: McpInventoryStatus::Error,
+        definitions: Vec::new(),
+        error: Some(message.to_string()),
+        checked_at_ms,
+    };
+
+    let Some(config_path) = codex_config_path() else {
+        return error_inventory("No se encontró el directorio de configuración de Codex.");
+    };
+    if !config_path.is_file() {
+        return error_inventory("No se encontró la configuración MCP de Codex.");
+    }
+    if !safe_codex_config_path(&config_path) {
+        return error_inventory("La ruta de configuración de Codex no es segura.");
+    }
+    let raw = match read_bounded_codex_config(&config_path) {
+        Ok(raw) => raw,
+        Err("too_large") => {
+            return error_inventory("La configuración MCP de Codex supera el límite permitido.");
+        }
+        Err(_) => return error_inventory("No se pudo leer la configuración MCP de Codex."),
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&raw) else {
+        return error_inventory("La configuración MCP de Codex no tiene un formato válido.");
+    };
+
+    let (definitions, had_invalid_entries) = mcp_definitions_from_codex_value(&value);
+    let status = if definitions.is_empty() {
+        if had_invalid_entries {
+            McpInventoryStatus::Partial
+        } else {
+            McpInventoryStatus::Empty
+        }
+    } else if had_invalid_entries {
+        McpInventoryStatus::Partial
+    } else {
+        McpInventoryStatus::Success
+    };
+    McpInventory {
+        provider: McpProvider::Codex,
+        target: McpTarget::WindowsLocal,
+        status,
+        definitions,
+        error: None,
+        checked_at_ms,
+    }
+}
+
+fn safe_codex_config_path(config_path: &Path) -> bool {
+    let Some(root) = config_path.parent() else {
+        return false;
+    };
+    let Ok(root_metadata) = std::fs::symlink_metadata(root) else {
+        return false;
+    };
+    let Ok(config_metadata) = std::fs::symlink_metadata(config_path) else {
+        return false;
+    };
+    if root_metadata.file_type().is_symlink() || config_metadata.file_type().is_symlink() {
+        return false;
+    }
+    let Ok(canonical_root) = root.canonicalize() else {
+        return false;
+    };
+    let Ok(canonical_config) = config_path.canonicalize() else {
+        return false;
+    };
+    canonical_config.parent() == Some(canonical_root.as_path())
+}
+
+fn mcp_definitions_from_codex_value(value: &toml::Value) -> (Vec<McpDefinition>, bool) {
+    let mut definitions = Vec::new();
+    let mut had_invalid_entries = false;
+    for (table_name, source) in [
+        ("mcp_servers", "codex_mcp_servers"),
+        ("mcpServers", "codex_mcpServers"),
+    ] {
+        let Some(root) = value.get(table_name) else {
+            continue;
+        };
+        let Some(table) = root.as_table() else {
+            had_invalid_entries = true;
+            continue;
+        };
+        for (raw_name, server) in table {
+            if definitions.len() >= MAX_MCP_DEFINITIONS {
+                had_invalid_entries = true;
+                break;
+            }
+            if !server.is_table() {
+                had_invalid_entries = true;
+                continue;
+            }
+            let Some(name) = normalize_mcp_identifier(raw_name, MAX_MCP_NAME_CHARS) else {
+                had_invalid_entries = true;
+                continue;
+            };
+            let command_available = server
+                .get("command")
+                .and_then(toml::Value::as_str)
+                .and_then(command_availability);
+            definitions.push(McpDefinition {
+                provider: McpProvider::Codex,
+                target: McpTarget::WindowsLocal,
+                source: source.to_string(),
+                name,
+                command_available,
+            });
+        }
+    }
+    (definitions, had_invalid_entries)
+}
+
+fn normalize_mcp_identifier(value: &str, max_chars: usize) -> Option<String> {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.is_empty() || chars.len() > max_chars {
+        return None;
+    }
+    if !chars
+        .iter()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        return None;
+    }
+    if !chars
+        .first()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+        || !chars
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+        || chars.windows(2).any(|pair| {
+            matches!(pair, [left, right]
+                if matches!(left, '-' | '_' | '.') && matches!(right, '-' | '_' | '.'))
+        })
+    {
+        return None;
+    }
+
+    let lower = value.to_ascii_lowercase();
+    let forbidden = [
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "authorization",
+        "cookie",
+        "header",
+        "headers",
+        "http",
+        "https",
+        "url",
+        "uri",
+    ];
+    if forbidden.iter().any(|marker| {
+        lower
+            .split(['-', '_', '.'])
+            .any(|segment| segment == *marker)
+    }) || lower.contains("api-key")
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn read_bounded_codex_config(config_path: &Path) -> Result<String, &'static str> {
+    let metadata = std::fs::metadata(config_path).map_err(|_| "read")?;
+    if metadata.len() > MAX_MCP_CONFIG_BYTES {
+        return Err("too_large");
+    }
+    let file = std::fs::File::open(config_path).map_err(|_| "read")?;
+    let mut reader = file.take(MAX_MCP_CONFIG_BYTES.saturating_add(1));
+    let mut raw = String::new();
+    let bytes_read = reader.read_to_string(&mut raw).map_err(|_| "read")?;
+    if bytes_read as u64 > MAX_MCP_CONFIG_BYTES {
+        return Err("too_large");
+    }
+    Ok(raw)
+}
+
+fn normalize_mcp_text(value: &str, max_chars: usize) -> Option<String> {
+    let cleaned = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let mut chars = cleaned.chars();
+    let prefix = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        Some(format!("{prefix}…"))
+    } else {
+        Some(prefix)
+    }
 }
 
 fn run_compact_host_command(
@@ -3855,6 +4103,85 @@ command = "duplicate"
             command_availability(missing.to_string_lossy().as_ref()),
             Some(false)
         );
+    }
+
+    #[test]
+    fn mcp_inventory_projection_is_bounded_source_bound_and_secret_free() {
+        let value = toml::from_str::<toml::Value>(
+            r#"
+[mcp_servers.same]
+command = "npx"
+args = ["--token", "secret"]
+
+[mcpServers.same]
+command = ""
+env = { TOKEN = "secret" }
+
+[mcp_servers."\u0001"]
+command = "ignored"
+"#,
+        )
+        .unwrap();
+        let (definitions, partial) = mcp_definitions_from_codex_value(&value);
+
+        assert!(partial);
+        assert_eq!(definitions.len(), 2);
+        assert_eq!(definitions[0].name, "same");
+        assert_eq!(definitions[0].source, "codex_mcp_servers");
+        assert_eq!(definitions[1].source, "codex_mcpServers");
+        let encoded = serde_json::to_string(&definitions).unwrap();
+        assert!(!encoded.contains("secret"));
+        assert!(!encoded.contains("args"));
+        assert!(!encoded.contains("env"));
+    }
+
+    #[test]
+    fn mcp_inventory_marks_malformed_roots_and_entries_partial_and_rejects_unsafe_names() {
+        let value = toml::from_str::<toml::Value>(
+            r#"
+mcp_servers = "not a table"
+
+[mcpServers]
+valid_server = { command = "npx" }
+bad_entry = "not a table"
+"https://example.com" = { command = "npx" }
+Authorization = { command = "npx" }
+"C:\\secrets" = { command = "npx" }
+"#,
+        )
+        .unwrap();
+
+        let (definitions, partial) = mcp_definitions_from_codex_value(&value);
+
+        assert!(partial);
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].name, "valid_server");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn mcp_inventory_is_unsupported_off_windows() {
+        let inventory = read_codex_mcp_inventory();
+
+        assert_eq!(inventory.status, McpInventoryStatus::Unsupported);
+        assert!(inventory.definitions.is_empty());
+    }
+
+    #[test]
+    fn safe_codex_config_path_rejects_symlinked_config() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let config = root.path().join("config.toml");
+        #[cfg(unix)]
+        let created = std::os::unix::fs::symlink(outside.path(), &config).is_ok();
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_file(outside.path(), &config).is_ok();
+
+        if !created {
+            return;
+        }
+
+        assert!(!safe_codex_config_path(&config));
     }
 
     fn run_git_test_command(repo: &Path, args: &[&str]) {

@@ -17,9 +17,14 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::bus::contract::{
+    McpDefinitionRef, McpDeliveryStatus, McpInventory, McpInventoryStatus, McpProfile,
+    McpProfileState,
+};
 use crate::git::{Git2Engine, GitError};
 
 pub const CONFIG_FILE: &str = "workbenches.toml";
+const MAX_MCP_PROFILE_NAME_CHARS: usize = 80;
 
 /// Error del workbench manager, serializable hacia el frontend.
 #[derive(Debug, Error)]
@@ -48,6 +53,16 @@ pub enum WorkbenchError {
     NoConfigDir,
     #[error("el store de workbenches quedó inutilizable tras un error interno; reinicia la app")]
     StoreLocked,
+    #[error("el nombre del perfil MCP no es válido")]
+    InvalidMcpProfileName,
+    #[error("ya existe un perfil MCP llamado `{0}`")]
+    DuplicateMcpProfile(String),
+    #[error("no existe el perfil MCP `{0}`")]
+    UnknownMcpProfile(String),
+    #[error("selecciona otro perfil MCP antes de eliminar el perfil activo")]
+    McpDefaultProfileRequired,
+    #[error("la importación MCP no está disponible: {0}")]
+    McpImportUnavailable(String),
 }
 
 impl From<GitError> for WorkbenchError {
@@ -72,6 +87,11 @@ impl Serialize for WorkbenchError {
             WorkbenchError::WslCommandFailed(_) => "wsl_command_failed",
             WorkbenchError::NoConfigDir => "no_config_dir",
             WorkbenchError::StoreLocked => "store_locked",
+            WorkbenchError::InvalidMcpProfileName => "invalid_mcp_profile_name",
+            WorkbenchError::DuplicateMcpProfile(_) => "duplicate_mcp_profile",
+            WorkbenchError::UnknownMcpProfile(_) => "unknown_mcp_profile",
+            WorkbenchError::McpDefaultProfileRequired => "mcp_default_profile_required",
+            WorkbenchError::McpImportUnavailable(_) => "mcp_import_unavailable",
         };
         let mut s = serializer.serialize_struct("WorkbenchError", 2)?;
         s.serialize_field("kind", kind)?;
@@ -149,6 +169,10 @@ pub struct Workbench {
     pub name: String,
     #[serde(default, rename = "repos")]
     pub repos: Vec<RepoEntry>,
+    #[serde(default, rename = "mcp_profiles", alias = "mcp_profile")]
+    pub mcp_profiles: Vec<McpProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_default_profile: Option<String>,
 }
 
 /// Config completa persistida.
@@ -204,6 +228,17 @@ impl WorkbenchStore {
         if let Some(active) = &config.active {
             if !config.workbenches.iter().any(|w| &w.name == active) {
                 config.active = None;
+            }
+        }
+        for workbench in &mut config.workbenches {
+            if let Some(active_profile) = &workbench.mcp_default_profile {
+                if !workbench
+                    .mcp_profiles
+                    .iter()
+                    .any(|profile| &profile.id == active_profile)
+                {
+                    workbench.mcp_default_profile = None;
+                }
             }
         }
         Ok(Self {
@@ -299,6 +334,8 @@ impl WorkbenchStore {
         self.config.workbenches.push(Workbench {
             name: name.to_string(),
             repos: Vec::new(),
+            mcp_profiles: Vec::new(),
+            mcp_default_profile: None,
         });
         self.persist()
     }
@@ -489,6 +526,245 @@ impl WorkbenchStore {
         self.persist()?;
         Ok(runtime)
     }
+
+    pub fn mcp_profile_state(&self, workbench: &str) -> Result<McpProfileState, WorkbenchError> {
+        let workbench = self
+            .config
+            .workbenches
+            .iter()
+            .find(|candidate| candidate.name == workbench)
+            .ok_or_else(|| WorkbenchError::UnknownWorkbench(workbench.to_string()))?;
+        Ok(McpProfileState {
+            profiles: workbench.mcp_profiles.clone(),
+            active_profile_id: workbench.mcp_default_profile.clone(),
+            // Profiles are local state only; no provider synchronization is
+            // admitted by this slice.
+            delivery_status: McpDeliveryStatus::Unsupported,
+        })
+    }
+
+    pub fn import_mcp_inventory(
+        &mut self,
+        workbench: &str,
+        inventory: &McpInventory,
+    ) -> Result<McpProfileState, WorkbenchError> {
+        if matches!(
+            inventory.status,
+            McpInventoryStatus::Error
+                | McpInventoryStatus::Partial
+                | McpInventoryStatus::Unsupported
+        ) {
+            return Err(WorkbenchError::McpImportUnavailable(
+                "el inventario no está disponible".to_string(),
+            ));
+        }
+        if inventory.status == McpInventoryStatus::Empty
+            && self
+                .config
+                .workbenches
+                .iter()
+                .find(|candidate| candidate.name == workbench)
+                .is_some_and(|candidate| {
+                    candidate
+                        .mcp_profiles
+                        .iter()
+                        .any(|profile| profile.id == "imported")
+                })
+        {
+            return Err(WorkbenchError::McpImportUnavailable(
+                "el inventario vacío no reemplaza el catálogo importado".to_string(),
+            ));
+        }
+        let definitions = inventory
+            .definitions
+            .iter()
+            .map(|definition| McpDefinitionRef {
+                provider: definition.provider,
+                target: definition.target,
+                source: definition.source.clone(),
+                name: definition.name.clone(),
+            })
+            .collect::<Vec<_>>();
+        self.transaction(|store| {
+            let workbench = store.find_mut(workbench)?;
+            let imported = McpProfile {
+                id: "imported".to_string(),
+                name: "Imported".to_string(),
+                definitions,
+            };
+            if let Some(existing) = workbench
+                .mcp_profiles
+                .iter_mut()
+                .find(|profile| profile.id == imported.id)
+            {
+                *existing = imported;
+            } else {
+                workbench.mcp_profiles.push(imported);
+            }
+            if workbench.mcp_default_profile.is_none() {
+                workbench.mcp_default_profile = Some("imported".to_string());
+            }
+            store.persist()?;
+            Ok(())
+        })?;
+        self.mcp_profile_state(workbench)
+    }
+
+    pub fn create_mcp_profile(
+        &mut self,
+        workbench: &str,
+        name: &str,
+    ) -> Result<McpProfileState, WorkbenchError> {
+        let name = normalize_mcp_profile_name(name)?;
+        self.transaction(|store| {
+            let workbench = store.find_mut(workbench)?;
+            if workbench
+                .mcp_profiles
+                .iter()
+                .any(|profile| profile.name == name)
+            {
+                return Err(WorkbenchError::DuplicateMcpProfile(name.clone()));
+            }
+            let id = next_mcp_profile_id(&workbench.mcp_profiles, &name);
+            workbench.mcp_profiles.push(McpProfile {
+                id,
+                name,
+                definitions: Vec::new(),
+            });
+            store.persist()?;
+            Ok(())
+        })?;
+        self.mcp_profile_state(workbench)
+    }
+
+    pub fn rename_mcp_profile(
+        &mut self,
+        workbench: &str,
+        profile_id: &str,
+        name: &str,
+    ) -> Result<McpProfileState, WorkbenchError> {
+        let name = normalize_mcp_profile_name(name)?;
+        self.transaction(|store| {
+            let workbench = store.find_mut(workbench)?;
+            if workbench
+                .mcp_profiles
+                .iter()
+                .any(|profile| profile.id != profile_id && profile.name == name)
+            {
+                return Err(WorkbenchError::DuplicateMcpProfile(name.clone()));
+            }
+            let profile = workbench
+                .mcp_profiles
+                .iter_mut()
+                .find(|profile| profile.id == profile_id)
+                .ok_or_else(|| WorkbenchError::UnknownMcpProfile(profile_id.to_string()))?;
+            profile.name = name;
+            store.persist()?;
+            Ok(())
+        })?;
+        self.mcp_profile_state(workbench)
+    }
+
+    pub fn delete_mcp_profile(
+        &mut self,
+        workbench: &str,
+        profile_id: &str,
+        replacement_id: Option<&str>,
+    ) -> Result<McpProfileState, WorkbenchError> {
+        self.transaction(|store| {
+            let workbench = store.find_mut(workbench)?;
+            if !workbench
+                .mcp_profiles
+                .iter()
+                .any(|profile| profile.id == profile_id)
+            {
+                return Err(WorkbenchError::UnknownMcpProfile(profile_id.to_string()));
+            }
+            if workbench.mcp_default_profile.as_deref() == Some(profile_id) {
+                let replacement = replacement_id
+                    .filter(|candidate| *candidate != profile_id)
+                    .filter(|candidate| {
+                        workbench
+                            .mcp_profiles
+                            .iter()
+                            .any(|profile| profile.id == *candidate)
+                    })
+                    .ok_or(WorkbenchError::McpDefaultProfileRequired)?;
+                workbench.mcp_default_profile = Some(replacement.to_string());
+            }
+            workbench
+                .mcp_profiles
+                .retain(|profile| profile.id != profile_id);
+            store.persist()?;
+            Ok(())
+        })?;
+        self.mcp_profile_state(workbench)
+    }
+
+    pub fn set_mcp_default_profile(
+        &mut self,
+        workbench: &str,
+        profile_id: &str,
+    ) -> Result<McpProfileState, WorkbenchError> {
+        self.transaction(|store| {
+            let workbench = store.find_mut(workbench)?;
+            if !workbench
+                .mcp_profiles
+                .iter()
+                .any(|profile| profile.id == profile_id)
+            {
+                return Err(WorkbenchError::UnknownMcpProfile(profile_id.to_string()));
+            }
+            workbench.mcp_default_profile = Some(profile_id.to_string());
+            store.persist()?;
+            Ok(())
+        })?;
+        self.mcp_profile_state(workbench)
+    }
+
+    fn transaction<T>(
+        &mut self,
+        action: impl FnOnce(&mut Self) -> Result<T, WorkbenchError>,
+    ) -> Result<T, WorkbenchError> {
+        let previous_config = self.config.clone();
+        let previous_degraded = self.degraded;
+        match action(self) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.config = previous_config;
+                self.degraded = previous_degraded;
+                Err(error)
+            }
+        }
+    }
+}
+
+fn normalize_mcp_profile_name(name: &str) -> Result<String, WorkbenchError> {
+    let name = name
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_MCP_PROFILE_NAME_CHARS {
+        return Err(WorkbenchError::InvalidMcpProfileName);
+    }
+    Ok(name.to_string())
+}
+
+fn next_mcp_profile_id(profiles: &[McpProfile], name: &str) -> String {
+    let base = name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let base = if base.is_empty() { "profile" } else { &base };
+    let mut candidate = format!("profile-{base}");
+    let mut suffix = 2;
+    while profiles.iter().any(|profile| profile.id == candidate) {
+        candidate = format!("profile-{base}-{suffix}");
+        suffix += 1;
+    }
+    candidate
 }
 
 fn normalize_runtime_repo_identity(path: &str) -> String {
@@ -531,6 +807,8 @@ fn runtime_workbench(workbench: &Workbench) -> Option<Workbench> {
     Some(Workbench {
         name: workbench.name.clone(),
         repos,
+        mcp_profiles: workbench.mcp_profiles.clone(),
+        mcp_default_profile: workbench.mcp_default_profile.clone(),
     })
 }
 
@@ -1168,6 +1446,151 @@ name = "Solo WSL"
             ));
             assert_eq!(store.config().active, None);
         }
+    }
+
+    #[test]
+    fn importa_inventario_crea_perfil_imported_y_mantiene_fuentes_duplicadas() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+        let inventory = McpInventory {
+            provider: crate::bus::contract::McpProvider::Codex,
+            target: crate::bus::contract::McpTarget::WindowsLocal,
+            status: McpInventoryStatus::Success,
+            definitions: vec![
+                crate::bus::contract::McpDefinition {
+                    provider: crate::bus::contract::McpProvider::Codex,
+                    target: crate::bus::contract::McpTarget::WindowsLocal,
+                    source: "codex_mcp_servers".into(),
+                    name: "same".into(),
+                    command_available: Some(true),
+                },
+                crate::bus::contract::McpDefinition {
+                    provider: crate::bus::contract::McpProvider::Codex,
+                    target: crate::bus::contract::McpTarget::WindowsLocal,
+                    source: "codex_mcpServers".into(),
+                    name: "same".into(),
+                    command_available: None,
+                },
+            ],
+            error: None,
+            checked_at_ms: 1,
+        };
+
+        let state = store.import_mcp_inventory("A", &inventory).unwrap();
+        assert_eq!(state.active_profile_id.as_deref(), Some("imported"));
+        assert_eq!(state.profiles[0].name, "Imported");
+        assert_eq!(state.profiles[0].definitions.len(), 2);
+        assert_ne!(
+            state.profiles[0].definitions[0].source,
+            state.profiles[0].definitions[1].source
+        );
+        let before_empty_import = store.config().clone();
+        let empty = McpInventory {
+            provider: crate::bus::contract::McpProvider::Codex,
+            target: crate::bus::contract::McpTarget::WindowsLocal,
+            status: McpInventoryStatus::Empty,
+            definitions: Vec::new(),
+            error: None,
+            checked_at_ms: 2,
+        };
+        assert!(matches!(
+            store.import_mcp_inventory("A", &empty),
+            Err(WorkbenchError::McpImportUnavailable(_))
+        ));
+        assert_eq!(store.config(), &before_empty_import);
+        let reloaded = store_in(&dir);
+        assert_eq!(
+            reloaded.config().workbenches[0].mcp_profiles,
+            state.profiles
+        );
+    }
+
+    #[test]
+    fn perfil_activo_exige_reemplazo_y_los_cambios_fallidos_no_mutan_memoria() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+        store.create_mcp_profile("A", "Personal").unwrap();
+        store
+            .set_mcp_default_profile("A", "profile-personal")
+            .unwrap();
+        let before = store.config().clone();
+        assert!(matches!(
+            store.delete_mcp_profile("A", "profile-personal", None),
+            Err(WorkbenchError::McpDefaultProfileRequired)
+        ));
+        assert_eq!(store.config(), &before);
+
+        let invalid = tempfile::NamedTempFile::new().unwrap();
+        store.config_dir = invalid.path().to_path_buf();
+        let before = store.config().clone();
+        assert!(store.create_mcp_profile("A", "After failure").is_err());
+        assert_eq!(store.config(), &before);
+    }
+
+    #[test]
+    fn perfil_lifecycle_crea_renombra_selecciona_elimina_y_recarga() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store_in(&dir);
+        store.create_workbench("A").unwrap();
+
+        let personal = store.create_mcp_profile("A", "Personal").unwrap();
+        let personal_id = personal.profiles[0].id.clone();
+        let with_team = store.create_mcp_profile("A", "Team").unwrap();
+        let team_id = with_team
+            .profiles
+            .iter()
+            .find(|profile| profile.name == "Team")
+            .unwrap()
+            .id
+            .clone();
+
+        let renamed = store.rename_mcp_profile("A", &team_id, "Shared").unwrap();
+        assert!(renamed
+            .profiles
+            .iter()
+            .any(|profile| profile.name == "Shared"));
+        let selected = store.set_mcp_default_profile("A", &team_id).unwrap();
+        assert_eq!(
+            selected.active_profile_id.as_deref(),
+            Some(team_id.as_str())
+        );
+
+        let deleted = store.delete_mcp_profile("A", &personal_id, None).unwrap();
+        assert_eq!(deleted.profiles.len(), 1);
+        assert_eq!(deleted.profiles[0].name, "Shared");
+        assert_eq!(deleted.active_profile_id.as_deref(), Some(team_id.as_str()));
+
+        let reloaded = store_in(&dir);
+        assert_eq!(
+            reloaded.config().workbenches[0].mcp_profiles,
+            deleted.profiles
+        );
+        assert_eq!(
+            reloaded.config().workbenches[0]
+                .mcp_default_profile
+                .as_deref(),
+            Some(team_id.as_str())
+        );
+    }
+
+    #[test]
+    fn perfiles_no_serializan_material_sensible() {
+        let profile = McpProfile {
+            id: "imported".into(),
+            name: "Imported".into(),
+            definitions: vec![McpDefinitionRef {
+                provider: crate::bus::contract::McpProvider::Codex,
+                target: crate::bus::contract::McpTarget::WindowsLocal,
+                source: "codex_mcp_servers".into(),
+                name: "safe".into(),
+            }],
+        };
+        let encoded = toml::to_string(&profile).unwrap();
+        assert!(!encoded.contains("args"));
+        assert!(!encoded.contains("env"));
+        assert!(!encoded.contains("token"));
     }
 
     #[test]

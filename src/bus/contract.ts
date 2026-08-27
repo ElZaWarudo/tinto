@@ -571,6 +571,51 @@ export interface WorkbenchSnapshot {
   repos: RepoDelta[];
 }
 
+// ---- Project MCP inventory/profile adjuncts (RDM-024) ----
+// These fields are additive to the frozen generated map.  They intentionally
+// carry only source-bound identity and command availability; provider args,
+// env, headers, paths, and credentials never cross the bus.
+export type McpProvider = "codex";
+export type McpTarget = "windows_local";
+export type McpInventoryStatus = "empty" | "success" | "partial" | "error" | "unsupported";
+export type McpDeliveryStatus = "unknown" | "unsupported";
+
+export interface McpDefinition {
+  provider: McpProvider;
+  target: McpTarget;
+  source: string;
+  name: string;
+  command_available?: boolean | null;
+}
+
+export interface McpDefinitionRef {
+  provider: McpProvider;
+  target: McpTarget;
+  source: string;
+  name: string;
+}
+
+export interface McpInventory {
+  provider: McpProvider;
+  target: McpTarget;
+  status: McpInventoryStatus;
+  definitions: McpDefinition[];
+  error?: string | null;
+  checked_at_ms: number;
+}
+
+export interface McpProfile {
+  id: string;
+  name: string;
+  definitions: McpDefinitionRef[];
+}
+
+export interface McpProfileState {
+  profiles: McpProfile[];
+  active_profile_id?: string | null;
+  delivery_status: McpDeliveryStatus;
+}
+
 // ---- Workbench config (from list_workbenches; source of names/aliases) ----
 export type RepoSource = "local" | "wsl";
 
@@ -585,6 +630,8 @@ export interface RepoEntry {
 export interface Workbench {
   name: string;
   repos: RepoEntry[];
+  mcp_profiles?: McpProfile[];
+  mcp_default_profile?: string | null;
 }
 
 export interface WorkbenchConfig {
@@ -717,4 +764,13 @@ export interface CuratedBusContractTypeMap {
   FileContent: FileContent;
   ContentEncoding: ContentEncoding;
   WorkbenchSnapshot: WorkbenchSnapshot;
+  McpProvider: McpProvider;
+  McpTarget: McpTarget;
+  McpInventoryStatus: McpInventoryStatus;
+  McpDeliveryStatus: McpDeliveryStatus;
+  McpDefinition: McpDefinition;
+  McpDefinitionRef: McpDefinitionRef;
+  McpInventory: McpInventory;
+  McpProfile: McpProfile;
+  McpProfileState: McpProfileState;
 }

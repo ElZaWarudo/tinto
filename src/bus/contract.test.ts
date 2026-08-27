@@ -9,6 +9,8 @@ import type {
   AgentSessionStatus,
   DiffLineKind,
   FileDiff,
+  McpInventory,
+  McpProfileState,
   RepoEntry,
   RepoDelta,
   WorkbenchConfig,
@@ -169,6 +171,65 @@ describe("workbench source contract types", () => {
     expect(local.source).toBeUndefined();
     expect(wsl.source).toBe("wsl");
     expect(wsl.distro).toBe("Ubuntu");
+  });
+});
+
+describe("project MCP contract types", () => {
+  it("keeps inventory source-bound and omits sensitive provider fields", () => {
+    const inventory = JSON.parse(
+      JSON.stringify({
+        provider: "codex",
+        target: "windows_local",
+        status: "success",
+        definitions: [
+          {
+            provider: "codex",
+            target: "windows_local",
+            source: "codex_mcp_servers",
+            name: "local",
+            command_available: true,
+          },
+          {
+            provider: "codex",
+            target: "windows_local",
+            source: "codex_mcpServers",
+            name: "local",
+            command_available: null,
+          },
+        ],
+        checked_at_ms: 2,
+      }),
+    ) as McpInventory;
+
+    expect(inventory.definitions).toHaveLength(2);
+    expect(inventory.definitions[0].source).not.toBe(inventory.definitions[1].source);
+    expect(inventory.definitions[0]).not.toHaveProperty("args");
+    expect(inventory.definitions[0]).not.toHaveProperty("env");
+    expect(inventory.definitions[0]).not.toHaveProperty("headers");
+  });
+
+  it("keeps delivery status independent from local profile state", () => {
+    const state = {
+      profiles: [
+        {
+          id: "imported",
+          name: "Imported",
+          definitions: [
+            {
+              provider: "codex",
+              target: "windows_local",
+              source: "codex_mcp_servers",
+              name: "local",
+            },
+          ],
+        },
+      ],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    } satisfies McpProfileState;
+
+    expect(state.active_profile_id).toBe("imported");
+    expect(state.delivery_status).toBe("unsupported");
   });
 });
 

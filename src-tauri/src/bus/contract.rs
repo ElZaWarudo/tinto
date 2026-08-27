@@ -17,6 +17,89 @@ pub const EVENT_AGENT_SESSION_OUTPUT: &str = "tinto://agent-session-output";
 pub const EVENT_AGENT_SESSION_CHANGE_LOG: &str = "tinto://agent-session-change-log";
 pub const EVENT_AGENT_SESSION_TIMELINE: &str = "tinto://agent-session-timeline";
 
+/// The only provider/target admitted by the first MCP slice.  These values
+/// describe where a definition came from; they do not grant permission to
+/// write or launch anything at that target.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpProvider {
+    Codex,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTarget {
+    WindowsLocal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpInventoryStatus {
+    Empty,
+    Success,
+    Partial,
+    Error,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpDeliveryStatus {
+    Unknown,
+    Unsupported,
+}
+
+/// A source-bound, deliberately non-sensitive MCP definition projection.
+/// `source` identifies the known schema/root without returning its path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpDefinition {
+    pub provider: McpProvider,
+    pub target: McpTarget,
+    pub source: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_available: Option<bool>,
+}
+
+/// Stable project-local identity for an imported definition.  Keeping source
+/// in the key prevents same-named definitions from different roots merging.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpDefinitionRef {
+    pub provider: McpProvider,
+    pub target: McpTarget,
+    pub source: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpInventory {
+    pub provider: McpProvider,
+    pub target: McpTarget,
+    pub status: McpInventoryStatus,
+    #[serde(default)]
+    pub definitions: Vec<McpDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub checked_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub definitions: Vec<McpDefinitionRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpProfileState {
+    #[serde(default)]
+    pub profiles: Vec<McpProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_profile_id: Option<String>,
+    pub delivery_status: McpDeliveryStatus,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentProviderSource {
@@ -820,6 +903,38 @@ pub struct WorkbenchSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_wire_shape_keeps_empty_public_lists() {
+        let inventory = McpInventory {
+            provider: McpProvider::Codex,
+            target: McpTarget::WindowsLocal,
+            status: McpInventoryStatus::Empty,
+            definitions: Vec::new(),
+            error: None,
+            checked_at_ms: 1,
+        };
+        let profile_state = McpProfileState {
+            profiles: Vec::new(),
+            active_profile_id: None,
+            delivery_status: McpDeliveryStatus::Unsupported,
+        };
+        let profile = McpProfile {
+            id: "empty".into(),
+            name: "Empty".into(),
+            definitions: Vec::new(),
+        };
+
+        let inventory_json = serde_json::to_value(inventory).unwrap();
+        let profile_json = serde_json::to_value(profile_state).unwrap();
+        let profile_definition_json = serde_json::to_value(profile).unwrap();
+        assert_eq!(inventory_json["definitions"], serde_json::json!([]));
+        assert_eq!(profile_json["profiles"], serde_json::json!([]));
+        assert_eq!(
+            profile_definition_json["definitions"],
+            serde_json::json!([])
+        );
+    }
 
     /// Ancla del contrato: el shape JSON de RepoDelta no cambia sin querer.
     #[test]

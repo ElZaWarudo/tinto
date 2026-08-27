@@ -7533,6 +7533,168 @@ select option:checked {
   display: flex;
 }
 
+.agent-panel__mcp {
+  flex: none;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid var(--agent-rule);
+  background: #171b1b;
+}
+
+.agent-panel__mcp-head,
+.agent-panel__mcp-profile-head,
+.agent-panel__mcp-status,
+.agent-panel__mcp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-panel__mcp-head h3 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.agent-panel__mcp-head p,
+.agent-panel__mcp-muted,
+.agent-panel__mcp-error,
+.agent-panel__mcp-profile-head span,
+.agent-panel__mcp-status span,
+.agent-panel__mcp-list span,
+.agent-panel__mcp-profiles label > span {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.agent-panel__mcp-head button,
+.agent-panel__mcp-actions button,
+.agent-panel__mcp-import {
+  flex: none;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid rgba(20, 184, 166, 0.36);
+  border-radius: 5px;
+  background: rgba(20, 184, 166, 0.1);
+  color: #ccfbf1;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-panel__mcp-head button:focus-visible,
+.agent-panel__mcp-actions button:focus-visible,
+.agent-panel__mcp-import:focus-visible,
+.agent-panel__mcp input:focus-visible,
+.agent-panel__mcp select:focus-visible {
+  outline: 2px solid var(--accent-fg);
+  outline-offset: 1px;
+}
+
+.agent-panel__mcp-head button:disabled,
+.agent-panel__mcp-actions button:disabled,
+.agent-panel__mcp-import:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.agent-panel__mcp-status {
+  justify-content: flex-start;
+  color: #99f6e4;
+  font-size: 11px;
+}
+
+.agent-panel__mcp-status strong {
+  padding: 2px 6px;
+  border: 1px solid rgba(20, 184, 166, 0.4);
+  border-radius: 999px;
+  color: #ccfbf1;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.agent-panel__mcp-error {
+  color: #fecaca;
+}
+
+.agent-panel__mcp-list {
+  display: grid;
+  gap: 5px;
+  max-height: 150px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.agent-panel__mcp-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.agent-panel__mcp-list strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-panel__mcp-list span {
+  flex: none;
+}
+
+.agent-panel__mcp-list small {
+  flex: none;
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+
+.agent-panel__mcp-profiles {
+  display: grid;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.agent-panel__mcp-profiles label {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-panel__mcp input,
+.agent-panel__mcp select {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 30px;
+  padding: 4px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 4px;
+  background: #111414;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+}
+
+.agent-panel__mcp-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.agent-panel__mcp-import {
+  width: 100%;
+}
+
 .agent-panel__details-head {
   position: sticky;
   top: 0;

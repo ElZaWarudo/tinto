@@ -8,6 +8,8 @@ use tauri::State;
 use super::{
     autodetect_repos, RepoEntry, Workbench, WorkbenchConfig, WorkbenchError, WorkbenchStore,
 };
+use crate::agent_console::commands::read_codex_mcp_inventory;
+use crate::bus::contract::McpProfileState;
 
 #[cfg(target_os = "windows")]
 use crate::windows_process::hide_console;
@@ -77,6 +79,67 @@ pub fn rename_workbench(store: Store<'_>, from: String, to: String) -> Result<()
 #[tauri::command]
 pub fn delete_workbench(store: Store<'_>, name: String) -> Result<(), WorkbenchError> {
     locked(&store, |s| s.delete_workbench(&name))
+}
+
+#[tauri::command]
+pub fn list_mcp_profiles(
+    store: Store<'_>,
+    workbench: String,
+) -> Result<McpProfileState, WorkbenchError> {
+    locked(&store, |s| s.mcp_profile_state(&workbench))
+}
+
+#[tauri::command]
+pub fn import_codex_mcp_profile(
+    store: Store<'_>,
+    workbench: String,
+) -> Result<McpProfileState, WorkbenchError> {
+    let inventory = read_codex_mcp_inventory();
+    locked(&store, |s| s.import_mcp_inventory(&workbench, &inventory))
+}
+
+#[tauri::command]
+pub fn create_mcp_profile(
+    store: Store<'_>,
+    workbench: String,
+    name: String,
+) -> Result<McpProfileState, WorkbenchError> {
+    locked(&store, |s| s.create_mcp_profile(&workbench, &name))
+}
+
+#[tauri::command]
+pub fn rename_mcp_profile(
+    store: Store<'_>,
+    workbench: String,
+    profile_id: String,
+    name: String,
+) -> Result<McpProfileState, WorkbenchError> {
+    locked(&store, |s| {
+        s.rename_mcp_profile(&workbench, &profile_id, &name)
+    })
+}
+
+#[tauri::command]
+pub fn delete_mcp_profile(
+    store: Store<'_>,
+    workbench: String,
+    profile_id: String,
+    replacement_id: Option<String>,
+) -> Result<McpProfileState, WorkbenchError> {
+    locked(&store, |s| {
+        s.delete_mcp_profile(&workbench, &profile_id, replacement_id.as_deref())
+    })
+}
+
+#[tauri::command]
+pub fn set_mcp_default_profile(
+    store: Store<'_>,
+    workbench: String,
+    profile_id: String,
+) -> Result<McpProfileState, WorkbenchError> {
+    locked(&store, |s| {
+        s.set_mcp_default_profile(&workbench, &profile_id)
+    })
 }
 
 #[tauri::command]

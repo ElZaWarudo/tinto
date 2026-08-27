@@ -8,16 +8,24 @@ import remarkGfm from "remark-gfm";
 import { agentErrorCategory, retryAgentRecoveryOperation } from "../../agent/boundedRetry";
 import {
   branchAgentSessionFromMessage,
+  createMcpProfile,
+  deleteMcpProfile,
+  getCodexMcpInventory,
   getAgentJournalSession,
   getAgentImagePreview,
   getAgentRuntimeCatalog,
   interruptAgentSessionTurn,
   listAgentSessions,
+  listMcpProfiles,
+  listWorkbenches,
+  importCodexMcpProfile,
+  renameMcpProfile,
   respondAgentSessionAcpPermission,
   resumeAgentJournalSession,
   retryAgentSessionAcp,
   setAgentSessionPermissionMode,
   setAgentSessionAcpConfigOption,
+  setMcpDefaultProfile,
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
@@ -46,6 +54,9 @@ import type {
   AgentSessionRuntimeOptions,
   AgentSessionOutput,
   AgentSessionTimelineItem,
+  McpDefinition,
+  McpInventory,
+  McpProfileState,
   FileDiff,
   RepoStatus,
 } from "../../bus/contract";
@@ -2361,6 +2372,9 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               turns={overview.turns}
             />
           )}
+          {detailsOpen && session && (
+            <AgentMcpPanel readOnly={readOnly} repo={session.repo ?? repo ?? ""} />
+          )}
           <AgentSessionOverview
             overview={overview}
             focusedTurnIndex={focusedTurn?.index ?? null}
@@ -3575,6 +3589,314 @@ function AgentDetailsHeader({
         Cerrar
       </button>
     </header>
+  );
+}
+
+function AgentMcpPanel({ readOnly, repo }: { readOnly: boolean; repo: string }) {
+  const [workbench, setWorkbench] = useState<string | null>(null);
+  const [inventory, setInventory] = useState<McpInventory | null>(null);
+  const [catalogDefinitions, setCatalogDefinitions] = useState<McpDefinition[] | null>(null);
+  const [profiles, setProfiles] = useState<McpProfileState | null>(null);
+  const [managedProfileId, setManagedProfileId] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const applyProfileState = (next: McpProfileState) => {
+    setProfiles(next);
+    setError(null);
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const config = await listWorkbenches();
+      const normalizedRepo = normalizeAgentPath(repo).replace(/\/+$/, "");
+      const owners = config.workbenches.filter((candidate) =>
+        candidate.repos.some(
+          (entry) =>
+            (entry.source ?? "local") === "local" &&
+            normalizeAgentPath(entry.path).replace(/\/+$/, "") === normalizedRepo,
+        ),
+      );
+      const sessionWorkbench = owners.length === 1 ? owners[0].name : null;
+      setWorkbench(sessionWorkbench);
+      if (!sessionWorkbench) {
+        setInventory({
+          provider: "codex",
+          target: "windows_local",
+          status: "unsupported",
+          definitions: [],
+          error:
+            owners.length > 1
+              ? "El repositorio pertenece a más de un proyecto."
+              : "La sesión no pertenece a un proyecto local disponible.",
+          checked_at_ms: Date.now(),
+        });
+        setProfiles(null);
+        return;
+      }
+      const [inventoryResult, profilesResult] = await Promise.allSettled([
+        getCodexMcpInventory(),
+        listMcpProfiles(sessionWorkbench),
+      ]);
+      if (inventoryResult.status === "fulfilled") {
+        setInventory(inventoryResult.value);
+        if (
+          inventoryResult.value.status === "success" ||
+          inventoryResult.value.status === "empty"
+        ) {
+          setCatalogDefinitions(inventoryResult.value.definitions);
+        } else if (inventoryResult.value.status === "partial") {
+          setCatalogDefinitions((current) =>
+            current === null ? inventoryResult.value.definitions : current,
+          );
+        }
+      } else {
+        setInventory({
+          provider: "codex",
+          target: "windows_local",
+          status: "error",
+          definitions: [],
+          error: "No se pudo consultar el inventario MCP de Codex.",
+          checked_at_ms: Date.now(),
+        });
+      }
+      if (profilesResult.status === "fulfilled") {
+        setProfiles(profilesResult.value);
+      } else {
+        setProfiles(null);
+      }
+      if (inventoryResult.status === "rejected" || profilesResult.status === "rejected") {
+        setError("No se pudo consultar todo el estado MCP del proyecto.");
+      }
+    } catch {
+      setError("No se pudo consultar el inventario MCP del proyecto.");
+    } finally {
+      setLoading(false);
+    }
+  }, [repo]);
+
+  useEffect(() => {
+    // Loading is the external Tauri synchronization owned by this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+  }, [load]);
+
+  const runProfileAction = async (action: () => Promise<McpProfileState>) => {
+    if (readOnly || loading || !workbench) return;
+    setBusy(true);
+    try {
+      applyProfileState(await action());
+      setProfileName("");
+    } catch {
+      setError("La acción del perfil MCP no se completó; el estado anterior se conserva.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectedProfileId =
+    profiles?.profiles.find((profile) => profile.id === managedProfileId)?.id ??
+    profiles?.active_profile_id ??
+    profiles?.profiles[0]?.id ??
+    null;
+  const selectedProfile = profiles?.profiles.find((profile) => profile.id === selectedProfileId);
+  const statusLabel = inventory
+    ? {
+        empty: "Vacío",
+        success: "Disponible",
+        partial: "Parcial",
+        error: "Error seguro",
+        unsupported: "No admitido",
+      }[inventory.status]
+    : "Cargando";
+
+  return (
+    <section className="agent-panel__mcp" aria-labelledby="agent-mcp-title">
+      <div className="agent-panel__mcp-head">
+        <div>
+          <h3 id="agent-mcp-title">MCP del proyecto</h3>
+          <p>Inventario local de Codex · sin sincronización de proveedor.</p>
+        </div>
+        <button
+          aria-label="Actualizar inventario MCP"
+          disabled={loading || busy}
+          onClick={() => void load()}
+          title="Volver a consultar el inventario local de Codex sin ejecutar servidores."
+          type="button"
+        >
+          {loading ? "Consultando" : "Actualizar"}
+        </button>
+      </div>
+      <div aria-live="polite" className="agent-panel__mcp-status">
+        <strong>{statusLabel}</strong>
+        <span>Codex · Windows/local</span>
+      </div>
+      {error && (
+        <p className="agent-panel__mcp-error" role="alert">
+          {error}
+        </p>
+      )}
+      {inventory?.status === "unsupported" || inventory?.status === "error" ? (
+        <p className="agent-panel__mcp-muted">
+          {inventory.error ?? "Este proveedor u objetivo no está admitido."}
+        </p>
+      ) : null}
+      {(catalogDefinitions?.length ?? 0) > 0 ? (
+        <ul className="agent-panel__mcp-list" aria-label="Definiciones MCP importadas">
+          {catalogDefinitions?.map((definition) => (
+            <li key={`${definition.source}:${definition.name}`}>
+              <strong>{definition.name}</strong>
+              <small>{definition.source}</small>
+              <span>
+                {definition.command_available === true
+                  ? "Comando disponible"
+                  : definition.command_available === false
+                    ? "Comando no disponible"
+                    : "Disponibilidad no comprobada"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : inventory?.status !== "unsupported" && inventory?.status !== "error" ? (
+        <p className="agent-panel__mcp-muted">No hay definiciones MCP no sensibles disponibles.</p>
+      ) : null}
+      {workbench && profiles && (
+        <div className="agent-panel__mcp-profiles">
+          <div className="agent-panel__mcp-profile-head">
+            <strong>Perfiles locales</strong>
+            <span>
+              {profiles.delivery_status === "unsupported" ? "Entrega no admitida" : "Estado local"}
+            </span>
+          </div>
+          {profiles.profiles.length > 0 ? (
+            <label>
+              <span>Perfil predeterminado</span>
+              <select
+                aria-label="Perfil MCP predeterminado"
+                disabled={readOnly || loading || busy}
+                onChange={(event) =>
+                  void runProfileAction(() =>
+                    setMcpDefaultProfile(workbench, event.currentTarget.value),
+                  )
+                }
+                value={profiles.active_profile_id ?? ""}
+              >
+                {profiles.profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="agent-panel__mcp-muted">
+              Importa el inventario para crear el perfil Imported.
+            </p>
+          )}
+          {profiles.profiles.length > 0 && (
+            <label>
+              <span>Perfil para gestionar</span>
+              <select
+                aria-label="Perfil MCP para gestionar"
+                disabled={readOnly || loading || busy}
+                onChange={(event) => setManagedProfileId(event.currentTarget.value)}
+                value={selectedProfileId ?? ""}
+              >
+                {profiles.profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            <span>Nombre de perfil</span>
+            <input
+              aria-label="Nombre de perfil MCP"
+              disabled={readOnly || loading || busy}
+              maxLength={80}
+              onChange={(event) => setProfileName(event.currentTarget.value)}
+              value={profileName}
+            />
+          </label>
+          <div className="agent-panel__mcp-actions">
+            <button
+              disabled={readOnly || loading || busy || !profileName.trim()}
+              onClick={() => void runProfileAction(() => createMcpProfile(workbench, profileName))}
+              type="button"
+            >
+              Crear perfil
+            </button>
+            <button
+              disabled={readOnly || loading || busy || !selectedProfile || !profileName.trim()}
+              onClick={() =>
+                void runProfileAction(() =>
+                  renameMcpProfile(workbench, selectedProfile?.id ?? "", profileName),
+                )
+              }
+              type="button"
+            >
+              Renombrar
+            </button>
+            <button
+              disabled={
+                readOnly ||
+                loading ||
+                busy ||
+                !selectedProfile ||
+                selectedProfile.id === profiles.active_profile_id
+              }
+              onClick={() =>
+                void runProfileAction(() =>
+                  deleteMcpProfile(workbench, selectedProfileId ?? "", null),
+                )
+              }
+              type="button"
+            >
+              Eliminar
+            </button>
+            <button
+              disabled={
+                readOnly ||
+                loading ||
+                busy ||
+                !selectedProfile ||
+                selectedProfile.id === profiles.active_profile_id
+              }
+              onClick={() =>
+                void runProfileAction(() =>
+                  setMcpDefaultProfile(workbench, selectedProfile?.id ?? ""),
+                )
+              }
+              type="button"
+            >
+              Usar como predeterminado
+            </button>
+          </div>
+          <button
+            className="agent-panel__mcp-import"
+            disabled={
+              readOnly ||
+              loading ||
+              busy ||
+              !inventory ||
+              inventory.status === "error" ||
+              inventory.status === "partial" ||
+              inventory.status === "unsupported"
+            }
+            onClick={() => void runProfileAction(() => importCodexMcpProfile(workbench))}
+            type="button"
+          >
+            Importar inventario actual
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
