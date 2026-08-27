@@ -1,0 +1,112 @@
+{
+  "acceptance_criteria": [
+    {
+      "description": "The no-open-terminal state and saved journal lifecycle labels no longer contradict each other, missing live sessions are not active, and focused tests cover stale and genuinely live records.",
+      "id": "AC-1"
+    },
+    {
+      "description": "Project MCP inventory/profile management is discoverable and usable from the Agents home without launching a provider, mounts lazily, remains project-attributed, and retains existing read-only behavior in saved transcripts.",
+      "id": "AC-2"
+    },
+    {
+      "description": "Agents quick launch reflects the same provider readiness result as the Dashboard, prevents known-unavailable launch, and presents actionable checking, retry, or unavailable copy with focused tests.",
+      "id": "AC-3"
+    },
+    {
+      "description": "The full bounded saved-session diagnostic remains available to pointer and assistive-technology users when its visual preview is truncated.",
+      "id": "AC-4"
+    },
+    {
+      "description": "Exited, cancelled/canceled, and waiting transcript lifecycle states are localized consistently with focused regression coverage.",
+      "id": "AC-5"
+    },
+    {
+      "description": "Focused ConsoleDockPanel and MCP tests plus the production frontend build pass without out-of-scope changes.",
+      "id": "AC-6"
+    }
+  ],
+  "closed_decisions": [
+    "Keep the change inside existing React/CSS seams and reuse AgentMcpPanel plus checkAgentAvailabilityForRepo; add no dependency, service, backend command, provider protocol, or persistence layer.",
+    "The empty workspace describes open conversations, not backend activity. A saved starting/running journal record without a matching live session receives a factual non-live label rather than being described as currently running.",
+    "A missing AgentSession is not active. Preserve true live-session labels when a matching session exists.",
+    "Expose one clearly named, lazy project MCP configuration entry from the Agents home before launch. Require explicit project choice when necessary and avoid duplicate DOM IDs.",
+    "Agents quick launch performs the same cached readiness check used by the project launcher, disables known-unavailable providers, and visibly explains checking, unavailable, and retryable-unknown states.",
+    "Long journal diagnostics may remain visually ellipsized but their full bounded text must be programmatically available without putting private diagnostic content into a generic top-level page label.",
+    "Localize exited, cancelled/canceled, and waiting lifecycle labels consistently in the transcript status surface.",
+    "Preserve all existing live launch, saved transcript, MCP read-only, and resume behavior; keep the implementation minimal and accessible at 800 by 600."
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rg -n",
+      "Get-Content -Raw",
+      "git diff --",
+      "git status --short",
+      "python C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py"
+    ],
+    "verification": {
+      "focused": [
+        "npx vitest run src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "npx vitest run src/panels/terminal/TerminalPanel.test.tsx -t MCP"
+      ],
+      "max_retries_per_command": 1,
+      "natural": [
+        "npm run build"
+      ]
+    }
+  },
+  "contract_hash": "sha256:ced7f003135b299c7c374b41094e49ada80301b1c0d4c766a41b2b2b8dbbc240",
+  "contract_id": "agents-functionality-2026-08-27:agents-usability-fixes",
+  "evidence_policy": {
+    "changed_files_source": "root-diff",
+    "minimum_command_trust": "self-reported"
+  },
+  "execution_budget": {
+    "discovery_passes": 1,
+    "extra_verification": "forbidden",
+    "fix_rounds": 2,
+    "implementation_rounds": 1,
+    "review_rounds": 1
+  },
+  "forbidden_changes": [
+    "Do not change Rust, bus contracts, generated files, provider configuration, workbench persistence, credentials, dependencies, manifests, lockfiles, native test harnesses, or Pumarejo.",
+    "Do not add a new provider framework, state store, modal system, settings route, or broad Agents redesign.",
+    "Do not delete or mutate saved user conversations, MCP profiles, or repository content.",
+    "Do not edit campaign, orchestration, roadmap, Jira, release, branch, commit, push, PR, or user-owned files outside the owned file list."
+  ],
+  "lane": "standard",
+  "objective": "Fix the confirmed Agents functionality and usability failures using existing project-scoped MCP, provider-readiness, and session lifecycle seams.",
+  "owned_files": [
+    "src/panels/terminal/ConsoleDockPanel.tsx",
+    "src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "src/panels/terminal/TerminalPanel.tsx",
+    "src/panels/terminal/TerminalPanel.test.tsx",
+    "src/App.css"
+  ],
+  "profile": "luna",
+  "required_certifications": [
+    "reviewer"
+  ],
+  "required_context": [
+    "AGENTS.md",
+    "docs/plans/agents-functionality-campaign/initiative-requirements.md",
+    "docs/audits/2026-08-27-agents-functionality-campaign.md",
+    "docs/edge-tests/agents-usability-2026-08-27/campaign.json",
+    "docs/plans/tinto-gap-closure/rdm-024-provider-neutral-mcp-requirements.md"
+  ],
+  "schema_version": 1,
+  "supervision": {
+    "mode": "terminal-only",
+    "transition_after_ms": 0
+  },
+  "terminal_protocol": {
+    "grace_actions": 0,
+    "return_when": [
+      "acceptance_criteria_resolved",
+      "required_checks_attempted",
+      "state_reconciled"
+    ]
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "unit_id": "agents-usability-fixes"
+}

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://krt.local/real-world-edge-testing/campaign.schema.json",
+  "title": "Real-World Edge Testing Campaign",
+  "type": "object",
+  "required": ["schemaVersion", "campaignId", "cases"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "campaignId": {"type": "string", "minLength": 1},
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id", "title", "category", "priority", "executionRisk",
+          "fixtures", "preconditions", "action", "oracle", "timeoutMs",
+          "evidence", "recovery"
+        ],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "category": {"type": "string", "minLength": 1},
+          "priority": {"enum": ["critical", "high", "medium", "low"]},
+          "executionRisk": {
+            "enum": [
+              "read_only", "reversible_mutation", "isolated_destructive",
+              "external_side_effect", "production_forbidden"
+            ]
+          },
+          "fixtures": {"type": "array", "items": {"type": "string", "pattern": "\\S"}},
+          "preconditions": {"type": "array", "items": {"type": "string", "pattern": "\\S"}},
+          "action": {"type": "object", "minProperties": 1},
+          "oracle": {"type": "object", "minProperties": 1},
+          "timeoutMs": {"type": "integer", "minimum": 1},
+          "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "\\S"}},
+          "recovery": {
+            "type": "object",
+            "required": ["required"],
+            "properties": {
+              "required": {"type": "boolean"},
+              "procedure": {"type": "string", "minLength": 1},
+              "verification": {"type": "string", "minLength": 1}
+            },
+            "allOf": [
+              {
+                "if": {"properties": {"required": {"const": true}}},
+                "then": {"required": ["procedure", "verification"]}
+              }
+            ]
+          },
+          "risk": {
+            "type": "object",
+            "required": ["impact", "likelihood", "detectability", "score", "rationale"],
+            "properties": {
+              "impact": {"type": "integer", "minimum": 1, "maximum": 5},
+              "likelihood": {"type": "integer", "minimum": 1, "maximum": 5},
+              "detectability": {"type": "integer", "minimum": 1, "maximum": 5},
+              "score": {"type": "integer", "minimum": 1, "maximum": 125},
+              "rationale": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "executionRisk": {
+                  "enum": ["reversible_mutation", "isolated_destructive", "external_side_effect"]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "recovery": {
+                  "properties": {"required": {"const": true}},
+                  "required": ["required", "procedure", "verification"]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

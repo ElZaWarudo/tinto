@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://krt.local/real-world-edge-testing/fixtures-manifest.schema.json",
+  "title": "Real-World Edge Testing Fixture Manifest",
+  "type": "object",
+  "required": ["schemaVersion", "generatedDirectory", "fixtures"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "generatedDirectory": {"type": "string", "minLength": 1},
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id", "fileName", "kind", "expectedTreatment", "provenance",
+          "canaries", "canaryEncoding", "containsPrivateData", "sha256"
+        ],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "fileName": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "minLength": 1},
+          "expectedTreatment": {
+            "enum": ["parse", "reject", "quarantine", "deduplicate", "preserve_bytes"]
+          },
+          "provenance": {
+            "type": "object",
+            "required": ["kind", "source", "reproduction"],
+            "properties": {
+              "kind": {"enum": ["generated", "versioned_static"]},
+              "source": {"type": "string", "minLength": 1},
+              "reproduction": {"type": "string", "minLength": 1}
+            }
+          },
+          "canaries": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {"type": "string", "pattern": "\\S", "maxLength": 1024}
+          },
+          "canaryEncoding": {"const": "utf-8"},
+          "containsPrivateData": {"const": false},
+          "duplicateOf": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

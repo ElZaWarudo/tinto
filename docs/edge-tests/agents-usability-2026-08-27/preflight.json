@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "checks": [
+    {"condition": "target_environment_verified", "status": "passed", "evidence": "Local Tinto checkout on Windows; native debug-only Pumarejo target; no production or remote service"},
+    {"condition": "bounded_execution_tier_enforced", "status": "passed", "evidence": "Read-only cases run first; controlled-write cases may create exactly one local Agent session and harmless turn, forbid repo/profile/destructive mutation, and record before/after git state"},
+    {"condition": "explicit_execution_authority", "status": "passed", "evidence": "The user explicitly expanded the campaign to full Agents functionality and authorized autonomous native interaction and recovery"},
+    {"condition": "pumarejo_ownership_verified", "status": "passed", "evidence": "Probe reached ready with an owned Tinto process, authenticated proxy, WebDriver, and tauri_close returned idle"},
+    {"condition": "recovery_verified", "status": "passed", "evidence": "Every native run uses serialized tauri_close cleanup; campaign-created sessions are interrupted or closed on timeout and their identifiers are recorded"},
+    {"condition": "evidence_sanitization_defined", "status": "passed", "evidence": "Raw local snapshots remain outside git; versioned evidence contains only case-level outcomes and redacted UI facts"}
+  ],
+  "blockers": []
+}

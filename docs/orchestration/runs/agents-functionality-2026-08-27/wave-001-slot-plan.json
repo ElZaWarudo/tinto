@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "total_slots": 9,
+  "reserve_slots": 1,
+  "role_caps": {
+    "implementer": 1,
+    "reviewer": 1
+  },
+  "requests": [
+    {"id": "agents-usability-implementer", "role": "implementer", "priority": 0},
+    {"id": "agents-usability-reviewer", "role": "reviewer", "priority": 1}
+  ]
+}
+

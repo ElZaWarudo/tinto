@@ -1,0 +1,33 @@
+{
+  "active_by_role": {
+    "implementer": 1,
+    "reviewer": 1
+  },
+  "admitted": [
+    {
+      "id": "agents-usability-implementer",
+      "priority": 0,
+      "role": "implementer"
+    },
+    {
+      "id": "agents-usability-reviewer",
+      "priority": 1,
+      "role": "reviewer"
+    }
+  ],
+  "rejected": [],
+  "reserve_slots": 1,
+  "role_caps": {
+    "ci-platform": 1,
+    "documenter": 1,
+    "fixer": 1,
+    "implementer": 1,
+    "integrator": 1,
+    "planner": 1,
+    "reviewer": 1,
+    "security": 1
+  },
+  "schema_version": 1,
+  "total_slots": 9,
+  "usable_slots": 8
+}

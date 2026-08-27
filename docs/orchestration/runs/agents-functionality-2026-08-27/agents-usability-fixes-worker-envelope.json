@@ -1,0 +1,8 @@
+{
+  "contract_hash": "sha256:ced7f003135b299c7c374b41094e49ada80301b1c0d4c766a41b2b2b8dbbc240",
+  "prompt": "Execute the immutable contract at C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/agents-functionality-2026-08-27/agents-usability-fixes-worker-contract.json with hash sha256:ced7f003135b299c7c374b41094e49ada80301b1c0d4c766a41b2b2b8dbbc240. Read the required context named by that contract from the root checkout. Implement only its owned files in your assigned isolated worktree. Do not commit, push, open a PR, or edit orchestration files. Write the exact worker-terminal-v1 JSON to C:/Users/User/AppData/Local/Temp/agents-functionality-2026-08-27-agents-usability-fixes-terminal.json. Your final command must be: python C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py --contract C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/agents-functionality-2026-08-27/agents-usability-fixes-worker-contract.json --input C:/Users/User/AppData/Local/Temp/agents-functionality-2026-08-27-agents-usability-fixes-terminal.json. Return only the exact validated JSON object, with every schema field present and no prose.",
+  "schema_version": 1,
+  "terminal_schema": "worker-terminal-v1",
+  "terminal_validation_command": "python C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py --contract C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/agents-functionality-2026-08-27/agents-usability-fixes-worker-contract.json --input C:/Users/User/AppData/Local/Temp/agents-functionality-2026-08-27-agents-usability-fixes-terminal.json",
+  "worker_profile": "luna"
+}

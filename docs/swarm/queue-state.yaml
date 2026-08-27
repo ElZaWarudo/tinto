@@ -401,6 +401,169 @@ units:
       release_notes: []
       suggested_jira_transition: null
       release_marshal_packet: docs/orchestration/release-handoffs/2026-08-27-provider-neutral-mcp-control-plane.md
+  agents-functionality-usability-fixes:
+    title: Fix confirmed Agents functionality and usability failures
+    jira_key: null
+    source: docs/plans/agents-functionality-campaign/initiative-requirements.md
+    status: release-ready
+    depends_on: []
+    blocked_by: []
+    affects_dependents: []
+    scope:
+      included:
+      - Agents-home lifecycle truthfulness and saved diagnostic accessibility.
+      - Pre-launch project MCP discoverability.
+      - Provider-readiness parity for quick launch.
+      - Transcript lifecycle localization.
+      excluded:
+      - Backend contracts, provider writes, new infrastructure, dependencies, and broad redesign.
+    acceptance_criteria:
+    - The six criteria in the immutable worker contract are resolved.
+    - The full 14-case campaign is rerun on the consolidated branch.
+    surfaces:
+      code:
+      - src/panels/terminal/ConsoleDockPanel.tsx
+      - src/panels/terminal/TerminalPanel.tsx
+      contracts: []
+      data: []
+      auth: []
+      docs:
+      - docs/edge-tests/agents-usability-2026-08-27
+      - docs/audits/2026-08-27-agents-functionality-campaign.md
+      tests:
+      - src/panels/terminal/ConsoleDockPanel.test.tsx
+      - src/panels/terminal/TerminalPanel.test.tsx
+      config: []
+      generated: []
+    dependencies: []
+    execution:
+      route: swarm
+      lane: standard
+      discovery_profile: null
+      worker_profile: luna
+      reasoning_effort: high
+      lane_trigger: bounded-overlapping-frontend-behavior-fixes
+      role_triggers:
+        reviewer: behavior-control-flow-and-accessibility-change
+      worker_contract_path: docs/orchestration/runs/agents-functionality-2026-08-27/agents-usability-fixes-worker-contract.json
+      worker_contract_hash: sha256:ced7f003135b299c7c374b41094e49ada80301b1c0d4c766a41b2b2b8dbbc240
+      evidence_trust: independently-reviewed-root-verified
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: high
+    verification:
+      focused_commands:
+      - npx vitest run src/panels/terminal/ConsoleDockPanel.test.tsx
+      - npx vitest run src/panels/terminal/TerminalPanel.test.tsx -t MCP
+      - npm run build
+      focused_evidence:
+      - ConsoleDockPanel focused suite passed with 28 tests.
+      - Terminal MCP and lifecycle slice passed with 8 tests.
+      - Production frontend build and git diff check passed.
+      - Independent UI review passed after one correction round.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:f06cedfd9a78b79416c6c8f5130901d6dce5cb4c76ee94880c90f2c72d45d119
+      fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-agents-functionality-wave-001-fingerprint.json
+      evidence_registry: C:/Users/User/AppData/Local/Temp/tinto-agents-functionality-verification-registry.json
+      reuse_decision: run:evidence-current
+    isolation:
+      type: worktree
+      branch: codex/agents-usability-fixes-worker
+      path: C:/Users/User/Documents/personal/tinto-worktrees/agents-usability-fixes
+      thread: /root/agents_usability_implementer
+    compound:
+      run_id: null
+      state_path: null
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-27T12:45:00Z'
+      artifact_revision: null
+    handoff:
+      intended_base: codex/agents-usability-edge-campaign
+      pr_grouping: consolidated-local-branch
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  agents-workbench-wire-contract:
+    title: Repair list_workbenches JSON response without changing persisted TOML
+    jira_key: null
+    source: docs/plans/agents-functionality-campaign/initiative-requirements.md
+    status: release-ready
+    depends_on: []
+    blocked_by: []
+    affects_dependents: []
+    scope:
+      included:
+      - Return plural workbenches at the Tauri JSON boundary.
+      - Preserve singular workbench in persisted TOML.
+      excluded:
+      - Persistence migration, provider behavior, or unrelated workbench refactors.
+    acceptance_criteria:
+    - The immutable worker contract criteria are resolved.
+    surfaces:
+      code:
+      - src-tauri/src/workbench/commands.rs
+      contracts:
+      - list_workbenches Tauri response
+      data:
+      - workbench TOML compatibility
+      auth: []
+      docs: []
+      tests:
+      - src-tauri/src/workbench/commands.rs
+      config: []
+      generated: []
+    dependencies: []
+    execution:
+      route: swarm
+      lane: deep
+      discovery_profile: luna_xhigh_discovery
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: public-wire-contract-with-persistence-compatibility
+      role_triggers:
+        reviewer: response-contract-and-persistence-compatibility
+      worker_contract_path: docs/orchestration/runs/agents-functionality-2026-08-27/workbench-wire-contract-worker-contract.json
+      worker_contract_hash: sha256:4ebf4e05257cd36a6f07a028197fee4958fe66bc2af5572cafccc1260cc9dc82
+      evidence_trust: independently-reviewed-root-verified
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: low
+    verification:
+      focused_commands:
+      - cargo test --manifest-path src-tauri/Cargo.toml list_workbenches
+      - cargo test --manifest-path src-tauri/Cargo.toml workbench
+      focused_evidence:
+      - Focused serialization slice passed with 2 tests.
+      - Workbench slice passed with 41 tests.
+      - Independent wire-contract review found no release blocker.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:f06cedfd9a78b79416c6c8f5130901d6dce5cb4c76ee94880c90f2c72d45d119
+      fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-agents-functionality-wave-001-fingerprint.json
+      evidence_registry: C:/Users/User/AppData/Local/Temp/tinto-agents-functionality-verification-registry.json
+      reuse_decision: run:evidence-current
+    isolation:
+      type: worktree
+      branch: codex/workbench-wire-contract-worker
+      path: C:/Users/User/Documents/personal/tinto-worktrees/workbench-wire-contract
+      thread: /root/workbench_wire_implementer
+    compound:
+      run_id: null
+      state_path: null
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-27T12:45:00Z'
+      artifact_revision: null
+    handoff:
+      intended_base: codex/agents-usability-edge-campaign
+      pr_grouping: consolidated-local-branch
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
 wave_history:
 - wave: gap-closure-2026-08-27
   status: release-ready
@@ -413,3 +576,12 @@ wave_history:
   aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
   aggregate_record_digest: sha256:1734c5934d3dfa756a9948a6a81f4ebd65f0e7bae4de2dd9d65c21d9b8e5c1c2
   release_handoff: validation-only/manual-required
+- wave: agents-functionality-2026-08-27-wave-001
+  status: release-ready
+  observed_at: '2026-08-27T12:45:00Z'
+  units:
+  - agents-functionality-usability-fixes
+  - agents-workbench-wire-contract
+  aggregate_fingerprint: sha256:f06cedfd9a78b79416c6c8f5130901d6dce5cb4c76ee94880c90f2c72d45d119
+  aggregate_record_digest: null
+  release_handoff: consolidated-local-branch
