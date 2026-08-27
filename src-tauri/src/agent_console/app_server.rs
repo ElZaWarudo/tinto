@@ -996,11 +996,15 @@ fn activity_text_from_item(item: &Value, completed: bool) -> Option<String> {
                 .get("tool")
                 .or_else(|| item.get("toolName"))
                 .or_else(|| item.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or("herramienta MCP");
-            match server {
-                Some(server) => format!("Usando {server} / {tool}"),
-                None => format!("Usando {tool}"),
+                .and_then(Value::as_str);
+            match (
+                normalize_activity_identity(server),
+                normalize_activity_identity(tool),
+            ) {
+                (Some(server), Some(tool)) => format!("Usando {server} / {tool}"),
+                // Without both explicit identities this remains a generic
+                // activity and cannot imply MCP attribution.
+                _ => "Usando una herramienta".to_string(),
             }
         }
         "contextcompaction" if !completed => "Compactando el contexto".to_string(),
@@ -1064,6 +1068,51 @@ fn truncate_activity_text(text: &str, max_chars: usize) -> String {
     } else {
         prefix
     }
+}
+
+fn normalize_activity_identity(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+    let cleaned = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() || cleaned.chars().count() > 96 {
+        return None;
+    }
+    if !cleaned.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, ' ' | '_' | '-' | '.')
+    }) {
+        return None;
+    }
+
+    let lower = cleaned.to_ascii_lowercase();
+    let normalized = lower.replace('_', "-");
+    let forbidden = [
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "authorization",
+        "cookie",
+        "header",
+        "headers",
+        "http",
+        "https",
+        "url",
+        "uri",
+    ];
+    if normalized.contains("api-key")
+        || forbidden.iter().any(|marker| {
+            normalized
+                .split(|character: char| {
+                    character.is_whitespace() || matches!(character, '-' | '.')
+                })
+                .any(|segment| segment == *marker)
+        })
+    {
+        return None;
+    }
+    Some(cleaned)
 }
 
 fn handle_model_catalog_response(message: &Value, context: &ServerRuntimeContext) -> bool {
@@ -1945,6 +1994,67 @@ mod tests {
             ))
         );
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn mcp_activity_requires_explicit_bounded_server_and_tool_identity() {
+        let explicit = activity_text_from_item(
+            &json!({
+                "type": "mcptoolcall",
+                "server": "fileserver",
+                "tool": "read_file"
+            }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(explicit, "Usando fileserver / read_file");
+
+        let generic = activity_text_from_item(
+            &json!({ "type": "mcptoolcall", "tool": "read_file" }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(generic, "Usando una herramienta");
+    }
+
+    #[test]
+    fn mcp_activity_rejects_unsafe_identity_shapes() {
+        for server in [
+            "https://example.com/mcp",
+            "Authorization: Bearer secret",
+            r"C:\Users\token",
+        ] {
+            let text = activity_text_from_item(
+                &json!({
+                    "type": "mcptoolcall",
+                    "server": server,
+                    "tool": "read_file"
+                }),
+                false,
+            )
+            .unwrap();
+            assert_eq!(text, "Usando una herramienta");
+            assert!(!text.contains(server));
+        }
+
+        let text = activity_text_from_item(
+            &json!({
+                "type": "mcptoolcall",
+                "server": "safe\nserver",
+                "tool": "read\tfile"
+            }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(text, "Usando una herramienta");
+
+        let long = "x".repeat(200);
+        let text = activity_text_from_item(
+            &json!({ "type": "mcptoolcall", "server": long, "tool": "read" }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(text, "Usando una herramienta");
     }
 
     #[test]

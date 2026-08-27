@@ -98,6 +98,15 @@ const INCLUDE = new Set([
   "FileContent",
   "ContentEncoding",
   "WorkbenchSnapshot",
+  "McpProvider",
+  "McpTarget",
+  "McpInventoryStatus",
+  "McpDeliveryStatus",
+  "McpDefinition",
+  "McpDefinitionRef",
+  "McpInventory",
+  "McpProfile",
+  "McpProfileState",
 ]);
 
 async function main() {

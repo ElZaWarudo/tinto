@@ -1,0 +1,112 @@
+{
+  "acceptance_criteria": [
+    {
+      "description": "The canonical child state, focused requirements, implementation plan, work package, review record, and historical MCP roadmap consistently identify the unfinished initiative as RDM-024 while preserving completed RDM-023 history.",
+      "id": "AC-1"
+    },
+    {
+      "description": "The provider evidence matrix makes explicit go/no-go decisions for inventory/import, synchronization, profiles, launcher application, connectivity evidence, and activity attribution on current Windows and WSL targets.",
+      "id": "AC-2"
+    },
+    {
+      "description": "The plan has stable U-IDs, dependencies, exact repository surfaces, focused tests, security boundaries, and no unresolved product or security decision in the admitted first slice.",
+      "id": "AC-3"
+    },
+    {
+      "description": "The work package passes the Compound Master checker and its P0-P2 document review, defines human-reviewable review units, and records execution-ready as the next state without implementing code.",
+      "id": "AC-4"
+    },
+    {
+      "description": "No owned artifact introduces infrastructure or abstraction beyond the demonstrated requirements, and no file outside the owned list changes.",
+      "id": "AC-5"
+    }
+  ],
+  "closed_decisions": [
+    "The unfinished provider-neutral MCP initiative is RDM-024; completed runtime installation remains RDM-023.",
+    "The provider capability evidence matrix is a go/no-go gate; unsupported shared behavior is deferred rather than generalized.",
+    "Reuse the existing runtime, bus, session, persistence, and project Agents UI seams.",
+    "A shared provider abstraction requires the same demonstrated rule in at least two current providers.",
+    "Windows and each WSL distribution remain separate provider targets and trust boundaries.",
+    "Import is read-only; provider-file synchronization is explicit, drift-aware, path-contained, and preserves the prior configuration on failure.",
+    "Provider-derived values are untrusted, bounded, normalized, redacted, and inert.",
+    "Connectivity evidence must not execute configured commands or make arbitrary provider-defined network requests.",
+    "Profiles are project-local enablement sets with one default and optional per-session launch override.",
+    "No product code may be changed in this artifact-only unit."
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rg -n",
+      "Get-Content -Raw",
+      "git diff --",
+      "git status --short",
+      "python C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py"
+    ],
+    "verification": {
+      "focused": [
+        "python C:/Users/User/.agents/skills/krt-compound-master/scripts/check_work_package.py docs/work-packages/RDM-024-provider-neutral-mcp/2026-08-27-001-provider-neutral-mcp-work-package.md",
+        "npx prettier --check docs/plans/tinto-gap-closure/rdm-024-provider-neutral-mcp-requirements.md docs/plans/tinto-gap-closure/rdm-024-provider-neutral-mcp-plan.md docs/work-packages/RDM-024-provider-neutral-mcp/2026-08-27-001-provider-neutral-mcp-work-package.md docs/review-findings/2026-08-27-rdm-024-artifact-review.md docs/roadmaps/2026-07-21-010-provider-neutral-mcp-layer-roadmap.md docs/orchestration/compound-master/gap-closure-rdm-024-mcp/state.md docs/orchestration/compound-master/gap-closure-rdm-024-mcp/summary.md"
+      ],
+      "max_retries_per_command": 1,
+      "natural": []
+    }
+  },
+  "contract_hash": "sha256:879c7340ef9b43a4c1987d08fa7ab3f905d3c08eeda6798e488ddaa0ed04b38c",
+  "contract_id": "gap-closure-rdm-024-mcp:gc-001-rdm-024-artifacts",
+  "evidence_policy": {
+    "changed_files_source": "root-diff",
+    "minimum_command_trust": "self-reported"
+  },
+  "execution_budget": {
+    "discovery_passes": 1,
+    "extra_verification": "forbidden",
+    "fix_rounds": 2,
+    "implementation_rounds": 1,
+    "review_rounds": 3
+  },
+  "forbidden_changes": [
+    "Do not add or propose a daemon, service, database, generic provider framework, polling layer, MCP client or proxy, marketplace, cloud sync, credential vault, or automatic server launcher.",
+    "Do not edit the approved Seneschal packet, queue, blocker ledger, approval receipt, product code, tests, configuration, or generated bus contract.",
+    "Do not create commits, branches, pushes, pull requests, Jira mutations, reviewer requests, or release actions.",
+    "Do not widen the first implementation slice beyond behavior proven by current provider evidence."
+  ],
+  "lane": "deep",
+  "objective": "Produce the smallest reviewed, execution-ready RDM-024 provider-neutral MCP artifact set without modifying product code or introducing speculative infrastructure.",
+  "owned_files": [
+    "docs/orchestration/compound-master/gap-closure-rdm-024-mcp/state.md",
+    "docs/orchestration/compound-master/gap-closure-rdm-024-mcp/summary.md",
+    "docs/plans/tinto-gap-closure/rdm-024-provider-neutral-mcp-requirements.md",
+    "docs/plans/tinto-gap-closure/rdm-024-provider-neutral-mcp-plan.md",
+    "docs/work-packages/RDM-024-provider-neutral-mcp/2026-08-27-001-provider-neutral-mcp-work-package.md",
+    "docs/review-findings/2026-08-27-rdm-024-artifact-review.md",
+    "docs/roadmaps/2026-07-21-010-provider-neutral-mcp-layer-roadmap.md"
+  ],
+  "profile": "luna_xhigh",
+  "required_certifications": [],
+  "required_context": [
+    "AGENTS.md",
+    "docs/plans/tinto-gap-closure/initiative-requirements.md",
+    "docs/product/roadmap.md",
+    "docs/roadmaps/2026-07-21-010-provider-neutral-mcp-layer-roadmap.md",
+    "docs/orchestration/compound-master-state.md",
+    "docs/contracts/bus-contract.md",
+    "src-tauri/src/agent_console",
+    "src/panels/terminal",
+    "src/bus"
+  ],
+  "schema_version": 1,
+  "supervision": {
+    "mode": "discovery-checkpoint",
+    "transition_after_ms": 15000
+  },
+  "terminal_protocol": {
+    "grace_actions": 0,
+    "return_when": [
+      "acceptance_criteria_resolved",
+      "required_checks_attempted",
+      "state_reconciled"
+    ]
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "unit_id": "gc-001-rdm-024-artifacts"
+}

@@ -9,12 +9,57 @@ import type {
   AgentSession,
   AgentSessionPermissionMode,
   FileDiff,
+  McpInventory,
+  McpProfileState,
   RepoDelta,
+  WorkbenchConfig,
 } from "../../bus/contract";
 
 const writeAgentSessionInputMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve();
+});
+const getCodexMcpInventoryMock = vi.fn<() => Promise<McpInventory>>(() =>
+  Promise.resolve({
+    provider: "codex" as const,
+    target: "windows_local" as const,
+    status: "empty" as const,
+    definitions: [],
+    error: null,
+    checked_at_ms: 1,
+  }),
+);
+const listWorkbenchesMock = vi.fn<() => Promise<WorkbenchConfig>>(() =>
+  Promise.resolve({ version: 1, active: "Work", workbenches: [] }),
+);
+const listMcpProfilesMock = vi.fn<(workbench: string) => Promise<McpProfileState>>((workbench) => {
+  void workbench;
+  return Promise.resolve({
+    profiles: [],
+    active_profile_id: null,
+    delivery_status: "unsupported" as const,
+  });
+});
+const importCodexMcpProfileMock = vi.fn((workbench: string) => listMcpProfilesMock(workbench));
+const createMcpProfileMock = vi.fn((workbench: string, name: string) => {
+  void name;
+  return listMcpProfilesMock(workbench);
+});
+const renameMcpProfileMock = vi.fn((workbench: string, profileId: string, name: string) => {
+  void profileId;
+  void name;
+  return listMcpProfilesMock(workbench);
+});
+const deleteMcpProfileMock = vi.fn(
+  (workbench: string, profileId: string, replacementId?: string | null) => {
+    void profileId;
+    void replacementId;
+    return listMcpProfilesMock(workbench);
+  },
+);
+const setMcpDefaultProfileMock = vi.fn((workbench: string, profileId: string) => {
+  void profileId;
+  return listMcpProfilesMock(workbench);
 });
 const writeAgentSessionTurnMock = vi.fn((...args: unknown[]) => {
   void args;
@@ -101,16 +146,27 @@ vi.mock("../../bus/client", () => ({
   branchAgentSessionFromMessage: (sessionId: string, messageId: string) =>
     branchAgentSessionFromMessageMock(sessionId, messageId),
   getAgentImagePreview: (path: string) => getAgentImagePreviewMock(path),
+  getCodexMcpInventory: () => getCodexMcpInventoryMock(),
   getAgentJournalSession: () => getAgentJournalSessionMock(),
   getAgentRuntimeCatalog: (sessionId: string, refresh?: boolean) =>
     getAgentRuntimeCatalogMock(sessionId, refresh),
   listAgentSessions: () => listAgentSessionsMock(),
+  listMcpProfiles: (workbench: string) => listMcpProfilesMock(workbench),
+  listWorkbenches: () => listWorkbenchesMock(),
+  importCodexMcpProfile: (workbench: string) => importCodexMcpProfileMock(workbench),
+  createMcpProfile: (workbench: string, name: string) => createMcpProfileMock(workbench, name),
+  renameMcpProfile: (workbench: string, profileId: string, name: string) =>
+    renameMcpProfileMock(workbench, profileId, name),
+  deleteMcpProfile: (workbench: string, profileId: string, replacementId?: string | null) =>
+    deleteMcpProfileMock(workbench, profileId, replacementId),
   respondAgentSessionAcpPermission: (...a: unknown[]) => respondAgentSessionAcpPermissionMock(...a),
   resumeAgentJournalSession: (sessionId: string) => resumeAgentJournalSessionMock(sessionId),
   retryAgentSessionAcp: (...a: unknown[]) => retryAgentSessionAcpMock(...a),
   setAgentSessionAcpConfigOption: (...a: unknown[]) => setAgentSessionAcpConfigOptionMock(...a),
   setAgentSessionPermissionMode: (sessionId: string, permissionMode: AgentSessionPermissionMode) =>
     setAgentSessionPermissionModeMock(sessionId, permissionMode),
+  setMcpDefaultProfile: (workbench: string, profileId: string) =>
+    setMcpDefaultProfileMock(workbench, profileId),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
   restoreSessionTurn: (...a: unknown[]) => restoreSessionTurnMock(...a),
@@ -317,6 +373,28 @@ describe("TerminalPanel", () => {
     getAgentRuntimeCatalogMock.mockReset();
     getAgentRuntimeCatalogMock.mockResolvedValue(runtimeCatalogFixture());
     getAgentImagePreviewMock.mockClear();
+    getCodexMcpInventoryMock.mockClear();
+    getCodexMcpInventoryMock.mockResolvedValue({
+      provider: "codex",
+      target: "windows_local",
+      status: "empty",
+      definitions: [],
+      error: null,
+      checked_at_ms: 1,
+    });
+    listWorkbenchesMock.mockClear();
+    listWorkbenchesMock.mockResolvedValue({ version: 1, active: "Work", workbenches: [] });
+    listMcpProfilesMock.mockClear();
+    listMcpProfilesMock.mockResolvedValue({
+      profiles: [],
+      active_profile_id: null,
+      delivery_status: "unsupported",
+    });
+    importCodexMcpProfileMock.mockClear();
+    createMcpProfileMock.mockClear();
+    renameMcpProfileMock.mockClear();
+    deleteMcpProfileMock.mockClear();
+    setMcpDefaultProfileMock.mockClear();
     revertSessionMock.mockClear();
     revertSessionTurnFileMock.mockClear();
     restoreSessionTurnMock.mockClear();
@@ -5223,6 +5301,333 @@ describe("TerminalPanel", () => {
       within(focus).getByRole("button", { name: "Restaurar desde este turno" }),
     ).toHaveAttribute("title", "Restaurar el turno 1: detén la sesión antes.");
     expect(screen.getByLabelText("Mensaje para Codex")).toHaveValue("");
+  });
+
+  it("shows the safe MCP inventory and project-local profile state from Details", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    listWorkbenchesMock.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [
+        {
+          name: "Work",
+          repos: [{ path: "/r/a", alias: null, fs_watch: [] }],
+        },
+      ],
+    });
+    getCodexMcpInventoryMock.mockResolvedValueOnce({
+      provider: "codex",
+      target: "windows_local",
+      status: "success",
+      definitions: [
+        {
+          provider: "codex",
+          target: "windows_local",
+          source: "codex_mcp_servers",
+          name: "same-name",
+          command_available: true,
+        },
+        {
+          provider: "codex",
+          target: "windows_local",
+          source: "codex_mcpServers",
+          name: "same-name",
+          command_available: null,
+        },
+      ],
+      error: null,
+      checked_at_ms: 1,
+    });
+    listMcpProfilesMock.mockResolvedValueOnce({
+      profiles: [{ id: "imported", name: "Imported", definitions: [] }],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    });
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+
+    expect(await screen.findByRole("heading", { name: "MCP del proyecto" })).toBeInTheDocument();
+    expect(screen.getByText("Disponible")).toBeInTheDocument();
+    expect(screen.getAllByText("same-name")).toHaveLength(2);
+    expect(screen.getByText("codex_mcp_servers")).toBeInTheDocument();
+    expect(screen.getByText("codex_mcpServers")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Perfil MCP predeterminado" })).toHaveValue(
+      "imported",
+    );
+    expect(screen.getByText("Entrega no admitida")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Importar inventario actual" })).toBeEnabled();
+  });
+
+  it("binds MCP profiles to the session repository instead of the active workbench", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture({ repo: "/r/a" })]);
+    listWorkbenchesMock.mockResolvedValueOnce({
+      version: 1,
+      active: "Other",
+      workbenches: [
+        { name: "Session project", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] },
+        { name: "Other", repos: [{ path: "/r/b", alias: null, fs_watch: [] }] },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+
+    await screen.findByRole("heading", { name: "MCP del proyecto" });
+    expect(listMcpProfilesMock).toHaveBeenCalledWith("Session project");
+    expect(listMcpProfilesMock).not.toHaveBeenCalledWith("Other");
+  });
+
+  it("renders a terminal MCP error while preserving a fulfilled profile response", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    listWorkbenchesMock.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+    });
+    getCodexMcpInventoryMock.mockRejectedValueOnce(new Error("unavailable"));
+    listMcpProfilesMock.mockResolvedValueOnce({
+      profiles: [{ id: "imported", name: "Imported", definitions: [] }],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    });
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+
+    expect(await screen.findByText("Error seguro")).toBeInTheDocument();
+    expect(screen.queryByText("Cargando")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Perfil MCP predeterminado" })).toHaveValue(
+      "imported",
+    );
+  });
+
+  it("manages a non-default profile without implicitly replacing the default", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    listWorkbenchesMock.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+    });
+    const state: McpProfileState = {
+      profiles: [
+        { id: "imported", name: "Imported", definitions: [] },
+        { id: "review", name: "Review", definitions: [] },
+      ],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    };
+    listMcpProfilesMock.mockResolvedValueOnce(state);
+    renameMcpProfileMock.mockResolvedValueOnce(state);
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Perfil MCP para gestionar" }),
+      "review",
+    );
+    await user.type(screen.getByRole("textbox", { name: "Nombre de perfil MCP" }), "Reviewed");
+    await user.click(screen.getByRole("button", { name: "Renombrar" }));
+
+    expect(renameMcpProfileMock).toHaveBeenCalledWith("Work", "review", "Reviewed");
+    expect(setMcpDefaultProfileMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Eliminar" })).toBeEnabled();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Perfil MCP para gestionar" }),
+      "imported",
+    );
+    expect(screen.getByRole("button", { name: "Eliminar" })).toBeDisabled();
+  });
+
+  it("disables MCP profile selectors in a read-only journal", async () => {
+    getAgentJournalSessionMock.mockResolvedValueOnce(
+      sessionFixture({ status: "exited", ended_at_ms: 2 }),
+    );
+    listWorkbenchesMock.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+    });
+    listMcpProfilesMock.mockResolvedValueOnce({
+      profiles: [
+        { id: "imported", name: "Imported", definitions: [] },
+        { id: "review", name: "Review", definitions: [] },
+      ],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    });
+
+    const user = userEvent.setup();
+    render(
+      <TerminalPanel
+        {...props({
+          sessionId: "sess-1",
+          repo: "/r/a",
+          agentType: "codex",
+          mode: "journal",
+        })}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+
+    expect(
+      await screen.findByRole("combobox", { name: "Perfil MCP predeterminado" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Perfil MCP para gestionar" })).toBeDisabled();
+    expect(setMcpDefaultProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps partial inventory non-importable", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    listWorkbenchesMock.mockResolvedValueOnce({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+    });
+    getCodexMcpInventoryMock.mockResolvedValueOnce({
+      provider: "codex",
+      target: "windows_local",
+      status: "partial",
+      definitions: [],
+      error: null,
+      checked_at_ms: 1,
+    });
+    listMcpProfilesMock.mockResolvedValueOnce({
+      profiles: [{ id: "imported", name: "Imported", definitions: [] }],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    });
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+
+    expect(await screen.findByText("Parcial")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Importar inventario actual" })).toBeDisabled();
+  });
+
+  it("keeps the last successful MCP definitions visible after a partial refresh", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    listWorkbenchesMock.mockResolvedValue({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+    });
+    getCodexMcpInventoryMock
+      .mockResolvedValueOnce({
+        provider: "codex",
+        target: "windows_local",
+        status: "success",
+        definitions: [
+          {
+            provider: "codex",
+            target: "windows_local",
+            source: "codex_mcp_servers",
+            name: "known-good",
+            command_available: true,
+          },
+        ],
+        error: null,
+        checked_at_ms: 1,
+      })
+      .mockResolvedValueOnce({
+        provider: "codex",
+        target: "windows_local",
+        status: "partial",
+        definitions: [],
+        error: null,
+        checked_at_ms: 2,
+      });
+    listMcpProfilesMock.mockResolvedValue({
+      profiles: [{ id: "imported", name: "Imported", definitions: [] }],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    });
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+    expect(await screen.findByText("known-good")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Actualizar inventario MCP" }));
+
+    expect(await screen.findByText("Parcial")).toBeInTheDocument();
+    expect(screen.getByText("known-good")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Importar inventario actual" })).toBeDisabled();
+  });
+
+  it("keeps an authoritative empty MCP catalog empty after a partial refresh", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    listWorkbenchesMock.mockResolvedValue({
+      version: 1,
+      active: "Work",
+      workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
+    });
+    getCodexMcpInventoryMock
+      .mockResolvedValueOnce({
+        provider: "codex",
+        target: "windows_local",
+        status: "empty",
+        definitions: [],
+        error: null,
+        checked_at_ms: 1,
+      })
+      .mockResolvedValueOnce({
+        provider: "codex",
+        target: "windows_local",
+        status: "partial",
+        definitions: [
+          {
+            provider: "codex",
+            target: "windows_local",
+            source: "codex_mcp_servers",
+            name: "incomplete",
+            command_available: true,
+          },
+        ],
+        error: null,
+        checked_at_ms: 2,
+      });
+    listMcpProfilesMock.mockResolvedValue({
+      profiles: [{ id: "imported", name: "Imported", definitions: [] }],
+      active_profile_id: "imported",
+      delivery_status: "unsupported",
+    });
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+    expect(await screen.findByText("Vacío")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Actualizar inventario MCP" }));
+
+    expect(await screen.findByText("Parcial")).toBeInTheDocument();
+    expect(screen.queryByText("incomplete")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("No hay definiciones MCP no sensibles disponibles."),
+    ).toBeInTheDocument();
+  });
+
+  it("reports MCP as unavailable when the session repository has no unique project", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    listWorkbenchesMock.mockResolvedValueOnce({
+      version: 1,
+      active: "Other",
+      workbenches: [{ name: "Other", repos: [{ path: "/r/b", alias: null, fs_watch: [] }] }],
+    });
+
+    const user = userEvent.setup();
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    await user.click(await screen.findByRole("button", { name: "Detalles" }));
+
+    expect(await screen.findByText("No admitido")).toBeInTheDocument();
+    expect(
+      screen.getByText("La sesión no pertenece a un proyecto local disponible."),
+    ).toBeInTheDocument();
+    expect(listMcpProfilesMock).not.toHaveBeenCalled();
   });
 
   it("shows session change log files in Agent Lens when turn checkpoints are unavailable", async () => {

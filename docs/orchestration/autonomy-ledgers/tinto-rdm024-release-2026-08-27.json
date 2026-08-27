@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "contract_id": "tinto-rdm024-release-2026-08-27",
+  "issued_at": "2026-08-27T09:56:48.3215398Z",
+  "expires_at": "2026-08-28T09:56:48.3215398Z",
+  "status": "active",
+  "issuer": {
+    "type": "user",
+    "id": "current-user",
+    "approval_ref": "thread-goal:autonomous-seneschal-through-release-phase",
+    "approval_hash": "sha256:c6b8ee786fc4e815606309f79669c9a652f8dcb5b3edb15a06de42596011db0e"
+  },
+  "scope": {
+    "repository": "ElZaWarudo/tinto",
+    "base_branch": "develop",
+    "branch_patterns": [
+      "codex/provider-neutral-mcp-control-plane"
+    ],
+    "jira_projects": [],
+    "jira_keys": [],
+    "packages": [
+      "docs/work-packages/RDM-024-provider-neutral-mcp/2026-08-27-001-provider-neutral-mcp-work-package.md"
+    ],
+    "review_units": [
+      "gc-001-rdm-024-artifacts",
+      "gc-002-rdm-024-implementation",
+      "gc-003-native-regression",
+      "gc-004-roadmap-reconciliation"
+    ]
+  },
+  "allowed_mutations": [
+    "branch_push",
+    "pr_create",
+    "reviewer_request"
+  ],
+  "stop_conditions": [
+    "contract_expired",
+    "required_checks_not_green",
+    "audit_write_failed",
+    "scope_mismatch",
+    "execution_template_unavailable"
+  ],
+  "audit": {
+    "path": "docs/orchestration/autonomy-ledgers/tinto-rdm024-release-2026-08-27-audit",
+    "head_hash": "9656229d8fb854a18f335005fc1ad6379a4a263b06c46fb7117a29a22bf532d5"
+  },
+  "contract_hash": "915852d736feea1844f14ec8d9671d3e186b9d26825828d73c1d3be59e14d2ec"
+}

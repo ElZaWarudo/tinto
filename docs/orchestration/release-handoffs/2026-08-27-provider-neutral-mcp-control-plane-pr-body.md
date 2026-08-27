@@ -1,0 +1,4 @@
+- Adds a read-only Codex MCP catalog with source-bound profiles and explicit sanitized activity attribution
+- Adds accessible MCP management details to the Agents workspace with truthful unsupported delivery states
+- Makes Windows Tauri E2E cleanup resilient to transient file locks
+- Documents provider evidence gates and native regression boundaries

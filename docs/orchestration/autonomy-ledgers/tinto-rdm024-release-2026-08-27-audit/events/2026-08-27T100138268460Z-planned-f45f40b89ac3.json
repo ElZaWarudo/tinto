@@ -1,0 +1,58 @@
+{
+  "actual_audit_head": "GENESIS",
+  "contract_id": "tinto-rdm024-release-2026-08-27",
+  "event_hash": "f45f40b89ac38e35f13cf6aa227438d847a34c1da5e8898f1a610cecdc785e3c",
+  "execution_requested": true,
+  "jira_provider": null,
+  "ledger_result": {
+    "allowed": true,
+    "audit_required": true,
+    "block_reasons": [],
+    "contract_hash": "8c794a48966ddb7c6cbe3e8bde8c16136f40f97e61b2f6f6dc879c67f2ff3791",
+    "contract_id": "tinto-rdm024-release-2026-08-27",
+    "live_state_summary": {
+      "contract_id": "tinto-rdm024-release-2026-08-27",
+      "expires_at": "2026-08-28T09:56:48.3215398Z",
+      "source": "ledger",
+      "status": "active"
+    },
+    "mutation_class": "branch_push",
+    "payload_hash": null,
+    "target": {
+      "branch": "codex/provider-neutral-mcp-control-plane",
+      "new_sha": "d2b8d3d601ac71973c93bdfc274be359d113f9c8",
+      "old_sha": "0000000000000000000000000000000000000000",
+      "repository": "ElZaWarudo/tinto"
+    },
+    "warnings": []
+  },
+  "mutation_class": "branch_push",
+  "payload_hash": null,
+  "previous_event_hash": "GENESIS",
+  "stage": "planned",
+  "target": {
+    "branch": "codex/provider-neutral-mcp-control-plane",
+    "new_sha": "d2b8d3d601ac71973c93bdfc274be359d113f9c8",
+    "old_sha": "0000000000000000000000000000000000000000",
+    "repository": "ElZaWarudo/tinto"
+  },
+  "timestamp": "2026-08-27T10:01:38.268460Z",
+  "validator_result": {
+    "allowed": true,
+    "audit_required": true,
+    "block_reasons": [],
+    "live_state_summary": {
+      "branch": "codex/provider-neutral-mcp-control-plane",
+      "old_sha": "0000000000000000000000000000000000000000"
+    },
+    "mutation_class": "branch_push",
+    "payload_hash": null,
+    "target": {
+      "branch": "codex/provider-neutral-mcp-control-plane",
+      "new_sha": "d2b8d3d601ac71973c93bdfc274be359d113f9c8",
+      "old_sha": "0000000000000000000000000000000000000000",
+      "repository": "ElZaWarudo/tinto"
+    },
+    "warnings": []
+  }
+}
