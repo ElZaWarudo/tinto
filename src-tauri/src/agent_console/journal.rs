@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::bus::contract::{
     AgentJournalSessionSummary, AgentSession, AgentSessionContextSummary, AgentSessionFeedback,
     AgentSessionGoal, AgentSessionPermissionMode, AgentSessionPersonality, AgentSessionPlanMode,
-    AgentSessionStatus, AgentSessionTimelineItem, AgentSessionTurnStatus,
+    AgentSessionStatus, AgentSessionTimelineItem, AgentSessionTurnStatus, AgentSubagentThread,
 };
 
 #[derive(Debug)]
@@ -83,7 +83,8 @@ impl AgentJournal {
               context_summary_text TEXT,
               context_summary_created_at_ms INTEGER,
               context_summary_source_events INTEGER,
-              context_summary_source_turns INTEGER
+              context_summary_source_turns INTEGER,
+              subagents_json TEXT
             );
 
             CREATE TABLE IF NOT EXISTS agent_turns (
@@ -129,6 +130,7 @@ impl AgentJournal {
         self.ensure_agent_sessions_column("context_summary_created_at_ms", "INTEGER")?;
         self.ensure_agent_sessions_column("context_summary_source_events", "INTEGER")?;
         self.ensure_agent_sessions_column("context_summary_source_turns", "INTEGER")?;
+        self.ensure_agent_sessions_column("subagents_json", "TEXT")?;
         Ok(())
     }
 
@@ -206,6 +208,11 @@ impl AgentJournal {
             .then_some(session.permission_mode)
             .flatten()
             .map(permission_mode_name);
+        let subagents_json = if session.subagents.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&session.subagents)?)
+        };
         let updated_at_ms = now_ms() as i64;
         self.conn.execute(
             r#"
@@ -215,8 +222,9 @@ impl AgentJournal {
               goal_text, goal_updated_at_ms, goal_json, personality_name,
               personality_updated_at_ms, plan_mode_enabled, plan_mode_updated_at_ms,
               feedback_json, context_summary_text, context_summary_created_at_ms,
-              context_summary_source_events, context_summary_source_turns, permission_mode
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+              context_summary_source_events, context_summary_source_turns, permission_mode,
+              subagents_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
             ON CONFLICT(id) DO UPDATE SET
               repo = excluded.repo,
               agent_type = excluded.agent_type,
@@ -239,7 +247,8 @@ impl AgentJournal {
               context_summary_created_at_ms = excluded.context_summary_created_at_ms,
               context_summary_source_events = excluded.context_summary_source_events,
               context_summary_source_turns = excluded.context_summary_source_turns,
-              permission_mode = excluded.permission_mode
+              permission_mode = excluded.permission_mode,
+              subagents_json = excluded.subagents_json
             "#,
             params![
                 &session.id,
@@ -270,6 +279,7 @@ impl AgentJournal {
                 context_summary_source_events,
                 context_summary_source_turns,
                 permission_mode,
+                subagents_json,
             ],
         )?;
         Ok(())
@@ -307,6 +317,47 @@ impl AgentJournal {
         Ok(())
     }
 
+    /// Store descendant items under the root session row while preserving the
+    /// provider thread identity. The normalized child timeline remains in the
+    /// session graph JSON, and the event wrapper keeps legacy root timeline
+    /// readers from accidentally displaying child output.
+    pub fn record_subagent_timeline_item(
+        &self,
+        root_session_id: &str,
+        thread_id: &str,
+        item: &AgentSessionTimelineItem,
+    ) -> Result<(), AgentJournalError> {
+        let seq = next_event_seq(&self.conn, root_session_id)?;
+        let kind = serde_json::to_value(item.kind)?
+            .as_str()
+            .unwrap_or("activity")
+            .to_string();
+        let payload = serde_json::to_string(&serde_json::json!({
+            "thread_id": thread_id,
+            "item": item,
+        }))?;
+        self.conn.execute(
+            r#"
+            INSERT OR IGNORE INTO agent_events (
+              id, session_id, turn_id, seq, kind, payload_json, timestamp_ms
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                format!("{root_session_id}:{thread_id}:{}", item.id),
+                root_session_id,
+                seq,
+                kind,
+                payload,
+                item.timestamp_ms as i64,
+            ],
+        )?;
+        self.conn.execute(
+            "UPDATE agent_sessions SET updated_at_ms = ?1 WHERE id = ?2",
+            params![item.timestamp_ms as i64, root_session_id],
+        )?;
+        Ok(())
+    }
+
     pub fn timeline_for_session(
         &self,
         session_id: &str,
@@ -316,6 +367,7 @@ impl AgentJournal {
             SELECT payload_json
             FROM agent_events
             WHERE session_id = ?1
+              AND (json_extract(payload_json, '$.thread_id') IS NULL)
             ORDER BY seq ASC
             "#,
         )?;
@@ -421,7 +473,7 @@ impl AgentJournal {
                   feedback_json,
                   context_summary_text, context_summary_created_at_ms,
                   context_summary_source_events, context_summary_source_turns,
-                  permission_mode
+                  permission_mode, subagents_json
                 FROM agent_sessions
                 WHERE id = ?1
                 "#,
@@ -450,6 +502,7 @@ impl AgentJournal {
                         row.get::<_, Option<i64>>(19)?,
                         row.get::<_, Option<i64>>(20)?,
                         row.get::<_, Option<String>>(21)?,
+                        row.get::<_, Option<String>>(22)?,
                     ))
                 },
             )
@@ -477,6 +530,7 @@ impl AgentJournal {
             context_summary_source_events,
             context_summary_source_turns,
             permission_mode,
+            subagents_json,
         )) = session
         else {
             return Ok(None);
@@ -493,6 +547,13 @@ impl AgentJournal {
         } else {
             None
         };
+        let subagents = subagents_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<AgentSubagentThread>>(json).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(stale_subagent)
+            .collect();
         Ok(Some(AgentSession {
             id,
             repo: PathBuf::from(repo),
@@ -514,6 +575,7 @@ impl AgentJournal {
             turn_status: AgentSessionTurnStatus::Waiting,
             turn_checkpoints: Vec::new(),
             timeline,
+            subagents,
             runtime_options: Default::default(),
             goal: goal_json
                 .as_deref()
@@ -618,6 +680,32 @@ fn archived_status(status: AgentSessionStatus, ended_at_ms: Option<u64>) -> Agen
     }
 }
 
+fn stale_subagent(mut subagent: AgentSubagentThread) -> AgentSubagentThread {
+    if matches!(
+        subagent.thread_status.as_str(),
+        "starting" | "running" | "active"
+    ) || matches!(
+        subagent.turn_status.as_str(),
+        "working" | "inProgress" | "in_progress"
+    ) {
+        subagent.thread_status = "interrupted".to_string();
+        subagent.turn_status = "waiting".to_string();
+        subagent.runtime_state = Some("stale".to_string());
+        if matches!(
+            subagent.collaboration_status.as_deref(),
+            Some("in_progress" | "inProgress" | "waiting_on_approval" | "waitingOnApproval")
+        ) {
+            subagent.collaboration_status = Some("interrupted".to_string());
+        }
+        subagent.capabilities.direct_input = false;
+        subagent.capabilities.steer = false;
+        subagent.capabilities.interrupt = false;
+        subagent.capabilities.wait = false;
+        subagent.capabilities.close = false;
+    }
+    subagent
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -632,7 +720,8 @@ mod tests {
     use crate::bus::contract::{
         AgentSession, AgentSessionAcpMode, AgentSessionAcpPermission,
         AgentSessionAcpPermissionState, AgentSessionAcpRuntime, AgentSessionAcpState,
-        AgentSessionPermissionMode, AgentSessionTimelineKind,
+        AgentSessionPermissionMode, AgentSessionTimelineKind, AgentSubagentCapabilities,
+        AgentSubagentThread,
     };
 
     fn session(id: &str) -> AgentSession {
@@ -657,6 +746,7 @@ mod tests {
             turn_status: crate::bus::contract::AgentSessionTurnStatus::Waiting,
             turn_checkpoints: Vec::new(),
             timeline: Vec::new(),
+            subagents: Vec::new(),
             runtime_options: Default::default(),
             goal: None,
             personality: None,
@@ -671,6 +761,94 @@ mod tests {
             age_ms: 10,
             output_bytes_per_second: None,
         }
+    }
+
+    fn subagent(id: &str, parent_id: Option<&str>, status: &str) -> AgentSubagentThread {
+        AgentSubagentThread {
+            id: id.into(),
+            parent_id: parent_id.map(str::to_string),
+            source_kind: "subAgentThreadSpawn".into(),
+            depth: u32::from(parent_id.is_some()),
+            agent_path: vec!["root".into(), id.into()],
+            nickname: Some(id.into()),
+            role: Some("worker".into()),
+            model: Some("gpt-5.6-sol".into()),
+            reasoning_effort: Some("high".into()),
+            runtime: Some("codex".into()),
+            approval_policy: Some("never".into()),
+            permission_mode: Some("workspace".into()),
+            capacity: Some(8),
+            thread_status: status.into(),
+            turn_status: if status == "running" {
+                "working"
+            } else {
+                "waiting"
+            }
+            .into(),
+            collaboration_status: None,
+            collaboration_tool: None,
+            consolidation_id: None,
+            runtime_state: Some(status.into()),
+            approval_request_id: None,
+            prompt: None,
+            preview: None,
+            capabilities: AgentSubagentCapabilities {
+                inspect: true,
+                direct_input: status == "running",
+                steer: status == "running",
+                interrupt: status == "running",
+                wait: true,
+                close: true,
+            },
+            activities: Vec::new(),
+            result: None,
+            timeline: Vec::new(),
+            updated_at_ms: 12,
+        }
+    }
+
+    #[test]
+    fn journal_roundtrips_nested_subagents_and_marks_live_children_stale() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut root = session("root-session");
+        let mut child = subagent("child-thread", Some("thread-1"), "running");
+        let grandchild = subagent("grandchild-thread", Some("child-thread"), "completed");
+        child.timeline.push(AgentSessionTimelineItem {
+            session_id: child.id.clone(),
+            id: "child-message".into(),
+            kind: AgentSessionTimelineKind::AgentMessage,
+            text: "child result".into(),
+            timestamp_ms: 20,
+            attachments: Vec::new(),
+        });
+        root.subagents = vec![child, grandchild];
+        journal.record_session(&root).expect("root graph");
+        journal
+            .record_subagent_timeline_item(
+                "root-session",
+                "child-thread",
+                &root.subagents[0].timeline[0],
+            )
+            .expect("child event");
+
+        let restored = journal
+            .session_from_journal("root-session")
+            .expect("load")
+            .expect("root exists");
+        assert!(
+            restored.timeline.is_empty(),
+            "child output must not pollute root"
+        );
+        assert_eq!(restored.subagents.len(), 2);
+        assert_eq!(restored.subagents[0].timeline[0].text, "child result");
+        assert_eq!(restored.subagents[0].thread_status, "interrupted");
+        assert_eq!(
+            restored.subagents[0].runtime_state.as_deref(),
+            Some("stale")
+        );
+        assert!(!restored.subagents[0].capabilities.direct_input);
+        assert!(!restored.subagents[0].capabilities.wait);
+        assert_eq!(restored.subagents[1].thread_status, "completed");
     }
 
     #[test]

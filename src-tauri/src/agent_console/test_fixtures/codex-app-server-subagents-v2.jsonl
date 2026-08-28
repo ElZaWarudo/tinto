@@ -1,0 +1,16 @@
+{"method":"thread/started","params":{"thread":{"id":"child-1","parentThreadId":"root-1","source":{"kind":"subAgentThreadSpawn","depth":1,"agent_path":["root-1","child-1"]},"agentNickname":"builder","agentRole":"implementation","model":"gpt-5.6-sol","reasoningEffort":"high","status":"running","capabilities":{"inspect":true,"directInput":true,"steer":true,"interrupt":true,"wait":true,"close":true},"unknownFutureField":{"preserve":true}}}}
+{"method":"turn/started","params":{"threadId":"grandchild-1","turn":{"id":"grand-turn-1"},"unknownField":"ignored"}}
+{"method":"item/completed","params":{"threadId":"grandchild-1","item":{"id":"grand-message-1","type":"agentMessage","text":"nested result","status":"completed"}}}
+{"method":"thread/started","params":{"thread":{"id":"grandchild-1","parentThreadId":"child-1","source":{"kind":"subAgentOther","depth":2,"agent_path":["root-1","child-1","grandchild-1"]},"status":"running"}}}
+{"method":"turn/completed","params":{"threadId":"grandchild-1","turn":{"id":"grand-turn-1","status":"completed"}}}
+{"method":"item/completed","params":{"threadId":"child-1","item":{"id":"child-message-1","type":"agentMessage","text":"child result","status":"completed"}}}
+{"method":"thread/status/changed","params":{"threadId":"child-1","status":"completed","result":{"status":"completed","summary":"child result"}}}
+{"method":"thread/status/changed","params":{"threadId":"child-2","status":{"type":"active","activeFlags":["waitingOnApproval"]},"collaborationTool":"waitAgent","consolidationId":"root-1"}}
+{"method":"item/commandExecution/requestApproval","params":{"threadId":"child-2","requestId":"approval-2","reason":"write requires approval"}}
+{"method":"turn/completed","params":{"threadId":"child-2","turn":{"id":"child-turn-2","status":"failed","error":{"message":"denied"}}}}
+{"id":41,"result":{"data":[{"id":"child-2","parentThreadId":"root-1","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"root-1","depth":1,"agent_nickname":"reviewer","agent_role":"review","agent_path":"root-1/reviewer"}}},"status":{"type":"active","activeFlags":[]},"canAcceptDirectInput":true,"result":{"status":{"type":"completed"},"summary":"reviewed"}}],"nextCursor":"page-2"}}
+{"id":42,"result":{"data":[],"nextCursor":"page-2"}}
+{"method":"thread/started","params":{"thread":{"id":"child-source","parentThreadId":"t","threadSource":"subAgentReview","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"t","depth":1,"agent_nickname":"reviewer","agent_role":"review","agent_path":"t/reviewer"}}},"preview":"review this change","prompt":"Review the backend graph","status":{"type":"idle"},"canAcceptDirectInput":true}}}
+{"id":"server-request-2","method":"serverRequest","params":{"request":{"id":"approval-2","method":"item/commandExecution/requestApproval","params":{"threadId":"child-source","reason":"run tests"}}}}
+{"method":"serverRequest/resolved","params":{"threadId":"child-source","requestId":"approval-2"}}
+{"method":"item/completed","params":{"threadId":"t","item":{"id":"collab-spawn-1","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed","prompt":"Inspect the backend graph","senderThreadId":"t","receiverThreadIds":["child-source"],"agentsStates":{"child-source":{"status":"running","message":"started"}}}}}

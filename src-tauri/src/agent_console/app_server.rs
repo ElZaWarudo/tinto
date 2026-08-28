@@ -20,12 +20,13 @@ use super::{
         kill_process_tree, prompt_with_file_attachments, AgentProcess, AgentProcessEvent,
         AgentTurnAttachment,
     },
-    AgentConsoleError, ResumeResultReceiver,
+    sanitize_provider_timeline_text, AgentConsoleError, ResumeResultReceiver, MAX_SUBAGENT_THREADS,
 };
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentRuntimeCatalogStatus, AgentRuntimeModel, AgentRuntimeReasoningEffort,
     AgentRuntimeServiceTier, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode,
     AgentSessionResumeMode, AgentSessionRuntimeOptions, AgentSessionTimelineKind,
+    AgentSubagentActivity, AgentSubagentCapabilities, AgentSubagentResult, AgentSubagentThread,
 };
 use crate::wsl_agent::shell_env::agent_console_script;
 
@@ -39,8 +40,62 @@ const MODEL_LIST_REQUEST_ID: u64 = 4;
 const FIRST_TURN_REQUEST_ID: u64 = 100;
 const CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const TURN_START_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_DISCOVERY_PAGES: usize = 128;
+const MAX_COMPLETED_MESSAGES_PER_THREAD: usize = 256;
+const MAX_DISCOVERED_CHILDREN: usize = MAX_SUBAGENT_THREADS;
+const MAX_TRACKED_THREAD_STATES: usize = MAX_DISCOVERED_CHILDREN + 1;
+const MAX_DISCOVERY_CURSOR_CHARS: usize = 512;
+const MAX_SUBAGENT_ID_CHARS: usize = 256;
 
 type PendingControlRequests = Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>;
+
+#[derive(Debug, Clone)]
+struct PendingDiscovery {
+    root_thread_id: String,
+    page: usize,
+    run_id: u64,
+}
+
+type PendingDiscoveryRequests = Arc<Mutex<HashMap<u64, PendingDiscovery>>>;
+
+fn completed_messages_for_thread(
+    messages: &mut HashMap<String, Vec<String>>,
+    thread_id: String,
+    is_root_thread: bool,
+) -> Option<&mut Vec<String>> {
+    if !messages.contains_key(&thread_id) {
+        let limit = if is_root_thread {
+            MAX_TRACKED_THREAD_STATES
+        } else {
+            MAX_DISCOVERED_CHILDREN
+        };
+        if messages.len() >= limit {
+            return None;
+        }
+    }
+    Some(messages.entry(thread_id).or_default())
+}
+
+fn track_active_turn(
+    active_turn_ids: &mut HashMap<String, String>,
+    thread_id: &str,
+    turn_id: &str,
+) -> bool {
+    if !active_turn_ids.contains_key(thread_id) && active_turn_ids.len() >= MAX_DISCOVERED_CHILDREN
+    {
+        return false;
+    }
+    active_turn_ids.insert(thread_id.to_string(), turn_id.to_string());
+    true
+}
+type PendingCollaborations = Arc<Mutex<HashMap<String, String>>>;
+
+#[derive(Debug, Default)]
+struct DiscoveryState {
+    run_id: u64,
+    seen_cursors: HashSet<String>,
+    child_ids: HashSet<String>,
+}
 
 pub struct CodexAppServerHandle {
     child: Child,
@@ -54,11 +109,16 @@ pub struct CodexAppServerHandle {
     permission_mode: Arc<Mutex<AgentSessionPermissionMode>>,
     thread_id: Arc<Mutex<Option<String>>>,
     active_turn_id: Arc<Mutex<Option<String>>>,
+    active_turn_ids: Arc<Mutex<HashMap<String, String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
     pending_control_requests: PendingControlRequests,
+    pending_thread_requests: Arc<Mutex<HashMap<u64, String>>>,
+    pending_discovery_requests: PendingDiscoveryRequests,
+    discovery_state: Arc<Mutex<DiscoveryState>>,
+    pending_collaborations: PendingCollaborations,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
 }
@@ -162,7 +222,8 @@ impl CodexAppServerHandle {
         let stdin = Arc::new(Mutex::new(stdin));
         let thread_id = Arc::new(Mutex::new(None));
         let active_turn_id = Arc::new(Mutex::new(None));
-        let completed_agent_messages = Arc::new(Mutex::new(Vec::new()));
+        let completed_agent_messages = Arc::new(Mutex::new(HashMap::new()));
+        let active_turn_ids = Arc::new(Mutex::new(HashMap::new()));
         let pending_turns = Arc::new(Mutex::new(VecDeque::new()));
         let pending_goal_updates = Arc::new(Mutex::new(VecDeque::new()));
         let runtime_catalog = Arc::new(Mutex::new(AgentRuntimeCatalog {
@@ -175,6 +236,10 @@ impl CodexAppServerHandle {
         }));
         let pending_model_requests = Arc::new(Mutex::new(HashSet::from([MODEL_LIST_REQUEST_ID])));
         let pending_control_requests = Arc::new(Mutex::new(HashMap::new()));
+        let pending_thread_requests = Arc::new(Mutex::new(HashMap::new()));
+        let pending_discovery_requests = Arc::new(Mutex::new(HashMap::new()));
+        let discovery_state = Arc::new(Mutex::new(DiscoveryState::default()));
+        let pending_collaborations = Arc::new(Mutex::new(HashMap::new()));
         let next_request_id = Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID));
         let cwd = working_dir.to_path_buf();
         let (resume_tx, resume_result) = if resume_thread_id.is_some() {
@@ -194,12 +259,17 @@ impl CodexAppServerHandle {
                 stdin: Arc::clone(&stdin),
                 thread_id: Arc::clone(&thread_id),
                 active_turn_id: Arc::clone(&active_turn_id),
+                active_turn_ids: Arc::clone(&active_turn_ids),
                 completed_agent_messages: Arc::clone(&completed_agent_messages),
                 pending_turns: Arc::clone(&pending_turns),
                 pending_goal_updates: Arc::clone(&pending_goal_updates),
                 runtime_catalog: Arc::clone(&runtime_catalog),
                 pending_model_requests: Arc::clone(&pending_model_requests),
                 pending_control_requests: Arc::clone(&pending_control_requests),
+                pending_thread_requests: Arc::clone(&pending_thread_requests),
+                pending_discovery_requests: Arc::clone(&pending_discovery_requests),
+                discovery_state: Arc::clone(&discovery_state),
+                pending_collaborations: Arc::clone(&pending_collaborations),
                 resume_tx: Mutex::new(resume_tx),
                 next_request_id: Arc::clone(&next_request_id),
                 cwd: cwd.clone(),
@@ -218,11 +288,16 @@ impl CodexAppServerHandle {
             permission_mode,
             thread_id,
             active_turn_id,
+            active_turn_ids,
             pending_turns,
             pending_goal_updates,
             runtime_catalog,
             pending_model_requests,
             pending_control_requests,
+            pending_thread_requests,
+            pending_discovery_requests,
+            discovery_state,
+            pending_collaborations,
             next_request_id,
             cwd,
         })
@@ -351,6 +426,144 @@ impl AgentProcess for CodexAppServerHandle {
         options: Option<AgentSessionRuntimeOptions>,
     ) -> Result<(), AgentConsoleError> {
         self.submit_turn(text.to_string(), attachments.to_vec(), options)
+    }
+
+    fn supports_subagents(&self) -> bool {
+        true
+    }
+
+    fn discover_subagents(&mut self) -> Result<(), AgentConsoleError> {
+        let root_thread_id = self
+            .thread_id
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .ok_or_else(|| {
+                AgentConsoleError::new("subagent_discovery_unavailable", "Codex aún está iniciando")
+            })?;
+        request_subagent_discovery(
+            &self.stdin,
+            &self.pending_discovery_requests,
+            &self.discovery_state,
+            &self.next_request_id,
+            &root_thread_id,
+            None,
+            1,
+            None,
+        )
+    }
+
+    fn write_subagent_turn(
+        &mut self,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        let permission_mode = self.permission_mode.lock().map(|mode| *mode).map_err(|_| {
+            AgentConsoleError::new("app_server_lock_poisoned", "permission mode lock failed")
+        })?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        send_turn_start(
+            &self.stdin,
+            request_id,
+            thread_id,
+            &PendingTurn {
+                text: text.to_string(),
+                attachments: attachments.to_vec(),
+                options,
+                permission_mode,
+            },
+            &self.cwd,
+        )
+    }
+
+    fn write_subagent_turn_with_metadata(
+        &mut self,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+        permission_mode: AgentSessionPermissionMode,
+        approval_policy: Option<&str>,
+    ) -> Result<(), AgentConsoleError> {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        let mut pending_requests = self.pending_thread_requests.lock().map_err(|_| {
+            AgentConsoleError::new("app_server_lock_poisoned", "request lock failed")
+        })?;
+        pending_requests.retain(|pending_id, _| pending_id.saturating_add(64) >= request_id);
+        pending_requests.insert(request_id, thread_id.to_string());
+        drop(pending_requests);
+        let result = send_turn_start_with_approval(
+            &self.stdin,
+            request_id,
+            thread_id,
+            &PendingTurn {
+                text: text.to_string(),
+                attachments: attachments.to_vec(),
+                options,
+                permission_mode,
+            },
+            &self.cwd,
+            approval_policy,
+        );
+        if result.is_err() {
+            if let Ok(mut requests) = self.pending_thread_requests.lock() {
+                requests.remove(&request_id);
+            }
+        }
+        result
+    }
+
+    fn steer_subagent_turn(
+        &mut self,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        let turn_id = self
+            .active_turn_ids
+            .lock()
+            .ok()
+            .and_then(|turns| turns.get(thread_id).cloned())
+            .ok_or_else(|| {
+                AgentConsoleError::new(
+                    "subagent_steer_unavailable",
+                    "Codex no confirmó un turno activo para este subagente",
+                )
+            })?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        self.send_control_request(
+            request_id,
+            turn_steer_message(request_id, thread_id, &turn_id, text, attachments),
+        )
+    }
+
+    fn interrupt_subagent_turn(&mut self, thread_id: &str) -> Result<(), AgentConsoleError> {
+        let turn_id = self
+            .active_turn_ids
+            .lock()
+            .ok()
+            .and_then(|turns| turns.get(thread_id).cloned())
+            .ok_or_else(|| {
+                AgentConsoleError::new(
+                    "subagent_interrupt_unavailable",
+                    "Codex no confirmó un turno activo para este subagente",
+                )
+            })?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        self.send_control_request(
+            request_id,
+            turn_interrupt_message(request_id, thread_id, &turn_id),
+        )
+    }
+
+    fn wait_subagent(&mut self, thread_id: &str) -> Result<(), AgentConsoleError> {
+        self.send_parent_collaboration_instruction("wait", thread_id)
+    }
+
+    fn close_subagent(&mut self, thread_id: &str) -> Result<(), AgentConsoleError> {
+        self.send_parent_collaboration_instruction("close", thread_id)
     }
 
     fn supports_permission_mode_change(&self) -> bool {
@@ -520,6 +733,82 @@ impl AgentProcess for CodexAppServerHandle {
 }
 
 impl CodexAppServerHandle {
+    fn send_parent_collaboration_instruction(
+        &mut self,
+        action: &str,
+        child_thread_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        if !valid_provider_thread_id(child_thread_id) {
+            return Err(AgentConsoleError::new(
+                "invalid_subagent_id",
+                "id de subagente no valido",
+            ));
+        }
+        let parent_thread_id = self
+            .thread_id
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .ok_or_else(|| {
+                AgentConsoleError::new("subagent_control_unavailable", "Codex aún está iniciando")
+            })?;
+        let text = match action {
+            "wait" => format!(
+                "Use the Codex waitAgent collaboration action for child thread {child_thread_id}, then report its result."
+            ),
+            "close" => format!(
+                "Use the Codex closeAgent collaboration action for child thread {child_thread_id}. Keep its transcript inspectable and do not archive or delete the thread."
+            ),
+            _ => return Err(AgentConsoleError::new("subagent_control_invalid", "acción no soportada")),
+        };
+        if parent_thread_id == child_thread_id {
+            return Err(AgentConsoleError::new(
+                "subagent_control_invalid",
+                "el hilo raiz no puede controlarse como descendiente",
+            ));
+        }
+        let permission_mode = self.permission_mode.lock().map(|mode| *mode).map_err(|_| {
+            AgentConsoleError::new("app_server_lock_poisoned", "permission mode lock failed")
+        })?;
+        if let Some(turn_id) = self
+            .active_turn_id
+            .lock()
+            .ok()
+            .and_then(|turn_id| turn_id.clone())
+        {
+            let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+            let result = self.send_control_request(
+                request_id,
+                turn_steer_message(request_id, &parent_thread_id, &turn_id, &text, &[]),
+            );
+            if result.is_ok() {
+                if let Ok(mut pending) = self.pending_collaborations.lock() {
+                    pending.insert(child_thread_id.to_string(), action.to_string());
+                }
+            }
+            return result;
+        }
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        let result = send_turn_start(
+            &self.stdin,
+            request_id,
+            &parent_thread_id,
+            &PendingTurn {
+                text,
+                attachments: Vec::new(),
+                options: None,
+                permission_mode,
+            },
+            &self.cwd,
+        );
+        if result.is_ok() {
+            if let Ok(mut pending) = self.pending_collaborations.lock() {
+                pending.insert(child_thread_id.to_string(), action.to_string());
+            }
+        }
+        result
+    }
+
     fn wait_for_active_turn_id(&self) -> Result<String, AgentConsoleError> {
         let deadline = Instant::now() + TURN_START_WAIT_TIMEOUT;
         loop {
@@ -734,12 +1023,17 @@ struct ServerRuntimeContext {
     stdin: Arc<Mutex<ChildStdin>>,
     thread_id: Arc<Mutex<Option<String>>>,
     active_turn_id: Arc<Mutex<Option<String>>>,
-    completed_agent_messages: Arc<Mutex<Vec<String>>>,
+    active_turn_ids: Arc<Mutex<HashMap<String, String>>>,
+    completed_agent_messages: Arc<Mutex<HashMap<String, Vec<String>>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
     pending_model_requests: Arc<Mutex<HashSet<u64>>>,
     pending_control_requests: PendingControlRequests,
+    pending_thread_requests: Arc<Mutex<HashMap<u64, String>>>,
+    pending_discovery_requests: PendingDiscoveryRequests,
+    discovery_state: Arc<Mutex<DiscoveryState>>,
+    pending_collaborations: PendingCollaborations,
     resume_tx: Mutex<Option<Sender<Result<AgentSessionResumeMode, AgentConsoleError>>>>,
     next_request_id: Arc<AtomicU64>,
     cwd: PathBuf,
@@ -769,12 +1063,15 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
     if handle_control_response(message, context) {
         return;
     }
+    if handle_subagent_discovery_response(message, context) {
+        return;
+    }
 
     if message.get("id").and_then(Value::as_u64) == Some(THREAD_REQUEST_ID) {
         if let Some(id) = message
             .pointer("/result/thread/id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
+            .and_then(|value| provider_string(Some(value), MAX_SUBAGENT_ID_CHARS))
+            .filter(|id| valid_provider_thread_id(id))
         {
             if let Ok(mut slot) = context.thread_id.lock() {
                 *slot = Some(id.clone());
@@ -799,6 +1096,16 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 &context.cwd,
                 &context.output_tx,
             );
+            let _ = request_subagent_discovery(
+                &context.stdin,
+                &context.pending_discovery_requests,
+                &context.discovery_state,
+                &context.next_request_id,
+                &id,
+                None,
+                1,
+                None,
+            );
             resolve_resume_result(context, Ok(AgentSessionResumeMode::Native));
         } else if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
             resolve_resume_result(
@@ -808,23 +1115,72 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
         }
     }
 
-    if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
-        let _ = context.event_tx.send(AgentProcessEvent::Error {
-            error: AgentConsoleError::new("provider_error", error),
-        });
-        let _ = context
-            .output_tx
-            .send(format!("\r\nCodex app-server error: {error}\r\n> ").into_bytes());
+    let target_thread_id = message_thread_id(message, context);
+    if let Some(request_id) = message.get("id").and_then(Value::as_u64) {
+        if let Ok(mut requests) = context.pending_thread_requests.lock() {
+            requests.remove(&request_id);
+        }
+    }
+    let root_thread_id = context
+        .thread_id
+        .lock()
+        .ok()
+        .and_then(|thread| thread.clone());
+    let has_explicit_thread_id = message.pointer("/params/threadId").is_some()
+        || message.pointer("/params/thread/id").is_some()
+        || message.pointer("/params/item/threadId").is_some()
+        || message.pointer("/params/request/threadId").is_some()
+        || message.pointer("/params/request/thread_id").is_some()
+        || message.pointer("/params/request/thread/id").is_some()
+        || message.pointer("/params/request/params/threadId").is_some()
+        || message
+            .pointer("/params/request/params/thread_id")
+            .is_some()
+        || message.pointer("/params/serverRequest/threadId").is_some()
+        || message.pointer("/params/serverRequest/thread_id").is_some()
+        || message.pointer("/params/serverRequest/thread/id").is_some();
+    let is_root_thread = if has_explicit_thread_id {
+        target_thread_id
+            .as_deref()
+            .is_some_and(|target| root_thread_id.as_deref() == Some(target))
+    } else {
+        target_thread_id
+            .as_deref()
+            .map(|target| root_thread_id.as_deref() == Some(target))
+            .unwrap_or(true)
+    };
+    if has_explicit_thread_id && target_thread_id.is_none() {
         return;
     }
 
-    if let Some(goal) = message.pointer("/result/goal") {
-        if goal.is_null() {
-            let _ = context.event_tx.send(AgentProcessEvent::GoalCleared);
-        } else if let Some(goal) = agent_goal_from_value(goal) {
+    if let Some(error) = message
+        .pointer("/error/message")
+        .and_then(|value| provider_string(Some(value), 4_000))
+    {
+        if is_root_thread {
+            let _ = context.event_tx.send(AgentProcessEvent::Error {
+                error: AgentConsoleError::new("provider_error", error.clone()),
+            });
             let _ = context
-                .event_tx
-                .send(AgentProcessEvent::GoalUpdated { goal });
+                .output_tx
+                .send(format!("\r\nCodex app-server error: {error}\r\n> ").into_bytes());
+        } else if let Some(thread_id) = target_thread_id {
+            let _ = context.event_tx.send(AgentProcessEvent::SubagentUpdated {
+                subagent: errored_subagent(thread_id, &error),
+            });
+        }
+        return;
+    }
+
+    if is_root_thread {
+        if let Some(goal) = message.pointer("/result/goal") {
+            if goal.is_null() {
+                let _ = context.event_tx.send(AgentProcessEvent::GoalCleared);
+            } else if let Some(goal) = agent_goal_from_value(goal) {
+                let _ = context
+                    .event_tx
+                    .send(AgentProcessEvent::GoalUpdated { goal });
+            }
         }
     }
 
@@ -834,70 +1190,153 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
     match method {
         "item/started" => {
             if let Some(item) = message.pointer("/params/item") {
+                emit_subagent_collaboration(context, item, false);
                 if let Some(text) = activity_text_from_item(item, false) {
-                    let _ = context
-                        .output_tx
-                        .send(timeline_frame(AgentSessionTimelineKind::Activity, &text));
+                    let _ = context.output_tx.send(timeline_frame_for_thread(
+                        AgentSessionTimelineKind::Activity,
+                        &text,
+                        target_thread_id.as_deref().filter(|_| !is_root_thread),
+                    ));
                 }
+                emit_subagent_activity(
+                    context,
+                    target_thread_id.as_deref().filter(|_| !is_root_thread),
+                    item,
+                    false,
+                );
             }
         }
         "item/completed" => {
             if let Some(item) = message.pointer("/params/item") {
+                emit_subagent_collaboration(context, item, true);
                 if let Some(text) = activity_text_from_item(item, true) {
-                    let _ = context
-                        .output_tx
-                        .send(timeline_frame(AgentSessionTimelineKind::Activity, &text));
+                    let _ = context.output_tx.send(timeline_frame_for_thread(
+                        AgentSessionTimelineKind::Activity,
+                        &text,
+                        target_thread_id.as_deref().filter(|_| !is_root_thread),
+                    ));
                 }
+                emit_subagent_activity(
+                    context,
+                    target_thread_id.as_deref().filter(|_| !is_root_thread),
+                    item,
+                    true,
+                );
                 if normalized_item_type(item).as_deref() == Some("agentmessage") {
                     if let Some(text) = item.get("text").and_then(Value::as_str) {
-                        let text = text.trim();
+                        let text = sanitize_provider_timeline_text(text.trim());
                         if !text.is_empty() {
                             if let Ok(mut messages) = context.completed_agent_messages.lock() {
-                                messages.push(text.to_string());
+                                let key = target_thread_id
+                                    .clone()
+                                    .or_else(|| {
+                                        context.thread_id.lock().ok().and_then(|id| id.clone())
+                                    })
+                                    .unwrap_or_default();
+                                if let Some(thread_messages) = completed_messages_for_thread(
+                                    &mut messages,
+                                    key,
+                                    is_root_thread,
+                                ) {
+                                    thread_messages.push(text.clone());
+                                    if thread_messages.len() > MAX_COMPLETED_MESSAGES_PER_THREAD {
+                                        let overflow = thread_messages.len()
+                                            - MAX_COMPLETED_MESSAGES_PER_THREAD;
+                                        thread_messages.drain(0..overflow);
+                                    }
+                                }
                             }
-                            let _ = context.output_tx.send(timeline_frame(
+                            let _ = context.output_tx.send(timeline_frame_for_thread(
                                 AgentSessionTimelineKind::AgentProgress,
-                                text,
+                                &text,
+                                target_thread_id.as_deref().filter(|_| !is_root_thread),
                             ));
                         }
                     }
                 }
             }
         }
-        "item/agentMessage/delta" => {}
+        "item/agentMessage/delta" => {
+            if let (Some(thread_id), Some(delta)) = (
+                target_thread_id.as_deref().filter(|_| !is_root_thread),
+                message.pointer("/params/delta").and_then(Value::as_str),
+            ) {
+                emit_subagent_delta(
+                    context,
+                    thread_id,
+                    message.pointer("/params/itemId").and_then(Value::as_str),
+                    delta,
+                );
+                let _ = context.output_tx.send(timeline_frame_for_thread(
+                    AgentSessionTimelineKind::AgentProgress,
+                    delta,
+                    Some(thread_id),
+                ));
+            }
+        }
         "item/commandExecution/outputDelta" => {
             if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
-                let _ = context.output_tx.send(timeline_frame(
+                let _ = context.output_tx.send(timeline_frame_for_thread(
                     AgentSessionTimelineKind::CommandOutput,
                     delta,
+                    target_thread_id.as_deref().filter(|_| !is_root_thread),
                 ));
             }
         }
         "turn/completed" => {
+            let key = target_thread_id
+                .clone()
+                .or_else(|| context.thread_id.lock().ok().and_then(|id| id.clone()))
+                .unwrap_or_default();
             let final_message =
                 context
                     .completed_agent_messages
                     .lock()
                     .ok()
                     .and_then(|mut messages| {
-                        let final_message = messages.pop();
-                        messages.clear();
-                        final_message
+                        let value = messages.get_mut(&key).and_then(|items| items.pop());
+                        if messages.get(&key).is_some_and(Vec::is_empty) {
+                            messages.remove(&key);
+                        }
+                        value
                     });
             if let Some(text) = final_message {
-                let _ = context.output_tx.send(timeline_frame(
+                let _ = context.output_tx.send(timeline_frame_for_thread(
                     AgentSessionTimelineKind::AgentMessage,
                     &text,
+                    target_thread_id.as_deref().filter(|_| !is_root_thread),
                 ));
             }
-            if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
-                *active_turn_id = None;
+            if is_root_thread {
+                if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
+                    *active_turn_id = None;
+                }
             }
-            let _ = context.event_tx.send(AgentProcessEvent::TurnCompleted {
-                timestamp_ms: now_ms(),
-            });
+            if let Some(thread_id) = target_thread_id.as_deref().filter(|_| !is_root_thread) {
+                if let Ok(mut active_turn_ids) = context.active_turn_ids.lock() {
+                    active_turn_ids.remove(thread_id);
+                }
+                let turn = message.pointer("/params/turn");
+                let status = turn
+                    .and_then(|turn| turn.get("status"))
+                    .map(|status| provider_status(Some(status), "completed"))
+                    .unwrap_or_else(|| "completed".to_string());
+                let mut update = subagent_status_update(thread_id, "unknown", &status);
+                update.result = turn.and_then(result_from_turn);
+                let _ = context
+                    .event_tx
+                    .send(AgentProcessEvent::SubagentUpdated { subagent: update });
+            }
+            if is_root_thread {
+                let _ = context.event_tx.send(AgentProcessEvent::TurnCompleted {
+                    timestamp_ms: now_ms(),
+                });
+            }
         }
         "thread/goal/updated" => {
+            if !is_root_thread {
+                return;
+            }
             if let Some(goal) = message
                 .pointer("/params/goal")
                 .and_then(agent_goal_from_value)
@@ -908,22 +1347,49 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             }
         }
         "thread/goal/cleared" => {
+            if !is_root_thread {
+                return;
+            }
             let _ = context.event_tx.send(AgentProcessEvent::GoalCleared);
         }
         "turn/started" => {
+            let key = target_thread_id
+                .clone()
+                .or_else(|| context.thread_id.lock().ok().and_then(|id| id.clone()))
+                .unwrap_or_default();
             if let Ok(mut messages) = context.completed_agent_messages.lock() {
-                messages.clear();
-            }
-            if let Some(turn_id) = message.pointer("/params/turn/id").and_then(Value::as_str) {
-                if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
-                    *active_turn_id = Some(turn_id.to_string());
+                if let Some(thread_messages) =
+                    completed_messages_for_thread(&mut messages, key, is_root_thread)
+                {
+                    thread_messages.clear();
                 }
             }
-            let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
-                timestamp_ms: now_ms(),
-            });
+            if let Some(turn_id) = message.pointer("/params/turn/id").and_then(Value::as_str) {
+                if is_root_thread {
+                    if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
+                        *active_turn_id = Some(turn_id.to_string());
+                    }
+                }
+                if let Some(thread_id) = target_thread_id.as_deref().filter(|_| !is_root_thread) {
+                    if let Ok(mut active_turn_ids) = context.active_turn_ids.lock() {
+                        track_active_turn(&mut active_turn_ids, thread_id, turn_id);
+                    }
+                }
+            }
+            if is_root_thread {
+                let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
+                    timestamp_ms: now_ms(),
+                });
+            } else if let Some(thread_id) = target_thread_id {
+                let _ = context.event_tx.send(AgentProcessEvent::SubagentUpdated {
+                    subagent: subagent_status_update(&thread_id, "running", "working"),
+                });
+            }
         }
         "thread/tokenUsage/updated" => {
+            if !is_root_thread {
+                return;
+            }
             if let Some((used_tokens, model_context_window)) = context_usage_from_message(message) {
                 let _ = context
                     .event_tx
@@ -934,9 +1400,41 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
             }
         }
         "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
-            let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
-                timestamp_ms: now_ms(),
-            });
+            if is_root_thread {
+                let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
+                    timestamp_ms: now_ms(),
+                });
+            }
+        }
+        "item/commandExecution/requestApproval"
+        | "item/fileChange/requestApproval"
+        | "item/mcpToolCall/requestApproval"
+        | "item/permissions/requestApproval" => {
+            if let Some(thread_id) = target_thread_id.as_deref().filter(|_| !is_root_thread) {
+                emit_subagent_approval(context, thread_id, message);
+            }
+        }
+        "serverRequest" => {
+            if is_server_approval_request(message) {
+                if let Some(thread_id) = target_thread_id.as_deref().filter(|_| !is_root_thread) {
+                    emit_subagent_approval(context, thread_id, message);
+                }
+            }
+        }
+        "serverRequest/resolved" => {
+            if let Some(thread_id) = target_thread_id.as_deref().filter(|_| !is_root_thread) {
+                emit_subagent_approval_resolved(context, thread_id, message);
+            }
+        }
+        "thread/started" | "thread/status/changed" | "thread/closed" => {
+            if let Some(subagent) = subagent_from_message(message, method) {
+                if root_thread_id.as_deref() == Some(subagent.id.as_str()) {
+                    return;
+                }
+                let _ = context
+                    .event_tx
+                    .send(AgentProcessEvent::SubagentUpdated { subagent });
+            }
         }
         _ => {}
     }
@@ -953,7 +1451,900 @@ fn resolve_resume_result(
     }
 }
 
+fn handle_subagent_discovery_response(message: &Value, context: &ServerRuntimeContext) -> bool {
+    if message.get("method").is_some() {
+        return false;
+    }
+    let Some(request_id) = message.get("id").and_then(Value::as_u64) else {
+        return false;
+    };
+    let pending = context
+        .pending_discovery_requests
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(&request_id));
+    let Some(pending) = pending else {
+        return false;
+    };
+    let root = Some(pending.root_thread_id.clone());
+    let run_is_current = context
+        .discovery_state
+        .lock()
+        .ok()
+        .is_some_and(|state| state.run_id == pending.run_id);
+    if !run_is_current {
+        // A new explicit discovery supersedes all older pages. Do not let a
+        // delayed response consume the new run's cursor/capacity budget.
+        return true;
+    }
+    if let Some(error) = message
+        .pointer("/error/message")
+        .and_then(|value| provider_string(Some(value), 4_000))
+    {
+        let _ = context
+            .event_tx
+            .send(AgentProcessEvent::SubagentDiscoveryFailed {
+                error: AgentConsoleError::new("subagent_discovery_failed", error),
+            });
+        return true;
+    }
+    let threads = message
+        .pointer("/result/data")
+        .or_else(|| message.pointer("/result/threads"))
+        .and_then(Value::as_array);
+    let Some(threads) = threads else {
+        let _ = context
+            .event_tx
+            .send(AgentProcessEvent::SubagentDiscoveryFailed {
+                error: AgentConsoleError::new(
+                    "subagent_discovery_failed",
+                    "Codex devolvió un listado de subagentes no válido",
+                ),
+            });
+        return true;
+    };
+    let discovered = threads
+        .iter()
+        .filter_map(|thread| subagent_from_thread(thread, None))
+        .filter(|subagent| {
+            subagent.id != pending.root_thread_id
+                && subagent.id != root.as_deref().unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    let total = {
+        let Ok(mut state) = context.discovery_state.lock() else {
+            return true;
+        };
+        let mut new_count = 0usize;
+        for subagent in &discovered {
+            if state.child_ids.insert(subagent.id.clone()) {
+                new_count = new_count.saturating_add(1);
+            }
+        }
+        state.child_ids.len().max(new_count)
+    };
+    if total > MAX_DISCOVERED_CHILDREN {
+        let _ = context
+            .event_tx
+            .send(AgentProcessEvent::SubagentDiscoveryFailed {
+                error: AgentConsoleError::new(
+                    "subagent_capacity_exceeded",
+                    "Codex devolvio mas descendientes de los permitidos",
+                ),
+            });
+        return true;
+    }
+    for subagent in discovered {
+        let _ = context
+            .event_tx
+            .send(AgentProcessEvent::SubagentUpdated { subagent });
+    }
+    let next_cursor = message
+        .pointer("/result/nextCursor")
+        .or_else(|| message.pointer("/result/next_cursor"))
+        .and_then(|cursor| provider_string(Some(cursor), MAX_DISCOVERY_CURSOR_CHARS));
+    if let (Some(root), Some(cursor)) = (root.as_deref(), next_cursor) {
+        if let Err(error) = request_subagent_discovery(
+            &context.stdin,
+            &context.pending_discovery_requests,
+            &context.discovery_state,
+            &context.next_request_id,
+            root,
+            Some(&cursor),
+            pending.page.saturating_add(1),
+            Some(pending.run_id),
+        ) {
+            let _ = context
+                .event_tx
+                .send(AgentProcessEvent::SubagentDiscoveryFailed { error });
+        }
+    }
+    true
+}
+
+fn message_thread_id(message: &Value, context: &ServerRuntimeContext) -> Option<String> {
+    let explicit = message
+        .pointer("/params/threadId")
+        .or_else(|| message.pointer("/params/thread/id"))
+        .or_else(|| message.pointer("/params/item/threadId"))
+        .or_else(|| message.pointer("/params/request/threadId"))
+        .or_else(|| message.pointer("/params/request/thread_id"))
+        .or_else(|| message.pointer("/params/request/thread/id"))
+        .or_else(|| message.pointer("/params/request/params/threadId"))
+        .or_else(|| message.pointer("/params/request/params/thread_id"))
+        .or_else(|| message.pointer("/params/serverRequest/threadId"))
+        .or_else(|| message.pointer("/params/serverRequest/thread_id"))
+        .or_else(|| message.pointer("/params/serverRequest/thread/id"));
+    match explicit {
+        Some(value) => provider_string(Some(value), MAX_SUBAGENT_ID_CHARS)
+            .filter(|id| valid_provider_thread_id(id)),
+        None => message
+            .get("id")
+            .and_then(Value::as_u64)
+            .and_then(|request_id| {
+                context
+                    .pending_thread_requests
+                    .lock()
+                    .ok()
+                    .and_then(|requests| requests.get(&request_id).cloned())
+            })
+            .or_else(|| {
+                context
+                    .thread_id
+                    .lock()
+                    .ok()
+                    .and_then(|thread| thread.clone())
+            }),
+    }
+}
+
+fn provider_string(value: Option<&Value>, max_chars: usize) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return None;
+    }
+    Some(text.chars().take(max_chars).collect())
+}
+
+fn provider_identifier(value: Option<&Value>, max_chars: usize) -> Option<String> {
+    provider_string(value, max_chars).or_else(|| {
+        value
+            .and_then(Value::as_u64)
+            .map(|number| number.to_string())
+    })
+}
+
+fn provider_status(value: Option<&Value>, fallback: &str) -> String {
+    let Some(value) = value else {
+        return fallback.to_string();
+    };
+    if let Some(status) = provider_string(Some(value), 96) {
+        return status;
+    }
+    for key in ["type", "status", "state", "kind"] {
+        if let Some(status) = provider_string(value.get(key), 96) {
+            return status;
+        }
+    }
+    fallback.to_string()
+}
+
+fn provider_timestamp_ms(value: Option<&Value>) -> Option<u64> {
+    let timestamp = value?.as_u64()?;
+    // Codex Thread.updatedAt is seconds; notification fixtures may already
+    // use milliseconds. Avoid overflow and retain the provider ordering.
+    Some(if timestamp < 10_000_000_000 {
+        timestamp.saturating_mul(1_000)
+    } else {
+        timestamp
+    })
+}
+
+fn is_terminal_provider_status(status: &str) -> bool {
+    matches!(
+        status,
+        "closed" | "completed" | "errored" | "failed" | "interrupted" | "exited" | "systemError"
+    )
+}
+
+fn valid_provider_thread_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().count() <= MAX_SUBAGENT_ID_CHARS
+        && !id.chars().any(char::is_control)
+        && !id.contains('/')
+        && !id.contains('\\')
+}
+
+fn explicit_bool(value: Option<&Value>, key: &str) -> Option<bool> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+}
+
+fn subagent_capabilities(
+    value: Option<&Value>,
+    active: bool,
+    can_accept_direct_input: Option<bool>,
+) -> AgentSubagentCapabilities {
+    let capabilities = value.and_then(|value| {
+        value
+            .get("capabilities")
+            .or_else(|| value.is_object().then_some(value))
+    });
+    let terminal = value
+        .and_then(|value| value.get("status").or_else(|| value.get("threadStatus")))
+        .map(|status| is_terminal_provider_status(&provider_status(Some(status), "unknown")))
+        .unwrap_or(false);
+    let direct_input = explicit_bool(capabilities, "directInput")
+        .or_else(|| explicit_bool(capabilities, "direct_input"))
+        .or(can_accept_direct_input)
+        .unwrap_or(active);
+    AgentSubagentCapabilities {
+        inspect: explicit_bool(capabilities, "inspect").unwrap_or(true),
+        direct_input: direct_input && !terminal,
+        steer: explicit_bool(capabilities, "steer").unwrap_or(active) && !terminal,
+        interrupt: explicit_bool(capabilities, "interrupt").unwrap_or(active) && !terminal,
+        wait: explicit_bool(capabilities, "wait").unwrap_or(active) && !terminal,
+        close: explicit_bool(capabilities, "close").unwrap_or(active) && !terminal,
+    }
+}
+
+fn subagent_from_thread(
+    value: &Value,
+    _fallback_parent: Option<&str>,
+) -> Option<AgentSubagentThread> {
+    let id = provider_string(value.get("id"), MAX_SUBAGENT_ID_CHARS)?;
+    if !valid_provider_thread_id(&id) {
+        return None;
+    }
+    let thread_status = provider_status(
+        value.get("status").or_else(|| value.get("threadStatus")),
+        "unknown",
+    );
+    let active = matches!(thread_status.as_str(), "starting" | "running" | "active");
+    let source = value.get("source");
+    let nested_subagent_source = source.and_then(|source| source.get("subAgent"));
+    let source_label =
+        provider_string(nested_subagent_source, 96).or_else(|| provider_string(source, 96));
+    let spawn_source = source
+        .and_then(|source| source.get("subAgent"))
+        .and_then(|source| source.get("thread_spawn"));
+    // `threadSource` is Codex's installed, authoritative classification. The
+    // nested `source` shape remains the metadata source/fallback for older
+    // app-server builds.
+    let source_kind = provider_string(value.get("threadSource"), 96)
+        .or_else(|| provider_string(source.and_then(|source| source.get("kind")), 96))
+        .or_else(|| provider_string(value.get("sourceKind"), 96))
+        .or_else(|| spawn_source.map(|_| "subAgentThreadSpawn".to_string()))
+        .or_else(|| match source_label.as_deref() {
+            Some("review") => Some("subAgentReview".to_string()),
+            Some("compact") => Some("subAgentCompact".to_string()),
+            Some("memory_consolidation") => Some("subAgentOther".to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "subAgent".to_string());
+    let parent_id = provider_string(
+        value
+            .get("parentThreadId")
+            .or_else(|| value.get("parentId"))
+            .or_else(|| source.and_then(|source| source.get("parent_thread_id")))
+            .or_else(|| spawn_source.and_then(|source| source.get("parent_thread_id"))),
+        MAX_SUBAGENT_ID_CHARS,
+    );
+    let path = value
+        .get("agentPath")
+        .or_else(|| source.and_then(|source| source.get("agent_path")))
+        .or_else(|| spawn_source.and_then(|source| source.get("agent_path")))
+        .map(|path| match path {
+            Value::Array(values) => values
+                .iter()
+                .filter_map(|value| provider_string(Some(value), 96))
+                .take(32)
+                .collect::<Vec<_>>(),
+            value => provider_string(Some(value), 96)
+                .map(|path| vec![path])
+                .unwrap_or_default(),
+        })
+        .unwrap_or_default();
+    let depth = value
+        .get("depth")
+        .or_else(|| source.and_then(|source| source.get("depth")))
+        .or_else(|| spawn_source.and_then(|source| source.get("depth")))
+        .and_then(Value::as_u64)
+        .and_then(|depth| u32::try_from(depth).ok())
+        .unwrap_or(path.len().saturating_sub(1) as u32);
+    let turn_status = provider_status(
+        value.get("turnStatus").or_else(|| value.get("turn_status")),
+        if active { "working" } else { "waiting" },
+    );
+    let collaboration_status = provider_string(
+        value
+            .get("collaborationStatus")
+            .or_else(|| value.get("collaboration_status")),
+        96,
+    )
+    .or_else(|| {
+        value
+            .get("status")
+            .and_then(|status| status.get("activeFlags"))
+            .and_then(Value::as_array)
+            .and_then(|flags| flags.first())
+            .and_then(|flag| provider_string(Some(flag), 96))
+    });
+    let runtime_state = provider_string(
+        value
+            .get("runtimeState")
+            .or_else(|| value.get("runtime_state")),
+        96,
+    );
+    let result = value
+        .get("result")
+        .and_then(result_from_value)
+        .or_else(|| value.get("outcome").and_then(result_from_value));
+    let nickname = provider_string(
+        value.get("agentNickname").or_else(|| value.get("nickname")),
+        96,
+    )
+    .or_else(|| {
+        provider_string(
+            spawn_source.and_then(|source| source.get("agent_nickname")),
+            96,
+        )
+    });
+    let role =
+        provider_string(value.get("agentRole").or_else(|| value.get("role")), 160).or_else(|| {
+            provider_string(
+                spawn_source.and_then(|source| source.get("agent_role")),
+                160,
+            )
+        });
+    let can_accept_direct_input = value.get("canAcceptDirectInput").and_then(Value::as_bool);
+    let collaboration_tool = provider_string(
+        value
+            .get("collaborationTool")
+            .or_else(|| value.get("collaboration_tool")),
+        96,
+    );
+    let consolidation_id = provider_string(
+        value
+            .get("consolidationId")
+            .or_else(|| value.get("consolidation_id"))
+            .or_else(|| value.get("consolidatesThreadId")),
+        MAX_SUBAGENT_ID_CHARS,
+    )
+    .or_else(|| {
+        (source_label.as_deref() == Some("memory_consolidation"))
+            .then(|| provider_string(value.get("parentThreadId"), MAX_SUBAGENT_ID_CHARS))
+            .flatten()
+    });
+    let approval_request_id = provider_string(
+        value
+            .get("approvalRequestId")
+            .or_else(|| value.get("approval_request_id")),
+        MAX_SUBAGENT_ID_CHARS,
+    );
+    Some(AgentSubagentThread {
+        id,
+        parent_id,
+        source_kind,
+        depth,
+        agent_path: path,
+        nickname,
+        role,
+        model: provider_string(value.get("model"), 160)
+            .or_else(|| provider_string(value.get("modelProvider"), 160)),
+        reasoning_effort: provider_string(
+            value
+                .get("reasoningEffort")
+                .or_else(|| value.get("reasoning_effort")),
+            96,
+        ),
+        runtime: provider_string(value.get("runtime"), 160),
+        approval_policy: provider_string(
+            value
+                .get("approvalPolicy")
+                .or_else(|| value.get("approval_policy")),
+            96,
+        ),
+        permission_mode: provider_string(
+            value
+                .get("permissionMode")
+                .or_else(|| value.get("permission_mode")),
+            96,
+        ),
+        capacity: value
+            .get("capacity")
+            .or_else(|| value.get("remainingCapacity"))
+            .and_then(Value::as_u64)
+            .and_then(|capacity| u32::try_from(capacity).ok()),
+        thread_status,
+        turn_status,
+        collaboration_status,
+        collaboration_tool,
+        consolidation_id,
+        runtime_state,
+        approval_request_id,
+        prompt: provider_string(value.get("prompt"), 16_384).or_else(|| {
+            provider_string(spawn_source.and_then(|source| source.get("prompt")), 16_384)
+        }),
+        preview: provider_string(value.get("preview"), 16_384),
+        capabilities: subagent_capabilities(Some(value), active, can_accept_direct_input),
+        activities: Vec::new(),
+        result,
+        timeline: Vec::new(),
+        updated_at_ms: provider_timestamp_ms(
+            value
+                .get("updatedAt")
+                .or_else(|| value.get("updated_at_ms")),
+        )
+        .unwrap_or_else(now_ms),
+    })
+}
+
+fn result_from_value(value: &Value) -> Option<AgentSubagentResult> {
+    if !value.is_object() {
+        return None;
+    }
+    Some(AgentSubagentResult {
+        status: provider_status(value.get("status"), "unknown"),
+        summary: value
+            .get("summary")
+            .or_else(|| value.get("message"))
+            .and_then(|value| {
+                provider_string(Some(value), 16_384).or_else(|| {
+                    value_as_text(Some(value)).map(|text| truncate_activity_text(&text, 16_384))
+                })
+            }),
+        error: value.get("error").and_then(|error| {
+            provider_string(Some(error), 4_000)
+                .or_else(|| provider_string(error.get("message"), 4_000))
+        }),
+        updated_at_ms: now_ms(),
+    })
+}
+
+fn result_from_turn(turn: &Value) -> Option<AgentSubagentResult> {
+    let status = provider_status(turn.get("status"), "completed");
+    let error = turn.get("error").and_then(|error| {
+        provider_string(error.get("message"), 4_000).or_else(|| provider_string(Some(error), 4_000))
+    });
+    Some(AgentSubagentResult {
+        status,
+        summary: None,
+        error,
+        updated_at_ms: now_ms(),
+    })
+}
+
+fn subagent_from_message(message: &Value, method: &str) -> Option<AgentSubagentThread> {
+    let thread = message.pointer("/params/thread").unwrap_or(&Value::Null);
+    let id = thread
+        .get("id")
+        .and_then(|value| provider_string(Some(value), MAX_SUBAGENT_ID_CHARS))
+        .or_else(|| provider_string(message.pointer("/params/threadId"), MAX_SUBAGENT_ID_CHARS))?;
+    if !valid_provider_thread_id(&id) || method == "thread/started" && thread.is_null() {
+        return None;
+    }
+    let mut subagent = if thread.is_object() {
+        subagent_from_thread(thread, None)?
+    } else {
+        subagent_status_update(&id, "unknown", "unknown")
+    };
+    if method == "thread/status/changed" {
+        let status = message.pointer("/params/status");
+        subagent.thread_status = provider_status(status, "unknown");
+        subagent.turn_status = "unknown".to_string();
+        // A status notification is commonly a sparse projection. Only
+        // replace capabilities when Codex explicitly reports them; the
+        // session merge then retains the last known capability set for an
+        // idle thread that can still accept a follow-up.
+        let capability_value = message
+            .pointer("/params/capabilities")
+            .or_else(|| thread.get("capabilities"));
+        let can_accept_direct_input = message
+            .pointer("/params/canAcceptDirectInput")
+            .and_then(Value::as_bool)
+            .or_else(|| thread.get("canAcceptDirectInput").and_then(Value::as_bool));
+        if capability_value.is_some() || can_accept_direct_input.is_some() {
+            subagent.capabilities = subagent_capabilities(
+                capability_value,
+                matches!(
+                    subagent.thread_status.as_str(),
+                    "starting" | "running" | "active"
+                ),
+                can_accept_direct_input,
+            );
+        } else if thread.is_null() {
+            let active = matches!(
+                subagent.thread_status.as_str(),
+                "starting" | "running" | "active"
+            );
+            subagent.capabilities = AgentSubagentCapabilities {
+                inspect: true,
+                direct_input: active,
+                steer: active,
+                interrupt: active,
+                wait: active,
+                close: active,
+            };
+        }
+        if let Some(flags) = status
+            .and_then(|status| status.get("activeFlags"))
+            .and_then(Value::as_array)
+            .and_then(|flags| flags.first())
+            .and_then(|flag| provider_string(Some(flag), 96))
+        {
+            subagent.collaboration_status = Some(flags);
+        }
+        subagent.updated_at_ms = provider_timestamp_ms(
+            message
+                .pointer("/params/updatedAt")
+                .or_else(|| message.pointer("/params/updated_at_ms")),
+        )
+        .unwrap_or_else(now_ms);
+    }
+    if let Some(result) = message
+        .pointer("/params/result")
+        .and_then(result_from_value)
+        .or_else(|| {
+            message
+                .pointer("/params/outcome")
+                .and_then(result_from_value)
+        })
+    {
+        subagent.result = Some(result);
+        subagent.collaboration_status = provider_string(
+            message
+                .pointer("/params/collaborationStatus")
+                .or_else(|| message.pointer("/params/collaboration_status")),
+            96,
+        )
+        .or(subagent.collaboration_status);
+    }
+    subagent.collaboration_tool = provider_string(
+        message
+            .pointer("/params/collaborationTool")
+            .or_else(|| message.pointer("/params/collaboration_tool")),
+        96,
+    );
+    subagent.consolidation_id = provider_string(
+        message
+            .pointer("/params/consolidationId")
+            .or_else(|| message.pointer("/params/consolidation_id")),
+        MAX_SUBAGENT_ID_CHARS,
+    );
+    subagent.approval_request_id = provider_string(
+        message
+            .pointer("/params/approvalRequestId")
+            .or_else(|| message.pointer("/params/approval_request_id")),
+        MAX_SUBAGENT_ID_CHARS,
+    );
+    if method == "thread/closed" {
+        subagent.thread_status = "closed".to_string();
+        subagent.turn_status = "waiting".to_string();
+        subagent.runtime_state = Some("shutdown".to_string());
+        subagent.capabilities.direct_input = false;
+        subagent.capabilities.steer = false;
+        subagent.capabilities.interrupt = false;
+        subagent.capabilities.wait = false;
+        subagent.capabilities.close = false;
+    }
+    Some(subagent)
+}
+
+fn subagent_status_update(id: &str, thread_status: &str, turn_status: &str) -> AgentSubagentThread {
+    let active_controls = matches!(thread_status, "starting" | "running" | "active")
+        || matches!(turn_status, "working" | "inProgress" | "in_progress");
+    AgentSubagentThread {
+        id: id.to_string(),
+        parent_id: None,
+        source_kind: "subAgent".to_string(),
+        depth: 0,
+        agent_path: Vec::new(),
+        nickname: None,
+        role: None,
+        model: None,
+        reasoning_effort: None,
+        runtime: None,
+        approval_policy: None,
+        permission_mode: None,
+        capacity: None,
+        thread_status: thread_status.to_string(),
+        turn_status: turn_status.to_string(),
+        collaboration_status: None,
+        collaboration_tool: None,
+        consolidation_id: None,
+        runtime_state: None,
+        approval_request_id: None,
+        prompt: None,
+        preview: None,
+        capabilities: AgentSubagentCapabilities {
+            inspect: true,
+            direct_input: active_controls,
+            steer: active_controls,
+            interrupt: active_controls,
+            wait: active_controls,
+            close: active_controls,
+        },
+        activities: Vec::new(),
+        result: None,
+        timeline: Vec::new(),
+        updated_at_ms: now_ms(),
+    }
+}
+
+fn errored_subagent(id: String, message: &str) -> AgentSubagentThread {
+    let mut subagent = subagent_status_update(&id, "errored", "waiting");
+    subagent.runtime_state = Some("errored".to_string());
+    subagent.result = Some(AgentSubagentResult {
+        status: "failed".to_string(),
+        summary: None,
+        error: provider_string(Some(&Value::String(message.to_string())), 4_000),
+        updated_at_ms: now_ms(),
+    });
+    subagent
+}
+
+fn emit_subagent_collaboration(context: &ServerRuntimeContext, item: &Value, completed: bool) {
+    if normalized_item_type(item).as_deref() != Some("collabagenttoolcall") {
+        return;
+    }
+    let tool =
+        provider_string(item.get("tool"), 96).or_else(|| provider_string(item.get("toolName"), 96));
+    let Some(tool) = tool else { return };
+    if !matches!(tool.as_str(), "spawnAgent" | "wait" | "closeAgent") {
+        return;
+    }
+    let mut receiver_ids = item
+        .get("receiverThreadIds")
+        .or_else(|| item.get("receiver_thread_ids"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| provider_string(Some(value), MAX_SUBAGENT_ID_CHARS))
+        .filter(|id| valid_provider_thread_id(id))
+        .collect::<Vec<_>>();
+    if receiver_ids.is_empty() {
+        if let Some(id) = provider_string(
+            item.get("agentThreadId")
+                .or_else(|| item.get("agent_thread_id")),
+            MAX_SUBAGENT_ID_CHARS,
+        )
+        .filter(|id| valid_provider_thread_id(id))
+        {
+            receiver_ids.push(id);
+        }
+    }
+    let item_id = provider_string(item.get("id"), MAX_SUBAGENT_ID_CHARS)
+        .unwrap_or_else(|| format!("collaboration-{}", now_ms()));
+    let item_status = provider_status(
+        item.get("status"),
+        if completed {
+            "completed"
+        } else {
+            "in_progress"
+        },
+    );
+    let prompt = provider_string(item.get("prompt"), 16_384)
+        .unwrap_or_else(|| format!("Codex {} el subagente", tool));
+    let states = item
+        .get("agentsStates")
+        .or_else(|| item.get("agents_states"));
+    for thread_id in receiver_ids {
+        let pending_action = context
+            .pending_collaborations
+            .lock()
+            .ok()
+            .and_then(|pending| pending.get(&thread_id).cloned());
+        if pending_action
+            .as_deref()
+            .is_some_and(|action| action != tool.as_str())
+        {
+            continue;
+        }
+        let state = states.and_then(|states| states.get(&thread_id));
+        let state_status = state
+            .and_then(|state| state.get("status"))
+            .and_then(|status| provider_string(Some(status), 96));
+        let thread_status = state_status.as_deref().unwrap_or("unknown");
+        let mut update = subagent_status_update(
+            &thread_id,
+            thread_status,
+            if completed { "waiting" } else { "working" },
+        );
+        update.collaboration_tool = Some(tool.clone());
+        update.collaboration_status = Some(item_status.clone());
+        update.prompt = Some(prompt.clone());
+        update.model = provider_string(item.get("model"), 160);
+        update.reasoning_effort = provider_string(
+            item.get("reasoningEffort")
+                .or_else(|| item.get("reasoning_effort")),
+            96,
+        );
+        update.activities = vec![AgentSubagentActivity {
+            id: item_id.clone(),
+            kind: "collab_agent_tool_call".to_string(),
+            status: item_status.clone(),
+            text: prompt.clone(),
+            timestamp_ms: now_ms(),
+        }];
+        if let Some(state) = state {
+            update.result = collab_result_from_state(state);
+        }
+        let _ = context
+            .event_tx
+            .send(AgentProcessEvent::SubagentUpdated { subagent: update });
+        if completed {
+            if let Ok(mut pending) = context.pending_collaborations.lock() {
+                pending.remove(&thread_id);
+            }
+        }
+    }
+}
+
+fn collab_result_from_state(value: &Value) -> Option<AgentSubagentResult> {
+    let status = provider_string(value.get("status"), 96)?;
+    Some(AgentSubagentResult {
+        status,
+        summary: provider_string(value.get("message"), 16_384),
+        error: None,
+        updated_at_ms: now_ms(),
+    })
+}
+
+fn emit_subagent_activity(
+    context: &ServerRuntimeContext,
+    thread_id: Option<&str>,
+    item: &Value,
+    completed: bool,
+) {
+    let Some(thread_id) = thread_id else { return };
+    let Some(id) = provider_string(item.get("id"), 256) else {
+        return;
+    };
+    let kind = normalized_item_type(item).unwrap_or_else(|| "item".to_string());
+    let status = provider_status(
+        item.get("status"),
+        if completed {
+            "completed"
+        } else {
+            "in_progress"
+        },
+    );
+    let text = activity_text_from_item(item, completed).unwrap_or_else(|| {
+        provider_string(item.get("prompt").or_else(|| item.get("text")), 512)
+            .unwrap_or_else(|| "Actividad del subagente".to_string())
+    });
+    let collaboration_tool = provider_string(
+        item.get("toolName")
+            .or_else(|| item.get("tool_name"))
+            .or_else(|| item.get("name"))
+            .or_else(|| item.get("server")),
+        96,
+    );
+    let consolidation_id = provider_string(
+        item.get("consolidationId")
+            .or_else(|| item.get("consolidation_id"))
+            .or_else(|| item.get("consolidatedThreadId")),
+        MAX_SUBAGENT_ID_CHARS,
+    );
+    let _ = context.event_tx.send(AgentProcessEvent::SubagentUpdated {
+        subagent: AgentSubagentThread {
+            collaboration_tool,
+            consolidation_id,
+            activities: vec![AgentSubagentActivity {
+                id,
+                kind,
+                status,
+                text,
+                timestamp_ms: now_ms(),
+            }],
+            ..subagent_status_update(thread_id, "running", "working")
+        },
+    });
+}
+
+fn emit_subagent_delta(
+    context: &ServerRuntimeContext,
+    thread_id: &str,
+    item_id: Option<&str>,
+    delta: &str,
+) {
+    let Some(id) = item_id.and_then(|id| {
+        provider_string(Some(&Value::String(id.to_string())), MAX_SUBAGENT_ID_CHARS)
+    }) else {
+        return;
+    };
+    let Some(text) = provider_string(Some(&Value::String(delta.to_string())), 16_384) else {
+        return;
+    };
+    let _ = context.event_tx.send(AgentProcessEvent::SubagentUpdated {
+        subagent: AgentSubagentThread {
+            activities: vec![AgentSubagentActivity {
+                id,
+                kind: "agent_message".to_string(),
+                status: "in_progress".to_string(),
+                text,
+                timestamp_ms: now_ms(),
+            }],
+            ..subagent_status_update(thread_id, "unknown", "working")
+        },
+    });
+}
+
+fn emit_subagent_approval(context: &ServerRuntimeContext, thread_id: &str, message: &Value) {
+    let request = message
+        .pointer("/params/request")
+        .or_else(|| message.pointer("/params/serverRequest"));
+    let request_id = request
+        .and_then(|request| request.get("id"))
+        .or_else(|| message.pointer("/params/requestId"))
+        .or_else(|| message.pointer("/params/id"))
+        .or_else(|| message.pointer("/id"))
+        .and_then(|value| provider_identifier(Some(value), MAX_SUBAGENT_ID_CHARS));
+    let text = request
+        .and_then(|request| request.get("reason").or_else(|| request.get("message")))
+        .or_else(|| message.pointer("/params/request/params/reason"))
+        .or_else(|| message.pointer("/params/request/params/message"))
+        .or_else(|| message.pointer("/params/reason"))
+        .or_else(|| message.pointer("/params/message"))
+        .and_then(|value| provider_string(Some(value), 512))
+        .unwrap_or_else(|| "El subagente espera una aprobacion".to_string());
+    let mut update = subagent_status_update(thread_id, "unknown", "waiting");
+    update.collaboration_status = Some("waiting_on_approval".to_string());
+    update.approval_request_id = request_id.clone();
+    update.activities = vec![AgentSubagentActivity {
+        id: request_id.unwrap_or_else(|| format!("approval-{}", now_ms())),
+        kind: "approval_request".to_string(),
+        status: "pending".to_string(),
+        text,
+        timestamp_ms: now_ms(),
+    }];
+    let _ = context
+        .event_tx
+        .send(AgentProcessEvent::SubagentUpdated { subagent: update });
+}
+
+fn is_server_approval_request(message: &Value) -> bool {
+    let nested_method = message
+        .pointer("/params/request/method")
+        .or_else(|| message.pointer("/params/serverRequest/method"))
+        .or_else(|| message.pointer("/params/method"))
+        .and_then(Value::as_str);
+    nested_method.is_some_and(|method| method.ends_with("/requestApproval"))
+        || message.pointer("/params/request/approval").is_some()
+        || message.pointer("/params/serverRequest/approval").is_some()
+        || message.pointer("/params/approval").is_some()
+}
+
+fn emit_subagent_approval_resolved(
+    context: &ServerRuntimeContext,
+    thread_id: &str,
+    message: &Value,
+) {
+    let request_id = message
+        .pointer("/params/requestId")
+        .or_else(|| message.pointer("/params/id"))
+        .and_then(|value| provider_identifier(Some(value), MAX_SUBAGENT_ID_CHARS));
+    let mut update = subagent_status_update(thread_id, "unknown", "waiting");
+    update.collaboration_status = Some("approval_resolved".to_string());
+    update.approval_request_id = None;
+    update.activities = vec![AgentSubagentActivity {
+        id: request_id.unwrap_or_else(|| format!("approval-resolved-{}", now_ms())),
+        kind: "approval_request".to_string(),
+        status: "resolved".to_string(),
+        text: "La aprobacion del subagente fue resuelta".to_string(),
+        timestamp_ms: now_ms(),
+    }];
+    let _ = context
+        .event_tx
+        .send(AgentProcessEvent::SubagentUpdated { subagent: update });
+}
+
 fn handle_control_response(message: &Value, context: &ServerRuntimeContext) -> bool {
+    if message.get("method").is_some() {
+        return false;
+    }
     let Some(request_id) = message.get("id").and_then(Value::as_u64) else {
         return false;
     };
@@ -965,11 +2356,11 @@ fn handle_control_response(message: &Value, context: &ServerRuntimeContext) -> b
     let Some(sender) = sender else {
         return false;
     };
-    let result = match message.pointer("/error/message").and_then(Value::as_str) {
-        Some(error) => Err(AgentConsoleError::new(
-            "provider_control_failed",
-            error.to_string(),
-        )),
+    let result = match message
+        .pointer("/error/message")
+        .and_then(|value| provider_string(Some(value), 4_000))
+    {
+        Some(error) => Err(AgentConsoleError::new("provider_control_failed", error)),
         None => Ok(()),
     };
     let _ = sender.send(result);
@@ -1116,6 +2507,9 @@ fn normalize_activity_identity(value: Option<&str>) -> Option<String> {
 }
 
 fn handle_model_catalog_response(message: &Value, context: &ServerRuntimeContext) -> bool {
+    if message.get("method").is_some() {
+        return false;
+    }
     let Some(request_id) = message.get("id").and_then(Value::as_u64) else {
         return false;
     };
@@ -1233,6 +2627,122 @@ fn request_model_catalog(
     result
 }
 
+const CODEX_SUBAGENT_SOURCE_KINDS: &[&str] = &[
+    "subAgent",
+    "subAgentReview",
+    "subAgentCompact",
+    "subAgentThreadSpawn",
+    "subAgentOther",
+];
+
+#[allow(clippy::too_many_arguments)]
+fn request_subagent_discovery(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    pending_requests: &PendingDiscoveryRequests,
+    discovery_state: &Arc<Mutex<DiscoveryState>>,
+    next_request_id: &Arc<AtomicU64>,
+    root_thread_id: &str,
+    cursor: Option<&str>,
+    page: usize,
+    run_id: Option<u64>,
+) -> Result<(), AgentConsoleError> {
+    let root_thread_id = provider_string(
+        Some(&Value::String(root_thread_id.to_string())),
+        MAX_SUBAGENT_ID_CHARS,
+    )
+    .filter(|id| valid_provider_thread_id(id))
+    .ok_or_else(|| AgentConsoleError::new("invalid_subagent_id", "id de hilo Codex no valido"))?;
+    if page == 0 || page > MAX_DISCOVERY_PAGES {
+        return Err(AgentConsoleError::new(
+            "subagent_discovery_limit",
+            "Codex alcanzo el limite de paginas de descendientes",
+        ));
+    }
+    let cursor = cursor
+        .map(|cursor| cursor.trim().to_string())
+        .filter(|cursor| !cursor.is_empty());
+    if cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.chars().count() > MAX_DISCOVERY_CURSOR_CHARS)
+    {
+        return Err(AgentConsoleError::new(
+            "subagent_discovery_cursor_invalid",
+            "el cursor de descendientes es demasiado largo",
+        ));
+    }
+    let run_id = {
+        let mut state = discovery_state.lock().map_err(|_| {
+            AgentConsoleError::new("app_server_lock_poisoned", "discovery state lock failed")
+        })?;
+        if cursor.is_none() {
+            if page != 1 || run_id.is_some() {
+                return Err(AgentConsoleError::new(
+                    "subagent_discovery_cursor_invalid",
+                    "una pagina posterior requiere cursor",
+                ));
+            }
+            state.run_id = state.run_id.saturating_add(1).max(1);
+            state.seen_cursors.clear();
+            state.child_ids.clear();
+        } else if run_id != Some(state.run_id) {
+            return Err(AgentConsoleError::new(
+                "subagent_discovery_cursor_invalid",
+                "la pagina de descendientes pertenece a otra ejecucion",
+            ));
+        }
+        if let Some(cursor) = cursor.as_ref() {
+            if !state.seen_cursors.insert(cursor.clone()) {
+                return Err(AgentConsoleError::new(
+                    "subagent_discovery_cursor_loop",
+                    "Codex repitio un cursor de descendientes",
+                ));
+            }
+        }
+        state.run_id
+    };
+    if discovery_state
+        .lock()
+        .map(|state| state.child_ids.len() > MAX_DISCOVERED_CHILDREN)
+        .unwrap_or(true)
+    {
+        return Err(AgentConsoleError::new(
+            "subagent_capacity_exceeded",
+            "Codex alcanzo el limite de descendientes",
+        ));
+    }
+    let request_id = next_request_id.fetch_add(1, Ordering::SeqCst);
+    pending_requests
+        .lock()
+        .map_err(|_| AgentConsoleError::new("app_server_lock_poisoned", "discovery lock failed"))?
+        .insert(
+            request_id,
+            PendingDiscovery {
+                root_thread_id: root_thread_id.clone(),
+                page,
+                run_id,
+            },
+        );
+    let result = write_json(
+        stdin,
+        &json!({
+            "method": "thread/list",
+            "id": request_id,
+            "params": {
+                "cursor": cursor,
+                "limit": 100,
+                "sourceKinds": CODEX_SUBAGENT_SOURCE_KINDS,
+                "ancestorThreadId": root_thread_id
+            }
+        }),
+    );
+    if result.is_err() {
+        if let Ok(mut pending) = pending_requests.lock() {
+            pending.remove(&request_id);
+        }
+    }
+    result
+}
+
 fn update_catalog_error(catalog: &Arc<Mutex<AgentRuntimeCatalog>>, message: &str) {
     if let Ok(mut catalog) = catalog.lock() {
         catalog.status = AgentRuntimeCatalogStatus::Error;
@@ -1336,12 +2846,18 @@ fn parse_runtime_model(value: &Value) -> Option<AgentRuntimeModel> {
     })
 }
 
-fn timeline_frame(kind: AgentSessionTimelineKind, text: &str) -> Vec<u8> {
+fn timeline_frame_for_thread(
+    kind: AgentSessionTimelineKind,
+    text: &str,
+    thread_id: Option<&str>,
+) -> Vec<u8> {
+    let text = sanitize_provider_timeline_text(text);
     let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
     frame.extend(
         serde_json::to_vec(&json!({
             "kind": kind,
-            "text_base64": STANDARD.encode(text.as_bytes())
+            "text_base64": STANDARD.encode(text.as_bytes()),
+            "thread_id": thread_id,
         }))
         .unwrap_or_else(|_| {
             b"{\"kind\":\"lifecycle\",\"text\":\"timeline encode failed\"}".to_vec()
@@ -1524,9 +3040,20 @@ fn send_turn_start(
     turn: &PendingTurn,
     cwd: &Path,
 ) -> Result<(), AgentConsoleError> {
+    send_turn_start_with_approval(stdin, request_id, thread_id, turn, cwd, Some("never"))
+}
+
+fn send_turn_start_with_approval(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    request_id: u64,
+    thread_id: &str,
+    turn: &PendingTurn,
+    cwd: &Path,
+    approval_policy: Option<&str>,
+) -> Result<(), AgentConsoleError> {
     write_json(
         stdin,
-        &turn_start_message_with_permission(
+        &turn_start_message_with_approval(
             request_id,
             thread_id,
             &turn.text,
@@ -1534,6 +3061,7 @@ fn send_turn_start(
             cwd,
             turn.options.as_ref(),
             turn.permission_mode,
+            approval_policy,
         ),
     )
 }
@@ -1558,6 +3086,7 @@ fn turn_start_message(
     )
 }
 
+#[cfg(test)]
 fn turn_start_message_with_permission(
     request_id: u64,
     thread_id: &str,
@@ -1566,6 +3095,29 @@ fn turn_start_message_with_permission(
     cwd: &Path,
     options: Option<&AgentSessionRuntimeOptions>,
     permission_mode: AgentSessionPermissionMode,
+) -> Value {
+    turn_start_message_with_approval(
+        request_id,
+        thread_id,
+        text,
+        attachments,
+        cwd,
+        options,
+        permission_mode,
+        Some("never"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn turn_start_message_with_approval(
+    request_id: u64,
+    thread_id: &str,
+    text: &str,
+    attachments: &[AgentTurnAttachment],
+    cwd: &Path,
+    options: Option<&AgentSessionRuntimeOptions>,
+    permission_mode: AgentSessionPermissionMode,
+    approval_policy: Option<&str>,
 ) -> Value {
     let mut input = attachments
         .iter()
@@ -1595,7 +3147,9 @@ fn turn_start_message_with_permission(
     {
         params["serviceTier"] = json!(service_tier);
     }
-    params["approvalPolicy"] = json!("never");
+    if let Some(approval_policy) = approval_policy {
+        params["approvalPolicy"] = json!(approval_policy);
+    }
     params["sandboxPolicy"] = json!({
         "type": match permission_mode {
             AgentSessionPermissionMode::Workspace => "workspaceWrite",
@@ -1752,7 +3306,8 @@ mod tests {
             stdin: dummy_stdin(),
             thread_id: Arc::new(Mutex::new(Some("t".into()))),
             active_turn_id: Arc::new(Mutex::new(None)),
-            completed_agent_messages: Arc::new(Mutex::new(Vec::new())),
+            active_turn_ids: Arc::new(Mutex::new(HashMap::new())),
+            completed_agent_messages: Arc::new(Mutex::new(HashMap::new())),
             pending_turns: Arc::new(Mutex::new(VecDeque::new())),
             pending_goal_updates: Arc::new(Mutex::new(VecDeque::new())),
             runtime_catalog: Arc::new(Mutex::new(AgentRuntimeCatalog {
@@ -1765,6 +3320,10 @@ mod tests {
             })),
             pending_model_requests: Arc::new(Mutex::new(HashSet::new())),
             pending_control_requests: Arc::new(Mutex::new(HashMap::new())),
+            pending_thread_requests: Arc::new(Mutex::new(HashMap::new())),
+            pending_discovery_requests: Arc::new(Mutex::new(HashMap::new())),
+            discovery_state: Arc::new(Mutex::new(DiscoveryState::default())),
+            pending_collaborations: Arc::new(Mutex::new(HashMap::new())),
             resume_tx: Mutex::new(None),
             next_request_id: Arc::new(AtomicU64::new(FIRST_TURN_REQUEST_ID)),
             cwd: PathBuf::from("/tmp/repo"),
@@ -2204,6 +3763,411 @@ mod tests {
     }
 
     #[test]
+    fn completed_child_message_cache_is_bounded_and_sanitized_before_promotion() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        let provider_text = format!("safe\u{0}{}", "x".repeat(20_000));
+        handle_server_message(
+            &json!({
+                "method":"item/completed",
+                "params":{
+                    "threadId":"child-thread",
+                    "item":{"id":"message-1","type":"agentMessage","text":provider_text}
+                }
+            }),
+            &context,
+        );
+
+        let messages = context.completed_agent_messages.lock().unwrap();
+        let cached = &messages["child-thread"][0];
+        assert_eq!(
+            cached.chars().count(),
+            crate::agent_console::MAX_PROVIDER_TIMELINE_TEXT_CHARS
+        );
+        assert!(!cached.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn incomplete_unique_child_turns_cannot_grow_thread_state_without_bound() {
+        let mut messages = HashMap::new();
+        let mut active_turns = HashMap::new();
+        for index in 0..MAX_DISCOVERED_CHILDREN {
+            let thread_id = format!("child-{index}");
+            assert!(
+                completed_messages_for_thread(&mut messages, thread_id.clone(), false).is_some()
+            );
+            assert!(track_active_turn(&mut active_turns, &thread_id, "turn"));
+        }
+
+        assert!(
+            completed_messages_for_thread(&mut messages, "overflow".to_string(), false).is_none()
+        );
+        assert!(!track_active_turn(&mut active_turns, "overflow", "turn"));
+        assert_eq!(messages.len(), MAX_DISCOVERED_CHILDREN);
+        assert_eq!(active_turns.len(), MAX_DISCOVERED_CHILDREN);
+
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        *context.completed_agent_messages.lock().unwrap() = messages;
+        handle_server_message(
+            &json!({
+                "method":"item/completed",
+                "params":{"threadId":"t","item":{"id":"root-message","type":"agentMessage","text":"root survives"}}
+            }),
+            &context,
+        );
+        let _progress = rx.recv().unwrap();
+        handle_server_message(
+            &json!({"method":"turn/completed","params":{"threadId":"t","turn":{"id":"root-turn"}}}),
+            &context,
+        );
+        let final_message = String::from_utf8(rx.recv().unwrap()).unwrap();
+        assert!(final_message.contains("\"kind\":\"agent_message\""));
+        assert!(final_message.contains(&STANDARD.encode("root survives")));
+    }
+
+    #[test]
+    fn child_notifications_remain_thread_scoped_and_do_not_complete_root_turn() {
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+
+        handle_server_message(
+            &json!({
+                "method": "turn/started",
+                "params": {"threadId": "child-1", "turn": {"id": "child-turn"}}
+            }),
+            &context,
+        );
+        handle_server_message(
+            &json!({
+                "method": "item/completed",
+                "params": {
+                    "threadId": "child-1",
+                    "item": {"id": "child-msg", "type": "agentMessage", "text": "child result"}
+                }
+            }),
+            &context,
+        );
+        handle_server_message(
+            &json!({
+                "method": "turn/completed",
+                "params": {"threadId": "child-1", "turn": {"id": "child-turn"}}
+            }),
+            &context,
+        );
+
+        let mut saw_child_frame = false;
+        while let Ok(frame) = rx.try_recv() {
+            let parsed = crate::agent_console::commands::parse_timeline_frame(&frame)
+                .expect("child output should remain framed");
+            assert_eq!(parsed.thread_id.as_deref(), Some("child-1"));
+            saw_child_frame = true;
+        }
+        assert!(saw_child_frame);
+        assert!(event_rx
+            .try_iter()
+            .all(|event| !matches!(event, AgentProcessEvent::TurnCompleted { .. })));
+        assert_eq!(context.active_turn_ids.lock().unwrap().get("child-1"), None);
+    }
+
+    #[test]
+    fn descendant_projection_preserves_identity_metadata_and_unknown_statuses() {
+        let subagent = subagent_from_thread(
+            &json!({
+                "id": "grandchild",
+                "parentThreadId": "child-1",
+                "source": {"kind": "subAgentOther", "depth": 2, "agent_path": ["root", "child", "grandchild"]},
+                "agentNickname": "reviewer",
+                "agentRole": "code reviewer",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "xhigh",
+                "status": "futureProviderState",
+                "capabilities": {"inspect": true, "directInput": false}
+            }),
+            Some("root"),
+        )
+        .unwrap();
+        assert_eq!(subagent.id, "grandchild");
+        assert_eq!(subagent.parent_id.as_deref(), Some("child-1"));
+        assert_eq!(subagent.source_kind, "subAgentOther");
+        assert_eq!(subagent.thread_status, "futureProviderState");
+        assert!(!subagent.capabilities.direct_input);
+        assert_eq!(subagent.model.as_deref(), Some("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn codex_subagent_fixture_tolerates_out_of_order_nested_and_unknown_events() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        for line in include_str!("test_fixtures/codex-app-server-subagents-v2.jsonl").lines() {
+            let message: Value = serde_json::from_str(line).expect("fixture json");
+            handle_server_message(&message, &context);
+        }
+        let updates = event_rx
+            .try_iter()
+            .filter_map(|event| match event {
+                AgentProcessEvent::SubagentUpdated { subagent } => Some(subagent),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(updates.iter().any(|agent| agent.id == "child-1"));
+        assert!(updates.iter().any(|agent| agent.id == "grandchild-1"));
+    }
+
+    #[test]
+    fn real_codex_thread_shape_keeps_object_status_source_and_result_metadata() {
+        let subagent = subagent_from_thread(
+            &json!({
+                "id": "child-real",
+                "threadSource": "subAgentReview",
+                "source": {"subAgent": {"thread_spawn": {
+                    "parent_thread_id": "root-real",
+                    "depth": 1,
+                    "agent_nickname": "reviewer",
+                    "agent_role": "code reviewer",
+                    "agent_path": "root-real/reviewer"
+                }}},
+                "status": {"type": "active", "activeFlags": ["waitingOnApproval"]},
+                "canAcceptDirectInput": true,
+                "preview": "review the patch",
+                "prompt": "Check the backend graph",
+                "result": {"status": {"type": "failed"}, "message": "denied"}
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(subagent.parent_id.as_deref(), Some("root-real"));
+        assert_eq!(subagent.source_kind, "subAgentReview");
+        assert_eq!(subagent.depth, 1);
+        assert_eq!(subagent.agent_path, vec!["root-real/reviewer"]);
+        assert_eq!(subagent.thread_status, "active");
+        assert_eq!(
+            subagent.collaboration_status.as_deref(),
+            Some("waitingOnApproval")
+        );
+        assert_eq!(
+            subagent
+                .result
+                .as_ref()
+                .map(|result| result.status.as_str()),
+            Some("failed")
+        );
+        assert_eq!(
+            subagent
+                .result
+                .as_ref()
+                .and_then(|result| result.summary.as_deref()),
+            Some("denied")
+        );
+        assert_eq!(subagent.prompt.as_deref(), Some("Check the backend graph"));
+        assert_eq!(subagent.preview.as_deref(), Some("review the patch"));
+    }
+
+    #[test]
+    fn child_goal_and_usage_notifications_never_update_root_state() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({"method":"thread/goal/updated","params":{"threadId":"child","goal":{"objective":"child"}}}),
+            &context,
+        );
+        handle_server_message(
+            &json!({"method":"thread/tokenUsage/updated","params":{"threadId":"child","tokenUsage":{"last":{"totalTokens":2},"modelContextWindow":4}}}),
+            &context,
+        );
+        assert!(event_rx.try_iter().all(|event| !matches!(
+            event,
+            AgentProcessEvent::GoalUpdated { .. } | AgentProcessEvent::ContextUsageUpdated { .. }
+        )));
+    }
+
+    #[test]
+    fn root_thread_lifecycle_notifications_never_project_as_children() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        for message in [
+            json!({"method":"thread/started","params":{"threadId":"t","thread":{"id":"t","status":{"type":"active"}}}}),
+            json!({"method":"thread/status/changed","params":{"threadId":"t","status":{"type":"idle"}}}),
+            json!({"method":"thread/closed","params":{"threadId":"t"}}),
+        ] {
+            handle_server_message(&message, &context);
+        }
+        assert!(event_rx
+            .try_iter()
+            .all(|event| !matches!(event, AgentProcessEvent::SubagentUpdated { .. })));
+    }
+
+    #[test]
+    fn server_request_approval_is_thread_scoped_and_resolved_by_request_id() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({
+                "id": "server-request-1",
+                "method": "serverRequest",
+                "params": {"request": {
+                    "id": "approval-1",
+                    "method": "item/commandExecution/requestApproval",
+                    "params": {"threadId":"child-server", "reason":"run command"}
+                }}
+            }),
+            &context,
+        );
+        let AgentProcessEvent::SubagentUpdated { subagent } = event_rx.recv().unwrap() else {
+            panic!("expected child approval");
+        };
+        assert_eq!(subagent.id, "child-server");
+        assert_eq!(subagent.approval_request_id.as_deref(), Some("approval-1"));
+        assert_eq!(
+            subagent.collaboration_status.as_deref(),
+            Some("waiting_on_approval")
+        );
+
+        handle_server_message(
+            &json!({"method":"serverRequest/resolved","params":{"threadId":"child-server","requestId":"approval-1"}}),
+            &context,
+        );
+        let AgentProcessEvent::SubagentUpdated { subagent } = event_rx.recv().unwrap() else {
+            panic!("expected resolved child approval");
+        };
+        assert_eq!(subagent.approval_request_id, None);
+        assert_eq!(
+            subagent.collaboration_status.as_deref(),
+            Some("approval_resolved")
+        );
+    }
+
+    #[test]
+    fn collaboration_tool_call_associates_bounded_child_result() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        handle_server_message(
+            &json!({
+                "method":"item/completed",
+                "params":{"threadId":"t","item":{
+                    "id":"collab-1", "type":"collabAgentToolCall", "tool":"wait",
+                    "status":"completed", "prompt":"Wait for child result",
+                    "senderThreadId":"t", "receiverThreadIds":["child-collab"],
+                    "agentsStates":{"child-collab":{"status":"completed","message":"done"}}
+                }}
+            }),
+            &context,
+        );
+        let AgentProcessEvent::SubagentUpdated { subagent } = event_rx.recv().unwrap() else {
+            panic!("expected collaboration projection");
+        };
+        assert_eq!(subagent.id, "child-collab");
+        assert_eq!(subagent.collaboration_tool.as_deref(), Some("wait"));
+        assert_eq!(
+            subagent
+                .result
+                .as_ref()
+                .and_then(|result| result.summary.as_deref()),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn discovery_rejects_unbounded_pages_cursors_and_provider_ids() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let state = Arc::new(Mutex::new(DiscoveryState::default()));
+        let next = Arc::new(AtomicU64::new(100));
+        let stdin = dummy_stdin();
+        assert_eq!(
+            request_subagent_discovery(
+                &stdin,
+                &pending,
+                &state,
+                &next,
+                "root",
+                None,
+                MAX_DISCOVERY_PAGES + 1,
+                None
+            )
+            .unwrap_err()
+            .category,
+            "subagent_discovery_limit"
+        );
+        let oversized = "x".repeat(MAX_DISCOVERY_CURSOR_CHARS + 1);
+        assert_eq!(
+            request_subagent_discovery(
+                &stdin,
+                &pending,
+                &state,
+                &next,
+                "root",
+                Some(&oversized),
+                2,
+                Some(1)
+            )
+            .unwrap_err()
+            .category,
+            "subagent_discovery_cursor_invalid"
+        );
+        assert!(request_subagent_discovery(
+            &stdin, &pending, &state, &next, "bad/id", None, 1, None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn discovery_capacity_and_cursor_are_unique_per_run() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        request_subagent_discovery(
+            &context.stdin,
+            &context.pending_discovery_requests,
+            &context.discovery_state,
+            &context.next_request_id,
+            "t",
+            None,
+            1,
+            None,
+        )
+        .unwrap();
+        handle_server_message(
+            &json!({"id":100,"result":{"data":[
+                {"id":"unique-child","threadSource":"subAgent","status":{"type":"idle"}},
+                {"id":"unique-child","threadSource":"subAgent","status":{"type":"idle"}}
+            ],"nextCursor":"cursor-1"}}),
+            &context,
+        );
+        assert_eq!(context.discovery_state.lock().unwrap().child_ids.len(), 1);
+        assert_eq!(
+            context.discovery_state.lock().unwrap().seen_cursors.len(),
+            1
+        );
+
+        request_subagent_discovery(
+            &context.stdin,
+            &context.pending_discovery_requests,
+            &context.discovery_state,
+            &context.next_request_id,
+            "t",
+            None,
+            1,
+            None,
+        )
+        .unwrap();
+        assert!(context
+            .discovery_state
+            .lock()
+            .unwrap()
+            .seen_cursors
+            .is_empty());
+        assert!(context.discovery_state.lock().unwrap().child_ids.is_empty());
+    }
+
+    #[test]
     fn command_delta_is_forwarded_as_command_timeline_frame() {
         let (tx, rx) = mpsc::channel();
         let (event_tx, _event_rx) = mpsc::channel();
@@ -2220,6 +4184,30 @@ mod tests {
             "\"text_base64\":\"{}\"",
             STANDARD.encode("cargo test")
         )));
+    }
+
+    #[test]
+    fn child_timeline_frames_are_bounded_and_strip_control_characters() {
+        let provider_text = format!("safe\u{0}{}", "x".repeat(20_000));
+        let frame = timeline_frame_for_thread(
+            AgentSessionTimelineKind::CommandOutput,
+            &provider_text,
+            Some("child-thread"),
+        );
+        let payload: Value = serde_json::from_slice(
+            &frame[TIMELINE_FRAME_PREFIX.len()..frame.len().saturating_sub(1)],
+        )
+        .unwrap();
+        let decoded = STANDARD
+            .decode(payload["text_base64"].as_str().unwrap())
+            .unwrap();
+        let decoded = String::from_utf8(decoded).unwrap();
+        assert_eq!(
+            decoded.chars().count(),
+            crate::agent_console::MAX_PROVIDER_TIMELINE_TEXT_CHARS
+        );
+        assert!(!decoded.chars().any(char::is_control));
+        assert_eq!(payload["thread_id"], "child-thread");
     }
 
     #[test]

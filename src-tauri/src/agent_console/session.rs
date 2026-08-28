@@ -9,6 +9,7 @@ use crate::bus::contract::{
     AgentSessionFeedback, AgentSessionGoal, AgentSessionGoalStatus, AgentSessionPermissionMode,
     AgentSessionPersonality, AgentSessionPlanMode, AgentSessionRuntimeOptions, AgentSessionStatus,
     AgentSessionTimelineItem, AgentSessionTurnCheckpoint, AgentSessionTurnStatus,
+    AgentSubagentThread,
 };
 use crate::wsl_agent::{
     launcher::{request_wsl_agent, windows_path_to_wsl_mount},
@@ -22,7 +23,7 @@ use super::{
         CheckpointRecord,
     },
     pty::{AgentProcess, AgentProcessEvent, AgentTurnAttachment},
-    AgentConsoleError,
+    sanitize_provider_timeline_text, AgentConsoleError, MAX_SUBAGENT_THREADS,
 };
 
 const OUTPUT_QUIET_MS: u64 = 2_000;
@@ -61,6 +62,7 @@ pub struct AgentSessionRecord {
     last_turn_scan_at_ms: Option<u64>,
     next_turn_index: u32,
     timeline: Vec<AgentSessionTimelineItem>,
+    subagents: Vec<AgentSubagentThread>,
     runtime_options: AgentSessionRuntimeOptions,
     goal: Option<AgentSessionGoal>,
     personality: Option<AgentSessionPersonality>,
@@ -120,6 +122,7 @@ impl AgentSessionRecord {
             last_turn_scan_at_ms: None,
             next_turn_index: 1,
             timeline: Vec::new(),
+            subagents: Vec::new(),
             runtime_options: AgentSessionRuntimeOptions::default(),
             goal: None,
             personality: None,
@@ -355,6 +358,180 @@ impl AgentSessionRecord {
         };
         self.running_process_mut()?
             .steer_turn(text, &runtime_attachments)
+    }
+
+    pub fn supports_subagents(&self) -> bool {
+        self.status == AgentSessionStatus::Running
+            && self
+                .process
+                .as_ref()
+                .is_some_and(|process| process.supports_subagents())
+    }
+
+    pub fn discover_subagents(&mut self) -> Result<(), AgentConsoleError> {
+        self.running_process_mut()?.discover_subagents()
+    }
+
+    fn subagent_for_control(
+        &self,
+        thread_id: &str,
+        operation: &str,
+        capability: fn(&crate::bus::contract::AgentSubagentCapabilities) -> bool,
+    ) -> Result<AgentSubagentThread, AgentConsoleError> {
+        if self.status != AgentSessionStatus::Running {
+            return Err(AgentConsoleError::new(
+                "session_not_running",
+                "la sesion no esta ejecutandose",
+            ));
+        }
+        if !self
+            .process
+            .as_ref()
+            .is_some_and(|process| process.supports_subagents())
+        {
+            return Err(AgentConsoleError::new(
+                "subagents_unsupported",
+                "este runtime no admite subagentes nativos",
+            ));
+        }
+        let subagent = self
+            .subagents
+            .iter()
+            .find(|agent| agent.id == thread_id)
+            .cloned()
+            .ok_or_else(|| {
+                AgentConsoleError::new("subagent_not_found", "no existe el subagente seleccionado")
+            })?;
+        if !capability(&subagent.capabilities) {
+            return Err(AgentConsoleError::new(
+                "subagent_capability_unavailable",
+                format!("Codex no permite {operation} para este subagente"),
+            ));
+        }
+        if matches!(
+            subagent.collaboration_status.as_deref(),
+            Some("waiting_on_approval" | "waitingOnApproval")
+        ) && !matches!(operation, "espera" | "cierre")
+        {
+            return Err(AgentConsoleError::new(
+                "subagent_approval_pending",
+                "el subagente espera una aprobacion antes de aceptar este control",
+            ));
+        }
+        if subagent.approval_request_id.is_some() && !matches!(operation, "espera" | "cierre") {
+            return Err(AgentConsoleError::new(
+                "subagent_approval_pending",
+                "el subagente tiene una aprobacion pendiente asociada a su propio hilo",
+            ));
+        }
+        if matches!(
+            subagent.thread_status.as_str(),
+            "closed" | "completed" | "errored" | "failed" | "interrupted" | "exited"
+        ) || matches!(
+            subagent.runtime_state.as_deref(),
+            Some("stale" | "shutdown" | "errored")
+        ) {
+            return Err(AgentConsoleError::new(
+                "subagent_lifecycle_unavailable",
+                "el subagente ya no admite controles en su estado actual",
+            ));
+        }
+        let child_requests_full_access = subagent.permission_mode.as_deref().is_some_and(|mode| {
+            matches!(
+                mode,
+                "dangerFullAccess" | "danger-full-access" | "full_access" | "fullAccess"
+            )
+        });
+        if child_requests_full_access
+            && self.permission_mode != AgentSessionPermissionMode::FullAccess
+        {
+            return Err(AgentConsoleError::new(
+                "subagent_permission_mismatch",
+                "el subagente solicita un acceso superior al de su sesion padre",
+            ));
+        }
+        Ok(subagent)
+    }
+
+    fn subagent_attachments(
+        &self,
+        attachments: &[AgentTurnAttachment],
+    ) -> Result<Vec<AgentTurnAttachment>, AgentConsoleError> {
+        if let Some(distro) = self.wsl_distro.as_deref() {
+            attachments
+                .iter()
+                .map(|attachment| {
+                    attachment_path_for_wsl(&attachment.path, distro).map(|path| {
+                        AgentTurnAttachment {
+                            path,
+                            is_image: attachment.is_image,
+                        }
+                    })
+                })
+                .collect()
+        } else {
+            Ok(attachments.to_vec())
+        }
+    }
+
+    pub fn write_subagent_turn(
+        &mut self,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        let thread_id = valid_subagent_id(thread_id)?;
+        let subagent =
+            self.subagent_for_control(&thread_id, "entrada directa", |caps| caps.direct_input)?;
+        let attachments = self.subagent_attachments(attachments)?;
+        let permission_mode = narrowed_subagent_permission_mode(
+            self.permission_mode,
+            subagent.permission_mode.as_deref(),
+        );
+        self.running_process_mut()?
+            .write_subagent_turn_with_metadata(
+                &thread_id,
+                text,
+                &attachments,
+                options,
+                permission_mode,
+                subagent.approval_policy.as_deref(),
+            )
+    }
+
+    pub fn steer_subagent_turn(
+        &mut self,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        let thread_id = valid_subagent_id(thread_id)?;
+        self.subagent_for_control(&thread_id, "intervencion", |caps| caps.steer)?;
+        let attachments = self.subagent_attachments(attachments)?;
+        self.running_process_mut()?
+            .steer_subagent_turn(&thread_id, text, &attachments)
+    }
+
+    pub fn interrupt_subagent_turn(&mut self, thread_id: &str) -> Result<(), AgentConsoleError> {
+        let thread_id = valid_subagent_id(thread_id)?;
+        self.subagent_for_control(&thread_id, "interrupcion", |caps| caps.interrupt)?;
+        self.running_process_mut()?
+            .interrupt_subagent_turn(&thread_id)
+    }
+
+    pub fn wait_subagent(&mut self, thread_id: &str) -> Result<(), AgentConsoleError> {
+        let thread_id = valid_subagent_id(thread_id)?;
+        self.subagent_for_control(&thread_id, "espera", |caps| caps.wait)?;
+        self.running_process_mut()?.wait_subagent(&thread_id)
+    }
+
+    pub fn close_subagent(&mut self, thread_id: &str) -> Result<(), AgentConsoleError> {
+        let thread_id = valid_subagent_id(thread_id)?;
+        self.subagent_for_control(&thread_id, "cierre", |caps| caps.close)?;
+        // Closing is intentionally delegated to the Codex parent; this never
+        // archives or deletes the provider thread.
+        self.running_process_mut()?.close_subagent(&thread_id)
     }
 
     pub fn interrupt_turn(&mut self) -> Result<(), AgentConsoleError> {
@@ -600,6 +777,18 @@ impl AgentSessionRecord {
                 });
                 Ok(())
             }
+            AgentProcessEvent::SubagentUpdated { subagent } => {
+                self.upsert_subagent(subagent);
+                Ok(())
+            }
+            AgentProcessEvent::SubagentTimeline { thread_id, item } => {
+                self.record_subagent_timeline_item(&thread_id, item);
+                Ok(())
+            }
+            AgentProcessEvent::SubagentDiscoveryFailed { error } => {
+                self.error = Some(error);
+                Ok(())
+            }
         }
     }
 
@@ -721,6 +910,225 @@ impl AgentSessionRecord {
             let overflow = self.timeline.len() - MAX_TIMELINE_ITEMS_PER_SESSION;
             self.timeline.drain(0..overflow);
         }
+    }
+
+    fn has_subagent(&self, thread_id: &str) -> bool {
+        self.subagents.iter().any(|agent| agent.id == thread_id)
+    }
+
+    pub fn upsert_subagent(&mut self, mut subagent: AgentSubagentThread) {
+        sanitize_subagent(&mut subagent);
+        if subagent.id.is_empty() {
+            return;
+        }
+        let sparse_update = is_sparse_subagent_update(&subagent);
+        let capabilities_bearing = has_explicit_subagent_capabilities(&subagent);
+        if let Some(existing) = self
+            .subagents
+            .iter_mut()
+            .find(|agent| agent.id == subagent.id)
+        {
+            if subagent.updated_at_ms < existing.updated_at_ms {
+                return;
+            }
+            if is_terminal_subagent_status(&existing.thread_status)
+                && !is_terminal_subagent_status(&subagent.thread_status)
+            {
+                return;
+            }
+            if is_nonterminal_lifecycle_regression(existing, &subagent) {
+                return;
+            }
+            merge_subagent_timeline(&mut existing.timeline, &mut subagent.timeline);
+            merge_subagent_activities(&mut existing.activities, &mut subagent.activities);
+            subagent.timeline = std::mem::take(&mut existing.timeline);
+            subagent.activities = std::mem::take(&mut existing.activities);
+            if subagent.thread_status == "unknown" {
+                subagent.thread_status = std::mem::take(&mut existing.thread_status);
+            }
+            if subagent.turn_status == "unknown" {
+                subagent.turn_status = std::mem::take(&mut existing.turn_status);
+            }
+            if subagent.parent_id.is_none() {
+                subagent.parent_id = existing.parent_id.take();
+            }
+            if subagent.source_kind == "subAgent" && existing.source_kind != "subAgent" {
+                subagent.source_kind = std::mem::take(&mut existing.source_kind);
+            }
+            if subagent.agent_path.is_empty() {
+                subagent.agent_path = std::mem::take(&mut existing.agent_path);
+            }
+            if subagent.nickname.is_none() {
+                subagent.nickname = existing.nickname.take();
+            }
+            if subagent.role.is_none() {
+                subagent.role = existing.role.take();
+            }
+            if subagent.model.is_none() {
+                subagent.model = existing.model.take();
+            }
+            if subagent.reasoning_effort.is_none() {
+                subagent.reasoning_effort = existing.reasoning_effort.take();
+            }
+            if subagent.runtime.is_none() {
+                subagent.runtime = existing.runtime.take();
+            }
+            if subagent.approval_policy.is_none() {
+                subagent.approval_policy = existing.approval_policy.take();
+            }
+            if subagent.permission_mode.is_none() {
+                subagent.permission_mode = existing.permission_mode.take();
+            }
+            if subagent.capacity.is_none() {
+                subagent.capacity = existing.capacity.take();
+            }
+            if subagent.collaboration_status.is_none() {
+                subagent.collaboration_status = existing.collaboration_status.take();
+            }
+            if subagent.runtime_state.is_none() {
+                subagent.runtime_state = existing.runtime_state.take();
+            }
+            if subagent.collaboration_tool.is_none() {
+                subagent.collaboration_tool = existing.collaboration_tool.take();
+            }
+            if subagent.consolidation_id.is_none() {
+                subagent.consolidation_id = existing.consolidation_id.take();
+            }
+            if subagent.approval_request_id.is_none()
+                && !matches!(
+                    subagent.turn_status.as_str(),
+                    "working" | "inProgress" | "in_progress"
+                )
+                && subagent.collaboration_status.as_deref() != Some("approval_resolved")
+            {
+                subagent.approval_request_id = existing.approval_request_id.take();
+            }
+            if subagent.prompt.is_none() {
+                subagent.prompt = existing.prompt.take();
+            }
+            if subagent.preview.is_none() {
+                subagent.preview = existing.preview.take();
+            }
+            // Status notifications are intentionally sparse. Preserve the
+            // last provider-declared capabilities instead of turning an idle
+            // thread into a permanently non-interactive projection.
+            if sparse_update || !capabilities_bearing {
+                subagent.capabilities = existing.capabilities.clone();
+            }
+            if subagent.result.is_none() {
+                subagent.result = existing.result.take();
+            }
+            if is_terminal_subagent_status(&subagent.thread_status) {
+                subagent.capabilities.direct_input = false;
+                subagent.capabilities.steer = false;
+                subagent.capabilities.interrupt = false;
+                subagent.capabilities.wait = false;
+                subagent.capabilities.close = false;
+            }
+            if matches!(
+                subagent.runtime_state.as_deref(),
+                Some("stale" | "shutdown" | "errored")
+            ) {
+                subagent.capabilities.direct_input = false;
+                subagent.capabilities.steer = false;
+                subagent.capabilities.interrupt = false;
+                subagent.capabilities.wait = false;
+                subagent.capabilities.close = false;
+            }
+            *existing = subagent;
+        } else if self.subagents.len() >= MAX_SUBAGENT_THREADS {
+            self.error = Some(AgentConsoleError::new(
+                "subagent_capacity_exceeded",
+                "Codex devolvio mas descendientes de los permitidos",
+            ));
+            return;
+        } else {
+            self.subagents.push(subagent);
+        }
+        self.subagents.sort_by(|left, right| {
+            left.agent_path
+                .cmp(&right.agent_path)
+                .then_with(|| left.depth.cmp(&right.depth))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    }
+
+    pub fn record_subagent_timeline_item(
+        &mut self,
+        thread_id: &str,
+        mut item: AgentSessionTimelineItem,
+    ) -> bool {
+        let Ok(thread_id) = valid_subagent_id(thread_id) else {
+            return false;
+        };
+        if !self.has_subagent(&thread_id) {
+            if self.subagents.len() >= MAX_SUBAGENT_THREADS {
+                self.error = Some(AgentConsoleError::new(
+                    "subagent_capacity_exceeded",
+                    "Codex devolvio mas descendientes de los permitidos",
+                ));
+                return false;
+            }
+            self.subagents.push(AgentSubagentThread {
+                id: thread_id.to_string(),
+                parent_id: None,
+                source_kind: "subAgent".to_string(),
+                depth: 0,
+                agent_path: Vec::new(),
+                nickname: None,
+                role: None,
+                model: None,
+                reasoning_effort: None,
+                runtime: None,
+                approval_policy: None,
+                permission_mode: None,
+                capacity: None,
+                thread_status: "unknown".to_string(),
+                turn_status: "waiting".to_string(),
+                collaboration_status: None,
+                collaboration_tool: None,
+                consolidation_id: None,
+                runtime_state: None,
+                approval_request_id: None,
+                prompt: None,
+                preview: None,
+                capabilities: crate::bus::contract::AgentSubagentCapabilities {
+                    inspect: true,
+                    direct_input: false,
+                    steer: false,
+                    interrupt: false,
+                    wait: false,
+                    close: false,
+                },
+                activities: Vec::new(),
+                result: None,
+                timeline: Vec::new(),
+                updated_at_ms: item.timestamp_ms,
+            });
+        }
+        if let Some(agent) = self
+            .subagents
+            .iter_mut()
+            .find(|agent| agent.id == thread_id)
+        {
+            item.session_id = thread_id.to_string();
+            item.text = sanitize_provider_timeline_text(&item.text);
+            if agent.timeline.iter().any(|existing| existing.id == item.id) {
+                return false;
+            }
+            agent.timeline.push(item);
+            if agent.timeline.len() > MAX_TIMELINE_ITEMS_PER_SESSION {
+                let overflow = agent.timeline.len() - MAX_TIMELINE_ITEMS_PER_SESSION;
+                agent.timeline.drain(0..overflow);
+            }
+            agent.updated_at_ms = agent
+                .timeline
+                .last()
+                .map(|item| item.timestamp_ms)
+                .unwrap_or(agent.updated_at_ms);
+            return true;
+        }
+        false
     }
 
     pub fn record_turn_done(&mut self, timestamp_ms: u64) -> Result<(), AgentConsoleError> {
@@ -926,6 +1334,7 @@ impl AgentSessionRecord {
                 .map(AgentTurnCheckpointRecord::to_contract)
                 .collect(),
             timeline: self.timeline.clone(),
+            subagents: self.subagents.clone(),
             runtime_options: self.runtime_options.clone(),
             goal: self.goal.clone(),
             personality: self.personality.clone(),
@@ -1301,6 +1710,272 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn narrowed_subagent_permission_mode(
+    parent: AgentSessionPermissionMode,
+    child_reported: Option<&str>,
+) -> AgentSessionPermissionMode {
+    // A child may retain a stricter provider sandbox, but never widen the
+    // parent's boundary. Unknown/missing metadata inherits the parent.
+    match child_reported.map(str::trim) {
+        Some("workspaceWrite" | "workspace-write" | "workspace_write") => {
+            AgentSessionPermissionMode::Workspace
+        }
+        Some("dangerFullAccess" | "danger-full-access" | "full_access" | "fullAccess")
+            if parent == AgentSessionPermissionMode::FullAccess =>
+        {
+            parent
+        }
+        _ => parent,
+    }
+}
+
+fn valid_subagent_id(value: &str) -> Result<String, AgentConsoleError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().any(char::is_control)
+        || value.chars().count() > 256
+        || value.contains('/')
+        || value.contains('\\')
+    {
+        return Err(AgentConsoleError::new(
+            "invalid_subagent_id",
+            "el identificador del subagente no es valido",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn bounded_provider_text(value: &mut Option<String>, max_chars: usize) {
+    let Some(text) = value.as_mut() else {
+        return;
+    };
+    if text.chars().any(char::is_control) {
+        *value = None;
+        return;
+    }
+    let mut chars = text.chars();
+    let bounded = chars.by_ref().take(max_chars).collect::<String>();
+    *text = bounded;
+}
+
+fn is_sparse_subagent_update(subagent: &AgentSubagentThread) -> bool {
+    subagent.source_kind == "subAgent"
+        && subagent.parent_id.is_none()
+        && subagent.depth == 0
+        && subagent.agent_path.is_empty()
+        && subagent.nickname.is_none()
+        && subagent.role.is_none()
+        && subagent.model.is_none()
+        && subagent.reasoning_effort.is_none()
+        && subagent.runtime.is_none()
+        && subagent.approval_policy.is_none()
+        && subagent.permission_mode.is_none()
+        && subagent.capacity.is_none()
+        && subagent.collaboration_status.is_none()
+        && subagent.collaboration_tool.is_none()
+        && subagent.consolidation_id.is_none()
+        && subagent.runtime_state.is_none()
+        && subagent.approval_request_id.is_none()
+        && subagent.prompt.is_none()
+        && subagent.preview.is_none()
+        && subagent.activities.is_empty()
+        && subagent.result.is_none()
+        && subagent.timeline.is_empty()
+}
+
+fn has_explicit_subagent_capabilities(subagent: &AgentSubagentThread) -> bool {
+    // Full thread snapshots carry identity/source metadata. Activity,
+    // approval, and status notifications do not, so those updates must not
+    // erase capabilities learned from the snapshot.
+    subagent.source_kind != "subAgent"
+        || subagent.parent_id.is_some()
+        || subagent.depth != 0
+        || !subagent.agent_path.is_empty()
+        || subagent.nickname.is_some()
+        || subagent.role.is_some()
+        || subagent.model.is_some()
+        || subagent.reasoning_effort.is_some()
+        || subagent.runtime.is_some()
+        || subagent.approval_policy.is_some()
+        || subagent.permission_mode.is_some()
+        || subagent.capacity.is_some()
+}
+
+fn sanitize_subagent(subagent: &mut AgentSubagentThread) {
+    subagent.id = subagent.id.trim().chars().take(256).collect();
+    subagent.parent_id = subagent
+        .parent_id
+        .take()
+        .filter(|value| !value.chars().any(char::is_control))
+        .map(|value| value.chars().take(256).collect());
+    subagent.source_kind = subagent
+        .source_kind
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(96)
+        .collect();
+    subagent.agent_path = subagent
+        .agent_path
+        .iter()
+        .filter(|value| !value.chars().any(char::is_control))
+        .map(|value| value.chars().take(96).collect())
+        .take(32)
+        .collect();
+    bounded_provider_text(&mut subagent.nickname, 96);
+    bounded_provider_text(&mut subagent.role, 160);
+    bounded_provider_text(&mut subagent.model, 160);
+    bounded_provider_text(&mut subagent.reasoning_effort, 96);
+    bounded_provider_text(&mut subagent.runtime, 160);
+    bounded_provider_text(&mut subagent.approval_policy, 96);
+    bounded_provider_text(&mut subagent.permission_mode, 96);
+    subagent.thread_status = subagent
+        .thread_status
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(96)
+        .collect();
+    subagent.turn_status = subagent
+        .turn_status
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(96)
+        .collect();
+    bounded_provider_text(&mut subagent.collaboration_status, 96);
+    bounded_provider_text(&mut subagent.collaboration_tool, 96);
+    bounded_provider_text(&mut subagent.consolidation_id, 256);
+    bounded_provider_text(&mut subagent.runtime_state, 96);
+    bounded_provider_text(&mut subagent.approval_request_id, 256);
+    bounded_provider_text(&mut subagent.prompt, 16_384);
+    bounded_provider_text(&mut subagent.preview, 16_384);
+    for activity in &mut subagent.activities {
+        activity.id = activity
+            .id
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(256)
+            .collect();
+        activity.kind = activity
+            .kind
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(96)
+            .collect();
+        activity.status = activity
+            .status
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(96)
+            .collect();
+        activity.text = activity
+            .text
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(512)
+            .collect();
+    }
+    if subagent.activities.len() > 256 {
+        let overflow = subagent.activities.len() - 256;
+        subagent.activities.drain(0..overflow);
+    }
+    if subagent.timeline.len() > MAX_TIMELINE_ITEMS_PER_SESSION {
+        let overflow = subagent.timeline.len() - MAX_TIMELINE_ITEMS_PER_SESSION;
+        subagent.timeline.drain(0..overflow);
+    }
+    for item in &mut subagent.timeline {
+        item.session_id = subagent.id.clone();
+        item.text = item
+            .text
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(16_384)
+            .collect();
+    }
+    if let Some(result) = subagent.result.as_mut() {
+        result.status = result
+            .status
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(96)
+            .collect();
+        bounded_provider_text(&mut result.summary, 16_384);
+        bounded_provider_text(&mut result.error, 4_000);
+    }
+    if is_terminal_subagent_status(&subagent.thread_status)
+        || matches!(
+            subagent.runtime_state.as_deref(),
+            Some("stale" | "shutdown" | "errored")
+        )
+    {
+        subagent.capabilities.direct_input = false;
+        subagent.capabilities.steer = false;
+        subagent.capabilities.interrupt = false;
+        subagent.capabilities.wait = false;
+        subagent.capabilities.close = false;
+    }
+}
+
+fn is_terminal_subagent_status(status: &str) -> bool {
+    matches!(
+        status,
+        "closed" | "completed" | "errored" | "failed" | "interrupted" | "exited" | "systemError"
+    )
+}
+
+fn is_nonterminal_lifecycle_regression(
+    existing: &AgentSubagentThread,
+    incoming: &AgentSubagentThread,
+) -> bool {
+    // Provider notifications can arrive out of order. These transitions are
+    // strictly monotonic and a later stale notification must not reopen or
+    // restart a still-live projection. Idle remains a valid follow-up state.
+    matches!(
+        (
+            existing.thread_status.as_str(),
+            incoming.thread_status.as_str()
+        ),
+        ("active", "starting" | "running") | ("running", "starting")
+    )
+}
+
+fn merge_subagent_activities(
+    existing: &mut Vec<crate::bus::contract::AgentSubagentActivity>,
+    incoming: &mut Vec<crate::bus::contract::AgentSubagentActivity>,
+) {
+    existing.append(incoming);
+    existing.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| right.timestamp_ms.cmp(&left.timestamp_ms))
+    });
+    existing.dedup_by(|right, left| right.id == left.id);
+    existing.sort_by(|left, right| {
+        left.timestamp_ms
+            .cmp(&right.timestamp_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    if existing.len() > 256 {
+        let overflow = existing.len() - 256;
+        existing.drain(0..overflow);
+    }
+}
+
+fn merge_subagent_timeline(
+    existing: &mut Vec<AgentSessionTimelineItem>,
+    incoming: &mut Vec<AgentSessionTimelineItem>,
+) {
+    existing.append(incoming);
+    existing.sort_by(|left, right| {
+        left.timestamp_ms
+            .cmp(&right.timestamp_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    existing.dedup_by(|right, left| right.id == left.id);
+    if existing.len() > MAX_TIMELINE_ITEMS_PER_SESSION {
+        let overflow = existing.len() - MAX_TIMELINE_ITEMS_PER_SESSION;
+        existing.drain(0..overflow);
+    }
+}
+
 fn change_signature(changes: &[AgentSessionChange]) -> Vec<(PathBuf, String)> {
     changes
         .iter()
@@ -1468,6 +2143,7 @@ mod tests {
     use super::*;
     use crate::bus::contract::{
         AgentSessionCheckpoint, AgentSessionCheckpointType, AgentSessionTimelineKind,
+        AgentSubagentActivity, AgentSubagentCapabilities, AgentSubagentThread,
     };
     use crate::git::test_fixtures::TempRepo;
     use std::io::Read;
@@ -1545,6 +2221,50 @@ mod tests {
 
         fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
             Vec::new()
+        }
+    }
+
+    fn subagent_fixture(
+        thread_status: &str,
+        turn_status: &str,
+        updated_at_ms: u64,
+        activities: Vec<AgentSubagentActivity>,
+    ) -> AgentSubagentThread {
+        AgentSubagentThread {
+            id: "child-gated".into(),
+            parent_id: Some("root".into()),
+            source_kind: "subAgentThreadSpawn".into(),
+            depth: 1,
+            agent_path: vec!["root".into(), "child-gated".into()],
+            nickname: Some("worker".into()),
+            role: Some("worker".into()),
+            model: Some("gpt-5.6-sol".into()),
+            reasoning_effort: Some("high".into()),
+            runtime: Some("codex".into()),
+            approval_policy: Some("on-request".into()),
+            permission_mode: Some("workspaceWrite".into()),
+            capacity: Some(4),
+            thread_status: thread_status.into(),
+            turn_status: turn_status.into(),
+            collaboration_status: None,
+            collaboration_tool: None,
+            consolidation_id: None,
+            runtime_state: None,
+            approval_request_id: None,
+            prompt: None,
+            preview: None,
+            capabilities: AgentSubagentCapabilities {
+                inspect: true,
+                direct_input: true,
+                steer: true,
+                interrupt: true,
+                wait: true,
+                close: true,
+            },
+            activities,
+            result: None,
+            timeline: Vec::new(),
+            updated_at_ms,
         }
     }
 
@@ -1835,6 +2555,73 @@ mod tests {
         assert_eq!(after.timeline, before.timeline);
         assert_eq!(after.checkpoint, before.checkpoint);
         assert_eq!(*retries.lock().unwrap(), vec![(true, true)]);
+    }
+
+    #[test]
+    fn child_timeline_is_sanitized_before_session_projection() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        session.record_subagent_timeline_item(
+            "child-thread",
+            AgentSessionTimelineItem {
+                session_id: "wrong-root".to_owned(),
+                id: "child-output-1".to_owned(),
+                kind: AgentSessionTimelineKind::AgentMessage,
+                text: format!("safe\u{0}{}", "x".repeat(20_000)),
+                timestamp_ms: 2,
+                attachments: Vec::new(),
+            },
+        );
+
+        let item = &session.to_contract().subagents[0].timeline[0];
+        assert_eq!(item.session_id, "child-thread");
+        assert_eq!(
+            item.text.chars().count(),
+            crate::agent_console::MAX_PROVIDER_TIMELINE_TEXT_CHARS
+        );
+        assert!(!item.text.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn unique_child_updates_and_timeline_events_cannot_exceed_graph_capacity() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        for index in 0..MAX_SUBAGENT_THREADS {
+            session.record_subagent_timeline_item(
+                &format!("child-{index}"),
+                AgentSessionTimelineItem {
+                    session_id: "root".to_owned(),
+                    id: format!("event-{index}"),
+                    kind: AgentSessionTimelineKind::Activity,
+                    text: "working".to_owned(),
+                    timestamp_ms: index as u64,
+                    attachments: Vec::new(),
+                },
+            );
+        }
+        session.record_subagent_timeline_item(
+            "timeline-overflow",
+            AgentSessionTimelineItem {
+                session_id: "root".to_owned(),
+                id: "overflow".to_owned(),
+                kind: AgentSessionTimelineKind::Activity,
+                text: "blocked".to_owned(),
+                timestamp_ms: MAX_SUBAGENT_THREADS as u64,
+                attachments: Vec::new(),
+            },
+        );
+        let mut update = session.to_contract().subagents[0].clone();
+        update.id = "update-overflow".to_owned();
+        session.upsert_subagent(update);
+
+        let contract = session.to_contract();
+        assert_eq!(contract.subagents.len(), MAX_SUBAGENT_THREADS);
+        assert_eq!(
+            contract.error.as_ref().map(|error| error.category.as_str()),
+            Some("subagent_capacity_exceeded")
+        );
+        assert!(!contract
+            .subagents
+            .iter()
+            .any(|agent| agent.id == "timeline-overflow" || agent.id == "update-overflow"));
     }
 
     #[test]
@@ -2391,5 +3178,120 @@ mod tests {
         assert!(error.message.contains("target failed"));
         assert!(error.message.contains("safety failed"));
         assert!(error.message.contains("state may be partial"));
+    }
+
+    #[test]
+    fn subagent_updates_accumulate_activity_and_ignore_lifecycle_regressions() {
+        let mut session = AgentSessionRecord::new(
+            "subagent-projection".into(),
+            PathBuf::from("/repo"),
+            "codex".into(),
+            AgentSessionPermissionMode::Workspace,
+            1,
+            None,
+            CheckpointConfig::default(),
+            CheckpointBackend::Local,
+        );
+        session.upsert_subagent(subagent_fixture(
+            "active",
+            "working",
+            10,
+            vec![AgentSubagentActivity {
+                id: "activity-1".into(),
+                kind: "command".into(),
+                status: "started".into(),
+                text: "cargo test".into(),
+                timestamp_ms: 10,
+            }],
+        ));
+        session.upsert_subagent(subagent_fixture(
+            "unknown",
+            "working",
+            20,
+            vec![AgentSubagentActivity {
+                id: "activity-2".into(),
+                kind: "command".into(),
+                status: "completed".into(),
+                text: "passed".into(),
+                timestamp_ms: 20,
+            }],
+        ));
+        session.upsert_subagent(subagent_fixture("running", "working", 25, Vec::new()));
+        let mut completed = subagent_fixture("completed", "completed", 30, Vec::new());
+        completed.capabilities.direct_input = false;
+        completed.capabilities.steer = false;
+        completed.capabilities.interrupt = false;
+        completed.capabilities.wait = false;
+        completed.capabilities.close = false;
+        session.upsert_subagent(completed);
+        session.upsert_subagent(subagent_fixture("active", "working", 40, Vec::new()));
+
+        let child = &session.to_contract().subagents[0];
+        assert_eq!(child.thread_status, "completed");
+        assert!(!child.capabilities.direct_input);
+        assert_eq!(child.activities.len(), 2);
+    }
+
+    #[test]
+    fn sparse_idle_status_preserves_explicit_followup_capabilities() {
+        let mut session = AgentSessionRecord::new(
+            "capability-merge".into(),
+            PathBuf::from("/repo"),
+            "codex".into(),
+            AgentSessionPermissionMode::Workspace,
+            1,
+            None,
+            CheckpointConfig::default(),
+            CheckpointBackend::Local,
+        );
+        let mut initial = subagent_fixture("active", "working", 10, Vec::new());
+        initial.capabilities.direct_input = true;
+        initial.capabilities.steer = true;
+        session.upsert_subagent(initial);
+        let mut idle = subagent_fixture("idle", "waiting", 20, Vec::new());
+        idle.source_kind = "subAgent".into();
+        idle.parent_id = None;
+        idle.depth = 0;
+        idle.agent_path.clear();
+        idle.nickname = None;
+        idle.role = None;
+        idle.model = None;
+        idle.reasoning_effort = None;
+        idle.runtime = None;
+        idle.approval_policy = None;
+        idle.permission_mode = None;
+        idle.capacity = None;
+        idle.runtime_state = None;
+        idle.capabilities = AgentSubagentCapabilities {
+            inspect: true,
+            direct_input: false,
+            steer: false,
+            interrupt: false,
+            wait: false,
+            close: false,
+        };
+        idle.updated_at_ms = 20;
+        session.upsert_subagent(idle);
+        let child = &session.to_contract().subagents[0];
+        assert!(child.capabilities.direct_input);
+        assert!(child.capabilities.steer);
+    }
+
+    #[test]
+    fn child_permission_is_never_widened_for_turn_start() {
+        assert_eq!(
+            narrowed_subagent_permission_mode(
+                AgentSessionPermissionMode::Workspace,
+                Some("dangerFullAccess"),
+            ),
+            AgentSessionPermissionMode::Workspace
+        );
+        assert_eq!(
+            narrowed_subagent_permission_mode(
+                AgentSessionPermissionMode::FullAccess,
+                Some("workspaceWrite"),
+            ),
+            AgentSessionPermissionMode::Workspace
+        );
     }
 }

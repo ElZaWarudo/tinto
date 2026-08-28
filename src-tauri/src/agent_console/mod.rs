@@ -12,6 +12,16 @@ pub mod pty;
 pub mod session;
 pub mod validation;
 
+pub(crate) const MAX_PROVIDER_TIMELINE_TEXT_CHARS: usize = 16_384;
+pub(crate) const MAX_SUBAGENT_THREADS: usize = 4_096;
+
+pub(crate) fn sanitize_provider_timeline_text(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_PROVIDER_TIMELINE_TEXT_CHARS)
+        .collect()
+}
+
 use std::{
     collections::HashMap,
     fmt,
@@ -23,7 +33,7 @@ use std::{
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionContextSummary, AgentSessionError,
     AgentSessionFeedback, AgentSessionLimits, AgentSessionPermissionMode, AgentSessionResumeMode,
-    AgentSessionRuntimeOptions, AgentSessionTimelineItem,
+    AgentSessionRuntimeOptions, AgentSessionTimelineItem, AgentSubagentThread,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -558,6 +568,90 @@ impl AgentSessionRegistry {
         session.interrupt_turn()
     }
 
+    pub fn session_supports_subagents(&self, session_id: &str) -> Result<bool, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        Ok(session.supports_subagents())
+    }
+
+    pub fn discover_session_subagents(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.discover_subagents()
+    }
+
+    pub fn write_session_subagent_turn(
+        &mut self,
+        session_id: &str,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.write_subagent_turn(thread_id, text, attachments, options)
+    }
+
+    pub fn steer_session_subagent_turn(
+        &mut self,
+        session_id: &str,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.steer_subagent_turn(thread_id, text, attachments)
+    }
+
+    pub fn interrupt_session_subagent_turn(
+        &mut self,
+        session_id: &str,
+        thread_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.interrupt_subagent_turn(thread_id)
+    }
+
+    pub fn wait_session_subagent(
+        &mut self,
+        session_id: &str,
+        thread_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.wait_subagent(thread_id)
+    }
+
+    pub fn close_session_subagent(
+        &mut self,
+        session_id: &str,
+        thread_id: &str,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.close_subagent(thread_id)
+    }
+
     pub fn session_supports_context_compaction(
         &self,
         session_id: &str,
@@ -836,6 +930,32 @@ impl AgentSessionRegistry {
             .get_mut(&item.session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(&item.session_id))?;
         session.record_timeline_item(item);
+        Ok(())
+    }
+
+    pub fn record_session_subagent_timeline_item(
+        &mut self,
+        session_id: &str,
+        thread_id: &str,
+        item: AgentSessionTimelineItem,
+    ) -> Result<bool, AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        Ok(session.record_subagent_timeline_item(thread_id, item))
+    }
+
+    pub fn upsert_session_subagent(
+        &mut self,
+        session_id: &str,
+        subagent: AgentSubagentThread,
+    ) -> Result<(), AgentConsoleError> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
+        session.upsert_subagent(subagent);
         Ok(())
     }
 

@@ -14,6 +14,7 @@ use crate::{
     bus::contract::{
         AgentRuntimeCatalog, AgentSessionAcpPermission, AgentSessionAcpRuntime,
         AgentSessionGoalStatus, AgentSessionPermissionMode, AgentSessionRuntimeOptions,
+        AgentSubagentThread,
     },
     wsl_agent::shell_env::agent_console_script,
 };
@@ -187,8 +188,73 @@ pub trait AgentProcess: Send {
             "este runtime no admite objetivos persistentes",
         ))
     }
+
+    /// Optional provider-owned descendant projection. PTY and ACP runtimes
+    /// retain the safe no-op defaults; Codex app-server overrides these hooks.
+    fn supports_subagents(&self) -> bool {
+        false
+    }
+    fn discover_subagents(&mut self) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "subagents_unsupported",
+            "este runtime no admite subagentes nativos",
+        ))
+    }
+    fn write_subagent_turn(
+        &mut self,
+        _thread_id: &str,
+        _text: &str,
+        _attachments: &[AgentTurnAttachment],
+        _options: Option<AgentSessionRuntimeOptions>,
+    ) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "subagent_unsupported",
+            "este runtime no admite entrada directa a subagentes",
+        ))
+    }
+    fn write_subagent_turn_with_metadata(
+        &mut self,
+        thread_id: &str,
+        text: &str,
+        attachments: &[AgentTurnAttachment],
+        options: Option<AgentSessionRuntimeOptions>,
+        _permission_mode: AgentSessionPermissionMode,
+        _approval_policy: Option<&str>,
+    ) -> Result<(), AgentConsoleError> {
+        self.write_subagent_turn(thread_id, text, attachments, options)
+    }
+    fn steer_subagent_turn(
+        &mut self,
+        _thread_id: &str,
+        _text: &str,
+        _attachments: &[AgentTurnAttachment],
+    ) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "subagent_steer_unsupported",
+            "este runtime no admite intervenir en subagentes",
+        ))
+    }
+    fn interrupt_subagent_turn(&mut self, _thread_id: &str) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "subagent_interrupt_unsupported",
+            "este runtime no admite interrumpir subagentes",
+        ))
+    }
+    fn wait_subagent(&mut self, _thread_id: &str) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "subagent_wait_unsupported",
+            "este runtime no admite esperar subagentes",
+        ))
+    }
+    fn close_subagent(&mut self, _thread_id: &str) -> Result<(), AgentConsoleError> {
+        Err(AgentConsoleError::new(
+            "subagent_close_unsupported",
+            "este runtime no admite cerrar subagentes",
+        ))
+    }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProcessEvent {
     FileActivity {
@@ -210,6 +276,16 @@ pub enum AgentProcessEvent {
     ContextUsageUpdated {
         used_tokens: u64,
         model_context_window: u64,
+    },
+    SubagentUpdated {
+        subagent: AgentSubagentThread,
+    },
+    SubagentTimeline {
+        thread_id: String,
+        item: crate::bus::contract::AgentSessionTimelineItem,
+    },
+    SubagentDiscoveryFailed {
+        error: AgentConsoleError,
     },
 }
 

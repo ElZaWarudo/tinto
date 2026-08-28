@@ -696,11 +696,12 @@ fn timeline_before_user_message(
 }
 
 #[derive(Debug, Deserialize)]
-struct TimelineFrame {
-    kind: AgentSessionTimelineKind,
-    text: String,
-    raw_output: Option<Vec<u8>>,
-    turn_done: bool,
+pub(crate) struct TimelineFrame {
+    pub(crate) kind: AgentSessionTimelineKind,
+    pub(crate) text: String,
+    pub(crate) raw_output: Option<Vec<u8>>,
+    pub(crate) turn_done: bool,
+    pub(crate) thread_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -714,6 +715,8 @@ struct TimelineFrameWire {
     raw_output_base64: Option<String>,
     #[serde(default)]
     turn_done: bool,
+    #[serde(default)]
+    thread_id: Option<String>,
 }
 
 #[tauri::command]
@@ -1188,6 +1191,164 @@ pub fn interrupt_agent_session_turn(
     registry
         .interrupt_session_turn(&session_id)
         .map_err(CommandError::from)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn write_agent_subagent_turn(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    thread_id: String,
+    text: String,
+    attachment_paths: Vec<String>,
+    options: Option<AgentSessionRuntimeOptions>,
+) -> Result<(), CommandError> {
+    if text.trim().is_empty() && attachment_paths.is_empty() {
+        return Err(CommandError::new(
+            "invalid_input",
+            "el mensaje o los archivos adjuntos no pueden estar vacios",
+        ));
+    }
+    if attachment_paths.len() > 10 {
+        return Err(CommandError::new(
+            "too_many_attachments",
+            "puedes adjuntar hasta 10 archivos por turno",
+        ));
+    }
+    let attachments = attachment_paths
+        .into_iter()
+        .map(PathBuf::from)
+        .map(validate_agent_attachment_path)
+        .collect::<Result<Vec<_>, _>>()?;
+    let text = if text.trim().is_empty() {
+        "Revisa los archivos adjuntos.".to_string()
+    } else {
+        text
+    };
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .write_session_subagent_turn(&session_id, &thread_id, &text, &attachments, options)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    emit_timeline_item_for_thread(
+        &app,
+        &session_id,
+        Some(&thread_id),
+        AgentSessionTimelineKind::UserMessage,
+        Some(text),
+        now_ms(),
+        attachments
+            .iter()
+            .map(|attachment| AgentSessionAttachment {
+                path: attachment.path.clone(),
+                name: attachment
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "archivo".to_string()),
+                is_image: attachment.is_image,
+            })
+            .collect(),
+    );
+    refresh_and_emit_sessions(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn steer_agent_subagent_turn(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    thread_id: String,
+    text: String,
+    attachment_paths: Vec<String>,
+) -> Result<(), CommandError> {
+    if text.trim().is_empty() && attachment_paths.is_empty() {
+        return Err(CommandError::new(
+            "invalid_input",
+            "el mensaje o los archivos adjuntos no pueden estar vacios",
+        ));
+    }
+    if attachment_paths.len() > 10 {
+        return Err(CommandError::new(
+            "too_many_attachments",
+            "puedes adjuntar hasta 10 archivos por mensaje",
+        ));
+    }
+    let attachments = attachment_paths
+        .into_iter()
+        .map(PathBuf::from)
+        .map(validate_agent_attachment_path)
+        .collect::<Result<Vec<_>, _>>()?;
+    let text = if text.trim().is_empty() {
+        "Revisa los archivos adjuntos.".to_string()
+    } else {
+        text
+    };
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .steer_session_subagent_turn(&session_id, &thread_id, &text, &attachments)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    emit_timeline_item_for_thread(
+        &app,
+        &session_id,
+        Some(&thread_id),
+        AgentSessionTimelineKind::SteerMessage,
+        Some(text),
+        now_ms(),
+        Vec::new(),
+    );
+    refresh_and_emit_sessions(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn interrupt_agent_subagent_turn(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    thread_id: String,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .interrupt_session_subagent_turn(&session_id, &thread_id)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    refresh_and_emit_sessions(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn wait_agent_subagent(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    thread_id: String,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .wait_session_subagent(&session_id, &thread_id)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    refresh_and_emit_sessions(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_agent_subagent(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    session_id: String,
+    thread_id: String,
+) -> Result<(), CommandError> {
+    let mut registry = lock_registry(&registry)?;
+    registry
+        .close_session_subagent(&session_id, &thread_id)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    refresh_and_emit_sessions(&app);
     Ok(())
 }
 
@@ -3227,9 +3388,13 @@ fn spawn_output_reader(
                 Ok(read) => {
                     let timestamp_ms = now_ms();
                     last_output_at.store(timestamp_ms, Ordering::Relaxed);
-                    if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
-                        if let Ok(mut registry) = registry.lock() {
-                            let _ = registry.record_session_output(&session_id, timestamp_ms);
+                    let child_output = parse_timeline_frame(&buffer[..read])
+                        .is_some_and(|frame| frame.thread_id.is_some());
+                    if !child_output {
+                        if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
+                            if let Ok(mut registry) = registry.lock() {
+                                let _ = registry.record_session_output(&session_id, timestamp_ms);
+                            }
                         }
                     }
                     let explicit_turn_done = emit_output_without_turn_done_marker(
@@ -3263,7 +3428,7 @@ fn emit_output_without_turn_done_marker(
     timestamp_ms: u64,
 ) -> bool {
     if let Some(frame) = parse_timeline_frame(output) {
-        let turn_done = frame.turn_done;
+        let turn_done = frame.turn_done && frame.thread_id.is_none();
         emit_output_chunk(app, session_id, output, timestamp_ms);
         return turn_done;
     }
@@ -3285,15 +3450,23 @@ fn emit_output_chunk(app: &AppHandle, session_id: &str, chunk: &[u8], timestamp_
         return;
     }
     if let Some(frame) = parse_timeline_frame(chunk) {
+        let target_session_id = frame.thread_id.as_deref().unwrap_or(session_id);
         if let Some(raw_output) = frame.raw_output {
             let payload = AgentSessionOutput {
-                session_id: session_id.to_string(),
+                session_id: target_session_id.to_string(),
                 chunk_base64: STANDARD.encode(&raw_output),
                 timestamp_ms,
             };
             let _ = app.emit(EVENT_AGENT_SESSION_OUTPUT, payload);
         }
-        emit_timeline_text(app, session_id, frame.kind, Some(frame.text), timestamp_ms);
+        emit_timeline_text_for_thread(
+            app,
+            session_id,
+            frame.thread_id.as_deref(),
+            frame.kind,
+            Some(frame.text),
+            timestamp_ms,
+        );
         return;
     }
     let payload = AgentSessionOutput {
@@ -3311,7 +3484,7 @@ fn emit_output_chunk(app: &AppHandle, session_id: &str, chunk: &[u8], timestamp_
     );
 }
 
-fn parse_timeline_frame(chunk: &[u8]) -> Option<TimelineFrame> {
+pub(crate) fn parse_timeline_frame(chunk: &[u8]) -> Option<TimelineFrame> {
     let payload = chunk.strip_prefix(TIMELINE_FRAME_PREFIX)?;
     let payload = payload.strip_suffix(b"\n").unwrap_or(payload);
     let wire: TimelineFrameWire = serde_json::from_slice(payload).ok()?;
@@ -3335,6 +3508,7 @@ fn parse_timeline_frame(chunk: &[u8]) -> Option<TimelineFrame> {
         text,
         raw_output,
         turn_done: wire.turn_done,
+        thread_id: wire.thread_id,
     })
 }
 
@@ -3348,9 +3522,40 @@ fn emit_timeline_text(
     emit_timeline_item(app, session_id, kind, text, timestamp_ms, Vec::new());
 }
 
+fn emit_timeline_text_for_thread(
+    app: &AppHandle,
+    root_session_id: &str,
+    thread_id: Option<&str>,
+    kind: AgentSessionTimelineKind,
+    text: Option<String>,
+    timestamp_ms: u64,
+) {
+    emit_timeline_item_for_thread(
+        app,
+        root_session_id,
+        thread_id,
+        kind,
+        text,
+        timestamp_ms,
+        Vec::new(),
+    );
+}
+
 fn emit_timeline_item(
     app: &AppHandle,
     session_id: &str,
+    kind: AgentSessionTimelineKind,
+    text: Option<String>,
+    timestamp_ms: u64,
+    attachments: Vec<AgentSessionAttachment>,
+) {
+    emit_timeline_item_for_thread(app, session_id, None, kind, text, timestamp_ms, attachments);
+}
+
+fn emit_timeline_item_for_thread(
+    app: &AppHandle,
+    root_session_id: &str,
+    thread_id: Option<&str>,
     kind: AgentSessionTimelineKind,
     text: Option<String>,
     timestamp_ms: u64,
@@ -3363,10 +3568,10 @@ fn emit_timeline_item(
         return;
     }
     let payload = AgentSessionTimelineItem {
-        session_id: session_id.to_string(),
+        session_id: thread_id.unwrap_or(root_session_id).to_string(),
         id: format!(
             "{}:{}:{}",
-            session_id,
+            root_session_id,
             timestamp_ms,
             TIMELINE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ),
@@ -3375,16 +3580,33 @@ fn emit_timeline_item(
         timestamp_ms,
         attachments,
     };
-    record_timeline_item(app, payload.clone());
+    record_timeline_item_for_thread(app, root_session_id, thread_id, payload.clone());
     let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, payload);
 }
 
 fn record_timeline_item(app: &AppHandle, item: AgentSessionTimelineItem) {
+    let session_id = item.session_id.clone();
+    record_timeline_item_for_thread(app, &session_id, None, item);
+}
+
+fn record_timeline_item_for_thread(
+    app: &AppHandle,
+    root_session_id: &str,
+    thread_id: Option<&str>,
+    item: AgentSessionTimelineItem,
+) {
     let mut session_snapshot = None;
+    let mut accepted = thread_id.is_none();
     if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
         if let Ok(mut registry) = registry.lock() {
-            let _ = registry.record_session_timeline_item(item.clone());
-            session_snapshot = registry.get_session(&item.session_id);
+            if let Some(thread_id) = thread_id {
+                accepted = registry
+                    .record_session_subagent_timeline_item(root_session_id, thread_id, item.clone())
+                    .unwrap_or(false);
+            } else {
+                accepted = registry.record_session_timeline_item(item.clone()).is_ok();
+            }
+            session_snapshot = registry.get_session(root_session_id);
         }
     }
     if let Some(journal) = app.try_state::<Mutex<AgentJournal>>() {
@@ -3392,9 +3614,17 @@ fn record_timeline_item(app: &AppHandle, item: AgentSessionTimelineItem) {
             if let Some(session) = session_snapshot.as_ref() {
                 let _ = journal.record_session(session);
             }
-            let _ = journal.record_timeline_item(&item);
+            if let Some(thread_id) = accepted_subagent_journal_target(thread_id, accepted) {
+                let _ = journal.record_subagent_timeline_item(root_session_id, thread_id, &item);
+            } else if thread_id.is_none() && accepted {
+                let _ = journal.record_timeline_item(&item);
+            }
         }
     }
+}
+
+fn accepted_subagent_journal_target(thread_id: Option<&str>, accepted: bool) -> Option<&str> {
+    thread_id.filter(|_| accepted)
 }
 
 fn timeline_text_from_input(input: &[u8]) -> Option<String> {
@@ -4190,6 +4420,19 @@ Authorization = { command = "npx" }
         }
 
         assert!(!safe_codex_config_path(&config));
+    }
+
+    #[test]
+    fn rejected_child_timeline_items_have_no_journal_target() {
+        assert_eq!(
+            accepted_subagent_journal_target(Some("accepted-child"), true),
+            Some("accepted-child")
+        );
+        assert_eq!(
+            accepted_subagent_journal_target(Some("overflow-child"), false),
+            None
+        );
+        assert_eq!(accepted_subagent_journal_target(None, true), None);
     }
 
     fn run_git_test_command(repo: &Path, args: &[&str]) {

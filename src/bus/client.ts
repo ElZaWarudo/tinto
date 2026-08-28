@@ -318,6 +318,47 @@ export const steerAgentSessionTurn = (sessionId: string, text: string, attachmen
 export const interruptAgentSessionTurn = (sessionId: string) =>
   invoke("interrupt_agent_session_turn", { sessionId });
 
+/** Direct Codex descendant controls. The root session id and provider thread
+ * id are always sent together so a selected child cannot be mis-targeted. */
+export const writeAgentSubagentTurn = (
+  sessionId: string,
+  threadId: string,
+  text: string,
+  attachmentPaths: string[],
+  options?: AgentSessionRuntimeOptions,
+) =>
+  invoke("write_agent_subagent_turn", {
+    sessionId,
+    threadId,
+    text,
+    attachmentPaths,
+    options: options ?? null,
+  });
+
+export const steerAgentSubagentTurn = (
+  sessionId: string,
+  threadId: string,
+  text: string,
+  attachmentPaths: string[],
+) =>
+  invoke("steer_agent_subagent_turn", {
+    sessionId,
+    threadId,
+    text,
+    attachmentPaths,
+  });
+
+export const interruptAgentSubagentTurn = (sessionId: string, threadId: string) =>
+  invoke("interrupt_agent_subagent_turn", { sessionId, threadId });
+
+/** Wait/close are parent-mediated Codex actions; these wrappers never archive
+ * or delete the child thread. */
+export const waitAgentSubagent = (sessionId: string, threadId: string) =>
+  invoke("wait_agent_subagent", { sessionId, threadId });
+
+export const closeAgentSubagent = (sessionId: string, threadId: string) =>
+  invoke("close_agent_subagent", { sessionId, threadId });
+
 export const getAgentImagePreview = (path: string) =>
   invoke<string | null>("get_agent_image_preview", { path });
 

@@ -526,6 +526,8 @@ pub struct AgentSession {
     pub turn_checkpoints: Vec<AgentSessionTurnCheckpoint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timeline: Vec<AgentSessionTimelineItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<AgentSubagentThread>,
     #[serde(default, skip_serializing_if = "AgentSessionRuntimeOptions::is_empty")]
     pub runtime_options: AgentSessionRuntimeOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -594,6 +596,106 @@ pub struct AgentSessionTimelineItem {
     pub timestamp_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AgentSessionAttachment>,
+}
+
+/// Capability projection for one provider-owned descendant. Each operation is
+/// independently gated because Codex may expose different controls by state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSubagentCapabilities {
+    #[serde(default = "default_true")]
+    pub inspect: bool,
+    #[serde(default)]
+    pub direct_input: bool,
+    #[serde(default)]
+    pub steer: bool,
+    #[serde(default)]
+    pub interrupt: bool,
+    #[serde(default)]
+    pub wait: bool,
+    #[serde(default)]
+    pub close: bool,
+}
+
+/// Provider activity is deliberately string-valued so a future Codex item or
+/// status is retained rather than making the whole session impossible to
+/// deserialize.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSubagentActivity {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub text: String,
+    pub timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSubagentResult {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub updated_at_ms: u64,
+}
+
+/// Additive Codex descendant projection. Unknown provider values remain inert
+/// strings, while bounded transcripts and activity stay attached to the
+/// provider thread instead of being merged into the root conversation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSubagentThread {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub source_kind: String,
+    pub depth: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_path: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<u32>,
+    pub thread_status: String,
+    pub turn_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collaboration_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collaboration_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consolidation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_request_id: Option<String>,
+    /// Bounded prompt captured from the provider's spawn/collaboration item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Bounded provider preview (usually the first user message).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    pub capabilities: AgentSubagentCapabilities,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activities: Vec<AgentSubagentActivity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<AgentSubagentResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline: Vec<AgentSessionTimelineItem>,
+    pub updated_at_ms: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Guarda de tamaño para contenido de archivos/blobs.
@@ -1060,6 +1162,7 @@ mod tests {
                 timestamp_ms: 1760000000001,
             }],
             turn_status: AgentSessionTurnStatus::Working,
+            subagents: Vec::new(),
             turn_checkpoints: vec![AgentSessionTurnCheckpoint {
                 id: "sess-1:turn-1".into(),
                 index: 1,

@@ -284,6 +284,7 @@ export interface AgentSession {
   turn_status: AgentSessionTurnStatus;
   turn_checkpoints?: AgentSessionTurnCheckpoint[];
   timeline?: AgentSessionTimelineItem[];
+  subagents?: AgentSubagentThread[];
   runtime_options?: AgentSessionRuntimeOptions;
   goal?: AgentSessionGoal | null;
   personality?: AgentSessionPersonality | null;
@@ -297,6 +298,60 @@ export interface AgentSession {
   active_sessions: number;
   age_ms: number;
   output_bytes_per_second?: number | null;
+}
+
+export interface AgentSubagentCapabilities {
+  inspect: boolean;
+  direct_input: boolean;
+  steer: boolean;
+  interrupt: boolean;
+  wait: boolean;
+  close: boolean;
+}
+
+export interface AgentSubagentActivity {
+  id: string;
+  kind: string;
+  status: string;
+  text: string;
+  timestamp_ms: number;
+}
+
+export interface AgentSubagentResult {
+  status: string;
+  summary?: string | null;
+  error?: string | null;
+  updated_at_ms: number;
+}
+
+export interface AgentSubagentThread {
+  id: string;
+  parent_id?: string | null;
+  source_kind: string;
+  depth: number;
+  agent_path?: string[];
+  nickname?: string | null;
+  role?: string | null;
+  model?: string | null;
+  reasoning_effort?: string | null;
+  runtime?: string | null;
+  approval_policy?: string | null;
+  permission_mode?: string | null;
+  capacity?: number | null;
+  thread_status: string;
+  turn_status: string;
+  collaboration_status?: string | null;
+  collaboration_tool?: string | null;
+  consolidation_id?: string | null;
+  runtime_state?: string | null;
+  approval_request_id?: string | null;
+  prompt?: string | null;
+  preview?: string | null;
+  capabilities: AgentSubagentCapabilities;
+  activities?: AgentSubagentActivity[];
+  result?: AgentSubagentResult | null;
+  timeline?: AgentSessionTimelineItem[];
+  updated_at_ms: number;
 }
 
 export interface AgentSessionOutput {
@@ -726,6 +781,10 @@ export interface CuratedBusContractTypeMap {
   AgentSessionFeedback: AgentSessionFeedback;
   AgentSessionContextSummary: AgentSessionContextSummary;
   AgentSessionContextUsage: AgentSessionContextUsage;
+  AgentSubagentCapabilities: AgentSubagentCapabilities;
+  AgentSubagentActivity: AgentSubagentActivity;
+  AgentSubagentResult: AgentSubagentResult;
+  AgentSubagentThread: AgentSubagentThread;
   // The generated wire requires this capability flag; the curated facade keeps
   // it optional so legacy archived sessions remain assignable.
   AgentSession: AgentSession & { permission_mode_change_supported: boolean };
