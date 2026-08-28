@@ -15,6 +15,7 @@ import {
   getAgentImagePreview,
   getAgentRuntimeCatalog,
   interruptAgentSessionTurn,
+  interruptAgentSubagentTurn,
   listAgentSessions,
   listMcpProfiles,
   listWorkbenches,
@@ -32,6 +33,10 @@ import {
   runAgentHostCommand,
   stopAgentSession,
   steerAgentSessionTurn,
+  steerAgentSubagentTurn,
+  waitAgentSubagent,
+  closeAgentSubagent,
+  writeAgentSubagentTurn,
   writeAgentSessionInput,
   writeAgentSessionTurn,
 } from "../../bus/client";
@@ -73,6 +78,7 @@ import {
   type CodexSpeedSelection,
 } from "./agentRuntimeCatalog";
 import { loadFavoriteRuntimePreset } from "./runtimePresets";
+import { AgentTreeLens } from "./AgentTreeLens";
 
 export interface TerminalPanelParams {
   sessionId: string;
@@ -248,7 +254,7 @@ const AGENT_SKILL_SHORTCUTS = [
 ] as const;
 
 type AgentLensScope = "focused" | "session";
-type AgentLensTab = "files" | "commands" | "timeline";
+type AgentLensTab = "files" | "commands" | "timeline" | "agents";
 type AgentComposerCommandScope = "Codex" | "Tinto" | "Habilidad";
 type AgentComposerCommandTrigger = "/" | "$";
 type AgentComposerHostCommand =
@@ -394,7 +400,7 @@ const CODEX_HOST_COMMANDS: Array<{
   },
 ];
 
-const AGENT_LENS_TAB_ORDER: AgentLensTab[] = ["files", "commands", "timeline"];
+const AGENT_LENS_TAB_ORDER: AgentLensTab[] = ["files", "commands", "timeline", "agents"];
 const COMPOSER_SLASH_TRIGGER_RE = /(^|\s)(\/)([^\s/$]*)$/;
 const COMPOSER_SKILL_TRIGGER_RE = /(^|\s)(\$)([^\s/$]*)$/;
 const COMPOSER_COMMAND_LINE_RE = /(^|\n)([/$])([^\s/$]*)(?:[^\n]*)$/;
@@ -2379,9 +2385,19 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                 turns={turns}
                 focusedTurn={focusedTurn}
                 repo={sessionRepo}
+                readOnly={readOnly}
                 canRevertTurnFile={canRevertTurnFile}
                 canPromptForFile={canCompose}
                 revertingFile={revertingFile}
+                onSubagentDirectInput={(threadId, text) =>
+                  writeAgentSubagentTurn(sessionId, threadId, text, [])
+                }
+                onSubagentSteer={(threadId, text) =>
+                  steerAgentSubagentTurn(sessionId, threadId, text, [])
+                }
+                onSubagentInterrupt={(threadId) => interruptAgentSubagentTurn(sessionId, threadId)}
+                onSubagentWait={(threadId) => waitAgentSubagent(sessionId, threadId)}
+                onSubagentClose={(threadId) => closeAgentSubagent(sessionId, threadId)}
                 onOpenFile={(path) => {
                   openSessionFile?.(path);
                 }}
@@ -5716,23 +5732,35 @@ function AgentLens({
   turns,
   focusedTurn,
   repo,
+  readOnly,
   canRevertTurnFile,
   canPromptForFile,
   revertingFile,
   onOpenFile,
   onPromptFile,
   onRevertTurnFile,
+  onSubagentDirectInput,
+  onSubagentSteer,
+  onSubagentInterrupt,
+  onSubagentWait,
+  onSubagentClose,
 }: {
   session: AgentSession;
   turns: AgentTurnView[];
   focusedTurn: AgentTurnView | null;
   repo: string | undefined;
+  readOnly: boolean;
   canRevertTurnFile: boolean;
   canPromptForFile: boolean;
   revertingFile: string | null;
   onOpenFile: (path: string) => void;
   onPromptFile: (context: AgentLensFilePromptContext) => void;
   onRevertTurnFile: (turnCheckpointId: string, path: string) => void;
+  onSubagentDirectInput: (threadId: string, text: string) => Promise<unknown>;
+  onSubagentSteer: (threadId: string, text: string) => Promise<unknown>;
+  onSubagentInterrupt: (threadId: string) => Promise<unknown>;
+  onSubagentWait: (threadId: string) => Promise<unknown>;
+  onSubagentClose: (threadId: string) => Promise<unknown>;
 }) {
   const [activeTab, setActiveTab] = useState<AgentLensTab>("files");
   const [scope, setScope] = useState<AgentLensScope>("focused");
@@ -5956,7 +5984,12 @@ function AgentLens({
         role="tablist"
         aria-label="Vistas de Agent Lens"
         aria-orientation="horizontal"
-        title={agentLensTabListTitle(fileItems.length, commandItems.length, timelineItems.length)}
+        title={agentLensTabListTitle(
+          fileItems.length,
+          commandItems.length,
+          timelineItems.length,
+          session.subagents?.length ?? 0,
+        )}
       >
         <AgentLensTabButton
           active={activeTab === "files"}
@@ -5984,6 +6017,35 @@ function AgentLens({
           label="Timeline"
           onClick={() => activateTab("timeline")}
           onKeyDown={(event) => handleTabKeyDown(event, "timeline")}
+        />
+        <AgentLensTabButton
+          active={activeTab === "agents"}
+          controlsId={agentLensPanelId(session.id, "agents")}
+          count={session.subagents?.length ?? 0}
+          id={agentLensTabId(session.id, "agents")}
+          label="Agents"
+          onClick={() => activateTab("agents")}
+          onKeyDown={(event) => handleTabKeyDown(event, "agents")}
+        />
+      </div>
+
+      <div
+        hidden={activeTab !== "agents"}
+        className="agent-panel__lens-view"
+        aria-label="Vista de agentes de Agent Lens"
+        aria-labelledby={agentLensTabId(session.id, "agents")}
+        id={agentLensPanelId(session.id, "agents")}
+        role="tabpanel"
+        title="Jerarquía completa de agentes y descendientes de Agent Lens."
+      >
+        <AgentTreeLens
+          session={session}
+          readOnly={readOnly}
+          onDirectInput={onSubagentDirectInput}
+          onSteer={onSubagentSteer}
+          onInterrupt={onSubagentInterrupt}
+          onWait={onSubagentWait}
+          onClose={onSubagentClose}
         />
       </div>
 
@@ -6799,8 +6861,9 @@ function agentLensTabListTitle(
   fileCount: number,
   commandCount: number,
   timelineCount: number,
+  agentCount = 0,
 ): string {
-  return `Pestañas de vistas de Agent Lens: ${countLabel(fileCount, "archivo", "archivos")}, ${countLabel(commandCount, "salida de comando", "salidas de comandos")}, ${countLabel(timelineCount, "evento de Timeline", "eventos de Timeline")}.`;
+  return `Pestañas de vistas de Agent Lens: ${countLabel(fileCount, "archivo", "archivos")}, ${countLabel(commandCount, "salida de comando", "salidas de comandos")}, ${countLabel(timelineCount, "evento de Timeline", "eventos de Timeline")}, ${countLabel(agentCount, "descendiente", "descendientes")}.`;
 }
 
 function agentLensScopeTitle(scope: AgentLensScope, focusedTurnIndex: number | null): string {

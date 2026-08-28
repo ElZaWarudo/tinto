@@ -7863,6 +7863,274 @@ select option:checked {
   padding: 14px;
 }
 
+.agent-panel__lens-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.agent-panel__subagents {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--fg);
+}
+
+.agent-panel__subagents-head,
+.agent-panel__subagent-detail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-panel__subagents-head > div,
+.agent-panel__subagent-detail-head {
+  min-width: 0;
+}
+
+.agent-panel__subagents-head strong,
+.agent-panel__subagent-detail-head strong {
+  font-size: 12px;
+}
+
+.agent-panel__subagents-head small,
+.agent-panel__subagent-detail-head span,
+.agent-panel__subagent-transcript small,
+.agent-panel__subagent-meta dt {
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+
+.agent-panel__subagents-head small {
+  display: block;
+  margin-top: 2px;
+}
+
+.agent-panel__subagents-head > span {
+  max-width: 55%;
+  color: var(--fg-muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+.agent-panel__subagents-tree {
+  min-height: 0;
+  max-height: 220px;
+  overflow: auto;
+  border-block: 1px solid var(--agent-rule);
+}
+
+.agent-panel__subagent-treeitem {
+  min-width: 0;
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  padding-inline-start: calc(6px + (var(--agent-tree-level, 1) - 1) * 14px);
+  border-inline-start: 2px solid transparent;
+  cursor: pointer;
+  outline: none;
+}
+
+.agent-panel__subagent-treeitem:hover,
+.agent-panel__subagent-treeitem--selected {
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.agent-panel__subagent-treeitem:focus-visible {
+  border-inline-start-color: rgba(20, 184, 166, 0.8);
+  outline: 2px solid rgba(20, 184, 166, 0.55);
+  outline-offset: -2px;
+}
+
+.agent-panel__subagent-toggle {
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-panel__subagent-toggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.agent-panel__subagent-name,
+.agent-panel__subagent-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-panel__subagent-name {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-panel__subagent-status {
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--fg-muted);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.agent-panel__subagent-status--running,
+.agent-panel__subagent-status--working {
+  background: rgba(20, 184, 166, 0.14);
+  color: #99f6e4;
+}
+
+.agent-panel__subagent-status--completed {
+  color: #bbf7d0;
+}
+
+.agent-panel__subagent-status--errored,
+.agent-panel__subagent-status--failed {
+  color: #fecaca;
+}
+
+.agent-panel__subagent-detail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 2px;
+}
+
+.agent-panel__subagent-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.agent-panel__subagent-meta div {
+  min-width: 0;
+}
+
+.agent-panel__subagent-meta dt {
+  text-transform: uppercase;
+}
+
+.agent-panel__subagent-meta dd {
+  min-width: 0;
+  margin: 2px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.agent-panel__subagent-activity,
+.agent-panel__subagent-result,
+.agent-panel__subagent-transcript {
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--agent-rule);
+  background: #131313;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.agent-panel__subagent-activity b,
+.agent-panel__subagent-result b,
+.agent-panel__subagent-transcript > b {
+  color: var(--fg-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.agent-panel__subagent-result p,
+.agent-panel__subagent-transcript p {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-panel__subagent-transcript {
+  max-height: 230px;
+  overflow: auto;
+}
+
+.agent-panel__subagent-transcript article {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--agent-rule);
+}
+
+.agent-panel__subagent-transcript article p {
+  margin: 3px 0 0;
+}
+
+.agent-panel__subagent-controls {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.agent-panel__subagent-controls label {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.agent-panel__subagent-controls textarea {
+  min-height: 48px;
+  resize: vertical;
+  padding: 6px;
+  border: 1px solid var(--agent-rule);
+  border-radius: 4px;
+  background: #0d0d0d;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+}
+
+.agent-panel__subagent-controls button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 5px;
+  border: 1px solid var(--agent-rule);
+  border-radius: 4px;
+  background: #171717;
+  color: var(--fg);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.agent-panel__subagent-controls button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.agent-panel__subagent-controls button:focus-visible,
+.agent-panel__subagent-controls textarea:focus-visible,
+.agent-panel__subagent-toggle:focus-visible {
+  outline: 2px solid rgba(20, 184, 166, 0.58);
+  outline-offset: 2px;
+}
+
+@media (max-width: 800px) {
+  .agent-panel__lens-tabs,
+  .agent-panel__subagent-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .agent-panel__lens-scope,
 .agent-panel__lens-tabs,
 .agent-panel__lens-filter {

@@ -4,6 +4,7 @@ import type {
   AgentSessionChange,
   AgentSessionOutput,
   AgentSessionTimelineItem,
+  AgentSubagentThread,
 } from "../bus/contract";
 
 export interface AgentSessionState {
@@ -134,6 +135,19 @@ function normalizeSession(session: AgentSession): AgentSession {
     turn_status: session.turn_status ?? "waiting",
     turn_checkpoints: session.turn_checkpoints ?? [],
     timeline: session.timeline ?? [],
+    subagents: (session.subagents ?? []).map(normalizeSubagent),
+  };
+}
+
+function normalizeSubagent(thread: AgentSubagentThread): AgentSubagentThread {
+  return {
+    ...thread,
+    parent_id: thread.parent_id ?? null,
+    agent_path: thread.agent_path ?? [],
+    activities: (thread.activities ?? []).slice(-2000),
+    timeline: (thread.timeline ?? []).slice(-2000),
+    capabilities: { ...thread.capabilities },
+    result: thread.result ?? null,
   };
 }
 

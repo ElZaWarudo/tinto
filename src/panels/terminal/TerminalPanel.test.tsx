@@ -4605,7 +4605,7 @@ describe("TerminalPanel", () => {
     const lens = await screen.findByLabelText("Agent Lens");
     const filesTab = within(lens).getByRole("tab", { name: /Archivos/ });
     const commandsTab = within(lens).getByRole("tab", { name: /Comandos/ });
-    const timelineTab = within(lens).getByRole("tab", { name: /Timeline/ });
+    const agentsTab = within(lens).getByRole("tab", { name: /Agents/ });
 
     expect(filesTab).toHaveAttribute("aria-selected", "true");
     filesTab.focus();
@@ -4620,12 +4620,12 @@ describe("TerminalPanel", () => {
     );
 
     await user.keyboard("{End}");
-    await waitFor(() => expect(timelineTab).toHaveFocus());
-    expect(timelineTab).toHaveAttribute("aria-selected", "true");
-    expect(timelineTab).toHaveAttribute("tabindex", "0");
-    expect(within(lens).getByRole("tabpanel", { name: /Timeline/ })).toHaveAttribute(
+    await waitFor(() => expect(agentsTab).toHaveFocus());
+    expect(agentsTab).toHaveAttribute("aria-selected", "true");
+    expect(agentsTab).toHaveAttribute("tabindex", "0");
+    expect(within(lens).getByRole("tabpanel", { name: /Agents/i })).toHaveAttribute(
       "id",
-      "agent-lens-sess-1-timeline-panel",
+      "agent-lens-sess-1-agents-panel",
     );
 
     await user.keyboard("{Home}");
