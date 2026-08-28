@@ -2372,6 +2372,24 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
               turns={overview.turns}
             />
           )}
+          {session && (
+            <div className="agent-panel__lens-pane">
+              <AgentLens
+                session={session}
+                turns={turns}
+                focusedTurn={focusedTurn}
+                repo={sessionRepo}
+                canRevertTurnFile={canRevertTurnFile}
+                canPromptForFile={canCompose}
+                revertingFile={revertingFile}
+                onOpenFile={(path) => {
+                  openSessionFile?.(path);
+                }}
+                onPromptFile={applyFileActionPrompt}
+                onRevertTurnFile={onRevertTurnFile}
+              />
+            </div>
+          )}
           {detailsOpen && session && (
             <AgentMcpPanel readOnly={readOnly} repo={session.repo ?? repo ?? ""} />
           )}
@@ -2426,35 +2444,15 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           )}
           <AgentActivityStrip overview={overview} readOnly={readOnly} session={session} />
           {session && (
-            <>
-              <div className="agent-panel__focus-pane">
-                <AgentTurnFocus
-                  canRestore={canRestoreTurn}
-                  firstTurnAtMs={turns[0]?.startedAtMs ?? null}
-                  onRestoreTurn={(turn) => void onRestoreTurn(turn)}
-                  restoringTurnId={restoringTurnId}
-                  turn={focusedTurn}
-                />
-              </div>
-              {session && (
-                <div className="agent-panel__lens-pane">
-                  <AgentLens
-                    session={session}
-                    turns={turns}
-                    focusedTurn={focusedTurn}
-                    repo={sessionRepo}
-                    canRevertTurnFile={canRevertTurnFile}
-                    canPromptForFile={canCompose}
-                    revertingFile={revertingFile}
-                    onOpenFile={(path) => {
-                      openSessionFile?.(path);
-                    }}
-                    onPromptFile={applyFileActionPrompt}
-                    onRevertTurnFile={onRevertTurnFile}
-                  />
-                </div>
-              )}
-            </>
+            <div className="agent-panel__focus-pane">
+              <AgentTurnFocus
+                canRestore={canRestoreTurn}
+                firstTurnAtMs={turns[0]?.startedAtMs ?? null}
+                onRestoreTurn={(turn) => void onRestoreTurn(turn)}
+                restoringTurnId={restoringTurnId}
+                turn={focusedTurn}
+              />
+            </div>
           )}
         </aside>
       </div>
