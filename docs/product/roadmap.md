@@ -1,4 +1,86 @@
-# Tinto gap-closure roadmap
+# Tinto delivery roadmap
+
+## Active initiative — Codex subagent parity
+
+Created: 2026-08-28
+Status: approved for autonomous local implementation; release requires manual approval
+
+### Product framing
+
+Tinto will become a complete native supervision surface for local Codex
+subagent workflows. Codex continues to orchestrate; Tinto projects, persists,
+restores, and controls the hierarchy through Agent Lens without copying Codex's
+visual design or inventing a second scheduler.
+
+### MVP boundary
+
+#### CSP-001 — Agent-thread domain and persistence
+
+- Add an explicit additive parent/child thread model, lifecycle/capability
+  metadata, complete transcript restoration, and honest interrupted recovery.
+- Preserve existing session, turn, event, checkpoint, provider-session, WSL,
+  worktree, and archived-conversation compatibility.
+- Exit: journal round-trips arbitrary-depth trees and legacy rows reconstruct
+  unchanged.
+
+#### CSP-002 — Codex protocol projection and controls
+
+- Consume the installed app-server's agentic thread/item/status contract,
+  including nested descendants, role/nickname metadata, activity, results,
+  follow-up/steer, interrupt, wait, close, approvals, and inherited runtime
+  metadata.
+- Tolerate unknown fields and future item kinds; do not implement orchestration.
+- Exit: structured adapter tests prove lifecycle/control correlation and bounded
+  failure behavior.
+
+#### CSP-003 — Tinto-native Agent Lens tree
+
+- Render active/done nested threads, inspectable child transcripts, metadata and
+  results, plus direct state-gated follow-up, interrupt, and close controls.
+- Preserve keyboard navigation, focus, announcements, constrained layout, docked
+  and detached consumers, and existing single-agent behavior.
+- Exit: focused component/store tests cover hierarchy, controls, recovery, and
+  accessibility states.
+
+#### CSP-004 — Integration, review, and release readiness
+
+- Reconcile generated contracts and all consumers; independently review backend
+  contract/persistence and frontend interaction/accessibility surfaces.
+- Run one aggregate verification fingerprint after the integrated diff settles.
+- Exit: no unresolved P0-P2 finding, all viable units are release-ready, and one
+  guarded Release Marshal plan is ready for user approval.
+
+### Dependencies
+
+```text
+CSP-001 domain/persistence ─┐
+                            ├─> CSP-002 protocol integration ─> CSP-004
+CSP-003 UI shell/tests ─────┘             │
+                 final contract/store binding ────────────────┘
+```
+
+CSP-001 and the initial CSP-003 view shell may run in parallel only while their
+owned files and contracts remain disjoint. Protocol, generated-contract,
+session-store binding, and final integration are serialized.
+
+### Deferred
+
+- Non-Codex subagent adapters.
+- Custom-agent authoring UI.
+- Remote/cloud agent trees and cross-device recovery.
+- Automatic release, Jira mutation, or provider-independent orchestration.
+
+### Start criteria
+
+- The initiative contract is approved and content-bound in the swarm gate.
+- Immutable executable worker contracts define exact ownership and checks.
+- Deep public-contract/persistence work completes read-only discovery before
+  mutation.
+- Every implementation worker is no-shipping.
+
+---
+
+## Completed initiative — Tinto gap closure
 
 Created: 2026-08-27  
 Status: completed locally; release not requested

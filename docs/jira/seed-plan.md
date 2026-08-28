@@ -1,38 +1,31 @@
-# Proposed Jira seed plan — Tinto gap closure
+# Proposed Jira seed plan — Codex subagent parity
 
-Created: 2026-08-27  
-Status: proposal only; no Jira provider or project is configured
+Created: 2026-08-28
+Status: proposal only; Jira is optional and no provider is selected
 
 ## Recommendation
 
-Do not seed Jira for this initiative by default. The local repository already
-contains the authoritative roadmap, Compound state, and work-package history;
-creating an artificial hierarchy would add administration without improving
-delivery. Keep `jira.provider` and `project_key` unset.
+Do not seed Jira during the autonomous implementation run. The conversation,
+initiative contract, worker contracts, queue state, and verification evidence
+are authoritative. Jira mutations remain outside the autonomy ledger and are
+deferred to the single guarded Release Marshal plan.
 
-If the user later requests Jira traceability and explicitly selects a provider,
-reuse existing issues when available and propose only:
+If the user approves Jira work during release, first resolve the provider and
+reuse an open matching issue when one exists. Otherwise propose one standalone
+Spanish task rather than an artificial parent/child hierarchy:
 
-- One parent: **Tinto gap closure**.
-- One child for **RDM-024 provider-neutral MCP**.
-- One child for **Windows native regression and atlas refresh**.
-- Subtasks only for independently executable review units produced by the
-  RDM-024 work package; do not mirror every document or internal gate.
+- **Resumen:** Incorporar soporte completo de subagentes Codex en Tinto
+- **Descripción:** Replicar el comportamiento de subagentes de Codex dentro de
+  Agent Lens, con jerarquía persistente, controles directos y restauración tras
+  reinicio, preservando la arquitectura y experiencia visual de Tinto.
+- **Labels:** `tinto`, `agents`, `codex`, `subagents`
+- **Initial status/sprint:** resolve from the selected provider; do not infer.
 
-## Proposed labels and states
+## Release-time mutation classes
 
-- Labels: `tinto`, `gap-closure`, plus `mcp` or `qa` as applicable.
-- Initial status: the provider's ordinary backlog state.
-- No sprint placement is inferred.
-- Blocked/deferred state is copied from the local blocker ledger only after
-  provider selection and explicit mutation approval.
+- Search/reuse or create the standalone task.
+- Add the approved PR remote link.
+- Transition the task to `En Revisión` after a ready PR exists.
 
-## Mutation classes requiring later approval
-
-- Search/read the selected Jira project for reuse candidates.
-- Create the parent and missing child issues.
-- Link dependencies or PRs.
-- Comment or transition issues during release handoff.
-
-No Jira read or mutation is part of the current documentation-planning run.
-
+No Jira read or mutation is authorized before the guarded release plan is
+explicitly approved.
