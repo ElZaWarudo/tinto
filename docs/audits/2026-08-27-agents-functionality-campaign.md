@@ -1,6 +1,6 @@
 # Agents functionality campaign
 
-Status: complete — 11 passed, 0 product failures, 3 blocked by harness
+Status: complete — 14 passed, 0 product failures, 0 blocked
 
 Branch: `codex/agents-usability-edge-campaign`
 
@@ -9,17 +9,20 @@ Campaign kit: `docs/edge-tests/agents-usability-2026-08-27`
 ## Outcome
 
 The full 14-case Agents campaign completed against the native Tinto application through
-Pumarejo. All executable product oracles passed after the fix wave. Three cases remain
-explicitly blocked by limitations of the current Windows automation adapter:
+the updated Pumarejo release. All product oracles now pass. The three previously blocked
+cases were rerun successfully:
 
-- keyboard focus progression does not expose a focused semantic node after bounded Tab
-  actions;
-- native resize to 640 by 480 is rejected as `UNSUPPORTED_ACTION`;
-- activating an Agent Lens tab causes the semantic snapshot to collapse to the application
-  shell, although the enabled Archivos, Comandos, and Timeline tabs are observable and
-  focused component tests pass.
+- sixteen bounded Tab actions exposed focused semantic nodes and advanced through distinct
+  application and Agents controls;
+- native resize reached exactly 640 by 480, preserved the core Agents workflow, and restored
+  to 800 by 600;
+- Agent Lens remained above the fold in Details, and Archivos, Comandos, and Timeline each
+  became selected with their corresponding panel observable after a settled snapshot.
 
-These are recorded as harness blocks, not product passes or failures.
+Pumarejo still occasionally returns an empty initial snapshot and reports `CLOSE_FAILED`
+after the application process has already exited with no residue. The runner recovered by
+retrying startup and retained these events in raw evidence; neither affected a product
+oracle.
 
 ## Product fixes delivered
 
@@ -34,6 +37,8 @@ These are recorded as harness blocks, not product passes or failures.
 5. Exited, cancelled/canceled, and waiting transcript states are localized.
 6. `list_workbenches` now returns the plural JSON field `workbenches` expected by the
    TypeScript contract while preserving the singular persisted TOML key `[[workbench]]`.
+7. Agent Lens now appears directly below the Details header, keeping its inspector tabs
+   visible and actionable in the default native viewport.
 
 The native MCP retest no longer produces the generic inventory alert. For this repository
 it truthfully reports the existing multiple-workbench ownership ambiguity and keeps the
@@ -50,12 +55,16 @@ A new local Codex conversation launched to a ready composer. The campaign then:
 - closed and reopened Tinto;
 - restored one Agents tab containing both prompts and the exact response.
 
-The repository status was identical before and after the controlled conversation, and each
-Pumarejo run closed in `idle`.
+The repository status was identical before and after the controlled conversation. Pumarejo
+released the application process, though some later runs returned its known retryable
+`CLOSE_FAILED` cleanup result after exit.
 
 ## Verification
 
 - Campaign kit validator: valid, including all oracle digests.
+- Pumarejo native keyboard and resize campaign: passed.
+- Pumarejo native Agent Lens tab campaign: passed for Archivos, Comandos, and Timeline.
+- Focused Agent Lens component tests: 2 passed in the canonical source tree.
 - ConsoleDockPanel focused suite: 28 passed.
 - Terminal MCP and lifecycle slice: 8 passed.
 - Production frontend build: passed.
