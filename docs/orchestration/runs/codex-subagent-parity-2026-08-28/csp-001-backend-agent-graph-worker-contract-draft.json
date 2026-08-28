@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "contract_id": "codex-subagent-parity-2026-08-28:csp-001-backend-agent-graph",
+  "unit_id": "csp-001-backend-agent-graph",
+  "objective": "Implement a Codex-owned, Tinto-projected subagent graph with thread-correct event routing, durable descendant transcripts, lifecycle and capability fidelity, and targeted controls without introducing a Tinto scheduler or generic provider framework.",
+  "lane": "deep",
+  "profile": "luna_xhigh",
+  "required_context": [
+    "AGENTS.md",
+    "docs/plans/codex-subagent-parity/initiative-requirements.md",
+    "docs/swarm/swarm-startup.md",
+    "src-tauri/src/agent_console/app_server.rs",
+    "src-tauri/src/agent_console/session.rs",
+    "src-tauri/src/agent_console/journal.rs",
+    "src-tauri/src/agent_console/commands.rs",
+    "src-tauri/src/bus/contract.rs"
+  ],
+  "owned_files": [
+    "src-tauri/src/agent_console/app_server.rs",
+    "src-tauri/src/agent_console/session.rs",
+    "src-tauri/src/agent_console/journal.rs",
+    "src-tauri/src/agent_console/commands.rs",
+    "src-tauri/src/agent_console/mod.rs",
+    "src-tauri/src/agent_console/pty.rs",
+    "src-tauri/src/agent_console/test_fixtures/codex-app-server-subagents-v2.jsonl",
+    "src-tauri/src/bus/contract.rs",
+    "src-tauri/src/lib.rs",
+    "scripts/generate-bus-contract.mjs",
+    "src/bus/contract.generated.ts",
+    "src/bus/contract.ts",
+    "src/bus/contract.parity.ts",
+    "src/bus/client.ts",
+    "src/bus/connection.ts"
+  ],
+  "forbidden_changes": [
+    "Do not create a Tinto-owned subagent scheduler, generic provider framework, new service, database, dependency, manifest change, lockfile change, or speculative abstraction.",
+    "Do not map Codex close-agent behavior to destructive thread archive or delete operations; preserve parent/model-mediated close semantics.",
+    "Do not auto-resume restored child work, execute provider-derived values, weaken permission or approval boundaries, or merge child transcripts into the root transcript.",
+    "Do not edit frontend UI files, orchestration state, requirements, roadmap, Jira, release artifacts, branches, commits, pushes, PRs, reviewer requests, or any file outside the owned list."
+  ],
+  "closed_decisions": [
+    "Codex app-server is the orchestrator and source of truth; Tinto projects, persists, and controls the graph.",
+    "Route every notification and response by provider thread identity before updating root session lifecycle or transcript state.",
+    "Represent child and descendant threads additively under the root AgentSession, keyed by stable Codex thread IDs with parent relationships and per-thread timelines.",
+    "Keep ThreadStatus, TurnStatus, collaboration-tool status, and agent runtime state distinct and forward-compatible with unknown fields.",
+    "Discover and restore descendants using Codex thread/list parentThreadId or ancestorThreadId pagination and explicit subagent source kinds; do not rely on default interactive filters or a fixed 100-row archive cap.",
+    "Persist enough normalized hierarchy, metadata, lifecycle, capability, transcript, activity, and result data for complete restart restoration; legacy flat sessions deserialize as roots with no descendants.",
+    "Target direct Codex turn/start, turn/steer, and turn/interrupt methods only when capability state permits; wait and close retain Codex collaboration semantics and close must remain parent-mediated.",
+    "Inherit and display Codex-provided role, nickname, model, reasoning effort, runtime, approval, permission, depth/path, and capacity metadata when present; bound and sanitize all provider-derived data.",
+    "Use the existing session, journal, app-server, bus-contract, and generated-contract seams."
+  ],
+  "acceptance_criteria": [
+    {"id": "AC-1", "description": "Root, child, and nested descendant events are routed to the correct thread-local timeline and lifecycle without clearing or polluting the root turn, including out-of-order, duplicate, and unknown-field fixtures."},
+    {"id": "AC-2", "description": "The normalized public contract carries hierarchy, source identity, distinct statuses, capabilities, collaboration activity, results, inherited metadata, and bounded child transcripts while remaining backward compatible."},
+    {"id": "AC-3", "description": "Journal persistence round-trips a root-child-grandchild graph and complete bounded child transcripts across restart, marks stale active work safely, and loads legacy flat sessions as roots without data loss."},
+    {"id": "AC-4", "description": "Codex descendant discovery uses explicit source kinds and pagination, preserves all descendants beyond legacy list caps, and handles capacity or provider rejection truthfully."},
+    {"id": "AC-5", "description": "Targeted inspect, follow-up/direct input, steer, interrupt, wait, and parent-mediated close command paths preserve Codex capability and approval semantics without destructive substitutes."},
+    {"id": "AC-6", "description": "Focused app-server, journal, and bus-contract Rust suites plus the natural agent_console suite pass with no out-of-scope changes."}
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rg -n",
+      "rg --files",
+      "Get-Content -Raw",
+      "git diff --",
+      "git status --short",
+      "python C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py"
+    ],
+    "verification": {
+      "focused": [
+        "cargo test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+        "cargo test --manifest-path src-tauri/Cargo.toml agent_console::journal::tests",
+        "cargo test --manifest-path src-tauri/Cargo.toml bus::contract::tests"
+      ],
+      "natural": [
+        "cargo test --manifest-path src-tauri/Cargo.toml agent_console"
+      ],
+      "max_retries_per_command": 1
+    }
+  },
+  "execution_budget": {
+    "discovery_passes": 1,
+    "implementation_rounds": 1,
+    "fix_rounds": 2,
+    "review_rounds": 2,
+    "extra_verification": "forbidden"
+  },
+  "supervision": {"mode": "discovery-checkpoint", "transition_after_ms": 0},
+  "terminal_protocol": {
+    "return_when": ["acceptance_criteria_resolved", "required_checks_attempted", "state_reconciled"],
+    "grace_actions": 0
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "required_certifications": ["reviewer"],
+  "evidence_policy": {"changed_files_source": "root-diff", "minimum_command_trust": "self-reported"}
+}

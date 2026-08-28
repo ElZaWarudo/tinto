@@ -1,0 +1,8 @@
+{
+  "role": "reviewer",
+  "actor_id": "backend_reviewer",
+  "status": "passed",
+  "contract_hash": "sha256:5b0d90cbe1d31e20ac1f0e72d347a375b688a82dcd7cbee0e47c067803713a97",
+  "diff_digest": "sha256:4ccd39d6dd27d88bdf1b578cca452671262c010a3dfce197bb36b035bf1cedf1",
+  "findings": []
+}

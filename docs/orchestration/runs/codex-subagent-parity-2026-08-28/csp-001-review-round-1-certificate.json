@@ -1,0 +1,25 @@
+{
+  "role": "reviewer",
+  "actor_id": "backend_reviewer",
+  "status": "failed",
+  "contract_hash": "sha256:5b0d90cbe1d31e20ac1f0e72d347a375b688a82dcd7cbee0e47c067803713a97",
+  "diff_digest": "sha256:7194e48593da393d3ea141bdf68dacd0538ace06c549e83cfae41e4b4b5bfb58",
+  "findings": [
+    {"severity":"p1","location":"src-tauri/src/agent_console/app_server.rs:1274-1304,1415-1417","detail":"Object-shaped Codex thread statuses were not parsed."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/app_server.rs:999-1006,1112-1175","detail":"Child goal/result/token events and root lifecycle routing could pollute or overwrite root state."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/app_server.rs:1098-1104","detail":"Turn completion was conflated with terminal thread completion."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/app_server.rs:1401-1427","detail":"Thread result payloads were not parsed."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/session.rs:375-443","detail":"Targeted operations did not enforce capability, lifecycle, runtime, or approval state."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/app_server.rs:2192-2197","detail":"Direct child turns forced approvalPolicy never and lacked child-correlated approval handling."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/app_server.rs:635-674","detail":"Busy-parent wait/close could reject or race without steer fallback."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/session.rs:827-882","detail":"Activity updates replaced rather than accumulated history."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/app_server.rs:1256-1264","detail":"Provider thread IDs were not bounded or sanitized before routing/persistence."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/journal.rs:683-695","detail":"Restart-stale children retained enabled capabilities."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/session.rs:375-390","detail":"Child attachments omitted WSL path translation."},
+    {"severity":"p1","location":"src-tauri/src/agent_console/session.rs:827-882","detail":"Delayed events could regress completed state without monotonic ordering guards."},
+    {"severity":"p2","location":"src-tauri/src/agent_console/app_server.rs:1237-1252,1792-1823","detail":"Pagination lacked cursor-loop, page, and child-count bounds."},
+    {"severity":"p2","location":"src-tauri/src/agent_console/app_server.rs:1298-1316","detail":"Unknown parent relationships were flattened to root."},
+    {"severity":"p2","location":"src-tauri/src/agent_console/app_server.rs and AgentSubagentThread","detail":"Collaboration tool metadata and consolidation linkage were incomplete."},
+    {"severity":"p2","location":"Codex fixture and app_server tests","detail":"Real status, pagination, denial, approval, busy-parent, result, bounds, activity, stale capability, and WSL cases lacked coverage."}
+  ]
+}

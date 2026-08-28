@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "contract_id": "codex-subagent-parity-2026-08-28",
+  "issued_at": "2026-08-28T00:00:00Z",
+  "expires_at": "2026-09-04T00:00:00Z",
+  "status": "active",
+  "issuer": {
+    "id": "user",
+    "approval_ref": "codex-thread:01a047ec-5f09-7370-88ff-289965a808ea",
+    "approval_hash": "sha256:6ca12b5852b73f41078a81c621644e2ba906002d051b4a0e6cbdd7420282e409"
+  },
+  "scope": {
+    "repositories": [
+      "ElZaWarudo/tinto"
+    ],
+    "base_branches": [
+      "codex/agents-usability-edge-campaign"
+    ],
+    "branch_patterns": [
+      "codex/subagent-parity-*"
+    ],
+    "jira_projects": [],
+    "packages": [
+      "codex-subagent-parity"
+    ],
+    "review_units": [
+      "csp-001-backend-agent-graph",
+      "csp-002-agent-lens-ui",
+      "csp-003-integration-verification"
+    ]
+  },
+  "allowed_mutations": [],
+  "stop_conditions": [
+    "Any requested external mutation",
+    "Scope or contract hash drift",
+    "Unresolved P0-P2 review finding",
+    "Aggregate verification failure",
+    "User revocation or changed release instruction"
+  ],
+  "audit": {
+    "path": "docs/orchestration/audit/codex-subagent-parity-2026-08-28.jsonl",
+    "head_hash": null
+  },
+  "contract_hash": "e477a2df85a6f31bd42d755dc30fbe9cce7cc10c72870508df75930f31c3d5c3"
+}

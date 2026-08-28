@@ -1,0 +1,26 @@
+{
+  "approval_event_digest": "sha256:6ca12b5852b73f41078a81c621644e2ba906002d051b4a0e6cbdd7420282e409",
+  "approved_at": "2026-08-28T00:00:00Z",
+  "approved_by": "user",
+  "artifacts": [
+    {
+      "digest": "sha256:ece15bd8c26c4c5cf7a451bd6ba7dd9b86e679384642a9c54b589b8c05fd32c5",
+      "path": "docs/jira/seed-plan.md"
+    },
+    {
+      "digest": "sha256:3f624282e99127b7b3b85496a4da75b10cb9d6fb90622cb366ce10dfa890ee48",
+      "path": "docs/plans/codex-subagent-parity/initiative-requirements.md"
+    },
+    {
+      "digest": "sha256:54a550c4f7156ea0d7e7aa31c3f7eb24978c4991f1f0b2f35ed06f44367ef316",
+      "path": "docs/product/roadmap.md"
+    },
+    {
+      "digest": "sha256:9083e2fdf8175dfc1c38c4fa020d797e20814e22b4e017b1dc2c87129aba9174",
+      "path": "docs/swarm/swarm-startup.md"
+    }
+  ],
+  "packet_digest": "sha256:857dc0c425005b995f3404f92758cedcda24b353863229e68557ef5acbde0830",
+  "receipt_digest": "sha256:dbfcdf1152beab94de993c59919a16fffb3c2c355c802f7c48dd3319501ceb85",
+  "schema_version": 1
+}

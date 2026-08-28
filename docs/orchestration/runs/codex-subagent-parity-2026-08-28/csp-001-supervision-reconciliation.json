@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "unit_id": "csp-001-backend-agent-graph",
+  "contract_hash": "sha256:5b0d90cbe1d31e20ac1f0e72d347a375b688a82dcd7cbee0e47c067803713a97",
+  "final_diff_digest": "sha256:4ccd39d6dd27d88bdf1b578cca452671262c010a3dfce197bb36b035bf1cedf1",
+  "worker_disposition": "interrupted-after-stalled-closeout",
+  "root_recovery": {
+    "reason": "The worker stopped changing files and did not emit a final validated terminal after two bounded checkpoint requests.",
+    "preserved_work": true,
+    "scope_expanded": false,
+    "shipping_mutations": false
+  },
+  "root_verification": [
+    "npm run contract:check (passed)",
+    "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check (passed)",
+    "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings (passed)",
+    "cargo test --manifest-path src-tauri/Cargo.toml (469 passed)",
+    "cargo build --manifest-path src-tauri/Cargo.toml (passed)"
+  ],
+  "review_certificate": "docs/orchestration/runs/codex-subagent-parity-2026-08-28/csp-001-review-final-certificate.json"
+}

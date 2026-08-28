@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "wave": "codex-subagent-parity-2026-08-28",
+  "base_revision": "a5fb6ad1feedf79539d24d3cccdfbb5ef7e2dc0c",
+  "captured_at": "2026-08-28T15:22:00Z",
+  "result": "passed-with-resolved-environment-exception",
+  "implementation_fingerprint": "sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830",
+  "fingerprint_artifact": "docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-fingerprint.json",
+  "commands": [
+    { "command": "npm run contract:check", "result": "passed" },
+    { "command": "npm run format:check", "result": "environment-blocked", "detail": "EPERM while scanning pre-existing .pumarejo artifacts" },
+    { "command": "scoped Prettier over all owned frontend/generated/script files", "result": "passed" },
+    { "command": "npm run lint", "result": "environment-blocked", "detail": "EPERM while scanning pre-existing .pumarejo artifacts" },
+    { "command": "scoped ESLint over all owned TypeScript and JavaScript files", "result": "passed" },
+    { "command": "npx vitest run --dir src", "result": "baseline-exception", "detail": "761 passed; one unowned pre-existing WSL-absence assertion failed against ConsoleDockPanel; the one owned failure was fixed and its focused regression passes" },
+    { "command": "npx vitest run src/agent/subagentSelectors.test.ts src/panels/terminal/AgentTreeLens.test.tsx", "result": "passed", "detail": "11 passed" },
+    { "command": "focused TerminalPanel generic-progress regression", "result": "passed", "detail": "3 root-source matches passed; 339 skipped" },
+    { "command": "npm run build", "result": "passed" },
+    { "command": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check", "result": "passed" },
+    { "command": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings", "result": "passed" },
+    { "command": "cargo test --manifest-path src-tauri/Cargo.toml", "result": "passed", "detail": "469 passed" },
+    { "command": "cargo build --manifest-path src-tauri/Cargo.toml", "result": "passed" }
+  ],
+  "resolved_environment_record": "docs/swarm/blockers.yaml#CSP-BLK-2026-08-28-001",
+  "excluded_user_owned_paths": ["output/"],
+  "shipping_mutations": false
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "unit_id": "csp-002-agent-lens-ui",
+  "contract_hash": "sha256:117d993618645829e41ef9d06603caf07a7e1ce6d8e5304283ad0cb9684a87e1",
+  "final_diff_digest": "sha256:3cec16443b2a901fd9c44b713ad56e3a3eae1df282e78d8f8c3bbca6ab7cdbe9",
+  "worker_disposition": "completed-with-root-review-remediation",
+  "root_recovery": {
+    "reason": "The bounded worker fix budget was exhausted after independent review; root applied only the listed accessibility, state, close-truthfulness, duplicate-ID, indentation, and transcript-consistency fixes.",
+    "scope_expanded": false,
+    "shipping_mutations": false
+  },
+  "root_verification": [
+    "npx vitest run src/agent/subagentSelectors.test.ts src/panels/terminal/AgentTreeLens.test.tsx (11 passed)",
+    "focused TerminalPanel generic-progress regression (passed)",
+    "scoped ESLint and Prettier checks (passed)",
+    "npm run build (passed)"
+  ],
+  "review_certificate": "docs/orchestration/runs/codex-subagent-parity-2026-08-28/csp-002-review-final-certificate.json"
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "wave": "codex-subagent-parity-2026-08-28",
+  "reconciled_at": "2026-08-28T15:30:00Z",
+  "reconciled_by": "root",
+  "decision": "release-ready",
+  "documentation_gate": "approved",
+  "implementation_fingerprint": "sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830",
+  "aggregate_evidence": "docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-verification.json",
+  "units": {
+    "csp-001-backend-agent-graph": {
+      "contract_hash": "sha256:5b0d90cbe1d31e20ac1f0e72d347a375b688a82dcd7cbee0e47c067803713a97",
+      "diff_digest": "sha256:4ccd39d6dd27d88bdf1b578cca452671262c010a3dfce197bb36b035bf1cedf1",
+      "review": "passed",
+      "verification": "passed"
+    },
+    "csp-002-agent-lens-ui": {
+      "contract_hash": "sha256:117d993618645829e41ef9d06603caf07a7e1ce6d8e5304283ad0cb9684a87e1",
+      "diff_digest": "sha256:3cec16443b2a901fd9c44b713ad56e3a3eae1df282e78d8f8c3bbca6ab7cdbe9",
+      "review": "passed",
+      "verification": "passed"
+    },
+    "csp-003-integration-verification": {
+      "review": "root-authoritative-reconciliation",
+      "verification": "passed-with-resolved-environment-exception"
+    }
+  },
+  "unresolved_p0_p2_findings": 0,
+  "open_blockers": [],
+  "resolved_exceptions": [
+    "docs/swarm/blockers.yaml#CSP-BLK-2026-08-28-001"
+  ],
+  "excluded_user_owned_paths": ["output/"],
+  "shipping_mutations": false
+}

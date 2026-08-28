@@ -1,0 +1,117 @@
+{
+  "acceptance_criteria": [
+    {
+      "description": "Agent Lens renders root, child, and nested descendants in stable hierarchy order with identity, role, distinct lifecycle/activity state, capability state, and result.",
+      "id": "AC-1"
+    },
+    {
+      "description": "Selecting any descendant shows only that agent's complete bounded transcript and metadata after both live updates and journal restoration.",
+      "id": "AC-2"
+    },
+    {
+      "description": "Follow-up/direct input, steer, interrupt, wait, inspect, and parent-mediated close affordances are present only when truthful and call the targeted normalized command path.",
+      "id": "AC-3"
+    },
+    {
+      "description": "Tree keyboard navigation, screen-reader semantics, focus stability, restrained status announcements, disabled reasons, and 800 by 600 behavior have focused regression coverage.",
+      "id": "AC-4"
+    },
+    {
+      "description": "Legacy root-only sessions and providers without subagent capability preserve existing Files, Commands, Timeline, launch, transcript, and resume behavior.",
+      "id": "AC-5"
+    },
+    {
+      "description": "Focused store, selector, bus-connection, AgentTreeLens, and TerminalPanel suites plus the production frontend build pass with no out-of-scope changes.",
+      "id": "AC-6"
+    }
+  ],
+  "closed_decisions": [
+    "Add an Agents tab inside the existing Agent Lens alongside Files, Commands, and Timeline.",
+    "Use one accessible tree with role tree/treeitem, aria-level, aria-expanded, aria-selected, stable focus, and Up/Down/Left/Right/Home/End keyboard navigation.",
+    "Show a selected agent detail surface with identity, role, status, current activity, transcript, result, inherited runtime/model/reasoning metadata, and truthful capability-gated controls.",
+    "Preserve Tinto typography, density, color, and panel composition; use existing components and CSS tokens.",
+    "The frontend consumes the normalized additive contract and contains no Codex protocol parsing or provider-specific control branching.",
+    "Restored graphs remain fully inspectable even when no live process exists; mutating controls are disabled with factual reasons.",
+    "Parent-mediated close is labeled and dispatched through the existing root session path, never as archive or delete."
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rg -n",
+      "rg --files",
+      "Get-Content -Raw",
+      "git diff --",
+      "git status --short",
+      "python C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py"
+    ],
+    "verification": {
+      "focused": [
+        "npm test -- src/agent/sessionStore.test.ts src/agent/subagentSelectors.test.ts src/bus/contract.test.ts src/bus/connection.test.ts",
+        "npm test -- src/panels/terminal/AgentTreeLens.test.tsx src/panels/terminal/TerminalPanel.test.tsx"
+      ],
+      "max_retries_per_command": 1,
+      "natural": [
+        "npm run build"
+      ]
+    }
+  },
+  "contract_hash": "sha256:117d993618645829e41ef9d06603caf07a7e1ce6d8e5304283ad0cb9684a87e1",
+  "contract_id": "codex-subagent-parity-2026-08-28:csp-002-agent-lens-ui",
+  "evidence_policy": {
+    "changed_files_source": "root-diff",
+    "minimum_command_trust": "self-reported"
+  },
+  "execution_budget": {
+    "discovery_passes": 1,
+    "extra_verification": "forbidden",
+    "fix_rounds": 2,
+    "implementation_rounds": 1,
+    "review_rounds": 2
+  },
+  "forbidden_changes": [
+    "Do not copy Codex desktop visual styling, replace Tinto's existing Agent Lens, redesign the session launcher, or add a generic provider UI framework.",
+    "Do not edit Rust, generated contracts, bus client infrastructure, dependencies, manifests, lockfiles, orchestration state, release artifacts, branches, commits, pushes, PRs, Jira, or files outside the owned list.",
+    "Do not show controls the normalized capability contract says are unavailable, report restored stale work as running, or use destructive archive/delete as close-agent behavior.",
+    "Do not truncate the persisted graph in selectors or flatten nested descendants into root transcript state."
+  ],
+  "lane": "standard",
+  "objective": "Add a native Tinto Agent Lens hierarchy that restores and exposes the complete Codex agent tree, per-agent transcript and result, truthful status and activity, and capability-gated controls with accessible keyboard behavior.",
+  "owned_files": [
+    "src/agent/sessionStore.ts",
+    "src/agent/sessionStore.test.ts",
+    "src/agent/subagentSelectors.ts",
+    "src/agent/subagentSelectors.test.ts",
+    "src/panels/terminal/AgentTreeLens.tsx",
+    "src/panels/terminal/AgentTreeLens.test.tsx",
+    "src/panels/terminal/TerminalPanel.tsx",
+    "src/panels/terminal/TerminalPanel.test.tsx",
+    "src/App.css"
+  ],
+  "profile": "luna",
+  "required_certifications": [
+    "reviewer"
+  ],
+  "required_context": [
+    "AGENTS.md",
+    "docs/plans/codex-subagent-parity/initiative-requirements.md",
+    "src/agent/sessionStore.ts",
+    "src/panels/terminal/TerminalPanel.tsx",
+    "src/panels/terminal/TerminalPanel.test.tsx",
+    "src/bus/contract.generated.ts"
+  ],
+  "schema_version": 1,
+  "supervision": {
+    "mode": "terminal-only",
+    "transition_after_ms": 0
+  },
+  "terminal_protocol": {
+    "grace_actions": 0,
+    "return_when": [
+      "acceptance_criteria_resolved",
+      "required_checks_attempted",
+      "state_reconciled"
+    ]
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "unit_id": "csp-002-agent-lens-ui"
+}

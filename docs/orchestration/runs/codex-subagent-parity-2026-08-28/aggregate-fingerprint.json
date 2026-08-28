@@ -1,0 +1,106 @@
+{
+  "base_revision": "a5fb6ad1feedf79539d24d3cccdfbb5ef7e2dc0c",
+  "changed_paths": [
+    {
+      "digest": "sha256:f192d217f948356cbb865aa09a71c2428e3fc63eb7b53bcaecf1f9d03a8cef7c",
+      "path": "scripts/generate-bus-contract.mjs"
+    },
+    {
+      "digest": "sha256:93573965cc20c9909e850de45fc8cfcf313ac30f6e4bb75635b8db2372335411",
+      "path": "src-tauri/src/agent_console/app_server.rs"
+    },
+    {
+      "digest": "sha256:069df0c6b11186cf8dfa35cb52980c9bfbe094696d9ee60cf9c54326c427caae",
+      "path": "src-tauri/src/agent_console/commands.rs"
+    },
+    {
+      "digest": "sha256:96c09e1ce7c096d281eb78525aa33ebf3cfc83ffa662729a8919b351af0c75d8",
+      "path": "src-tauri/src/agent_console/journal.rs"
+    },
+    {
+      "digest": "sha256:67ad4ad6f499a49f53d99360dd69d23be63149f9a6d8d390dbc0ec4f39e28b35",
+      "path": "src-tauri/src/agent_console/mod.rs"
+    },
+    {
+      "digest": "sha256:1e1c730895fef0712df7caacea9d9d8e66acec6d3dd551a46d9833dd58e872fe",
+      "path": "src-tauri/src/agent_console/pty.rs"
+    },
+    {
+      "digest": "sha256:9c0b396de9ec2d327c44e0b6bdbf8ee4b0b9fff65c036e026b8502a30b501163",
+      "path": "src-tauri/src/agent_console/session.rs"
+    },
+    {
+      "digest": "sha256:d1e872b63e3179c2a83a78c8fb59ee5487c9af850830d894cb7ae04b43b873f3",
+      "path": "src-tauri/src/agent_console/test_fixtures/codex-app-server-subagents-v2.jsonl"
+    },
+    {
+      "digest": "sha256:14d6b48691a05ea2ec7bc90bae2b9c50a683ef74970b10d70e5afe006a6be7b7",
+      "path": "src-tauri/src/bus/contract.rs"
+    },
+    {
+      "digest": "sha256:782b7b7ba5b643d58c7e03a53306329007c725c22099355c31ba2bf6b783ac5c",
+      "path": "src-tauri/src/lib.rs"
+    },
+    {
+      "digest": "sha256:eff8378cba4bb2cc98a03486745f4e8e6edbca262f34be1f6f130a7b0634327d",
+      "path": "src/App.css"
+    },
+    {
+      "digest": "sha256:2d1a78d5febe58e5b9716c11cf2c7304d67586e067e8d09aa7134c5f069c7691",
+      "path": "src/agent/sessionStore.test.ts"
+    },
+    {
+      "digest": "sha256:724cc85a0ba5c2cbd4462390df89af53b46e885c55569cee2ce865239b364870",
+      "path": "src/agent/sessionStore.ts"
+    },
+    {
+      "digest": "sha256:a9d6ea4b318b146ecf1fbc22b91087e50295437fa4c7e3a1f504b702a766cfa0",
+      "path": "src/agent/subagentSelectors.test.ts"
+    },
+    {
+      "digest": "sha256:3414a28379c3e9e5d87fc8d5e6963c660f336f38d6cdccde383cfb1694adb940",
+      "path": "src/agent/subagentSelectors.ts"
+    },
+    {
+      "digest": "sha256:c9e281a6a7f0ed9a0c0d35bfed9f84216190a40a9f7e5c3b679df29f0b862242",
+      "path": "src/bus/client.ts"
+    },
+    {
+      "digest": "sha256:a7229e1219d595e2779e469b9c9f4f2ab33947ed00d67f2bd9887106475b974f",
+      "path": "src/bus/contract.generated.ts"
+    },
+    {
+      "digest": "sha256:af143fa111c599635349d7f907b977f9c9641585928e8be2dcfb6ec9afdcb26d",
+      "path": "src/bus/contract.ts"
+    },
+    {
+      "digest": "sha256:20e65e0b0bd8349d037eba0d7e08ee2d2e82301ec3d7eff1822da54d757cfefd",
+      "path": "src/panels/terminal/AgentTreeLens.test.tsx"
+    },
+    {
+      "digest": "sha256:8393b64eaaa53c3b517a0f4a0100a945f679215b786dce46d6c84978cc6db708",
+      "path": "src/panels/terminal/AgentTreeLens.tsx"
+    },
+    {
+      "digest": "sha256:ae29efec73dc02bee171bc28c7316d6e244b56baa5ee6ae466a4b8ed62fd8929",
+      "path": "src/panels/terminal/TerminalPanel.test.tsx"
+    },
+    {
+      "digest": "sha256:3358fe2e3e9c195db0c57c88eeef2d584f8431c273efd2ddc71f246e700533a4",
+      "path": "src/panels/terminal/TerminalPanel.tsx"
+    }
+  ],
+  "commands": [
+    "npm run contract:check",
+    "npx prettier --check <owned-files>",
+    "npx eslint <owned-ts-files>",
+    "npx vitest run --dir src",
+    "npm run build",
+    "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
+    "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "cargo test --manifest-path src-tauri/Cargo.toml",
+    "cargo build --manifest-path src-tauri/Cargo.toml"
+  ],
+  "fingerprint": "sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830",
+  "schema_version": 1
+}

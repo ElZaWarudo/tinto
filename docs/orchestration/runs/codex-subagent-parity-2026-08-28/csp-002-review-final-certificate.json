@@ -1,0 +1,8 @@
+{
+  "role": "reviewer",
+  "actor_id": "agent_lens_reviewer",
+  "status": "passed",
+  "contract_hash": "sha256:117d993618645829e41ef9d06603caf07a7e1ce6d8e5304283ad0cb9684a87e1",
+  "diff_digest": "sha256:3cec16443b2a901fd9c44b713ad56e3a3eae1df282e78d8f8c3bbca6ab7cdbe9",
+  "findings": []
+}

@@ -1,27 +1,30 @@
 schema_version: 2
-updated_at: '2026-08-27'
+updated_at: '2026-08-28'
 mode: autonomous-team-flow
 documentation_gate:
   status: approved
-  approved_by: user
-  approved_at: '2026-08-27T06:50:47Z'
-  initiative_contract: docs/plans/tinto-gap-closure/initiative-requirements.md
+  initiative_contract: docs/plans/codex-subagent-parity/initiative-requirements.md
   source_artifacts:
-  - docs/plans/tinto-gap-closure/initiative-requirements.md
+  - docs/plans/codex-subagent-parity/initiative-requirements.md
   - docs/product/roadmap.md
   - docs/jira/seed-plan.md
   - docs/swarm/swarm-startup.md
-  - docs/swarm/queue-state.yaml
-  - docs/swarm/blockers.yaml
   approval_artifacts:
-  - docs/plans/tinto-gap-closure/initiative-requirements.md
+  - docs/plans/codex-subagent-parity/initiative-requirements.md
   - docs/product/roadmap.md
   - docs/jira/seed-plan.md
   - docs/swarm/swarm-startup.md
-  approval_receipt: docs/orchestration/approval-receipts/tinto-gap-closure-2026-08-27.json
-  approved_packet_digest: sha256:514eaffc690d80ad1920561bc21e4329c2a110ee467eb427381bb734d47ef5d8
-  approval_receipt_digest: sha256:c0db67a19383c2fe4592d340ebf938d8febc29c07a2d92ecb7dc1ff5a6bb0365
   feedback_log:
+  - at: '2026-08-28T00:00:00Z'
+    by: user
+    summary: Authorized autonomous implementation of complete current Codex subagent
+      behavior while preserving Tinto visual language and forbidding release mutations
+      pending one final review.
+    affected_artifacts:
+    - docs/plans/codex-subagent-parity/initiative-requirements.md
+    - docs/product/roadmap.md
+    - docs/jira/seed-plan.md
+    - docs/swarm/swarm-startup.md
   - at: '2026-08-27T06:40:16Z'
     by: document-review
     summary: Made provider evidence a real go/no-go gate and added bounded security,
@@ -30,15 +33,23 @@ documentation_gate:
     - docs/plans/tinto-gap-closure/initiative-requirements.md
     - docs/product/roadmap.md
     - docs/swarm/queue-state.yaml
+  approved_by: user
+  approved_at: '2026-08-28T00:00:00Z'
+  approval_receipt: docs/orchestration/approval-receipts/codex-subagent-parity-2026-08-28.json
+  approved_packet_digest: sha256:857dc0c425005b995f3404f92758cedcda24b353863229e68557ef5acbde0830
+  approval_receipt_digest: sha256:dbfcdf1152beab94de993c59919a16fffb3c2c355c802f7c48dd3319501ceb85
 initiative:
-  contract_path: docs/plans/tinto-gap-closure/initiative-requirements.md
+  contract_path: docs/plans/codex-subagent-parity/initiative-requirements.md
   artifact_contract: ce-unified-plan/v1
   artifact_readiness: requirements-only
   shared_revision: null
   shared_decisions:
-  - Rename the unfinished MCP initiative to RDM-024.
-  - Keep mutable implementation concurrency at one unless evidence proves isolation.
-  - Reuse existing runtime, bus, session, and UI seams; add no new infrastructure.
+  - Codex remains the subagent orchestrator; Tinto observes, persists, and controls
+    through documented Codex app-server contracts.
+  - Preserve Tinto IADE visual language and add the agent hierarchy to Agent Lens.
+  - Persist the full root-child-descendant graph and transcripts across restart.
+  - Add only a narrow provider boundary around normalized graph events and targeted
+    controls.
 compound_runs:
   gap-closure-rdm-024-mcp:
     run_id: gap-closure-rdm-024-mcp
@@ -53,15 +64,15 @@ compound_runs:
     artifact_revision: sha256:452003b2a4f43374834ee5323b1665fb82a1388aef928f2f17a586db6ca36d2b
 autonomy:
   mode: autonomous
-  ledger_path: docs/orchestration/autonomy-ledgers/tinto-rdm024-release-2026-08-27.json
+  ledger_path: docs/orchestration/autonomy-ledgers/codex-subagent-parity-2026-08-28.json
   resume_snapshot:
     authority: false
     schema_version: 1
-    contract_id: tinto-rdm024-release-2026-08-27
+    contract_id: codex-subagent-parity-2026-08-28
     contract_status: active
-    contract_hash: 915852d736feea1844f14ec8d9671d3e186b9d26825828d73c1d3be59e14d2ec
-    latest_audit_event: 9656229d8fb854a18f335005fc1ad6379a4a263b06c46fb7117a29a22bf532d5
-    captured_at: '2026-08-27T10:01:38.291087Z'
+    contract_hash: e477a2df85a6f31bd42d755dc30fbe9cce7cc10c72870508df75930f31c3d5c3
+    latest_audit_event: null
+    captured_at: '2026-08-28T00:00:00Z'
 jira:
   provider: null
   project_key: null
@@ -122,7 +133,7 @@ units:
       lane_trigger: incomplete-artifact-and-security-pipeline
       role_triggers:
         compound-master: provider-configuration-public-contract-and-security
-      worker_contract_hash: null
+      worker_contract_hash: sha256:5b0d90cbe1d31e20ac1f0e72d347a375b688a82dcd7cbee0e47c067803713a97
       worker_contract_path: docs/orchestration/runs/gap-closure-rdm-024-mcp/gc-001-rdm-024-artifacts-worker-contract.json
       evidence_trust: reviewed
     risk:
@@ -286,7 +297,7 @@ units:
       lane_trigger: bounded-native-qa-with-no-authorized-product-edit
       role_triggers: {}
       worker_contract_path: null
-      worker_contract_hash: null
+      worker_contract_hash: sha256:117d993618645829e41ef9d06603caf07a7e1ce6d8e5304283ad0cb9684a87e1
       evidence_trust: runtime-audited
     risk:
       production: prototype
@@ -376,8 +387,10 @@ units:
       focused_commands:
       - 'rg -n "RDM-023|RDM-024|status: active|status: stale" docs'
       focused_evidence:
-      - docs/product/application-atlas.md remains explicitly stale with a precise uncommitted-tree boundary.
-      - RDM-024 is completed; RDM-018/RDM-019/RDM-020 are retired and RDM-021 remains backlog-only, not the next initiative.
+      - docs/product/application-atlas.md remains explicitly stale with a precise
+        uncommitted-tree boundary.
+      - RDM-024 is completed; RDM-018/RDM-019/RDM-020 are retired and RDM-021 remains
+        backlog-only, not the next initiative.
       aggregate_owner: wave-root
       aggregate_fingerprint: sha256:fe6e27ed824c1c31d0e1d75355a040ba7f1784ec873014d72860f0bced9ca1bf
       fingerprint_artifact: C:/Users/User/AppData/Local/Temp/tinto-rdm024-final-fingerprint.json
@@ -416,7 +429,8 @@ units:
       - Provider-readiness parity for quick launch.
       - Transcript lifecycle localization.
       excluded:
-      - Backend contracts, provider writes, new infrastructure, dependencies, and broad redesign.
+      - Backend contracts, provider writes, new infrastructure, dependencies, and
+        broad redesign.
     acceptance_criteria:
     - The six criteria in the immutable worker contract are resolved.
     - The full 14-case campaign is rerun on the consolidated branch.
@@ -564,6 +578,273 @@ units:
       release_notes: []
       suggested_jira_transition: null
       release_marshal_packet: null
+  csp-001-backend-agent-graph:
+    title: Project and persist the Codex subagent graph
+    jira_key: null
+    source: docs/plans/codex-subagent-parity/initiative-requirements.md
+    status: handed-off
+    depends_on: []
+    blocked_by: []
+    affects_dependents:
+    - csp-002-agent-lens-ui
+    - csp-003-integration-verification
+    scope:
+      included:
+      - Route Codex app-server notifications and responses by provider thread identity.
+      - Normalize hierarchy, lifecycle, capabilities, collaboration activity, and
+        child-local transcripts.
+      - Persist and restore the complete descendant graph with legacy-session compatibility.
+      - Add targeted steer, follow-up, interrupt, wait, inspect, and parent-mediated
+        close commands.
+      excluded:
+      - A Tinto-owned subagent scheduler.
+      - Destructive archive or delete masquerading as Codex close-agent semantics.
+      - A generic multi-provider orchestration framework.
+    acceptance_criteria:
+    - R1 through R10, R12 through R14, and AE1 through AE6 in the initiative contract
+      pass.
+    surfaces:
+      code:
+      - src-tauri/src/agent_console
+      - src-tauri/src/bus
+      contracts:
+      - src-tauri/src/bus/contract.rs
+      - src/bus/contract.generated.ts
+      data:
+      - agent journal and SQLite event storage
+      auth:
+      - inherited Codex runtime and approval context
+      docs: []
+      tests:
+      - src-tauri/src/agent_console/**/*.rs
+      - src-tauri/src/bus/**/*.rs
+      config: []
+      generated:
+      - src/bus/contract.generated.ts
+    dependencies: []
+    execution:
+      route: swarm
+      lane: deep
+      discovery_profile: luna_xhigh_discovery
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: public-contract-persistence-concurrency-and-recovery
+      role_triggers:
+        reviewer: protocol-persistence-and-compatibility-change
+      worker_contract_path: docs/orchestration/runs/codex-subagent-parity-2026-08-28/csp-001-backend-agent-graph-worker-contract.json
+      worker_contract_hash: sha256:5b0d90cbe1d31e20ac1f0e72d347a375b688a82dcd7cbee0e47c067803713a97
+      evidence_trust: independently-reviewed-root-verified
+    risk:
+      production: high
+      security: medium
+      compliance: low
+      overlap: high
+    verification:
+      focused_commands:
+      - cargo test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests
+      - cargo test --manifest-path src-tauri/Cargo.toml agent_console::journal::tests
+      - cargo test --manifest-path src-tauri/Cargo.toml bus::contract::tests
+      focused_evidence:
+      - Final independent backend review passed with no findings.
+      - Contract generation, Rust formatting, clippy, all 469 Rust tests, and the final Rust build passed.
+      - Root supervision preserved the worker diff and reconciled its validated contract after bounded closeout recovery.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
+      fingerprint_artifact: docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-fingerprint.json
+      evidence_registry: docs/orchestration/runs/codex-subagent-parity-2026-08-28/csp-001-review-final-certificate.json
+      reuse_decision: run:evidence-current
+    isolation:
+      type: current-checkout
+      branch: codex/agents-usability-edge-campaign
+      path: C:/Users/User/Documents/personal/tinto
+      thread: null
+    compound:
+      run_id: null
+      state_path: null
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-28T15:30:00Z'
+      artifact_revision: sha256:4ccd39d6dd27d88bdf1b578cca452671262c010a3dfce197bb36b035bf1cedf1
+    handoff:
+      intended_base: codex/agents-usability-edge-campaign
+      pr_grouping: consolidated-codex-subagent-parity
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: docs/orchestration/release-handoffs/2026-08-28-codex-subagent-parity.md
+  csp-002-agent-lens-ui:
+    title: Add the native Tinto Agent Lens hierarchy and controls
+    jira_key: null
+    source: docs/plans/codex-subagent-parity/initiative-requirements.md
+    status: handed-off
+    depends_on:
+    - csp-001-backend-agent-graph
+    blocked_by: []
+    affects_dependents:
+    - csp-003-integration-verification
+    scope:
+      included:
+      - Add an Agents view to Agent Lens using Tinto's existing visual language.
+      - Render nested descendants, lifecycle, activity, capabilities, transcript,
+        and result.
+      - Expose only truthful targeted controls with keyboard and screen-reader semantics.
+      excluded:
+      - Copying Codex desktop visual design.
+      - Replacing the existing flat session launcher or console dock.
+      - Provider-specific UI branching outside normalized capability data.
+    acceptance_criteria:
+    - R11, R14 through R16, and AE7 through AE9 in the initiative contract pass.
+    surfaces:
+      code:
+      - src/agent
+      - src/panels/terminal
+      - src/App.css
+      contracts:
+      - src/bus/contract.generated.ts
+      data: []
+      auth: []
+      docs: []
+      tests:
+      - src/agent/**/*.test.ts
+      - src/panels/terminal/**/*.test.tsx
+      config: []
+      generated: []
+    dependencies:
+    - csp-001-backend-agent-graph
+    execution:
+      route: swarm
+      lane: standard
+      discovery_profile: null
+      worker_profile: luna
+      reasoning_effort: high
+      lane_trigger: interactive-accessible-agent-tree-and-controls
+      role_triggers:
+        reviewer: accessibility-and-control-semantics
+      worker_contract_path: docs/orchestration/runs/codex-subagent-parity-2026-08-28/csp-002-agent-lens-ui-worker-contract.json
+      worker_contract_hash: sha256:117d993618645829e41ef9d06603caf07a7e1ce6d8e5304283ad0cb9684a87e1
+      evidence_trust: independently-reviewed-root-verified
+    risk:
+      production: medium
+      security: low
+      compliance: low
+      overlap: medium
+    verification:
+      focused_commands:
+      - npm test -- src/agent/sessionStore.test.ts src/bus/contract.test.ts src/bus/connection.test.ts
+      - npm test -- src/panels/terminal/TerminalPanel.test.tsx
+      focused_evidence:
+      - Final independent UI review passed after bounded remediation.
+      - Agent tree and selector tests passed 11 of 11; focused transcript regressions, scoped lint and formatting, and the production build passed.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
+      fingerprint_artifact: docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-fingerprint.json
+      evidence_registry: docs/orchestration/runs/codex-subagent-parity-2026-08-28/csp-002-review-final-certificate.json
+      reuse_decision: run:evidence-current
+    isolation:
+      type: current-checkout
+      branch: codex/agents-usability-edge-campaign
+      path: C:/Users/User/Documents/personal/tinto
+      thread: null
+    compound:
+      run_id: null
+      state_path: null
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-28T15:30:00Z'
+      artifact_revision: sha256:3cec16443b2a901fd9c44b713ad56e3a3eae1df282e78d8f8c3bbca6ab7cdbe9
+    handoff:
+      intended_base: codex/agents-usability-edge-campaign
+      pr_grouping: consolidated-codex-subagent-parity
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: docs/orchestration/release-handoffs/2026-08-28-codex-subagent-parity.md
+  csp-003-integration-verification:
+    title: Reconcile and verify complete Codex subagent parity
+    jira_key: null
+    source: docs/plans/codex-subagent-parity/initiative-requirements.md
+    status: handed-off
+    depends_on:
+    - csp-001-backend-agent-graph
+    - csp-002-agent-lens-ui
+    blocked_by: []
+    affects_dependents: []
+    scope:
+      included:
+      - Run aggregate contract, frontend, Rust, persistence, and build gates.
+      - Reconcile independent review certificates and release evidence.
+      excluded:
+      - New feature implementation unrelated to review fixes.
+      - Any release mutation.
+    acceptance_criteria:
+    - All initiative acceptance examples pass or have an explicit deferred blocker.
+    - No unresolved P0-P2 finding remains and the consolidated diff is release-ready.
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs:
+      - docs/orchestration/runs/codex-subagent-parity-2026-08-28
+      tests:
+      - full frontend and Rust gates
+      config: []
+      generated: []
+    dependencies:
+    - csp-001-backend-agent-graph
+    - csp-002-agent-lens-ui
+    execution:
+      route: root-direct
+      lane: standard
+      discovery_profile: null
+      worker_profile: null
+      reasoning_effort: xhigh
+      lane_trigger: authoritative-cross-surface-reconciliation
+      role_triggers: {}
+      worker_contract_path: null
+      worker_contract_hash: null
+      evidence_trust: root-authoritative-reconciliation
+    risk:
+      production: high
+      security: medium
+      compliance: low
+      overlap: low
+    verification:
+      focused_commands:
+      - npm run contract:check
+      - npm run format:check
+      - npm run lint
+      - npm test
+      - npm run build
+      - cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+        -- -D warnings
+      - cargo test --manifest-path src-tauri/Cargo.toml
+      - cargo build --manifest-path src-tauri/Cargo.toml
+      focused_evidence:
+      - Aggregate contract, scoped frontend quality, production build, Rust format, clippy, 469-test, and build gates passed.
+      - One environment exception was resolved through source-scoped evidence; no unresolved P0-P2 finding remains.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
+      fingerprint_artifact: docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-fingerprint.json
+      evidence_registry: docs/orchestration/runs/codex-subagent-parity-2026-08-28/authoritative-reconciliation.json
+      reuse_decision: run:evidence-current
+    isolation:
+      type: current-checkout
+      branch: codex/agents-usability-edge-campaign
+      path: C:/Users/User/Documents/personal/tinto
+      thread: /root
+    compound:
+      run_id: null
+      state_path: null
+      interaction: brokered
+      observed_status: completed
+      observed_at: '2026-08-28T15:30:00Z'
+      artifact_revision: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
+    handoff:
+      intended_base: codex/agents-usability-edge-campaign
+      pr_grouping: consolidated-codex-subagent-parity
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: docs/orchestration/release-handoffs/2026-08-28-codex-subagent-parity.md
 wave_history:
 - wave: gap-closure-2026-08-27
   status: release-ready
@@ -585,3 +866,13 @@ wave_history:
   aggregate_fingerprint: sha256:f06cedfd9a78b79416c6c8f5130901d6dce5cb4c76ee94880c90f2c72d45d119
   aggregate_record_digest: null
   release_handoff: consolidated-local-branch
+- wave: codex-subagent-parity-2026-08-28
+  status: handed-off
+  observed_at: '2026-08-28T15:30:00Z'
+  units:
+  - csp-001-backend-agent-graph
+  - csp-002-agent-lens-ui
+  - csp-003-integration-verification
+  aggregate_fingerprint: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
+  aggregate_record_digest: null
+  release_handoff: docs/orchestration/release-handoffs/2026-08-28-codex-subagent-parity.md

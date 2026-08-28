@@ -1,0 +1,3 @@
+- Projects and persists the full Codex subagent hierarchy, lifecycle, capabilities, activity, transcripts, results, and inherited execution context.
+- Adds targeted follow-up, steer, interrupt, wait, inspect, and parent-mediated close controls over the Codex app-server protocol.
+- Adds an accessible Agent Lens tree with per-agent transcripts, results, drafts, state restoration, and capability-gated controls in Tinto's existing visual language.

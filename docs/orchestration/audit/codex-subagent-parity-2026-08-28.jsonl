@@ -1,0 +1,3 @@
+{"schema_version":1,"event":"authorization-captured","at":"2026-08-28T00:00:00Z","contract_id":"codex-subagent-parity-2026-08-28","shipping_authorized":false}
+{"schema_version":1,"event":"worker-stall-recovered","at":"2026-08-28T15:04:00Z","contract_id":"codex-subagent-parity-2026-08-28","unit_id":"csp-001-backend-agent-graph","shipping_authorized":false}
+{"schema_version":1,"event":"aggregate-verification-recorded","at":"2026-08-28T15:22:00Z","contract_id":"codex-subagent-parity-2026-08-28","result":"passed-with-resolved-environment-exception","shipping_authorized":false}

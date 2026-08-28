@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "operation": "approve-documentation",
+  "receipt_path": "docs/orchestration/approval-receipts/codex-subagent-parity-2026-08-28.json",
+  "expected_approval_event_digest": "sha256:6ca12b5852b73f41078a81c621644e2ba906002d051b4a0e6cbdd7420282e409"
+}
