@@ -10,6 +10,8 @@ export default defineConfig(async () => ({
   plugins: [react()],
 
   test: {
+    // Nested worktrees and Pumarejo fixtures can contain stale copies of src.
+    include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     environment: "jsdom",
     fileParallelism: false,
     setupFiles: "./src/setupTests.ts",
