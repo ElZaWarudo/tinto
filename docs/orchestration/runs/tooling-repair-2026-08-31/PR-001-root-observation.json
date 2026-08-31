@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "profile": "luna_xhigh",
+  "started_at_ms": 1788157686182,
+  "owned_files": [
+    "src/mcp/runtime.ts",
+    "src/session/manager.ts",
+    "src/observability/diagnostics.ts",
+    "tests/unit/mcp-runtime.test.ts",
+    "tests/unit/session-manager.test.ts",
+    "tests/unit/diagnostics.test.ts"
+  ],
+  "changed_files": [
+    "src/mcp/runtime.ts",
+    "tests/unit/mcp-runtime.test.ts"
+  ],
+  "checkpoint_count": 1,
+  "checkpoint": {
+    "event": "discovery_complete",
+    "edit_path_found": true,
+    "planned_files": [
+      "src/mcp/runtime.ts",
+      "tests/unit/mcp-runtime.test.ts"
+    ],
+    "evidence_digest": "edit src/mcp/runtime.ts | symbol=PumarejoRuntime.diagnostics, launchNow, closeNow; pattern=requireActive() at diagnostics and retained #diagnostics assigned during launch but closed during cleanup; why=launch failure records diagnostics yet public query returns SESSION_NOT_ACTIVE after active state is cleared. Reuse the bounded retained store for failed-launch queries while idle, clear on explicit close or replacement, and preserve owned cleanup. Regression: failed launch status plus diagnostics query, sanitized output, explicit close cleanup, and relaunch isolation.\nedit tests/unit/mcp-runtime.test.ts | symbol=asynchronous launch failure and diagnostics lifecycle tests; pattern=tests at lines 488 and 534 cover status retention and active-only diagnostics; why=add focused regression proving PUM-009 failed launch diagnostics remain queryable after SESSION_CREATE_FAILED, including phase/process stderr/last_error redaction and cleanup clearing without changing successful-session behavior.\ndependency src/observability/diagnostics.ts | symbol=DiagnosticStore.append/query/close; pattern=sanitizeRecord before ring insertion and close clears bounded state; why=existing sanitizer and bounded store are sufficient, so no diagnostics-store edit is required.",
+    "discovery_complete_at_ms": 1788157986182
+  },
+  "discovery_returned_at_ms": 1788157986182,
+  "verification_manifest": {
+    "focused": [
+      "rtk proxy node.exe node_modules/vitest/vitest.mjs run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/diagnostics.test.ts"
+    ],
+    "natural": [],
+    "max_retries_per_command": 1
+  },
+  "interventions_sent": [
+    "dispatch_implementation"
+  ],
+  "contract_hash": "sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b",
+  "worker_id": "/root/pumarejo_lifecycle_impl",
+  "implementation_started_at_ms": 1788157986182,
+  "returned_at_ms": 1788158671278,
+  "final": {
+    "status": "needs_review",
+    "phase": "closeout",
+    "remaining_actions": [],
+    "terminal_ready": true,
+    "acceptance_criteria_resolved": true,
+    "acceptance_evidence": [
+      {
+        "criterion_id": "AC-1",
+        "status": "satisfied",
+        "evidence": "contract_hash=sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b; accepted discovery checkpoint PR-001-discovery.json identifies the concrete lifecycle defect: launch records bounded diagnostics in PumarejoRuntime.#diagnostics, then public diagnostics requires an active session and returns SESSION_NOT_ACTIVE after the failed launch. The focused regression drives an asynchronous SESSION_CREATE_FAILED, phase, and process stderr through the owned launch callbacks, queries diagnostics while idle, and checks close and relaunch isolation."
+      },
+      {
+        "criterion_id": "AC-2",
+        "status": "satisfied",
+        "evidence": "contract_hash=sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b; src/mcp/runtime.ts now exposes the retained bounded store only after a failed launch has settled idle, retains it through launch cleanup, closes it on explicit close, and closes the prior store before replacement. Surface-scoped queries remain fail-closed without an owned active surface, and existing successful-session cleanup/routing paths remain unchanged. tests/unit/mcp-runtime.test.ts covers sanitized phase, stderr, last_error, close clearing, relaunch isolation, and stale surface denial."
+      },
+      {
+        "criterion_id": "AC-3",
+        "status": "satisfied",
+        "evidence": "contract_hash=sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b; the assigned WSL focused command was attempted twice. Attempt 1 failed on the new regression's last_error phase expectation and the existing diagnostics spy after the harness replacement change; attempt 2 passed all existing checks and failed only the new fixture's Windows-path redaction assertion. The fixture was corrected to use the sanitizer-supported /private path afterward, but the manifest permits no third attempt. No native GUI verification was claimed or run."
+      }
+    ],
+    "last_required_command": "rtk proxy node.exe node_modules/vitest/vitest.mjs run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/diagnostics.test.ts",
+    "verification": {
+      "attempted": [
+        {
+          "command": "rtk proxy node.exe node_modules/vitest/vitest.mjs run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/diagnostics.test.ts",
+          "attempts": 2,
+          "outcome": "failed"
+        }
+      ],
+      "skipped": []
+    },
+    "verification_commands_run": [
+      "rtk proxy node.exe node_modules/vitest/vitest.mjs run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/diagnostics.test.ts",
+      "rtk proxy node.exe node_modules/vitest/vitest.mjs run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/diagnostics.test.ts"
+    ],
+    "unowned_failures": [],
+    "scope_extension": null
+  },
+  "command_evidence": {
+    "trust": "self-reported",
+    "commands": [
+      {
+        "command": "rtk proxy node.exe node_modules/vitest/vitest.mjs run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/diagnostics.test.ts",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk proxy node.exe node_modules/vitest/vitest.mjs run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/diagnostics.test.ts",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk python3 /mnt/c/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py --contract /mnt/c/Users/User/Documents/personal/tinto/docs/orchestration/runs/tooling-repair-2026-08-31/PR-001-worker-contract.json --input /mnt/c/Users/User/AppData/Local/Temp/PR-001-repair-terminal.json",
+        "kind": "read-only"
+      }
+    ]
+  },
+  "terminal_validation_exit_code": 0,
+  "terminal_validation_command": "rtk python3 /mnt/c/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py --contract /mnt/c/Users/User/Documents/personal/tinto/docs/orchestration/runs/tooling-repair-2026-08-31/PR-001-worker-contract.json --input /mnt/c/Users/User/AppData/Local/Temp/PR-001-repair-terminal.json",
+  "certifications": [],
+  "timing_evidence_note": "Discovery start was an estimate in original checkpoint; elapsed metrics are not runtime-audited. Implementation start bound is discovery return, not exact dispatch time.",
+  "changed_files_source": "root-diff",
+  "diff_basis": "worktree-vs-revision",
+  "base_revision": "18fa00b961851b021ac4d9f609107e0ecd343269",
+  "baseline_tree": null,
+  "baseline_digest": "sha256:0417ae0a4c5a44e8d15267023f6f1ae174db392650d4dc1c39aa146bc939c513",
+  "diff_digest": "sha256:06fa609c4bb8bc60158f32e588521918ebefb2381bac0dddcc99d401bac8128d"
+}

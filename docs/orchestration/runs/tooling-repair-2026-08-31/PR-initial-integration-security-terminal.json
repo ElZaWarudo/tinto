@@ -1,0 +1,29 @@
+{
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+  "diff_digest": "sha256:c03789511f100a16ee630f62aa6169bfd2d3f27eaa0892965f3e15b32a60a4e1",
+  "review_plan_hash": "sha256:fc847718101fef9a2266daad656ba27c081dbfe6582abcb404d37f9e7e7895c0",
+  "reviewer_id": "/root/pumarejo_diagnostics_security",
+  "surface_id": "pumarejo-security",
+  "risk_boundaries_checked": [
+    "Windows and POSIX path redaction",
+    "bounded retained diagnostics",
+    "owned process cleanup"
+  ],
+  "findings": [],
+  "finding_feedback": [
+    {
+      "finding_id": "F-1F24B270",
+      "action": "corroborate",
+      "rationale": "The final diff closes the reported Windows path disclosure by matching both drive-letter cases and adding raw message assertions through direct and failed-launch retention paths.",
+      "evidence": [
+        "src/observability/diagnostics.ts:60-61 now matches both uppercase and lowercase Windows drive prefixes before retention.",
+        "tests/unit/diagnostics.test.ts:41-49 covers C:\\Users and c:/Users native launch stack paths; tests/unit/diagnostics.test.ts:14-28 asserts the stored raw message is redacted rather than relying on JSON escaping.",
+        "tests/unit/mcp-runtime.test.ts:542-605 drives failed-launch stderr containing /private and C:\\Users paths, verifies no raw C:\\Users record, and verifies close/relaunch isolation.",
+        "src/mcp/runtime.ts:1047-1057 clears the prior store before a new session ID is accepted; src/mcp/runtime.ts:1233-1263 retains diagnostics only across failure cleanup, while closeNow at 1341-1364 still performs artifact and manager cleanup before optional diagnostic retention.",
+        "src/session/manager.ts:482-490 rechecks owned process identity before each family-aware readiness probe; existing failLaunch cleanup and process-lease identity checks preserve fail-closed termination. Root reports 79 focused tests passed."
+      ]
+    }
+  ],
+  "suppressed_speculative_count": 0,
+  "stop_reason": "coverage-complete"
+}

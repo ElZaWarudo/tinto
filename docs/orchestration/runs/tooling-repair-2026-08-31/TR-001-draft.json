@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "contract_id": "tooling-repair-2026-08-31:TR-001",
+  "unit_id": "TR-001",
+  "lane": "deep",
+  "profile": "luna_xhigh",
+  "objective": "Find and repair confirmed root causes of provider startup/turn-completion/reconnect/archival errors, including child routing and history compatibility. Do not presume UI Enviando and five reconnect attempts are backend-caused; return precise follow-up evidence for unowned surfaces.",
+  "owned_files": [
+    "src-tauri/src/agent_console/app_server.rs",
+    "src-tauri/src/agent_console/session.rs",
+    "src-tauri/src/agent_console/commands.rs",
+    "src-tauri/src/agent_console/journal.rs"
+  ],
+  "required_context": [
+    "package.json",
+    "AGENTS.md",
+    "src-tauri/src/agent_console/app_server.rs",
+    "src-tauri/src/agent_console/session.rs",
+    "src-tauri/src/agent_console/commands.rs",
+    "src-tauri/src/agent_console/journal.rs"
+  ],
+  "closed_decisions": [
+    "Working repository: C:/Users/User/Documents/personal/tinto. You are not alone: other workers own other repositories; root owns all docs/GUI. Do not revert others changes.",
+    "User explicitly authorized implementation after validated repair documents; no human check-in. Read shared C:/Users/User/Documents/personal/tinto/docs/plans/tooling-repair-2026-08-31/initiative-requirements.md and ICook/docs/tinto-pumarejo-dogfood-report.md as source.",
+    "Deep discovery role is read-only and returns only its single discovery_complete checkpoint with contract_hash, planned_files, evidence_digest detailing exact edit path and regressions. Implementation starts only after root validates that checkpoint; do not repeat discovery.",
+    "All GUI belongs to root and must use Pumarejo. No worker GUI interactions. No code/test/config changes outside owned manifest.",
+    "Execute listed rtk commands under WSL via wsl --cd /mnt/c/Users/User/Documents/personal/tinto --exec bash -lc; Windows tools node.exe/cargo.exe run the existing native checkout. Ordinary coding tools permitted by user for reads/edits; record command evidence honestly.",
+    "Use exact canonical terminal schema. Write self-reported command evidence to unique temporary file outside repo before final validator. Use no additional verification beyond manifest.",
+    "Discovery can read named adjacent code to locate cause but must not run tests or mutate. Evidence digest must describe actionable fix or precise evidence blocker."
+  ],
+  "forbidden_changes": [
+    "No commits, push, PR, Jira, releases, credentials, destructive Git or process kill.",
+    "No ICook source edits or baseline Cargo.toml/Cargo.lock changes.",
+    "No broad refactor, new dependencies, increased timeouts as workaround, or swallowed errors."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "description": "Confirm a concrete causal lifecycle defect from source and reproduce it with a focused regression; distinguish unowned environmental or unsupported findings."
+    },
+    {
+      "id": "AC-2",
+      "description": "Repair the confirmed behavior within accepted discovery manifest while preserving existing public contracts, routing, history, diagnostics redaction, and owned cleanup."
+    },
+    {
+      "id": "AC-3",
+      "description": "Run assigned focused checks and provide criterion-specific evidence, exact failures and remaining limitations without claiming native GUI verification."
+    }
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rtk read",
+      "rtk grep",
+      "rtk git status",
+      "rtk git diff",
+      "rtk python3 /mnt/c/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py"
+    ],
+    "verification": {
+      "focused": [
+        "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+        "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::session::tests"
+      ],
+      "natural": [],
+      "max_retries_per_command": 1
+    }
+  },
+  "execution_budget": {
+    "discovery_passes": 1,
+    "implementation_rounds": 1,
+    "fix_rounds": 2,
+    "review_rounds": 1,
+    "extra_verification": "forbidden",
+    "max_elapsed_ms": 1200000
+  },
+  "supervision": {
+    "mode": "discovery-checkpoint",
+    "transition_after_ms": 15000
+  },
+  "terminal_protocol": {
+    "return_when": [
+      "acceptance_criteria_resolved",
+      "required_checks_attempted",
+      "state_reconciled"
+    ],
+    "grace_actions": 0
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "required_certifications": [
+    "reviewer"
+  ],
+  "evidence_policy": {
+    "minimum_command_trust": "self-reported",
+    "changed_files_source": "root-diff"
+  }
+}

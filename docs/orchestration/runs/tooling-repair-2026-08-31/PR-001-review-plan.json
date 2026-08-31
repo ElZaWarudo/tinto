@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "contract_hash": "sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b",
+  "diff_digest": "sha256:06fa609c4bb8bc60158f32e588521918ebefb2381bac0dddcc99d401bac8128d",
+  "changed_paths": [
+    "src/mcp/runtime.ts",
+    "tests/unit/mcp-runtime.test.ts"
+  ],
+  "assignments": [
+    {
+      "id": "diagnostics-lifecycle",
+      "reviewer_role": "reviewer",
+      "owned_paths": [
+        "src/mcp/runtime.ts",
+        "tests/unit/mcp-runtime.test.ts"
+      ],
+      "risk_boundaries": [
+        "close/relaunch isolation",
+        "failed-launch retention",
+        "lifecycle ordering"
+      ],
+      "cross_cutting": false,
+      "priority": 1
+    },
+    {
+      "id": "diagnostics-security",
+      "reviewer_role": "security-sentinel",
+      "owned_paths": [
+        "src/mcp/runtime.ts",
+        "tests/unit/mcp-runtime.test.ts"
+      ],
+      "risk_boundaries": [
+        "fail-closed cleanup",
+        "redaction and bounded retention",
+        "surface ownership"
+      ],
+      "cross_cutting": true,
+      "priority": 2
+    }
+  ],
+  "queued": [],
+  "coverage_complete": true,
+  "validation_wave_required": true,
+  "review_plan_hash": "sha256:8239983df01a741d9fe2a41a8ddf79683d6c8d38c5cf7a4888c26ae298422276"
+}

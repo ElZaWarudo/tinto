@@ -1,0 +1,47 @@
+{
+  "contract_hash": "sha256:75b1f7decdde679e5df751c1208f69403def8291b2e89b0705c4197c3e008de5",
+  "diff_digest": "sha256:b6af61927bd953ddb85a08463f8c0ae2b440ed4bd476bc1ef888920b0c34c96d",
+  "review_plan_hash": "sha256:1db128b7ac64485c4832e7433212c40b18cc99422bc4f6579985651d8b554007",
+  "reviewer_id": "/root/tinto_ui_review",
+  "surface_id": "turn-ui",
+  "risk_boundaries_checked": [
+    "at-most-once resumed dispatch",
+    "same-title attribution",
+    "truthful lifecycle status"
+  ],
+  "findings": [],
+  "finding_feedback": [
+    {
+      "finding_id": "F-4492E3D8",
+      "action": "corroborate",
+      "rationale": "The resume command is now invoked directly and the only enclosing retry is gated by a known session_not_running write failure; ambiguous resume and provider response failures preserve the draft without automatic replay.",
+      "evidence": [
+        "src/panels/terminal/TerminalPanel.tsx:1322-1334 calls resumeAgentJournalSession directly and stores the target before writing.",
+        "src/panels/terminal/TerminalPanel.tsx:1367-1370 retries the whole resumed operation only when restartRequired is set by a known restartable write error.",
+        "src/panels/terminal/TerminalPanel.test.tsx:1280-1301 and :1304-1318 assert one provider write or resume call, no automatic replay, and draft retention after ambiguous failures."
+      ]
+    },
+    {
+      "finding_id": "F-520C73CD",
+      "action": "corroborate",
+      "rationale": "Activity now derives its busy state from working or settling turn_status, while running/waiting renders a ready activity title alongside the En espera primary status.",
+      "evidence": [
+        "src/panels/terminal/TerminalPanel.tsx:7843-7858 returns Agent está trabajando only for working or settling and Listo para el siguiente turno otherwise.",
+        "src/panels/terminal/TerminalPanel.tsx:8728-8733 maps a running session to its turn status, including En espera.",
+        "src/panels/terminal/TerminalPanel.test.tsx:932-943 asserts both Estado: En espera and Listo para el siguiente turno, and rejects the contradictory busy title."
+      ]
+    },
+    {
+      "finding_id": "F-80C504E3",
+      "action": "corroborate",
+      "rationale": "Send failures now select direct correction copy for categorized pre-dispatch session and attachment/input rejections, retaining inspect-before-resend wording for unknown failures.",
+      "evidence": [
+        "src/panels/terminal/TerminalPanel.tsx:8679-8688 maps restartable session errors and invalid_input, attachment_not_found, or image_not_found to direct correction guidance while unknown errors retain the ambiguous delivery warning.",
+        "src/panels/terminal/TerminalPanel.test.tsx:1322-1340 covers session_not_running, attachment_not_found, and invalid_input and asserts the direct message excludes No se pudo confirmar.",
+        "src-tauri/src/agent_console/commands.rs:1077-1088 and :1415-1427 reject invalid input and attachment validation before provider dispatch."
+      ]
+    }
+  ],
+  "suppressed_speculative_count": 0,
+  "stop_reason": "coverage-complete"
+}

@@ -1,0 +1,147 @@
+[
+  {
+    "id": "TIN-001",
+    "cause": "Historical full-access/workspace mismatch; no permission broadening performed.",
+    "disposition": "Mitigated; distinct ICook project remains the supported route. Historical scope receipt not freshly reproduced."
+  },
+  {
+    "id": "TIN-002",
+    "cause": "Earlier WSL project registration/restart recovery.",
+    "disposition": "Historical pass preserved; current campaign uses Windows."
+  },
+  {
+    "id": "TIN-003",
+    "cause": "History/context-pressure concern.",
+    "disposition": "History and native resume verified; actual high-context compaction/performance remains unmeasured."
+  },
+  {
+    "id": "TIN-004",
+    "cause": "Revision freshness.",
+    "disposition": "Fetched baseline Tinto b0880b1 and Pumarejo18fa00b; both matched origin/main before local repair commits."
+  },
+  {
+    "id": "TIN-005",
+    "cause": "Completion refresh reopened a closed turn because its last output was recent; session.rs now skips inactive turns. Root turn_done emission and UI state projection also repaired.",
+    "disposition": "Resolved: deterministic red/green regression,231 backend tests, independent TR-003 review, final native037 En espera and FINAL_IDLE_OK."
+  },
+  {
+    "id": "TIN-006",
+    "cause": "Generic recovery retried ambiguous native resume/write failures. TerminalPanel now resumes once and retries writes only for known pre-dispatch session_not_running.",
+    "disposition": "Fixed guardrails and actionable errors; original five-attempt runtime trace is still missing. One native resumed dispatch produced one reply."
+  },
+  {
+    "id": "TIN-007",
+    "cause": "Historical fresh-start lead now has concrete sessionb359b1be evidence: thread sandbox sent dangerFullAccess where API expected danger-full-access.",
+    "disposition": "Baseline already uses correct thread/start/resume spelling and has regression tests. Fresh starts worked; other one-event archives still lack causal traces."
+  },
+  {
+    "id": "PUM-001 / PUM-001-REPAIR",
+    "cause": "Original doctor compatibility repair was historical. Current exact-byte provider drift is separately diagnosed.",
+    "disposition": "Historical repair preserved; final doctor is NOT green. Tinto executor differs only in CRLF; ICook also has regenerated permission files. No integrity check relaxed."
+  },
+  {
+    "id": "PUM-002",
+    "cause": "Native semantic primitives.",
+    "disposition": "Launch, snapshot, click, type, key and screenshot exercised; historical resize passed. Final minimized-window resize correctly failed. See PUM-010."
+  },
+  {
+    "id": "PUM-003",
+    "cause": "Broker reports no such alert when no dialog exists; client misclassified it as unavailable provider. webdriver/client.ts repaired.",
+    "disposition": "Unit regression and native016 verify provider_dialog_absent. Pending-dialog accept/cancel was not demonstrated; do not mark it passed."
+  },
+  {
+    "id": "PUM-004",
+    "cause": "Nonempty screenshot artifact quarantine cannot be safely deleted without native identity-bound adapter.",
+    "disposition": "Blocked fail-closed for save:true cleanup. save:false returns image for client evidence and allows clean close; both apps passed this path. Not a fix for nonempty quarantine."
+  },
+  {
+    "id": "PUM-005",
+    "cause": "Default snapshot maxDepth32 hides deeply nested pane; maxTextLength/maxNodes also truncate explicitly.",
+    "disposition": "Client usage corrected: fresh maxDepth100 and adequate bounds expose transcript. Truncation is recorded, not ignored."
+  },
+  {
+    "id": "PUM-006",
+    "cause": "Historical external bridge interruption while Cargo ran.",
+    "disposition": "Recovered historical exact rerun; no new build-failure claim."
+  },
+  {
+    "id": "PUM-007",
+    "cause": "Historical interruption at Cargo263/483, not a compiler error.",
+    "disposition": "Durable journal and final native history expose the exact progress event. Current ICook nonblank launch verified after cached-build retry."
+  },
+  {
+    "id": "PUM-008",
+    "cause": "Native Windows optional CLI binding absent, then GNU dlltool missing, then cold MSVC compile exceeded provider deadline.",
+    "disposition": "Development-only npm repair and explicit MSVC launch environment. Final authenticated ready013, snapshot014, screenshot015, close016, reopen018, close019 all recorded."
+  },
+  {
+    "id": "PUM-009",
+    "cause": "Runtime discarded launch diagnostics on failed cleanup; uppercase drive paths escaped redaction.",
+    "disposition": "Fixed bounded retained diagnostics in idle and cleanup_failed, redaction, replacement isolation and explicit-close clearing. Final failed cold launch diagnostic009 retained51 records with redacted paths and cleanup convergence."
+  },
+  {
+    "id": "PUM-010",
+    "cause": "New final native restore result says restored while Windows rect remains -32000,-32000,160x28.",
+    "disposition": "Open provider/restore postcondition gap; maximize succeeds, resize correctly rejects unmet geometry. Evidence tinto-final015,017,024,025."
+  },
+  {
+    "id": "ICOOK-ENV-001",
+    "cause": "Android SDK / ANDROID_HOME absent.",
+    "disposition": "External blocker, out of scope; no SDK/signing/deployment changes."
+  },
+  {
+    "id": "ICOOK-ENV-002",
+    "cause": "Historical dependency-cache/index issue.",
+    "disposition": "Historical recovery preserved; Windows native dependencies repaired separately without package/lock changes."
+  },
+  {
+    "id": "ICOOK-001",
+    "cause": "Missing icon asset.",
+    "disposition": "Historical fix preserved; no feature changes in this repair."
+  },
+  {
+    "id": "ICOOK-002",
+    "cause": "Recommendation tags omitted after first two.",
+    "disposition": "Historical fix and29-test result preserved; no reimplementation."
+  },
+  {
+    "id": "ICOOK-003",
+    "cause": "Invalid div under ul in empty ingredient result.",
+    "disposition": "Historical fix preserved."
+  },
+  {
+    "id": "ICOOK-004",
+    "cause": "Bundle icon metadata absent.",
+    "disposition": "Historical fix preserved."
+  },
+  {
+    "id": "ORC-001",
+    "cause": "Historical managed Git metadata restriction.",
+    "disposition": "Prior recovery preserved; no ICook commit or remote action."
+  },
+  {
+    "id": "ORC-002",
+    "cause": "Restart recovery depended on durable history.",
+    "disposition": "Fresh native history distinguishes same-title sessions by full accessible IDs and visible short IDs."
+  },
+  {
+    "id": "ORC-003",
+    "cause": "Durable queue/contracts survived bridge restart.",
+    "disposition": "Preserved; current canonical queue transition remains blocked by gate compiler requiring approval despite explicit bypass. No fabricated receipt/status."
+  },
+  {
+    "id": "ORC-004",
+    "cause": "New: transition compiler lacks explicit user-authorized documentation bypass path.",
+    "disposition": "External skill protocol blocker. Gate stays in_review, canonical units planned; actual execution and evidence recorded separately."
+  },
+  {
+    "id": "ORC-005",
+    "cause": "Vitest default discovery traversed nested worktrees/Pumarejo copies.",
+    "disposition": "Fixed anchored source and scripts test includes. Independent inventory confirms all59 tracked test files covered. Existing WSL policy test and baseline effect lint remain separate failures."
+  },
+  {
+    "id": "ORC-006",
+    "cause": "Unquoted colon in existing Pumarejo blocker YAML scalar",
+    "disposition": "Resolved by quoting one scalar; live full ledger parses; historical snapshot preserved."
+  }
+]

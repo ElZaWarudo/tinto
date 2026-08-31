@@ -1,0 +1,146 @@
+{
+  "contract_hash": "sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b",
+  "diff_digest": "sha256:06fa609c4bb8bc60158f32e588521918ebefb2381bac0dddcc99d401bac8128d",
+  "findings": [
+    {
+      "contract_hash": "sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b",
+      "diff_digest": "sha256:06fa609c4bb8bc60158f32e588521918ebefb2381bac0dddcc99d401bac8128d",
+      "evidence": [
+        "src/mcp/runtime.ts:1125 records manager process output into the launch DiagnosticStore; src/mcp/runtime.ts:831-847 now serves that store after a failed launch settles idle.",
+        "src/observability/diagnostics.ts:60-61 defines PATH_PATTERN with [a-z]: and no case-insensitive flag, so C:\\... is not matched.",
+        "C:/Users/User/Documents/personal/ICook/docs/tooling-repair-evidence/icook-repaired/004-tauri_diagnostics.json contains a process_stderr message with C:\\\\Users\\\\User\\\\Documents\\\\... while [REDACTED_PATH] appears only later in the text.",
+        "tests/unit/mcp-runtime.test.ts:542-575 exercises only /private/trace and does not cover uppercase Windows paths."
+      ],
+      "feedback": [],
+      "fingerprint": "sha256:1f24b2705cecd8dbeb6f28d5b26561e694d2d2b01f9b1eca5d892c9b02d1a7cb",
+      "id": "F-1F24B270",
+      "impact": "A caller with tauri_diagnostics access can read local usernames, project roots, package paths, and stack-trace locations from failed-launch stderr. This creates an information disclosure in the newly exposed failure records.",
+      "observation": "The new idle failed-launch diagnostics path exposes retained process stderr, but the existing sanitizer's Windows path branch only matches lowercase drive letters; uppercase drive paths remain in retained records.",
+      "principle": "security",
+      "recommendation": "Extend the existing diagnostics sanitizer to match uppercase Windows drive letters and add focused regression coverage for C:\\Users\\... through the failed-launch path. Keep raw stderr out of artifacts and logs while preserving the existing record and query bounds.",
+      "reporters": [
+        "/root/pumarejo_diagnostics_security"
+      ],
+      "resolution": {
+        "evidence": [
+          "PR-final-review-terminal.json",
+          "ICook/docs/tooling-repair-evidence/checks/pumarejo-final-direct-build/registry.json: passed"
+        ],
+        "resolution": "fixed",
+        "resolved_diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+        "resolver_id": "/root"
+      },
+      "review_plan_hashes": [
+        "sha256:8239983df01a741d9fe2a41a8ddf79683d6c8d38c5cf7a4888c26ae298422276"
+      ],
+      "rule_id": "redaction.windows-absolute-path",
+      "severity": "p2",
+      "status": "fixed",
+      "surface_ids": [
+        "diagnostics-security"
+      ],
+      "validation": {
+        "evidence": [
+          "Root inspected exact referenced code and reproduced missing tests/unsafe retry or native redaction as described; bounded root fixes follow."
+        ],
+        "revised_finding": null,
+        "validator_id": "/root",
+        "verdict": "confirmed"
+      }
+    },
+    {
+      "contract_hash": "sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b",
+      "diff_digest": "sha256:06fa609c4bb8bc60158f32e588521918ebefb2381bac0dddcc99d401bac8128d",
+      "evidence": [
+        "src/mcp/runtime.ts:1047-1052 obtains and validates sessionId, returns INTERNAL_ERROR with state idle, and only then closes this.#diagnostics.",
+        "src/mcp/runtime.ts:827-833 selects this.#diagnostics whenever state is idle and no launch operation remains.",
+        "src/mcp/runtime.ts:1125-1160 records launch failure diagnostics and leaves the retained store in place when cleanup succeeds; a subsequent invalid-ID launch therefore leaves that first store queryable.",
+        "The scenario is reproducible through the exported PumarejoRuntimeDependencies.sessionId seam: first return a valid ID and fail manager.launch, then return a malformed ID and query diagnostics without an intervening close."
+      ],
+      "feedback": [],
+      "fingerprint": "sha256:89cf4f7430150d902db947f207852a4faeac1d784969f82a408e4504c2611032",
+      "id": "F-89CF4F74",
+      "impact": "After one failed launch, a replacement attempt that produces an invalid ID leaves the previous attempt's phase, stderr, and last_error records queryable as if they belonged to the current idle state, violating relaunch isolation and misattributing evidence.",
+      "observation": "launchNow validates the newly generated session ID and returns INTERNAL_ERROR before closing the retained DiagnosticStore from an earlier failed launch. It sets the runtime back to idle, leaving the old store available to the idle diagnostics branch.",
+      "principle": "correctness",
+      "recommendation": "Invalidate and close the retained diagnostics store at the start of a replacement launch, before sessionId validation, and clear its pointer so every replacement attempt either owns a fresh store or exposes no prior records.",
+      "reporters": [
+        "/root/pumarejo_diagnostics_review"
+      ],
+      "resolution": {
+        "evidence": [
+          "PR-final-review-terminal.json",
+          "ICook/docs/tooling-repair-evidence/checks/pumarejo-final-direct-build/registry.json: passed"
+        ],
+        "resolution": "fixed",
+        "resolved_diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+        "resolver_id": "/root"
+      },
+      "review_plan_hashes": [
+        "sha256:8239983df01a741d9fe2a41a8ddf79683d6c8d38c5cf7a4888c26ae298422276"
+      ],
+      "rule_id": "diagnostics.relaunch.invalid-session-id",
+      "severity": "p2",
+      "status": "fixed",
+      "surface_ids": [
+        "diagnostics-lifecycle"
+      ],
+      "validation": {
+        "evidence": [
+          "Root inspected exact referenced code and reproduced missing tests/unsafe retry or native redaction as described; bounded root fixes follow."
+        ],
+        "revised_finding": null,
+        "validator_id": "/root",
+        "verdict": "confirmed"
+      }
+    },
+    {
+      "contract_hash": "sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b",
+      "diff_digest": "sha256:06fa609c4bb8bc60158f32e588521918ebefb2381bac0dddcc99d401bac8128d",
+      "evidence": [
+        "tests/unit/mcp-runtime.test.ts:577-582 calls close and asserts SESSION_NOT_ACTIVE before the relaunch at lines 584-592.",
+        "tests/unit/mcp-runtime.test.ts:321-324 replaces diagnostics with a fresh DiagnosticStore on the second create, independently guaranteeing clean relaunch records even if src/mcp/runtime.ts:1052 is removed."
+      ],
+      "feedback": [],
+      "fingerprint": "sha256:9972bfddfa7b4158f996f66a531ced9b043624e79b4941160b945807af6b4501",
+      "id": "F-9972BFDD",
+      "impact": "A regression that removes the runtime's replacement close or otherwise retains the previous store can remain green; the required close/relaunch isolation behavior is not actually exercised by this test.",
+      "observation": "The new regression closes the failed launch and verifies diagnostics are cleared before it performs the relaunch assertion. Its harness also creates a new DiagnosticStore on every create after the first, so the test cannot observe whether runtime replacement cleanup closes the previous store.",
+      "principle": "testing",
+      "recommendation": "Attempt the second launch directly after the failed-launch diagnostics query and assert the old record is absent from the new query, then separately call close and verify diagnostics are unavailable. Use a factory or close spy that preserves the old store until runtime replacement performs the cleanup.",
+      "reporters": [
+        "/root/pumarejo_diagnostics_review"
+      ],
+      "resolution": {
+        "evidence": [
+          "PR-final-review-terminal.json",
+          "ICook/docs/tooling-repair-evidence/checks/pumarejo-final-direct-build/registry.json: passed"
+        ],
+        "resolution": "fixed",
+        "resolved_diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+        "resolver_id": "/root"
+      },
+      "review_plan_hashes": [
+        "sha256:8239983df01a741d9fe2a41a8ddf79683d6c8d38c5cf7a4888c26ae298422276"
+      ],
+      "rule_id": "diagnostics.relaunch-isolation.unexercised",
+      "severity": "p2",
+      "status": "fixed",
+      "surface_ids": [
+        "diagnostics-lifecycle"
+      ],
+      "validation": {
+        "evidence": [
+          "Root inspected exact referenced code and reproduced missing tests/unsafe retry or native redaction as described; bounded root fixes follow."
+        ],
+        "revised_finding": null,
+        "validator_id": "/root",
+        "verdict": "confirmed"
+      }
+    }
+  ],
+  "registry_digest": "sha256:9b6b3e2f81822b03806a75e03c2ce77e8404a4a5c2a568c12369aac99ffbd8d6",
+  "registry_id": "tooling-repair-PR-001",
+  "revision": 8,
+  "schema_version": 1
+}

@@ -1,0 +1,5 @@
+# Repair startup
+
+Mode autonomous-team-flow. Prior queues are preserved byte-for-byte under the run prior-state directory; prior approved packets do not authorize this new scope. Documentation gate stays in_review with explicit AUTH-TOOLING-2026-08-31 bypass and no receipt. Two repository-separated deep units justify delegation; root handles evidence, GUI and reconciliation. Implementation cap two, review cap two, one spare slot. Native GUI testing is serial and exclusively through Pumarejo. Workers are implementation-only, no commits/shipping/Jira and no ICook edits.
+
+Required gates: contract and profile validation, accepted read-only discovery manifest, focused tests, actual-diff observation, independent control-flow/security review, canonical terminal evaluation, root aggregate evidence fingerprint/run, real Pumarejo campaign. Local commits belong only to Release Marshal and exclude baseline dirty files. Stop only for precise blockers with no safe independent work remaining. Runtime failures retain their original observations. All state promotions require evidence, not worker prose.

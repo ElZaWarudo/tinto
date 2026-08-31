@@ -1,0 +1,93 @@
+{
+  "reviewer_id": "/root/tinto_ui_review",
+  "base_revision": "b0880b163b4698d180d0f0c9f56416b99731731f",
+  "scope": [
+    "vite.config.ts",
+    "tracked test inventory"
+  ],
+  "vite_config_hash": {
+    "sha256_raw_bytes": "e9ce07852bfb64aa69540a1b75e7b583538c655a15b226a52ed8e0a099bcce7b",
+    "git_blob_sha1": "af7831f492887e0ebba3b42782eb8072ba7cb4b3"
+  },
+  "configured_include": [
+    "src/**/*.test.{ts,tsx}",
+    "scripts/**/*.test.mjs"
+  ],
+  "tracked_test_inventory": {
+    "candidate_count": 59,
+    "covered_count": 59,
+    "uncovered_count": 0,
+    "generated_or_untracked_copies_ignored": true,
+    "files": [
+      "scripts/remove-with-retry.test.mjs",
+      "src/App.test.tsx",
+      "src/agent/boundedRetry.test.ts",
+      "src/agent/sessionStore.test.ts",
+      "src/agent/subagentSelectors.test.ts",
+      "src/bus/connection.test.ts",
+      "src/bus/contract.test.ts",
+      "src/bus/store.test.ts",
+      "src/demo/agentRuntime.test.tsx",
+      "src/panels/DashboardPanel.test.tsx",
+      "src/panels/RepoCard.test.tsx",
+      "src/panels/RepoPanel.test.tsx",
+      "src/panels/RepoTab.test.tsx",
+      "src/panels/WatchedFilesSection.test.tsx",
+      "src/panels/diff/DiffView.test.tsx",
+      "src/panels/diff/FullFileView.test.tsx",
+      "src/panels/file/FileOverviewRuler.test.tsx",
+      "src/panels/file/FileView.test.tsx",
+      "src/panels/file/MediaView.test.tsx",
+      "src/panels/file/OverwriteConfirmModal.test.tsx",
+      "src/panels/file/useOverviewScrollSync.test.tsx",
+      "src/panels/terminal/AgentConversationTab.test.tsx",
+      "src/panels/terminal/AgentTreeLens.test.tsx",
+      "src/panels/terminal/ConsoleDockPanel.test.tsx",
+      "src/panels/terminal/DetachedConsolesApp.test.tsx",
+      "src/panels/terminal/TerminalPanel.test.tsx",
+      "src/panels/terminal/detachTerminalWindow.test.ts",
+      "src/panels/terminal/runtimePresets.test.ts",
+      "src/panels/timeline/TimelinePanel.test.tsx",
+      "src/panels/timeline/model.test.ts",
+      "src/panels/tree/ProjectExplorer.test.tsx",
+      "src/panels/tree/fileTree.test.ts",
+      "src/qol/GlanceMode.test.tsx",
+      "src/qol/filters.test.ts",
+      "src/qol/notifications.test.ts",
+      "src/qol/shortcuts.test.ts",
+      "src/qol/zoom.test.ts",
+      "src/windowLayout.test.ts",
+      "src/workbench/BrowserReviewHome.test.tsx",
+      "src/workbench/KeyboardShortcuts.test.tsx",
+      "src/workbench/ManageWorkbenchesDialog.test.tsx",
+      "src/workbench/WindowChrome.test.tsx",
+      "src/workbench/operations.test.ts",
+      "src/workbench/recentWorkbenches.test.ts",
+      "src/workbench/useAccessibleDialog.test.tsx",
+      "src/workbench/workbench.test.tsx",
+      "src/workbench/wslAbsence.test.ts",
+      "src/workspace/AccessibleDockTab.test.tsx",
+      "src/workspace/DockWorkspace.test.tsx",
+      "src/workspace/consoleDock.test.ts",
+      "src/workspace/externalTabDetach.test.ts",
+      "src/workspace/fileDock.test.ts",
+      "src/workspace/layout.test.ts",
+      "src/workspace/openAgentTerminal.test.ts",
+      "src/workspace/openDashboard.test.ts",
+      "src/workspace/openTimeline.test.ts",
+      "src/workspace/recentAgentLaunches.test.ts",
+      "src/workspace/repoTreeStore.test.ts",
+      "src/workspace/subscriptions.test.ts"
+    ]
+  },
+  "findings": [],
+  "verification": {
+    "tests_rerun": [],
+    "static_checks": [
+      "git ls-files inventory matched 59 tracked test candidates",
+      "All 59 tracked test candidates match src/**/*.test.{ts,tsx} or scripts/**/*.test.mjs",
+      "Current vite.config.ts raw SHA-256 and git blob SHA-1 recorded above",
+      "Generated and untracked nested copies were excluded from the inventory"
+    ]
+  }
+}

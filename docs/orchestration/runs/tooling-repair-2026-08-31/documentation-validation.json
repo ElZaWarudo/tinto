@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "approval_asserted": false,
+  "bypass_event": "AUTH-TOOLING-2026-08-31",
+  "source_sha256": "a76acbb1964d782069006f1b81186ada61a06458ed898c186e153f714accb0f1",
+  "artifacts": {
+    "docs/plans/tooling-repair-2026-08-31/initiative-requirements.md": "27c631ae50e81f69563b245a10c34b03ec99c67d145eb07621f3e2ad288631c2",
+    "docs/plans/tooling-repair-2026-08-31/roadmap.md": "706e4de89d826472d7e0a5f891e15f9a1943dfefc31e7586f3f15d33deb2fc2f",
+    "docs/plans/tooling-repair-2026-08-31/jira-seed-plan.md": "3023e82c8e3bedc9c04c980aabc145ea81a7357e213dfc9cff4308494507f55b",
+    "docs/plans/tooling-repair-2026-08-31/swarm-startup.md": "f1098c380093842c2cd4d2dbabe35cf10a985c17e6f0884de3747e66e3d184c4"
+  },
+  "review": "root composition review: bounded scope, no feature expansion, all gates and ownership declared",
+  "jira": "none",
+  "baseline": "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\tooling-repair-2026-08-31\\baseline.json"
+}

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "contract_hash": "sha256:c42dfcc2a8a7499dca1e947a27525a142d84a6ecfb73a784c483fe161ca9071a",
+  "diff_digest": "sha256:1add6461ae8e81ff973f52b18418dfded3e1ce72ed79a4c02680e5f16a816b75",
+  "changed_paths": [
+    "src-tauri/src/agent_console/session.rs"
+  ],
+  "assignments": [
+    {
+      "id": "closed-turn-refresh",
+      "reviewer_role": "reviewer",
+      "owned_paths": [
+        "src-tauri/src/agent_console/session.rs"
+      ],
+      "risk_boundaries": [
+        "completed turn remains idle",
+        "next turn starts normally",
+        "no duplicate checkpoint"
+      ],
+      "cross_cutting": false,
+      "priority": 1
+    }
+  ],
+  "queued": [],
+  "coverage_complete": true,
+  "validation_wave_required": false,
+  "review_plan_hash": "sha256:72b64b2c2279949ab33a32d1b70e3dd49ab4f689588f447ce23143d9920bb14b"
+}

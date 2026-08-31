@@ -1,0 +1,16 @@
+{
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+  "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+  "review_plan_hash": "sha256:1ec58f5acd6caf4bd1189a65df3bd426d42300e9a6838a5129a887f4a179672f",
+  "reviewer_id": "/root/pumarejo_diagnostics_review",
+  "surface_id": "pumarejo-runtime",
+  "risk_boundaries_checked": [
+    "native dialog absence",
+    "provider process exit and PID reuse",
+    "replacement isolation"
+  ],
+  "findings": [],
+  "finding_feedback": [],
+  "suppressed_speculative_count": 0,
+  "stop_reason": "coverage-complete"
+}

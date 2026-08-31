@@ -1,0 +1,19 @@
+{
+  "id": "TR-003",
+  "route": "root-direct",
+  "owned_files": [
+    "src-tauri/src/agent_console/session.rs"
+  ],
+  "objective": "Keep completed turns idle during immediate and delayed status refresh; preserve next-turn activity and indexing",
+  "evidence": "Native47331a89 upstreamcompleted plus deterministic red regression left Working expected Waiting",
+  "exclusions": [
+    "permissions",
+    "frame transport",
+    "provider control",
+    "ICook source"
+  ],
+  "verification": [
+    "cargo test --manifest-path src-tauri/Cargo.toml agent_console:: --lib"
+  ],
+  "review_required": true
+}

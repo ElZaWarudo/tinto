@@ -1,0 +1,56 @@
+[
+  {
+    "message": "fix(agent): complete turns and clean up failed resumes",
+    "paths": [
+      "src-tauri/src/agent_console/app_server.rs",
+      "src-tauri/src/agent_console/commands.rs"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"src-tauri/src/agent_console/app_server.rs\", \"src-tauri/src/agent_console/commands.rs\"], \"message\": \"fix(agent): complete turns and clean up failed resumes\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/agents-usability-edge-campaign 57fa54b] fix(agent): complete turns and clean up failed resumes\\n 2 files changed, 122 insertions(+), 10 deletions(-)\\n\"}\n",
+    "stderr": "",
+    "head": "57fa54b586637760b5b31bf24e0bc71ca07c40f0"
+  },
+  {
+    "message": "fix(agent): keep completed turns idle during status refresh",
+    "paths": [
+      "src-tauri/src/agent_console/session.rs"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"src-tauri/src/agent_console/session.rs\"], \"message\": \"fix(agent): keep completed turns idle during status refresh\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/agents-usability-edge-campaign 70afafd] fix(agent): keep completed turns idle during status refresh\\n 1 file changed, 14 insertions(+)\\n\"}\n",
+    "stderr": "",
+    "head": "70afafdb4e86fea38283027252865c7a0cda6148"
+  },
+  {
+    "message": "fix(journal): preserve turn checkpoints across restarts",
+    "paths": [
+      "src-tauri/src/agent_console/journal.rs"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"src-tauri/src/agent_console/journal.rs\"], \"message\": \"fix(journal): preserve turn checkpoints across restarts\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/agents-usability-edge-campaign 2ef6a41] fix(journal): preserve turn checkpoints across restarts\\n 1 file changed, 107 insertions(+), 10 deletions(-)\\n\"}\n",
+    "stderr": "",
+    "head": "2ef6a41b896fde7d1ee802d26a9e242d198ca0df"
+  },
+  {
+    "message": "fix(agent-ui): preserve dispatch identity and truthful turn state",
+    "paths": [
+      "src/panels/terminal/TerminalPanel.tsx",
+      "src/panels/terminal/TerminalPanel.test.tsx",
+      "src/panels/terminal/ConsoleDockPanel.tsx",
+      "src/panels/terminal/ConsoleDockPanel.test.tsx"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"src/panels/terminal/ConsoleDockPanel.test.tsx\", \"src/panels/terminal/ConsoleDockPanel.tsx\", \"src/panels/terminal/TerminalPanel.test.tsx\", \"src/panels/terminal/TerminalPanel.tsx\"], \"message\": \"fix(agent-ui): preserve dispatch identity and truthful turn state\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/agents-usability-edge-campaign 161865b] fix(agent-ui): preserve dispatch identity and truthful turn state\\n 4 files changed, 154 insertions(+), 38 deletions(-)\\n\"}\n",
+    "stderr": "",
+    "head": "161865b2fa7ec1e57e2ac83f46d4c5d41f6f23bd"
+  },
+  {
+    "message": "test: keep discovery inside tracked source and script trees",
+    "paths": [
+      "vite.config.ts"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"vite.config.ts\"], \"message\": \"test: keep discovery inside tracked source and script trees\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/agents-usability-edge-campaign 09ebd54] test: keep discovery inside tracked source and script trees\\n 1 file changed, 2 insertions(+)\\n\"}\n",
+    "stderr": "",
+    "head": "09ebd549aa3a5049bdd1c9cb17d687aa11093e40"
+  }
+]

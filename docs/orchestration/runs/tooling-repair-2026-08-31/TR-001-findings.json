@@ -1,0 +1,100 @@
+{
+  "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+  "diff_digest": "sha256:1984dff031984c2fe2b92f38a114ec7536afa0d412bd1006db4e2c8baaf975af",
+  "findings": [
+    {
+      "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+      "diff_digest": "sha256:1984dff031984c2fe2b92f38a114ec7536afa0d412bd1006db4e2c8baaf975af",
+      "evidence": [
+        "src-tauri/src/agent_console/journal.rs:63-136 defines the new column and ensure_agent_sessions_column migration, but no test fixture creates the old schema without it.",
+        "src-tauri/src/agent_console/journal.rs:903-946 calls open_in_memory (which runs the new CREATE TABLE) and only updates turn_checkpoints_json to NULL; that is NULL-field compatibility, not legacy-schema migration coverage.",
+        "The source SELECT at src-tauri/src/agent_console/journal.rs:476-547 now unconditionally reads column 23, so a true old-schema fixture is needed to verify migration precedes reads."
+      ],
+      "feedback": [],
+      "fingerprint": "sha256:9860e4e8e4ad0eb318b7b0049b6aac47ef237f5dfcd7e3766794c6b16e606320",
+      "id": "F-9860E4E8",
+      "impact": "A migration or SELECT compatibility regression can break existing on-disk journals or fail to load their legacy rows while this test remains green, leaving the required backward compatibility claim unsupported.",
+      "observation": "The journal_roundtrips_turn_checkpoints_and_accepts_legacy_rows regression opens an in-memory journal whose CREATE TABLE already includes turn_checkpoints_json, then sets that newly created column to NULL. It does not exercise a database created before the column existed, so the additive ALTER TABLE migration path is unverified.",
+      "principle": "testing",
+      "recommendation": "Build a temporary SQLite database with the pre-change agent_sessions schema, insert a legacy row, open it through AgentJournal::open, and assert migration adds the column and restores the row with empty checkpoints; then verify a subsequent checkpoint roundtrip.",
+      "reporters": [
+        "/root/tinto_lifecycle_review"
+      ],
+      "resolution": {
+        "evidence": [
+          "TR-001-final-review-terminal.json",
+          "ICook/docs/tooling-repair-evidence/checks/tinto-aggregate/command-02-exit-0.log: 231 backend tests passed"
+        ],
+        "resolution": "fixed",
+        "resolved_diff_digest": "sha256:f231fc227245dc7f0f5018e848fda8f97b6f43ae475006a39faff2cd2da1bfa2",
+        "resolver_id": "/root"
+      },
+      "review_plan_hashes": [
+        "sha256:a6ca95ec2301343fd744df0b56f91070bce470a33d70864933b15c4b52afeaeb"
+      ],
+      "rule_id": "journal.migration-legacy-schema-uncovered",
+      "severity": "p2",
+      "status": "fixed",
+      "surface_ids": [
+        "tinto-lifecycle"
+      ],
+      "validation": {
+        "evidence": [
+          "Root inspected exact referenced code and reproduced missing tests/unsafe retry or native redaction as described; bounded root fixes follow."
+        ],
+        "revised_finding": null,
+        "validator_id": "/root",
+        "verdict": "confirmed"
+      }
+    },
+    {
+      "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+      "diff_digest": "sha256:1984dff031984c2fe2b92f38a114ec7536afa0d412bd1006db4e2c8baaf975af",
+      "evidence": [
+        "src-tauri/src/agent_console/commands.rs:436-473 adds cleanup calls, while the commands.rs test module contains no resume_agent_journal_session or cleanup_failed_resume_session test.",
+        "src-tauri/src/agent_console/app_server.rs:3418-3438 only asserts that a provider resume error resolves as agent_resume_failed; it does not hold a registry session or assert process cleanup.",
+        "src-tauri/src/agent_console/mod.rs:1759-1764 covers only stop_session for a missing id and cannot guard rejected-resume cleanup."
+      ],
+      "feedback": [],
+      "fingerprint": "sha256:9a4881918e1993a6c0b50ff661032998ca26c5710be73019ef98574fbeac6200",
+      "id": "F-9A488191",
+      "impact": "Removing one cleanup call or regressing stop_session handling would leave the focused tests green while a rejected native resume keeps its newly registered provider process alive, consuming session capacity and enabling stranded or duplicate sessions.",
+      "observation": "The new cleanup_failed_resume_session calls cover the three failed resume-result branches, but no test invokes resume_agent_journal_session or this helper with a registry containing the newly started session. The existing rejected resume test checks only the provider error delivered through the resume channel.",
+      "principle": "testing",
+      "recommendation": "Add a focused command or registry regression with a controllable fake process that exercises a failed native resume and asserts process termination and terminal registry state while preserving the original resume error. Cover the disconnected or wait failure branches as practical.",
+      "reporters": [
+        "/root/tinto_lifecycle_review"
+      ],
+      "resolution": {
+        "evidence": [
+          "TR-001-final-review-terminal.json",
+          "ICook/docs/tooling-repair-evidence/checks/tinto-aggregate/command-02-exit-0.log: 231 backend tests passed"
+        ],
+        "resolution": "fixed",
+        "resolved_diff_digest": "sha256:f231fc227245dc7f0f5018e848fda8f97b6f43ae475006a39faff2cd2da1bfa2",
+        "resolver_id": "/root"
+      },
+      "review_plan_hashes": [
+        "sha256:a6ca95ec2301343fd744df0b56f91070bce470a33d70864933b15c4b52afeaeb"
+      ],
+      "rule_id": "resume.cleanup-regression-uncovered",
+      "severity": "p2",
+      "status": "fixed",
+      "surface_ids": [
+        "tinto-lifecycle"
+      ],
+      "validation": {
+        "evidence": [
+          "Root inspected exact referenced code and reproduced missing tests/unsafe retry or native redaction as described; bounded root fixes follow."
+        ],
+        "revised_finding": null,
+        "validator_id": "/root",
+        "verdict": "confirmed"
+      }
+    }
+  ],
+  "registry_digest": "sha256:db0e4ad93c6165af46f54235c24a5aa439374c6ca29e541a031aa17af04ac9a3",
+  "registry_id": "tooling-repair-TR-001",
+  "revision": 5,
+  "schema_version": 1
+}

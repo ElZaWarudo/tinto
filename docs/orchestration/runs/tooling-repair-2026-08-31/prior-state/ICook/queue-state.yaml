@@ -1,0 +1,806 @@
+schema_version: 2
+updated_at: '2026-08-28T17:27:46Z'
+mode: autonomous-team-flow
+documentation_gate:
+  status: in_review
+  approved_by: null
+  approved_at: null
+  initiative_contract: docs/plans/icook/initiative-requirements.md
+  source_artifacts:
+  - docs/plans/icook/initiative-requirements.md
+  - docs/product/roadmap.md
+  - docs/jira/seed-plan.md
+  - docs/swarm/swarm-startup.md
+  - docs/swarm/queue-state.yaml
+  - docs/swarm/blockers.yaml
+  approval_artifacts:
+  - docs/plans/icook/initiative-requirements.md
+  - docs/product/roadmap.md
+  - docs/jira/seed-plan.md
+  - docs/swarm/swarm-startup.md
+  approval_receipt: null
+  approved_packet_digest: null
+  approval_receipt_digest: null
+  feedback_log: []
+  authorization_bypass:
+    event_id: AUTH-IC-2026-08-28-001
+    path: docs/orchestration/seneschal/authorization-event.md
+    permits:
+    - direct_progression_after_documents
+    - worker_dispatch
+    - code_mutation
+    - release_handoff
+    - local_commits
+    - branch_push
+    does_not_assert_document_review: true
+    one_shot: true
+initiative:
+  contract_path: docs/plans/icook/initiative-requirements.md
+  artifact_contract: ce-unified-plan/v1
+  artifact_readiness: requirements-only
+  shared_revision: IC-REQ-R1
+  shared_decisions:
+  - DEC-IC-001
+  - DEC-IC-002
+  - DEC-IC-003
+  - DEC-IC-004
+compound_runs: {}
+autonomy:
+  mode: high
+  ledger_path: docs/orchestration/autonomy-ledgers/IC-RUN-2026-08-28-001.json
+  resume_snapshot:
+    authority: false
+    schema_version: 1
+    contract_id: IC-AUTO-2026-08-28-001
+    contract_status: active
+    contract_hash: 9afd85d4faa1d8791ff07dac312744b19a6c8670ecfb34552ba777b74ae7bab2
+    latest_audit_event: GENESIS
+    captured_at: '2026-08-28T15:47:50Z'
+jira:
+  provider: none
+  project_key: null
+  base_url: null
+  last_read_at: null
+source_artifacts:
+- path: docs/plans/icook/initiative-requirements.md
+  kind: initiative-contract
+jira_issue_map: {}
+proposed_jira:
+  epics: []
+  parents: []
+  subtasks: []
+units:
+  IC-FOUND-001:
+    title: Foundation, recipe data, ranking and filters
+    jira_key: null
+    source: docs/plans/icook/initiative-requirements.md
+    status: release-ready
+    depends_on: []
+    blocked_by: []
+    affects_dependents:
+    - IC-UI-001
+    - IC-TAURI-001
+    - IC-VERIFY-001
+    scope:
+      included:
+      - Tauri/React/TypeScript scaffold contract
+      - approximately 40 local recipes
+      - ingredient normalization/selection persistence contract
+      - deterministic ranking and four filters
+      excluded:
+      - finished UI
+      - Android lifecycle
+      - external services
+    acceptance_criteria:
+    - Recipe records contain every required field and approximately 40 realistic entries
+    - Match percentage and three-level ordering are deterministic
+    - All four filters compose
+    - Selection storage contract is local and reload-safe
+    surfaces:
+      code:
+      - src/domain
+      - src/data
+      - src/state
+      contracts:
+      - ranking and recipe model
+      data:
+      - local recipes
+      auth: []
+      docs: []
+      tests:
+      - domain tests
+      config:
+      - initial manifests
+      generated: []
+    dependencies: []
+    execution:
+      route: swarm
+      transport: tinto-agent
+      lane: deep
+      discovery_profile: luna_xhigh_discovery
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: new cross-cutting application/data architecture and deterministic
+        state contract
+      role_triggers:
+        reviewer: architecture/data/behavior change
+        integrator: foundation dependency edges
+      worker_contract_path: docs/orchestration/seneschal/contracts/materialized/IC-FOUND-001-worker-contract.json
+      worker_contract_hash: sha256:0bc3f8477bed7c059d73497d79f1e6fd1dd1489ff2b68f090496601dae9662cc
+      evidence_trust: runtime-audited-through-tinto-if-available
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: high
+    verification:
+      focused_commands:
+      - rtk test npm test -- ranking filters data
+      focused_evidence:
+      - docs/orchestration/runs/IC-RUN-2026-08-28-001/aggregate-verification.md
+      aggregate_owner: seneschal-superior
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/seneschal/evidence/verification-evidence.json
+      reuse_decision: null
+    isolation:
+      type: tinto-purpose-built-workspace
+      workspace_plan: null
+      workspace_plan_hash: null
+      workspace_id: null
+      branch: null
+      path: null
+      thread: null
+      mode: mutable
+      source_revision: null
+      baseline_source: null
+      baseline_tree: null
+      dependency_patch_hashes: []
+      candidate_patch_hashes: []
+      patch_manifest: null
+      patch_manifest_hash: null
+      cleanup_status: not-created
+    handoff:
+      intended_base: main
+      pr_grouping: grouped-local-commit
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  IC-UI-001:
+    title: Touch-first responsive ICook UI/UX
+    jira_key: null
+    source: docs/plans/icook/initiative-requirements.md
+    status: release-ready
+    depends_on:
+    - IC-FOUND-001
+    blocked_by: []
+    affects_dependents:
+    - IC-VERIFY-001
+    - IC-PUM-001
+    scope:
+      included:
+      - ingredient browse/search/select/clear
+      - recommendations and filter controls
+      - recipe details
+      - empty/no-result/recovery states
+      - 360x800 and 412x915 responsive accessibility
+      excluded:
+      - domain ranking changes
+      - Tauri native configuration
+    acceptance_criteria:
+    - Large touch targets and visible keyboard focus
+    - Selection/filter feedback is immediate and clear
+    - Long names/lists scroll without hidden actions
+    - All required UI states are accessible and responsive
+    surfaces:
+      code:
+      - src/components
+      - src/views
+      - src/styles
+      contracts: []
+      data: []
+      auth: []
+      docs: []
+      tests:
+      - UI tests
+      config: []
+      generated: []
+    dependencies:
+    - IC-FOUND-001
+    execution:
+      route: swarm
+      transport: tinto-subagent
+      lane: standard
+      discovery_profile: null
+      worker_profile: luna
+      reasoning_effort: high
+      lane_trigger: bounded UI implementation choices after foundation
+      role_triggers:
+        reviewer: behavior/accessibility change
+        documenter: dogfood evidence only after campaign
+      worker_contract_path: docs/orchestration/seneschal/contracts/materialized/IC-UI-001-worker-contract.json
+      worker_contract_hash: sha256:39920d5c2be52a28e85f58db81860042f0a298ac0ca27c2ea437452b28eeba8b
+      evidence_trust: runtime-audited-through-tinto-if-available
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: low
+    verification:
+      focused_commands:
+      - rtk test npm test -- ui accessibility
+      - rtk test npm run build
+      focused_evidence:
+      - docs/orchestration/runs/IC-RUN-2026-08-28-001/aggregate-verification.md
+      aggregate_owner: seneschal-superior
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/seneschal/evidence/verification-evidence.json
+      reuse_decision: null
+    isolation:
+      type: tinto-purpose-built-workspace
+      workspace_plan: null
+      workspace_plan_hash: null
+      workspace_id: null
+      branch: null
+      path: null
+      thread: null
+      mode: mutable
+      source_revision: null
+      baseline_source: IC-FOUND-001
+      baseline_tree: null
+      dependency_patch_hashes: []
+      candidate_patch_hashes: []
+      patch_manifest: null
+      patch_manifest_hash: null
+      cleanup_status: not-created
+    handoff:
+      intended_base: main
+      pr_grouping: grouped-local-commit
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  IC-TAURI-001:
+    title: Tauri desktop, Android readiness, persistence and Pumarejo dev integration
+    jira_key: null
+    source: docs/plans/icook/initiative-requirements.md
+    status: release-ready
+    depends_on:
+    - IC-FOUND-001
+    blocked_by:
+    - BLK-IC-2026-08-28-002
+    affects_dependents:
+    - IC-VERIFY-001
+    - IC-PUM-001
+    scope:
+      included:
+      - Tauri 2 shell/config
+      - desktop lifecycle
+      - local persistence wiring
+      - Android initialization/readiness
+      - Pumarejo-compatible dev launch
+      excluded:
+      - UI layout
+      - ranking changes
+      - signing/publishing
+    acceptance_criteria:
+    - Rust/Tauri compilation check passes
+    - Desktop launch/reload/close/reopen works
+    - Android initializes/builds or exact external blocker is captured
+    - Pumarejo can attach to the real development application
+    surfaces:
+      code:
+      - src-tauri
+      contracts:
+      - desktop/mobile bridge
+      data: []
+      auth: []
+      docs: []
+      tests:
+      - platform checks
+      config:
+      - Tauri and Android config
+      generated:
+      - Android project outputs
+    dependencies:
+    - IC-FOUND-001
+    execution:
+      route: swarm
+      transport: tinto-subagent
+      lane: deep
+      discovery_profile: luna_xhigh_discovery
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: cross-platform integration and generated Android/deployment contract
+      role_triggers:
+        reviewer: platform/public integration contract
+        ci_platform: only on concrete toolchain failure
+        integrator: shared manifest/generated output coordination
+      worker_contract_path: docs/orchestration/seneschal/contracts/materialized/IC-TAURI-001-worker-contract.json
+      worker_contract_hash: sha256:53fb9ec80f6342e9ad1ba82b8757b971463e616ffcc5233a907d44750323c7cc
+      evidence_trust: runtime-audited-through-tinto-if-available
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: elevated
+    verification:
+      focused_commands:
+      - rtk test cargo check
+      - rtk test npm run tauri android init
+      focused_evidence:
+      - docs/orchestration/runs/IC-RUN-2026-08-28-001/aggregate-verification.md
+      - docs/pumarejo-development.md#android-evidence
+      aggregate_owner: seneschal-superior
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/seneschal/evidence/verification-evidence.json
+      reuse_decision: null
+    isolation:
+      type: tinto-purpose-built-workspace
+      workspace_plan: null
+      workspace_plan_hash: null
+      workspace_id: null
+      branch: null
+      path: null
+      thread: null
+      mode: mutable
+      source_revision: null
+      baseline_source: IC-FOUND-001
+      baseline_tree: null
+      dependency_patch_hashes: []
+      candidate_patch_hashes: []
+      patch_manifest: null
+      patch_manifest_hash: null
+      cleanup_status: not-created
+    handoff:
+      intended_base: main
+      pr_grouping: grouped-local-commit
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  IC-VERIFY-001:
+    title: Automated verification and required edge-state coverage
+    jira_key: null
+    source: docs/plans/icook/initiative-requirements.md
+    status: release-ready
+    depends_on:
+    - IC-FOUND-001
+    - IC-UI-001
+    - IC-TAURI-001
+    blocked_by: []
+    affects_dependents:
+    - IC-PUM-001
+    scope:
+      included:
+      - ranking/match/filter/tie/empty tests
+      - UI edge-state tests
+      - frontend build
+      - Rust check
+      - Android evidence
+      excluded:
+      - feature expansion
+      - open-ended refactoring
+    acceptance_criteria:
+    - Every required automated case has a meaningful assertion
+    - Frontend production build and Rust check pass
+    - Android evidence is pass or exact environmental blocker
+    - Aggregate evidence is machine captured
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs: []
+      tests:
+      - tests
+      config:
+      - test configuration only
+      generated: []
+    dependencies:
+    - IC-FOUND-001
+    - IC-UI-001
+    - IC-TAURI-001
+    execution:
+      route: swarm
+      transport: tinto-subagent
+      lane: standard
+      discovery_profile: null
+      worker_profile: luna
+      reasoning_effort: high
+      lane_trigger: bounded test implementation across settled behavior
+      role_triggers:
+        reviewer: testing adequacy and behavior coverage
+      worker_contract_path: docs/orchestration/seneschal/contracts/materialized/IC-VERIFY-001-worker-contract.json
+      worker_contract_hash: sha256:74d4770e290cf3d2b252ed3373dccedf0ceb4f211f7588c2bf204a3937d72757
+      evidence_trust: runtime-audited-through-tinto-if-available
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: low
+    verification:
+      focused_commands:
+      - rtk test npm test
+      - rtk test npm run build
+      - rtk test cargo check
+      focused_evidence:
+      - docs/orchestration/runs/IC-RUN-2026-08-28-001/aggregate-verification.md
+      aggregate_owner: seneschal-superior
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/seneschal/evidence/verification-evidence.json
+      reuse_decision: null
+    isolation:
+      type: tinto-purpose-built-workspace
+      workspace_plan: null
+      workspace_plan_hash: null
+      workspace_id: null
+      branch: null
+      path: null
+      thread: null
+      mode: mutable
+      source_revision: null
+      baseline_source: consolidated-IC-FOUND-UI-TAURI
+      baseline_tree: null
+      dependency_patch_hashes: []
+      candidate_patch_hashes: []
+      patch_manifest: null
+      patch_manifest_hash: null
+      cleanup_status: not-created
+    handoff:
+      intended_base: main
+      pr_grouping: grouped-local-commit
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  IC-PUM-001:
+    title: Pumarejo functional campaign
+    jira_key: null
+    source: docs/plans/icook/initiative-requirements.md
+    status: ready
+    depends_on:
+    - IC-VERIFY-001
+    blocked_by: []
+    affects_dependents:
+    - IC-DOG-001
+    scope:
+      included:
+      - 21 required real-app cases through Pumarejo
+      - semantic snapshots
+      - material screenshots
+      - case evidence
+      excluded:
+      - host UI automation
+      - direct app manipulation
+      - implementation
+    acceptance_criteria:
+    - Every case has observable pass/fail/blocked evidence
+    - Fresh snapshots follow material state changes
+    - Failures are classified by product
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs:
+      - dogfood report
+      tests:
+      - functional campaign
+      config: []
+      generated:
+      - snapshots/screenshots
+    dependencies:
+    - IC-VERIFY-001
+    execution:
+      route: pumarejo-driver
+      transport: pumarejo
+      lane: null
+      discovery_profile: null
+      worker_profile: null
+      reasoning_effort: null
+      lane_trigger: non-implementation automation campaign
+      role_triggers:
+        documenter: durable dogfood evidence
+      worker_contract_path: docs/orchestration/seneschal/contracts/IC-PUM-001-role-contract.json
+      worker_contract_hash: null
+      evidence_trust: pumarejo-observed
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: low
+    verification:
+      focused_commands: []
+      focused_evidence: []
+      aggregate_owner: pumarejo-campaign-owner
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/seneschal/evidence/pumarejo-campaign.json
+      reuse_decision: null
+    isolation:
+      type: pumarejo-session
+      workspace_plan: null
+      workspace_plan_hash: null
+      workspace_id: null
+      branch: null
+      path: null
+      thread: Codex · ICook
+      mode: read-interact
+      source_revision: null
+      baseline_source: verified-application
+      baseline_tree: null
+      dependency_patch_hashes: []
+      candidate_patch_hashes: []
+      patch_manifest: null
+      patch_manifest_hash: null
+      cleanup_status: not-created
+    handoff:
+      intended_base: main
+      pr_grouping: none
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  IC-DOG-001:
+    title: Dogfood reconciliation and independent review
+    jira_key: null
+    source: docs/tinto-pumarejo-dogfood-report.md
+    status: planned
+    depends_on:
+    - IC-PUM-001
+    blocked_by: []
+    affects_dependents:
+    - IC-REL-001
+    scope:
+      included:
+      - separate Tinto/Pumarejo/ICook/orchestration findings
+      - root-observed reconciliation
+      - review registry/certificates
+      - bounded fixes and recertification
+      excluded:
+      - new features
+      - unbounded polish
+    acceptance_criteria:
+    - All findings have required fields and final status
+    - Application defects are separate from automation defects
+    - Every accepted fix maps to evidence and latest diff
+    - No unresolved P0/P1 reaches release
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs:
+      - docs/tinto-pumarejo-dogfood-report.md
+      tests: []
+      config: []
+      generated: []
+    dependencies:
+    - IC-PUM-001
+    execution:
+      route: swarm
+      transport: tinto-review-subagent
+      lane: null
+      discovery_profile: null
+      worker_profile: null
+      reasoning_effort: high
+      lane_trigger: role-specific reconciliation/review
+      role_triggers:
+        reviewer: multi-surface behavior change
+        integrator: dependent patches
+        fixer: only concrete confirmed findings
+        documenter: dogfood report is explicit scope
+      worker_contract_path: docs/orchestration/seneschal/contracts/IC-DOG-001-role-contract.json
+      worker_contract_hash: null
+      evidence_trust: root-and-pumarejo-observed
+    risk:
+      production: prototype
+      security: low
+      compliance: low
+      overlap: elevated
+    verification:
+      focused_commands: []
+      focused_evidence: []
+      aggregate_owner: seneschal-superior
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/seneschal/evidence/verification-evidence.json
+      reuse_decision: null
+    isolation:
+      type: fresh-tinto-review-workspaces
+      workspace_plan: null
+      workspace_plan_hash: null
+      workspace_id: null
+      branch: null
+      path: null
+      thread: null
+      mode: read-only-review-and-bounded-fixer
+      source_revision: null
+      baseline_source: campaign-candidate
+      baseline_tree: null
+      dependency_patch_hashes: []
+      candidate_patch_hashes: []
+      patch_manifest: null
+      patch_manifest_hash: null
+      cleanup_status: not-created
+    handoff:
+      intended_base: main
+      pr_grouping: grouped-local-commit
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  IC-REL-001:
+    title: Release Marshal local commits and bounded main push
+    jira_key: null
+    source: docs/orchestration/seneschal/release-handoff.md
+    status: planned
+    depends_on:
+    - IC-DOG-001
+    blocked_by: []
+    affects_dependents: []
+    scope:
+      included:
+      - focused local commits
+      - remote identity/fetch/fast-forward checks
+      - exact non-force main push
+      excluded:
+      - force push
+      - PR
+      - merge
+      - Jira
+      - release publication
+      - branch cleanup
+    acceptance_criteria:
+    - Clean reconciled tree is committed in focused groups
+    - Ledger and audit head validate immediately before push
+    - Remote update is proven fast-forward
+    - Exact git push -u origin main:main succeeds
+    surfaces:
+      code: []
+      contracts: []
+      data: []
+      auth: []
+      docs: []
+      tests: []
+      config:
+      - Git metadata only
+      generated: []
+    dependencies:
+    - IC-DOG-001
+    execution:
+      route: krt-release-marshal
+      transport: tinto-release-session
+      lane: null
+      discovery_profile: null
+      worker_profile: null
+      reasoning_effort: null
+      lane_trigger: release-owned side effects
+      role_triggers: {}
+      worker_contract_path: docs/orchestration/seneschal/release-handoff.md
+      worker_contract_hash: null
+      evidence_trust: release-marshal-observed
+    risk:
+      production: preprod
+      security: low
+      compliance: low
+      overlap: high
+    verification:
+      focused_commands:
+      - rtk git status --short
+      - rtk git fetch origin
+      - rtk git merge-base --is-ancestor origin/main main
+      focused_evidence: []
+      aggregate_owner: release-marshal
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/seneschal/evidence/release-evidence.json
+      reuse_decision: null
+    isolation:
+      type: authoritative-consolidation
+      workspace_plan: null
+      workspace_plan_hash: null
+      workspace_id: null
+      branch: main
+      path: null
+      thread: null
+      mode: mutable-consolidation
+      source_revision: null
+      baseline_source: fully-reconciled
+      baseline_tree: null
+      dependency_patch_hashes: []
+      candidate_patch_hashes: []
+      patch_manifest: null
+      patch_manifest_hash: null
+      cleanup_status: not-created
+    handoff:
+      intended_base: main
+      pr_grouping: none
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: docs/orchestration/seneschal/release-handoff.md
+wave_history:
+- id: WAVE-00-DOCS
+  selected_units: []
+  concurrency:
+    implementer_cap: 2
+    cap_reasons:
+    - default-cap
+    - foundation-serialized
+    - runtime-capacity-to-be-observed
+    total_slots: null
+    usable_slots: null
+    reserve_slots: 1
+    allocation_artifact: null
+  result: documentary-complete
+  scope_violations: null
+  merge_conflicts: null
+  review_lagging: null
+  verification_summary: []
+  aggregate_verification:
+    owner: seneschal-superior
+    fingerprint: null
+    fingerprint_artifact: null
+    commands: []
+    evidence: []
+    evidence_registry: docs/orchestration/seneschal/evidence/verification-evidence.json
+    reuse_decision: null
+    result: not-run
+  gates:
+    scope: passed-documentary
+    verification: document-validation-pending
+    review: bypassed-by-current-user-event
+    security: not-required
+    state: blocked-by-git-infrastructure
+  timing_artifact: null
+  review_summary: []
+  blockers_recorded:
+  - BLK-IC-2026-08-28-001
+- id: WAVE-03-VERIFY-RESUME
+  selected_units:
+  - IC-FOUND-001
+  - IC-UI-001
+  - IC-TAURI-001
+  - IC-VERIFY-001
+  concurrency:
+    implementer_cap: 0
+    cap_reasons:
+    - reconciliation-only-resume
+    total_slots: 4
+    usable_slots: 1
+    reserve_slots: 3
+    allocation_artifact: null
+  result: passed-with-nonfatal-android-blocker
+  scope_violations: false
+  merge_conflicts: false
+  review_lagging: false
+  verification_summary:
+  - npm test passed 29 tests
+  - npm run build passed
+  - Rust/Tauri cargo check passed with writable temporary CARGO_HOME
+  - Android init blocked by missing external SDK
+  aggregate_verification:
+    owner: seneschal-supervisor
+    fingerprint: null
+    fingerprint_artifact: null
+    commands:
+    - rtk test npm test
+    - rtk test npm run build
+    - rtk proxy env CARGO_HOME=/tmp/icook-cargo cargo check --manifest-path src-tauri/Cargo.toml
+    - rtk test npm run tauri android init
+    - rtk git diff --check
+    evidence:
+    - docs/orchestration/runs/IC-RUN-2026-08-28-001/aggregate-verification.md
+    evidence_registry: docs/orchestration/seneschal/evidence/verification-evidence.json
+    reuse_decision: run-root-observed
+    result: passed-with-nonfatal-android-blocker
+  gates:
+    scope: passed
+    verification: passed-with-nonfatal-android-blocker
+    review: passed-after-bounded-fixes
+    security: not-required
+    state: reconciled-for-pumarejo-handoff
+  timing_artifact: null
+  review_summary:
+  - ic_resume_final_review found one P1 and two P2 issues; all were fixed and recertified
+  blockers_recorded:
+  - BLK-IC-2026-08-28-002

@@ -1,0 +1,47 @@
+[
+  {
+    "message": "fix(runtime): retain sanitized diagnostics after failed launches",
+    "paths": [
+      "src/mcp/runtime.ts",
+      "src/observability/diagnostics.ts",
+      "tests/unit/mcp-runtime.test.ts",
+      "tests/unit/diagnostics.test.ts"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"src/mcp/runtime.ts\", \"src/observability/diagnostics.ts\", \"tests/unit/diagnostics.test.ts\", \"tests/unit/mcp-runtime.test.ts\"], \"message\": \"fix(runtime): retain sanitized diagnostics after failed launches\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/fix-agent-certification-gaps 2513768] fix(runtime): retain sanitized diagnostics after failed launches\\n 4 files changed, 178 insertions(+), 21 deletions(-)\\n\"}\n",
+    "stderr": "",
+    "head": "2513768fdaee90be283c966a35e64917dab22a3a"
+  },
+  {
+    "message": "fix(runtime): stop readiness checks when the owned process exits",
+    "paths": [
+      "src/session/manager.ts",
+      "tests/unit/session-manager.test.ts"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"src/session/manager.ts\", \"tests/unit/session-manager.test.ts\"], \"message\": \"fix(runtime): stop readiness checks when the owned process exits\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/fix-agent-certification-gaps 8b8531c] fix(runtime): stop readiness checks when the owned process exits\\n 2 files changed, 34 insertions(+)\\n\"}\n",
+    "stderr": "",
+    "head": "8b8531ca1e1f92d1780071146a37dda31d7d7649"
+  },
+  {
+    "message": "fix(dialog): distinguish absent native dialogs from provider failures",
+    "paths": [
+      "src/webdriver/client.ts",
+      "tests/unit/webdriver-native-control.test.ts"
+    ],
+    "exit_code": 0,
+    "result": "{\"committed_paths\": [\"src/webdriver/client.ts\", \"tests/unit/webdriver-native-control.test.ts\"], \"message\": \"fix(dialog): distinguish absent native dialogs from provider failures\", \"ok\": true, \"previous_staged_count\": 0, \"reset_index\": false, \"stdout\": \"[codex/fix-agent-certification-gaps f76355a] fix(dialog): distinguish absent native dialogs from provider failures\\n 2 files changed, 27 insertions(+)\\n\"}\n",
+    "stderr": "",
+    "head": "f76355ad3631fa45259c889d0462aa09e190384c"
+  },
+  {
+    "message": "docs: repair blocker ledger YAML syntax",
+    "paths": [
+      "docs/swarm/blockers.yaml"
+    ],
+    "exit_code": 0,
+    "result": "create_approved_commit.py succeeded; one quoted YAML scalar, validated with yaml.safe_load",
+    "stderr": "",
+    "head": "f0af7c65ee5f6a866e6d5cfbf31579231e4e9fec"
+  }
+]

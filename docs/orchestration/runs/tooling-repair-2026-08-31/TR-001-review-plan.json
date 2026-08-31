@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+  "diff_digest": "sha256:f231fc227245dc7f0f5018e848fda8f97b6f43ae475006a39faff2cd2da1bfa2",
+  "changed_paths": [
+    "src-tauri/src/agent_console/app_server.rs",
+    "src-tauri/src/agent_console/commands.rs",
+    "src-tauri/src/agent_console/journal.rs"
+  ],
+  "assignments": [
+    {
+      "id": "tinto-lifecycle",
+      "reviewer_role": "reviewer",
+      "owned_paths": [
+        "src-tauri/src/agent_console/app_server.rs",
+        "src-tauri/src/agent_console/commands.rs",
+        "src-tauri/src/agent_console/journal.rs"
+      ],
+      "risk_boundaries": [
+        "journal backward compatibility and restoration",
+        "rejected resume owned cleanup",
+        "root and child turn completion isolation"
+      ],
+      "cross_cutting": false,
+      "priority": 1
+    }
+  ],
+  "queued": [],
+  "coverage_complete": true,
+  "validation_wave_required": false,
+  "review_plan_hash": "sha256:46379902964f5dc19a0080667629f117e3b97459e5e9547d42d8621c12d01221"
+}

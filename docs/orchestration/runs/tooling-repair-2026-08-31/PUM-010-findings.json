@@ -1,0 +1,57 @@
+{
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+  "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+  "findings": [
+    {
+      "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+      "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+      "evidence": [
+        "ICook/docs/tooling-repair-evidence/tinto-final/015-tauri_window.json",
+        "ICook/docs/tooling-repair-evidence/tinto-final/024-tauri_window.json",
+        "src/webdriver/client.ts:1088-1216; vendor executor.rs:1582-1641"
+      ],
+      "feedback": [],
+      "fingerprint": "sha256:1f8584b420bc672f07305492c50a72613320e2426481412bd8d2ed73343735b2",
+      "id": "F-1F8584B4",
+      "impact": "Callers receive success for a minimized window.",
+      "observation": "Native restore reports restored while outer rect remains minimized (-32000,-32000,160x28); client lacks visibility postcondition and provider never unminimizes. Pre-existing to this repair.",
+      "principle": "correctness",
+      "recommendation": "Reconcile provider staging first, then add a native restore/unminimize proof and truthful capability; do not hardcode coordinate sentinels or weaken postconditions.",
+      "reporters": [
+        "/root/pumarejo_diagnostics_review"
+      ],
+      "resolution": {
+        "evidence": [
+          "Provider staging is integrity-blocked and contains pre-existing/generated drift; native capability needs coordinated provider integration, not a client coordinate heuristic.",
+          "ICook/docs/tinto-pumarejo-repair-handoff.md"
+        ],
+        "resolution": "deferred",
+        "resolved_diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+        "resolver_id": "/root"
+      },
+      "review_plan_hashes": [
+        "sha256:1ec58f5acd6caf4bd1189a65df3bd426d42300e9a6838a5129a887f4a179672f"
+      ],
+      "rule_id": "window.restore.minimized-false-success",
+      "severity": "p2",
+      "status": "deferred",
+      "surface_ids": [
+        "pumarejo-runtime"
+      ],
+      "validation": {
+        "evidence": [
+          "ICook/docs/tooling-repair-evidence/tinto-final/015-tauri_window.json",
+          "ICook/docs/tooling-repair-evidence/tinto-final/024-tauri_window.json",
+          "src/webdriver/client.ts:1088-1216; vendor executor.rs:1582-1641"
+        ],
+        "revised_finding": null,
+        "validator_id": "/root",
+        "verdict": "confirmed"
+      }
+    }
+  ],
+  "registry_digest": "sha256:4ac640af50a4a1d9fd952f8672f2347df6f34880a5d7f1e16e8f43823355a273",
+  "registry_id": "tooling-repair-PUM-010",
+  "revision": 3,
+  "schema_version": 1
+}

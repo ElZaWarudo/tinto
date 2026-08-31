@@ -1,0 +1,17 @@
+{
+  "updates": [
+    {
+      "unit": "PR-001",
+      "exit_code": 0,
+      "stdout": "{\n  \"acceptance_latency_ms\": null,\n  \"captured_at\": \"2026-08-31T07:58:11.532435Z\",\n  \"context_bytes\": 0,\n  \"discovery_implementation_ratio\": null,\n  \"evidence_trust\": \"self-reported\",\n  \"fix_rounds\": 0,\n  \"lane\": \"deep\",\n  \"last_required_command_to_return_ms\": null,\n  \"model_class\": \"luna\",\n  \"out_of_manifest_commands\": 0,\n  \"phase_duration_ms\": {},\n  \"reasoning_effort\": \"xhigh\",\n  \"repeated_context_reads\": null,\n  \"repeated_verification_commands\": 0,\n  \"review_findings_p0\": 0,\n  \"review_findings_p1\": 0,\n  \"review_findings_p2\": 0,\n  \"review_rounds\": 0,\n  \"root_interventions\": 0,\n  \"run_id\": \"tooling-repair-2026-08-31\",\n  \"scope_violations\": 0,\n  \"status\": \"completed\",\n  \"time_to_first_change_ms\": null,\n  \"total_duration_ms\": 0,\n  \"unit_id\": \"PR-001\",\n  \"verification_fingerprint\": null,\n  \"wave_id\": \"wave-01\",\n  \"worker_profile\": \"luna_xhigh\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "unit": "TR-001",
+      "exit_code": 0,
+      "stdout": "{\n  \"acceptance_latency_ms\": null,\n  \"captured_at\": \"2026-08-31T07:58:11.890341Z\",\n  \"context_bytes\": 0,\n  \"discovery_implementation_ratio\": null,\n  \"evidence_trust\": \"self-reported\",\n  \"fix_rounds\": 0,\n  \"lane\": \"deep\",\n  \"last_required_command_to_return_ms\": null,\n  \"model_class\": \"luna\",\n  \"out_of_manifest_commands\": 0,\n  \"phase_duration_ms\": {},\n  \"reasoning_effort\": \"xhigh\",\n  \"repeated_context_reads\": null,\n  \"repeated_verification_commands\": 0,\n  \"review_findings_p0\": 0,\n  \"review_findings_p1\": 0,\n  \"review_findings_p2\": 0,\n  \"review_rounds\": 0,\n  \"root_interventions\": 0,\n  \"run_id\": \"tooling-repair-2026-08-31\",\n  \"scope_violations\": 0,\n  \"status\": \"blocked\",\n  \"time_to_first_change_ms\": null,\n  \"total_duration_ms\": 0,\n  \"unit_id\": \"TR-001\",\n  \"verification_fingerprint\": null,\n  \"wave_id\": \"wave-01\",\n  \"worker_profile\": \"luna_xhigh\"\n}\n",
+      "stderr": ""
+    }
+  ],
+  "limits": "No elapsed phase durations invented. TR leaf exceeded elapsed budget; root independently integrated, tested and reviewed the code. These records describe leaf supervision, not aggregate acceptance."
+}

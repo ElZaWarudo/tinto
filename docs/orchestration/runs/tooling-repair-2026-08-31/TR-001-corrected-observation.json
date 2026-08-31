@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "profile": "luna_xhigh",
+  "started_at_ms": 1788158153967,
+  "owned_files": [
+    "src-tauri/src/agent_console/app_server.rs",
+    "src-tauri/src/agent_console/session.rs",
+    "src-tauri/src/agent_console/commands.rs",
+    "src-tauri/src/agent_console/journal.rs"
+  ],
+  "changed_files": [
+    "src-tauri/src/agent_console/app_server.rs",
+    "src-tauri/src/agent_console/commands.rs",
+    "src-tauri/src/agent_console/journal.rs"
+  ],
+  "checkpoint_count": 1,
+  "checkpoint": {
+    "event": "discovery_complete",
+    "edit_path_found": true,
+    "planned_files": [
+      "src-tauri/src/agent_console/app_server.rs",
+      "src-tauri/src/agent_console/commands.rs",
+      "src-tauri/src/agent_console/journal.rs"
+    ],
+    "evidence_digest": "edit src-tauri/src/agent_console/app_server.rs | symbol=handle_server_message turn/completed and timeline_frame_for_thread, pattern=completion emits TurnCompleted but no turn_done frame when no cached final message; why=commands::spawn_output_reader only refreshes completion on turn_done/marker, so empty completed turns leave status/checkpoint stale; add a root-scoped turn_done frame and regress empty-final completion plus child isolation.\nedit src-tauri/src/agent_console/commands.rs | symbol=resume_agent_journal_session, pattern=resume_result error branches refresh and return without registry.stop_session(started.id); why=rejected native resume leaves the newly inserted provider session/process live, enabling duplicate or capacity failures; add a rejected-resume regression asserting cleanup while preserving the error.\nedit src-tauri/src/agent_console/journal.rs | symbol=record_session and session_from_journal, pattern=agent_sessions persistence omits turn_checkpoints and restore hardcodes Vec::new(), while observed agent_turns rows remain empty; why=archived/restarted sessions lose turn checkpoint history; add additive checkpoint persistence with legacy-row compatibility and a roundtrip regression.",
+    "discovery_complete_at_ms": 1788158153967
+  },
+  "discovery_returned_at_ms": 1788158153967,
+  "verification_manifest": {
+    "focused": [
+      "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+      "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::session::tests"
+    ],
+    "natural": [],
+    "max_retries_per_command": 1
+  },
+  "interventions_sent": [
+    "dispatch_implementation"
+  ],
+  "changed_files_source": "root-diff",
+  "diff_basis": "worktree-vs-revision",
+  "base_revision": "b0880b163b4698d180d0f0c9f56416b99731731f",
+  "baseline_tree": null,
+  "baseline_digest": "sha256:ac776f1dc740691deac6a39fc5266fba9f367bd7a1caf17a0eed7b90628173b1",
+  "diff_digest": "sha256:f231fc227245dc7f0f5018e848fda8f97b6f43ae475006a39faff2cd2da1bfa2",
+  "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+  "worker_id": "/root/tinto_lifecycle_impl",
+  "implementation_started_at_ms": 1788158153967,
+  "returned_at_ms": 1788160515798,
+  "final": {
+    "status": "needs_review",
+    "phase": "closeout",
+    "remaining_actions": [],
+    "terminal_ready": true,
+    "acceptance_criteria_resolved": true,
+    "acceptance_evidence": [
+      {
+        "criterion_id": "AC-1",
+        "status": "satisfied",
+        "evidence": "contract_hash=sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc; the accepted discovery checkpoint identifies the concrete causal defects: root turn/completed had no output turn_done frame when its final message cache was empty, rejected native resume left its newly inserted provider session/process in the registry, and journal restore discarded turn_checkpoints. The focused app_server regression now proves an empty root completion emits a root-scoped turn_done frame and the existing child isolation regression proves child completion cannot close the root turn."
+      },
+      {
+        "criterion_id": "AC-2",
+        "status": "satisfied",
+        "evidence": "contract_hash=sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc; app_server.rs emits an explicit turn_done lifecycle frame only for root turn/completed notifications, commands.rs stops the started session on every rejected or missing native resume result before refreshing the snapshot while retaining the resume error, and journal.rs adds the additive turn_checkpoints_json column with roundtrip restore plus NULL legacy-row compatibility. Only the planned app_server.rs, commands.rs, and journal.rs files were edited; existing child routing and sanitized frame contracts remain intact."
+      },
+      {
+        "criterion_id": "AC-3",
+        "status": "satisfied",
+        "evidence": "contract_hash=sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc; the assigned app_server focused command passed 48 tests on attempt 1. A second app_server attempt was made after a small wire-compatibility refactor and failed at compilation because of a temporary helper-arity mismatch; that refactor was reverted to the implementation covered by attempt 1. The assigned session focused command passed 30 tests. No native GUI verification was run or claimed; root aggregate verification remains the review step for the newly added journal regression and final shared tree."
+      }
+    ],
+    "last_required_command": "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::session::tests",
+    "verification": {
+      "attempted": [
+        {
+          "command": "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+          "attempts": 2,
+          "outcome": "failed"
+        },
+        {
+          "command": "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::session::tests",
+          "attempts": 1,
+          "outcome": "passed"
+        }
+      ],
+      "skipped": []
+    },
+    "verification_commands_run": [
+      "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+      "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+      "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::session::tests"
+    ],
+    "unowned_failures": [],
+    "scope_extension": null
+  },
+  "command_evidence": {
+    "trust": "self-reported",
+    "commands": [
+      {
+        "command": "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::app_server::tests",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk proxy cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console::session::tests",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk python3 /mnt/c/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py --contract /mnt/c/Users/User/Documents/personal/tinto/docs/orchestration/runs/tooling-repair-2026-08-31/TR-001-worker-contract.json --input /mnt/c/Users/User/AppData/Local/Temp/TR-001-repair-terminal.json",
+        "kind": "read-only"
+      }
+    ]
+  },
+  "terminal_validation_exit_code": 0,
+  "terminal_validation_command": "rtk python3 /mnt/c/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py --contract /mnt/c/Users/User/Documents/personal/tinto/docs/orchestration/runs/tooling-repair-2026-08-31/TR-001-worker-contract.json --input /mnt/c/Users/User/AppData/Local/Temp/TR-001-repair-terminal.json",
+  "certifications": [],
+  "scope_evidence_note": "Root copied only owned backend files byte-for-byte into detached clean review worktree; baseline user Cargo edits, root UI and docs are excluded from worker scope. Source hashes can be compared directly."
+}

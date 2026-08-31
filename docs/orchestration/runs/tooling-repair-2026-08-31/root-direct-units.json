@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "authorization": "authorization-event.md",
+  "route": "root-direct",
+  "units": [
+    {
+      "id": "PR-002",
+      "owned_files": [
+        "src/webdriver/client.ts",
+        "tests/unit/webdriver-native-control.test.ts"
+      ],
+      "objective": "Recognize native broker no-such-alert as absent dialog using existing public result; never claim unsupported broker passed",
+      "evidence": "provider handler returns no_such_alert; baseline 015 tauri_dialog",
+      "review_required": true
+    },
+    {
+      "id": "TR-002",
+      "owned_files": [
+        "src/panels/terminal/TerminalPanel.tsx",
+        "src/panels/terminal/TerminalPanel.test.tsx",
+        "src/panels/terminal/ConsoleDockPanel.tsx",
+        "src/panels/terminal/ConsoleDockPanel.test.tsx"
+      ],
+      "objective": "Truthful turn status, distinguish same-title session identities, prevent automatic replay of ambiguous resumed writes",
+      "evidence": "native baseline screenshot13; source default retry of unknown write errors",
+      "review_required": true,
+      "deep_trigger": "idempotency of resumed dispatch"
+    },
+    {
+      "id": "PR-003",
+      "owned_files": [
+        "src/observability/diagnostics.ts",
+        "tests/unit/diagnostics.test.ts"
+      ],
+      "objective": "Redact uppercase Windows absolute paths without exposing retained stderr",
+      "review_required": true
+    },
+    {
+      "id": "PR-004",
+      "owned_files": [
+        "src/session/manager.ts",
+        "tests/unit/session-manager.test.ts"
+      ],
+      "objective": "Stop provider readiness checks after owned process exits or identity changes",
+      "review_required": true
+    },
+    {
+      "id": "ORC-005",
+      "owned_files": [
+        "vite.config.ts"
+      ],
+      "objective": "Exclude nested stale tests while preserving all59 tracked source/script test files",
+      "review_required": true
+    },
+    {
+      "id": "TR-003",
+      "owned_files": [
+        "src-tauri/src/agent_console/session.rs"
+      ],
+      "objective": "Prevent status refresh from reopening explicitly completed turns",
+      "review_required": true
+    }
+  ],
+  "exclusions": [
+    "unapproved external mutations",
+    "provider credentials",
+    "ICook feature source",
+    "baseline Cargo changes"
+  ],
+  "root_focused_checks": [
+    "node node_modules/vitest/vitest.mjs run src/panels/terminal/TerminalPanel.test.tsx src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "node node_modules/vitest/vitest.mjs run tests/unit/webdriver-native-control.test.ts"
+  ],
+  "reason": "Confirmed edit paths, bounded root ownership while backend worker runs; no extra implementer startup."
+}

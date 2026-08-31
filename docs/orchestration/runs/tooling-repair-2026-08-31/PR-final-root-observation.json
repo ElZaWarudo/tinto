@@ -1,0 +1,19 @@
+{
+  "changed_files": [
+    "src/mcp/runtime.ts",
+    "src/observability/diagnostics.ts",
+    "src/session/manager.ts",
+    "src/webdriver/client.ts",
+    "tests/unit/diagnostics.test.ts",
+    "tests/unit/mcp-runtime.test.ts",
+    "tests/unit/session-manager.test.ts",
+    "tests/unit/webdriver-native-control.test.ts"
+  ],
+  "changed_files_source": "root-diff",
+  "diff_basis": "worktree-vs-revision",
+  "base_revision": "18fa00b961851b021ac4d9f609107e0ecd343269",
+  "baseline_tree": null,
+  "baseline_digest": "sha256:0417ae0a4c5a44e8d15267023f6f1ae174db392650d4dc1c39aa146bc939c513",
+  "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514"
+}

@@ -1,0 +1,62 @@
+schema_version: 1
+updated_at: '2026-08-28'
+blockers:
+- id: BLK-2026-08-27-001
+  jira_issue_key: null
+  unit_id: gc-001-rdm-024-artifacts
+  title: Approve the reviewed gap-closure documentation packet
+  wave: null
+  type: dependency
+  risk: high
+  description: The autonomous mandate removes later action-by-action confirmations,
+    but the Seneschal contract still requires explicit approval of the reviewed packet
+    before Jira mutation, worker dispatch, product-code mutation, or release handoff.
+  decision_required: Explicitly approve the current documentation packet.
+  impact_if_ignored: Proceeding would bypass a mandatory composition gate and invalidate
+    the autonomous execution contract.
+  affected_units:
+  - gc-001-rdm-024-artifacts
+  - gc-002-rdm-024-implementation
+  - gc-003-native-regression
+  - gc-004-roadmap-reconciliation
+  blocks_dependents: true
+  suggested_owner: user
+  detected_at: '2026-08-27'
+  status: resolved
+  evidence: docs/swarm/queue-state.yaml#documentation_gate
+  next_action: Approve the documentation packet so the bounded autonomous waves can
+    begin.
+  resolution:
+    decided_at: '2026-08-27T06:50:47Z'
+    decided_by: user
+    decision: Approved the current documentation packet and authorized autonomous
+      continuation.
+- id: CSP-BLK-2026-08-28-001
+  jira_issue_key: null
+  unit_id: csp-003-integration-verification
+  title: Repository-wide frontend discovery crosses unreadable and stale artifact trees
+  wave: codex-subagent-parity-2026-08-28
+  type: environment
+  risk: low
+  description: Repository-wide Prettier and ESLint stop with EPERM in pre-existing
+    .pumarejo artifact directories, while Vitest filename discovery also traverses
+    stale nested worktrees. The root src suite additionally exposes a pre-existing
+    WSL-absence assertion against unowned ConsoleDockPanel changes.
+  decision_required: none
+  impact_if_ignored: Aggregate evidence could be misreported as a product regression
+    or could certify stale duplicate tests instead of the root source tree.
+  affected_units:
+  - csp-003-integration-verification
+  blocks_dependents: false
+  suggested_owner: repository-maintenance
+  detected_at: '2026-08-28T15:05:00Z'
+  status: resolved
+  evidence: docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-verification.json
+  next_action: Keep source-scoped commands in this release evidence; separately clean
+    or exclude generated artifact roots in repository tooling.
+  resolution:
+    decided_at: '2026-08-28T15:14:00Z'
+    decided_by: root
+    decision: Verified every owned frontend file with scoped Prettier and ESLint,
+      verified the production build and focused tests, and recorded the full src
+      result of 761 passing tests with one unowned baseline failure.

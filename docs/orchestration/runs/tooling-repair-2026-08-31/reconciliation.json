@@ -1,0 +1,32 @@
+{
+  "run_id": "tooling-repair-2026-08-31",
+  "documentation_gate": "in_review",
+  "approval_receipt": null,
+  "authorization": "AUTH-TOOLING-2026-08-31",
+  "canonical_queue_status": {
+    "TR-001": "planned",
+    "PR-001": "planned"
+  },
+  "actual_execution": {
+    "TR-001": "Root integrated, reviewed, verified and locally committed; leaf budget exception retained",
+    "PR-001": "implemented, reviewed, verified, locally committed",
+    "TR-002": "implemented and reviewed;162 affected UI tests pass",
+    "TR-003": "Red/green regression, independent review, native037 En espera, clean close039; committed",
+    "ORC-005": "all59 tracked test files included;3 script tests pass",
+    "ORC-006": "Pumarejo live blocker ledger YAML repaired and locally committed"
+  },
+  "protocol_limits": [
+    "No state transition forged after compiler rejected bypass.",
+    "TR-001 worker terminal remains needs_review and elapsed-budget violation is retained. Root independently integrated, tested and reviewed code.",
+    "Original review plans/observations were refreshed during integration; original terminals retain their earlier hashes. Only final matching plan/terminal pairs constitute current review evidence.",
+    "Worker command evidence is self-reported, not runtime-audited.",
+    "Drafting helper had no leaf contract and its draft was not accepted as verification; root wrote final report/handoff."
+  ],
+  "remote_actions": [],
+  "jira_provider": "none",
+  "rebase": "not needed: both branches began at fetched origin/main; no destructive history operations",
+  "local_commit_authorization": "explicit user request; focused path staging through create_approved_commit.py",
+  "captured_at": "2026-08-31T08:01:33.262629+00:00",
+  "native_acceptance": "ICook launch and close/reopen pass; Tinto history/resume/idle pass; precise remaining boundaries in handoff",
+  "closeout_status": "local-repair-complete-with-explicit-acceptance-blockers"
+}

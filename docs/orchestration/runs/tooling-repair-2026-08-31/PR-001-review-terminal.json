@@ -1,0 +1,43 @@
+{
+  "contract_hash": "sha256:02c32a1a1f1ee6a0f9a99f64b35a3412cd06ebd2ff554af57a00daafb5dfb20b",
+  "diff_digest": "sha256:06fa609c4bb8bc60158f32e588521918ebefb2381bac0dddcc99d401bac8128d",
+  "review_plan_hash": "sha256:8239983df01a741d9fe2a41a8ddf79683d6c8d38c5cf7a4888c26ae298422276",
+  "reviewer_id": "/root/pumarejo_diagnostics_review",
+  "surface_id": "diagnostics-lifecycle",
+  "risk_boundaries_checked": [
+    "close/relaunch isolation",
+    "failed-launch retention",
+    "lifecycle ordering"
+  ],
+  "findings": [
+    {
+      "severity": "p2",
+      "principle": "correctness",
+      "rule_id": "diagnostics.relaunch.invalid-session-id",
+      "observation": "launchNow validates the newly generated session ID and returns INTERNAL_ERROR before closing the retained DiagnosticStore from an earlier failed launch. It sets the runtime back to idle, leaving the old store available to the idle diagnostics branch.",
+      "impact": "After one failed launch, a replacement attempt that produces an invalid ID leaves the previous attempt's phase, stderr, and last_error records queryable as if they belonged to the current idle state, violating relaunch isolation and misattributing evidence.",
+      "recommendation": "Invalidate and close the retained diagnostics store at the start of a replacement launch, before sessionId validation, and clear its pointer so every replacement attempt either owns a fresh store or exposes no prior records.",
+      "evidence": [
+        "src/mcp/runtime.ts:1047-1052 obtains and validates sessionId, returns INTERNAL_ERROR with state idle, and only then closes this.#diagnostics.",
+        "src/mcp/runtime.ts:827-833 selects this.#diagnostics whenever state is idle and no launch operation remains.",
+        "src/mcp/runtime.ts:1125-1160 records launch failure diagnostics and leaves the retained store in place when cleanup succeeds; a subsequent invalid-ID launch therefore leaves that first store queryable.",
+        "The scenario is reproducible through the exported PumarejoRuntimeDependencies.sessionId seam: first return a valid ID and fail manager.launch, then return a malformed ID and query diagnostics without an intervening close."
+      ]
+    },
+    {
+      "severity": "p2",
+      "principle": "testing",
+      "rule_id": "diagnostics.relaunch-isolation.unexercised",
+      "observation": "The new regression closes the failed launch and verifies diagnostics are cleared before it performs the relaunch assertion. Its harness also creates a new DiagnosticStore on every create after the first, so the test cannot observe whether runtime replacement cleanup closes the previous store.",
+      "impact": "A regression that removes the runtime's replacement close or otherwise retains the previous store can remain green; the required close/relaunch isolation behavior is not actually exercised by this test.",
+      "recommendation": "Attempt the second launch directly after the failed-launch diagnostics query and assert the old record is absent from the new query, then separately call close and verify diagnostics are unavailable. Use a factory or close spy that preserves the old store until runtime replacement performs the cleanup.",
+      "evidence": [
+        "tests/unit/mcp-runtime.test.ts:577-582 calls close and asserts SESSION_NOT_ACTIVE before the relaunch at lines 584-592.",
+        "tests/unit/mcp-runtime.test.ts:321-324 replaces diagnostics with a fresh DiagnosticStore on the second create, independently guaranteeing clean relaunch records even if src/mcp/runtime.ts:1052 is removed."
+      ]
+    }
+  ],
+  "finding_feedback": [],
+  "suppressed_speculative_count": 0,
+  "stop_reason": "coverage-complete"
+}

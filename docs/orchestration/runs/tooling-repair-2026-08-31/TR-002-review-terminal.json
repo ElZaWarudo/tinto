@@ -1,0 +1,56 @@
+{
+  "contract_hash": "sha256:75b1f7decdde679e5df751c1208f69403def8291b2e89b0705c4197c3e008de5",
+  "diff_digest": "sha256:0499c71e665acee6a91481c67fe9b1832d5d9d480ecfd8fd45c894fa9e8e5423",
+  "review_plan_hash": "sha256:bfa696ddf745cab49011f924c4cf23871ee67f61c2dc79a81355f83af31fd4b0",
+  "reviewer_id": "/root/tinto_ui_review",
+  "surface_id": "turn-ui",
+  "risk_boundaries_checked": [
+    "at-most-once resumed dispatch",
+    "same-title attribution",
+    "truthful lifecycle status"
+  ],
+  "findings": [
+    {
+      "severity": "p1",
+      "principle": "correctness",
+      "rule_id": "TR002-RESUME-UNKNOWN-RETRY",
+      "observation": "The resumed write now restricts replay to session_not_running, but resumeAgentJournalSession is still invoked through recover(), whose default retry policy retries unclassified failures.",
+      "impact": "resume_agent_journal_session starts and registers a new provider session on each invocation. If the first invoke loses its response after starting the process, the frontend can invoke it up to five times, leaving duplicate or orphaned sessions before any user turn is sent and violating idempotent resume/at-most-once recovery.",
+      "recommendation": "Do not automatically retry the resume command after an unclassified/ambiguous failure; keep the pending draft and require inspection before a user initiated retry. Add a regression where resume rejects with an unclassified error after its side effect and assert one resume invocation and no write dispatch.",
+      "evidence": [
+        "src/panels/terminal/TerminalPanel.tsx:1331 calls recover(() => resumeAgentJournalSession(session.id));",
+        "src/agent/boundedRetry.ts:32-45 defaults retryAgentRecoveryOperation to isRetryableAgentRecoveryError, and :53-55 treats errors without a category as retryable.",
+        "src-tauri/src/agent_console/commands.rs:347-389 creates a fresh registry session for every resume_agent_journal_session invocation before returning its result."
+      ]
+    },
+    {
+      "severity": "p1",
+      "principle": "correctness",
+      "rule_id": "TR002-LIFECYCLE-ACTIVITY-MISMATCH",
+      "observation": "The changed sessionCompletionLabel now reports a running session with turn_status=waiting as En espera, while agentActivitySummary still classifies every status=running session as Agent est\u00e1 trabajando.",
+      "impact": "A ready session simultaneously announces En espera in the primary status strip and Agent est\u00e1 trabajando in the Activity strip, with detail En espera. This preserves the misleading busy signal that prompted the repair and can cause users or automation to wait or attempt recovery unnecessarily.",
+      "recommendation": "Make the Activity summary branch on turn_status before the generic running fallback, using an idle/ready title for waiting and a working title only for working or settling. Add a running/waiting regression that asserts both status surfaces communicate readiness consistently.",
+      "evidence": [
+        "src/panels/terminal/TerminalPanel.tsx:8724-8726 maps status=running to turnStatusLabel, so waiting renders En espera.",
+        "src/panels/terminal/TerminalPanel.tsx:7844-7851 uses session.status===running as the working condition and returns title Agent est\u00e1 trabajando even when turnState is En espera.",
+        "src/panels/terminal/TerminalPanel.test.tsx:934-935 asserts the new En espera primary label for a running/waiting fixture without asserting the Activity strip's contradictory title."
+      ]
+    },
+    {
+      "severity": "p2",
+      "principle": "correctness",
+      "rule_id": "TR002-KNOWN-ERROR-COPY",
+      "observation": "The catch block now uses the ambiguous-response message for every send error, including categorized failures known to occur before provider dispatch.",
+      "impact": "A known session_not_running, invalid_input, or attachment validation failure is presented as No se pudo confirmar el env\u00edo and asks the user to inspect the conversation, even though the backend has rejected it before dispatch. The message hides the actionable recovery path and makes safe retries look ambiguous.",
+      "recommendation": "Choose the alert copy from the error category: preserve the inspect-before-resend warning only for unclassified/ambiguous failures, while known pre-dispatch categories retain a direct retry or correction message. Cover at least session_not_running and attachment validation in focused tests.",
+      "evidence": [
+        "src/panels/terminal/TerminalPanel.tsx:1413-1417 applies the same ambiguous message to all caught send/steer/resume errors.",
+        "src-tauri/src/agent_console/session.rs:1285-1295 returns session_not_running before obtaining a process, and :215-241 routes write_input through that guard before process.write_input.",
+        "src-tauri/src/agent_console/commands.rs:1026-1050 separately rejects malformed input before emitting a timeline user message."
+      ]
+    }
+  ],
+  "finding_feedback": [],
+  "suppressed_speculative_count": 0,
+  "stop_reason": "coverage-complete"
+}

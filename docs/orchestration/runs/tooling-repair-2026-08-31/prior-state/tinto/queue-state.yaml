@@ -1,45 +1,55 @@
 schema_version: 2
-updated_at: '2026-08-31T06:23:02.779958+00:00'
+updated_at: '2026-08-28'
 mode: autonomous-team-flow
 documentation_gate:
-  status: in_review
-  approved_by: null
-  approved_at: null
-  initiative_contract: docs/plans/tooling-repair-2026-08-31/initiative-requirements.md
-  source_artifacts: &id001
-  - docs/plans/tooling-repair-2026-08-31/initiative-requirements.md
-  - docs/plans/tooling-repair-2026-08-31/roadmap.md
-  - docs/plans/tooling-repair-2026-08-31/jira-seed-plan.md
-  - docs/plans/tooling-repair-2026-08-31/swarm-startup.md
-  approval_artifacts: *id001
-  approval_receipt: null
-  approved_packet_digest: null
-  approval_receipt_digest: null
-  authorization_bypass:
-    event_id: AUTH-TOOLING-2026-08-31
-    path: docs/orchestration/runs/tooling-repair-2026-08-31/authorization-event.md
-    source_sha256: a76acbb1964d782069006f1b81186ada61a06458ed898c186e153f714accb0f1
-    permits:
-    - queue_state
-    - worker_dispatch
-    - code_test_config_mutation
-    - verification
-    - review
-    - reconciliation
-    - release_handoff
-    - local_commits
-    does_not_assert_document_review: true
-    one_shot: true
+  status: approved
+  initiative_contract: docs/plans/codex-subagent-parity/initiative-requirements.md
+  source_artifacts:
+  - docs/plans/codex-subagent-parity/initiative-requirements.md
+  - docs/product/roadmap.md
+  - docs/jira/seed-plan.md
+  - docs/swarm/swarm-startup.md
+  approval_artifacts:
+  - docs/plans/codex-subagent-parity/initiative-requirements.md
+  - docs/product/roadmap.md
+  - docs/jira/seed-plan.md
+  - docs/swarm/swarm-startup.md
+  feedback_log:
+  - at: '2026-08-28T00:00:00Z'
+    by: user
+    summary: Authorized autonomous implementation of complete current Codex subagent
+      behavior while preserving Tinto visual language and forbidding release mutations
+      pending one final review.
+    affected_artifacts:
+    - docs/plans/codex-subagent-parity/initiative-requirements.md
+    - docs/product/roadmap.md
+    - docs/jira/seed-plan.md
+    - docs/swarm/swarm-startup.md
+  - at: '2026-08-27T06:40:16Z'
+    by: document-review
+    summary: Made provider evidence a real go/no-go gate and added bounded security,
+      interaction-state, outcome, and accessibility requirements without adding infrastructure.
+    affected_artifacts:
+    - docs/plans/tinto-gap-closure/initiative-requirements.md
+    - docs/product/roadmap.md
+    - docs/swarm/queue-state.yaml
+  approved_by: user
+  approved_at: '2026-08-28T00:00:00Z'
+  approval_receipt: docs/orchestration/approval-receipts/codex-subagent-parity-2026-08-28.json
+  approved_packet_digest: sha256:857dc0c425005b995f3404f92758cedcda24b353863229e68557ef5acbde0830
+  approval_receipt_digest: sha256:dbfcdf1152beab94de993c59919a16fffb3c2c355c802f7c48dd3319501ceb85
 initiative:
-  contract_path: docs/plans/tooling-repair-2026-08-31/initiative-requirements.md
+  contract_path: docs/plans/codex-subagent-parity/initiative-requirements.md
   artifact_contract: ce-unified-plan/v1
   artifact_readiness: requirements-only
   shared_revision: null
   shared_decisions:
-  - Pumarejo-only GUI
-  - Jira none
-  - No ICook features
-  - No remote mutations
+  - Codex remains the subagent orchestrator; Tinto observes, persists, and controls
+    through documented Codex app-server contracts.
+  - Preserve Tinto IADE visual language and add the agent hierarchy to Agent Lens.
+  - Persist the full root-child-descendant graph and transcripts across restart.
+  - Add only a narrow provider boundary around normalized graph events and targeted
+    controls.
 compound_runs:
   gap-closure-rdm-024-mcp:
     run_id: gap-closure-rdm-024-mcp
@@ -54,17 +64,17 @@ compound_runs:
     artifact_revision: sha256:452003b2a4f43374834ee5323b1665fb82a1388aef928f2f17a586db6ca36d2b
 autonomy:
   mode: autonomous
-  ledger_path: docs/orchestration/autonomy-ledgers/tooling-repair-2026-08-31.json
+  ledger_path: docs/orchestration/autonomy-ledgers/codex-subagent-parity-2026-08-28.json
   resume_snapshot:
     authority: false
     schema_version: 1
-    contract_id: tooling-repair-2026-08-31
+    contract_id: codex-subagent-parity-2026-08-28
     contract_status: active
-    contract_hash: 1c051cd89be2a7af0d3f0701760aa05d38f6e5a4d5fbf49874015bc7bb745bcc
+    contract_hash: e477a2df85a6f31bd42d755dc30fbe9cce7cc10c72870508df75930f31c3d5c3
     latest_audit_event: null
-    captured_at: '2026-08-31T06:23:02.779958+00:00'
+    captured_at: '2026-08-28T00:00:00Z'
 jira:
-  provider: none
+  provider: null
   project_key: null
   base_url: null
   last_read_at: null
@@ -636,10 +646,8 @@ units:
       - cargo test --manifest-path src-tauri/Cargo.toml bus::contract::tests
       focused_evidence:
       - Final independent backend review passed with no findings.
-      - Contract generation, Rust formatting, clippy, all 469 Rust tests, and the
-        final Rust build passed.
-      - Root supervision preserved the worker diff and reconciled its validated contract
-        after bounded closeout recovery.
+      - Contract generation, Rust formatting, clippy, all 469 Rust tests, and the final Rust build passed.
+      - Root supervision preserved the worker diff and reconciled its validated contract after bounded closeout recovery.
       aggregate_owner: wave-root
       aggregate_fingerprint: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
       fingerprint_artifact: docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-fingerprint.json
@@ -725,8 +733,7 @@ units:
       - npm test -- src/panels/terminal/TerminalPanel.test.tsx
       focused_evidence:
       - Final independent UI review passed after bounded remediation.
-      - Agent tree and selector tests passed 11 of 11; focused transcript regressions,
-        scoped lint and formatting, and the production build passed.
+      - Agent tree and selector tests passed 11 of 11; focused transcript regressions, scoped lint and formatting, and the production build passed.
       aggregate_owner: wave-root
       aggregate_fingerprint: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
       fingerprint_artifact: docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-fingerprint.json
@@ -813,10 +820,8 @@ units:
       - cargo test --manifest-path src-tauri/Cargo.toml
       - cargo build --manifest-path src-tauri/Cargo.toml
       focused_evidence:
-      - Aggregate contract, scoped frontend quality, production build, Rust format,
-        clippy, 469-test, and build gates passed.
-      - One environment exception was resolved through source-scoped evidence; no
-        unresolved P0-P2 finding remains.
+      - Aggregate contract, scoped frontend quality, production build, Rust format, clippy, 469-test, and build gates passed.
+      - One environment exception was resolved through source-scoped evidence; no unresolved P0-P2 finding remains.
       aggregate_owner: wave-root
       aggregate_fingerprint: sha256:6e4e9f0b81d3e51319154e63049830a7dbcc8fd3df4123568dfd3507da8d8830
       fingerprint_artifact: docs/orchestration/runs/codex-subagent-parity-2026-08-28/aggregate-fingerprint.json
@@ -840,62 +845,6 @@ units:
       release_notes: []
       suggested_jira_transition: null
       release_marshal_packet: docs/orchestration/release-handoffs/2026-08-28-codex-subagent-parity.md
-  TR-001:
-    title: Tinto session lifecycle repair
-    status: planned
-    jira_key: null
-    source: docs/plans/tooling-repair-2026-08-31/initiative-requirements.md
-    depends_on: []
-    blocked_by: []
-    scope:
-      included:
-      - Tinto session lifecycle repair
-      excluded:
-      - shipping
-      - ICook features
-      - baseline dirty files
-    execution:
-      route: swarm
-      lane: deep
-      worker_profile: luna_xhigh
-      discovery_profile: luna_xhigh_discovery
-      reasoning_effort: xhigh
-      lane_trigger: concurrent-lifecycle-and-public-contract
-    isolation:
-      type: repository-separated-current-checkout
-      path: C:/Users/User/Documents/personal/tinto
-      branch: codex/agents-usability-edge-campaign
-    verification:
-      aggregate_owner: root
-      focused_commands: []
-  PR-001:
-    title: Pumarejo retained diagnostics and lifecycle repair
-    status: planned
-    jira_key: null
-    source: docs/plans/tooling-repair-2026-08-31/initiative-requirements.md
-    depends_on: []
-    blocked_by: []
-    scope:
-      included:
-      - Pumarejo retained diagnostics and lifecycle repair
-      excluded:
-      - shipping
-      - ICook features
-      - baseline dirty files
-    execution:
-      route: swarm
-      lane: deep
-      worker_profile: luna_xhigh
-      discovery_profile: luna_xhigh_discovery
-      reasoning_effort: xhigh
-      lane_trigger: concurrent-lifecycle-and-public-contract
-    isolation:
-      type: repository-separated-current-checkout
-      path: C:/Users/User/Documents/personal/pumarejo
-      branch: codex/fix-agent-certification-gaps
-    verification:
-      aggregate_owner: root
-      focused_commands: []
 wave_history:
 - wave: gap-closure-2026-08-27
   status: release-ready

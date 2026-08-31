@@ -1,0 +1,10 @@
+{
+  "actionable_finding_ids": [
+    "F-1F8584B4"
+  ],
+  "new_critical_findings": [],
+  "registry_digest": "sha256:e6c0ec52128f9b6897647b98c1d29779a61c35f5dbacbb23dafafdc43a3e6fd6",
+  "rejected_finding_ids": [],
+  "status": "complete",
+  "validator_id": "/root"
+}

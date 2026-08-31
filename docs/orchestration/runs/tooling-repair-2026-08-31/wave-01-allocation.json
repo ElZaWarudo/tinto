@@ -1,0 +1,40 @@
+{
+  "allocation": {
+    "active_by_role": {
+      "implementer": 2
+    },
+    "admitted": [
+      {
+        "id": "PR-001",
+        "priority": 1,
+        "role": "implementer"
+      },
+      {
+        "id": "TR-001",
+        "priority": 1,
+        "role": "implementer"
+      }
+    ],
+    "rejected": [],
+    "reserve_slots": 1,
+    "role_caps": {
+      "ci-platform": 1,
+      "documenter": 1,
+      "fixer": 1,
+      "implementer": 2,
+      "integrator": 1,
+      "planner": 1,
+      "reviewer": 2,
+      "security": 1
+    },
+    "schema_version": 1,
+    "total_slots": 9,
+    "usable_slots": 8
+  },
+  "cap_reasons": [
+    "default-cap"
+  ],
+  "green_wave_streak": 0,
+  "implementer_cap": 2,
+  "schema_version": 1
+}

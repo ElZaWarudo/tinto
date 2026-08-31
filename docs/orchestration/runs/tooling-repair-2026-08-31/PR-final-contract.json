@@ -1,0 +1,27 @@
+{
+  "route": "root-integration",
+  "objective": "Retain sanitized attributable launch diagnostics; report absent dialogs accurately; stop waiting for an exited or replaced owned launch process",
+  "owned_files": [
+    "src/mcp/runtime.ts",
+    "src/observability/diagnostics.ts",
+    "src/session/manager.ts",
+    "src/webdriver/client.ts",
+    "tests/unit/diagnostics.test.ts",
+    "tests/unit/mcp-runtime.test.ts",
+    "tests/unit/session-manager.test.ts",
+    "tests/unit/webdriver-native-control.test.ts"
+  ],
+  "excluded": [
+    "ICook source",
+    "auth changes",
+    "unsafe cleanup deletion"
+  ],
+  "verification": "79 focused tests passed; aggregate pending",
+  "fixes": [
+    "F-1F24B270",
+    "invalid replacement ID isolation",
+    "direct relaunch cleanup assertion"
+  ],
+  "max_review_ms": 600000,
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514"
+}

@@ -1,0 +1,12 @@
+{
+  "finding_counts": {
+    "p0": 0,
+    "p1": 0,
+    "p2": 0
+  },
+  "finding_feedback_count": 0,
+  "reviewer_id": "/root/tinto_lifecycle_review",
+  "suppressed_speculative_count": 0,
+  "surface_id": "closed-turn-refresh",
+  "valid": true
+}

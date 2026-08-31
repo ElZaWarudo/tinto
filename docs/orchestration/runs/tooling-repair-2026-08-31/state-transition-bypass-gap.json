@@ -1,0 +1,22 @@
+{
+  "command": [
+    "python",
+    "C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/transition_swarm_state.py",
+    "--queue",
+    "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\swarm\\queue-state.yaml",
+    "--blockers",
+    "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\swarm\\blockers.yaml",
+    "--transition",
+    "C:\\Users\\User\\AppData\\Local\\Temp\\repair-state-transition.json",
+    "--expected-queue-digest",
+    "sha256:ebb637c0e2547fe4d687590b802b93fbc0e68510aa577277bb0cc16b760b41eb",
+    "--expected-blockers-digest",
+    "sha256:38f9f027ce78e42362fc1d202d595c4546f0f4f0244d63be6bf3d5f29bc79a60",
+    "--repo-root",
+    "C:\\Users\\User\\Documents\\personal\\tinto"
+  ],
+  "exit_code": 2,
+  "stdout": "",
+  "stderr": "usage: transition_swarm_state.py [-h] --queue QUEUE --blockers BLOCKERS\n                                 --transition TRANSITION\n                                 --expected-queue-digest EXPECTED_QUEUE_DIGEST\n                                 --expected-blockers-digest EXPECTED_BLOCKERS_DIGEST\n                                 [--repo-root REPO_ROOT]\ntransition_swarm_state.py: error: documentation approval is missing\n",
+  "disposition": "Preserve in_review gate and null receipt. User explicitly permits queue/dispatch/code despite gate; execution facts remain root observations, not fabricated approved status."
+}

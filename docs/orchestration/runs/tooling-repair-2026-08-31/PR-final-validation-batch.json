@@ -1,0 +1,8 @@
+{
+  "allow_new_critical": true,
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+  "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+  "finding_ids": [],
+  "new_critical_findings": [],
+  "validator_id": "/root"
+}

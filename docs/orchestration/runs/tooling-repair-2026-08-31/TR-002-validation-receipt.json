@@ -1,0 +1,12 @@
+{
+  "status": "complete",
+  "registry_digest": "sha256:725d8355d525b536ea26fdf13c9a91fbf69f00105a85af5a7fe95267f9cdc39c",
+  "validator_id": "/root",
+  "actionable_finding_ids": [
+    "F-4492E3D8",
+    "F-520C73CD",
+    "F-80C504E3"
+  ],
+  "rejected_finding_ids": [],
+  "new_critical_findings": []
+}

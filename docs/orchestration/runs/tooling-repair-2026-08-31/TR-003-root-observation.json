@@ -1,0 +1,8 @@
+{
+  "contract_hash": "sha256:c42dfcc2a8a7499dca1e947a27525a142d84a6ecfb73a784c483fe161ca9071a",
+  "diff_digest": "sha256:1add6461ae8e81ff973f52b18418dfded3e1ce72ed79a4c02680e5f16a816b75",
+  "changed_paths": [
+    "src-tauri/src/agent_console/session.rs"
+  ],
+  "file_sha256": "c3e0bf57fa388c92320e235aea8c266524810199561b3b06e7d996d03cc12a12"
+}

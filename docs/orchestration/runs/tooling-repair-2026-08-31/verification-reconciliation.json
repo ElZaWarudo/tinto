@@ -1,0 +1,41 @@
+{
+  "pumarejo_committed_head": "f76355ad3631fa45259c889d0462aa09e190384c",
+  "verified_fingerprint": "sha256:b5110d88e3a0fb90a48522f53c6a5543a67cc371bc7322e631ed363653981a5a",
+  "record_digest": "sha256:8acfb67c80e6d42a90b18ef0d1b757bddfe4c6aa1b0bd0199c98ba2864fc32a9",
+  "committed_source_matches_verified_files": [
+    {
+      "path": "src/mcp/runtime.ts",
+      "matched": true
+    },
+    {
+      "path": "src/observability/diagnostics.ts",
+      "matched": true
+    },
+    {
+      "path": "src/session/manager.ts",
+      "matched": true
+    },
+    {
+      "path": "src/webdriver/client.ts",
+      "matched": true
+    },
+    {
+      "path": "tests/unit/diagnostics.test.ts",
+      "matched": true
+    },
+    {
+      "path": "tests/unit/mcp-runtime.test.ts",
+      "matched": true
+    },
+    {
+      "path": "tests/unit/session-manager.test.ts",
+      "matched": true
+    },
+    {
+      "path": "tests/unit/webdriver-native-control.test.ts",
+      "matched": true
+    }
+  ],
+  "tinto_full_aggregate_result": "failed: baseline WSL assertion and pre-existing effect lint;770 tests passed",
+  "tinto_followup": "TR-003-focused-verification.json binds additional session.rs guard; native compilation succeeded"
+}

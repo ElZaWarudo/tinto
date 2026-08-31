@@ -1,0 +1,8 @@
+{
+  "actionable_finding_ids": [],
+  "new_critical_findings": [],
+  "registry_digest": "sha256:21de50d19703bb6c5dabd818233655d2111e249d82c146f793cda6f37ea870aa",
+  "rejected_finding_ids": [],
+  "status": "complete",
+  "validator_id": "/root"
+}

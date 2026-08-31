@@ -1,0 +1,9 @@
+{
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+  "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+  "findings": [],
+  "registry_digest": "sha256:21de50d19703bb6c5dabd818233655d2111e249d82c146f793cda6f37ea870aa",
+  "registry_id": "tooling-repair-PR-final",
+  "revision": 0,
+  "schema_version": 1
+}

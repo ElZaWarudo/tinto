@@ -1,0 +1,62 @@
+{
+  "tinto": {
+    "head": {
+      "exit_code": 0,
+      "output": "b0880b163b4698d180d0f0c9f56416b99731731f"
+    },
+    "branch": {
+      "exit_code": 0,
+      "output": "codex/agents-usability-edge-campaign"
+    },
+    "status": {
+      "exit_code": 0,
+      "output": "M src-tauri/Cargo.lock\n M src-tauri/Cargo.toml\n?? docs/orchestration/runs/tooling-repair-2026-08-31/\n?? output/"
+    },
+    "remote_main": {
+      "exit_code": 0,
+      "output": "b0880b163b4698d180d0f0c9f56416b99731731f"
+    },
+    "dirty_tracked": {
+      "src-tauri/Cargo.lock": "1b1076cc5b886a06c10bb982f8a0204ab0687bf4b1a36b0e8d9cdb0172b45380",
+      "src-tauri/Cargo.toml": "bb63a15506d17a6634bfccbfa7a8ef1d6a79928cdb6a77efe8f7fdd13bd8ac40"
+    }
+  },
+  "pumarejo": {
+    "head": {
+      "exit_code": 0,
+      "output": "18fa00b961851b021ac4d9f609107e0ecd343269"
+    },
+    "branch": {
+      "exit_code": 0,
+      "output": "codex/fix-agent-certification-gaps"
+    },
+    "status": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "remote_main": {
+      "exit_code": 0,
+      "output": "18fa00b961851b021ac4d9f609107e0ecd343269"
+    },
+    "dirty_tracked": {}
+  },
+  "ICook": {
+    "head": {
+      "exit_code": 128,
+      "output": "HEAD"
+    },
+    "branch": {
+      "exit_code": 0,
+      "output": "main"
+    },
+    "status": {
+      "exit_code": 0,
+      "output": "?? .gitignore\n?? .pumarejo.json\n?? docs/\n?? index.html\n?? package-lock.json\n?? package.json\n?? src-tauri/\n?? src/\n?? tests/\n?? tsconfig.json\n?? tsconfig.tsbuildinfo\n?? vite.config.ts"
+    },
+    "remote_main": {
+      "exit_code": 128,
+      "output": "origin/main"
+    },
+    "dirty_tracked": {}
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+  "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+  "findings": [
+    {
+      "evidence": [
+        "ICook/docs/tooling-repair-evidence/tinto-final/015-tauri_window.json",
+        "ICook/docs/tooling-repair-evidence/tinto-final/024-tauri_window.json",
+        "src/webdriver/client.ts:1088-1216; vendor executor.rs:1582-1641"
+      ],
+      "impact": "Callers receive success for a minimized window.",
+      "observation": "Native restore reports restored while outer rect remains minimized (-32000,-32000,160x28); client lacks visibility postcondition and provider never unminimizes. Pre-existing to this repair.",
+      "principle": "correctness",
+      "recommendation": "Reconcile provider staging first, then add a native restore/unminimize proof and truthful capability; do not hardcode coordinate sentinels or weaken postconditions.",
+      "rule_id": "window.restore.minimized-false-success",
+      "severity": "p2"
+    }
+  ],
+  "reporter_id": "/root/pumarejo_diagnostics_review",
+  "review_plan_hash": "sha256:1ec58f5acd6caf4bd1189a65df3bd426d42300e9a6838a5129a887f4a179672f",
+  "surface_id": "pumarejo-runtime"
+}

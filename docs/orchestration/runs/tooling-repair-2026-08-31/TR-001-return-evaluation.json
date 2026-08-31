@@ -1,0 +1,25 @@
+{
+  "action": "contract_violation",
+  "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+  "evidence_trust": "self-reported",
+  "metrics": {
+    "acceptance_latency_ms": null,
+    "discovery_implementation_ratio": null,
+    "elapsed_budget_exhausted": true,
+    "evidence_trust": "self-reported",
+    "last_required_command_to_return_ms": null,
+    "out_of_manifest_commands": 0,
+    "repeated_verification_commands": 1,
+    "review_findings_p0": 0,
+    "review_findings_p1": 0,
+    "review_findings_p2": 0,
+    "root_interventions": 1,
+    "scope_violations": 0,
+    "time_to_first_change_ms": null
+  },
+  "pending_certifications": [],
+  "reasons": [
+    "execution-elapsed-budget-exceeded"
+  ],
+  "terminal_status": "needs_review"
+}

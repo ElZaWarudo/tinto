@@ -1,0 +1,2115 @@
+schema_version: 2
+updated_at: "2026-08-25T17:30:50Z"
+mode: autonomous-team-flow
+documentation_gate:
+  status: approved
+  approved_by: user
+  approved_at: "2026-08-21T11:18:58Z"
+  initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+  source_artifacts:
+    - docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    - docs/product/roadmap.md
+    - docs/jira/seed-plan.md
+    - docs/swarm/swarm-startup.md
+    - docs/swarm/queue-state.yaml
+    - docs/swarm/blockers.yaml
+    - docs/swarm/shared-artifact-revision.json
+  feedback_log:
+    - at: "2026-08-21T11:18:58Z"
+      by: user
+      summary: Approved the documentation packet, both recommended decisions, and autonomous execution through release handoff.
+      affected_artifacts:
+        - docs/plans/tinto-e2e-reliability/initiative-requirements.md
+        - docs/swarm/queue-state.yaml
+        - docs/swarm/blockers.yaml
+
+initiative:
+  contract_path: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+  artifact_contract: ce-unified-plan/v1
+  artifact_readiness: requirements-only
+  shared_revision: sha256:b0f646489c37c205beccbe6cbe26cb5aa1169b73d8d83922d6a0fb8af5a48d12
+  shared_decisions:
+    - local-stdio-transport
+    - one-owned-application-session-with-multiple-surfaces
+    - explicit-capability-and-test-authorization-for-native-dialogs
+    - stable-semantic-identifiers-are-non-actionable
+    - public-dialog-tool-is-additive-tauri-dialog
+    - modified-provider-is-bundled-and-package-relative
+    - windows-release-custody-uses-identity-bound-job-object-backend
+    - preserve-capability-composition-and-rustfmt-idempotence
+
+autonomy:
+  mode: high
+  ledger_path: docs/orchestration/autonomy-ledgers/tinto-e2e-reliability.json
+  resume_snapshot:
+    authority: false
+    schema_version: 1
+    contract_id: autonomy-2026-08-21-tinto-e2e-reliability
+    contract_status: active
+    contract_hash: 69fd844328c04dd4ae9b8b56b41a02ff75279b3f627d342393217544c819254b
+    latest_audit_event: GENESIS
+    captured_at: "2026-08-21T11:18:58Z"
+
+jira:
+  provider: null
+  project_key: null
+  base_url: null
+  last_read_at: null
+
+source_artifacts:
+  - path: docs/audits/2026-07-28-pumarejo-usage-feedback.md
+    kind: accepted-planning-input
+  - path: docs/roadmaps/2026-07-28-001-real-usage-hardening-roadmap.md
+    kind: prior-roadmap
+  - path: docs/work-packages/RDM-009-bounded-observation/2026-07-28-009-bounded-observation-work-package.md
+    kind: existing-work-package
+  - path: docs/product/roadmap.md
+    kind: initiative-roadmap
+
+compound_runs:
+  tinto-e2e-rdm-009-observation:
+    run_id: tinto-e2e-rdm-009-observation
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-009-observation/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-009
+    artifact_namespace: tinto-e2e-reliability/RDM-009-observation
+    status: review-passed
+    observed_at: "2026-08-21T11:46:00Z"
+    artifact_revision: 23fe76ecce1b3cbe8bd58e79ef31518e2d3b8f53
+  tinto-e2e-rdm-013-surfaces:
+    run_id: tinto-e2e-rdm-013-surfaces
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-013-surfaces/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-013
+    artifact_namespace: tinto-e2e-reliability/RDM-013-surfaces
+    status: ci-prevention-ready
+    observed_at: "2026-08-24T06:25:00Z"
+    artifact_revision: null
+  tinto-e2e-rdm-014-native-control:
+    run_id: tinto-e2e-rdm-014-native-control
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-014-native-control/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-014
+    artifact_namespace: tinto-e2e-reliability/RDM-014-native-control
+    status: completed
+    observed_at: "2026-08-24T07:40:00Z"
+    artifact_revision: null
+  tinto-e2e-rdm-015-observability:
+    run_id: tinto-e2e-rdm-015-observability
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-015-observability/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-015
+    artifact_namespace: tinto-e2e-reliability/RDM-015-observability
+    status: ci-prevention-ready
+    observed_at: "2026-08-24T07:25:00Z"
+    artifact_revision: null
+  tinto-e2e-rdm-016-process-custody:
+    run_id: tinto-e2e-rdm-016-process-custody
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-016-process-custody/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-016
+    artifact_namespace: tinto-e2e-reliability/RDM-016-process-custody
+    status: certified-pr-handoff-ready
+    observed_at: "2026-08-25T17:30:50Z"
+    artifact_revision: null
+  tinto-e2e-rdm-017-portable-runtime:
+    run_id: tinto-e2e-rdm-017-portable-runtime
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-017-portable-runtime/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-017
+    artifact_namespace: tinto-e2e-reliability/RDM-017-portable-runtime
+    status: certified-pr-handoff-ready
+    observed_at: "2026-08-25T17:30:50Z"
+    artifact_revision: null
+  tinto-e2e-rdm-018-sequences-refs:
+    run_id: tinto-e2e-rdm-018-sequences-refs
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-018-sequences-refs/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-018
+    artifact_namespace: tinto-e2e-reliability/RDM-018-sequences-refs
+    status: release-ready-with-host-and-native-cleanup-gaps
+    observed_at: "2026-08-24T06:10:00Z"
+    artifact_revision: null
+  tinto-e2e-rdm-019-certification:
+    run_id: tinto-e2e-rdm-019-certification
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-019-certification/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-019
+    artifact_namespace: tinto-e2e-reliability/RDM-019-certification
+    status: implementation-evidence-partial
+    observed_at: "2026-08-25T17:30:50Z"
+    artifact_revision: null
+  tinto-e2e-rdm-020-attributed-drift:
+    run_id: tinto-e2e-rdm-020-attributed-drift
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-020-attributed-drift/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-020
+    artifact_namespace: tinto-e2e-reliability/RDM-020-attributed-drift
+    status: artifacts-ready
+    observed_at: "2026-08-21T12:00:00Z"
+    artifact_revision: null
+  tinto-e2e-rdm-021-network-artifacts:
+    run_id: tinto-e2e-rdm-021-network-artifacts
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-021-network-artifacts/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-021
+    artifact_namespace: tinto-e2e-reliability/RDM-021-network-artifacts
+    status: release-ready-with-host-and-native-cleanup-gaps
+    observed_at: "2026-08-24T13:18:21Z"
+    artifact_revision: null
+  tinto-e2e-rdm-022-self-doctor:
+    run_id: tinto-e2e-rdm-022-self-doctor
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-022-self-doctor/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-022
+    artifact_namespace: tinto-e2e-reliability/RDM-022-self-doctor
+    status: release-ready-with-platform-and-resolver-evidence-gaps
+    observed_at: "2026-08-24T15:21:03Z"
+    artifact_revision: null
+  tinto-e2e-rdm-023-release-certification:
+    run_id: tinto-e2e-rdm-023-release-certification
+    state_path: docs/orchestration/compound-master/tinto-e2e-rdm-023-release-certification/state.md
+    interaction: brokered
+    initiative_contract: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    roadmap: docs/product/roadmap.md
+    roadmap_item: RDM-023
+    artifact_namespace: tinto-e2e-reliability/RDM-023-release-certification
+    status: pr-handoff-ready-full-release-blocked
+    observed_at: "2026-08-25T17:30:50Z"
+    artifact_revision: null
+
+proposed_jira:
+  epics:
+    - provisional_id: PUM-E2E
+      title: Reliable native end-to-end validation
+  parents:
+    - { provisional_id: PUM-E2E-A, title: Surface foundation }
+    - { provisional_id: PUM-E2E-B, title: Native control and evidence }
+    - { provisional_id: PUM-E2E-C, title: Runtime custody and portability }
+    - { provisional_id: PUM-E2E-D, title: Efficient interaction }
+    - { provisional_id: PUM-E2E-E, title: Tinto certification }
+    - { provisional_id: PUM-E2E-F, title: Operational hardening }
+    - { provisional_id: PUM-E2E-G, title: Release certification }
+  subtasks: []
+
+jira_issue_map: {}
+
+units:
+  rdm-009-bounded-observation:
+    title: Settle and implement bounded protected observation
+    jira_key: null
+    source: docs/work-packages/RDM-009-bounded-observation/2026-07-28-009-bounded-observation-work-package.md
+    status: review-passed
+    depends_on: []
+    blocked_by: []
+    affects_dependents:
+      [
+        rdm-013-surface-graph,
+        rdm-018-sequences-refs,
+        rdm-019-tinto-certification,
+      ]
+    scope:
+      included:
+        [bounded observation, redaction, ARIA fidelity, partial evidence]
+      excluded: [closed shadow roots, generic selectors, release]
+    acceptance_criteria:
+      - Bounded snapshots never fail opaquely at transport-safe limits.
+      - Continuation and actionable reference semantics match the accepted decision.
+    surfaces:
+      code: [src/observation, src/mcp]
+      contracts: [docs/contracts.md]
+      data: []
+      auth: []
+      docs: [docs/architecture.md, docs/security.md]
+      tests: [tests/unit, tests/integration, tests/contract]
+      config: []
+      generated: []
+    execution:
+      route: nested-compound-or-direct-after-decision
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: public-snapshot-ref-and-disclosure-contract
+      role_triggers:
+        {
+          reviewer: public-contract-and-security,
+          integrator: central-observation-contract,
+          documenter: maintained-contracts,
+        }
+    verification:
+      focused_commands:
+        [pnpm test:unit, pnpm test:contract, pnpm test:integration]
+      focused_evidence:
+        - docs/orchestration/compound-master/tinto-e2e-rdm-009-observation/summary.md
+      aggregate_owner: wave-root
+      aggregate_fingerprint: null
+    isolation:
+      type: worktree
+      branch: codex/tinto-e2e-reliability
+      path: C:/Users/User/Documents/personal/pumarejo/.worktrees/codex-tinto-e2e-reliability
+      thread: /root/rdm009_observation
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes:
+          [
+            Bound private semantic identity fields and settle non-actionable continuation semantics.,
+          ],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-013-surface-graph:
+    title: Discover, diagnose, and select nested semantic surfaces
+    jira_key: null
+    source: docs/product/roadmap.md#rdm-013
+    status: ci-prevention-ready
+    depends_on: [rdm-009-bounded-observation]
+    blocked_by: []
+    affects_dependents:
+      [rdm-014-native-control, rdm-015-observability, rdm-018-sequences-refs]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-013-surfaces,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-013-surfaces/state.md,
+        interaction: brokered,
+        observed_status: ci-prevention-ready,
+        observed_at: "2026-08-24T06:25:00Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          surface enumeration,
+          nested panels,
+          open shadow roots,
+          supported iframes,
+          dynamic windows and WebViews,
+          coverage diagnostics,
+        ]
+      excluded:
+        [
+          closed shadow roots without instrumentation,
+          generic desktop automation,
+        ]
+    acceptance_criteria:
+      - Every provider-supported visible Tinto control appears with a current actionable ref.
+      - Unsupported visible regions are reported as coverage gaps with owning surface context.
+    surfaces:
+      code: [src/observation, src/webdriver, src/session, src/mcp]
+      contracts: [docs/contracts.md, docs/architecture.md]
+      data: []
+      auth: []
+      docs: [docs/security.md, docs/compatibility.md]
+      tests: [tests/unit, tests/integration, tests/platform, tests/contract]
+      config: [src/config]
+      generated: []
+    execution:
+      route: swarm
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: cross-cutting-surface-architecture-and-public-contract
+      role_triggers:
+        {
+          planner: item-needs-work-package,
+          reviewer: behavior-and-contract,
+          integrator: provider-observation-overlap,
+          documenter: maintained-contracts,
+        }
+    verification:
+      focused_commands:
+        [
+          pnpm test:unit,
+          pnpm test:integration,
+          pnpm test:contract,
+          pnpm test:platform:windows,
+        ]
+      focused_evidence: []
+      aggregate_owner: wave-root
+      aggregate_fingerprint: null
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-014-native-control:
+    title: Make window control truthful and Tauri dialogs explicit
+    jira_key: null
+    source: docs/work-packages/RDM-014-native-control/2026-08-21-014-native-control-work-package.md
+    status: certified-pr-handoff-ready
+    depends_on: [rdm-013-surface-graph]
+    blocked_by: []
+    affects_dependents: [rdm-018-sequences-refs, rdm-019-tinto-certification]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-014-native-control,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-014-native-control/state.md,
+        interaction: brokered,
+        observed_status: completed,
+        observed_at: "2026-08-24T07:40:00Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          effective capability probes,
+          verified sizing,
+          initial dimensions,
+          dialog detection,
+          explicit accept or cancel,
+          audit evidence,
+        ]
+      excluded: [arbitrary OS dialogs, implicit approval, generic native input]
+    acceptance_criteria:
+      - Unsupported window actions are not advertised as available.
+      - Authorized Tauri dialog decisions succeed and unauthorized decisions fail closed.
+    surfaces:
+      code:
+        [src/webdriver, src/interaction, src/mcp, src/session, src/installer]
+      contracts: [docs/contracts.md]
+      data: []
+      auth: [Tauri capability and per-test authorization]
+      docs: [docs/security.md, docs/compatibility.md]
+      tests: [tests/contract, tests/integration, tests/platform]
+      config: [src/config]
+      generated: [generated Tauri integration]
+    execution:
+      route: nested-compound-artifacts
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: permissioned-native-boundary-and-public-contract
+      role_triggers:
+        {
+          planner: item-needs-work-package,
+          reviewer: auth-security-and-contract,
+          integrator: shared-provider-and-mcp-schema,
+          documenter: security-and-contracts,
+        }
+    verification:
+      focused_commands:
+        [pnpm test:contract, pnpm test:integration, pnpm test:platform:windows]
+      focused_evidence:
+        - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-014-public-tauri-dialog-verification-fingerprint.json
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:11ff635d0684aca62c935ac113279be9bf11ef9442d931423e9453dd6041f61d
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: docs/evidence/release/2026-08-25-approved-decisions-pr-handoff.json,
+      }
+
+  rdm-015-observability:
+    title: Expose bounded sanitized runtime evidence
+    jira_key: null
+    source: docs/work-packages/RDM-015-observability/2026-08-21-015-observability-work-package.md
+    status: ci-prevention-ready
+    depends_on: [rdm-013-surface-graph]
+    blocked_by: []
+    affects_dependents:
+      [
+        rdm-016-process-custody,
+        rdm-017-portable-runtime,
+        rdm-019-tinto-certification,
+        rdm-021-network-artifacts,
+      ]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-015-observability,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-015-observability/state.md,
+        interaction: brokered,
+        observed_status: ci-prevention-ready,
+        observed_at: "2026-08-24T07:25:00Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          WebView console,
+          bounded stdout and stderr,
+          invocation traces,
+          launch phases,
+          last error,
+          redaction,
+        ]
+      excluded:
+        [unbounded streaming, raw environment or PATH, unsanitized arguments]
+    acceptance_criteria:
+      - Bounded queries retain code, phase, duration, retryability, and recovery advice.
+      - Seeded secrets and sensitive paths never leave the trust boundary.
+    surfaces:
+      code: [src/mcp, src/session, src/platform, src/webdriver, src/shared]
+      contracts: [docs/contracts.md]
+      data: [bounded in-memory diagnostic buffers]
+      auth: []
+      docs: [docs/security.md, docs/architecture.md]
+      tests: [tests/unit, tests/integration, tests/contract, tests/platform]
+      config: [src/config]
+      generated: []
+    execution:
+      route: nested-compound-artifacts
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: sensitive-observability-public-contract
+      role_triggers:
+        {
+          planner: item-needs-work-package,
+          reviewer: security-and-contract,
+          integrator: session-platform-mcp-overlap,
+          documenter: contracts-and-security,
+        }
+    verification:
+      focused_commands:
+        [pnpm test:unit, pnpm test:integration, pnpm test:contract]
+      focused_evidence: []
+      aggregate_owner: wave-root
+      aggregate_fingerprint: null
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-016-process-custody:
+    title: Supervise owned process trees and recover orphaned sessions
+    jira_key: null
+    source: docs/work-packages/RDM-016-process-custody/2026-08-21-016-process-custody-work-package.md
+    status: certified-pr-handoff-ready
+    depends_on: [rdm-015-observability]
+    blocked_by: []
+    affects_dependents: [rdm-019-tinto-certification, rdm-021-network-artifacts]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-016-process-custody,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-016-process-custody/state.md,
+        interaction: brokered,
+        observed_status: exact-digest-review-and-security-passed,
+        observed_at: "2026-08-25T17:30:50Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          Windows Job Objects,
+          Linux process groups,
+          disconnect cleanup,
+          orphan ledger,
+          cleanup or repair,
+          port verification,
+        ]
+      excluded: [unowned termination, generic process manager]
+    acceptance_criteria:
+      - Normal close, cancellation, timeout, and transport loss converge to zero owned residue or exact retryable residue.
+      - PID reuse and forged ownership evidence cannot terminate an unrelated process.
+    surfaces:
+      code: [src/session, src/platform, src/artifacts, src/mcp]
+      contracts: [docs/contracts.md, docs/architecture.md]
+      data: [owned process lease and generation]
+      auth: []
+      docs: [docs/security.md]
+      tests: [tests/unit, tests/integration, tests/platform]
+      config: []
+      generated: []
+    execution:
+      route: nested-compound-artifacts
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: destructive-process-ownership-and-concurrency
+      role_triggers:
+        {
+          planner: item-needs-work-package,
+          reviewer: process-security,
+          integrator: session-platform-state,
+          documenter: security-and-operations,
+        }
+    verification:
+      focused_commands:
+        [
+          pnpm test:unit,
+          pnpm test:integration,
+          pnpm test:platform:windows,
+          pnpm test:platform:linux,
+        ]
+      focused_evidence:
+        - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-016-windows-job-object-verification-fingerprint.json
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:a2bace65a959dd29c1ca05d97c49fba672022425be1c04187bed30543c834995
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: docs/evidence/release/2026-08-25-approved-decisions-pr-handoff.json,
+      }
+
+  rdm-017-portable-runtime:
+    title: Reconstruct safe Windows environments and resolve toolchains portably
+    jira_key: null
+    source: docs/work-packages/RDM-017-portable-runtime/2026-08-21-017-portable-runtime-work-package.md
+    status: certified-pr-handoff-ready
+    depends_on: [rdm-015-observability]
+    blocked_by: []
+    affects_dependents:
+      [
+        rdm-019-tinto-certification,
+        rdm-020-attributed-drift,
+        rdm-022-self-doctor,
+      ]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-017-portable-runtime,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-017-portable-runtime/state.md,
+        interaction: brokered,
+        observed_status: portable-provider-exact-digest-review-and-security-passed,
+        observed_at: "2026-08-25T17:30:50Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          Windows essential variables,
+          expansion,
+          secret denylist,
+          effective PATH provenance,
+          Node and Rust toolchains,
+          Tauri CLI,
+          WebView provider,
+        ]
+      excluded:
+        [
+          shell evaluation,
+          full environment disclosure,
+          repository-stored personal paths,
+        ]
+    acceptance_criteria:
+      - Tinto finds required runtimes without personal path literals in repository config.
+      - Every selected and rejected executable candidate has sanitized provenance and reason.
+    surfaces:
+      code: [src/platform, src/shared, src/installer, src/cli, src/config]
+      contracts: [docs/contracts.md, docs/compatibility.md]
+      data: []
+      auth: [secret exclusion policy]
+      docs: [docs/security.md]
+      tests: [tests/unit, tests/integration, tests/platform, tests/contract]
+      config: [src/config]
+      generated: []
+    execution:
+      route: nested-compound-artifacts
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: environment-security-and-platform-contract
+      role_triggers:
+        {
+          planner: item-needs-work-package,
+          reviewer: environment-security,
+          integrator: installer-platform-config,
+          documenter: compatibility-and-security,
+        }
+    verification:
+      focused_commands:
+        [
+          pnpm test:unit,
+          pnpm test:integration,
+          pnpm test:contract,
+          pnpm test:platform:windows,
+        ]
+      focused_evidence:
+        - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-017-provider-delivery-verification-fingerprint.json
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:7b127853bdec851312d43803972456ae90ad7e46ef0989f06b491887c2cd0942
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: docs/evidence/release/2026-08-25-approved-decisions-pr-handoff.json,
+      }
+
+  rdm-018-sequences-refs:
+    title: Add bounded sequences and deterministic generation semantics
+    jira_key: null
+    source: docs/work-packages/RDM-018-sequences-refs/2026-08-24-018-sequences-refs-work-package.md
+    status: implementation-review-passed-with-host-gaps
+    depends_on:
+      [
+        rdm-009-bounded-observation,
+        rdm-013-surface-graph,
+        rdm-014-native-control,
+      ]
+    blocked_by: []
+    affects_dependents: [rdm-019-tinto-certification]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-018-sequences-refs,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-018-sequences-refs/state.md,
+        interaction: brokered,
+        observed_status: implementation-review-passed-with-host-gaps,
+        observed_at: "2026-08-24T10:18:32Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          finite sequences,
+          final stabilization,
+          final snapshot,
+          focused editable typing,
+          generation matrix,
+          stable semantic correlation IDs,
+        ]
+      excluded:
+        [unbounded macros, stale-ref authorization, application assertions]
+    acceptance_criteria:
+      - Action and duration limits fail safely with current generation evidence.
+      - Rejected proven-no-change actions preserve refs while uncertain outcomes advance generation explicitly.
+    surfaces:
+      code: [src/interaction, src/observation, src/mcp, src/session]
+      contracts: [docs/contracts.md]
+      data: []
+      auth: []
+      docs: [docs/architecture.md]
+      tests: [tests/unit, tests/integration, tests/contract]
+      config: []
+      generated: []
+    execution:
+      route: swarm
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: public-action-contract-and-stale-state-ordering
+      role_triggers:
+        {
+          reviewer: public-contract-and-concurrency-change,
+          fixer: concrete-u38-root-review-findings,
+          integrator: u37-u38-shared-generation-and-mcp-surfaces,
+          documenter: maintained-public-contract-docs,
+        }
+    verification:
+      focused_commands:
+        - pnpm exec vitest run tests/unit/sequence.test.ts tests/unit/interaction.test.ts tests/unit/mcp-runtime.test.ts
+        - pnpm exec vitest run tests/integration/sequence.test.ts
+        - pnpm exec vitest run tests/contract/mcp-server.test.ts
+        - pnpm typecheck
+      focused_evidence:
+        - U37 root acceptance passed 142 focused tests and typecheck before U38.
+        - U38 closed at 155 focused unit/contract tests plus typecheck, lint, formatting, and diff checks.
+        - Independent Reviewer closed with no P0-P2 findings after typed-output, deadline, and final-stabilization corrections.
+        - Security Sentinel passed; typed sequences omit the final snapshot and timeout uncertainty invalidates exactly once inside the FIFO.
+        - Two Luna xhigh Fixer results violated the live-checkpoint contract; their diffs were accepted only after root inspection, regression tests, and independent review.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: d1d018a4b609b26675525e99cefc3efc42ce894a72394df946d0add9c1f9923e
+    isolation:
+      {
+        type: worktree,
+        branch: codex/tinto-e2e-reliability,
+        path: C:/Users/User/Documents/personal/pumarejo/.worktrees/codex-tinto-e2e-reliability,
+        thread: null,
+      }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-019-managed-launch-remediation:
+    title: Restore managed launch for the real Tinto journey
+    jira_key: null
+    source: docs/swarm/blockers.yaml#BLK-2026-08-25-010
+    status: release-ready
+    depends_on: []
+    blocked_by: []
+    affects_dependents: [rdm-019-tinto-certification, rdm-023-release-certification]
+    compound:
+      {
+        run_id: null,
+        state_path: null,
+        interaction: brokered,
+        observed_status: null,
+        observed_at: null,
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [managed stdio launch, readiness, process custody, failure observability, artifact cleanup]
+      excluded:
+        [public dialog contract, Tinto companion changes, provider delivery, release mutations]
+    acceptance_criteria:
+      - Managed tauri_launch reaches READY on the clean real Tinto proving copy.
+      - Original launch failures remain observable when cleanup also encounters a failure.
+      - Cleanup is idempotent and leaves no owned process, provider port, or disposable artifact residue.
+      - Focused runtime, session, Windows process, tracked-process, and artifact-store regression tests pass.
+    surfaces:
+      code:
+        [src/artifacts/store.ts, src/mcp/runtime.ts, src/session/manager.ts, src/platform]
+      contracts: []
+      data: [sanitized diagnostics and artifact manifests]
+      auth: [process and artifact ownership]
+      docs: []
+      tests:
+        [tests/unit/mcp-runtime.test.ts, tests/unit/session-manager.test.ts, tests/unit/tracked-process.test.ts, tests/unit/windows-process.test.ts, tests/integration/artifact-store.test.ts]
+      config: []
+      generated: []
+    dependencies: []
+    execution:
+      route: swarm
+      lane: deep
+      discovery_profile: luna_xhigh_discovery
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: process-custody-readiness-cleanup-idempotency-and-security-boundaries
+      worker_contract_path: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/rdm-019-managed-launch-remediation-worker-contract.json
+      worker_contract_hash: sha256:3ca14b84a87b1c2138930bdc897dff6afeb79183b1684653511f1afe87f3d955
+      fixer_contract_path: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/rdm-019-managed-launch-timeout-fixer-worker-contract.json
+      fixer_contract_hash: sha256:62fc7085e79f6f36584ce6a99af6845d956692a1684abb8eda5c8373f938162e
+      stdio_environment_fixer_contract_path: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/rdm-019-managed-launch-stdio-environment-fixer-worker-contract.json
+      stdio_environment_fixer_contract_hash: sha256:15d0579b85bae5caad23c3e303308dd4b89481ef989f83aaf4eb4e995c1b441d
+      close_race_fixer_contract_path: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/rdm-019-managed-launch-close-race-fixer-worker-contract.json
+      close_race_fixer_contract_hash: sha256:588580e970ca6b67f1405e2ffedaa540225b923d404477616773d1ae77187fb6
+      lease_transition_fixer_contract_path: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/rdm-019-managed-launch-lease-transition-fixer-worker-contract.json
+      lease_transition_fixer_contract_hash: sha256:040df2d0168ed8c19dcf3a38a7ad9d4d8281dfa44411f29123f71dc6592c2dea
+      final_convergence_contract_path: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/rdm-019-managed-launch-final-convergence-v3-worker-contract.json
+      final_convergence_contract_hash: sha256:2d3c16125bb869a5f4332cd5b4237bf5035a98ce6672b11043ff42cc0a8225d8
+      environment_hardening_contract_path: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/rdm-017-windows-environment-hardening-worker-contract.json
+      environment_hardening_contract_hash: sha256:76475e9e85b363eb8567c0c9791ac810d738ae832046eeed0787c5c5faf5e5ca
+      evidence_trust: self-reported
+      role_triggers:
+        reviewer: behavior-and-control-flow-change-on-managed-launch
+        security: ownership-custody-and-destructive-artifact-cleanup
+    risk:
+      production: unknown
+      security: high
+      compliance: low
+      overlap: high
+    verification:
+      focused_commands:
+        - pnpm build
+        - pnpm vitest run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/tracked-process.test.ts tests/unit/windows-process.test.ts tests/integration/artifact-store.test.ts
+        - node C:\Users\User\AppData\Local\Temp\pumarejo-tinto-rdm019-probe.mjs
+      focused_evidence:
+        - Baseline managed probe reproduced APP_START_FAILED masked by CLOSE_FAILED with cleanupPending artifacts on 2026-08-25.
+        - Initial implementer evaluation failed closed for invalid terminal shape and eleven repeated verification commands.
+        - Root direct-manager diagnosis reached waiting_provider and proved the 30000 ms clamp expires before cold real-Tinto provider readiness.
+        - Timeout fixer evaluation failed closed for a malformed terminal; its bounded timeout code and focused passing tests remain preserved for independent review.
+        - Root isolated the remaining stdio-only failure to the MCP SDK restricted Windows environment omitting ComSpec, PATHEXT, and TMP before managed process spawn.
+        - Safe minimum reconstruction now lets the real stdio probe reach READY; its first close exposed a bounded tracked-exit/custody-inspection race with no live PID remaining afterward.
+        - Recursive close diagnostics proved cleanup later failed on an invalid stale durable-lease transition active-to-closed; a bounded state-machine fixer is running.
+        - Root and final convergence validation passed 124 focused tests with 2 skipped, pnpm build, and the clean real-Tinto READY/first-close-idle probe.
+        - Independent reviewer and security-sentinel certification failed with five P1 and three P2 findings; identity-bound Windows termination requires BLK-2026-08-25-011.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: null
+      fingerprint_artifact: null
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: null
+    isolation:
+      type: worktree
+      branch: codex/tinto-e2e-reliability
+      path: C:/Users/User/Documents/personal/pumarejo/.worktrees/codex-tinto-e2e-reliability
+      thread: null
+    handoff:
+      intended_base: main
+      pr_grouping: grouped
+      release_notes: []
+      suggested_jira_transition: null
+      release_marshal_packet: null
+  rdm-019-tinto-certification:
+    title: Certify the complete Tinto end-to-end journey
+    jira_key: null
+    source: docs/work-packages/RDM-019-certification/2026-08-24-019-tinto-certification-work-package.md
+    status: implementation-evidence-partial
+    depends_on:
+      [
+        rdm-014-native-control,
+        rdm-015-observability,
+        rdm-016-process-custody,
+        rdm-017-portable-runtime,
+        rdm-018-sequences-refs,
+      ]
+    blocked_by: [full-real-tinto-dialog-and-failure-journey]
+    affects_dependents: [rdm-023-release-certification]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-019-certification,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-019-certification/state.md,
+        interaction: brokered,
+        observed_status: package-review-passed,
+        observed_at: "2026-08-24T06:15:00Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          archived conversation,
+          send message,
+          change access,
+          explicit dialog decision,
+          close,
+          residue proof,
+          forced failures,
+          sanitized evidence,
+        ]
+      excluded: [release, unsanitized Tinto content]
+    acceptance_criteria:
+      - The proving journey completes only through public Pumarejo tools.
+      - Forced timeout and denied dialog authorization remain diagnosable and ownership-safe.
+    surfaces:
+      code: [tests/agent, tests/contract, tests/integration, tests/platform]
+      contracts: [docs/contracts.md]
+      data: [sanitized evidence]
+      auth: [dialog authorization evidence]
+      docs: [README.md, docs/compatibility.md, docs/security.md]
+      tests:
+        [
+          tests/agent,
+          tests/contract,
+          tests/integration,
+          tests/platform,
+          tests/release,
+        ]
+      config: [Tinto test configuration]
+      generated: [certification evidence]
+    execution:
+      route: nested-compound-artifacts
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: cross-surface-release-evidence
+      role_triggers:
+        {
+          planner: item-needs-work-package,
+          reviewer: integrated-acceptance,
+          integrator: all-mvp-dependencies,
+          documenter: operator-and-release-evidence,
+        }
+    verification:
+      focused_commands:
+        [
+          pnpm test:agent,
+          pnpm test:contract,
+          pnpm test:integration,
+          pnpm test:platform:windows,
+          pnpm test:platform:linux,
+        ]
+      focused_evidence: []
+      aggregate_owner: wave-root
+      aggregate_fingerprint: null
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-020-attributed-drift:
+    title: Diagnose integration drift by owned attribution
+    jira_key: null
+    source: docs/work-packages/RDM-020-attributed-drift/2026-08-21-020-attributed-drift-work-package.md
+    status: implementation-review-passed-with-host-gaps
+    depends_on: [rdm-017-portable-runtime]
+    blocked_by: []
+    affects_dependents: [rdm-023-release-certification]
+    scope:
+      included:
+        [
+          owned markers,
+          Cargo dependencies and features,
+          ignore entry,
+          isolated capability,
+          owned config fields,
+          secondary full hash,
+        ]
+      excluded: [reverting unrelated edits]
+    acceptance_criteria:
+      - An unrelated `.gitignore` edit does not produce integration drift.
+      - Owned changes still detect deletion, mutation, duplication, malformed files, and unsafe links.
+    surfaces:
+      code: [src/installer]
+      contracts: [docs/contracts.md]
+      data: [integration manifest attribution]
+      auth: []
+      docs: [docs/security.md]
+      tests: [tests/unit, tests/integration, tests/contract]
+      config: []
+      generated: [integration manifest]
+    execution:
+      route: swarm
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: unsafe-path-permission-attribution-and-fail-closed-security
+      role_triggers:
+        {
+          reviewer: installer-behavior-and-security,
+          integrator: user-dirty-installer-surface,
+          documenter: contracts,
+        }
+    verification:
+      focused_commands:
+        [pnpm test:unit, pnpm test:integration, pnpm test:contract]
+      focused_evidence:
+        - 54/54 focused RDM-020 regressions passed.
+        - Integration passed 89 tests with 5 skips; contract passed 66/66.
+        - Typecheck and focused lint, format, and diff checks passed.
+      aggregate_owner: wave-root
+      aggregate_fingerprint: e3f4bf28be2b9b5d4d25dbe1d33ca45fd13e9a8d6829c4e53a42959a613886bb
+    isolation:
+      {
+        type: worktree,
+        branch: codex/tinto-e2e-reliability,
+        path: C:/Users/User/Documents/personal/pumarejo/.worktrees/codex-tinto-e2e-reliability,
+        thread: null,
+      }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-021-network-artifacts:
+    title: Harden loopback diagnostics, discovery, and artifact policy
+    jira_key: null
+    source: docs/work-packages/RDM-021-network-artifacts/2026-08-21-021-network-artifacts-work-package.md
+    status: release-ready
+    depends_on: [rdm-015-observability, rdm-016-process-custody]
+    blocked_by: []
+    affects_dependents: [rdm-023-release-certification]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-021-network-artifacts,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-021-network-artifacts/state.md,
+        interaction: brokered,
+        observed_status: release-ready-with-host-and-native-cleanup-gaps,
+        observed_at: "2026-08-24T13:18:21Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          IPv4 and IPv6 binding diagnosis,
+          devUrl comparison,
+          default exclusions,
+          retention,
+          cleanup,
+          permissions,
+        ]
+      excluded: [network service, traversal outside owned roots]
+    acceptance_criteria:
+      - Listener and devUrl mismatches yield a concrete loopback correction.
+      - Discovery excludes runtime and repository copies without hiding explicit user-selected fixtures.
+    surfaces:
+      code: [src/installer, src/platform, src/artifacts, tests]
+      contracts: [docs/contracts.md, docs/compatibility.md]
+      data: [artifact retention metadata]
+      auth: []
+      docs: [docs/security.md]
+      tests: [tests/unit, tests/integration, tests/platform]
+      config: [src/config]
+      generated: []
+    execution:
+      route: swarm
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: loopback-ownership-and-destructive-filesystem-security
+      role_triggers:
+        {
+          planner: split-broad-phase-two-item,
+          reviewer: platform-and-permissions,
+          integrator: cross-unit-artifact-policy,
+          documenter: operations-and-security,
+        }
+    verification:
+      focused_commands:
+        [
+          pnpm test:unit,
+          pnpm test:integration,
+          pnpm test:platform:windows,
+          pnpm test:platform:linux,
+        ]
+      focused_evidence: []
+      aggregate_owner: wave-root
+      aggregate_fingerprint: null
+    isolation:
+      {
+        type: worktree,
+        branch: codex/tinto-e2e-reliability,
+        path: C:/Users/User/Documents/personal/pumarejo/.worktrees/codex-tinto-e2e-reliability,
+        thread: null,
+      }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-022-self-doctor:
+    title: Diagnose Pumarejo's own dependency health
+    jira_key: null
+    source: docs/work-packages/RDM-022-self-doctor/2026-08-21-022-self-doctor-work-package.md
+    status: implementation-active
+    depends_on: [rdm-017-portable-runtime]
+    blocked_by: []
+    affects_dependents: [rdm-023-release-certification]
+    compound:
+      {
+        run_id: tinto-e2e-rdm-022-self-doctor,
+        state_path: docs/orchestration/compound-master/tinto-e2e-rdm-022-self-doctor/state.md,
+        interaction: brokered,
+        observed_status: ru1-security-passed-ru2-discovery-active,
+        observed_at: "2026-08-24T14:13:20Z",
+        artifact_revision: null,
+      }
+    scope:
+      included:
+        [
+          dependency resolution,
+          broken links and junctions,
+          lockfile install coherence,
+          postinstall binaries,
+          Node and package manager,
+          repair guidance,
+        ]
+      excluded: [automatic deletion or reinstall]
+    acceptance_criteria:
+      - The known broken `debug` junction class is detected with a specific safe repair instruction.
+      - Checks do not traverse unsafe links or expose private paths unnecessarily.
+    surfaces:
+      code: [src/cli, src/installer, src/shared]
+      contracts: [docs/contracts.md]
+      data: []
+      auth: []
+      docs: [README.md, docs/security.md]
+      tests: [tests/unit, tests/integration, tests/contract]
+      config: []
+      generated: []
+    execution:
+      route: nested-compound-artifacts
+      lane: deep
+      worker_profile: luna_xhigh
+      reasoning_effort: xhigh
+      lane_trigger: filesystem-link-and-repair-security-boundary
+      role_triggers:
+        {
+          planner: item-needs-work-package,
+          reviewer: filesystem-security,
+          documenter: repair-guidance,
+        }
+    verification:
+      focused_commands:
+        [pnpm test:unit, pnpm test:integration, pnpm test:contract]
+      focused_evidence: []
+      aggregate_owner: wave-root
+      aggregate_fingerprint: null
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: null,
+      }
+
+  rdm-023-release-certification:
+    title: Regress capability composition, formatting, and the full supported matrix
+    jira_key: null
+    source: docs/work-packages/RDM-023-release-certification/2026-08-24-023-release-certification-work-package.md
+    status: pr-handoff-ready-full-release-blocked
+    depends_on:
+      [
+        rdm-019-tinto-certification,
+        rdm-020-attributed-drift,
+        rdm-021-network-artifacts,
+        rdm-022-self-doctor,
+      ]
+    blocked_by: [rdm-019-full-journey, node-and-cross-platform-release-matrix]
+    affects_dependents: []
+    scope:
+      included:
+        [
+          capability JSON and TOML,
+          window wildcard,
+          malformed and unsafe files,
+          duplicate IDs,
+          rustfmt idempotence,
+          full validation and platform matrix,
+        ]
+      excluded: [release mutation]
+    acceptance_criteria:
+      - Existing application capabilities remain composed with Pumarejo's isolated capability.
+      - Generated Rust is unchanged by rustfmt and the complete supported matrix passes.
+    surfaces:
+      code: [tests, docs]
+      contracts: [docs/contracts.md]
+      data: [sanitized release evidence]
+      auth: [capability regression]
+      docs: [README.md, docs/compatibility.md, docs/security.md]
+      tests:
+        [
+          tests/unit,
+          tests/integration,
+          tests/contract,
+          tests/platform,
+          tests/release,
+          tests/agent,
+        ]
+      config: [test fixtures]
+      generated: [release evidence]
+    execution:
+      route: swarm
+      lane: standard
+      worker_profile: luna
+      reasoning_effort: high
+      lane_trigger: decision-closed-integrated-evidence
+      role_triggers:
+        {
+          reviewer: release-evidence,
+          integrator: all-roadmap-dependencies,
+          documenter: release-and-operator-docs,
+        }
+    verification:
+      focused_commands:
+        [
+          pnpm validate,
+          pnpm test:contract,
+          pnpm test:integration,
+          pnpm test:agent,
+          pnpm test:platform:windows,
+          pnpm test:platform:linux,
+        ]
+      focused_evidence:
+        - docs/evidence/release/2026-08-25-approved-decisions-pr-handoff.json
+      aggregate_owner: wave-root
+      aggregate_fingerprint: sha256:c1d2ca9dda13734be5008b0ff8386bc7f0bdb02aaccc8077cb5246fb1bb472b9
+    isolation: { type: worktree, branch: null, path: null, thread: null }
+    handoff:
+      {
+        intended_base: main,
+        pr_grouping: standalone,
+        release_notes: [],
+        suggested_jira_transition: null,
+        release_marshal_packet: docs/evidence/release/2026-08-25-approved-decisions-pr-handoff.json,
+      }
+
+wave_candidates:
+  - id: wave-a-contract-surface-foundation
+    selected_units: [rdm-009-bounded-observation]
+    next_after_decision: [rdm-013-surface-graph]
+    implementer_cap: 1
+    reason: RDM-009 contract and central observation surface must settle before surface-graph work.
+  - id: wave-b-native-control-evidence
+    selected_units: [rdm-014-native-control, rdm-015-observability]
+    implementer_cap: 2
+    condition: Planning may be parallel; serialize implementation when MCP/provider surfaces overlap.
+  - id: wave-c-custody-portability
+    selected_units: [rdm-016-process-custody, rdm-017-portable-runtime]
+    implementer_cap: 2
+    condition: Distinct lifecycle and environment ownership is proved.
+
+wave_history:
+  - id: wave-a-contract-surface-foundation
+    concurrency:
+      implementers: 1
+      planners: 1
+      reviewers: 0
+      fixers: 1
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-009-bounded-observation, rdm-013-surface-graph]
+    skipped_units: []
+    result: completed
+    green: true
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm format:check
+        - pnpm test
+        - pnpm pack:check
+      evidence:
+        - docs/orchestration/compound-master/tinto-e2e-rdm-009-observation/summary.md
+        - docs/orchestration/compound-master/tinto-e2e-rdm-013-surfaces/summary.md
+      result: focused-pass
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - RDM-009 and RDM-013 implementation and review gates passed.
+    blockers_recorded:
+      - DEC-2026-08-21-003
+      - DEC-2026-08-21-004
+      - DEC-2026-08-21-005
+  - id: wave-f-artifact-planning
+    concurrency:
+      implementers: 0
+      planners: 3
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units:
+      [rdm-020-attributed-drift, rdm-021-network-artifacts, rdm-022-self-doctor]
+    skipped_units: []
+    result: artifacts-ready
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands: []
+      evidence: []
+      result: not-run
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary: []
+    blockers_recorded: [DEC-2026-08-21-006]
+  - id: wave-b-artifact-planning
+    concurrency:
+      implementers: 0
+      planners: 2
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-014-native-control, rdm-015-observability]
+    skipped_units: []
+    result: artifacts-ready
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands: []
+      evidence: []
+      result: not-run
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary: []
+    blockers_recorded: [DEC-2026-08-21-003, DEC-2026-08-21-004]
+  - id: wave-c-artifact-planning
+    concurrency:
+      implementers: 0
+      planners: 2
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-016-process-custody, rdm-017-portable-runtime]
+    skipped_units: []
+    result: artifacts-ready
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands: []
+      evidence: []
+      result: not-run
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary: []
+    blockers_recorded: [DEC-2026-08-21-004]
+  - id: wave-a-surface-implementation
+    concurrency:
+      implementers: 1
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 2
+    selected_units: [rdm-013-surface-graph]
+    skipped_units: []
+    result: completed-with-baseline-gaps
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm test:unit
+        - pnpm test:contract
+        - pnpm test:integration
+      evidence:
+        - docs/orchestration/compound-master/tinto-e2e-rdm-013-surfaces/summary.md
+      result: focused-pass-aggregate-pending
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Code review and security review passed with no P0-P2 findings.
+    blockers_recorded: []
+  - id: wave-d-artifact-planning
+    concurrency:
+      implementers: 0
+      planners: 1
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-018-sequences-refs]
+    skipped_units: []
+    result: artifacts-ready
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands: []
+      evidence: []
+      result: not-run
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary: []
+    blockers_recorded:
+      - Initial implementation terminal rejected by evaluate_worker_run.py; bounded timeout fixer admitted.
+  - id: wave-e-artifact-planning
+    concurrency:
+      implementers: 0
+      planners: 1
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-019-tinto-certification]
+    skipped_units: []
+    result: artifacts-ready
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands: []
+      evidence: []
+      result: not-run
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary: []
+    blockers_recorded: []
+  - id: wave-g-artifact-planning
+    concurrency:
+      implementers: 0
+      planners: 1
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-023-release-certification]
+    skipped_units: []
+    result: artifacts-ready
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands: []
+      evidence: []
+      result: not-run
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary: []
+    blockers_recorded: []
+  - id: wave-b-native-control-implementation
+    concurrency:
+      implementers: 1
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-014-native-control]
+    skipped_units: []
+    result: completed-with-provider-gap
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm test:unit
+        - pnpm test:contract
+        - pnpm test:integration
+      evidence:
+        - docs/orchestration/compound-master/tinto-e2e-rdm-014-native-control/summary.md
+      result: focused-pass-aggregate-pending
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Focused code and security review passed with no P0/P1 findings.
+    blockers_recorded: [BLK-2026-08-24-007]
+  - id: wave-b-observability-implementation
+    concurrency:
+      implementers: 1
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-015-observability]
+    skipped_units: []
+    result: completed-with-baseline-gaps
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm test:unit
+        - pnpm test:contract
+        - pnpm test:integration
+      evidence:
+        - docs/orchestration/compound-master/tinto-e2e-rdm-015-observability/summary.md
+      result: focused-pass-aggregate-pending
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Focused implementation and Security Sentinel reviews passed.
+    blockers_recorded: []
+  - id: wave-b-dialog-bridge-remediation
+    concurrency:
+      implementers: 1
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-014-native-control]
+    skipped_units: []
+    result: completed-with-external-adoption-gap
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm test:unit
+        - pnpm test:integration
+        - pnpm test:platform:windows
+      evidence:
+        - vendor/tauri-plugin-wdio-webdriver/src/dialog.rs
+        - tests/unit/native-control.test.ts
+      result: focused-pass-aggregate-pending
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Provider broker security review passed; no generic transport or implicit choice exists.
+    blockers_recorded: [BLK-2026-08-24-007]
+  - id: wave-c-custody-implementation
+    concurrency:
+      implementers: 1
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-016-process-custody]
+    skipped_units: []
+    result: completed-with-platform-gaps
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm test:unit
+        - pnpm test:integration
+        - pnpm test:platform:structural
+      evidence:
+        - docs/orchestration/compound-master/tinto-e2e-rdm-016-process-custody/summary.md
+      result: focused-pass-aggregate-pending
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Code and security review passed; provider-native Windows/Linux evidence remains gated.
+    blockers_recorded: []
+  - id: wave-c-portable-runtime-implementation
+    concurrency:
+      implementers: 1
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+    selected_units: [rdm-017-portable-runtime]
+    skipped_units: []
+    result: completed-with-platform-gap
+    green: true
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm test:unit
+        - pnpm test:integration
+        - pnpm test:contract
+        - pnpm test:platform:structural
+      evidence:
+        - Focused RDM-017 matrix 43 passed; incomplete Windows launch refusal 1 passed.
+        - Contract 58 passed; integration 71 passed with 5 provider/fixture skips.
+        - Unit 350 passed and 3 skipped with 5 unchanged host/baseline failures.
+        - Typecheck, targeted lint/format, and diff check passed.
+      result: focused-pass-aggregate-baseline-recorded
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Code review resolved eight findings; opaque Windows reparse proof remains a native-platform gap.
+      - Security Sentinel passed with authoritative platform evidence required before a complete release claim.
+    blockers_recorded: []
+  - id: wave-d-sequences-implementation
+    concurrency:
+      implementers: 0
+      planners: 0
+      reviewers: 1
+      fixers: 1
+      integrators: 1
+      documenters: 0
+    selected_units: [rdm-018-sequences-refs]
+    skipped_units: []
+    result: accepted-with-host-gaps
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: d1d018a4b609b26675525e99cefc3efc42ce894a72394df946d0add9c1f9923e
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm format:check
+        - pnpm test
+        - pnpm pack:check
+      evidence:
+        - build, typecheck, lint, and pack:check passed.
+        - format:check is host-baseline blocked by core.autocrlf=true; 117 checkout files including untouched package.json are CRLF while the base blob passes Prettier.
+        - pnpm test passed 539 tests with 17 skips and 7 host/baseline failures: two CRLF-sensitive certification hashes, one unavailable Windows PowerShell Security module in powershell.exe, and four Vitest Node-runtime path mismatches.
+        - RDM-018 focused verification passed 155 tests after final reconciliation.
+      result: host-gaps
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - U37 and U38 passed root acceptance; independent review closed without findings and Security Sentinel passed.
+      - Two Luna xhigh Fixer runs failed the mandatory live-checkpoint protocol; retained code was independently inspected and verified rather than trusted from those terminals.
+      - Aggregate product checks are green except for reproducible host/checkout normalization gaps unrelated to RDM-018.
+    blockers_recorded: []
+  - id: wave-f-attributed-drift-implementation
+    concurrency:
+      implementers: 1
+      planners: 0
+      reviewers: 1
+      fixers: 0
+      integrators: 1
+      documenters: 1
+    selected_units: [rdm-020-attributed-drift]
+    skipped_units: []
+    result: accepted-with-host-gaps
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: e3f4bf28be2b9b5d4d25dbe1d33ca45fd13e9a8d6829c4e53a42959a613886bb
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm format:check
+        - pnpm test
+        - pnpm pack:check
+      evidence:
+        - build, typecheck, lint, and pack:check passed.
+        - format:check retains the Windows CRLF checkout baseline gap; focused RDM-020 formatting passed.
+        - pnpm test passed 562 tests with 17 skips and 7 host/baseline failures: two CRLF-sensitive hashes, one unavailable PowerShell Security module, and four Node-runtime path mismatches.
+        - Focused RDM-020 verification passed 54 tests; integration passed 89 with 5 skips; contract passed 66.
+      result: host-gaps
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Deep lane admitted for fail-closed path, ownership-attribution, and capability-permission semantics.
+      - Independent review closed three P1 findings; final review had no P0-P2 findings and Security Sentinel passed.
+      - RU1 and RU2 worker terminals violated supervision contracts; retained changes were root-inspected and independently verified.
+    blockers_recorded: []
+  - id: wave-g-network-artifacts-implementation
+    concurrency:
+      implementers: 2
+      planners: 0
+      reviewers: 1
+      fixers: 0
+      integrators: 1
+      documenters: 1
+    selected_units: [rdm-021-network-artifacts]
+    skipped_units: []
+    result: accepted-with-host-and-native-cleanup-gaps
+    green: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: f6c7885288ff5c67b6b225b44252ad149b3f110035ecdfd5d6e12383bd010eb6
+      commands:
+        - pnpm build
+        - pnpm typecheck
+        - pnpm lint
+        - pnpm format:check
+        - pnpm test
+        - pnpm pack:check
+      evidence:
+        - build, typecheck, lint, and pack:check passed.
+        - format:check reproduced the Windows CRLF checkout baseline gap across 105 files; focused RDM-021 formatting passed.
+        - pnpm test passed 604 tests with 17 skips and 7 known host/baseline failures: two CRLF-sensitive hashes, one unavailable Windows PowerShell Security module, and four Node-runtime path mismatches.
+        - Focused RDM-021 verification passed 131 tests with 2 skips before aggregate execution.
+      result: host-gaps
+    timing_artifact: docs/orchestration/runs/tinto-e2e-reliability-timing.json
+    review_summary:
+      - Deep lane admitted for loopback ownership and destructive-filesystem security boundaries.
+      - DEC-2026-08-21-006 resolves DR-021-001 to explicit bounded operator policy only; no implicit deletion is authorized.
+      - RU1 and RU2 worker terminals violated retry/manifest rules; root review replaced their acceptance evidence.
+      - Runtime integration now covers family-aware ownership, safe devUrl propagation, bounded diagnostics, link/race defenses, permissions, and deterministic retention.
+      - Independent implementation review closed all P0-P2 findings; Security Sentinel passed after cleanup outcome and contract corrections.
+    blockers_recorded:
+      - Native identity-bound recursive deletion is unavailable by default; quarantine remains preserved and retryable for RDM-023 certification.
+  - id: wave-e-managed-launch-remediation
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 2
+      cap_reasons: [default-cap]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/wave-e-managed-launch-allocation.json
+      implementers: 1
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 0
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-019-managed-launch-remediation]
+    skipped_units: []
+    result: failed
+    green: false
+    scope_violations: null
+    merge_conflicts: null
+    review_lagging: null
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      fingerprint_artifact: null
+      commands: []
+      evidence:
+        - Managed baseline reproduced CLOSE_FAILED with underlying APP_START_FAILED and cleanupPending artifacts.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: null
+      result: failed
+    gates:
+      scope: passed
+      verification: passed
+      review: failed
+      security: failed
+      state: blocked
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary:
+      - Independent final reviewer failed with three P1 findings.
+      - Independent security sentinel failed with two P1 and three P2 findings.
+    blockers_recorded: [BLK-2026-08-25-011]
+  - id: wave-e-stdio-environment-fixer
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 1
+      cap_reasons: [last-wave-not-green]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/wave-e-stdio-environment-fixer-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 0
+      fixers: 1
+      integrators: 0
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-019-managed-launch-stdio-environment-fixer]
+    skipped_units: []
+    result: failed
+    green: false
+    scope_violations: null
+    merge_conflicts: null
+    review_lagging: null
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      fingerprint_artifact: null
+      commands: []
+      evidence:
+        - Direct manager reached READY while standard MCP stdio failed before spawn from its restricted Windows environment.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: null
+      result: not-run
+    gates:
+      scope: pending
+      verification: pending
+      review: required
+      security: required
+      state: current
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary: []
+    blockers_recorded: []
+  - id: wave-e-close-race-fixer
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 1
+      cap_reasons: [last-wave-not-green]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/wave-e-close-race-fixer-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 0
+      fixers: 1
+      integrators: 0
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-019-managed-launch-close-race-fixer]
+    skipped_units: []
+    result: failed
+    green: false
+    scope_violations: null
+    merge_conflicts: null
+    review_lagging: null
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      fingerprint_artifact: null
+      commands: []
+      evidence:
+        - Real stdio launch reached READY; close returned retryable application-process while the owned PID disappeared shortly afterward.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: null
+      result: not-run
+    gates:
+      scope: pending
+      verification: pending
+      review: required
+      security: required
+      state: current
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary: []
+    blockers_recorded: []
+  - id: wave-e-lease-transition-fixer
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 1
+      cap_reasons: [last-wave-not-green]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/wave-e-lease-transition-fixer-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 0
+      fixers: 1
+      integrators: 0
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-019-managed-launch-lease-transition-fixer]
+    skipped_units: []
+    result: failed
+    green: false
+    scope_violations: null
+    merge_conflicts: null
+    review_lagging: null
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      fingerprint_artifact: null
+      commands: []
+      evidence:
+        - Recursive live diagnostics proved first close fails only because the stale active lease object is reused after persisting closing.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: null
+      result: not-run
+    gates:
+      scope: pending
+      verification: pending
+      review: required
+      security: required
+      state: current
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary: []
+    blockers_recorded: []
+  - id: wave-f-final-convergence
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 1
+      cap_reasons: [last-wave-not-green]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/wave-f-final-convergence-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 1
+      fixers: 0
+      integrators: 1
+      documenters: 0
+      security: 1
+      ci_platform: 0
+    selected_units: [rdm-019-managed-launch-final-convergence-v3]
+    skipped_units: []
+    result: failed
+    green: false
+    scope_violations: 0
+    merge_conflicts: 0
+    review_lagging: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      fingerprint_artifact: null
+      commands:
+        - pnpm vitest run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/tracked-process.test.ts tests/unit/windows-process.test.ts tests/unit/windows-environment.test.ts tests/unit/launch-environment.test.ts tests/unit/mode-config.test.ts tests/integration/artifact-store.test.ts
+        - pnpm build
+        - node C:\Users\User\AppData\Local\Temp\pumarejo-tinto-rdm019-probe.mjs
+      evidence:
+        - Root and final validator passed 124 focused tests with 2 skipped, build, READY evidence, and first-close idle.
+        - Reviewer certificate failed with three P1 findings.
+        - Security certificate failed with two P1 and three P2 findings.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: rerun-after-blk-2026-08-25-011
+      result: failed
+    gates:
+      scope: passed
+      verification: passed
+      review: failed
+      security: failed
+      state: blocked
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary:
+      - Five P1 and three P2 findings require remediation or an explicit identity-bound custody decision.
+    blockers_recorded: [BLK-2026-08-25-011]
+  - id: wave-g-environment-hardening
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 1
+      cap_reasons: [last-wave-not-green]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/wave-g-environment-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 0
+      fixers: 1
+      integrators: 0
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-017-windows-environment-hardening]
+    skipped_units: []
+    result: passed
+    green: true
+    scope_violations: 0
+    merge_conflicts: 0
+    review_lagging: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: sha256:da462368bd4d05028008b4d797ef2fed2f213ff739720a4127b6d456a93652ef
+      fingerprint_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/environment-hardening-verification-fingerprint.json
+      commands:
+        - pnpm vitest run tests/unit/windows-environment.test.ts tests/unit/launch-environment.test.ts tests/unit/mode-config.test.ts
+        - pnpm build
+        - node C:\Users\User\AppData\Local\Temp\pumarejo-tinto-rdm019-probe.mjs
+      evidence:
+        - Bounded independent remediation for the certified expansion/cycle/path-provenance findings.
+        - Root aggregate passed 45 focused tests with 2 skipped, build, and real-Tinto READY/surface/snapshot/first-close-idle.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: run-evidence-missing
+      result: passed
+    gates:
+      scope: passed
+      verification: passed
+      review: passed
+      security: passed
+      state: complete
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary:
+      - Reviewer and security-sentinel certificates passed the exact post-fix contract and root-observed diff.
+    blockers_recorded: [BLK-2026-08-25-011]
+  - id: wave-h-lease-metadata-hardening
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 2
+      cap_reasons: [default-cap]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/wave-h-lease-metadata-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 0
+      fixers: 1
+      integrators: 0
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-019-lease-metadata-hardening]
+    skipped_units: []
+    result: failed
+    green: false
+    scope_violations: 0
+    merge_conflicts: 0
+    review_lagging: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: null
+      fingerprint_artifact: null
+      commands: []
+      evidence:
+        - Bounded remediation for durable provider-family metadata, fail-closed lease scans, and untracked-custody proof loss; identity-bound Windows termination remains blocked.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: null
+      result: not-run
+    gates:
+      scope: passed
+      verification: passed
+      review: passed
+      security: failed
+      state: blocked
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary:
+      - Focused tests and build passed, but the initial probe was blocked by eight preserved pre-providerFamily retryable leases in the proving fixture.
+      - Clean-session fix verification passed 44 focused tests with 1 skipped, build, READY evidence, and first-close idle.
+      - Reviewer passed; security failed with one P1 providerPid-gated listener-postcondition finding, moved to a new bounded contract.
+    blockers_recorded: [BLK-2026-08-25-011]
+  - id: wave-i-listener-postcondition
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 1
+      cap_reasons: [last-wave-not-green]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/wave-i-listener-postcondition-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 0
+      fixers: 1
+      integrators: 0
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-019-listener-postcondition]
+    skipped_units: []
+    result: passed
+    green: true
+    scope_violations: 0
+    merge_conflicts: 0
+    review_lagging: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: sha256:84fc5c1a9ef48c59c6b85e64941325392aae9100bdf694ea26d15128a026a82f
+      fingerprint_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/listener-postcondition-verification-fingerprint.json
+      commands:
+        - pnpm vitest run tests/unit/session-recovery.test.ts tests/unit/session-manager.test.ts
+        - pnpm build
+        - node C:\Users\User\AppData\Local\Temp\pumarejo-tinto-rdm019-probe.mjs
+      evidence:
+        - One-finding remediation removes providerPid as a gate on the stored port/family listener postcondition.
+        - Root aggregate passed 35 tests, build, and real-Tinto READY/surface/snapshot/first-close-idle.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: run-evidence-missing
+      result: passed
+    gates:
+      scope: passed
+      verification: passed
+      review: passed
+      security: passed
+      state: complete
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary:
+      - Reviewer and security-sentinel certificates passed the exact contract and root-observed diff.
+    blockers_recorded: [BLK-2026-08-25-011]
+  - id: wave-j-final-convergence-v4
+    concurrency:
+      total_slots: 9
+      usable_slots: 8
+      reserve_slots: 1
+      implementer_cap: 2
+      cap_reasons: [default-cap]
+      allocation_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/wave-j-final-convergence-allocation.json
+      implementers: 0
+      planners: 0
+      reviewers: 0
+      fixers: 0
+      integrators: 1
+      documenters: 0
+      security: 0
+      ci_platform: 0
+    selected_units: [rdm-019-final-convergence-v4]
+    skipped_units: []
+    result: passed
+    green: false
+    scope_violations: 0
+    merge_conflicts: 0
+    review_lagging: false
+    aggregate_verification:
+      owner: wave-root
+      fingerprint: sha256:20fd65d5975dc3ec1b440d8d72bb9f02b633d049684db1ad6a98ec17d87a0df5
+      fingerprint_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/final-convergence-v4-verification-fingerprint.json
+      commands:
+        - pnpm vitest run tests/unit/mcp-runtime.test.ts tests/unit/session-manager.test.ts tests/unit/session-recovery.test.ts tests/unit/process-lease.test.ts tests/unit/tracked-process.test.ts tests/unit/windows-process.test.ts tests/unit/windows-environment.test.ts tests/unit/launch-environment.test.ts tests/unit/mode-config.test.ts tests/integration/artifact-store.test.ts
+        - pnpm build
+        - node C:\Users\User\AppData\Local\Temp\pumarejo-tinto-rdm019-probe.mjs
+      evidence:
+        - Current broad read-only convergence after bounded security remediation.
+        - Root aggregate passed 136 tests with 3 skipped, build, and real-Tinto READY/surface/snapshot/first-close-idle.
+      evidence_registry: docs/orchestration/verification-evidence.json
+      reuse_decision: run-evidence-missing
+      result: passed
+    gates:
+      scope: passed
+      verification: passed
+      review: passed
+      security: passed
+      state: blocked
+    timing_artifact: docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/timing.json
+    review_summary:
+      - Exact-contract evaluator completed with terminal status done_with_baseline_gaps.
+      - Independent reviewer and security-sentinel certificates passed the current 13-file digest.
+      - Release remains blocked only by the recorded identity-bound custody decision and existing external dialog/provider blockers.
+    blockers_recorded: [BLK-2026-08-25-011, BLK-2026-08-25-009, DEC-2026-08-25-008]

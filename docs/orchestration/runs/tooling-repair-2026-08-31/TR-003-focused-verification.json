@@ -1,0 +1,15 @@
+{
+  "contract_hash": "sha256:c42dfcc2a8a7499dca1e947a27525a142d84a6ecfb73a784c483fe161ca9071a",
+  "diff_digest": "sha256:1add6461ae8e81ff973f52b18418dfded3e1ce72ed79a4c02680e5f16a816b75",
+  "changed_paths": [
+    "src-tauri/src/agent_console/session.rs"
+  ],
+  "file_sha256": "c3e0bf57fa388c92320e235aea8c266524810199561b3b06e7d996d03cc12a12",
+  "command": "cargo test --manifest-path src-tauri/Cargo.toml agent_console:: --lib",
+  "exit_code": 0,
+  "passed_tests": 231,
+  "evidence": "ICook/docs/tooling-repair-evidence/checks/tinto-closed-turn-green.log",
+  "red_evidence": "ICook/docs/tooling-repair-evidence/checks/tinto-closed-turn-red.log",
+  "captured_at": "2026-08-31T07:53:46.593838+00:00",
+  "limit": "Focused root integration evidence; full frontend aggregate retains baseline failures."
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "contract_hash": "sha256:8bb3148f6d7020fe8373ec684ae119fc6651c1eeb9eb7bc555b4fc56d4dc2514",
+  "diff_digest": "sha256:68a0758b217168f1c4a54a4c4c42e0bc72e6e9cbb812a114450fc3b34ede9e81",
+  "changed_paths": [
+    "src/mcp/runtime.ts",
+    "src/observability/diagnostics.ts",
+    "src/session/manager.ts",
+    "src/webdriver/client.ts",
+    "tests/unit/diagnostics.test.ts",
+    "tests/unit/mcp-runtime.test.ts",
+    "tests/unit/session-manager.test.ts",
+    "tests/unit/webdriver-native-control.test.ts"
+  ],
+  "assignments": [
+    {
+      "id": "pumarejo-runtime",
+      "reviewer_role": "reviewer",
+      "owned_paths": [
+        "src/mcp/runtime.ts",
+        "src/session/manager.ts",
+        "src/webdriver/client.ts",
+        "tests/unit/mcp-runtime.test.ts",
+        "tests/unit/session-manager.test.ts",
+        "tests/unit/webdriver-native-control.test.ts"
+      ],
+      "risk_boundaries": [
+        "native dialog absence",
+        "provider process exit and PID reuse",
+        "replacement isolation"
+      ],
+      "cross_cutting": false,
+      "priority": 1
+    },
+    {
+      "id": "pumarejo-security",
+      "reviewer_role": "security-sentinel",
+      "owned_paths": [
+        "src/observability/diagnostics.ts",
+        "tests/unit/diagnostics.test.ts"
+      ],
+      "risk_boundaries": [
+        "Windows and POSIX path redaction",
+        "bounded retained diagnostics",
+        "owned process cleanup"
+      ],
+      "cross_cutting": false,
+      "priority": 2
+    }
+  ],
+  "queued": [],
+  "coverage_complete": true,
+  "validation_wave_required": true,
+  "review_plan_hash": "sha256:1ec58f5acd6caf4bd1189a65df3bd426d42300e9a6838a5129a887f4a179672f"
+}

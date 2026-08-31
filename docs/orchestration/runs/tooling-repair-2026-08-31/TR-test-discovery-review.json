@@ -1,0 +1,106 @@
+{
+  "reviewer_id": "/root/tinto_ui_review",
+  "base_revision": "b0880b163b4698d180d0f0c9f56416b99731731f",
+  "scope": [
+    "vite.config.ts",
+    "scripts/remove-with-retry.test.mjs",
+    "src/workbench/wslAbsence.test.ts",
+    "src/panels/terminal/ConsoleDockPanel.tsx"
+  ],
+  "file_hashes": {
+    "vite.config.ts": {
+      "baseline": {
+        "sha256_raw_bytes": "6869936f8edde3fa4cee8875aafc824c2ec0586adc4652555554519fac15a7cb",
+        "git_blob_sha1": "5eaf48eed01fa198b9f3661395c5eecf9d7285ea"
+      },
+      "current": {
+        "sha256_raw_bytes": "79da8eb8c1428edcd2f5c1b67083ebf7d8013cd15b88e5053c5bcb258dcce279",
+        "git_blob_sha1": "714c5816acc0a1e9919a6fe74bf5bb42709ea47f"
+      }
+    },
+    "scripts/remove-with-retry.test.mjs": {
+      "baseline": {
+        "sha256_raw_bytes": "797284c25c15c44bd69f18a833ff7a0da809d2335fecbef08b0e13ebd361a4f4",
+        "git_blob_sha1": "210a7767818794e3a88937988bffbb6311a63e18"
+      },
+      "current": {
+        "sha256_raw_bytes": "7ed1bb42e963cbeb9604d64163c2e7bd19c84b61e3a4d962da7829da52b16356",
+        "git_blob_sha1": "210a7767818794e3a88937988bffbb6311a63e18"
+      }
+    },
+    "src/workbench/wslAbsence.test.ts": {
+      "baseline": {
+        "sha256_raw_bytes": "4c85b607e8ca6e43ffe9435a13bb8a7a82f06ccb6568864ec3a476b4a099c60c",
+        "git_blob_sha1": "5ff9ccd285ace180f9932ef7eca9244621123205"
+      },
+      "current": {
+        "sha256_raw_bytes": "af78470e0afc96bb23e09674d1e69d13cbefa198b3a13fffa1cc1a4c8dad4564",
+        "git_blob_sha1": "5ff9ccd285ace180f9932ef7eca9244621123205"
+      }
+    },
+    "src/panels/terminal/ConsoleDockPanel.tsx": {
+      "baseline": {
+        "sha256_raw_bytes": "a9ad4d02fd85ec5d0756dbf7b41f7a5d5a2e6401eb4fa9d71a8304b68b537976",
+        "git_blob_sha1": "065b47b97208ef595c5a4d604b384635339fb538"
+      },
+      "current": {
+        "sha256_raw_bytes": "ba544eb4b00cd02ee6868ff3a2e545ecca1451cce065901d44623601deaa14be",
+        "git_blob_sha1": "9ceec2db925ee85c3d4b8f8c815aac52254c1ff4"
+      }
+    }
+  },
+  "discovery_assessment": {
+    "configured_include": ["src/**/*.test.{ts,tsx}"],
+    "benefit": "The include is rooted at the repository src directory, so default Vitest discovery no longer traverses nested .pumarejo or worktree source copies.",
+    "tracked_tests_outside_include": [
+      {
+        "path": "scripts/remove-with-retry.test.mjs",
+        "test_count": 3,
+        "baseline_tracked": true
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "TD-001",
+      "severity": "p1",
+      "status": "open",
+      "principle": "testing",
+      "file": "vite.config.ts",
+      "observation": "Replacing Vitest's default include with src/**/*.test.{ts,tsx} removes the tracked scripts/remove-with-retry.test.mjs file from an ordinary npm test run, even though package.json defines npm test as vitest run and the script test is part of the baseline repository.",
+      "impact": "The aggregate can become green while three tests covering removeWithRetry, used by scripts/run-tauri-e2e.mjs, are silently skipped. The stale nested copies are excluded, but a legitimate repository test loses coverage.",
+      "recommendation": "Keep the anchored src include and add the explicit tracked test family, for example scripts/**/*.test.mjs, or use an equally narrow include list that covers every tracked test location. Confirm the aggregate reports the script tests again.",
+      "evidence": [
+        "vite.config.ts:12-18 adds include: [\"src/**/*.test.{ts,tsx}\"].",
+        "package.json:26-27 defines npm test as vitest run and has no separate command for scripts/remove-with-retry.test.mjs.",
+        "scripts/remove-with-retry.test.mjs:1-52 is tracked at the baseline and contains three Vitest tests; its baseline and current git blob SHA-1 are both 210a7767818794e3a88937988bffbb6311a63e18.",
+        "Nested copies are present under .pumarejo/qa-project/src, which validates the need for a rooted include but does not justify dropping the tracked scripts test."
+      ]
+    },
+    {
+      "id": "BASELINE-WSL-001",
+      "severity": "p2",
+      "status": "pre-existing-baseline-blocker",
+      "principle": "testing",
+      "file": "src/workbench/wslAbsence.test.ts",
+      "observation": "The aggregate failure against src/panels/terminal/ConsoleDockPanel.tsx:1415-1416 is reproducible from baseline b0880: the raw-source scan excludes tests, does not allowlist ConsoleDockPanel.tsx, and the baseline source already contains No disponible en WSL ${distro}.",
+      "impact": "The WSL absence test fails independently of the current tooling repair and current UI changes, so treating it as a regression would misattribute a pre-existing blocker to this diff.",
+      "recommendation": "Record this as a baseline blocker for the current run. If the intentional quick-launch unavailable guidance is allowed, the minimal correction is adding src/panels/terminal/ConsoleDockPanel.tsx to WSL_ALLOWED_RUNTIME_FILES. If the policy truly bans WSL text there, move or remove that user-facing branch in a separate WSL-scope change rather than changing the tooling repair.",
+      "evidence": [
+        "src/workbench/wslAbsence.test.ts:4-16 scans every non-test TS/TSX runtime source, and :18-32 omits src/panels/terminal/ConsoleDockPanel.tsx from WSL_ALLOWED_RUNTIME_FILES.",
+        "git show b0880b163b4698d180d0f0c9f56416b99731731f:src/panels/terminal/ConsoleDockPanel.tsx contains the same WSL branch at baseline lines 1409-1410; the current branch is src/panels/terminal/ConsoleDockPanel.tsx:1415-1416.",
+        "src/workbench/wslAbsence.test.ts has identical baseline/current git blob SHA-1 5ff9ccd285ace180f9932ef7eca9244621123205, and git diff against b0880 reports no change for that test.",
+        "The WSL string is intentional quick-launch availability guidance, consistent with the existing allowlisted WSL-facing RepoCard and workbench surfaces."
+      ]
+    }
+  ],
+  "verification": {
+    "tests_rerun": [],
+    "static_checks": [
+      "git diff b0880b163b4698d180d0f0c9f56416b99731731f -- vite.config.ts",
+      "git diff --quiet b0880b163b4698d180d0f0c9f56416b99731731f -- src/workbench/wslAbsence.test.ts",
+      "git show b0880b163b4698d180d0f0c9f56416b99731731f:src/panels/terminal/ConsoleDockPanel.tsx contains No disponible en WSL branch",
+      "tracked test inventory shows scripts/remove-with-retry.test.mjs outside the configured include"
+    ]
+  }
+}

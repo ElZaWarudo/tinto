@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "contract_id": "tooling-repair-2026-08-31",
+  "issued_at": "2026-08-31T06:23:02.779958+00:00",
+  "expires_at": "2026-09-07T23:59:59Z",
+  "status": "active",
+  "issuer": {
+    "id": "user",
+    "approval_ref": "docs/orchestration/runs/tooling-repair-2026-08-31/authorization-event.md",
+    "approval_hash": "sha256:a76acbb1964d782069006f1b81186ada61a06458ed898c186e153f714accb0f1"
+  },
+  "scope": {
+    "repositories": [
+      "ElZaWarudo/tinto",
+      "ElZaWarudo/pumarejo"
+    ],
+    "base_branches": [
+      "codex/agents-usability-edge-campaign",
+      "codex/fix-agent-certification-gaps"
+    ],
+    "branch_patterns": [
+      "codex/tooling-repair-*"
+    ],
+    "jira_projects": [],
+    "packages": [
+      "tooling-repair-2026-08-31"
+    ],
+    "review_units": [
+      "TR-001",
+      "PR-001"
+    ]
+  },
+  "allowed_mutations": [],
+  "stop_conditions": [
+    "No external mutation authorized",
+    "Credential changes forbidden",
+    "Destructive Git forbidden",
+    "GUI fallback forbidden",
+    "User revocation"
+  ],
+  "audit": {
+    "path": "docs/orchestration/audit/tooling-repair-2026-08-31.jsonl",
+    "head_hash": null
+  },
+  "contract_hash": "1c051cd89be2a7af0d3f0701760aa05d38f6e5a4d5fbf49874015bc7bb745bcc"
+}

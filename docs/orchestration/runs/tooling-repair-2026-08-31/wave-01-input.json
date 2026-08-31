@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "total_slots": 9,
+  "reserve_slots": 1,
+  "role_caps": {
+    "implementer": 2,
+    "reviewer": 2
+  },
+  "scale_authorization": {
+    "authorization_id": "AUTH-TOOLING-2026-08-31",
+    "authorized": false,
+    "authorized_by": "user",
+    "max_implementers": 2,
+    "authorization_digest": "sha256:e7780ba8801cca9d419b0d5b3a799d665fef5df6f66ad0292258371c152d8231"
+  },
+  "review_capacity": 2,
+  "wave_history": [],
+  "requests": [
+    {
+      "id": "TR-001",
+      "role": "implementer",
+      "priority": 1,
+      "owned_paths": [
+        "tinto/src"
+      ],
+      "risk_surfaces": [
+        "tinto-lifecycle"
+      ],
+      "unresolved_dependencies": [],
+      "blocked": false
+    },
+    {
+      "id": "PR-001",
+      "role": "implementer",
+      "priority": 1,
+      "owned_paths": [
+        "pumarejo/src"
+      ],
+      "risk_surfaces": [
+        "pumarejo-lifecycle"
+      ],
+      "unresolved_dependencies": [],
+      "blocked": false
+    }
+  ]
+}

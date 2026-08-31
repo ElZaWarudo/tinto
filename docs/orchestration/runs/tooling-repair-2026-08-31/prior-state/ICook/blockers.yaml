@@ -1,0 +1,66 @@
+schema_version: 1
+updated_at: '2026-08-28T17:27:46Z'
+blockers:
+- id: BLK-IC-2026-08-28-001
+  jira_issue_key: null
+  unit_id: IC-FOUND-001
+  title: Local Git repository cannot be initialized in managed read-only .git
+  wave: WAVE-01-FOUND
+  type: infrastructure
+  risk: high
+  description: The workspace contains an incomplete .git directory whose hooks path
+    is read-only under the managed filesystem policy; git init -b main failed and
+    the folder is not a working tree.
+  decision_required: Restore write permission for the repository .git directory or
+    provide a correctly initialized local repository on branch main without deleting
+    user data.
+  impact_if_ignored: Canonical worktree isolation, sealed baselines, root-observed
+    diffs, local commits, fetch/fast-forward checks, and branch_push cannot be performed
+    safely.
+  affected_units:
+  - IC-FOUND-001
+  - IC-UI-001
+  - IC-TAURI-001
+  - IC-VERIFY-001
+  - IC-PUM-001
+  - IC-DOG-001
+  - IC-REL-001
+  blocks_dependents: true
+  suggested_owner: tech lead
+  detected_at: '2026-08-28T15:47:50Z'
+  status: resolved
+  evidence: docs/orchestration/seneschal/evidence/git-init.txt
+  next_action: Resolve filesystem permission safely, rerun git init -b main if needed,
+    and verify git branch --show-current returns main.
+  resolution:
+    decided_at: '2026-08-28T17:00:00Z'
+    decided_by: seneschal-supervisor
+    decision: A bounded retry through the current Tinto terminal successfully initialized
+      an empty local Git repository on branch main; git rev-parse returned true and
+      git branch --show-current returned main.
+- id: BLK-IC-2026-08-28-002
+  jira_issue_key: null
+  unit_id: IC-TAURI-001
+  title: Android initialization requires an external SDK toolchain
+  wave: WAVE-03-VERIFY
+  type: infrastructure
+  risk: medium
+  description: ANDROID_HOME is unset and the Android SDK is absent at /home/teb/Android/Sdk;
+    Tauri cannot generate src-tauri/gen/android in this environment.
+  decision_required: Provide an Android SDK installation and configure ANDROID_HOME
+    before Android initialization/build verification.
+  impact_if_ignored: Android packaging and Android automation remain unverified; the
+    independently compiled desktop target and shared frontend are unaffected.
+  affected_units: []
+  blocks_dependents: false
+  suggested_owner: tech lead
+  detected_at: '2026-08-28T17:27:46Z'
+  status: open
+  evidence: docs/orchestration/runs/IC-RUN-2026-08-28-001/aggregate-verification.md
+  next_action: Install/configure the Android SDK, then rerun Tauri Android init and build;
+    continue the desktop Pumarejo campaign independently.
+  resolution:
+    decided_at: null
+    decided_by: null
+    decision: null
+    supersedes: null

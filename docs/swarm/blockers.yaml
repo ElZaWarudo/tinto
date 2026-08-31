@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at: '2026-08-28'
+updated_at: '2026-08-31'
 blockers:
 - id: BLK-2026-08-27-001
   jira_issue_key: null
@@ -34,7 +34,8 @@ blockers:
 - id: CSP-BLK-2026-08-28-001
   jira_issue_key: null
   unit_id: csp-003-integration-verification
-  title: Repository-wide frontend discovery crosses unreadable and stale artifact trees
+  title: Repository-wide frontend discovery crosses unreadable and stale artifact
+    trees
   wave: codex-subagent-parity-2026-08-28
   type: environment
   risk: low
@@ -58,5 +59,131 @@ blockers:
     decided_at: '2026-08-28T15:14:00Z'
     decided_by: root
     decision: Verified every owned frontend file with scoped Prettier and ESLint,
-      verified the production build and focused tests, and recorded the full src
-      result of 761 passing tests with one unowned baseline failure.
+      verified the production build and focused tests, and recorded the full src result
+      of 761 passing tests with one unowned baseline failure.
+- id: TR-BLK-2026-08-31-01
+  jira_issue_key: null
+  unit_id: tooling-repair-2026-08-31
+  title: Canonical documentation bypass transition
+  wave: tooling-repair-2026-08-31
+  type: dependency
+  risk: high
+  description: The transition compiler requires an approval receipt although the user
+    explicitly authorized a bypass; do not fabricate approval.
+  decision_required: none for completed local work; prerequisite recorded
+  impact_if_ignored: Would overstate acceptance or violate the safety boundary.
+  affected_units:
+  - TR-001
+  - PR-001
+  blocks_dependents: false
+  suggested_owner: tooling-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: docs/orchestration/runs/tooling-repair-2026-08-31/state-transition-bypass-gap.json
+  next_action: Extend the external skill compiler with a supported authorized-bypass
+    path; current queue remains planned.
+- id: TR-BLK-2026-08-31-02
+  jira_issue_key: null
+  unit_id: tooling-repair-2026-08-31
+  title: Nonempty artifact quarantine cleanup
+  wave: tooling-repair-2026-08-31
+  type: security
+  risk: high
+  description: Native identity-bound deletion adapter is unavailable. Nonempty screenshot
+    quarantine fails closed, though owned processes close successfully.
+  decision_required: none for completed local work; prerequisite recorded
+  impact_if_ignored: Would overstate acceptance or violate the safety boundary.
+  affected_units:
+  - TR-001
+  - PR-001
+  blocks_dependents: false
+  suggested_owner: tooling-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: ../ICook/docs/tooling-repair-evidence/tinto-baseline/017-tauri_close.json
+  next_action: Provide the supported native deletion adapter; keep existing quarantines
+    and do not use recursive path deletion as a substitute.
+- id: TR-BLK-2026-08-31-03
+  jira_issue_key: null
+  unit_id: tooling-repair-2026-08-31
+  title: Provider staging and minimized-window restore
+  wave: tooling-repair-2026-08-31
+  type: dependency
+  risk: medium
+  description: Doctor detects provider byte drift; native restore falsely reports
+    restored for a minimized window. A coordinated provider upgrade is required.
+  decision_required: none for completed local work; prerequisite recorded
+  impact_if_ignored: Would overstate acceptance or violate the safety boundary.
+  affected_units:
+  - TR-001
+  - PR-001
+  blocks_dependents: false
+  suggested_owner: tooling-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: docs/orchestration/runs/tooling-repair-2026-08-31/PUM-010-findings.json
+  next_action: Reconcile attributed staged files without discarding changes, then
+    implement and verify native unminimize/restore postconditions.
+- id: TR-BLK-2026-08-31-04
+  jira_issue_key: null
+  unit_id: tooling-repair-2026-08-31
+  title: One-child interruption acceptance incomplete
+  wave: tooling-repair-2026-08-31
+  type: capability
+  risk: medium
+  description: Two distinct children and routed results were verified, but both finished
+    before the planned interrupt. Recorded child capabilities did not advertise interrupt.
+  decision_required: none for completed local work; prerequisite recorded
+  impact_if_ignored: Would overstate acceptance or violate the safety boundary.
+  affected_units:
+  - TR-001
+  - PR-001
+  blocks_dependents: false
+  suggested_owner: tooling-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: ../ICook/docs/tooling-repair-evidence/tinto-repaired/
+  next_action: Use a provider that advertises child interrupt, then repeat a bounded
+    long-lived two-child case and prove sibling continuity.
+- id: TR-BLK-2026-08-31-05
+  jira_issue_key: null
+  unit_id: tooling-repair-2026-08-31
+  title: Historical and context-pressure evidence gaps
+  wave: tooling-repair-2026-08-31
+  type: evidence
+  risk: low
+  description: Original five-retry trace and some one-event fresh archives lack causal
+    records. High-context compaction/performance was not freshly measured.
+  decision_required: none for completed local work; prerequisite recorded
+  impact_if_ignored: Would overstate acceptance or violate the safety boundary.
+  affected_units:
+  - TR-001
+  - PR-001
+  blocks_dependents: false
+  suggested_owner: tooling-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: ../ICook/docs/tinto-pumarejo-repair-handoff.md
+  next_action: Capture exact session IDs and provider/refresh diagnostics during a
+    bounded reproduction; do not infer a cause from retry count.
+- id: TR-BLK-2026-08-31-06
+  jira_issue_key: null
+  unit_id: tooling-repair-2026-08-31
+  title: Unchanged baseline aggregate failures
+  wave: tooling-repair-2026-08-31
+  type: verification
+  risk: low
+  description: Full Tinto suite has one baseline WSL text-policy failure; changed-file
+    lint exposes a pre-existing setState-in-effect diagnostic.
+  decision_required: none for completed local work; prerequisite recorded
+  impact_if_ignored: Would overstate acceptance or violate the safety boundary.
+  affected_units:
+  - TR-001
+  - PR-001
+  blocks_dependents: false
+  suggested_owner: tooling-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: ../ICook/docs/tooling-repair-evidence/checks/tinto-final-aggregate/
+  next_action: Resolve policy/availability ownership in a separate bounded maintenance
+    change. Current fixes have scoped coverage; do not label full aggregate green.

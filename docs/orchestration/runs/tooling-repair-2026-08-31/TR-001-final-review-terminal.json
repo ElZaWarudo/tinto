@@ -1,0 +1,35 @@
+{
+  "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+  "diff_digest": "sha256:f231fc227245dc7f0f5018e848fda8f97b6f43ae475006a39faff2cd2da1bfa2",
+  "review_plan_hash": "sha256:46379902964f5dc19a0080667629f117e3b97459e5e9547d42d8621c12d01221",
+  "reviewer_id": "/root/tinto_lifecycle_review",
+  "surface_id": "tinto-lifecycle",
+  "risk_boundaries_checked": [
+    "journal backward compatibility and restoration",
+    "rejected resume owned cleanup",
+    "root and child turn completion isolation"
+  ],
+  "findings": [],
+  "finding_feedback": [
+    {
+      "finding_id": "F-9860E4E8",
+      "action": "corroborate",
+      "rationale": "The rejected resume cleanup finding is resolved by a controllable fake process regression that exercises cleanup and preserves the provider error while proving process termination, terminal registry state, and capacity recovery.",
+      "evidence": [
+        "src-tauri/src/agent_console/commands.rs:3799-3845 adds rejected_resume_cleanup_stops_process_and_releases_capacity, asserting kill, Completed status, original error category/message, and successful capacity reuse.",
+        "Root reports cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console:: --lib passed 231 tests after the regression was added."
+      ]
+    },
+    {
+      "finding_id": "F-9A488191",
+      "action": "corroborate",
+      "rationale": "The journal migration finding is resolved by an on-disk pre-change SQLite fixture opened through AgentJournal::open, with assertions for additive migration, legacy checkpoint restoration, record compatibility, and reopen compatibility.",
+      "evidence": [
+        "src-tauri/src/agent_console/journal.rs:903-933 adds journal_migrates_a_database_without_checkpoint_column, creating the old schema before AgentJournal::open, asserting the migrated column and empty legacy checkpoints, recording the restored row, and reopening it successfully.",
+        "Root reports cargo.exe test --manifest-path src-tauri/Cargo.toml agent_console:: --lib passed 231 tests after the regression was added."
+      ]
+    }
+  ],
+  "suppressed_speculative_count": 1,
+  "stop_reason": "coverage-complete"
+}

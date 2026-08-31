@@ -1,0 +1,66 @@
+[
+  {
+    "terminal": "TR-001-final-review-terminal.json",
+    "valid": true,
+    "result": {
+      "valid": true,
+      "reviewer_id": "/root/tinto_lifecycle_review",
+      "surface_id": "tinto-lifecycle",
+      "finding_counts": {
+        "p0": 0,
+        "p1": 0,
+        "p2": 0
+      },
+      "finding_feedback_count": 2,
+      "suppressed_speculative_count": 1
+    }
+  },
+  {
+    "terminal": "TR-002-final-review-terminal.json",
+    "valid": true,
+    "result": {
+      "valid": true,
+      "reviewer_id": "/root/tinto_ui_review",
+      "surface_id": "turn-ui",
+      "finding_counts": {
+        "p0": 0,
+        "p1": 0,
+        "p2": 0
+      },
+      "finding_feedback_count": 3,
+      "suppressed_speculative_count": 0
+    }
+  },
+  {
+    "terminal": "PR-final-review-terminal.json",
+    "valid": true,
+    "result": {
+      "valid": true,
+      "reviewer_id": "/root/pumarejo_diagnostics_review",
+      "surface_id": "pumarejo-runtime",
+      "finding_counts": {
+        "p0": 0,
+        "p1": 0,
+        "p2": 0
+      },
+      "finding_feedback_count": 0,
+      "suppressed_speculative_count": 0
+    }
+  },
+  {
+    "terminal": "PR-final-security-terminal.json",
+    "valid": true,
+    "result": {
+      "valid": true,
+      "reviewer_id": "/root/pumarejo_diagnostics_security",
+      "surface_id": "pumarejo-security",
+      "finding_counts": {
+        "p0": 0,
+        "p1": 0,
+        "p2": 0
+      },
+      "finding_feedback_count": 1,
+      "suppressed_speculative_count": 0
+    }
+  }
+]

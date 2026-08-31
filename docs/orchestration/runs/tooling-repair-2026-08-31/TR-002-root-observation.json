@@ -1,0 +1,15 @@
+{
+  "changed_files": [
+    "src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "src/panels/terminal/ConsoleDockPanel.tsx",
+    "src/panels/terminal/TerminalPanel.test.tsx",
+    "src/panels/terminal/TerminalPanel.tsx"
+  ],
+  "changed_files_source": "root-diff",
+  "diff_basis": "worktree-vs-revision",
+  "base_revision": "b0880b163b4698d180d0f0c9f56416b99731731f",
+  "baseline_tree": null,
+  "baseline_digest": "sha256:ac776f1dc740691deac6a39fc5266fba9f367bd7a1caf17a0eed7b90628173b1",
+  "diff_digest": "sha256:b6af61927bd953ddb85a08463f8c0ae2b440ed4bd476bc1ef888920b0c34c96d",
+  "contract_hash": "sha256:75b1f7decdde679e5df751c1208f69403def8291b2e89b0705c4197c3e008de5"
+}

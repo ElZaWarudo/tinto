@@ -1,0 +1,505 @@
+schema_version: 1
+updated_at: "2026-08-25T17:30:50Z"
+blockers:
+  - id: BLK-2026-08-21-001
+    jira_issue_key: null
+    unit_id: initiative
+    title: Approve the documentation packet
+    wave: preflight
+    type: product
+    risk: high
+    description: The Seneschal documentation gate is in review, so implementation, worker dispatch, Jira mutation, and release work are not authorized.
+    decision_required: Approve the packet or request specific revisions.
+    impact_if_ignored: Work would bypass the initiative contract and composition gate.
+    affected_units:
+      - rdm-009-bounded-observation
+      - rdm-013-surface-graph
+      - rdm-014-native-control
+      - rdm-015-observability
+      - rdm-016-process-custody
+      - rdm-017-portable-runtime
+      - rdm-018-sequences-refs
+      - rdm-019-tinto-certification
+      - rdm-020-attributed-drift
+      - rdm-021-network-artifacts
+      - rdm-022-self-doctor
+      - rdm-023-release-certification
+    blocks_dependents: true
+    suggested_owner: user
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence: docs/swarm/queue-state.yaml#documentation_gate
+    next_action: Review the six packet artifacts and explicitly approve or request changes.
+    resolution:
+      decided_at: "2026-08-21T11:18:58Z"
+      decided_by: user
+      decision: Approved the documentation packet and autonomous execution through release handoff.
+      supersedes: null
+
+  - id: BLK-2026-08-21-002
+    jira_issue_key: null
+    unit_id: initiative
+    title: Publish approved shared artifacts to an isolation-readable revision
+    wave: preflight
+    type: dependency
+    risk: high
+    description: Artifact planning can use the recorded read-only content bundle, but mutable workers require the approved initiative contract and roadmap on the same Git revision in every worktree; the current main checkout is dirty.
+    decision_required: After approval and artifact planning, use the repository Git workflow to create a stable implementation base without absorbing or reverting the user's unrelated dirty changes.
+    impact_if_ignored: Parallel children could plan or implement against different requirements, or overwrite user work.
+    affected_units:
+      - rdm-009-bounded-observation
+      - rdm-013-surface-graph
+      - rdm-014-native-control
+      - rdm-015-observability
+      - rdm-016-process-custody
+      - rdm-017-portable-runtime
+      - rdm-018-sequences-refs
+      - rdm-019-tinto-certification
+      - rdm-020-attributed-drift
+      - rdm-021-network-artifacts
+      - rdm-022-self-doctor
+      - rdm-023-release-certification
+    blocks_dependents: true
+    suggested_owner: tech lead
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence: docs/swarm/shared-artifact-revision.json
+    next_action: Verify the content bundle for artifact planning; create and record the approved Git revision before mutable dispatch.
+    resolution:
+      decided_at: "2026-08-21T11:18:58Z"
+      decided_by: seneschal
+      decision: Use one isolated worktree on codex/tinto-e2e-reliability and serialize mutable work against the verified approved content bundle.
+      supersedes: null
+
+  - id: BLK-2026-08-21-003
+    jira_issue_key: null
+    unit_id: rdm-017-portable-runtime
+    title: Isolate existing installer project-detection changes
+    wave: wave-c-custody-portability
+    type: dependency
+    risk: medium
+    description: The checkout already contains user-owned edits in `src/installer/project.ts` and `tests/unit/project-detection.test.ts`, which may overlap later installer and self-diagnostic work.
+    decision_required: Preserve them on their own branch/worktree or integrate them before a worker owns overlapping installer surfaces.
+    impact_if_ignored: The initiative could mix, overwrite, or misattribute unrelated user changes.
+    affected_units:
+      [rdm-017-portable-runtime, rdm-020-attributed-drift, rdm-022-self-doctor]
+    blocks_dependents: true
+    suggested_owner: user
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence: git-status-2026-08-21
+    next_action: Resolve isolation during the approved shared-revision step; do not reset the current files.
+    resolution:
+      decided_at: "2026-08-21T11:18:58Z"
+      decided_by: seneschal
+      decision: Existing installer edits remain only in the main checkout; initiative work runs in the clean isolated worktree.
+      supersedes: null
+
+  - id: DEC-2026-08-21-001
+    jira_issue_key: null
+    unit_id: rdm-009-bounded-observation
+    compound_run_id: tinto-e2e-rdm-009-observation
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-009-observation/state.md
+    title: Decide continuation and actionable generation semantics
+    wave: wave-a-contract-surface-foundation
+    type: product
+    risk: high
+    description: RDM-009 cannot implement bounded continuation until pages and actionable reference generations have one unambiguous contract.
+    decision_required: Choose frozen-generation pages or non-actionable continuation plus a separately refreshed actionable snapshot.
+    question: Should continuation pages share one frozen actionable generation, or be non-actionable evidence followed by a fresh actionable snapshot?
+    why_not_inferable: Both preserve bounded output but have different concurrency, lifetime, and stale-ref tradeoffs.
+    options:
+      - id: non-actionable-continuation
+        consequence: Simpler ordering and safer ref lifetime; a final refresh is required before interaction.
+      - id: frozen-actionable-generation
+        consequence: Fewer refreshes but requires a frozen handle table and stricter concurrency/lifetime rules.
+    recommendation: non-actionable-continuation
+    safe_fallback: Keep RDM-009 and dependent surface/sequence work blocked.
+    canonical_target: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    affected_units:
+      [
+        rdm-009-bounded-observation,
+        rdm-013-surface-graph,
+        rdm-018-sequences-refs,
+        rdm-019-tinto-certification,
+      ]
+    blocks_dependents: true
+    suggested_owner: product
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence:
+      - docs/work-packages/RDM-009-bounded-observation/2026-07-28-009-bounded-observation-work-package.md#contract-decision-gate
+      - docs/plans/tinto-e2e-reliability/initiative-requirements.md#approved-decisions-and-escalation-boundaries
+    next_action: Record the approved option in the initiative contract before RDM-009 dispatch.
+    resolution:
+      decided_at: "2026-08-21T11:18:58Z"
+      decided_by: user
+      decision: Continuation pages are non-actionable; interaction requires a separately refreshed actionable snapshot.
+      canonical_revision: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+
+  - id: DEC-2026-08-21-002
+    jira_issue_key: null
+    unit_id: rdm-014-native-control
+    compound_run_id: tinto-e2e-rdm-014-native-control
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-014-native-control/state.md
+    title: Choose explicit native-dialog test authorization
+    wave: wave-b-native-control-evidence
+    type: security
+    risk: high
+    description: A Tauri capability proves application opt-in but does not by itself prove that a particular test may approve a native confirmation.
+    decision_required: Choose the bounded per-test authorization mechanism and default evidence retention.
+    question: What explicit authorization must accompany accept/cancel for a native Tauri dialog?
+    why_not_inferable: Configuration-only and launch-scoped tokens have different replay, ergonomics, and audit properties.
+    options:
+      - id: launch-scoped-authorization
+        consequence: A random, bounded launch-scoped grant names allowed dialog actions and cannot be reused by another session.
+      - id: static-project-authorization
+        consequence: Easier setup but broader standing authority and weaker per-test intent evidence.
+    recommendation: launch-scoped-authorization
+    safe_fallback: Detect and report dialogs but disable accept/cancel.
+    canonical_target: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    affected_units:
+      [
+        rdm-014-native-control,
+        rdm-018-sequences-refs,
+        rdm-019-tinto-certification,
+      ]
+    blocks_dependents: true
+    suggested_owner: security
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence:
+      - docs/plans/tinto-e2e-reliability/initiative-requirements.md#truthful-desktop-controls-and-native-dialogs
+    next_action: Record the chosen mechanism and retention default before RDM-014 implementation planning closes.
+    resolution:
+      decided_at: "2026-08-21T11:18:58Z"
+      decided_by: user
+      decision: Use a random launch-scoped grant naming permitted native-dialog actions; retain only bounded sanitized evidence by default.
+      canonical_revision: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+
+  - id: BLK-2026-08-21-004
+    jira_issue_key: null
+    unit_id: jira-seed
+    title: Resolve Jira provider and target project
+    wave: jira-seeding
+    type: infrastructure
+    risk: medium
+    description: No Jira provider, URL, project key, or mutation authority is available.
+    decision_required: Choose Jira use and provide enough context to resolve exactly one provider and project before seeding.
+    impact_if_ignored: Jira keys or workflow states could be fabricated or written to the wrong instance.
+    affected_units: [jira-seed]
+    blocks_dependents: false
+    suggested_owner: user
+    detected_at: "2026-08-21"
+    status: open
+    evidence: docs/jira/seed-plan.md
+    next_action: Leave Jira untouched unless the user explicitly asks to seed it after documentation approval.
+    resolution:
+      { decided_at: null, decided_by: null, decision: null, supersedes: null }
+
+  - id: DEC-2026-08-21-003
+    jira_issue_key: null
+    unit_id: rdm-013-surface-graph
+    compound_run_id: tinto-e2e-rdm-013-surfaces
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-013-surfaces/state.md
+    title: Choose the public surface discovery and selection API shape
+    wave: wave-a-contract-surface-foundation
+    type: product
+    risk: high
+    description: The approved initiative requires explicit discovery and selection but does not choose dedicated additive operations versus extensions to existing tools.
+    decision_required: Select the backward-compatible public tool and schema shape.
+    question: Should discovery and selection use additive dedicated MCP operations or extend existing snapshot/window operations?
+    why_not_inferable: Each option changes downstream RDM-014, RDM-015, and RDM-018 composition and public compatibility differently.
+    options:
+      - id: additive-dedicated-operations
+        consequence: Clear separation and backward-compatible existing calls; adds a bounded selection lifecycle.
+      - id: extend-existing-operations
+        consequence: Fewer tools but tighter coupling and broader existing schemas.
+    recommendation: additive-dedicated-operations
+    safe_fallback: Keep RDM-013 implementation blocked and preserve current snapshot/window behavior.
+    canonical_target: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    affected_units:
+      [
+        rdm-013-surface-graph,
+        rdm-014-native-control,
+        rdm-015-observability,
+        rdm-018-sequences-refs,
+        rdm-019-tinto-certification,
+      ]
+    blocks_dependents: true
+    suggested_owner: product
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence:
+      - docs/plans/tinto-e2e-reliability/2026-08-21-rdm-013-surface-graph-requirements.md
+      - docs/contracts.md
+    next_action: Persist the selected public shape in the initiative contract, then resume RDM-013.
+    resolution:
+      decided_at: "2026-08-21T12:04:48Z"
+      decided_by: user
+      decision: Use additive dedicated discovery and selection operations; preserve existing calls.
+      canonical_revision: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+
+  - id: DEC-2026-08-21-004
+    jira_issue_key: null
+    unit_id: rdm-013-surface-graph
+    compound_run_id: tinto-e2e-rdm-013-surfaces
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-013-surfaces/state.md
+    title: Choose the public surface capability-state vocabulary
+    wave: wave-a-contract-surface-foundation
+    type: product
+    risk: high
+    description: Provider context outcomes need a stable public distinction without contradicting RDM-014 window capability semantics.
+    decision_required: Select the public states and bounded evidence fields for surface operations.
+    question: Which vocabulary distinguishes supported, unsupported, unavailable, denied, and failed surface operations?
+    why_not_inferable: A minimal unsupported-only contract is smaller but loses diagnostic truth required by the initiative.
+    options:
+      - id: explicit-operation-matrix
+        consequence: Truthful bounded diagnostics with stable codes; a larger additive contract.
+      - id: minimal-unsupported-only
+        consequence: Smaller contract with less diagnostic precision.
+    recommendation: explicit-operation-matrix
+    safe_fallback: Expose only proven support and mark all other contexts non-actionable unsupported gaps.
+    canonical_target: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    affected_units: [rdm-013-surface-graph, rdm-014-native-control]
+    blocks_dependents: true
+    suggested_owner: tech lead
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence:
+      - docs/plans/tinto-e2e-reliability/2026-08-21-rdm-013-surface-graph-requirements.md
+      - docs/product/roadmap.md
+    next_action: Record the vocabulary and evidence bounds in the initiative contract before RU1.
+    resolution:
+      decided_at: "2026-08-21T12:04:48Z"
+      decided_by: user
+      decision: Use supported, unsupported, unavailable, denied, and failed states with stable codes and bounded sanitized evidence.
+      canonical_revision: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+
+  - id: DEC-2026-08-21-005
+    jira_issue_key: null
+    unit_id: rdm-013-surface-graph
+    compound_run_id: tinto-e2e-rdm-013-surfaces
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-013-surfaces/state.md
+    title: Choose the screenshot-to-semantics coverage-gap policy
+    wave: wave-a-contract-surface-foundation
+    type: product
+    risk: high
+    description: Visual coverage diagnostics need a bounded granularity and truth threshold without becoming OCR or coordinate automation.
+    decision_required: Choose conservative provider-region evidence or a strict pixel-gap threshold.
+    question: What bounded visual-region granularity and threshold should coverage diagnostics use?
+    why_not_inferable: Pixel segmentation, occlusion, and clipping trade false positives against diagnostic detail.
+    options:
+      - id: conservative-provider-region-map
+        consequence: Avoids false claims and reports coverage_unknown when geometry is inconclusive.
+      - id: strict-pixel-gap-threshold
+        consequence: Finds more candidate gaps with higher false-positive and contract complexity risk.
+    recommendation: conservative-provider-region-map
+    safe_fallback: Report only provider-proven unsupported regions and mark visual comparison unavailable.
+    canonical_target: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    affected_units: [rdm-013-surface-graph, rdm-019-tinto-certification]
+    blocks_dependents: true
+    suggested_owner: product
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence:
+      - docs/plans/tinto-e2e-reliability/2026-08-21-rdm-013-surface-graph-requirements.md
+      - docs/product/roadmap.md
+    next_action: Record the bounded diagnostic policy in the initiative contract before RU2.
+    resolution:
+      decided_at: "2026-08-21T12:04:48Z"
+      decided_by: user
+      decision: Use a conservative provider-region map and coverage_unknown when geometry is inconclusive.
+      canonical_revision: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+
+  - id: DEC-2026-08-21-006
+    jira_issue_key: null
+    unit_id: rdm-021-network-artifacts
+    compound_run_id: tinto-e2e-rdm-021-network-artifacts
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-021-network-artifacts/state.md
+    title: Choose retained-artifact cleanup activation policy
+    wave: wave-f-artifact-planning
+    type: product
+    risk: high
+    description: The initiative requires bounded cleanup for retained artifacts but does not authorize an implicit destructive default.
+    decision_required: Choose product-wide automatic age/count/byte cleanup or explicit operator-supplied policy only.
+    question: Should retained artifact cleanup run automatically under product defaults, or only when the operator supplies a bounded policy?
+    why_not_inferable: Automatic deletion changes persistence behavior and recovery expectations for artifacts the operator explicitly retained.
+    options:
+      - id: explicit-policy-only
+        consequence: Preserves retained artifacts by default while enabling a deterministic bounded cleanup evaluator when requested.
+      - id: automatic-product-defaults
+        consequence: Bounds disk growth without operator setup but deletes retained data under an implicit policy.
+    recommendation: explicit-policy-only
+    safe_fallback: Implement pure planning and validation but preserve retained artifacts when no explicit policy is supplied.
+    canonical_target: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    affected_units: [rdm-021-network-artifacts, rdm-023-release-certification]
+    blocks_dependents: true
+    suggested_owner: product
+    detected_at: "2026-08-21"
+    status: resolved
+    evidence:
+      - docs/plans/tinto-e2e-reliability/2026-08-21-rdm-021-network-artifacts-requirements.md
+      - docs/review-findings/tinto-e2e-reliability/RDM-021-network-artifacts/2026-08-21-document-review.md
+    next_action: Persist the cleanup activation policy in the initiative contract before implicit retained deletion is wired.
+    resolution:
+      decided_at: "2026-08-21T12:04:48Z"
+      decided_by: user
+      decision: Cleanup requires an explicit bounded operator policy; preserve retained artifacts when absent.
+      canonical_revision: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+
+  - id: BLK-2026-08-24-007
+    jira_issue_key: null
+    unit_id: rdm-014-native-control
+    compound_run_id: tinto-e2e-rdm-014-native-control
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-014-native-control/state.md
+    title: Adopt the Pumarejo dialog broker in Tinto
+    wave: wave-b-dialog-bridge-remediation
+    type: dependency
+    risk: high
+    description: Pumarejo now exposes the purpose-built opt-in request_dialog provider boundary, but Tinto still uses ordinary dialog calls that cannot be intercepted safely.
+    decision_required: Adopt the Pumarejo request_dialog broker at Tinto's confirmation call site in test mode.
+    impact_if_ignored: REL-005 and the complete Tinto dialog journey cannot be certified as supported, though all other roadmap work can continue.
+    affected_units:
+      [
+        rdm-014-native-control,
+        rdm-019-tinto-certification,
+        rdm-023-release-certification,
+      ]
+    blocks_dependents: true
+    suggested_owner: tech lead
+    detected_at: "2026-08-24"
+    status: resolved
+    evidence:
+      - C:/Users/User/Documents/personal/tinto/.worktrees/pumarejo-dialog-broker/src/panels/terminal/pumarejoDialog.ts
+      - C:/Users/User/Documents/personal/tinto/.worktrees/pumarejo-dialog-broker/src/panels/terminal/TerminalPanel.tsx
+      - C:/Users/User/Documents/personal/tinto/.worktrees/pumarejo-dialog-broker/src/panels/terminal/TerminalPanel.test.tsx
+      - npm test -- src/panels/terminal/TerminalPanel.test.tsx --reporter=dot (126 passed)
+      - npm run build (passed)
+    next_action: Preserve the local Tinto adoption and certify it through the public Pumarejo journey after the public dialog projection and managed launch are ready.
+    resolution:
+      decided_at: "2026-08-25T07:08:20Z"
+      decided_by: user-and-seneschal
+      decision: Tinto adopts request_dialog at the permission-mode confirmation callsite; accept mutates, cancel and authorization failures preserve the prior mode, and exact runtime absence retains compatibility.
+      supersedes: null
+
+  - id: DEC-2026-08-25-008
+    jira_issue_key: null
+    unit_id: rdm-014-native-control
+    compound_run_id: tinto-e2e-rdm-014-native-control
+    compound_state_path: docs/orchestration/compound-master/tinto-e2e-rdm-014-native-control/state.md
+    title: Choose the public MCP dialog operation
+    wave: wave-b-dialog-public-projection
+    type: product
+    risk: high
+    description: The dialog schema, runtime controller, provider route, and Tinto callsite exist, but the MCP server does not register a public dialog tool.
+    decision_required: Choose the additive public operation name and confirm that its existing detect/accept/cancel schema is the intended authorization transport.
+    question: Should the existing dialog runtime be exposed as additive tool tauri_dialog with the existing strict action, surfaceRef, generation, and authorize fields?
+    why_not_inferable: Adding a public MCP tool is a compatibility contract explicitly reserved for parent reconciliation in RDM-014.
+    options:
+      - id: additive-tauri-dialog
+        consequence: Completes the planned public journey with a bounded, backward-compatible tool over the existing runtime and schema.
+      - id: private-only-dialog
+        consequence: Preserves the current public tool list but makes RDM-019's required public dialog journey impossible.
+    recommendation: additive-tauri-dialog
+    safe_fallback: Keep public dialog certification and dependent release claims blocked; continue independent launch remediation.
+    canonical_target: docs/plans/tinto-e2e-reliability/initiative-requirements.md
+    affected_units:
+      [rdm-014-native-control, rdm-019-tinto-certification, rdm-023-release-certification]
+    blocks_dependents: true
+    suggested_owner: product
+    detected_at: "2026-08-25"
+    status: resolved
+    evidence:
+      - src/mcp/schemas.ts
+      - src/mcp/runtime.ts
+      - src/mcp/server.ts
+      - src/mcp/tools/index.ts
+      - docs/orchestration/compound-master/tinto-e2e-rdm-014-native-control/state.md
+    next_action: Complete; retain the exact-digest certificates and verification fingerprint in the PR handoff packet.
+    resolution:
+      { decided_at: "2026-08-25T11:27:00Z", decided_by: user, decision: "Expose the additive public MCP operation tauri_dialog with the existing strict action, surfaceRef, generation, and authorize fields.", canonical_revision: docs/plans/tinto-e2e-reliability/initiative-requirements.md }
+
+  - id: BLK-2026-08-25-009
+    jira_issue_key: null
+    unit_id: rdm-023-release-certification
+    title: Deliver the modified provider through a portable attributable source
+    wave: wave-g-release-remediation
+    type: dependency
+    risk: high
+    description: The broker-capable provider exists only under Pumarejo vendor sources while initialized Tinto resolves the public crates.io 1.x provider, which lacks request_dialog.
+    decision_required: Implement and verify a portable package/init source for the modified provider without absolute machine paths.
+    impact_if_ignored: A local disposable copy can certify source integration, but a released Pumarejo package cannot reproduce the supported dialog path.
+    affected_units: [rdm-023-release-certification]
+    blocks_dependents: true
+    suggested_owner: tech lead
+    detected_at: "2026-08-25"
+    status: resolved
+    evidence:
+      - package.json
+      - src/installer/cargo.ts
+      - vendor/tauri-plugin-wdio-webdriver/src/dialog.rs
+      - C:/Users/User/Documents/personal/tinto/.worktrees/pumarejo-dialog-broker/src-tauri/Cargo.toml
+      - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-017-provider-bound-release-reviewer-certificate.json
+      - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-017-provider-bound-release-security-certificate.json
+      - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-017-provider-delivery-verification-fingerprint.json
+    next_action: Complete; retain the portable-provider certification in the PR handoff packet.
+    resolution:
+      { decided_at: "2026-08-25T11:27:00Z", decided_by: user, decision: "Ship the modified provider as an attributable bundled source selected through a portable package-relative mechanism; do not rely on absolute machine paths or ambient unpublished checkouts.", supersedes: null }
+
+  - id: BLK-2026-08-25-010
+    jira_issue_key: null
+    unit_id: rdm-019-managed-launch-remediation
+    title: Restore managed launch for the real Tinto journey
+    wave: wave-e-tinto-certification-remediation
+    type: infrastructure
+    risk: high
+    description: The disposable Tinto copy builds and starts directly with the generated overlay and MSVC toolchain, but tauri_launch returns CLOSE_FAILED after recording APP_START_FAILED and quarantining the empty artifact session.
+    decision_required: Diagnose and fix the owned manager/readiness/custody/artifact failure without weakening cleanup or replacing the real provider.
+    impact_if_ignored: RDM-019 cannot discover surfaces or exercise any real public journey, and RDM-023 cannot claim a supported Windows row.
+    affected_units: [rdm-019-tinto-certification, rdm-023-release-certification]
+    blocks_dependents: true
+    suggested_owner: tech lead
+    detected_at: "2026-08-25"
+    status: resolved
+    evidence:
+      - tauri_launch structured failure APP_START_FAILED followed by CLOSE_FAILED
+      - direct Tinto launch with identical overlay reached target/debug/tinto.exe
+      - C:/Users/User/AppData/Local/Temp/pumarejo-tinto-rdm019-clean
+      - root aggregate verification passed 124 focused tests with 2 skipped, pnpm build, and the clean real-Tinto probe with READY and first close idle
+      - final convergence evaluation action needs_fix after independent reviewer and security-sentinel certification
+    next_action: No further managed-launch remediation is required; retain final-v4 convergence evidence for release certification.
+    resolution:
+      { decided_at: "2026-08-25T11:16:10Z", decided_by: seneschal, decision: "Final convergence v4 passed 136 focused tests with 3 skips, build, real-Tinto READY/surface/snapshot/first-close-idle, and exact-diff reviewer/security certification.", supersedes: null }
+
+  - id: BLK-2026-08-25-011
+    jira_issue_key: null
+    unit_id: rdm-016-process-custody
+    title: Choose and deliver identity-bound Windows process custody
+    wave: wave-f-final-convergence
+    type: architecture
+    risk: critical
+    description: Managed launch and the independently bounded environment, listener-family, lease-scan, and untracked-orphan remediations are green. The remaining release-critical finding is architectural: the windows_validated_tree fallback revalidates identity and then invokes taskkill by raw PID, leaving a non-atomic PID-reuse window.
+    decision_required: Choose an identity-bound Windows termination backend (the existing job-object seam backed by a portable native implementation, a portable helper with equivalent handle-bound proof, or removal of the validated-tree fallback from the supported Windows row) and authorize the associated packaging scope.
+    impact_if_ignored: Pumarejo can demonstrate READY, exact-family listener cleanup, fail-closed durable recovery, and first-close idle locally, but cannot make a release-grade claim that the validated-tree fallback never terminates a PID-reused replacement.
+    affected_units: [rdm-016-process-custody, rdm-017-portable-runtime, rdm-019-tinto-certification, rdm-023-release-certification]
+    blocks_dependents: true
+    suggested_owner: tech lead
+    detected_at: "2026-08-25"
+    status: resolved
+    evidence:
+      - docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/final-convergence-v3-reviewer-certificate.json
+      - docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/final-convergence-v3-security-certificate.json
+      - docs/orchestration/runs/tinto-e2e-rdm-019-managed-launch-remediation/final-convergence-v3-evaluation.json
+      - docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/environment-hardening-evaluation-complete.json
+      - docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/listener-postcondition-evaluation-complete.json
+      - docs/orchestration/runs/tinto-e2e-rdm-019-security-remediation/listener-postcondition-security-certificate.json
+      - src/platform/windows/process.ts
+      - src/platform/tracked-process.ts
+      - src/session/manager.ts
+      - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-016-job-release-reviewer-certificate.json
+      - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-016-job-release-security-certificate.json
+      - docs/orchestration/runs/tinto-e2e-approved-decisions/rdm-016-windows-job-object-verification-fingerprint.json
+    next_action: Complete; retain the identity-bound custody certification in the PR handoff packet.
+    resolution:
+      { decided_at: "2026-08-25T11:27:00Z", decided_by: user, decision: "Complete the existing Windows Job Object seam with a portable native identity-bound backend; the raw-PID validated-tree fallback must not support a release-grade cleanup claim.", supersedes: null }

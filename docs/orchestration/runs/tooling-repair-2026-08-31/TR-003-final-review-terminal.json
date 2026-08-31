@@ -1,0 +1,16 @@
+{
+  "contract_hash": "sha256:c42dfcc2a8a7499dca1e947a27525a142d84a6ecfb73a784c483fe161ca9071a",
+  "diff_digest": "sha256:1add6461ae8e81ff973f52b18418dfded3e1ce72ed79a4c02680e5f16a816b75",
+  "review_plan_hash": "sha256:72b64b2c2279949ab33a32d1b70e3dd49ab4f689588f447ce23143d9920bb14b",
+  "reviewer_id": "/root/tinto_lifecycle_review",
+  "surface_id": "closed-turn-refresh",
+  "risk_boundaries_checked": [
+    "completed turn remains idle",
+    "next turn starts normally",
+    "no duplicate checkpoint"
+  ],
+  "findings": [],
+  "finding_feedback": [],
+  "suppressed_speculative_count": 0,
+  "stop_reason": "coverage-complete"
+}

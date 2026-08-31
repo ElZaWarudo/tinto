@@ -1,0 +1,25 @@
+{
+  "action": "contract_violation",
+  "contract_hash": "sha256:4df7c9f48dc5614aff3e3e66fad0b4d86c9007ef137d4dd9d901d708062580bc",
+  "evidence_trust": "missing",
+  "metrics": {
+    "discovery_implementation_ratio": null,
+    "last_required_command_to_return_ms": null,
+    "out_of_manifest_commands": 0,
+    "root_interventions": 1,
+    "time_to_first_change_ms": null,
+    "evidence_trust": "missing",
+    "repeated_verification_commands": 0,
+    "scope_violations": 0,
+    "review_findings_p0": 0,
+    "review_findings_p1": 0,
+    "review_findings_p2": 0,
+    "acceptance_latency_ms": null,
+    "elapsed_budget_exhausted": false
+  },
+  "pending_certifications": [],
+  "reasons": [
+    "command-evidence-invalid"
+  ],
+  "terminal_status": "needs_review"
+}

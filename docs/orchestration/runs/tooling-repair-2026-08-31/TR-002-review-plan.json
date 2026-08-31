@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "contract_hash": "sha256:75b1f7decdde679e5df751c1208f69403def8291b2e89b0705c4197c3e008de5",
+  "diff_digest": "sha256:b6af61927bd953ddb85a08463f8c0ae2b440ed4bd476bc1ef888920b0c34c96d",
+  "changed_paths": [
+    "src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "src/panels/terminal/ConsoleDockPanel.tsx",
+    "src/panels/terminal/TerminalPanel.test.tsx",
+    "src/panels/terminal/TerminalPanel.tsx"
+  ],
+  "assignments": [
+    {
+      "id": "turn-ui",
+      "reviewer_role": "reviewer",
+      "owned_paths": [
+        "src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "src/panels/terminal/ConsoleDockPanel.tsx",
+        "src/panels/terminal/TerminalPanel.test.tsx",
+        "src/panels/terminal/TerminalPanel.tsx"
+      ],
+      "risk_boundaries": [
+        "at-most-once resumed dispatch",
+        "same-title attribution",
+        "truthful lifecycle status"
+      ],
+      "cross_cutting": false,
+      "priority": 1
+    }
+  ],
+  "queued": [],
+  "coverage_complete": true,
+  "validation_wave_required": false,
+  "review_plan_hash": "sha256:1db128b7ac64485c4832e7433212c40b18cc99422bc4f6579985651d8b554007"
+}
