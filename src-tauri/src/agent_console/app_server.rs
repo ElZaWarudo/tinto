@@ -1308,6 +1308,14 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 ));
             }
             if is_root_thread {
+                let _ = context.output_tx.send(timeline_frame_for_thread_with_turn_done(
+                    AgentSessionTimelineKind::Lifecycle,
+                    "",
+                    None,
+                    true,
+                ));
+            }
+            if is_root_thread {
                 if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
                     *active_turn_id = None;
                 }
@@ -2851,16 +2859,26 @@ fn timeline_frame_for_thread(
     text: &str,
     thread_id: Option<&str>,
 ) -> Vec<u8> {
+    timeline_frame_for_thread_with_turn_done(kind, text, thread_id, false)
+}
+
+fn timeline_frame_for_thread_with_turn_done(
+    kind: AgentSessionTimelineKind,
+    text: &str,
+    thread_id: Option<&str>,
+    turn_done: bool,
+) -> Vec<u8> {
     let text = sanitize_provider_timeline_text(text);
     let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
     frame.extend(
         serde_json::to_vec(&json!({
             "kind": kind,
             "text_base64": STANDARD.encode(text.as_bytes()),
+            "turn_done": turn_done,
             "thread_id": thread_id,
         }))
         .unwrap_or_else(|_| {
-            b"{\"kind\":\"lifecycle\",\"text\":\"timeline encode failed\"}".to_vec()
+            b"{\"kind\":\"lifecycle\",\"text\":\"timeline encode failed\",\"turn_done\":false}".to_vec()
         }),
     );
     frame.push(b'\n');
@@ -3340,6 +3358,13 @@ mod tests {
             &context,
         );
 
+        let frame = rx.recv().expect("empty completion should still emit a frame");
+        let frame = crate::agent_console::commands::parse_timeline_frame(&frame)
+            .expect("completion frame should be parseable");
+        assert!(frame.turn_done);
+        assert!(frame.thread_id.is_none());
+        assert_eq!(frame.kind, AgentSessionTimelineKind::Lifecycle);
+        assert!(frame.text.is_empty());
         assert!(matches!(
             event_rx.recv().unwrap(),
             AgentProcessEvent::TurnCompleted { .. }
@@ -3864,6 +3889,7 @@ mod tests {
             let parsed = crate::agent_console::commands::parse_timeline_frame(&frame)
                 .expect("child output should remain framed");
             assert_eq!(parsed.thread_id.as_deref(), Some("child-1"));
+            assert!(!parsed.turn_done);
             saw_child_frame = true;
         }
         assert!(saw_child_frame);

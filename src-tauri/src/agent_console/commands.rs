@@ -437,22 +437,37 @@ pub async fn resume_agent_journal_session(
         match tokio::task::spawn_blocking(move || resume_result.recv()).await {
             Ok(Ok(Ok(resolved_mode))) => mode = resolved_mode,
             Ok(Ok(Err(error))) => {
+                let error = cleanup_failed_resume_session(
+                    &registry,
+                    &started.id,
+                    CommandError::from(error),
+                );
                 refresh_and_emit_sessions(&app);
-                return Err(CommandError::from(error));
+                return Err(error);
             }
             Ok(Err(_)) => {
+                let error = cleanup_failed_resume_session(
+                    &registry,
+                    &started.id,
+                    CommandError::new(
+                        "agent_resume_failed",
+                        "la reanudación terminó sin un resultado",
+                    ),
+                );
                 refresh_and_emit_sessions(&app);
-                return Err(CommandError::new(
-                    "agent_resume_failed",
-                    "la reanudación terminó sin un resultado",
-                ));
+                return Err(error);
             }
             Err(_) => {
+                let error = cleanup_failed_resume_session(
+                    &registry,
+                    &started.id,
+                    CommandError::new(
+                        "agent_resume_failed",
+                        "no se pudo esperar el resultado de la reanudación",
+                    ),
+                );
                 refresh_and_emit_sessions(&app);
-                return Err(CommandError::new(
-                    "agent_resume_failed",
-                    "no se pudo esperar el resultado de la reanudación",
-                ));
+                return Err(error);
             }
         }
     }
@@ -2968,6 +2983,28 @@ fn lock_registry(
         .map_err(|_| CommandError::new("lock_poisoned", "el registro de agentes fallo"))
 }
 
+fn cleanup_failed_resume_session(
+    registry: &Mutex<AgentSessionRegistry>,
+    session_id: &str,
+    resume_error: CommandError,
+) -> CommandError {
+    let cleanup_result = lock_registry(registry).and_then(|mut registry| {
+        registry
+            .stop_session(session_id)
+            .map_err(CommandError::from)
+    });
+    match cleanup_result {
+        Ok(()) => resume_error,
+        Err(cleanup_error) => CommandError::new(
+            resume_error.category,
+            format!(
+                "{} (la limpieza de la sesion fallo: {})",
+                resume_error.message, cleanup_error.message
+            ),
+        ),
+    }
+}
+
 fn lock_install_registry(
     registry: &Mutex<AgentInstallRegistry>,
 ) -> Result<std::sync::MutexGuard<'_, AgentInstallRegistry>, CommandError> {
@@ -3757,6 +3794,55 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_resume_cleanup_stops_process_and_releases_capacity() {
+        use crate::agent_console::pty::{AgentProcess, AgentProcessFactory};
+        use std::sync::atomic::AtomicUsize;
+
+        struct Process(Arc<AtomicUsize>);
+        impl AgentProcess for Process {
+            fn pid(&self) -> Option<u32> { Some(77) }
+            fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
+                Ok((self.0.load(Ordering::SeqCst) > 0).then_some(0))
+            }
+            fn kill(&mut self) -> Result<(), AgentConsoleError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            fn write_input(&mut self, _: &[u8]) -> Result<(), AgentConsoleError> { Ok(()) }
+            fn resize(&mut self, _: u16, _: u16) -> Result<(), AgentConsoleError> { Ok(()) }
+            fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> { None }
+        }
+        struct Factory(Arc<AtomicUsize>);
+        impl AgentProcessFactory for Factory {
+            fn spawn_agent(&self, _: &Path, _: &Path, _: AgentSessionPermissionMode)
+                -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+                Ok(Box::new(Process(Arc::clone(&self.0))))
+            }
+        }
+        let killed = Arc::new(AtomicUsize::new(0));
+        let registry = Mutex::new(AgentSessionRegistry::with_process_factory(
+            Arc::new(Factory(Arc::clone(&killed))),
+        ));
+        let repo = tempfile::tempdir().unwrap();
+        let binary = repo.path().join("fake-codex");
+        std::fs::write(&binary, "fixture").unwrap();
+        let id = registry.lock().unwrap().start_session_with_binary(
+            repo.path().into(), "codex".into(), binary.clone(),
+        ).unwrap();
+        let error = cleanup_failed_resume_session(
+            &registry, &id, CommandError::new("agent_resume_failed", "provider rejected resume"),
+        );
+        assert_eq!(error.category, "agent_resume_failed");
+        assert_eq!(error.message, "provider rejected resume");
+        assert_eq!(killed.load(Ordering::SeqCst), 1);
+        assert_eq!(registry.lock().unwrap().get_session(&id).unwrap().status,
+            AgentSessionStatus::Completed);
+        assert!(registry.lock().unwrap().start_session_with_binary(
+            repo.path().into(), "codex".into(), binary,
+        ).is_ok());
+    }
 
     fn prepared_install_for_command_test() -> PreparedInstall {
         PreparedInstall {
