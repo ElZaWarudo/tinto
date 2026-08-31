@@ -245,15 +245,18 @@ export function ConsoleDockPanel({
     const api = apiRef.current;
     if (!api) return;
     for (const terminal of openTerminals) {
-      const firstUserMessage = agentState.timeline[terminal.sessionId]?.find(
+      const liveMessage = agentState.timeline[terminal.sessionId]?.find(
         (item) => item.kind === "user_message",
       )?.text;
+      const firstUserMessage = liveMessage ?? journalSessions.find(
+        (session) => session.id === terminal.sessionId,
+      )?.first_user_message;
       if (!firstUserMessage) continue;
       api
         .getPanel(agentTerminalPanelId(terminal.sessionId))
         ?.api.setTitle(agentConversationTabTitle(terminal, conversationTitle(firstUserMessage)));
     }
-  }, [agentState.timeline, openTerminals]);
+  }, [agentState.timeline, journalSessions, openTerminals]);
 
   const retryJournalLoad = () => {
     setJournalLoadState(journalLoadedOnceRef.current ? "refreshing" : "loading");
