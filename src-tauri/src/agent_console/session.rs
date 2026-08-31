@@ -1182,6 +1182,11 @@ impl AgentSessionRecord {
         now_ms: u64,
         force_close: bool,
     ) -> Result<(), AgentConsoleError> {
+        // A status refresh must not reopen a turn that an explicit completion closed.
+        // Its last output can still be inside the quiet window.
+        if !force_close && self.turn_started_at_ms.is_none() {
+            return Ok(());
+        }
         if self.turn_baseline.is_none() {
             if force_close && self.turn_started_at_ms.is_some() {
                 self.next_turn_index = self.next_turn_index.saturating_add(1);
@@ -3022,6 +3027,15 @@ mod tests {
         session.record_output_activity(10);
 
         session.record_turn_done(11).unwrap();
+
+        session.refresh_turn_checkpoints(11, false).unwrap();
+        assert_eq!(
+            session.to_contract().turn_status,
+            AgentSessionTurnStatus::Waiting
+        );
+        session
+            .refresh_turn_checkpoints(11 + OUTPUT_QUIET_MS + FILESYSTEM_QUIET_MS, false)
+            .unwrap();
 
         let contract = session.to_contract();
         assert!(contract.turn_checkpoints.is_empty());
