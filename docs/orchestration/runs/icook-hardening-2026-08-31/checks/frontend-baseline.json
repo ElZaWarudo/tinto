@@ -1,0 +1,20 @@
+{
+  "name": "frontend-baseline",
+  "cwd": "C:/Users/User/Documents/personal/tinto",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "src/workbench/operations.test.ts",
+    "src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "src/panels/terminal/AgentConversationTab.test.tsx",
+    "src/panels/RepoCard.test.tsx"
+  ],
+  "started_at": "2026-08-31T10:18:25.341Z",
+  "finished_at": "2026-08-31T10:19:21.162Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "\n RUN  v4.1.11 C:/Users/User/Documents/personal/tinto\n\n\n Test Files  4 passed (4)\n      Tests  89 passed (89)\n   Start at  12:18:28\n   Duration  53.04s (transform 1.00s, setup 6.52s, import 7.17s, tests 2.50s, environment 34.48s)\n\n",
+  "stderr": ""
+}

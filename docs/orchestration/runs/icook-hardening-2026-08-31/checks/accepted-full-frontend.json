@@ -1,0 +1,17 @@
+{
+  "name": "accepted-full-frontend",
+  "cwd": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration-accepted",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "--maxWorkers=2"
+  ],
+  "started_at": "2026-08-31T11:04:48.012Z",
+  "finished_at": "2026-08-31T11:07:48.047Z",
+  "exit_code": null,
+  "signal": "SIGTERM",
+  "error": "ETIMEDOUT",
+  "stdout": "\n RUN  v4.1.11 C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration-accepted\n\n ❯ src/workbench/wslAbsence.test.ts (102 tests | 1 failed) 47ms\n     × keeps WSL text isolated from visible runtime UI in src/panels/terminal/ConsoleDockPanel.tsx 10ms\n",
+  "stderr": ""
+}

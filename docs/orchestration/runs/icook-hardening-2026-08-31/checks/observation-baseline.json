@@ -1,0 +1,18 @@
+{
+  "name": "observation-baseline",
+  "cwd": "C:/Users/User/Documents/personal/pumarejo",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "tests/unit/snapshot-browser.test.ts",
+    "tests/unit/snapshot.test.ts"
+  ],
+  "started_at": "2026-08-31T10:18:35.726Z",
+  "finished_at": "2026-08-31T10:18:57.691Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "\n RUN  v3.2.7 C:/Users/User/Documents/personal/pumarejo\n\n ✓ tests/unit/snapshot.test.ts (16 tests) 39ms\n ✓ tests/unit/snapshot-browser.test.ts (17 tests) 2521ms\n   ✓ standards-derived browser snapshot > keeps adversarial UTF-8 content and relationships below the MCP framing cap  1389ms\n   ✓ standards-derived browser snapshot > returns a deterministic bounded result for an oversized tree  926ms\n\n Test Files  2 passed (2)\n      Tests  33 passed (33)\n   Start at  12:18:40\n   Duration  16.90s (transform 412ms, setup 0ms, collect 1.05s, tests 2.56s, environment 11.45s, prepare 1.96s)\n\n",
+  "stderr": ""
+}

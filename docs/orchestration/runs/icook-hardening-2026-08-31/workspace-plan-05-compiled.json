@@ -1,0 +1,142 @@
+{
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "consolidation_invocation": "integration-accepted",
+  "execution_waves": [
+    [
+      "scanner-implementer",
+      "title-root"
+    ],
+    [
+      "integration-accepted",
+      "scanner-reviewer",
+      "title-root-reviewer"
+    ]
+  ],
+  "lifecycle": [
+    "create",
+    "seed-index",
+    "seal-baseline",
+    "dispatch",
+    "observe",
+    "export-patch",
+    "reconcile",
+    "cleanup"
+  ],
+  "patch_application_order": [
+    "scanner-implementer",
+    "title-root",
+    "integration-accepted"
+  ],
+  "run_id": "icook-hardening-2026-08-31",
+  "schema_version": 1,
+  "workspace_plan_hash": "sha256:a3888cfe97653c1da5dd8b6b6cf364ce933401202aa5955e4f60e91f0fc8feff",
+  "workspaces": [
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "baseline_source": "dependency",
+      "baseline_tree": null,
+      "branch": "seneschal/icook-hardening-2026-08-31/title-root",
+      "candidate_invocations": [],
+      "dependency_patch_hashes": [],
+      "depends_on": [],
+      "detached": false,
+      "invocation_id": "title-root",
+      "mode": "mutable",
+      "owned_paths": [
+        "src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "src/panels/terminal/ConsoleDockPanel.tsx"
+      ],
+      "path": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/title-root",
+      "role": "implementer",
+      "unit_id": "title-root",
+      "worker_git_mutation": "forbidden",
+      "workspace_id": "icook-hardening-2026-08-31-title-root"
+    },
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "baseline_source": "candidate",
+      "baseline_tree": null,
+      "branch": null,
+      "candidate_invocations": [
+        "title-root"
+      ],
+      "dependency_patch_hashes": [],
+      "depends_on": [],
+      "detached": true,
+      "invocation_id": "title-root-reviewer",
+      "mode": "read-only",
+      "owned_paths": [],
+      "path": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/title-root-reviewer",
+      "role": "reviewer",
+      "unit_id": "title-root-reviewer",
+      "worker_git_mutation": "forbidden",
+      "workspace_id": "icook-hardening-2026-08-31-title-root-reviewer"
+    },
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "baseline_source": "dependency",
+      "baseline_tree": null,
+      "branch": "seneschal/icook-hardening-2026-08-31/scanner-implementer",
+      "candidate_invocations": [],
+      "dependency_patch_hashes": [],
+      "depends_on": [],
+      "detached": false,
+      "invocation_id": "scanner-implementer",
+      "mode": "mutable",
+      "owned_paths": [
+        "src-tauri/src/bus/secret_scan.rs"
+      ],
+      "path": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/scanner-implementer",
+      "role": "implementer",
+      "unit_id": "scanner-implementer",
+      "worker_git_mutation": "forbidden",
+      "workspace_id": "icook-hardening-2026-08-31-scanner-implementer"
+    },
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "baseline_source": "candidate",
+      "baseline_tree": null,
+      "branch": null,
+      "candidate_invocations": [
+        "scanner-implementer"
+      ],
+      "dependency_patch_hashes": [],
+      "depends_on": [],
+      "detached": true,
+      "invocation_id": "scanner-reviewer",
+      "mode": "read-only",
+      "owned_paths": [],
+      "path": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/scanner-reviewer",
+      "role": "reviewer",
+      "unit_id": "scanner-reviewer",
+      "worker_git_mutation": "forbidden",
+      "workspace_id": "icook-hardening-2026-08-31-scanner-reviewer"
+    },
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "baseline_source": "dependency",
+      "baseline_tree": null,
+      "branch": "seneschal/icook-hardening-2026-08-31/integration-accepted",
+      "candidate_invocations": [],
+      "dependency_patch_hashes": [],
+      "depends_on": [
+        "scanner-implementer",
+        "title-root"
+      ],
+      "detached": false,
+      "invocation_id": "integration-accepted",
+      "mode": "mutable-consolidation",
+      "owned_paths": [
+        "src-tauri/src/bus/secret_scan.rs",
+        "src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "src/panels/terminal/ConsoleDockPanel.tsx"
+      ],
+      "path": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration-accepted",
+      "role": "integrator",
+      "unit_id": "integration-accepted",
+      "worker_git_mutation": "forbidden",
+      "workspace_id": "icook-hardening-2026-08-31-integration-accepted"
+    }
+  ],
+  "worktree_parent": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees"
+}

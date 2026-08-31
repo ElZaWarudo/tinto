@@ -1,0 +1,28 @@
+{
+  "name": "scanner-diagnostic",
+  "cwd": "C:/Users/User/Documents/personal/tinto",
+  "executable": "C:/Users/User/AppData/Local/tinto/addons/gitleaks/bin/gitleaks.exe",
+  "args": [
+    "--config",
+    "C:\\Users\\User\\Documents\\personal\\tinto\\.gitleaks.toml",
+    "dir",
+    "--no-banner",
+    "--redact=100",
+    "--exit-code",
+    "0",
+    "--timeout",
+    "8",
+    "--report-format",
+    "json",
+    "--report-path",
+    "C:/Users/User/AppData/Local/Temp/tinto-hardening-gitleaks-20260831.json",
+    "C:/Users/User/Documents/personal/tinto"
+  ],
+  "started_at": "2026-08-31T10:18:14.358Z",
+  "finished_at": "2026-08-31T10:18:23.479Z",
+  "exit_code": 1,
+  "signal": null,
+  "error": null,
+  "stdout": "",
+  "stderr": "12:18PM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts\"\n12:18PM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-2\"\n12:18PM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-3\"\n12:18PM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-4\"\n12:18PM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-5\"\n12:18PM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\regression-artifacts\"\n12:18PM ERR failed scan directory error=\"context deadline exceeded\"\n12:18PM WRN scanned ~179593733 bytes (179.59 MB)\n12:18PM WRN partial scan completed in 7.73s\n12:18PM WRN 2 leaks found in partial scan\n"
+}

@@ -1,0 +1,13 @@
+{
+  "workspace_id": "icook-hardening-2026-08-31-scanner-implementer",
+  "worker_id": "/root/scanner_implementation",
+  "unit_id": "scanner",
+  "role": "implementer",
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "baseline_tree": "e2541e203c7cf504d4a5e8f888dc48da89db8f1a",
+  "dependency_patch_hashes": [],
+  "owned_paths": [
+    "src-tauri/src/bus/secret_scan.rs"
+  ],
+  "contract_hash": "sha256:fa889eed0d713495d0b2bec2efc234e8a0ba2b34950ef531fc0c67868ccc6351"
+}

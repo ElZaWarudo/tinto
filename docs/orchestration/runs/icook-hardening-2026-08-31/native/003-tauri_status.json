@@ -1,0 +1,17 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"state\":\"launching\",\"phase\":\"waiting_provider\",\"window\":\"main\",\"proxyReady\":false,\"webdriverReady\":false,\"lastAction\":\"launch\",\"ownedPid\":38592}"
+    }
+  ],
+  "structuredContent": {
+    "state": "launching",
+    "phase": "waiting_provider",
+    "window": "main",
+    "proxyReady": false,
+    "webdriverReady": false,
+    "lastAction": "launch",
+    "ownedPid": 38592
+  }
+}

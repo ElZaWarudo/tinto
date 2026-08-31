@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "lane": "deep",
+  "profile": "luna_xhigh",
+  "required_context": [
+    "AGENTS.md"
+  ],
+  "closed_decisions": [
+    "Implementation-only/no-shipping. You are not alone; preserve others' edits and never revert them.",
+    "Discovery is read-only and returns only the profile's exact discovery_complete checkpoint. No implementation in discovery.",
+    "Base revision 59f0cecafb41c08db6a4c18001fa24131da7003e; sealed baseline tree e2541e203c7cf504d4a5e8f888dc48da89db8f1a; dependency patches [].",
+    "Source closure criteria and historical evidence: C:/Users/User/Documents/personal/tinto/docs/orchestration/2026-08-31-icook-hardening-handoff.md. Root owns native acceptance.",
+    "User explicitly authorizes this bounded local discovery despite in_review documentation gate; no review approval is asserted.",
+    "Invocation workspace: C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/wsl-discovery; ID icook-hardening-2026-08-31-wsl-discovery; read-only."
+  ],
+  "forbidden_changes": [
+    "No Git index mutation, commits, branches, patches, worktree management, shipping, external mutations, ICook commands or file edits, GUI automation, or scope expansion.",
+    "Do not edit during discovery. Do not load skill trees. Use only AGENTS, this contract and named source evidence."
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rtk read",
+      "rtk rg",
+      "rtk git diff",
+      "rtk git status",
+      "rtk git log",
+      "rtk git show",
+      "rtk python3 'C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py'"
+    ],
+    "verification": {
+      "focused": [],
+      "natural": [],
+      "max_retries_per_command": 1
+    }
+  },
+  "execution_budget": {
+    "discovery_passes": 1,
+    "implementation_rounds": 1,
+    "fix_rounds": 2,
+    "review_rounds": 1,
+    "extra_verification": "forbidden",
+    "max_elapsed_ms": 480000
+  },
+  "supervision": {
+    "mode": "discovery-checkpoint",
+    "transition_after_ms": 15000
+  },
+  "terminal_protocol": {
+    "return_when": [
+      "acceptance_criteria_resolved",
+      "required_checks_attempted",
+      "state_reconciled"
+    ],
+    "grace_actions": 0
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "required_certifications": [
+    "reviewer"
+  ],
+  "evidence_policy": {
+    "minimum_command_trust": "self-reported",
+    "changed_files_source": "root-diff"
+  },
+  "contract_id": "icook-hardening-2026-08-31:wsl",
+  "unit_id": "wsl",
+  "objective": "Diagnose TIN-HARD-01 only: WSL provider stdout closure loses causal process diagnostics. Trace launch, EOF, pooled-agent cleanup and retry safety; identify the smallest demonstrated repair and exact regression tests. Do not assume why the actual distro failed; distinguish confirmed code loss of diagnostics from environmental cause. Narrow the candidate ownership and explain every proposed edit. Return no-edit-path if no safe repair exists.",
+  "owned_files": [
+    "src-tauri/src/wsl_agent/launcher.rs",
+    "src-tauri/src/wsl_agent/runtime.rs",
+    "src-tauri/src/wsl_agent/protocol.rs",
+    "src-tauri/src/wsl_agent/shell_env.rs"
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "description": "Diagnose TIN-HARD-01 only: WSL provider stdout closure loses causal process diagnostics. Trace launch, EOF, pooled-agent cleanup and retry safety; identify the smallest demonstrated repair and exact regression tests. Do not assume why the actual distro failed; distinguish confirmed code loss of diagnostics from environmental cause. Narrow the candidate ownership and explain every proposed edit. Return no-edit-path if no safe repair exists."
+    }
+  ]
+}

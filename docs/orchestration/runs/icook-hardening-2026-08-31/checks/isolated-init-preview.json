@@ -1,0 +1,19 @@
+{
+  "name": "isolated-init-preview",
+  "cwd": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "C:\\Users\\User\\Documents\\personal\\pumarejo\\dist\\cli\\index.js",
+    "init",
+    "--project",
+    "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration",
+    "--dry-run"
+  ],
+  "started_at": "2026-08-31T10:36:07.302Z",
+  "finished_at": "2026-08-31T10:36:08.318Z",
+  "exit_code": 1,
+  "signal": null,
+  "error": null,
+  "stdout": "",
+  "stderr": "{\"code\":\"INTEGRATION_INCOMPLETE\",\"message\":\"The pumarejo integration could not be completed (ALREADY_INTEGRATED_MODIFIED).\",\"phase\":\"integration\",\"retryable\":false,\"suggestion\":\"Run pumarejo doctor; preserve the existing files and resolve the reported integration drift manually.\"}\n"
+}

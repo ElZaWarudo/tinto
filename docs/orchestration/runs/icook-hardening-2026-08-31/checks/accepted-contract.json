@@ -1,0 +1,16 @@
+{
+  "name": "accepted-contract",
+  "cwd": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration-accepted",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "scripts/generate-bus-contract.mjs",
+    "--check"
+  ],
+  "started_at": "2026-08-31T11:04:43.105Z",
+  "finished_at": "2026-08-31T11:04:43.963Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "",
+  "stderr": ""
+}

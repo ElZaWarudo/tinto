@@ -1,0 +1,14 @@
+{
+  "workspace_id": "icook-hardening-2026-08-31-history-implementer",
+  "worker_id": "/root/archived_title",
+  "unit_id": "archived-title",
+  "role": "implementer",
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "baseline_tree": "e2541e203c7cf504d4a5e8f888dc48da89db8f1a",
+  "dependency_patch_hashes": [],
+  "owned_paths": [
+    "src/panels/terminal/ConsoleDockPanel.tsx",
+    "src/panels/terminal/ConsoleDockPanel.test.tsx"
+  ],
+  "contract_hash": "sha256:c1af858241953a5cb87dda60165b4ec6ea00ca9b563f90db9be045d7bdb51eed"
+}

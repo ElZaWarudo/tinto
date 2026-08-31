@@ -165,7 +165,9 @@ blockers:
   status: open
   evidence: ../ICook/docs/tinto-pumarejo-repair-handoff.md
   next_action: Capture exact session IDs and provider/refresh diagnostics during a
-    bounded reproduction; do not infer a cause from retry count.
+    bounded reproduction; do not infer a cause from retry count. Include the archived
+    identity and scoped-transcript recovery cases TIN-HARD-04 and TIN-HARD-05 in
+    docs/orchestration/2026-08-31-icook-hardening-handoff.md.
 - id: TR-BLK-2026-08-31-06
   jira_issue_key: null
   unit_id: tooling-repair-2026-08-31
@@ -187,3 +189,88 @@ blockers:
   evidence: ../ICook/docs/tooling-repair-evidence/checks/tinto-final-aggregate/
   next_action: Resolve policy/availability ownership in a separate bounded maintenance
     change. Current fixes have scoped coverage; do not label full aggregate green.
+- id: IC-HARD-BLK-2026-08-31-01
+  jira_issue_key: null
+  unit_id: null
+  title: WSL ICook provider closes stdout and supported retry does not recover
+  wave: null
+  type: environment
+  risk: high
+  description: The saved WSL project failed to load and execute work. A later file refresh succeeded, but one fresh Agent start still ended in child_exit and closed stdout. Causal diagnostics remain unknown; file refresh is not execution readiness.
+  decision_required: current local hardening authorized with explicit documentation-gate bypass; native acceptance still blocked
+  impact_if_ignored: ICook execution could proceed in the wrong scope or be falsely reported as verified.
+  affected_units: []
+  blocks_dependents: true
+  suggested_owner: tinto-runtime-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: docs/orchestration/2026-08-31-icook-hardening-handoff.md#tin-hard-01--wsl-provider-failure-leaves-icook-unusable
+  next_action: Reproduce with attributable provider launch/exit diagnostics; prove usable project access or an actionable terminal error without duplicate dispatch.
+- id: IC-HARD-BLK-2026-08-31-02
+  jira_issue_key: null
+  unit_id: null
+  title: Native ICook onboarding is blocked at the folder-picker boundary
+  wave: null
+  type: capability
+  risk: high
+  description: Choose-folder remains Abriendo with disabled controls while Pumarejo exposes only the main surface, reports no supported pending dialog, and unknown coverage. Native registration was not observed after manual recovery and one supported relaunch.
+  decision_required: current local hardening authorized with explicit documentation-gate bypass; native acceptance still blocked
+  impact_if_ignored: ICook execution could proceed in the wrong scope or be falsely reported as verified.
+  affected_units: []
+  blocks_dependents: true
+  suggested_owner: tinto-pumarejo-maintainers
+  detected_at: '2026-08-31'
+  status: open
+  evidence: docs/orchestration/2026-08-31-icook-hardening-handoff.md#tin-hard-02--native-project-registration-cannot-be-completed-through-the-supported-gui-boundary
+  next_action: Prove supported select/cancel and control recovery in the same controlled instance, then verify native project identity survives a clean restart.
+- id: IC-HARD-BLK-2026-08-31-03
+  jira_issue_key: null
+  unit_id: null
+  title: Managed runtime readiness does not establish usable ICook scope and tools
+  wave: null
+  type: environment
+  risk: high
+  description: The native Agent launched in Tinto has Tinto workspace scope. ICook reads work but Git refuses ownership and Node/Python are absent from the managed PATH. This does not prove a sandbox defect or permit bypassing restrictions.
+  decision_required: current local hardening authorized with explicit documentation-gate bypass; native acceptance still blocked
+  impact_if_ignored: ICook execution could proceed in the wrong scope or be falsely reported as verified.
+  affected_units: []
+  blocks_dependents: true
+  suggested_owner: tinto-runtime-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: docs/orchestration/2026-08-31-icook-hardening-handoff.md#tin-hard-03--availability-does-not-establish-a-usable-managed-project-runtime
+  next_action: Use an actual ICook native workspace and capture effective scope, executable resolution and exact command exits before implementation; retain permission and Git trust boundaries.
+- id: IC-HARD-BLK-2026-08-31-04
+  jira_issue_key: null
+  unit_id: null
+  title: Supported Pumarejo integration reconciliation is unavailable for current source
+  wave: null
+  type: environment
+  risk: high
+  description: Fresh doctor flags debug-registration. Original attributed edits and staged provider match their manifest, but lib.rs full hash has unrelated drift and the current provider bundle differs. Supported init/remove previews reject ALREADY_INTEGRATED_MODIFIED. A pristine isolated checkout also rejects init because committed attribution has no ignored integration manifest. Public ready status does not clear integrity errors.
+  decision_required: provide a supported attribution-preserving migration or a maintainer-approved matching integration snapshot; no integrity bypass is authorized
+  impact_if_ignored: Native acceptance could be claimed against an unverified provider or overwrite unrelated source.
+  affected_units: []
+  blocks_dependents: true
+  suggested_owner: pumarejo-maintainer
+  detected_at: '2026-08-31'
+  status: open
+  evidence: docs/orchestration/runs/icook-hardening-2026-08-31/progress.md
+  next_action: Repair supported staging/restore provenance before repeating ICook binding, folder select/cancel, history and large-transcript native acceptance; preserve all quarantined artifacts.
+- id: IC-HARD-BLK-2026-08-31-05
+  jira_issue_key: null
+  unit_id: null
+  title: Full Gitleaks verification times out on inaccessible retained artifacts
+  wave: null
+  type: verification
+  risk: high
+  description: Fresh Gitleaks 8.30.1 invocation exits 1 after permission-denied warnings in retained Pumarejo artifact directories and context deadline exceeded at the unchanged eight-second budget. Partial report and heuristic fallback cannot certify a full scan.
+  decision_required: supported custody or ownership remediation for retained artifacts; no recursive deletion or scanner-rule weakening
+  impact_if_ignored: A degraded heuristic check could be misrepresented as complete secret verification.
+  affected_units: []
+  blocks_dependents: false
+  suggested_owner: tinto-pumarejo-maintainers
+  detected_at: '2026-08-31'
+  status: open
+  evidence: docs/orchestration/runs/icook-hardening-2026-08-31/checks/scanner-diagnostic.json
+  next_action: Complete authorized custody repair, rerun the unchanged full scanner, and require a successful complete report; diagnostic code improvements do not close this gate.

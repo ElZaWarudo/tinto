@@ -1,0 +1,18 @@
+{
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "changed_paths": [
+    {
+      "digest": "sha256:3f0e29262ae71908f9ec7c4fb35f977ad34f9a5853bb7b2689967c5a99db25bb",
+      "path": "src/panels/terminal/ConsoleDockPanel.test.tsx"
+    },
+    {
+      "digest": "sha256:14b744ca07bd26be4c42067155cfb8f6f61717adf961d0bf89a8beae9d5661a1",
+      "path": "src/panels/terminal/ConsoleDockPanel.tsx"
+    }
+  ],
+  "commands": [
+    "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx"
+  ],
+  "fingerprint": "sha256:90f1d26076faec71c6a92eba79ebd32b2d995060d514cbfeae1972f84fda6a7b",
+  "schema_version": 1
+}

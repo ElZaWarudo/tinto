@@ -1,0 +1,196 @@
+{
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "baseline_digest": "sha256:a07b1ebeae1727aaa09f9c42ff16c3ca62d11c5a9872484fde773109cb579521",
+  "baseline_tree": "e2541e203c7cf504d4a5e8f888dc48da89db8f1a",
+  "certifications": [
+    {
+      "actor_id": "/root/archived_title_review",
+      "contract_hash": "sha256:c1af858241953a5cb87dda60165b4ec6ea00ca9b563f90db9be045d7bdb51eed",
+      "diff_digest": "sha256:6fc71c8c343fc011d39960a13d6ac352b8e9dc5dbdb4c604d4252f5a46c08950",
+      "findings": [],
+      "role": "reviewer",
+      "status": "passed"
+    }
+  ],
+  "changed_files": [
+    "src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "src/panels/terminal/ConsoleDockPanel.tsx"
+  ],
+  "changed_files_source": "root-diff",
+  "checkpoint_count": 0,
+  "command_evidence": {
+    "commands": [
+      {
+        "command": "rtk read C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/archived-title-envelope.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/archived-title-worker-contract.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read C:/Users/User/.agents/skills/krt-swarm-seneschal/references/worker-terminal.schema.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk git status --short",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg --files -g AGENTS.md -g src/panels/terminal/ConsoleDockPanel.tsx -g src/panels/terminal/ConsoleDockPanel.test.tsx -g src/workspace/consoleDock.ts -g src/agent/sessionStore.ts",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read src/panels/terminal/ConsoleDockPanel.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read src/workspace/consoleDock.ts",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read src/agent/sessionStore.ts",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 8 \"first_user_message|conversationTitle|journalSessions|setTitle\" src/panels/terminal/ConsoleDockPanel.tsx src/panels/terminal/ConsoleDockPanel.test.tsx src/bus/contract.ts",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n \"^(describe|it)\\(\" src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 20 \"updates open terminal titles|title|Nueva conversaci\u00f3n|first_user_message\" src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read AGENTS.md",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 6 \"vi.mock|clientMocks|beforeEach|dockviewMocks|consoleDock.openTerminal|setTitle\" src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 8 \"interface TerminalPanelParams|type TerminalPanelParams\" src/panels/terminal/TerminalPanel.tsx src/panels/terminal/ConsoleDockPanel.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 18 \"beforeEach\" src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 14 \"nestedDockApi|addPanel\" src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 8 \"agentSessionStore\" src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk rg -n -C 18 \"sessionStoreMocks|nestedDockApi\\(|const panel =\" src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/archived-title-v2-envelope.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/archived-title-v2-worker-contract.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk git diff -- src/panels/terminal/ConsoleDockPanel.tsx src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk git status --short",
+        "kind": "read-only"
+      },
+      {
+        "command": "printf '%s\\n' \"$TINTO_TURN_DONE_MARKER\"",
+        "kind": "read-only"
+      },
+      {
+        "command": "printf '%s\\n' \"$TINTO_TURN_DONE_MARKER\"",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk python3 'C:\\Users\\User\\.agents\\skills\\krt-swarm-seneschal\\scripts\\validate_worker_terminal.py' --contract 'C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\archived-title-v2-worker-contract.json' --input C:/Users/User/AppData/Local/Temp/icook-hardening-title-terminal.json",
+        "kind": "read-only"
+      }
+    ],
+    "trust": "self-reported"
+  },
+  "contract_hash": "sha256:c1af858241953a5cb87dda60165b4ec6ea00ca9b563f90db9be045d7bdb51eed",
+  "diff_basis": "worktree-vs-index",
+  "diff_digest": "sha256:6fc71c8c343fc011d39960a13d6ac352b8e9dc5dbdb4c604d4252f5a46c08950",
+  "final": {
+    "acceptance_criteria_resolved": true,
+    "acceptance_evidence": [
+      {
+        "criterion_id": "AC-1",
+        "evidence": "ConsoleDockPanel now falls back to journalSessions.find(session => session.id === terminal.sessionId)?.first_user_message when the live timeline has no user message; the focused regression verifies the exact session receives the persisted title. Contract hash: sha256:c1af858241953a5cb87dda60165b4ec6ea00ca9b563f90db9be045d7bdb51eed.",
+        "status": "satisfied"
+      },
+      {
+        "criterion_id": "AC-2",
+        "evidence": "The fallback uses liveFirstUserMessage ?? persisted summary, so live titles retain precedence and absent values still skip the update; no dispatch or resume code was changed.",
+        "status": "satisfied"
+      },
+      {
+        "criterion_id": "AC-3",
+        "evidence": "The focused ConsoleDockPanel test command failed with 1 regression before the fix and passed with 30 tests after the fix; existing assertions remain intact.",
+        "status": "satisfied"
+      }
+    ],
+    "last_required_command": "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "phase": "closeout",
+    "remaining_actions": [],
+    "scope_extension": null,
+    "status": "done",
+    "terminal_ready": true,
+    "unowned_failures": [],
+    "verification": {
+      "attempted": [
+        {
+          "attempts": 2,
+          "command": "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx",
+          "outcome": "passed"
+        }
+      ],
+      "skipped": []
+    },
+    "verification_commands_run": [
+      "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx",
+      "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx"
+    ]
+  },
+  "first_change_at_ms": 1788172277740,
+  "interventions_sent": [],
+  "last_required_command_finished_at_ms": 1788172309380,
+  "phase_duration_ms": {
+    "discovery": 0,
+    "implementation": 215276
+  },
+  "profile": "luna",
+  "returned_at_ms": 1788172367193,
+  "schema_version": 1,
+  "started_at_ms": 1788172151917,
+  "terminal_validation_command": "rtk python3 'C:\\Users\\User\\.agents\\skills\\krt-swarm-seneschal\\scripts\\validate_worker_terminal.py' --contract 'C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\archived-title-v2-worker-contract.json' --input C:/Users/User/AppData/Local/Temp/icook-hardening-title-terminal.json",
+  "terminal_validation_exit_code": null,
+  "worker_id": "/root/archived_title"
+}

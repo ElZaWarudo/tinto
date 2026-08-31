@@ -1,0 +1,30 @@
+{
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "changed_paths": [
+    {
+      "digest": "sha256:aae8461fafbc15453258c9713d898a994baeb2878ff01201b5c2987a4d9b4adc",
+      "path": "src-tauri/src/bus/secret_scan.rs"
+    },
+    {
+      "digest": "sha256:eb2716c14bae7eabb61b2aaef3269ce5bd19407e3119fe1316e13e5915d5037d",
+      "path": "src-tauri/src/wsl_agent/launcher.rs"
+    },
+    {
+      "digest": "sha256:df7b5b042788d4102b1d47216faec892d8ee4eff2cf83fa8553abf1999bcd994",
+      "path": "src/panels/terminal/ConsoleDockPanel.test.tsx"
+    },
+    {
+      "digest": "sha256:9b2968c9016af50836fe90eb81d7fd5014855137e711f5ca0a145f732d042a76",
+      "path": "src/panels/terminal/ConsoleDockPanel.tsx"
+    }
+  ],
+  "commands": [
+    "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-focused",
+    "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-build-frontend",
+    "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-contract",
+    "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-lint",
+    "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-full-frontend"
+  ],
+  "fingerprint": "sha256:34fe42f551857aadd7d4602304e5f538e3cd74c2b358eb90e071bff22b8c7a44",
+  "schema_version": 1
+}

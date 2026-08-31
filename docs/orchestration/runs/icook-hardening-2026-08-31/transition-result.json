@@ -1,0 +1,7 @@
+{
+  "chunk_id": "7fd2e5",
+  "wall_time_seconds": 0.7089388,
+  "exit_code": 1,
+  "original_token_count": 109,
+  "output": "usage: transition_swarm_state.py [-h] --queue QUEUE --blockers BLOCKERS\r\n                                 --transition TRANSITION\r\n                                 --expected-queue-digest EXPECTED_QUEUE_DIGEST\r\n                                 --expected-blockers-digest EXPECTED_BLOCKERS_DIGEST\r\n                                 [--repo-root REPO_ROOT]\r\ntransition_swarm_state.py: error: open blocker references an unknown queue unit\r\n"
+}

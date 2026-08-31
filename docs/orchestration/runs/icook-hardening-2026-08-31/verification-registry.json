@@ -1,0 +1,119 @@
+{
+  "records": [
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "captured_at": "2026-08-31T11:04:07.939908Z",
+      "changed_paths": [
+        {
+          "digest": "sha256:aae8461fafbc15453258c9713d898a994baeb2878ff01201b5c2987a4d9b4adc",
+          "path": "src-tauri/src/bus/secret_scan.rs"
+        },
+        {
+          "digest": "sha256:eb2716c14bae7eabb61b2aaef3269ce5bd19407e3119fe1316e13e5915d5037d",
+          "path": "src-tauri/src/wsl_agent/launcher.rs"
+        },
+        {
+          "digest": "sha256:df7b5b042788d4102b1d47216faec892d8ee4eff2cf83fa8553abf1999bcd994",
+          "path": "src/panels/terminal/ConsoleDockPanel.test.tsx"
+        },
+        {
+          "digest": "sha256:9b2968c9016af50836fe90eb81d7fd5014855137e711f5ca0a145f732d042a76",
+          "path": "src/panels/terminal/ConsoleDockPanel.tsx"
+        }
+      ],
+      "commands": [
+        "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-focused",
+        "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-build-frontend",
+        "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-contract",
+        "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-lint",
+        "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-full-frontend"
+      ],
+      "evidence": [
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\aggregate-frontend\\command-01-exit-0.log",
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\aggregate-frontend\\command-02-exit-0.log",
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\aggregate-frontend\\command-03-exit-0.log",
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\aggregate-frontend\\command-04-exit-1.log",
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\aggregate-frontend\\command-05-exit-1.log"
+      ],
+      "fingerprint": "sha256:34fe42f551857aadd7d4602304e5f538e3cd74c2b358eb90e071bff22b8c7a44",
+      "record_digest": "sha256:3f159e7a63f7ee3a61ef970d43154a6763e29feaed52f16dbccd4e4b71a98162",
+      "result": "failed"
+    },
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "captured_at": "2026-08-31T10:40:53.468496Z",
+      "changed_paths": [
+        {
+          "digest": "sha256:3f0e29262ae71908f9ec7c4fb35f977ad34f9a5853bb7b2689967c5a99db25bb",
+          "path": "src/panels/terminal/ConsoleDockPanel.test.tsx"
+        }
+      ],
+      "commands": [
+        "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx"
+      ],
+      "evidence": [
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\title-red\\command-01-exit-1.log"
+      ],
+      "fingerprint": "sha256:39f6e908ea53139927ac0463ea570ccd9635bc1d91fa82d9bb6d029fca41527d",
+      "record_digest": "sha256:6ff14720805f6674af9e48cba40e3f737bf8a8cf8c4bdc506cb924bf55d3ca4c",
+      "result": "failed"
+    },
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "captured_at": "2026-08-31T11:04:19.863227Z",
+      "changed_paths": [
+        {
+          "digest": "sha256:aae8461fafbc15453258c9713d898a994baeb2878ff01201b5c2987a4d9b4adc",
+          "path": "src-tauri/src/bus/secret_scan.rs"
+        },
+        {
+          "digest": "sha256:eb2716c14bae7eabb61b2aaef3269ce5bd19407e3119fe1316e13e5915d5037d",
+          "path": "src-tauri/src/wsl_agent/launcher.rs"
+        },
+        {
+          "digest": "sha256:df7b5b042788d4102b1d47216faec892d8ee4eff2cf83fa8553abf1999bcd994",
+          "path": "src/panels/terminal/ConsoleDockPanel.test.tsx"
+        },
+        {
+          "digest": "sha256:9b2968c9016af50836fe90eb81d7fd5014855137e711f5ca0a145f732d042a76",
+          "path": "src/panels/terminal/ConsoleDockPanel.tsx"
+        }
+      ],
+      "commands": [
+        "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-full-rust",
+        "node C:/Users/User/Documents/personal/tinto/docs/orchestration/runs/icook-hardening-2026-08-31/capture-check.mjs accepted-build-rust"
+      ],
+      "evidence": [
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\aggregate-backend\\command-01-exit-0.log",
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\aggregate-backend\\command-02-exit-0.log"
+      ],
+      "fingerprint": "sha256:7ffa508e09090a5d898b099325bcbc91185e878181cc4ed2bae9a5ef93c3c7d1",
+      "record_digest": "sha256:c3a049f579ac029d3a240f2cf36c268aa5c60050d607629c16c55c95099f3f54",
+      "result": "passed"
+    },
+    {
+      "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "captured_at": "2026-08-31T10:41:56.503802Z",
+      "changed_paths": [
+        {
+          "digest": "sha256:3f0e29262ae71908f9ec7c4fb35f977ad34f9a5853bb7b2689967c5a99db25bb",
+          "path": "src/panels/terminal/ConsoleDockPanel.test.tsx"
+        },
+        {
+          "digest": "sha256:14b744ca07bd26be4c42067155cfb8f6f61717adf961d0bf89a8beae9d5661a1",
+          "path": "src/panels/terminal/ConsoleDockPanel.tsx"
+        }
+      ],
+      "commands": [
+        "rtk vitest run src/panels/terminal/ConsoleDockPanel.test.tsx"
+      ],
+      "evidence": [
+        "C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\title-green\\command-01-exit-0.log"
+      ],
+      "fingerprint": "sha256:90f1d26076faec71c6a92eba79ebd32b2d995060d514cbfeae1972f84fda6a7b",
+      "record_digest": "sha256:4b272cf764b22562e8e79fcf647d32ba9c637a0aa09a3bd0a41a7ba962462e94",
+      "result": "passed"
+    }
+  ],
+  "schema_version": 1
+}

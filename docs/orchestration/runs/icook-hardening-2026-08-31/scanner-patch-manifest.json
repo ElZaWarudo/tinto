@@ -1,0 +1,24 @@
+{
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "baseline_digest": "sha256:a07b1ebeae1727aaa09f9c42ff16c3ca62d11c5a9872484fde773109cb579521",
+  "baseline_tree": "e2541e203c7cf504d4a5e8f888dc48da89db8f1a",
+  "changed_files": [
+    {
+      "digest": "sha256:cb477ab6fddd1f0f1caaa732a373cf6da3ced5e1af3a2e8d6bef4817e068455a",
+      "path": "src-tauri/src/bus/secret_scan.rs"
+    }
+  ],
+  "contract_hash": "sha256:fa889eed0d713495d0b2bec2efc234e8a0ba2b34950ef531fc0c67868ccc6351",
+  "dependency_patch_hashes": [],
+  "diff_digest": "sha256:42c85e9e66dbe3050ffd17bed4dde371279753d7a433344a4441c8035879aceb",
+  "manifest_hash": "sha256:c8cd8a17dbfad0d355d59cc92600ceb463c7df20970a6f0038a45db99afa081d",
+  "owned_paths": [
+    "src-tauri/src/bus/secret_scan.rs"
+  ],
+  "patch_sha256": "sha256:eb16e082dc8994576f2280e97836116173b9b2bf1b5e9dfdd259363a551d61bf",
+  "role": "implementer",
+  "schema_version": 1,
+  "unit_id": "scanner",
+  "worker_id": "/root/scanner_implementation",
+  "workspace_id": "icook-hardening-2026-08-31-scanner-implementer"
+}

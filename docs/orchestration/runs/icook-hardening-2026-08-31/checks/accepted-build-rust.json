@@ -1,0 +1,22 @@
+{
+  "name": "accepted-build-rust",
+  "cwd": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration-accepted",
+  "executable": "C:/Users/User/.cargo/bin/cargo.exe",
+  "args": [
+    "+1.97.1-x86_64-pc-windows-msvc",
+    "build",
+    "--offline",
+    "--locked",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--target-dir",
+    "C:/Users/User/Documents/personal/tinto/src-tauri/target"
+  ],
+  "started_at": "2026-08-31T11:06:17.354Z",
+  "finished_at": "2026-08-31T11:07:36.360Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "",
+  "stderr": "   Compiling tinto v0.1.0 (C:\\Users\\User\\Documents\\personal\\tinto-hardening-worktrees\\icook-hardening-2026-08-31\\integration-accepted\\src-tauri)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 18s\n"
+}

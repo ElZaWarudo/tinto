@@ -1,0 +1,8 @@
+{
+  "role": "reviewer",
+  "actor_id": "/root/wsl_root_review",
+  "status": "passed",
+  "contract_hash": "sha256:925bfb8207fcd43de42bb280ea4f5e36b4344735f0a6fb42b13367faf47acab7",
+  "diff_digest": "sha256:ff88810bf665f2db8fcdb231af48881648e5e15e12a976328b6c89d74879a159",
+  "findings": []
+}

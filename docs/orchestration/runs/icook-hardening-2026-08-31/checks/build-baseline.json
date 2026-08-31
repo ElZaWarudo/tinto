@@ -1,0 +1,17 @@
+{
+  "name": "build-baseline",
+  "cwd": "C:/Users/User/Documents/personal/tinto",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "C:/nvm4w/nodejs/node_modules/npm/bin/npm-cli.js",
+    "run",
+    "build"
+  ],
+  "started_at": "2026-08-31T10:35:56.765Z",
+  "finished_at": "2026-08-31T10:36:16.707Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "\n> tinto@0.1.0 build\n> tsc && vite build\n\nvite v8.2.2 building client environment for production...\ntransforming...\n✓ 438 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                                 0.89 kB │ gzip:   0.39 kB\ndist/assets/tinto-wordmark-dark-BSnJFhI0.png   33.38 kB\ndist/assets/vendor-dockview-Duc-gE2U.css      125.33 kB │ gzip:  10.30 kB\ndist/assets/index-besoh6Wg.css                214.41 kB │ gzip:  35.45 kB\ndist/assets/css-CdtkT07m.js                     0.05 kB │ gzip:   0.07 kB\ndist/assets/javascript-Yelw-5ZN.js              0.06 kB │ gzip:   0.08 kB\ndist/assets/rolldown-runtime-hePW80VL.js        0.71 kB │ gzip:   0.42 kB\ndist/assets/webviewWindow-CMl9sgu2.js           1.52 kB │ gzip:   0.70 kB\ndist/assets/json-qhed-kSA.js                    2.81 kB │ gzip:   0.77 kB\ndist/assets/toml-CcmNWLt0.js                    6.41 kB │ gzip:   1.28 kB\ndist/assets/dark-plus-Cs2F2srj.js               9.09 kB │ gzip:   2.10 kB\ndist/assets/yaml-rwi0_p6S.js                   10.49 kB │ gzip:   2.26 kB\ndist/assets/rust-Cfkwpbl8.js                   15.06 kB │ gzip:   2.71 kB\ndist/assets/shellscript-CLZ0U2zV.js            41.47 kB │ gzip:   6.07 kB\ndist/assets/css-LbU1hoFO.js                    49.02 kB │ gzip:  11.90 kB\ndist/assets/html-CVO8wu9Q.js                   57.24 kB │ gzip:  11.74 kB\ndist/assets/markdown-BYOwaDjH.js               59.32 kB │ gzip:   5.66 kB\ndist/assets/python-gzcpVVnB.js                 69.94 kB │ gzip:   9.09 kB\ndist/assets/vendor-shiki-BGFxFrk1.js           85.61 kB │ gzip:  27.36 kB\ndist/assets/vendor-markdown-CtR-qdbo.js       154.25 kB │ gzip:  45.98 kB\ndist/assets/javascript-BzbQS41l.js            174.81 kB │ gzip:  16.62 kB\ndist/assets/tsx-udAQXfEw.js                   175.52 kB │ gzip:  16.62 kB\ndist/assets/jsx-Bz0zcwM4.js                   177.78 kB │ gzip:  16.71 kB\ndist/assets/typescript-bsJCZSQ-.js            181.07 kB │ gzip:  16.23 kB\ndist/assets/vendor-dockview-BkHOh-Db.js       385.18 kB │ gzip:  89.08 kB\ndist/assets/wasm-BnjxR4X6.js                  622.32 kB │ gzip: 232.09 kB\ndist/assets/index-n4ThBJWc.js                 635.10 kB │ gzip: 181.86 kB\n\n✓ built in 3.06s\n",
+  "stderr": "\u001b[33m[PLUGIN_TIMINGS] \u001b[0mYour build spent 31% of 3.0s inside plugin hooks (954ms).\nNot measurable — 1 hook whose calls overlap, so elapsed time covers work other calls were doing. Profile with `node --cpu-prof`:\n  - vite:asset load (4 calls)\nSee https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.\n\n"
+}

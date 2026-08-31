@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "run_id": "icook-hardening-2026-08-31",
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "worktree_parent": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees",
+  "invocations": [
+    {
+      "id": "title-root",
+      "unit_id": "title-root",
+      "role": "implementer",
+      "owned_paths": [
+        "src/panels/terminal/ConsoleDockPanel.tsx",
+        "src/panels/terminal/ConsoleDockPanel.test.tsx"
+      ],
+      "depends_on": [],
+      "candidate_invocations": []
+    },
+    {
+      "id": "title-root-reviewer",
+      "unit_id": "title-root-reviewer",
+      "role": "reviewer",
+      "owned_paths": [],
+      "depends_on": [],
+      "candidate_invocations": [
+        "title-root"
+      ]
+    },
+    {
+      "id": "scanner-implementer",
+      "unit_id": "scanner-implementer",
+      "role": "implementer",
+      "owned_paths": [
+        "src-tauri/src/bus/secret_scan.rs"
+      ],
+      "depends_on": [],
+      "candidate_invocations": []
+    },
+    {
+      "id": "scanner-reviewer",
+      "unit_id": "scanner-reviewer",
+      "role": "reviewer",
+      "owned_paths": [],
+      "depends_on": [],
+      "candidate_invocations": [
+        "scanner-implementer"
+      ]
+    },
+    {
+      "id": "wsl-root",
+      "unit_id": "wsl-root",
+      "role": "implementer",
+      "owned_paths": [
+        "src-tauri/src/wsl_agent/launcher.rs"
+      ],
+      "depends_on": [],
+      "candidate_invocations": []
+    },
+    {
+      "id": "wsl-root-reviewer",
+      "unit_id": "wsl-root-reviewer",
+      "role": "reviewer",
+      "owned_paths": [],
+      "depends_on": [],
+      "candidate_invocations": [
+        "wsl-root"
+      ]
+    },
+    {
+      "id": "integration-accepted",
+      "unit_id": "integration-accepted",
+      "role": "integrator",
+      "owned_paths": [
+        "src/panels/terminal/ConsoleDockPanel.tsx",
+        "src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "src-tauri/src/bus/secret_scan.rs",
+        "src-tauri/src/wsl_agent/launcher.rs"
+      ],
+      "depends_on": [
+        "title-root",
+        "scanner-implementer",
+        "wsl-root"
+      ],
+      "candidate_invocations": []
+    }
+  ]
+}

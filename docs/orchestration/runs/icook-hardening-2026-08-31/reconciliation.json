@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "run_id": "icook-hardening-2026-08-31",
+  "reconciled_at": "2026-08-31T11:13:00Z",
+  "status": "local_repairs_verified_native_acceptance_blocked",
+  "authorization": {
+    "source": "authorization.md",
+    "kind": "explicit_user_authorized_documentation_gate_bypass",
+    "approval_receipt_fabricated": false,
+    "canonical_queue_changed": false,
+    "compiler_limitation": "transition-result.json: historical unknown-unit blockers reject the transition before the documentation gate; actual local execution is recorded separately",
+    "validators_changed": false
+  },
+  "repositories": {
+    "tinto": {
+      "path": "C:/Users/User/Documents/personal/tinto",
+      "head": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+      "branch": "main",
+      "primary_changes_applied": true,
+      "preexisting_preserved": ["src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "prior docs/swarm/blockers.yaml content", "historical handoff and observations", "output/"],
+      "documentary_changes": ["docs/swarm/blockers.yaml", "docs/orchestration/2026-08-31-icook-hardening-handoff.md", "docs/orchestration/runs/icook-hardening-2026-08-31/"]
+    },
+    "pumarejo": {"path": "C:/Users/User/Documents/personal/pumarejo", "head": "f0af7c65ee5f6a866e6d5cfbf31579231e4e9fec", "code_changed": false, "final_tree_clean": true},
+    "icook": {"path": "C:/Users/User/Documents/personal/ICook", "host_commands_run": false, "product_files_edited": false, "current_managed_bounded_command_proven": false}
+  },
+  "findings": [
+    {
+      "id": "TIN-HARD-01",
+      "disposition": "local_diagnostic_defect_fixed_native_cause_and_recovery_blocked",
+      "confirmed_cause": "Launcher discarded subprocess stderr on failure; original Ubuntu failure cause remains unknown.",
+      "repair": "Start bounded 4096-byte stderr drain immediately in both transports; expose only fixed cause labels, observable exit status and explicit unavailable/truncated markers; preserve retry and success behavior.",
+      "tests": "checks/wsl-root-focused.json: 22 passed; accepted and primary full Rust: 478 passed",
+      "review": ["wsl-root-review.json", "wsl-root-security.json"],
+      "blockers": ["IC-HARD-BLK-2026-08-31-01", "IC-HARD-BLK-2026-08-31-04"],
+      "next_action": "Establish integrity-verified provider and capture attributable launch/exit/recovery in the intended ICook workspace."
+    },
+    {
+      "id": "TIN-HARD-02",
+      "disposition": "blocked_no_speculative_fix",
+      "confirmed_cause": null,
+      "evidence": "Public dialog API supports detect/accept/cancel but does not expose a folder-path selection field; prior unknown dialog coverage does not establish a Tinto defect.",
+      "blockers": ["IC-HARD-BLK-2026-08-31-02", "IC-HARD-BLK-2026-08-31-04"],
+      "next_action": "After integration repair, prove select/cancel, disabled-control recovery and native ICook persistence in one controlled instance."
+    },
+    {
+      "id": "TIN-HARD-03",
+      "disposition": "blocked_environment_and_binding_acceptance",
+      "confirmed_cause": "Historical Tinto-launched Agent had expected Tinto workspace scope; no confirmed Full Access propagation defect.",
+      "blockers": ["IC-HARD-BLK-2026-08-31-03", "IC-HARD-BLK-2026-08-31-04"],
+      "next_action": "Bind actual ICook workspace and capture managed effective scope, executable resolution, ownership diagnostics and bounded command exit without trust or sandbox relaxation."
+    },
+    {
+      "id": "TIN-HARD-04",
+      "disposition": "archived_title_defect_fixed_native_outcome_recovery_blocked",
+      "confirmed_cause": "Title effect consulted capped live timeline but ignored persisted first_user_message for the same full session ID.",
+      "repair": "Exact-ID persisted fallback with live precedence, without changing persistence caps, dispatch or resume behavior.",
+      "tests": "checks/title-root-red.json: 32 pass/1 fail; checks/title-root-green.json: 33 pass; primary focused: 94 pass",
+      "review": ["title-root-review.json"],
+      "blockers": ["IC-HARD-BLK-2026-08-31-04", "TR-BLK-2026-08-31-05"],
+      "next_action": "Verify bounded interrupted-session restart, identity, title, partial output and outcome without dispatching an archive or retrying an uncertain send."
+    },
+    {
+      "id": "TIN-HARD-05",
+      "disposition": "observation_regressions_pass_native_large_transcript_blocked",
+      "confirmed_cause": "Historical broad observation exhausted fieldBudget; scoped read recovered output. This is not proof of model-context exhaustion or session termination.",
+      "tests": "checks/observation-baseline.json: current Pumarejo snapshot suites 33 passed",
+      "fresh_observation": "native/006: scoped status snapshot, 8 nodes, 276 visited, non-truncated; not representative large-transcript acceptance",
+      "blockers": ["IC-HARD-BLK-2026-08-31-04", "TR-BLK-2026-08-31-05"],
+      "next_action": "On verified integration, prove bounded long-transcript attribution, explicit truncation and scoped final-output recovery; measure high-context behavior separately."
+    },
+    {
+      "id": "TIN-HARD-06",
+      "disposition": "diagnostic_defect_fixed_full_scan_and_native_verification_blocked",
+      "confirmed_cause": "Gitleaks 8.30.1 exits 1 with permission-denied warnings and context deadline exceeded under unchanged eight-second timeout; invalid config is not established.",
+      "repair": "Conservative fixed timeout/permission categories, opaque generic fallback and no raw scanner output. Partial reports and basic detector remain insufficient for full verification.",
+      "tests": "scanner-runtime-audit.json: nine focused tests; accepted and primary full Rust: 478 pass",
+      "review": ["scanner-review.json", "scanner-security.json"],
+      "blockers": ["IC-HARD-BLK-2026-08-31-05", "IC-HARD-BLK-2026-08-31-04"],
+      "next_action": "Supported retained-artifact custody/ownership repair, unchanged complete scan with exit 0, then fresh native degraded/success reporting verification."
+    }
+  ],
+  "integration": {
+    "workspace": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration-accepted",
+    "workspace_plan": "workspace-plan-06.json",
+    "workspace_plan_hash": "sha256:6e989c9a6c6b70166fd953e20ad8acdebe600eefa1ddaf0fea6faae63a2b90bb",
+    "index_tree": "636249baf40436a2373c3ededf49a3cc3ada62d9",
+    "application_order": ["title-root.patch", "scanner.patch", "wsl-root.patch"],
+    "manifests": ["title-root-patch-manifest.json", "scanner-patch-manifest.json", "wsl-root-patch-manifest.json"],
+    "contracts": ["title-root-contract.md", "scanner-implementation-worker-contract.json", "wsl-root-contract.md"],
+    "primary_bytes_match_snapshot": true,
+    "code_files": [
+      {"path": "src/panels/terminal/ConsoleDockPanel.tsx", "sha256": "9b2968c9016af50836fe90eb81d7fd5014855137e711f5ca0a145f732d042a76"},
+      {"path": "src/panels/terminal/ConsoleDockPanel.test.tsx", "sha256": "df7b5b042788d4102b1d47216faec892d8ee4eff2cf83fa8553abf1999bcd994"},
+      {"path": "src-tauri/src/bus/secret_scan.rs", "sha256": "aae8461fafbc15453258c9713d898a994baeb2878ff01201b5c2987a4d9b4adc"},
+      {"path": "src-tauri/src/wsl_agent/launcher.rs", "sha256": "eb2716c14bae7eabb61b2aaef3269ce5bd19407e3119fe1316e13e5915d5037d"}
+    ],
+    "rejected_not_consolidated": [
+      {"candidate": "archived-title.patch", "reason": "Worker command-contract violations; preserved history-evaluation.json. Independently reimplemented under title-root contract."},
+      {"candidate": "wsl-candidate.patch", "reason": "Independent review identified success-race and stderr/stdin deadlock risks; missing successful verification. Fresh source-baseline root replacement, not inherited candidate."}
+    ],
+    "old_integration_workspace": "diagnostic_only_not_acceptance",
+    "worktrees_and_rejected_candidates_preserved": true
+  },
+  "verification": {
+    "registry": "verification-registry.json",
+    "backend_fingerprint": "sha256:7ffa508e09090a5d898b099325bcbc91185e878181cc4ed2bae9a5ef93c3c7d1",
+    "backend_aggregate": "passed",
+    "frontend_fingerprint": "sha256:34fe42f551857aadd7d4602304e5f538e3cd74c2b358eb90e071bff22b8c7a44",
+    "frontend_aggregate": "failed",
+    "accepted_checks": {"focused_frontend": "94 pass, exit 0", "full_rust_library": "478 pass, exit 0", "frontend_build": "exit 0", "rust_build": "exit 0", "generated_contract": "exit 0", "lint": "exit 1, unchanged setState-in-effect", "full_frontend": "same baseline WSL text-policy failure then ETIMEDOUT after 180 seconds; no complete suite result"},
+    "primary_checks": {"focused_frontend": "checks/primary-focused.json: 94 pass, exit 0", "full_rust_library": "checks/primary-full-rust.json: 478 pass, exit 0", "diff_check": "exit 0"},
+    "native_post_repair_acceptance": "blocked",
+    "leaf_evidence_trust": "self-reported; independently reviewed and root-tested before acceptance",
+    "tests_or_scanner_rules_weakened": false
+  },
+  "native": {
+    "driver": "Pumarejo public supported MCP API only",
+    "evidence": "native/001 through 009, checks/doctor-final.json, checks/init-preview.json, checks/isolated-init-preview.json",
+    "observed_instance_final_state": "idle after public close/status",
+    "baseline_screenshot": "native/007-tauri_screenshot-0.png",
+    "screenshot_certifies_repairs": false,
+    "final_doctor_process_exit": 0,
+    "final_doctor_semantic_status": "error",
+    "integration_barrier": "Owned blocks and old staged bytes match attribution; unrelated lib.rs full hash drift and current-provider bundle mismatch. Supported init/remove reject ALREADY_INTEGRATED_MODIFIED. Baseline isolated checkout has committed attribution without ignored manifest and also rejects init.",
+    "required_external_prerequisite": "Supported attribution-preserving migration or authoritative matching integration snapshot; then verify native closure cases. No guessed manifest/hash rewrite or integrity bypass.",
+    "unknown_messages_resent": false
+  },
+  "related_blockers": {
+    "preserved": ["TR-BLK-2026-08-31-01", "TR-BLK-2026-08-31-02", "TR-BLK-2026-08-31-03", "TR-BLK-2026-08-31-04", "TR-BLK-2026-08-31-05", "TR-BLK-2026-08-31-06"],
+    "new_current_prerequisites": ["IC-HARD-BLK-2026-08-31-04", "IC-HARD-BLK-2026-08-31-05"],
+    "no_automatic_closure": true
+  },
+  "safety": {"commits": 0, "pushes": 0, "prs": 0, "jira_mutations": 0, "destructive_cleanup": false, "sandbox_relaxed": false, "git_trust_exceptions_added": false, "credentials_changed": false, "integrity_checks_bypassed": false, "raw_secret_report_published": false},
+  "tool_preparation": {"rtk": "Official portable v0.46.0 installed at previously absent C:/Users/User/.cargo/bin/rtk.exe", "release_sha256": "9bc5acd54d35a916e4a561435963e0acf2f1a0115cf43dcfe2b719f361c8a970", "path_settings_changed": false},
+  "stop_condition": "No safe independent demonstrated repair remains identified; every finding retains an explicit native/environment closure prerequisite. No claim of full ICook readiness or end-to-end completion.",
+  "human_handoff": "final-handoff.md"
+}

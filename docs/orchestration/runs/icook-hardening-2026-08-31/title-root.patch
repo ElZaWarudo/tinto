@@ -1,0 +1,79 @@
+diff --git a/src/panels/terminal/ConsoleDockPanel.test.tsx b/src/panels/terminal/ConsoleDockPanel.test.tsx
+index 624216f76285f3467ea99e70aefb04ebd0fd1612..a832d24ef60cb5190fb46460daee45fde001f772 100644
+--- a/src/panels/terminal/ConsoleDockPanel.test.tsx
++++ b/src/panels/terminal/ConsoleDockPanel.test.tsx
+@@ -136,7 +136,7 @@ function nestedDockApi() {
+       const panel = {
+         id: opts.id,
+         params: opts.params,
+-        api: { setActive: vi.fn(), location: { type: "grid" } },
++        api: { setActive: vi.fn(), setTitle: vi.fn(), location: { type: "grid" } },
+       } as unknown as IDockviewPanel;
+       panels[opts.id] = panel;
+       panelList.push(panel);
+@@ -489,6 +489,40 @@ describe("ConsoleDockPanel detach drop", () => {
+     unmount();
+   });
+ 
++  it.each([
++    { name: "persisted fallback", live: undefined, savedId: "same-prefix-target", expected: "Saved first message" },
++    { name: "live precedence", live: "Live first message", savedId: "same-prefix-target", expected: "Live first message" },
++    { name: "different full ID", live: undefined, savedId: "same-prefix-other", expected: undefined },
++    { name: "missing summary", live: undefined, savedId: undefined, expected: undefined },
++  ])("updates archived tab titles safely: $name", async ({ live, savedId, expected }) => {
++    const sessionId = "same-prefix-target";
++    consoleDock.openTerminal({ sessionId, repo: "/r/api", agentType: "codex", mode: "journal" });
++    sessionStoreMocks.state.timeline[sessionId] = live
++      ? [{ id: "first", session_id: sessionId, kind: "user_message", text: live, timestamp_ms: 1 }]
++      : [{ id: "later", session_id: sessionId, kind: "agent_message", text: "Partial output", timestamp_ms: 2 }];
++    clientMocks.listAgentJournalSessions.mockResolvedValue(savedId ? [{
++      id: savedId,
++      repo: "/r/api",
++      agent_type: "codex",
++      status: "completed",
++      started_at_ms: 1,
++      updated_at_ms: 3,
++      event_count: 2001,
++      first_user_message: "Saved first message",
++    }] : []);
++
++    const { unmount } = render(<ConsoleDockPanel />);
++    await act(async () => { await Promise.resolve(); });
++    const panel = dockviewMocks.api!.getPanel(agentTerminalPanelId(sessionId))!;
++    if (expected) {
++      await waitFor(() => expect(panel.api.setTitle).toHaveBeenLastCalledWith(`Codex · api · ${expected}`));
++    } else {
++      expect(panel.api.setTitle).not.toHaveBeenCalled();
++    }
++    expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
++    unmount();
++  });
++
+   it("distinguishes saved conversations with identical titles by session identity", async () => {
+     clientMocks.listAgentJournalSessions.mockResolvedValue(
+       ["11111111-first", "22222222-second"].map((id) => ({
+diff --git a/src/panels/terminal/ConsoleDockPanel.tsx b/src/panels/terminal/ConsoleDockPanel.tsx
+index 9ceec2db925ee85c3d4b8f8c815aac52254c1ff4..492d40a7795f1c543c353656f841daa93fde731c 100644
+--- a/src/panels/terminal/ConsoleDockPanel.tsx
++++ b/src/panels/terminal/ConsoleDockPanel.tsx
+@@ -245,15 +245,18 @@ export function ConsoleDockPanel({
+     const api = apiRef.current;
+     if (!api) return;
+     for (const terminal of openTerminals) {
+-      const firstUserMessage = agentState.timeline[terminal.sessionId]?.find(
++      const liveMessage = agentState.timeline[terminal.sessionId]?.find(
+         (item) => item.kind === "user_message",
+       )?.text;
++      const firstUserMessage = liveMessage ?? journalSessions.find(
++        (session) => session.id === terminal.sessionId,
++      )?.first_user_message;
+       if (!firstUserMessage) continue;
+       api
+         .getPanel(agentTerminalPanelId(terminal.sessionId))
+         ?.api.setTitle(agentConversationTabTitle(terminal, conversationTitle(firstUserMessage)));
+     }
+-  }, [agentState.timeline, openTerminals]);
++  }, [agentState.timeline, journalSessions, openTerminals]);
+ 
+   const retryJournalLoad = () => {
+     setJournalLoadState(journalLoadedOnceRef.current ? "refreshing" : "loading");

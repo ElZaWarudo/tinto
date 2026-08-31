@@ -1,0 +1,26 @@
+{
+  "name": "wsl-root-focused",
+  "cwd": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/wsl-root",
+  "executable": "C:/Users/User/.cargo/bin/cargo.exe",
+  "args": [
+    "+1.97.1-x86_64-pc-windows-msvc",
+    "test",
+    "--offline",
+    "--locked",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--target-dir",
+    "C:/Users/User/Documents/personal/tinto/src-tauri/target",
+    "--lib",
+    "wsl_agent::launcher::tests",
+    "--",
+    "--test-threads=1"
+  ],
+  "started_at": "2026-08-31T10:55:16.845Z",
+  "finished_at": "2026-08-31T10:56:01.762Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "\nrunning 22 tests\ntest wsl_agent::launcher::tests::agent_requests_have_more_room_than_startup ... ok\ntest wsl_agent::launcher::tests::builds_wsl_command_without_shell_interpolation ... ok\ntest wsl_agent::launcher::tests::child_exit_retry_is_limited_to_read_only_requests ... ok\ntest wsl_agent::launcher::tests::dev_source_command_uses_ubuntu_and_manifest_path ... ok\ntest wsl_agent::launcher::tests::dev_source_fallback_requires_explicit_truthy_value ... ok\ntest wsl_agent::launcher::tests::handshake_accepts_mocked_compatible_response ... ok\ntest wsl_agent::launcher::tests::handshake_maps_transport_and_protocol_failures ... ok\ntest wsl_agent::launcher::tests::managed_agent_command_uses_versioned_home_path ... ok\ntest wsl_agent::launcher::tests::missing_distro_and_agent_command_are_safe_errors ... ok\ntest wsl_agent::launcher::tests::one_shot_drains_stderr_before_large_stdin_and_keeps_success ... ok\ntest wsl_agent::launcher::tests::packaged_agent_candidates_are_app_relative ... ok\ntest wsl_agent::launcher::tests::packaged_agent_install_cache_keys_by_version_distro_and_source ... ok\ntest wsl_agent::launcher::tests::packaged_agent_install_command_copies_host_agent_from_wsl_mount ... ok\ntest wsl_agent::launcher::tests::packaged_agent_path_accepts_linux_elf_artifact ... ok\ntest wsl_agent::launcher::tests::packaged_agent_path_rejects_non_linux_binary ... ok\ntest wsl_agent::launcher::tests::pooled_exit_retains_observable_status_and_fixed_diagnostics ... ok\ntest wsl_agent::launcher::tests::pooled_timeout_keeps_timeout_category_and_unknown_exit_status ... ok\ntest wsl_agent::launcher::tests::request_with_transport_returns_typed_response ... ok\ntest wsl_agent::launcher::tests::stale_agent_error_is_detected_for_pool_restart ... ok\ntest wsl_agent::launcher::tests::stderr_capture_drains_past_its_bound_and_never_exposes_content ... ok\ntest wsl_agent::launcher::tests::windows_path_translation_accepts_extended_length_paths ... ok\ntest wsl_agent::launcher::tests::windows_path_translation_uses_wsl_mount_shape ... ok\n\ntest result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 0.44s\n\n",
+  "stderr": "   Compiling tinto v0.1.0 (C:\\Users\\User\\Documents\\personal\\tinto-hardening-worktrees\\icook-hardening-2026-08-31\\wsl-root\\src-tauri)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.63s\n     Running unittests src\\lib.rs (C:/Users/User/Documents/personal/tinto/src-tauri/target\\debug\\deps\\tinto_lib-8f61af854af9ae50.exe)\n"
+}

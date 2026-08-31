@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "total_slots": 9,
+  "reserve_slots": 1,
+  "role_caps": {
+    "implementer": 2,
+    "reviewer": 2,
+    "planner": 1,
+    "fixer": 1,
+    "integrator": 1,
+    "documenter": 1,
+    "security": 1,
+    "ci-platform": 1
+  },
+  "scale_authorization": {
+    "authorization_id": "AUTH-IC-HARD-2026-08-31",
+    "authorized": false,
+    "authorized_by": "root:no-scale-requested",
+    "max_implementers": 2,
+    "authorization_digest": "sha256:a25c4aa7ab4138bb5451163fdffd0655e2ca8b426a7ebd680472f4c0d1ce0cb5"
+  },
+  "review_capacity": 1,
+  "wave_history": [
+    {
+      "result": "partial",
+      "scope_violations": 1,
+      "merge_conflicts": 0,
+      "review_lagging": false
+    }
+  ],
+  "requests": [
+    {
+      "id": "wsl-discovery",
+      "role": "implementer",
+      "priority": 0,
+      "owned_paths": [
+        "src-tauri/src/wsl_agent/launcher.rs"
+      ],
+      "risk_surfaces": [
+        "public-contract"
+      ],
+      "unresolved_dependencies": [],
+      "blocked": false
+    },
+    {
+      "id": "history-discovery",
+      "role": "implementer",
+      "priority": 1,
+      "owned_paths": [
+        "src/panels/terminal/ConsoleDockPanel.tsx"
+      ],
+      "risk_surfaces": [
+        "data"
+      ],
+      "unresolved_dependencies": [],
+      "blocked": false
+    }
+  ]
+}

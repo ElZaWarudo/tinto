@@ -1,0 +1,14 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"state\":\"launching\",\"pollAfterMs\":500,\"recommendedClientTimeoutMs\":10000,\"phase\":\"resolving_command\"}"
+    }
+  ],
+  "structuredContent": {
+    "state": "launching",
+    "pollAfterMs": 500,
+    "recommendedClientTimeoutMs": 10000,
+    "phase": "resolving_command"
+  }
+}

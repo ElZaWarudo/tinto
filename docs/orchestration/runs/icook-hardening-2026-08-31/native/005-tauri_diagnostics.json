@@ -1,0 +1,238 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"capabilities\":{\"console\":{\"state\":\"unsupported\",\"code\":\"provider_console_unsupported\",\"evidence\":\"The configured provider exposes no approved console boundary.\"},\"process_stdout\":{\"state\":\"supported\",\"code\":\"owned_process_stream_available\"},\"process_stderr\":{\"state\":\"supported\",\"code\":\"owned_process_stream_available\"},\"invocation\":{\"state\":\"supported\",\"code\":\"invocation_trace_available\"},\"phase\":{\"state\":\"supported\",\"code\":\"launch_phase_history_available\"},\"last_error\":{\"state\":\"supported\",\"code\":\"last_error_projection_available\"}},\"records\":[{\"id\":\"diagnostic-000004\",\"sequence\":4,\"observedAt\":\"2026-08-31T10:16:15.074Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"process\"},\"code\":\"custody_orphan_repair_failed\",\"retryable\":true,\"capability\":{\"state\":\"failed\",\"code\":\"custody_orphan_repair_failed\",\"evidence\":\"windows_job_object\"}},{\"id\":\"diagnostic-000005\",\"sequence\":5,\"observedAt\":\"2026-08-31T10:16:15.087Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"process\"},\"code\":\"custody_orphan_repair_failed\",\"retryable\":true,\"capability\":{\"state\":\"failed\",\"code\":\"custody_orphan_repair_failed\",\"evidence\":\"windows_job_object\"}},{\"id\":\"diagnostic-000006\",\"sequence\":6,\"observedAt\":\"2026-08-31T10:16:15.108Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"process\"},\"code\":\"custody_orphan_repair_failed\",\"retryable\":true,\"capability\":{\"state\":\"failed\",\"code\":\"custody_orphan_repair_failed\",\"evidence\":\"windows_job_object\"}},{\"id\":\"diagnostic-000007\",\"sequence\":7,\"observedAt\":\"2026-08-31T10:16:15.108Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"phase\":\"preparing_runtime\"},{\"id\":\"diagnostic-000008\",\"sequence\":8,\"observedAt\":\"2026-08-31T10:16:15.151Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"phase\":\"starting_process\"},{\"id\":\"diagnostic-000011\",\"sequence\":11,\"observedAt\":\"2026-08-31T10:16:18.324Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"process\"},\"code\":\"windows_job_object_available\",\"retryable\":false,\"capability\":{\"state\":\"supported\",\"code\":\"windows_job_object_available\",\"evidence\":\"windows_job_object\"}},{\"id\":\"diagnostic-000012\",\"sequence\":12,\"observedAt\":\"2026-08-31T10:16:18.324Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"phase\":\"waiting_provider\"},{\"id\":\"diagnostic-000022\",\"sequence\":22,\"observedAt\":\"2026-08-31T10:16:27.010Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"process\"},\"code\":\"loopback_ready\",\"retryable\":false,\"suggestion\":\"The owned loopback provider is ready.\",\"family\":\"ipv4\",\"port\":62238},{\"id\":\"diagnostic-000023\",\"sequence\":23,\"observedAt\":\"2026-08-31T10:16:29.860Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"phase\":\"starting_proxy\"},{\"id\":\"diagnostic-000024\",\"sequence\":24,\"observedAt\":\"2026-08-31T10:16:34.662Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"phase\":\"creating_session\"},{\"id\":\"diagnostic-000025\",\"sequence\":25,\"observedAt\":\"2026-08-31T10:16:34.708Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"phase\":\"selecting_window\"},{\"id\":\"diagnostic-000026\",\"sequence\":26,\"observedAt\":\"2026-08-31T10:16:34.717Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"phase\":\"capturing_first_snapshot\"}],\"lastErrors\":[{\"id\":\"diagnostic-000001\",\"sequence\":1,\"observedAt\":\"2026-08-31T10:16:10.760Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"session\"},\"code\":\"artifact_recovery\",\"retryable\":true,\"suggestion\":\"Unproven artifact entries were preserved.\",\"count\":0},{\"id\":\"diagnostic-000022\",\"sequence\":22,\"observedAt\":\"2026-08-31T10:16:27.010Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"12db0514011d2962ad17fac8b009597a\",\"owner\":\"process\"},\"code\":\"loopback_ready\",\"retryable\":false,\"suggestion\":\"The owned loopback provider is ready.\",\"family\":\"ipv4\",\"port\":62238}],\"truncation\":{\"truncated\":true,\"evicted\":0,\"returned\":12,\"maxRecords\":12,\"maxBytes\":4096}}"
+    }
+  ],
+  "structuredContent": {
+    "sessionId": "12db0514011d2962ad17fac8b009597a",
+    "capabilities": {
+      "console": {
+        "state": "unsupported",
+        "code": "provider_console_unsupported",
+        "evidence": "The configured provider exposes no approved console boundary."
+      },
+      "process_stdout": {
+        "state": "supported",
+        "code": "owned_process_stream_available"
+      },
+      "process_stderr": {
+        "state": "supported",
+        "code": "owned_process_stream_available"
+      },
+      "invocation": {
+        "state": "supported",
+        "code": "invocation_trace_available"
+      },
+      "phase": {
+        "state": "supported",
+        "code": "launch_phase_history_available"
+      },
+      "last_error": {
+        "state": "supported",
+        "code": "last_error_projection_available"
+      }
+    },
+    "records": [
+      {
+        "id": "diagnostic-000004",
+        "sequence": 4,
+        "observedAt": "2026-08-31T10:16:15.074Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "process"
+        },
+        "code": "custody_orphan_repair_failed",
+        "retryable": true,
+        "capability": {
+          "state": "failed",
+          "code": "custody_orphan_repair_failed",
+          "evidence": "windows_job_object"
+        }
+      },
+      {
+        "id": "diagnostic-000005",
+        "sequence": 5,
+        "observedAt": "2026-08-31T10:16:15.087Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "process"
+        },
+        "code": "custody_orphan_repair_failed",
+        "retryable": true,
+        "capability": {
+          "state": "failed",
+          "code": "custody_orphan_repair_failed",
+          "evidence": "windows_job_object"
+        }
+      },
+      {
+        "id": "diagnostic-000006",
+        "sequence": 6,
+        "observedAt": "2026-08-31T10:16:15.108Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "process"
+        },
+        "code": "custody_orphan_repair_failed",
+        "retryable": true,
+        "capability": {
+          "state": "failed",
+          "code": "custody_orphan_repair_failed",
+          "evidence": "windows_job_object"
+        }
+      },
+      {
+        "id": "diagnostic-000007",
+        "sequence": 7,
+        "observedAt": "2026-08-31T10:16:15.108Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "phase": "preparing_runtime"
+      },
+      {
+        "id": "diagnostic-000008",
+        "sequence": 8,
+        "observedAt": "2026-08-31T10:16:15.151Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "phase": "starting_process"
+      },
+      {
+        "id": "diagnostic-000011",
+        "sequence": 11,
+        "observedAt": "2026-08-31T10:16:18.324Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "process"
+        },
+        "code": "windows_job_object_available",
+        "retryable": false,
+        "capability": {
+          "state": "supported",
+          "code": "windows_job_object_available",
+          "evidence": "windows_job_object"
+        }
+      },
+      {
+        "id": "diagnostic-000012",
+        "sequence": 12,
+        "observedAt": "2026-08-31T10:16:18.324Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "phase": "waiting_provider"
+      },
+      {
+        "id": "diagnostic-000022",
+        "sequence": 22,
+        "observedAt": "2026-08-31T10:16:27.010Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "process"
+        },
+        "code": "loopback_ready",
+        "retryable": false,
+        "suggestion": "The owned loopback provider is ready.",
+        "family": "ipv4",
+        "port": 62238
+      },
+      {
+        "id": "diagnostic-000023",
+        "sequence": 23,
+        "observedAt": "2026-08-31T10:16:29.860Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "phase": "starting_proxy"
+      },
+      {
+        "id": "diagnostic-000024",
+        "sequence": 24,
+        "observedAt": "2026-08-31T10:16:34.662Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "phase": "creating_session"
+      },
+      {
+        "id": "diagnostic-000025",
+        "sequence": 25,
+        "observedAt": "2026-08-31T10:16:34.708Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "phase": "selecting_window"
+      },
+      {
+        "id": "diagnostic-000026",
+        "sequence": 26,
+        "observedAt": "2026-08-31T10:16:34.717Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "phase": "capturing_first_snapshot"
+      }
+    ],
+    "lastErrors": [
+      {
+        "id": "diagnostic-000001",
+        "sequence": 1,
+        "observedAt": "2026-08-31T10:16:10.760Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "session"
+        },
+        "code": "artifact_recovery",
+        "retryable": true,
+        "suggestion": "Unproven artifact entries were preserved.",
+        "count": 0
+      },
+      {
+        "id": "diagnostic-000022",
+        "sequence": 22,
+        "observedAt": "2026-08-31T10:16:27.010Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "12db0514011d2962ad17fac8b009597a",
+          "owner": "process"
+        },
+        "code": "loopback_ready",
+        "retryable": false,
+        "suggestion": "The owned loopback provider is ready.",
+        "family": "ipv4",
+        "port": 62238
+      }
+    ],
+    "truncation": {
+      "truncated": true,
+      "evicted": 0,
+      "returned": 12,
+      "maxRecords": 12,
+      "maxBytes": 4096
+    }
+  }
+}

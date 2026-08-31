@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "run_id": "icook-hardening-2026-08-31",
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "worktree_parent": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees",
+  "invocations": [
+    {
+      "id": "wsl-discovery",
+      "unit_id": "wsl-discovery",
+      "role": "discovery",
+      "depends_on": [],
+      "candidate_invocations": [],
+      "owned_paths": []
+    },
+    {
+      "id": "scanner-discovery",
+      "unit_id": "scanner-discovery",
+      "role": "discovery",
+      "depends_on": [],
+      "candidate_invocations": [],
+      "owned_paths": []
+    },
+    {
+      "id": "history-implementer",
+      "unit_id": "history-implementer",
+      "role": "implementer",
+      "depends_on": [],
+      "candidate_invocations": [],
+      "owned_paths": [
+        "src/panels/terminal/ConsoleDockPanel.tsx",
+        "src/panels/terminal/ConsoleDockPanel.test.tsx"
+      ]
+    },
+    {
+      "id": "wsl-implementer",
+      "unit_id": "wsl-implementer",
+      "role": "implementer",
+      "depends_on": [],
+      "candidate_invocations": [],
+      "owned_paths": [
+        "src-tauri/src/wsl_agent/launcher.rs"
+      ]
+    },
+    {
+      "id": "scanner-implementer",
+      "unit_id": "scanner-implementer",
+      "role": "implementer",
+      "depends_on": [],
+      "candidate_invocations": [],
+      "owned_paths": [
+        "src-tauri/src/bus/secret_scan.rs"
+      ]
+    },
+    {
+      "id": "history-reviewer",
+      "unit_id": "history-reviewer",
+      "role": "reviewer",
+      "depends_on": [],
+      "candidate_invocations": [
+        "history-implementer"
+      ],
+      "owned_paths": []
+    },
+    {
+      "id": "wsl-reviewer",
+      "unit_id": "wsl-reviewer",
+      "role": "reviewer",
+      "depends_on": [],
+      "candidate_invocations": [
+        "wsl-implementer"
+      ],
+      "owned_paths": []
+    },
+    {
+      "id": "scanner-reviewer",
+      "unit_id": "scanner-reviewer",
+      "role": "reviewer",
+      "depends_on": [],
+      "candidate_invocations": [
+        "scanner-implementer"
+      ],
+      "owned_paths": []
+    },
+    {
+      "id": "integration",
+      "unit_id": "integration",
+      "role": "integrator",
+      "depends_on": [
+        "history-implementer",
+        "wsl-implementer",
+        "scanner-implementer"
+      ],
+      "candidate_invocations": [],
+      "owned_paths": [
+        "src/panels/terminal/ConsoleDockPanel.tsx",
+        "src/panels/terminal/ConsoleDockPanel.test.tsx",
+        "src-tauri/src/wsl_agent/launcher.rs",
+        "src-tauri/src/bus/secret_scan.rs"
+      ]
+    }
+  ]
+}

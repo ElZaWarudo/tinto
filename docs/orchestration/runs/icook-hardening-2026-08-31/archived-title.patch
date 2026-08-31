@@ -1,0 +1,93 @@
+diff --git a/src/panels/terminal/ConsoleDockPanel.test.tsx b/src/panels/terminal/ConsoleDockPanel.test.tsx
+index 624216f76285f3467ea99e70aefb04ebd0fd1612..b3a98a6243b8b30ab0d04dda464358aac410e953 100644
+--- a/src/panels/terminal/ConsoleDockPanel.test.tsx
++++ b/src/panels/terminal/ConsoleDockPanel.test.tsx
+@@ -136,7 +136,7 @@ function nestedDockApi() {
+       const panel = {
+         id: opts.id,
+         params: opts.params,
+-        api: { setActive: vi.fn(), location: { type: "grid" } },
++        api: { setActive: vi.fn(), setTitle: vi.fn(), location: { type: "grid" } },
+       } as unknown as IDockviewPanel;
+       panels[opts.id] = panel;
+       panelList.push(panel);
+@@ -489,6 +489,54 @@ describe("ConsoleDockPanel detach drop", () => {
+     unmount();
+   });
+ 
++  it("uses the persisted journal title when an archived tab has no first live message", async () => {
++    const sessionId = "sess-archived-with-evicted-first-message";
++    const persistedTitle = "Persisted title after timeline eviction";
++    consoleDock.openTerminal({ sessionId, repo: "/r/api", agentType: "codex", mode: "journal" });
++    sessionStoreMocks.state = {
++      sessions: {},
++      output: {},
++      outputTotal: {},
++      timeline: {
++        [sessionId]: [
++          {
++            id: "later-message",
++            session_id: sessionId,
++            kind: "agent_message",
++            text: "The first user message is no longer in the capped timeline.",
++            timestamp_ms: 2,
++          },
++        ],
++      },
++    };
++    clientMocks.listAgentJournalSessions.mockResolvedValue([
++      {
++        id: sessionId,
++        repo: "/r/api",
++        agent_type: "codex",
++        status: "completed",
++        started_at_ms: 1,
++        updated_at_ms: 3,
++        event_count: 2,
++        first_user_message: persistedTitle,
++      },
++    ]);
++
++    const { unmount } = render(<ConsoleDockPanel />);
++    const panel = await waitFor(() => {
++      const current = dockviewMocks.api?.getPanel(agentTerminalPanelId(sessionId));
++      expect(current).toBeDefined();
++      return current!;
++    });
++
++    await waitFor(() =>
++      expect(panel.api.setTitle).toHaveBeenCalledWith(
++        `Codex · api · ${persistedTitle}`,
++      ),
++    );
++    unmount();
++  });
++
+   it("distinguishes saved conversations with identical titles by session identity", async () => {
+     clientMocks.listAgentJournalSessions.mockResolvedValue(
+       ["11111111-first", "22222222-second"].map((id) => ({
+diff --git a/src/panels/terminal/ConsoleDockPanel.tsx b/src/panels/terminal/ConsoleDockPanel.tsx
+index 9ceec2db925ee85c3d4b8f8c815aac52254c1ff4..7d7f5a2aa0abb69bbad9e6d7baebec6565097852 100644
+--- a/src/panels/terminal/ConsoleDockPanel.tsx
++++ b/src/panels/terminal/ConsoleDockPanel.tsx
+@@ -245,15 +245,18 @@ export function ConsoleDockPanel({
+     const api = apiRef.current;
+     if (!api) return;
+     for (const terminal of openTerminals) {
+-      const firstUserMessage = agentState.timeline[terminal.sessionId]?.find(
++      const liveFirstUserMessage = agentState.timeline[terminal.sessionId]?.find(
+         (item) => item.kind === "user_message",
+       )?.text;
++      const firstUserMessage =
++        liveFirstUserMessage ??
++        journalSessions.find((session) => session.id === terminal.sessionId)?.first_user_message;
+       if (!firstUserMessage) continue;
+       api
+         .getPanel(agentTerminalPanelId(terminal.sessionId))
+         ?.api.setTitle(agentConversationTabTitle(terminal, conversationTitle(firstUserMessage)));
+     }
+-  }, [agentState.timeline, openTerminals]);
++  }, [agentState.timeline, journalSessions, openTerminals]);
+ 
+   const retryJournalLoad = () => {
+     setJournalLoadState(journalLoadedOnceRef.current ? "refreshing" : "loading");

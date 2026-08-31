@@ -1,0 +1,67 @@
+{
+  "acceptance_criteria": [
+    {
+      "description": "Identify exact loss boundary, minimal static classification design, tests, and distinguish observed timeout from unproven config failure.",
+      "id": "AC-1"
+    }
+  ],
+  "closed_decisions": [
+    "Workspace C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/scanner-discovery; source 59f0cecafb41c08db6a4c18001fa24131da7003e; baseline e2541e203c7cf504d4a5e8f888dc48da89db8f1a; no dependency patches.",
+    "You are not alone; read-only discovery only. No extra skills. Deadline5min. No tests, no ICook or GUI.",
+    "Do not change rules, ignore paths, timeout8s, report parsing success gate or degraded heuristic state. Infer only recognized static categories; unknown remains unknown. Return one discovery_complete checkpoint with edit_path_found, planned_files, evidence_digest and no prose."
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rtk read",
+      "rtk rg",
+      "rtk git diff",
+      "rtk git status"
+    ],
+    "verification": {
+      "focused": [],
+      "max_retries_per_command": 0,
+      "natural": []
+    }
+  },
+  "contract_hash": "sha256:b82c232d88d1714ea7bb72caadb4e460b1ffc22b4eddf328971d464766022457",
+  "contract_id": "icook-hardening-2026-08-31:scanner-discovery",
+  "evidence_policy": {
+    "changed_files_source": "root-diff",
+    "minimum_command_trust": "self-reported"
+  },
+  "execution_budget": {
+    "discovery_passes": 1,
+    "extra_verification": "forbidden",
+    "fix_rounds": 0,
+    "implementation_rounds": 0,
+    "max_elapsed_ms": 300000,
+    "review_rounds": 0
+  },
+  "forbidden_changes": [
+    "No edits, verification, staging, commits, branches, worktree operations, ICook commands, GUI or secret/report reads."
+  ],
+  "lane": "deep",
+  "objective": "Read-only single-pass diagnosis of TIN-HARD-06 scanner diagnostic loss. Source scan_with_gitleaks discards nonzero stderr and maps all to ScanFailed with unsupported config blame. Root reproduced Gitleaks8.30.1 exit1 stderr permission denied followed by context deadline exceeded. Find minimum edit path, tests and safe static diagnostic classification; never expose raw stderr, secret values, paths, report contents. No implementation.",
+  "owned_files": [
+    "src-tauri/src/bus/secret_scan.rs"
+  ],
+  "profile": "luna_xhigh",
+  "required_certifications": [],
+  "required_context": [
+    "AGENTS.md"
+  ],
+  "schema_version": 1,
+  "supervision": {
+    "mode": "discovery-checkpoint",
+    "transition_after_ms": 0
+  },
+  "terminal_protocol": {
+    "grace_actions": 0,
+    "return_when": [
+      "acceptance_criteria_resolved"
+    ]
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "unit_id": "scanner-discovery"
+}

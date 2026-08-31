@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "profile": "luna_xhigh",
+  "contract_hash": "sha256:fa889eed0d713495d0b2bec2efc234e8a0ba2b34950ef531fc0c67868ccc6351",
+  "worker_id": "/root/scanner_implementation",
+  "started_at_ms": 1788173211596,
+  "returned_at_ms": 1788173515561,
+  "first_change_at_ms": 1788173285005,
+  "last_required_command_finished_at_ms": 1788173350584,
+  "phase_duration_ms": {
+    "discovery": 0,
+    "implementation": 303965
+  },
+  "checkpoint_count": 1,
+  "interventions_sent": [
+    "dispatch_implementation"
+  ],
+  "final": {
+    "status": "done",
+    "phase": "closeout",
+    "remaining_actions": [],
+    "terminal_ready": true,
+    "acceptance_criteria_resolved": true,
+    "acceptance_evidence": [
+      {
+        "criterion_id": "AC-1",
+        "status": "satisfied",
+        "evidence": "Added fixed timeout and permission-denied ScanFailure variants and classified failed-process diagnostics without retaining their text; focused tests passed."
+      },
+      {
+        "criterion_id": "AC-2",
+        "status": "satisfied",
+        "evidence": "Status output remains fixed category/message text, explicit context deadlines take precedence over earlier permission warnings, ambiguous markers remain generic, and tests assert no diagnostic, secret, path, or config text leaks; degraded heuristic fallback is unchanged."
+      },
+      {
+        "criterion_id": "AC-3",
+        "status": "satisfied",
+        "evidence": "The exact focused MSVC command passed with 9 tests passed and 0 failed, including synthetic timeout, permission, unknown, ambiguous, and non-disclosure regressions."
+      }
+    ],
+    "last_required_command": "rtk cargo +1.97.1-x86_64-pc-windows-msvc test --offline --locked --manifest-path src-tauri/Cargo.toml --target-dir C:/Users/User/Documents/personal/tinto/src-tauri/target --lib bus::secret_scan::tests -- --test-threads=1",
+    "verification": {
+      "attempted": [
+        {
+          "command": "rtk cargo +1.97.1-x86_64-pc-windows-msvc test --offline --locked --manifest-path src-tauri/Cargo.toml --target-dir C:/Users/User/Documents/personal/tinto/src-tauri/target --lib bus::secret_scan::tests -- --test-threads=1",
+          "attempts": 1,
+          "outcome": "passed"
+        }
+      ],
+      "skipped": []
+    },
+    "verification_commands_run": [
+      "rtk cargo +1.97.1-x86_64-pc-windows-msvc test --offline --locked --manifest-path src-tauri/Cargo.toml --target-dir C:/Users/User/Documents/personal/tinto/src-tauri/target --lib bus::secret_scan::tests -- --test-threads=1"
+    ],
+    "unowned_failures": []
+  },
+  "command_evidence": {
+    "trust": "self-reported",
+    "commands": [
+      {
+        "command": "rtk read C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\scanner-implementation-envelope.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\scanner-implementation-worker-contract.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read C:\\Users\\User\\.agents\\skills\\krt-swarm-seneschal\\references\\worker-terminal.schema.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read AGENTS.md",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk read src-tauri/src/bus/secret_scan.rs",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk cargo +1.97.1-x86_64-pc-windows-msvc test --offline --locked --manifest-path src-tauri/Cargo.toml --target-dir C:/Users/User/Documents/personal/tinto/src-tauri/target --lib bus::secret_scan::tests -- --test-threads=1",
+        "kind": "verification"
+      },
+      {
+        "command": "rtk proxy powershell -NoProfile -Command 'Write-Output $env:TINTO_TURN_DONE_MARKER'",
+        "kind": "exact"
+      },
+      {
+        "command": "rtk python3 'C:\\Users\\User\\.agents\\skills\\krt-swarm-seneschal\\scripts\\validate_worker_terminal.py' --contract 'C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\scanner-implementation-worker-contract.json' --input C:/Users/User/AppData/Local/Temp/icook-hardening-scanner-terminal.json",
+        "kind": "read-only"
+      },
+      {
+        "command": "rtk python3 'C:\\Users\\User\\.agents\\skills\\krt-swarm-seneschal\\scripts\\validate_worker_terminal.py' --contract 'C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\scanner-implementation-worker-contract.json' --input C:/Users/User/AppData/Local/Temp/icook-hardening-scanner-terminal.json",
+        "kind": "read-only"
+      }
+    ]
+  },
+  "terminal_validation_command": "rtk python3 'C:\\Users\\User\\.agents\\skills\\krt-swarm-seneschal\\scripts\\validate_worker_terminal.py' --contract 'C:\\Users\\User\\Documents\\personal\\tinto\\docs\\orchestration\\runs\\icook-hardening-2026-08-31\\scanner-implementation-worker-contract.json' --input C:/Users/User/AppData/Local/Temp/icook-hardening-scanner-terminal.json",
+  "terminal_validation_exit_code": 0,
+  "certifications": [
+    {
+      "role": "reviewer",
+      "actor_id": "/root/scanner_review",
+      "status": "passed",
+      "contract_hash": "sha256:fa889eed0d713495d0b2bec2efc234e8a0ba2b34950ef531fc0c67868ccc6351",
+      "diff_digest": "sha256:42c85e9e66dbe3050ffd17bed4dde371279753d7a433344a4441c8035879aceb",
+      "findings": []
+    },
+    {
+      "role": "security-sentinel",
+      "actor_id": "/root/scanner_review",
+      "status": "passed",
+      "contract_hash": "sha256:fa889eed0d713495d0b2bec2efc234e8a0ba2b34950ef531fc0c67868ccc6351",
+      "diff_digest": "sha256:42c85e9e66dbe3050ffd17bed4dde371279753d7a433344a4441c8035879aceb",
+      "findings": []
+    }
+  ],
+  "checkpoint": {
+    "event": "discovery_complete",
+    "discovery_complete_at_ms": 1788173213425,
+    "edit_path_found": true,
+    "planned_files": [
+      "src-tauri/src/bus/secret_scan.rs"
+    ],
+    "evidence_digest": "edit src-tauri/src/bus/secret_scan.rs | symbol=scan_with_gitleaks, ScanFailure, tests; pattern=nonzero output discards stderr and returns ScanFailed with unsupported config blame; why=conservative static timeout/permission classification with opaque fallback preserves scanner enforcement. Root accepted this separate discovery checkpoint in initial dispatch; no new discovery occurred here."
+  },
+  "discovery_returned_at_ms": 1788173213425,
+  "implementation_started_at_ms": 1788173213425
+}

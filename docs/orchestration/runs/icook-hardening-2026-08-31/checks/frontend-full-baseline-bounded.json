@@ -1,0 +1,17 @@
+{
+  "name": "frontend-full-baseline-bounded",
+  "cwd": "C:/Users/User/Documents/personal/tinto",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "--maxWorkers=2"
+  ],
+  "started_at": "2026-08-31T10:39:51.672Z",
+  "finished_at": "2026-08-31T10:42:51.706Z",
+  "exit_code": null,
+  "signal": "SIGTERM",
+  "error": "ETIMEDOUT",
+  "stdout": "\n RUN  v4.1.11 C:/Users/User/Documents/personal/tinto\n\n ❯ src/workbench/wslAbsence.test.ts (102 tests | 1 failed) 25ms\n     × keeps WSL text isolated from visible runtime UI in src/panels/terminal/ConsoleDockPanel.tsx 6ms\n",
+  "stderr": ""
+}

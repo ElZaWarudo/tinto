@@ -1,0 +1,322 @@
+diff --git a/src-tauri/src/wsl_agent/launcher.rs b/src-tauri/src/wsl_agent/launcher.rs
+index 80433420054b0a74b0fcf7bc4dea7fa5ea77b7cf..d83edf60f3f6f6c37d9f5a79c5074bcb9b3ccc5c 100644
+--- a/src-tauri/src/wsl_agent/launcher.rs
++++ b/src-tauri/src/wsl_agent/launcher.rs
+@@ -7,7 +7,7 @@ use std::io::Read;
+ use std::io::{BufRead, Write};
+ use std::path::{Path, PathBuf};
+ #[cfg(target_os = "windows")]
+-use std::process::{Child, ChildStdin, Command, Stdio};
++use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+ #[cfg(target_os = "windows")]
+ use std::sync::mpsc;
+ #[cfg(target_os = "windows")]
+@@ -539,12 +539,88 @@ pub(crate) fn windows_path_to_wsl_mount(path: &std::path::Path) -> Result<String
+     Ok(format!("/mnt/{}/{}", letter.to_ascii_lowercase(), rest))
+ }
+ 
++#[cfg(target_os = "windows")]
++#[derive(Default)]
++struct ProcessStderr {
++    tail: Vec<u8>,
++    truncated: bool,
++}
++
++#[cfg(target_os = "windows")]
++impl ProcessStderr {
++    fn append(&mut self, bytes: &[u8]) {
++        const LIMIT: usize = 4096;
++        let overflow = (self.tail.len() + bytes.len()).saturating_sub(LIMIT);
++        self.truncated |= overflow > 0;
++        let discard = overflow.min(self.tail.len());
++        self.tail.drain(..discard);
++        self.tail.extend_from_slice(&bytes[bytes.len().saturating_sub(LIMIT)..]);
++    }
++
++    fn label(&self) -> &'static str {
++        let text = String::from_utf8_lossy(&self.tail).to_ascii_lowercase();
++        if text.contains("permission denied") || text.contains("access is denied") {
++            "stderr indica acceso denegado"
++        } else if text.contains("command not found") || text.contains("no such file or directory") {
++            "stderr indica comando o archivo no encontrado"
++        } else if self.tail.is_empty() {
++            "stderr no disponible"
++        } else {
++            "causa de stderr no reconocida; contenido omitido"
++        }
++    }
++}
++
++#[cfg(target_os = "windows")]
++fn drain_process_stderr(mut reader: impl Read, capture: &Mutex<ProcessStderr>) {
++    let mut buffer = [0_u8; 512];
++    while let Ok(count) = reader.read(&mut buffer) {
++        if count == 0 {
++            break;
++        }
++        if let Ok(mut captured) = capture.lock() {
++            captured.append(&buffer[..count]);
++        }
++    }
++}
++
++#[cfg(target_os = "windows")]
++fn capture_process_stderr(child: &mut Child) -> Arc<Mutex<ProcessStderr>> {
++    let capture = Arc::new(Mutex::new(ProcessStderr::default()));
++    if let Some(stderr) = child.stderr.take() {
++        let target = Arc::clone(&capture);
++        std::thread::spawn(move || drain_process_stderr(stderr, &target));
++    }
++    capture
++}
++
++#[cfg(target_os = "windows")]
++fn with_process_diagnostics(
++    mut error: AgentError,
++    status: Option<ExitStatus>,
++    capture: &Mutex<ProcessStderr>,
++) -> AgentError {
++    let exit = status.and_then(|status| status.code())
++        .map(|code| code.to_string())
++        .unwrap_or_else(|| "no disponible".to_string());
++    error.message.push_str(&format!("; codigo de salida: {exit}"));
++    if let Ok(captured) = capture.lock() {
++        error.message.push_str("; ");
++        error.message.push_str(captured.label());
++        if captured.truncated {
++            error.message.push_str("; stderr recortado");
++        }
++    }
++    error
++}
++
+ #[cfg(target_os = "windows")]
+ struct PooledAgent {
+     child: Mutex<Child>,
+     io: Mutex<()>,
+     stdin: Mutex<ChildStdin>,
+     stdout: Mutex<mpsc::Receiver<Result<String, AgentError>>>,
++    stderr: Arc<Mutex<ProcessStderr>>,
+ }
+ 
+ #[cfg(target_os = "windows")]
+@@ -672,11 +748,12 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
+             .args(args)
+             .stdin(Stdio::piped())
+             .stdout(Stdio::piped())
+-            .stderr(Stdio::null()),
++            .stderr(Stdio::piped()),
+     )
+     .spawn()
+     .map_err(|error| map_spawn_error(program, error))?;
+ 
++    let stderr = capture_process_stderr(&mut child);
+     let stdin = match child.stdin.take() {
+         Some(stdin) => stdin,
+         None => {
+@@ -733,6 +810,7 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
+         io: Mutex::new(()),
+         stdin: Mutex::new(stdin),
+         stdout: Mutex::new(rx),
++        stderr,
+     })
+ }
+ 
+@@ -754,10 +832,10 @@ impl PooledAgent {
+                     "no se pudo observar el agente",
+                 )
+             })? {
+-                return Err(AgentError::new(
++                return Err(with_process_diagnostics(AgentError::new(
+                     AgentErrorCategory::ChildExit,
+                     format!("el agente WSL termino con {status}"),
+-                ));
++                ), Some(status), &self.stderr));
+             }
+         }
+ 
+@@ -769,14 +847,14 @@ impl PooledAgent {
+             stdin
+                 .write_all(request_line.as_bytes())
+                 .and_then(|_| stdin.flush())
+-                .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado"))?;
++                .map_err(|_| self.diagnose(AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado")))?;
+         }
+ 
+         let stdout = self
+             .stdout
+             .lock()
+             .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdout bloqueado"))?;
+-        match stdout.recv_timeout(timeout) {
++        let result = match stdout.recv_timeout(timeout) {
+             Ok(result) => result,
+             Err(mpsc::RecvTimeoutError::Timeout) => Err(AgentError::new(
+                 AgentErrorCategory::Timeout,
+@@ -786,7 +864,14 @@ impl PooledAgent {
+                 AgentErrorCategory::ChildExit,
+                 "el agente WSL cerro la conexion",
+             )),
+-        }
++        };
++        result.map_err(|error| self.diagnose(error))
++    }
++
++    fn diagnose(&self, error: AgentError) -> AgentError {
++        let status = self.child.lock().ok()
++            .and_then(|mut child| child.try_wait().ok().flatten());
++        with_process_diagnostics(error, status, &self.stderr)
+     }
+ 
+     fn kill(&self) {
+@@ -828,18 +913,22 @@ impl HandshakeTransport for StdCommandTransport {
+                 .args(args)
+                 .stdin(Stdio::piped())
+                 .stdout(Stdio::piped())
+-                .stderr(Stdio::null()),
++                .stderr(Stdio::piped()),
+         )
+         .spawn()
+         .map_err(|error| map_spawn_error(program, error))?;
+ 
++        let stderr = capture_process_stderr(&mut child);
+         {
+             let mut stdin = child.stdin.take().ok_or_else(|| {
+                 AgentError::new(AgentErrorCategory::SpawnFailed, "stdin no disponible")
+             })?;
+             stdin
+                 .write_all(request_line.as_bytes())
+-                .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado"))?;
++                .map_err(|_| with_process_diagnostics(
++                    AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado"),
++                    child.try_wait().ok().flatten(), &stderr,
++                ))?;
+         }
+ 
+         let stdout = child.stdout.take().ok_or_else(|| {
+@@ -858,7 +947,10 @@ impl HandshakeTransport for StdCommandTransport {
+         loop {
+             if let Ok(result) = rx.try_recv() {
+                 let line = result.map_err(|_| {
+-                    AgentError::new(AgentErrorCategory::ChildExit, "stdout cerrado")
++                    with_process_diagnostics(
++                        AgentError::new(AgentErrorCategory::ChildExit, "stdout cerrado"),
++                        child.try_wait().ok().flatten(), &stderr,
++                    )
+                 })?;
+                 let status = child.wait().map_err(|_| {
+                     AgentError::new(
+@@ -867,10 +959,10 @@ impl HandshakeTransport for StdCommandTransport {
+                     )
+                 })?;
+                 if !status.success() && line.trim().is_empty() {
+-                    return Err(AgentError::new(
++                    return Err(with_process_diagnostics(AgentError::new(
+                         AgentErrorCategory::ChildExit,
+                         "el agente termino sin respuesta valida",
+-                    ));
++                    ), Some(status), &stderr));
+                 }
+                 return Ok(line);
+             }
+@@ -882,20 +974,20 @@ impl HandshakeTransport for StdCommandTransport {
+                 )
+             })? {
+                 if !status.success() {
+-                    return Err(AgentError::new(
++                    return Err(with_process_diagnostics(AgentError::new(
+                         AgentErrorCategory::ChildExit,
+                         "el agente termino antes del handshake",
+-                    ));
++                    ), Some(status), &stderr));
+                 }
+             }
+ 
+             if Instant::now() >= deadline {
+                 let _ = child.kill();
+                 let _ = child.wait();
+-                return Err(AgentError::new(
++                return Err(with_process_diagnostics(AgentError::new(
+                     AgentErrorCategory::Timeout,
+                     "timeout esperando handshake del agente",
+-                ));
++                ), None, &stderr));
+             }
+ 
+             std::thread::sleep(Duration::from_millis(5));
+@@ -1272,6 +1364,76 @@ mod tests {
+         }));
+     }
+ 
++    #[cfg(target_os = "windows")]
++    #[test]
++    fn stderr_capture_drains_past_its_bound_and_never_exposes_content() {
++        let mut bytes = vec![b'x'; 32_768];
++        bytes.extend_from_slice(b"permission denied private/path synthetic-secret");
++        let length = bytes.len();
++        let mut reader = std::io::Cursor::new(bytes);
++        let capture = Mutex::new(ProcessStderr::default());
++        drain_process_stderr(&mut reader, &capture);
++        assert_eq!(reader.position() as usize, length);
++        assert_eq!(capture.lock().unwrap().tail.len(), 4096);
++        let error = with_process_diagnostics(
++            AgentError::new(AgentErrorCategory::ChildExit, "stdout cerrado"),
++            None,
++            &capture,
++        );
++        assert!(error.message.contains("stderr indica acceso denegado"));
++        assert!(error.message.contains("stderr recortado"));
++        assert!(error.message.contains("codigo de salida: no disponible"));
++        assert!(!error.message.contains("synthetic-secret"));
++        assert!(!error.message.contains("private/path"));
++        let mut unknown = ProcessStderr::default();
++        unknown.append(b"synthetic-secret");
++        assert_eq!(unknown.label(), "causa de stderr no reconocida; contenido omitido");
++    }
++
++    #[cfg(target_os = "windows")]
++    #[test]
++    fn pooled_exit_retains_observable_status_and_fixed_diagnostics() {
++        let agent = start_pooled_agent(&[
++            "cmd.exe".to_string(), "/C".to_string(), "exit /b 17".to_string(),
++        ]).unwrap();
++        agent.child.lock().unwrap().wait().unwrap();
++        // Deterministic snapshot: collector draining/bounds are tested separately.
++        agent.stderr.lock().unwrap().append(b"command not found synthetic-secret");
++        let error = agent.exchange("{}\n", Duration::from_secs(2)).unwrap_err();
++        assert_eq!(error.category, AgentErrorCategory::ChildExit);
++        assert!(error.message.contains("codigo de salida: 17"));
++        assert!(error.message.contains("comando o archivo no encontrado"));
++        assert!(!error.message.contains("synthetic-secret"));
++    }
++
++    #[cfg(target_os = "windows")]
++    #[test]
++    fn one_shot_drains_stderr_before_large_stdin_and_keeps_success() {
++        let argv = vec![
++            "powershell.exe".to_string(), "-NoProfile".to_string(),
++            "-NonInteractive".to_string(), "-Command".to_string(),
++            "[Console]::Error.Write(('x' * 32768)); $null = [Console]::ReadLine(); [Console]::Out.WriteLine('ready')".to_string(),
++        ];
++        let request = format!("{}\n", "x".repeat(131_072));
++        let response = StdCommandTransport.exchange(&argv, &request, Duration::from_secs(5)).unwrap();
++        assert_eq!(response.trim(), "ready");
++    }
++
++    #[cfg(target_os = "windows")]
++    #[test]
++    fn pooled_timeout_keeps_timeout_category_and_unknown_exit_status() {
++        let agent = start_pooled_agent(&[
++            "powershell.exe".to_string(), "-NoProfile".to_string(),
++            "-NonInteractive".to_string(), "-Command".to_string(),
++            "$null = [Console]::ReadLine(); Start-Sleep -Seconds 5".to_string(),
++        ]).unwrap();
++        let result = agent.exchange("{}\n", Duration::from_millis(20));
++        agent.kill();
++        let error = result.unwrap_err();
++        assert_eq!(error.category, AgentErrorCategory::Timeout);
++        assert!(error.message.contains("codigo de salida: no disponible"));
++    }
++
+     #[test]
+     fn windows_path_translation_uses_wsl_mount_shape() {
+         let translated = windows_path_to_wsl_mount(std::path::Path::new("C:\\Users\\Mayor\\tinto"))

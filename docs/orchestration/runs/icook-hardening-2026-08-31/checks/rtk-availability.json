@@ -1,0 +1,15 @@
+{
+  "name": "rtk-availability",
+  "cwd": "C:/Users/User/Documents/personal/tinto",
+  "executable": "rtk",
+  "args": [
+    "--version"
+  ],
+  "started_at": "2026-08-31T10:19:04.374Z",
+  "finished_at": "2026-08-31T10:19:04.383Z",
+  "exit_code": null,
+  "signal": null,
+  "error": "ENOENT",
+  "stdout": "",
+  "stderr": ""
+}

@@ -1,0 +1,8 @@
+{
+  "role": "reviewer",
+  "actor_id": "/root/title_root_review",
+  "status": "passed",
+  "contract_hash": "sha256:08fc4700a7773e51f7f3ed2f334a30d0d6a3c811f63a6df6a98cf7138ddcbc3b",
+  "diff_digest": "sha256:6c9611f1cb4a3e2a9428f4e026d0a9463947a2f8ba6fdceeb59765918ad8a100",
+  "findings": []
+}

@@ -1,0 +1,21 @@
+{
+  "name": "worker-materialization",
+  "cwd": "C:/Users/User/Documents/personal/tinto",
+  "executable": "python",
+  "args": [
+    "C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/materialize_worker_contract.py",
+    "--input",
+    "docs/orchestration/runs/icook-hardening-2026-08-31/wsl-draft.json",
+    "--repo-root",
+    "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/wsl-discovery",
+    "--output",
+    "docs/orchestration/runs/icook-hardening-2026-08-31/wsl-worker-contract.json"
+  ],
+  "started_at": "2026-08-31T10:19:04.489Z",
+  "finished_at": "2026-08-31T10:19:05.005Z",
+  "exit_code": 2,
+  "signal": null,
+  "error": null,
+  "stdout": "",
+  "stderr": "usage: materialize_worker_contract.py [-h] --input INPUT --repo-root REPO_ROOT\r\n                                      [--output OUTPUT] [--check]\r\nmaterialize_worker_contract.py: error: contract commands must start with rtk: Get-Content -LiteralPath\r\n"
+}

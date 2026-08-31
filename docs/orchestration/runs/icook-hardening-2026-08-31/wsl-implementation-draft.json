@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "contract_id": "icook-hardening-2026-08-31:wsl-diagnostics",
+  "unit_id": "wsl-diagnostics",
+  "lane": "deep",
+  "profile": "luna_xhigh",
+  "objective": "Implement the confirmed TIN-HARD-01 launcher diagnostic-loss repair, only launcher.rs. Preserve bounded safe failure causes and process exit status for pooled and one-shot transport errors, without changing existing retry predicates or uncertain-send semantics. Actual Ubuntu cause remains unknown; root owns native acceptance.",
+  "owned_files": [
+    "src-tauri/src/wsl_agent/launcher.rs"
+  ],
+  "required_context": [
+    "AGENTS.md",
+    "src-tauri/src/wsl_agent/protocol.rs",
+    "src-tauri/src/wsl_agent/shell_env.rs"
+  ],
+  "closed_decisions": [
+    "Worktree C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/wsl-implementer; source 59f0cecafb41c08db6a4c18001fa24131da7003e baseline e2541e203c7cf504d4a5e8f888dc48da89db8f1a; dependencies []. You are not alone; preserve others' edits.",
+    "Read-only discovery completed: start_pooled_agent and StdCommandTransport discard stderr via Stdio::null; EOF/read errors use generic ChildExit. Capture bounded stderr while continuously draining it, retain exit status when observable before cleanup, do not wait indefinitely for exit/stderr/descendants.",
+    "Do NOT surface raw stderr, command arguments, environment, request text, tokens, secrets or arbitrary paths. Use fixed allowlisted diagnostic labels (e.g missing executable, permission denied) and exit code; unknown stderr remains explicitly omitted/unknown. Test a synthetic secret marker never appears. Do not infer distro cause from a category.",
+    "Keep AgentError existing category/message shape, retry-safe predicate, two-attempt policy, pool cleanup and mutation no-retry unchanged. No public schema or unrelated race refactors.",
+    "One narrowed implementation phase; no rediscovery. Focused tests must exercise deterministic Windows child failure, bounded diagnostic retention, unknown/raw content suppression, timeout behavior and retry-safety existing assertions. Tests may spawn cmd.exe or PowerShell hidden through existing helper, not WSL or GUI.",
+    "Cargo verification uses pristine committed lockfile offline and existing shared target cache. If dependency resolution blocks, report exact baseline prerequisite; do not edit Cargo files or run extra commands.",
+    "Final terminal schema C:/Users/User/.agents/skills/krt-swarm-seneschal/references/worker-terminal.schema.json. Before final validator emit TINTO turn marker; validator final command. Deadline15min."
+  ],
+  "forbidden_changes": [
+    "No ICook commands/files, GUI, unsafe retries, rules or sandbox changes, dependency/config edits, staging/commits/worktree actions, extra skills, raw stderr publication, extra verification."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "description": "Pooled and one-shot failure messages retain safely bounded known diagnostics and observable exit status, including EOF failure; no indefinite wait introduced."
+    },
+    {
+      "id": "AC-2",
+      "description": "Existing retry-safe decision, attempt count and uncertain-send behavior unchanged; secret/unknown stderr content never emitted."
+    },
+    {
+      "id": "AC-3",
+      "description": "Add focused deterministic regressions; run exactly required focused verification, report environment failures honestly."
+    }
+  ],
+  "commands": {
+    "exact": [],
+    "read_only_prefixes": [
+      "rtk read",
+      "rtk rg",
+      "rtk git diff",
+      "rtk git status",
+      "rtk python3 'C:/Users/User/.agents/skills/krt-swarm-seneschal/scripts/validate_worker_terminal.py'"
+    ],
+    "verification": {
+      "focused": [
+        "rtk cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --target-dir C:/Users/User/Documents/personal/tinto/src-tauri/target --lib wsl_agent::launcher::tests -- --test-threads=1"
+      ],
+      "natural": [],
+      "max_retries_per_command": 1
+    }
+  },
+  "execution_budget": {
+    "discovery_passes": 0,
+    "implementation_rounds": 1,
+    "fix_rounds": 2,
+    "review_rounds": 1,
+    "extra_verification": "forbidden",
+    "max_elapsed_ms": 900000
+  },
+  "supervision": {
+    "mode": "discovery-checkpoint",
+    "transition_after_ms": 0
+  },
+  "terminal_protocol": {
+    "return_when": [
+      "acceptance_criteria_resolved",
+      "required_checks_attempted",
+      "state_reconciled"
+    ],
+    "grace_actions": 0
+  },
+  "terminal_schema": "worker-terminal-v1",
+  "required_certifications": [
+    "reviewer",
+    "security-sentinel"
+  ],
+  "evidence_policy": {
+    "changed_files_source": "root-diff",
+    "minimum_command_trust": "self-reported"
+  }
+}

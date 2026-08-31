@@ -1,0 +1,217 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"generation\":2,\"observedAt\":\"2026-08-31T10:17:30.118Z\",\"window\":{\"label\":\"main\",\"title\":\"Tinto\",\"width\":800,\"height\":600},\"nodes\":[{\"ref\":\"e2-1\",\"kind\":\"status\",\"tag\":\"span\",\"role\":\"status\",\"name\":\"Observación de archivos activa\",\"text\":\"● observando\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":621.09375,\"y\":4.5,\"width\":72.90625,\"height\":18},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}},{\"ref\":\"e2-2\",\"kind\":\"status\",\"tag\":\"p\",\"role\":\"status\",\"text\":\"Ubuntu-24.04:ICook actualizado: 308 archivos con cambios y 0 señales.\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":-1,\"y\":320.375,\"width\":1,\"height\":1},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}},{\"ref\":\"e2-3\",\"kind\":\"status\",\"tag\":\"div\",\"role\":\"status\",\"name\":\"Gitleaks no pudo completar el análisis; revisa .gitleaks.toml. Se usó el detector básico.\",\"text\":\"Gitleaks falló Detector básico activo\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":61,\"y\":583.375,\"width\":719,\"height\":24.5},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}},{\"ref\":\"e2-4\",\"kind\":\"status\",\"tag\":\"div\",\"role\":\"status\",\"text\":\"Sin cambios por analizar\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":61,\"y\":901.375,\"width\":719,\"height\":24.5},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}},{\"ref\":\"e2-5\",\"kind\":\"status\",\"tag\":\"div\",\"role\":\"alert\",\"text\":\"Error: timeout esperando respuesta del agente WSL Reintentar\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":51,\"y\":935.875,\"width\":739,\"height\":60},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}},{\"ref\":\"e2-6\",\"kind\":\"status\",\"tag\":\"div\",\"role\":\"status\",\"text\":\"Sin cambios por analizar\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":61,\"y\":1255.875,\"width\":719,\"height\":24.5},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}},{\"ref\":\"e2-7\",\"kind\":\"status\",\"tag\":\"div\",\"role\":\"status\",\"text\":\"Resumen opened\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":-1,\"y\":599,\"width\":1,\"height\":1},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}},{\"ref\":\"e2-8\",\"kind\":\"status\",\"tag\":\"div\",\"role\":\"alert\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":-1,\"y\":599,\"width\":1,\"height\":1},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}}],\"truncation\":{\"truncated\":false,\"reasons\":[],\"counts\":{\"visited\":276,\"candidates\":121,\"matched\":8,\"returned\":8,\"filtered\":113},\"refineWith\":[]}}"
+    }
+  ],
+  "structuredContent": {
+    "generation": 2,
+    "observedAt": "2026-08-31T10:17:30.118Z",
+    "window": {
+      "label": "main",
+      "title": "Tinto",
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "ref": "e2-1",
+        "kind": "status",
+        "tag": "span",
+        "role": "status",
+        "name": "Observación de archivos activa",
+        "text": "● observando",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": 621.09375,
+          "y": 4.5,
+          "width": 72.90625,
+          "height": 18
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      },
+      {
+        "ref": "e2-2",
+        "kind": "status",
+        "tag": "p",
+        "role": "status",
+        "text": "Ubuntu-24.04:ICook actualizado: 308 archivos con cambios y 0 señales.",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": -1,
+          "y": 320.375,
+          "width": 1,
+          "height": 1
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      },
+      {
+        "ref": "e2-3",
+        "kind": "status",
+        "tag": "div",
+        "role": "status",
+        "name": "Gitleaks no pudo completar el análisis; revisa .gitleaks.toml. Se usó el detector básico.",
+        "text": "Gitleaks falló Detector básico activo",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": 61,
+          "y": 583.375,
+          "width": 719,
+          "height": 24.5
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      },
+      {
+        "ref": "e2-4",
+        "kind": "status",
+        "tag": "div",
+        "role": "status",
+        "text": "Sin cambios por analizar",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": 61,
+          "y": 901.375,
+          "width": 719,
+          "height": 24.5
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      },
+      {
+        "ref": "e2-5",
+        "kind": "status",
+        "tag": "div",
+        "role": "alert",
+        "text": "Error: timeout esperando respuesta del agente WSL Reintentar",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": 51,
+          "y": 935.875,
+          "width": 739,
+          "height": 60
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      },
+      {
+        "ref": "e2-6",
+        "kind": "status",
+        "tag": "div",
+        "role": "status",
+        "text": "Sin cambios por analizar",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": 61,
+          "y": 1255.875,
+          "width": 719,
+          "height": 24.5
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      },
+      {
+        "ref": "e2-7",
+        "kind": "status",
+        "tag": "div",
+        "role": "status",
+        "text": "Resumen opened",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": -1,
+          "y": 599,
+          "width": 1,
+          "height": 1
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      },
+      {
+        "ref": "e2-8",
+        "kind": "status",
+        "tag": "div",
+        "role": "alert",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": -1,
+          "y": 599,
+          "width": 1,
+          "height": 1
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      }
+    ],
+    "truncation": {
+      "truncated": false,
+      "reasons": [],
+      "counts": {
+        "visited": 276,
+        "candidates": 121,
+        "matched": 8,
+        "returned": 8,
+        "filtered": 113
+      },
+      "refineWith": []
+    }
+  }
+}

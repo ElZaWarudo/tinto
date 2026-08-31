@@ -1,0 +1,8 @@
+{
+  "role": "reviewer",
+  "actor_id": "/root/scanner_review",
+  "status": "passed",
+  "contract_hash": "sha256:fa889eed0d713495d0b2bec2efc234e8a0ba2b34950ef531fc0c67868ccc6351",
+  "diff_digest": "sha256:42c85e9e66dbe3050ffd17bed4dde371279753d7a433344a4441c8035879aceb",
+  "findings": []
+}

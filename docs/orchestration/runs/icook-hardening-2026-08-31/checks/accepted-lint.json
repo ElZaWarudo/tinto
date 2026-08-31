@@ -1,0 +1,17 @@
+{
+  "name": "accepted-lint",
+  "cwd": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/integration-accepted",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "node_modules/eslint/bin/eslint.js",
+    "src/panels/terminal/ConsoleDockPanel.tsx",
+    "src/panels/terminal/ConsoleDockPanel.test.tsx"
+  ],
+  "started_at": "2026-08-31T11:04:44.057Z",
+  "finished_at": "2026-08-31T11:04:47.925Z",
+  "exit_code": 1,
+  "signal": null,
+  "error": null,
+  "stdout": "\nC:\\Users\\User\\Documents\\personal\\tinto-hardening-worktrees\\icook-hardening-2026-08-31\\integration-accepted\\src\\panels\\terminal\\ConsoleDockPanel.tsx\n  315:5  error  Error: Calling setState synchronously within an effect can trigger cascading renders\n\nEffects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:\n* Update external systems with the latest state from React.\n* Subscribe for updates from some external system, calling setState in a callback function when external state changes.\n\nCalling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).\n\nC:\\Users\\User\\Documents\\personal\\tinto-hardening-worktrees\\icook-hardening-2026-08-31\\integration-accepted\\src\\panels\\terminal\\ConsoleDockPanel.tsx:315:5\n  313 |     if (launches.length === 0) return;\n  314 |     let alive = true;\n> 315 |     setQuickLaunchAvailability((current) => {\n      |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect\n  316 |       const next = { ...current };\n  317 |       for (const launch of launches) {\n  318 |         next[recentLaunchKey(launch)] = { state: \"checking\" };  react-hooks/set-state-in-effect\n\n✖ 1 problem (1 error, 0 warnings)\n\n",
+  "stderr": ""
+}

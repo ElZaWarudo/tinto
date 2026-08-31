@@ -1,0 +1,17 @@
+{
+  "name": "title-root-green",
+  "cwd": "C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/title-root",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "src/panels/terminal/ConsoleDockPanel.test.tsx"
+  ],
+  "started_at": "2026-08-31T10:45:21.072Z",
+  "finished_at": "2026-08-31T10:45:25.724Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "\n RUN  v4.1.11 C:/Users/User/Documents/personal/tinto-hardening-worktrees/icook-hardening-2026-08-31/title-root\n\n\n Test Files  1 passed (1)\n      Tests  33 passed (33)\n   Start at  12:45:21\n   Duration  4.06s (transform 489ms, setup 278ms, import 1.07s, tests 1.06s, environment 1.43s)\n\n",
+  "stderr": ""
+}

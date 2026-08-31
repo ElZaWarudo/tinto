@@ -1,0 +1,480 @@
+diff --git a/src-tauri/src/wsl_agent/launcher.rs b/src-tauri/src/wsl_agent/launcher.rs
+index 80433420054b0a74b0fcf7bc4dea7fa5ea77b7cf..13d5fa9ac20bbcf19bb27af8e71ff0f9bedd91cf 100644
+--- a/src-tauri/src/wsl_agent/launcher.rs
++++ b/src-tauri/src/wsl_agent/launcher.rs
+@@ -7,7 +7,9 @@ use std::io::Read;
+ use std::io::{BufRead, Write};
+ use std::path::{Path, PathBuf};
+ #[cfg(target_os = "windows")]
+-use std::process::{Child, ChildStdin, Command, Stdio};
++use std::process::{Child, ChildStderr, ChildStdin, Command, ExitStatus, Stdio};
++#[cfg(all(not(target_os = "windows"), test))]
++use std::process::ExitStatus;
+ #[cfg(target_os = "windows")]
+ use std::sync::mpsc;
+ #[cfg(target_os = "windows")]
+@@ -539,12 +541,66 @@ pub(crate) fn windows_path_to_wsl_mount(path: &std::path::Path) -> Result<String
+     Ok(format!("/mnt/{}/{}", letter.to_ascii_lowercase(), rest))
+ }
+ 
++#[cfg(any(target_os = "windows", test))]
++const MAX_CAPTURED_STDERR_BYTES: usize = 4096;
++
++#[cfg(any(target_os = "windows", test))]
++const DIAGNOSTIC_UNKNOWN: &str = "unknown";
++
++#[cfg(any(target_os = "windows", test))]
++fn safe_stderr_diagnostic(stderr: &[u8]) -> &'static str {
++    let text = String::from_utf8_lossy(stderr).to_ascii_lowercase();
++    if text.contains("permission denied")
++        || text.contains("access is denied")
++        || text.contains("permiso denegado")
++    {
++        return "permission denied";
++    }
++    if text.contains("not recognized as an internal or external command")
++        || text.contains("command not found")
++        || text.contains("executable file not found")
++        || text.contains("no such file or directory")
++        || text.contains("cannot find the file")
++        || text.contains("file not found")
++    {
++        return "missing executable";
++    }
++    DIAGNOSTIC_UNKNOWN
++}
++
++#[cfg(any(target_os = "windows", test))]
++fn child_failure_message(
++    context: &str,
++    status: Option<ExitStatus>,
++    stderr: &[u8],
++) -> String {
++    let status = status
++        .and_then(|status| status.code())
++        .map(|code| format!("; codigo de salida: {code}"))
++        .unwrap_or_default();
++    format!(
++        "{context}{status}; diagnostico: {}",
++        safe_stderr_diagnostic(stderr)
++    )
++}
++
++#[cfg(any(target_os = "windows", test))]
++fn child_failure_error(
++    category: AgentErrorCategory,
++    context: &str,
++    status: Option<ExitStatus>,
++    stderr: &[u8],
++) -> AgentError {
++    AgentError::new(category, child_failure_message(context, status, stderr))
++}
++
+ #[cfg(target_os = "windows")]
+ struct PooledAgent {
+     child: Mutex<Child>,
+     io: Mutex<()>,
+     stdin: Mutex<ChildStdin>,
+     stdout: Mutex<mpsc::Receiver<Result<String, AgentError>>>,
++    stderr: Arc<Mutex<CapturedStderr>>,
+ }
+ 
+ #[cfg(target_os = "windows")]
+@@ -672,7 +728,7 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
+             .args(args)
+             .stdin(Stdio::piped())
+             .stdout(Stdio::piped())
+-            .stderr(Stdio::null()),
++            .stderr(Stdio::piped()),
+     )
+     .spawn()
+     .map_err(|error| map_spawn_error(program, error))?;
+@@ -680,8 +736,7 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
+     let stdin = match child.stdin.take() {
+         Some(stdin) => stdin,
+         None => {
+-            let _ = child.kill();
+-            let _ = child.wait();
++            let _ = terminate_child(&mut child);
+             return Err(AgentError::new(
+                 AgentErrorCategory::SpawnFailed,
+                 "stdin no disponible",
+@@ -691,14 +746,25 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
+     let stdout = match child.stdout.take() {
+         Some(stdout) => stdout,
+         None => {
+-            let _ = child.kill();
+-            let _ = child.wait();
++            let _ = terminate_child(&mut child);
+             return Err(AgentError::new(
+                 AgentErrorCategory::SpawnFailed,
+                 "stdout no disponible",
+             ));
+         }
+     };
++    let stderr = match child.stderr.take() {
++        Some(stderr) => stderr,
++        None => {
++            let _ = terminate_child(&mut child);
++            return Err(AgentError::new(
++                AgentErrorCategory::SpawnFailed,
++                "stderr no disponible",
++            ));
++        }
++    };
++    let stderr_capture = Arc::new(Mutex::new(CapturedStderr::default()));
++    spawn_stderr_reader(stderr, Arc::clone(&stderr_capture));
+     let (tx, rx) = mpsc::channel();
+     std::thread::spawn(move || {
+         let mut reader = std::io::BufReader::new(stdout);
+@@ -733,9 +799,75 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
+         io: Mutex::new(()),
+         stdin: Mutex::new(stdin),
+         stdout: Mutex::new(rx),
++        stderr: stderr_capture,
+     })
+ }
+ 
++#[cfg(target_os = "windows")]
++#[derive(Default)]
++struct CapturedStderr {
++    bytes: Vec<u8>,
++    complete: bool,
++}
++
++#[cfg(target_os = "windows")]
++fn spawn_stderr_reader(stderr: ChildStderr, capture: Arc<Mutex<CapturedStderr>>) {
++    std::thread::spawn(move || {
++        let mut reader = stderr;
++        let mut buffer = [0_u8; 512];
++        loop {
++            match reader.read(&mut buffer) {
++                Ok(0) | Err(_) => {
++                    if let Ok(mut captured) = capture.lock() {
++                        captured.complete = true;
++                    }
++                    return;
++                }
++                Ok(count) => {
++                    if let Ok(mut captured) = capture.lock() {
++                        let remaining =
++                            MAX_CAPTURED_STDERR_BYTES.saturating_sub(captured.bytes.len());
++                        captured.bytes.extend_from_slice(&buffer[..count.min(remaining)]);
++                    } else {
++                        return;
++                    }
++                }
++            }
++        }
++    });
++}
++
++#[cfg(target_os = "windows")]
++fn bounded_stderr(capture: &Mutex<CapturedStderr>) -> Vec<u8> {
++    let deadline = Instant::now() + Duration::from_millis(50);
++    loop {
++        let Ok(captured) = capture.lock() else {
++            return Vec::new();
++        };
++        let snapshot = captured.bytes.clone();
++        if captured.complete || Instant::now() >= deadline {
++            return snapshot;
++        }
++        drop(captured);
++        std::thread::sleep(Duration::from_millis(2));
++    }
++}
++
++#[cfg(target_os = "windows")]
++fn terminate_child(child: &mut Child) -> Option<ExitStatus> {
++    let _ = child.kill();
++    let deadline = Instant::now() + Duration::from_millis(200);
++    loop {
++        match child.try_wait() {
++            Ok(Some(status)) => return Some(status),
++            Ok(None) if Instant::now() < deadline => {
++                std::thread::sleep(Duration::from_millis(5));
++            }
++            Ok(None) | Err(_) => return None,
++        }
++    }
++}
++
+ #[cfg(target_os = "windows")]
+ impl PooledAgent {
+     fn exchange(&self, request_line: &str, timeout: Duration) -> Result<String, AgentError> {
+@@ -754,9 +886,11 @@ impl PooledAgent {
+                     "no se pudo observar el agente",
+                 )
+             })? {
+-                return Err(AgentError::new(
++                return Err(child_failure_error(
+                     AgentErrorCategory::ChildExit,
+-                    format!("el agente WSL termino con {status}"),
++                    "el agente WSL termino",
++                    Some(status),
++                    &bounded_stderr(&self.stderr),
+                 ));
+             }
+         }
+@@ -766,10 +900,23 @@ impl PooledAgent {
+                 .stdin
+                 .lock()
+                 .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin bloqueado"))?;
+-            stdin
++            if stdin
+                 .write_all(request_line.as_bytes())
+                 .and_then(|_| stdin.flush())
+-                .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado"))?;
++                .is_err()
++            {
++                let status = self
++                    .child
++                    .lock()
++                    .ok()
++                    .and_then(|mut child| child.try_wait().ok().flatten());
++                return Err(child_failure_error(
++                    AgentErrorCategory::ChildExit,
++                    "stdin cerrado",
++                    status,
++                    &bounded_stderr(&self.stderr),
++                ));
++            }
+         }
+ 
+         let stdout = self
+@@ -777,22 +924,47 @@ impl PooledAgent {
+             .lock()
+             .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdout bloqueado"))?;
+         match stdout.recv_timeout(timeout) {
+-            Ok(result) => result,
+-            Err(mpsc::RecvTimeoutError::Timeout) => Err(AgentError::new(
++            Ok(result) => result.map_err(|error| {
++                let status = self
++                    .child
++                    .lock()
++                    .ok()
++                    .and_then(|mut child| child.try_wait().ok().flatten());
++                if error.category == AgentErrorCategory::ChildExit {
++                    return child_failure_error(
++                        AgentErrorCategory::ChildExit,
++                        &error.message,
++                        status,
++                        &bounded_stderr(&self.stderr),
++                    );
++                }
++                error
++            }),
++            Err(mpsc::RecvTimeoutError::Timeout) => Err(child_failure_error(
+                 AgentErrorCategory::Timeout,
+                 "timeout esperando respuesta del agente WSL",
++                None,
++                &bounded_stderr(&self.stderr),
+             )),
+-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(AgentError::new(
+-                AgentErrorCategory::ChildExit,
+-                "el agente WSL cerro la conexion",
+-            )),
++            Err(mpsc::RecvTimeoutError::Disconnected) => {
++                let status = self
++                    .child
++                    .lock()
++                    .ok()
++                    .and_then(|mut child| child.try_wait().ok().flatten());
++                Err(child_failure_error(
++                    AgentErrorCategory::ChildExit,
++                    "el agente WSL cerro la conexion",
++                    status,
++                    &bounded_stderr(&self.stderr),
++                ))
++            }
+         }
+     }
+ 
+     fn kill(&self) {
+         if let Ok(mut child) = self.child.lock() {
+-            let _ = child.kill();
+-            let _ = child.wait();
++            let _ = terminate_child(&mut child);
+         }
+     }
+ }
+@@ -828,7 +1000,7 @@ impl HandshakeTransport for StdCommandTransport {
+                 .args(args)
+                 .stdin(Stdio::piped())
+                 .stdout(Stdio::piped())
+-                .stderr(Stdio::null()),
++                .stderr(Stdio::piped()),
+         )
+         .spawn()
+         .map_err(|error| map_spawn_error(program, error))?;
+@@ -845,6 +1017,11 @@ impl HandshakeTransport for StdCommandTransport {
+         let stdout = child.stdout.take().ok_or_else(|| {
+             AgentError::new(AgentErrorCategory::SpawnFailed, "stdout no disponible")
+         })?;
++        let stderr = child.stderr.take().ok_or_else(|| {
++            AgentError::new(AgentErrorCategory::SpawnFailed, "stderr no disponible")
++        })?;
++        let stderr_capture = Arc::new(Mutex::new(CapturedStderr::default()));
++        spawn_stderr_reader(stderr, Arc::clone(&stderr_capture));
+         let (tx, rx) = mpsc::channel();
+         std::thread::spawn(move || {
+             let mut line = String::new();
+@@ -857,21 +1034,48 @@ impl HandshakeTransport for StdCommandTransport {
+         let deadline = Instant::now() + timeout;
+         loop {
+             if let Ok(result) = rx.try_recv() {
+-                let line = result.map_err(|_| {
+-                    AgentError::new(AgentErrorCategory::ChildExit, "stdout cerrado")
+-                })?;
+-                let status = child.wait().map_err(|_| {
+-                    AgentError::new(
+-                        AgentErrorCategory::ChildExit,
+-                        "no se pudo esperar al agente",
+-                    )
+-                })?;
+-                if !status.success() && line.trim().is_empty() {
+-                    return Err(AgentError::new(
+-                        AgentErrorCategory::ChildExit,
+-                        "el agente termino sin respuesta valida",
++                let line = match result {
++                    Ok(line) => line,
++                    Err(_) => {
++                        let status = child.try_wait().ok().flatten();
++                        return Err(child_failure_error(
++                            AgentErrorCategory::ChildExit,
++                            "stdout cerrado",
++                            status,
++                            &bounded_stderr(&stderr_capture),
++                        ));
++                    }
++                };
++                let status = loop {
++                    match child.try_wait() {
++                        Ok(Some(status)) => break Some(status),
++                        Ok(None) if Instant::now() < deadline => {
++                            std::thread::sleep(Duration::from_millis(5));
++                        }
++                        Ok(None) => break None,
++                        Err(_) => break None,
++                    }
++                };
++                if line.trim().is_empty() {
++                    if let Some(status) = status {
++                        return Err(child_failure_error(
++                            AgentErrorCategory::ChildExit,
++                            "el agente termino sin respuesta valida",
++                            Some(status),
++                            &bounded_stderr(&stderr_capture),
++                        ));
++                    }
++                    let status = terminate_child(&mut child);
++                    return Err(child_failure_error(
++                        AgentErrorCategory::Timeout,
++                        "timeout esperando el cierre del agente WSL",
++                        status,
++                        &bounded_stderr(&stderr_capture),
+                     ));
+                 }
++                if status.is_none() {
++                    let _ = terminate_child(&mut child);
++                }
+                 return Ok(line);
+             }
+ 
+@@ -881,20 +1085,21 @@ impl HandshakeTransport for StdCommandTransport {
+                     "no se pudo observar el agente",
+                 )
+             })? {
+-                if !status.success() {
+-                    return Err(AgentError::new(
+-                        AgentErrorCategory::ChildExit,
+-                        "el agente termino antes del handshake",
+-                    ));
+-                }
++                return Err(child_failure_error(
++                    AgentErrorCategory::ChildExit,
++                    "el agente termino antes del handshake",
++                    Some(status),
++                    &bounded_stderr(&stderr_capture),
++                ));
+             }
+ 
+             if Instant::now() >= deadline {
+-                let _ = child.kill();
+-                let _ = child.wait();
+-                return Err(AgentError::new(
++                let status = terminate_child(&mut child);
++                return Err(child_failure_error(
+                     AgentErrorCategory::Timeout,
+                     "timeout esperando handshake del agente",
++                    status,
++                    &bounded_stderr(&stderr_capture),
+                 ));
+             }
+ 
+@@ -913,6 +1118,12 @@ fn map_spawn_error(program: &str, error: std::io::Error) -> AgentError {
+         };
+         return AgentError::new(category, "no se encontro el ejecutable requerido");
+     }
++    if error.kind() == std::io::ErrorKind::PermissionDenied {
++        return AgentError::new(
++            AgentErrorCategory::SpawnFailed,
++            "no se pudo iniciar el proceso WSL; diagnostico: permission denied",
++        );
++    }
+     AgentError::new(
+         AgentErrorCategory::SpawnFailed,
+         "no se pudo iniciar el proceso WSL",
+@@ -1272,6 +1483,51 @@ mod tests {
+         }));
+     }
+ 
++    #[test]
++    fn child_failure_diagnostics_are_bounded_and_never_echo_stderr() {
++        let secret = "synthetic-secret-marker";
++        let stderr = format!("unexpected output {secret}");
++        let error = child_failure_error(
++            AgentErrorCategory::ChildExit,
++            "el agente termino",
++            None,
++            stderr.as_bytes(),
++        );
++
++        assert!(error.message.contains("diagnostico: unknown"));
++        assert!(!error.message.contains(secret));
++
++        let permission = child_failure_error(
++            AgentErrorCategory::ChildExit,
++            "el agente termino",
++            None,
++            b"Access is denied",
++        );
++        assert!(permission.message.contains("diagnostico: permission denied"));
++
++        let bounded = vec![b'x'; MAX_CAPTURED_STDERR_BYTES * 2];
++        assert_eq!(safe_stderr_diagnostic(&bounded), DIAGNOSTIC_UNKNOWN);
++    }
++
++    #[cfg(target_os = "windows")]
++    #[test]
++    fn one_shot_eof_retains_exit_code_without_echoing_stderr() {
++        let command = std::env::var("ComSpec").expect("ComSpec");
++        let argv = vec![
++            command,
++            "/C".to_string(),
++            "echo synthetic-secret-marker 1>&2 & exit /b 17".to_string(),
++        ];
++
++        let error = StdCommandTransport
++            .exchange(&argv, "{}\n", Duration::from_secs(2))
++            .expect_err("child should exit without a response");
++
++        assert_eq!(error.category, AgentErrorCategory::ChildExit);
++        assert!(error.message.contains("codigo de salida: 17"));
++        assert!(!error.message.contains("synthetic-secret-marker"));
++    }
++
+     #[test]
+     fn windows_path_translation_uses_wsl_mount_shape() {
+         let translated = windows_path_to_wsl_mount(std::path::Path::new("C:\\Users\\Mayor\\tinto"))

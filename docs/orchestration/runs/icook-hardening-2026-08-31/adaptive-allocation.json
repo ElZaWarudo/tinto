@@ -1,0 +1,41 @@
+{
+  "allocation": {
+    "active_by_role": {
+      "implementer": 1
+    },
+    "admitted": [
+      {
+        "id": "wsl-discovery",
+        "priority": 0,
+        "role": "implementer"
+      }
+    ],
+    "rejected": [
+      {
+        "id": "history-discovery",
+        "reason": "adaptive-cap",
+        "role": "implementer"
+      }
+    ],
+    "reserve_slots": 1,
+    "role_caps": {
+      "ci-platform": 1,
+      "documenter": 1,
+      "fixer": 1,
+      "implementer": 1,
+      "integrator": 1,
+      "planner": 1,
+      "reviewer": 2,
+      "security": 1
+    },
+    "schema_version": 1,
+    "total_slots": 9,
+    "usable_slots": 8
+  },
+  "cap_reasons": [
+    "last-wave-not-green"
+  ],
+  "green_wave_streak": 0,
+  "implementer_cap": 1,
+  "schema_version": 1
+}

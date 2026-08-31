@@ -1,0 +1,19 @@
+{
+  "name": "doctor-final",
+  "cwd": "C:/Users/User/Documents/personal/tinto",
+  "executable": "C:\\nvm4w\\nodejs\\node.exe",
+  "args": [
+    "C:\\Users\\User\\Documents\\personal\\pumarejo\\dist\\cli\\index.js",
+    "doctor",
+    "--project",
+    "C:/Users/User/Documents/personal/tinto",
+    "--json"
+  ],
+  "started_at": "2026-08-31T11:09:47.103Z",
+  "finished_at": "2026-08-31T11:09:56.179Z",
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "stdout": "{\"status\":\"error\",\"diagnostics\":[{\"id\":\"project.detected\",\"status\":\"ready\",\"summary\":\"A supported Tauri 2 project was detected.\"},{\"id\":\"config.valid\",\"status\":\"ready\",\"summary\":\"The v1 project configuration is valid.\"},{\"id\":\"integration.manifest\",\"status\":\"warn\",\"summary\":\"The manifest is canonical, but one or more recorded files have drifted.\",\"action\":\"Review the changed files before running remove.\"},{\"id\":\"integration.debug-registration\",\"status\":\"error\",\"summary\":\"Cargo or Rust no longer retains the attributable registration.\",\"action\":\"Restore the owned values or rerun init.\"},{\"id\":\"integration.capability-permission\",\"status\":\"ready\",\"summary\":\"The isolated agent capability grants the provider permission.\"},{\"id\":\"integration.version-alignment\",\"status\":\"ready\",\"summary\":\"CLI, integration manifest, and Tauri plugin versions are aligned.\",\"classification\":\"verified\"},{\"id\":\"toolchain.node\",\"status\":\"ready\",\"summary\":\"Node runtime is v24.13.0.\"},{\"id\":\"toolchain.rust\",\"status\":\"ready\",\"summary\":\"Cargo is available.\"},{\"id\":\"toolchain.launch\",\"status\":\"ready\",\"summary\":\"The project launch executable is available.\",\"classification\":\"verified\",\"evidence\":{\"executable\":\"npm\",\"arguments\":[\"run\",\"tauri\",\"--\",\"dev\",\"--features\",\"pumarejo\",\"--config\",\"{tauriConfig}\"],\"provenance\":\"project-config\",\"confidence\":\"verified\"}},{\"id\":\"platform.supported\",\"status\":\"ready\",\"summary\":\"Platform win32 is supported.\"},{\"id\":\"platform.display\",\"status\":\"ready\",\"summary\":\"A desktop display session is available.\"},{\"id\":\"platform.webview\",\"status\":\"ready\",\"summary\":\"A successful Pumarejo launch verified the WebView runtime.\",\"classification\":\"verified\",\"evidence\":{\"provenance\":\"successful-launch\",\"confidence\":\"verified\"}},{\"id\":\"port.available\",\"status\":\"ready\",\"summary\":\"A dynamic loopback port can be reserved.\"},{\"id\":\"residue.owned\",\"status\":\"warn\",\"summary\":\"5 owned session residue entries require recovery.\",\"action\":\"Run the documented cleanup flow; doctor never terminates processes.\"}]}\n",
+  "stderr": ""
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "run_id": "icook-hardening-2026-08-31",
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "worktree_parent": "//?/C:/Users/User/Documents/personal/tinto-hardening-worktrees",
+  "invocations": [
+    {
+      "id": "wsl-discovery",
+      "unit_id": "tin-hard-01",
+      "role": "discovery",
+      "depends_on": [],
+      "candidate_invocations": [],
+      "owned_paths": []
+    },
+    {
+      "id": "history-discovery",
+      "unit_id": "tin-hard-04",
+      "role": "discovery",
+      "depends_on": [],
+      "candidate_invocations": [],
+      "owned_paths": []
+    },
+    {
+      "id": "integration",
+      "unit_id": "hardening-integration",
+      "role": "integrator",
+      "depends_on": [
+        "wsl-discovery",
+        "history-discovery"
+      ],
+      "candidate_invocations": [],
+      "owned_paths": [
+        "src-tauri/src/wsl_agent/launcher.rs",
+        "src/panels/terminal/ConsoleDockPanel.tsx"
+      ]
+    }
+  ]
+}

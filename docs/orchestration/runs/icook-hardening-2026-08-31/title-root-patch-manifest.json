@@ -1,0 +1,29 @@
+{
+  "base_revision": "59f0cecafb41c08db6a4c18001fa24131da7003e",
+  "baseline_digest": "sha256:a07b1ebeae1727aaa09f9c42ff16c3ca62d11c5a9872484fde773109cb579521",
+  "baseline_tree": "e2541e203c7cf504d4a5e8f888dc48da89db8f1a",
+  "changed_files": [
+    {
+      "digest": "sha256:dc3471d29d3aad55b77f263c10a4c73702faa699a29b963b572806f16fc0f93f",
+      "path": "src/panels/terminal/ConsoleDockPanel.test.tsx"
+    },
+    {
+      "digest": "sha256:9a830ad6cce0b23a708420b1147fc260b2c6d02ad43a60eba08cbb0128049a64",
+      "path": "src/panels/terminal/ConsoleDockPanel.tsx"
+    }
+  ],
+  "contract_hash": "sha256:08fc4700a7773e51f7f3ed2f334a30d0d6a3c811f63a6df6a98cf7138ddcbc3b",
+  "dependency_patch_hashes": [],
+  "diff_digest": "sha256:6c9611f1cb4a3e2a9428f4e026d0a9463947a2f8ba6fdceeb59765918ad8a100",
+  "manifest_hash": "sha256:0c2ddc4bde78673155004640f270b8fffc0fe3c2338d81649265d11261fde7c8",
+  "owned_paths": [
+    "src/panels/terminal/ConsoleDockPanel.test.tsx",
+    "src/panels/terminal/ConsoleDockPanel.tsx"
+  ],
+  "patch_sha256": "sha256:7a96974484f6ca5fcf21f3bc71275e9d7011c86301a950e486c980a8fdf1adcf",
+  "role": "implementer",
+  "schema_version": 1,
+  "unit_id": "title-root",
+  "worker_id": "/root",
+  "workspace_id": "icook-hardening-2026-08-31-title-root"
+}
