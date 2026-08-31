@@ -325,7 +325,9 @@ describe("ConsoleDockPanel detach drop", () => {
     fireEvent.click(configure);
 
     expect(await screen.findByRole("heading", { name: "MCP del proyecto" })).toBeInTheDocument();
-    expect(screen.getByText("Proyecto: registered · inventario local de Codex")).toBeInTheDocument();
+    expect(
+      screen.getByText("Proyecto: registered · inventario local de Codex"),
+    ).toBeInTheDocument();
     expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
     unmount();
   });
@@ -484,6 +486,30 @@ describe("ConsoleDockPanel detach drop", () => {
     expect(
       screen.getByRole("button", { name: /abrir la transcripción de api con codex/i }),
     ).toBeInTheDocument();
+    unmount();
+  });
+
+  it("distinguishes saved conversations with identical titles by session identity", async () => {
+    clientMocks.listAgentJournalSessions.mockResolvedValue(
+      ["11111111-first", "22222222-second"].map((id) => ({
+        id,
+        repo: "/r/api",
+        agent_type: "codex",
+        status: "completed",
+        started_at_ms: 1,
+        updated_at_ms: 3,
+        event_count: 1,
+        first_user_message: "Same request",
+      })),
+    );
+    const { unmount } = render(<ConsoleDockPanel />);
+    const first = await screen.findByRole("button", {
+      name: /Same request · sesión 11111111-first/,
+    });
+    const second = screen.getByRole("button", { name: /Same request · sesión 22222222-second/ });
+    expect(first).toHaveTextContent("11111111");
+    expect(second).toHaveTextContent("22222222");
+    expect(first).not.toBe(second);
     unmount();
   });
 

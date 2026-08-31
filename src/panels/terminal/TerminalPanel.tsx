@@ -1308,10 +1308,6 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     setSending(true);
     setError(null);
     setRecoveryAttempt(null);
-    const recover = <T,>(operation: () => Promise<T>) =>
-      retryAgentRecoveryOperation(operation, {
-        onRetry: (current, total) => setRecoveryAttempt({ sessionId, current, total }),
-      });
     try {
       let journalResume: JournalResumeTarget | null = null;
       if (action === "steer") {
@@ -1328,7 +1324,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             restartRequired = false;
             let target = pendingJournalResumeRef.current;
             if (!target) {
-              const result = await recover(() => resumeAgentJournalSession(session.id));
+              const result = await resumeAgentJournalSession(session.id);
               target = {
                 sessionId: result.session_id,
                 repo: session.repo,
@@ -1339,15 +1335,23 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
             }
             const targetSessionId = target.sessionId;
             try {
-              await recover(() =>
-                attachments.length > 0
-                  ? writeAgentSessionTurn(
-                      targetSessionId,
-                      text,
-                      attachments.map((attachment) => attachment.path),
-                      effectiveRuntimeOptions,
-                    )
-                  : writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions),
+              await retryAgentRecoveryOperation(
+                () =>
+                  attachments.length > 0
+                    ? writeAgentSessionTurn(
+                        targetSessionId,
+                        text,
+                        attachments.map((attachment) => attachment.path),
+                        effectiveRuntimeOptions,
+                      )
+                    : writeAgentSessionInput(targetSessionId, `${text}\r`, effectiveRuntimeOptions),
+                {
+                  onRetry: (current, total) => setRecoveryAttempt({ sessionId, current, total }),
+                  // Only retry a known pre-dispatch rejection. A lost response may
+                  // mean the provider accepted the turn; replaying could duplicate it.
+                  shouldRetry: (writeError) =>
+                    agentErrorCategory(writeError) === "session_not_running",
+                },
               );
             } catch (writeError) {
               restartRequired = RESTARTABLE_RESUMED_SESSION_ERRORS.has(
@@ -1403,12 +1407,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       ) {
         pendingJournalResumeRef.current = null;
       }
-      setError(
-        reportAgentFailure(
-          e,
-          "El mensaje no se envió. Tu borrador sigue aquí; vuelve a intentarlo cuando la sesión esté disponible.",
-        ),
-      );
+      setError(reportAgentFailure(e, agentSendFailureMessage(e)));
     } finally {
       setRecoveryAttempt(null);
       setSending(false);
@@ -7841,7 +7840,7 @@ function agentActivitySummary(
       tone: "done",
     };
   }
-  if (session.turn_status === "working" || session.status === "running") {
+  if (session.turn_status === "working" || session.turn_status === "settling") {
     return {
       title: "Agent está trabajando",
       detail: `${turnState}. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
@@ -8677,6 +8676,18 @@ function agentSessionFailureMessage(): string {
   return "La sesión de Agent requiere atención. Revisa la conversación y vuelve a intentarlo si la acción sigue disponible.";
 }
 
+function agentSendFailureMessage(error: unknown): string {
+  const category = agentErrorCategory(error);
+  if (
+    category &&
+    (RESTARTABLE_RESUMED_SESSION_ERRORS.has(category) ||
+      ["invalid_input", "attachment_not_found", "image_not_found"].includes(category))
+  ) {
+    return "El mensaje no se envió. Tu borrador sigue aquí; comprueba la sesión y los adjuntos antes de volver a intentarlo.";
+  }
+  return "No se pudo confirmar el envío. Tu borrador sigue aquí; revisa la conversación antes de volver a enviarlo.";
+}
+
 function turnStatusLabel(status: string): string {
   switch (status) {
     case "working":
@@ -8715,6 +8726,7 @@ function sessionStatusLabel(status: string): string {
 }
 
 function sessionCompletionLabel(session: AgentSession): string {
+  if (session.status === "running") return turnStatusLabel(session.turn_status ?? "waiting");
   if (session.status !== "completed") return sessionStatusLabel(session.status);
   return session.checkpoint
     ? "Turno completado · punto de control listo"
@@ -8763,7 +8775,7 @@ function repoName(repo: string): string {
 
 function auditTitle(session: AgentSession): string {
   const pieces = [
-    `Estado: ${sessionStatusLabel(session.status)}`,
+    `Estado: ${sessionCompletionLabel(session)}`,
     session.checkpoint
       ? `Punto de control: ${checkpointLabel(session.checkpoint.checkpoint_type)}`
       : null,

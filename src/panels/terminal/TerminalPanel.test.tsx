@@ -454,8 +454,8 @@ describe("TerminalPanel", () => {
     expect(activity).toHaveTextContent("0 turnos");
     expect(activity).toHaveTextContent("0 archivos");
     expect(activity).toHaveTextContent("Transmisión en reposo");
-    const sessionStatus = screen.getByTitle(/Estado: En ejecución/);
-    expect(sessionStatus).toHaveTextContent("En ejecución");
+    const sessionStatus = screen.getByTitle(/Estado: Trabajando/);
+    expect(sessionStatus).toHaveTextContent("Trabajando");
     const processStatus = screen.getByRole("status", { name: "Codex está trabajando" });
     expect(processStatus).toHaveTextContent("Codex está trabajando");
     expect(processStatus).toHaveTextContent("EN CURSO");
@@ -925,12 +925,19 @@ describe("TerminalPanel", () => {
       name: "Codex está revisando cambios",
     });
     expect(settling).toHaveTextContent("VERIFICANDO");
+    expect(screen.getByTitle(/Estado: Finalizando/)).toHaveTextContent("Finalizando");
     expect(settling.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
     unmount();
 
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture({ turn_status: "waiting" })]);
     render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
-    await screen.findByTitle(/Estado: En ejecución/);
+    expect(await screen.findByTitle(/Estado: En espera/)).toHaveTextContent("En espera");
+    expect(screen.getByLabelText("Actividad de Agent")).toHaveTextContent(
+      "Listo para el siguiente turno",
+    );
+    expect(screen.getByLabelText("Actividad de Agent")).not.toHaveTextContent(
+      "Agent está trabajando",
+    );
     expect(
       screen.queryByRole("status", { name: /Codex está trabajando|Codex está revisando cambios/ }),
     ).toBeNull();
@@ -1240,7 +1247,10 @@ describe("TerminalPanel", () => {
       }),
     ]);
     writeAgentSessionInputMock
-      .mockRejectedValueOnce(new Error("Session is still starting"))
+      .mockRejectedValueOnce({
+        category: "session_not_running",
+        message: "Session is still starting",
+      })
       .mockResolvedValueOnce(undefined);
     renderWithWorkspaceActions(
       <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
@@ -1266,6 +1276,68 @@ describe("TerminalPanel", () => {
     expect(screen.queryByTestId("terminal-panel-error")).not.toBeInTheDocument();
     consoleError.mockRestore();
   });
+
+  it("does not replay a resumed turn after an ambiguous provider response failure", async () => {
+    const user = userEvent.setup();
+    const openAgentTerminal = vi.fn();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ status: "exited", pid: null, ended_at_ms: 2500, active_sessions: 0 }),
+    ]);
+    writeAgentSessionInputMock.mockRejectedValueOnce(new Error("Provider response lost"));
+    renderWithWorkspaceActions(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
+      { openAgentTerminal },
+    );
+    const composer = await screen.findByPlaceholderText("Continúa esta conversación");
+    await user.type(composer, "Send once");
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+    await screen.findByTestId("terminal-panel-error");
+    expect(writeAgentSessionInputMock).toHaveBeenCalledTimes(1);
+    expect(resumeAgentJournalSessionMock).toHaveBeenCalledTimes(1);
+    expect(openAgentTerminal).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("Send once");
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeEnabled();
+    consoleError.mockRestore();
+  });
+
+  it("does not retry an ambiguous resume failure or dispatch the draft", async () => {
+    const user = userEvent.setup();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ status: "exited", pid: null, ended_at_ms: 2500, active_sessions: 0 }),
+    ]);
+    resumeAgentJournalSessionMock.mockRejectedValueOnce(new Error("Resume response lost"));
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+    const composer = await screen.findByPlaceholderText("Continúa esta conversación");
+    await user.type(composer, "Resume once");
+    await user.click(screen.getByRole("button", { name: "Enviar" }));
+    await screen.findByTestId("terminal-panel-error");
+    expect(resumeAgentJournalSessionMock).toHaveBeenCalledTimes(1);
+    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("Resume once");
+    consoleError.mockRestore();
+  });
+
+  it.each(["session_not_running", "attachment_not_found", "invalid_input"])(
+    "reports a known pre-dispatch %s rejection without claiming uncertain delivery",
+    async (category) => {
+      const user = userEvent.setup();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+      writeAgentSessionInputMock.mockRejectedValueOnce({ category, message: "private detail" });
+      render(
+        <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
+      );
+      await user.type(await screen.findByLabelText("Mensaje para Codex"), "Draft");
+      await user.click(screen.getByRole("button", { name: "Enviar" }));
+      const alert = await screen.findByTestId("terminal-panel-error");
+      expect(alert).toHaveTextContent("El mensaje no se envió.");
+      expect(alert).toHaveTextContent("comprueba la sesión y los adjuntos");
+      expect(alert).not.toHaveTextContent("No se pudo confirmar");
+      consoleError.mockRestore();
+    },
+  );
 
   it("sends Codex turns with models discovered from the runtime catalog", async () => {
     const user = userEvent.setup();
@@ -1699,7 +1771,7 @@ describe("TerminalPanel", () => {
     const errorBanner = await screen.findByTestId("terminal-panel-error");
     expect(errorBanner).toHaveAttribute("role", "alert");
     expect(errorBanner).toHaveTextContent(
-      "El mensaje no se envió. Tu borrador sigue aquí; vuelve a intentarlo cuando la sesión esté disponible.",
+      "No se pudo confirmar el envío. Tu borrador sigue aquí; revisa la conversación antes de volver a enviarlo.",
     );
     expect(errorBanner).not.toHaveTextContent("Write failed");
     expect(errorBanner).not.toHaveAttribute("title");

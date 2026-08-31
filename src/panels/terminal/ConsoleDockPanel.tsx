@@ -621,7 +621,10 @@ export function ConsoleDockPanel({
                     return (
                       <div className="console-dock-panel__quick-project" key={group.repo}>
                         <div className="console-dock-panel__quick-project-head">
-                          <div className="console-dock-panel__quick-project-title" title={group.repo}>
+                          <div
+                            className="console-dock-panel__quick-project-title"
+                            title={group.repo}
+                          >
                             {busStore.displayName(group.repo)}
                           </div>
                           <button
@@ -963,7 +966,7 @@ function AgentNavigator({
                     key={terminal.sessionId}
                     aria-label={`Mostrar ${busStore.displayName(
                       terminal.repo ?? terminal.sessionId,
-                    )} ${agentLabel(agentType)}: ${title}`}
+                    )} ${agentLabel(agentType)}: ${title} · sesión ${terminal.sessionId}`}
                     onClick={() => onFocus(terminal)}
                   >
                     <span
@@ -985,7 +988,7 @@ function AgentNavigator({
                       <small>
                         {agentLabel(agentType)} ·{" "}
                         {terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"} ·{" "}
-                        {sessionStatusLabel(session)}
+                        {sessionStatusLabel(session)} · {terminal.sessionId.slice(0, 8)}
                       </small>
                       {preview && <em>{preview}</em>}
                     </span>
@@ -1021,7 +1024,7 @@ function AgentNavigator({
                     key={terminal.sessionId}
                     aria-label={`Mostrar ${busStore.displayName(
                       terminal.repo ?? terminal.sessionId,
-                    )} ${agentLabel(agentType)}: ${title}`}
+                    )} ${agentLabel(agentType)}: ${title} · sesión ${terminal.sessionId}`}
                     onClick={() => onFocus(terminal)}
                   >
                     <span
@@ -1037,7 +1040,7 @@ function AgentNavigator({
                       <small>
                         {agentLabel(agentType)} ·{" "}
                         {terminal.repo ? busStore.displayName(terminal.repo) : "Sesión"} ·{" "}
-                        {sessionStatusLabel(session)}
+                        {sessionStatusLabel(session)} · {terminal.sessionId.slice(0, 8)}
                       </small>
                     </span>
                   </button>
@@ -1053,7 +1056,7 @@ function AgentNavigator({
                     key={session.id}
                     aria-label={`Abrir la transcripción de ${busStore.displayName(
                       session.repo,
-                    )} con ${agentLabel(session.agent_type)}: ${title}`}
+                    )} con ${agentLabel(session.agent_type)}: ${title} · sesión ${session.id}`}
                     disabled={deletingJournalId === session.id}
                     onClick={() => onOpenJournal(session)}
                     onContextMenu={(event) => {
@@ -1089,7 +1092,7 @@ function AgentNavigator({
                           ? "Eliminando…"
                           : openingJournalId === session.id
                             ? "Abriendo…"
-                            : `${agentLabel(session.agent_type)} · ${busStore.displayName(session.repo)}`}
+                            : `${agentLabel(session.agent_type)} · ${busStore.displayName(session.repo)} · ${session.id.slice(0, 8)}`}
                       </small>
                     </span>
                   </button>
@@ -1201,7 +1204,7 @@ function AgentJournalBrowser({
                   key={session.id}
                   aria-label={`Abrir la transcripción de ${busStore.displayName(
                     session.repo,
-                  )} con ${agentLabel(session.agent_type)}: ${title}`}
+                  )} con ${agentLabel(session.agent_type)}: ${title} · sesión ${session.id}`}
                   disabled={deletingJournalId === session.id}
                   onPointerDown={(event) => event.stopPropagation()}
                   onMouseDown={(event) => event.stopPropagation()}
@@ -1234,7 +1237,8 @@ function AgentJournalBrowser({
                   <span className="console-dock-panel__journal-main">
                     <span>{title}</span>
                     <small>
-                      {agentLabel(session.agent_type)} · {sessionLabel(session, liveSessions[session.id])}
+                      {agentLabel(session.agent_type)} ·{" "}
+                      {sessionLabel(session, liveSessions[session.id])} · {session.id.slice(0, 8)}
                     </small>
                     {session.last_event_text && (
                       <em
@@ -1394,7 +1398,9 @@ function availabilityKeyForRepo(repo: string, config: WorkbenchConfig | null | u
   const workbenches = config?.workbenches ?? [];
   const active = config?.active ?? null;
   const entry =
-    workbenches.find((workbench) => workbench.name === active)?.repos.find((item) => item.path === repo) ??
+    workbenches
+      .find((workbench) => workbench.name === active)
+      ?.repos.find((item) => item.path === repo) ??
     workbenches.flatMap((workbench) => workbench.repos).find((item) => item.path === repo);
   return agentAvailabilityKey(entry?.source, entry?.distro);
 }
