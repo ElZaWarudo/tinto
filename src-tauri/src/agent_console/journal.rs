@@ -8,7 +8,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::bus::contract::{
     AgentJournalSessionSummary, AgentSession, AgentSessionContextSummary, AgentSessionFeedback,
     AgentSessionGoal, AgentSessionPermissionMode, AgentSessionPersonality, AgentSessionPlanMode,
-    AgentSessionStatus, AgentSessionTimelineItem, AgentSessionTurnStatus, AgentSubagentThread,
+    AgentSessionStatus, AgentSessionTimelineItem, AgentSessionTurnCheckpoint,
+    AgentSessionTurnStatus, AgentSubagentThread,
 };
 
 #[derive(Debug)]
@@ -84,7 +85,8 @@ impl AgentJournal {
               context_summary_created_at_ms INTEGER,
               context_summary_source_events INTEGER,
               context_summary_source_turns INTEGER,
-              subagents_json TEXT
+              subagents_json TEXT,
+              turn_checkpoints_json TEXT
             );
 
             CREATE TABLE IF NOT EXISTS agent_turns (
@@ -131,6 +133,7 @@ impl AgentJournal {
         self.ensure_agent_sessions_column("context_summary_source_events", "INTEGER")?;
         self.ensure_agent_sessions_column("context_summary_source_turns", "INTEGER")?;
         self.ensure_agent_sessions_column("subagents_json", "TEXT")?;
+        self.ensure_agent_sessions_column("turn_checkpoints_json", "TEXT")?;
         Ok(())
     }
 
@@ -213,6 +216,11 @@ impl AgentJournal {
         } else {
             Some(serde_json::to_string(&session.subagents)?)
         };
+        let turn_checkpoints_json = if session.turn_checkpoints.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&session.turn_checkpoints)?)
+        };
         let updated_at_ms = now_ms() as i64;
         self.conn.execute(
             r#"
@@ -223,8 +231,8 @@ impl AgentJournal {
               personality_updated_at_ms, plan_mode_enabled, plan_mode_updated_at_ms,
               feedback_json, context_summary_text, context_summary_created_at_ms,
               context_summary_source_events, context_summary_source_turns, permission_mode,
-              subagents_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+              subagents_json, turn_checkpoints_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
             ON CONFLICT(id) DO UPDATE SET
               repo = excluded.repo,
               agent_type = excluded.agent_type,
@@ -248,7 +256,8 @@ impl AgentJournal {
               context_summary_source_events = excluded.context_summary_source_events,
               context_summary_source_turns = excluded.context_summary_source_turns,
               permission_mode = excluded.permission_mode,
-              subagents_json = excluded.subagents_json
+              subagents_json = excluded.subagents_json,
+              turn_checkpoints_json = excluded.turn_checkpoints_json
             "#,
             params![
                 &session.id,
@@ -280,6 +289,7 @@ impl AgentJournal {
                 context_summary_source_turns,
                 permission_mode,
                 subagents_json,
+                turn_checkpoints_json,
             ],
         )?;
         Ok(())
@@ -473,7 +483,7 @@ impl AgentJournal {
                   feedback_json,
                   context_summary_text, context_summary_created_at_ms,
                   context_summary_source_events, context_summary_source_turns,
-                  permission_mode, subagents_json
+                  permission_mode, subagents_json, turn_checkpoints_json
                 FROM agent_sessions
                 WHERE id = ?1
                 "#,
@@ -503,6 +513,7 @@ impl AgentJournal {
                         row.get::<_, Option<i64>>(20)?,
                         row.get::<_, Option<String>>(21)?,
                         row.get::<_, Option<String>>(22)?,
+                        row.get::<_, Option<String>>(23)?,
                     ))
                 },
             )
@@ -531,6 +542,7 @@ impl AgentJournal {
             context_summary_source_turns,
             permission_mode,
             subagents_json,
+            turn_checkpoints_json,
         )) = session
         else {
             return Ok(None);
@@ -554,6 +566,10 @@ impl AgentJournal {
             .into_iter()
             .map(stale_subagent)
             .collect();
+        let turn_checkpoints = turn_checkpoints_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<AgentSessionTurnCheckpoint>>(json).ok())
+            .unwrap_or_default();
         Ok(Some(AgentSession {
             id,
             repo: PathBuf::from(repo),
@@ -573,7 +589,7 @@ impl AgentJournal {
             checkpoint: None,
             change_log: Vec::new(),
             turn_status: AgentSessionTurnStatus::Waiting,
-            turn_checkpoints: Vec::new(),
+            turn_checkpoints,
             timeline,
             subagents,
             runtime_options: Default::default(),
@@ -718,10 +734,11 @@ mod tests {
     use super::*;
 
     use crate::bus::contract::{
-        AgentSession, AgentSessionAcpMode, AgentSessionAcpPermission,
+        AgentSession, AgentSessionAcpMode, AgentSessionAcpPermission, AgentSessionChange,
+        AgentSessionChangeKind, AgentSessionCheckpoint, AgentSessionCheckpointType,
         AgentSessionAcpPermissionState, AgentSessionAcpRuntime, AgentSessionAcpState,
-        AgentSessionPermissionMode, AgentSessionTimelineKind, AgentSubagentCapabilities,
-        AgentSubagentThread,
+        AgentSessionPermissionMode, AgentSessionTimelineKind, AgentSessionTurnCheckpoint,
+        AgentSubagentCapabilities, AgentSubagentThread,
     };
 
     fn session(id: &str) -> AgentSession {
@@ -880,6 +897,86 @@ mod tests {
         assert_eq!(timeline.len(), 2);
         assert_eq!(timeline[0].id, "event-2");
         assert_eq!(timeline[1].kind, AgentSessionTimelineKind::UserMessage);
+    }
+
+    #[test]
+    fn journal_migrates_a_database_without_checkpoint_column() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("legacy.sqlite");
+        let legacy = Connection::open(&path).unwrap();
+        legacy.execute_batch(
+            "CREATE TABLE agent_sessions (
+                id TEXT PRIMARY KEY, repo TEXT NOT NULL, agent_type TEXT NOT NULL,
+                source_kind TEXT NOT NULL DEFAULT 'local', distro TEXT,
+                status TEXT NOT NULL, started_at_ms INTEGER NOT NULL,
+                ended_at_ms INTEGER, updated_at_ms INTEGER NOT NULL
+            );
+            INSERT INTO agent_sessions
+                (id, repo, agent_type, status, started_at_ms, updated_at_ms)
+                VALUES ('legacy', '/repo', 'codex', 'completed', 1, 2);",
+        ).unwrap();
+        drop(legacy);
+
+        let journal = AgentJournal::open(&path).unwrap();
+        let restored = journal.session_from_journal("legacy").unwrap().unwrap();
+        assert_eq!(restored.id, "legacy");
+        assert!(restored.turn_checkpoints.is_empty());
+        let column: Option<String> = journal.conn.query_row(
+            "SELECT turn_checkpoints_json FROM agent_sessions WHERE id = 'legacy'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(column.is_none());
+        journal.record_session(&restored).unwrap();
+        drop(journal);
+        assert!(AgentJournal::open(&path).unwrap()
+            .session_from_journal("legacy").unwrap().is_some());
+    }
+
+    #[test]
+    fn journal_roundtrips_turn_checkpoints_and_accepts_legacy_rows() {
+        let journal = AgentJournal::open_in_memory().expect("journal");
+        let mut live = session("checkpointed");
+        live.turn_checkpoints = vec![AgentSessionTurnCheckpoint {
+            id: "checkpointed:turn-1".to_string(),
+            index: 1,
+            started_at_ms: 100,
+            ended_at_ms: 200,
+            checkpoint: AgentSessionCheckpoint {
+                checkpoint_type: AgentSessionCheckpointType::GitRef,
+                git_hash: Some("abc123".to_string()),
+                snapshot_files: Vec::new(),
+            },
+            restore_checkpoint: Some(AgentSessionCheckpoint {
+                checkpoint_type: AgentSessionCheckpointType::FsSnapshot,
+                git_hash: None,
+                snapshot_files: vec![PathBuf::from("src/main.rs")],
+            }),
+            changes: vec![AgentSessionChange {
+                path: PathBuf::from("src/main.rs"),
+                kind: AgentSessionChangeKind::Modified,
+                timestamp_ms: 200,
+            }],
+        }];
+        journal.record_session(&live).expect("session");
+
+        let archived = journal
+            .session_from_journal("checkpointed")
+            .expect("read")
+            .expect("session");
+        assert_eq!(archived.turn_checkpoints, live.turn_checkpoints);
+
+        journal
+            .conn
+            .execute(
+                "UPDATE agent_sessions SET turn_checkpoints_json = NULL WHERE id = ?1",
+                params!["checkpointed"],
+            )
+            .expect("legacy row");
+        let legacy = journal
+            .session_from_journal("checkpointed")
+            .expect("read legacy")
+            .expect("legacy session");
+        assert!(legacy.turn_checkpoints.is_empty());
     }
 
     #[test]
