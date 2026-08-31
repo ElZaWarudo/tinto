@@ -72,6 +72,8 @@ struct ManagedReleaseAsset {
 enum ScanFailure {
     BinaryUnavailable,
     LaunchFailed,
+    Timeout,
+    PermissionDenied,
     ScanFailed,
     ReportUnavailable,
     InvalidReport,
@@ -82,6 +84,8 @@ impl ScanFailure {
         match self {
             Self::BinaryUnavailable => "binary_unavailable",
             Self::LaunchFailed => "launch_failed",
+            Self::Timeout => "timeout",
+            Self::PermissionDenied => "permission_denied",
             Self::ScanFailed => "scan_failed",
             Self::ReportUnavailable => "report_unavailable",
             Self::InvalidReport => "invalid_report",
@@ -92,9 +96,11 @@ impl ScanFailure {
         match self {
             Self::BinaryUnavailable => "Gitleaks no está instalado; se usó el detector básico.",
             Self::LaunchFailed => "Gitleaks no pudo iniciarse; se usó el detector básico.",
-            Self::ScanFailed => {
-                "Gitleaks no pudo completar el análisis; revisa .gitleaks.toml. Se usó el detector básico."
+            Self::Timeout => "Gitleaks agotó el tiempo de análisis; se usó el detector básico.",
+            Self::PermissionDenied => {
+                "Gitleaks no pudo acceder a algunos archivos; se usó el detector básico."
             }
+            Self::ScanFailed => "Gitleaks no pudo completar el análisis; se usó el detector básico.",
             Self::ReportUnavailable => {
                 "Gitleaks no produjo un reporte legible; se usó el detector básico."
             }
@@ -857,7 +863,7 @@ fn scan_with_gitleaks(
         .map_err(|_| ScanFailure::LaunchFailed)?;
     if !output.status.success() {
         let _ = std::fs::remove_file(&report_path);
-        return Err(ScanFailure::ScanFailed);
+        return Err(classify_scan_failure(&output.stderr));
     }
 
     let report =
@@ -874,6 +880,35 @@ fn scan_with_gitleaks(
         filter_report_findings(repo, status, diffs, changed_paths, parsed),
         version,
     ))
+}
+
+fn classify_scan_failure(stderr: &[u8]) -> ScanFailure {
+    let diagnostic = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+
+    // Gitleaks can report an earlier permission warning before its final
+    // context deadline. Prefer the terminal timeout signal in that case.
+    let has_context_deadline = diagnostic.contains("context deadline exceeded")
+        || diagnostic.contains("deadline exceeded");
+    let has_timeout = ["timed out", "timeout", "i/o timeout"]
+        .iter()
+        .any(|marker| diagnostic.contains(marker));
+    let has_permission = [
+        "permission denied",
+        "access is denied",
+        "operation not permitted",
+    ]
+    .iter()
+    .any(|marker| diagnostic.contains(marker));
+
+    if has_context_deadline || (has_timeout && !has_permission) {
+        return ScanFailure::Timeout;
+    }
+
+    if has_permission && !has_timeout {
+        return ScanFailure::PermissionDenied;
+    }
+
+    ScanFailure::ScanFailed
 }
 
 fn gitleaks_version(binary: &Path) -> Option<String> {
@@ -1117,6 +1152,37 @@ mod tests {
                     .collect(),
             }],
         }
+    }
+
+    #[test]
+    fn classifies_timeout_and_permission_failures_without_exposing_diagnostics() {
+        let timeout = classify_scan_failure(
+            b"warning: permission denied: C:/private/secret.env\nfatal: context deadline exceeded",
+        );
+        assert_eq!(timeout, ScanFailure::Timeout);
+        assert_eq!(timeout.category(), "timeout");
+        assert!(!timeout.message().contains("secret.env"));
+        assert!(!timeout.message().contains("permission denied"));
+        assert!(!timeout.message().contains("context deadline exceeded"));
+
+        let permission = classify_scan_failure(b"open /private/secret.env: permission denied");
+        assert_eq!(permission, ScanFailure::PermissionDenied);
+        assert_eq!(permission.category(), "permission_denied");
+        assert!(!permission.message().contains("secret.env"));
+        assert!(!permission.message().contains("permission denied"));
+    }
+
+    #[test]
+    fn unknown_or_ambiguous_diagnostics_remain_generic() {
+        let unknown = classify_scan_failure(b"unexpected scanner output /repo/secret.env");
+        assert_eq!(unknown, ScanFailure::ScanFailed);
+        assert_eq!(unknown.message(), "Gitleaks no pudo completar el análisis; se usó el detector básico.");
+        assert!(!unknown.message().contains(".gitleaks.toml"));
+
+        let ambiguous = classify_scan_failure(b"permission denied while operation timed out");
+        assert_eq!(ambiguous, ScanFailure::ScanFailed);
+        assert!(!ambiguous.message().contains("secret"));
+        assert!(!ambiguous.message().contains("/repo"));
     }
 
     #[test]
