@@ -1,0 +1,76 @@
+{
+  "schema": "tinto-continuation-source-repairs/v1",
+  "captured_at": "2026-09-01T06:45:41.3700397Z",
+  "repositories": {
+    "tinto": "C:/Users/User/Documents/personal/tinto",
+    "pumarejo": "C:/Users/User/Documents/personal/pumarejo"
+  },
+  "repairs": {
+    "typed_local_onboarding": [
+      "typed path through authoritative add_repo backend",
+      "Enter routing",
+      "synchronous mutation lock",
+      "backend rejection and retry",
+      "NativeApp canonical panel wiring",
+      "partial-success refresh recovery without a second add"
+    ],
+    "archived_outcome": [
+      "SQLite exit_code schema migration",
+      "INSERT and ON CONFLICT persistence",
+      "legacy NULL remains unknown",
+      "archived UI distinguishes code 0, nonzero, and unknown"
+    ]
+  },
+  "verification": {
+    "tinto_onboarding_and_app": {
+      "passed": 84,
+      "failed": 0
+    },
+    "tinto_terminal": {
+      "passed": 135,
+      "failed": 0
+    },
+    "tinto_rust_lib": {
+      "passed": 479,
+      "failed": 0
+    },
+    "tinto_build": "pass",
+    "tinto_changed_file_eslint": "pass",
+    "tinto_contract_check": "pass",
+    "pumarejo_aggregate": {
+      "passed": 734,
+      "failed": 0,
+      "skipped": 9,
+      "passed_files": 57,
+      "skipped_files": 4
+    },
+    "pumarejo_observation": {
+      "passed": 39,
+      "failed": 0
+    },
+    "pumarejo_init": {
+      "passed": 40,
+      "failed": 0
+    },
+    "tinto_wsl_launcher": {
+      "passed": 22,
+      "failed": 0
+    }
+  },
+  "native_acceptance": {
+    "status": "open",
+    "reason": "semantic doctor remains warn for five retained custody leases; public native acceptance requires ready",
+    "scanner": "open: unchanged eight-second full scan still reports retained-directory permission failures and deadline exceeded"
+  },
+  "file_sha256": {
+    "src/App.test.tsx": "39a39bdeb2d2af0f65184f9ef33bb207ad541e757cbbae5524309b61ae822241",
+    "src/workbench/operations.test.ts": "60af3bcced167d33b46b350c6099361d5e02e851f44fa51acac2a68dd16bc5f7",
+    "src/panels/terminal/TerminalPanel.test.tsx": "e8db16e77855dbb884d77e534908c26f301c6ee27def29769fc50a7ac48fd759",
+    "src/App.tsx": "3a130f5d50bfbffde056031529010eb392ece4748b4305d66369f0612e4eadad",
+    "src/panels/terminal/TerminalPanel.tsx": "f992594704b5b8985e9f92cda0bff9fe908b73f37a43a7a6382a7fc664cbf8da",
+    "src/workbench/workbench.test.tsx": "45b2d4efdd0098bf6baa4f13786dec070ef9f6e390cce03e5d977f97ed6c9d68",
+    "src-tauri/src/agent_console/journal.rs": "a2325d05170d9f42aac220122974b8a8ffadd8eb0cc5e3b7fca0e5c70106e3aa",
+    "src/workbench/operations.ts": "62b2555c101df74abd27a2c809ef830dcbcb7459bc7051ec11931e6ab0555f59",
+    "src/workbench/AddRepoDialog.tsx": "7007140caee5029c72175f0092f7b73ff23ed1e0508142b3b94c2a3c7c564311"
+  }
+}

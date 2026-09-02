@@ -1,0 +1,50 @@
+{
+  "schema": "tinto-second-reboot-recovery/v1",
+  "capturedAt": "2026-09-02T11:39:53.3520738+02:00",
+  "previousBootIdentifier": {
+    "scheme": "windows-boot-sequence/v2",
+    "bootEnvironmentGuid": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898",
+    "bootId": 52
+  },
+  "currentBootIdentifier": {
+    "scheme": "windows-boot-sequence/v2",
+    "bootEnvironmentGuid": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898",
+    "bootId": 53
+  },
+  "dryRun": {
+    "operationId": "e50bc8f5d1bc3ddbf3f41da4583af915",
+    "status": "complete",
+    "selectedCount": 5,
+    "decisionForAllFive": "would_recover",
+    "reasonForAllFive": "previous_boot",
+    "exactCheckpointIdsMatched": true,
+    "mutationPerformed": false
+  },
+  "execute": {
+    "operationId": "a03cefb99ac9ca89f679439a659cc687",
+    "status": "complete",
+    "recoveredCount": 5,
+    "decisionForAllFive": "recovered",
+    "reasonForAllFive": "previous_boot"
+  },
+  "idempotence": {
+    "operationId": "54d2258c5b0770734ac2d44874d5d514",
+    "status": "complete",
+    "alreadyRecoveredCount": 5,
+    "decisionForAllFive": "already_recovered"
+  },
+  "postcondition": {
+    "leaseRecordCount": 5,
+    "stateForAllFive": "closed",
+    "versionForAllFive": 2,
+    "doctorStatus": "warn",
+    "remainingDoctorWarning": "2 owned artifact roots require identity-bound cleanup"
+  },
+  "artifactPreflight": {
+    "operationId": "46059abf84a489bbc847a09db66c171a",
+    "decision": "rejected",
+    "reason": "maintenance_identity_not_elevated",
+    "mutationPerformed": false
+  },
+  "conclusion": "The second reboot supplied the required previous-boot proof and the supported command recovered exactly the five checkpointed leases. Repeat execution was idempotent. Lease custody is closed; native readiness remains blocked only by the two protected artifact roots."
+}

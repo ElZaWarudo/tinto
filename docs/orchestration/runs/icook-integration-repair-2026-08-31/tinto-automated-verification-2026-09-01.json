@@ -1,0 +1,66 @@
+{
+  "schema": "tinto-automated-verification/v1",
+  "capturedAt": "2026-09-01T12:23:30.0970149+02:00",
+  "repository": {
+    "path": "C:\\Users\\User\\Documents\\personal\\tinto",
+    "branch": "codex/windows-recovery-maintenance",
+    "head": "4b9e259c029ab72b323ad84b10c06927b7638df1",
+    "workingTreeContainsUncommittedChanges": true
+  },
+  "checks": [
+    {
+      "command": "npm run contract:check",
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "command": "npm run build",
+      "status": "passed",
+      "exitCode": 0,
+      "modulesTransformed": 438
+    },
+    {
+      "command": "npm test",
+      "status": "passed",
+      "exitCode": 0,
+      "testFilesPassed": 59,
+      "testsPassed": 783,
+      "durationSeconds": 159.84
+    },
+    {
+      "command": "npx eslint src/panels/terminal/ConsoleDockPanel.tsx",
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "command": "npx vitest run src/workbench/wslAbsence.test.ts src/panels/terminal/ConsoleDockPanel.test.tsx src/workspace/recentAgentLaunches.test.ts",
+      "status": "passed",
+      "exitCode": 0,
+      "testFilesPassed": 3,
+      "testsPassed": 139
+    },
+    {
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast",
+      "status": "passed",
+      "exitCode": 0,
+      "testsPassed": 479,
+      "testsFailed": 0
+    },
+    {
+      "command": "npm run lint",
+      "status": "blocked",
+      "exitCode": 2,
+      "reason": "EPERM while ESLint recursively scans .pumarejo/qa-project/.pumarejo/artifacts under the unchanged repository root. No ignore or exclusion was added."
+    }
+  ],
+  "repair": {
+    "file": "src/panels/terminal/ConsoleDockPanel.tsx",
+    "reason": "A runtime-neutrality policy test found one visible WSL-specific unavailable label in otherwise generic Agent UI.",
+    "changes": [
+      "Use the existing generic unavailable label for all provider sources.",
+      "Defer quick-launch availability initialization to a microtask so the current React hook lint rule is satisfied without changing the availability request or cancellation semantics."
+    ]
+  },
+  "nativeAcceptanceExecuted": false,
+  "result": "All Tinto frontend and Rust automated tests, the bus-contract check, the production build, and scoped lint for the changed file pass. Repository-wide lint remains blocked only by the protected historical artifact tree and was not weakened or excluded."
+}

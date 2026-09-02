@@ -1,0 +1,54 @@
+{
+  "schema": "tinto-pumarejo-implementation-verification/v1",
+  "capturedAt": "2026-09-01T12:10:07.1279546+02:00",
+  "repository": {
+    "path": "C:\\Users\\User\\Documents\\personal\\pumarejo",
+    "branch": "codex/fix-agent-certification-gaps",
+    "head": "f0af7c65ee5f6a866e6d5cfbf31579231e4e9fec",
+    "workingTreeContainsUncommittedImplementation": true
+  },
+  "verificationWorkspace": "C:\\Users\\User\\AppData\\Local\\Temp\\pumarejo-verify-bmlnztqa.y52",
+  "checks": [
+    {
+      "command": "pnpm typecheck",
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm lint",
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm build",
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm test",
+      "status": "passed",
+      "exitCode": 0,
+      "testFilesPassed": 69,
+      "testFilesSkipped": 8,
+      "testsPassed": 779,
+      "testsSkipped": 19,
+      "durationSeconds": 41.69
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed-with-line-ending-notices",
+      "exitCode": 0,
+      "errors": 0
+    }
+  ],
+  "nativeWindowsCoverage": {
+    "testFile": "tests/integration/artifact-maintenance-windows.test.ts",
+    "testsPassed": 3,
+    "validatedBehaviors": [
+      "nested NTFS deletion through held handles",
+      "junction rejection without modifying its external target",
+      "elevated-token requirement before enabling maintenance privileges"
+    ]
+  },
+  "result": "All automated implementation checks executed in the isolated dependency workspace are green. Skipped tests retain their existing environment-specific conditions."
+}

@@ -1,0 +1,51 @@
+{
+  "schema": "tinto-artifact-maintenance-preflight/v1",
+  "capturedAt": "2026-09-01T12:10:07.1279546+02:00",
+  "mutationPerformed": false,
+  "actingIdentity": {
+    "account": "AIR103\\User",
+    "sid": "S-1-5-21-253028406-3978028226-1178244906-1001",
+    "elevatedAdministrator": false
+  },
+  "targets": [
+    {
+      "artifactId": "qa-project",
+      "canonicalPath": "C:\\Users\\User\\Documents\\personal\\tinto\\.pumarejo\\qa-project",
+      "inspection": {
+        "filesystemIdentity": {
+          "volumeSerialNumber": "6e5ac0375abff9c3",
+          "fileId": "ca051a00000013000000000000000000"
+        },
+        "ownerSid": "S-1-5-21-253028406-3978028226-1178244906-1005",
+        "ownerAccount": "AIR103\\CodexSandboxOffline",
+        "creationTimeFiletime": "134297837834793828",
+        "lastWriteTimeFiletime": "134298795243464338",
+        "attributes": 16,
+        "reparseTag": 0
+      },
+      "nativePreflight": {
+        "status": "rejected",
+        "reason": "unsafe_junction"
+      },
+      "unsafeEntry": {
+        "path": "C:\\Users\\User\\Documents\\personal\\tinto\\.pumarejo\\qa-project\\node_modules",
+        "reparseTag": "0xa0000003",
+        "kind": "junction",
+        "substituteTarget": "C:\\Users\\User\\Documents\\personal\\tinto\\node_modules",
+        "externalTargetTouched": false
+      },
+      "manifest": "docs/orchestration/runs/icook-integration-repair-2026-08-31/qa-project-cleanup-manifest.json"
+    },
+    {
+      "artifactId": "regression-artifacts",
+      "canonicalPath": "C:\\Users\\User\\Documents\\personal\\tinto\\.pumarejo\\regression-artifacts",
+      "inspection": {
+        "status": "rejected",
+        "reason": "win32_5"
+      },
+      "manifestCreated": false,
+      "reason": "The current identity cannot read the durable filesystem identity or owner, so an identity-bound manifest cannot be created without fabricating metadata."
+    }
+  ],
+  "safetyConclusion": "The current identity cannot execute explicit maintenance because it is not elevated and is not the original owner. The QA target also contains a junction to the active checkout's node_modules; the supported operation correctly refuses to traverse or delete through it. Regression artifacts remain unreadable. No ACL, ownership, link, target, or content was changed."
+}

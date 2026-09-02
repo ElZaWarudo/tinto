@@ -1,0 +1,99 @@
+{
+  "schema": "tinto-artifact-recovery-and-scanner/v1",
+  "recordedAt": "2026-09-02T12:13:08.7308340+02:00",
+  "authorization": {
+    "approvedBy": "user",
+    "reference": "go-ahead-2026-09-02",
+    "scope": "Implement junction-safe identity-bound artifact cleanup and execute the two prepared elevated cleanup manifests."
+  },
+  "implementation": {
+    "repository": "C:\\Users\\User\\Documents\\personal\\pumarejo",
+    "summary": [
+      "Treat an ordinary directory junction below an attested root as an opaque leaf and unlink it through a held reparse-point handle.",
+      "Reject a manifested root that is itself a junction, and continue to reject symbolic links, volume mount points, and unknown reparse points.",
+      "For explicit elevated maintenance, use privileged native handle inspection instead of an earlier unprivileged Node realpath check."
+    ],
+    "verification": {
+      "typecheck": "passed",
+      "lint": "passed",
+      "build": "passed",
+      "focusedTests": "15 passed",
+      "fullTests": "780 passed, 19 skipped across 69 passed and 8 skipped files"
+    },
+    "securityReview": "acceptable for the authorized cleanup scope; external junction targets are never traversed and root identity remains fail-closed"
+  },
+  "cleanup": {
+    "qaProject": {
+      "manifest": "qa-project-cleanup-manifest.json",
+      "dryRunOperationId": "6198a07fa9773ba9c29f3a0a2cb416ee",
+      "dryRun": {
+        "disposition": "would_remove",
+        "directories": 427,
+        "files": 518,
+        "bytes": 596155603
+      },
+      "executeOperationId": "4b7d82db4bf3eaffe1782743835e305c",
+      "result": "removed"
+    },
+    "regressionArtifacts": {
+      "manifest": "regression-artifacts-cleanup-manifest.json",
+      "dryRunOperationId": "a951dbc3d887b994f743cbd5cce5c668",
+      "dryRun": {
+        "disposition": "would_remove",
+        "directories": 1,
+        "files": 0
+      },
+      "executeOperationId": "78c9418d0d9e138cfa14f0cfdb4ec9f4",
+      "result": "removed"
+    },
+    "activeNodeModules": {
+      "path": "C:\\Users\\User\\Documents\\personal\\tinto\\node_modules",
+      "volumeSerialNumberBeforeAndAfter": "6e5ac0375abff9c3",
+      "fileIdBeforeAndAfter": "a9c5020000001b000000000000000000",
+      "lastWriteTimeFiletimeBeforeAndAfter": "134323826244187578",
+      "creationTimeFiletimeBeforeAndAfter": "134266890156094462",
+      "result": "unchanged"
+    }
+  },
+  "postCleanup": {
+    "doctor": {
+      "status": "ready",
+      "leaseResidue": "five v2 leases verified closed"
+    },
+    "gitleaksEightSecondGate": {
+      "version": "8.30.1",
+      "result": "failed",
+      "exitCode": 1,
+      "reason": "context deadline exceeded",
+      "permissionDeniedWarnings": 0,
+      "partialBytesScanned": 2550000,
+      "partialFindings": 0
+    },
+    "gitleaksSixtySecondDiagnostic": {
+      "result": "failed",
+      "exitCode": 1,
+      "reason": "context deadline exceeded",
+      "partialBytesScanned": 121080000,
+      "partialFindings": 2,
+      "redactedFindingPaths": [
+        ".worktrees/codex/fix-codex-session-permissions/src/demo/main.tsx",
+        ".worktrees/codex/fix-codex-session-permissions/src/panels/timeline/TimelinePanel.test.tsx"
+      ],
+      "ruleIds": [
+        "generic-api-key",
+        "stripe-access-token"
+      ],
+      "rawReportPublished": false
+    },
+    "tintoLint": {
+      "result": "failed",
+      "reason": "ESLint traversed a separate historical worktree QA copy containing a recursively nested .pnpm-store and resolved a missing package from the repeated path."
+    }
+  },
+  "conclusion": {
+    "custodyResidue": "resolved",
+    "scannerGate": "open",
+    "remainingBoundary": "The attested .pumarejo roots were removed, but an unmanifested historical QA copy under .worktrees/pumarejo-dialog-broker remains. It was preserved because it was outside the authorized identity-bound targets.",
+    "nextAction": "Define a bounded, attributable cleanup or scanner topology for the historical worktree copy, then rerun the unchanged eight-second Gitleaks gate."
+  }
+}

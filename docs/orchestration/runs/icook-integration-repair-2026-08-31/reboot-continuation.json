@@ -1,0 +1,54 @@
+{
+  "schema": "tinto-reboot-continuation/v1",
+  "state": "lease-and-artifact-recovery-complete-scanner-blocked",
+  "preparedAt": "2026-09-01T12:00:30.7163534+02:00",
+  "approvedAt": "2026-09-02T11:35:14.7775419+02:00",
+  "approvedBy": "user",
+  "previousBootIdentifier": {
+    "scheme": "windows-boot-sequence/v2",
+    "bootEnvironmentGuid": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898",
+    "bootId": 52
+  },
+  "leaseIds": [
+    "661e13c04151f419c550df3fbe94a5f7",
+    "7da8f17b8bf931336d6c6b2e63fe7d4f",
+    "7ea16368f2c9bb1e490810f558df0ffc",
+    "abae9656d28350ea6d16ae83aadbd06e",
+    "e89b7e4994b9ca1f748dae9d562af35e"
+  ],
+  "bindingOperationId": "4d4c62459a6923bf65e1e073d4b631ed",
+  "preRebootEvidence": "docs/orchestration/runs/icook-integration-repair-2026-08-31/pre-reboot-lease-evidence-2026-09-01.json",
+  "firstRebootCorrectionEvidence": "docs/orchestration/runs/icook-integration-repair-2026-08-31/first-reboot-boot-identity-correction-2026-09-01.json",
+  "nextCommands": [
+    "node C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js recover-leases --project C:/Users/User/Documents/personal/tinto --dry-run --json",
+    "node C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js recover-leases --project C:/Users/User/Documents/personal/tinto --execute --json",
+    "node C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js recover-leases --project C:/Users/User/Documents/personal/tinto --execute --json",
+    "node C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js doctor --json --project C:/Users/User/Documents/personal/tinto"
+  ],
+  "postReboot": {
+    "completedAt": "2026-09-02T11:39:53.3520738+02:00",
+    "currentBootIdentifier": {
+      "scheme": "windows-boot-sequence/v2",
+      "bootEnvironmentGuid": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898",
+      "bootId": 53
+    },
+    "dryRunOperationId": "e50bc8f5d1bc3ddbf3f41da4583af915",
+    "executeOperationId": "a03cefb99ac9ca89f679439a659cc687",
+    "idempotenceOperationId": "54d2258c5b0770734ac2d44874d5d514",
+    "recoveredCount": 5,
+    "repeatAlreadyRecoveredCount": 5,
+    "doctorStatus": "ready",
+    "remainingDoctorWarning": null,
+    "artifactDryRunOperationId": "46059abf84a489bbc847a09db66c171a",
+    "artifactDryRunDisposition": "maintenance_identity_not_elevated",
+    "evidence": "second-reboot-recovery-2026-09-02.json",
+    "artifactRecoveryEvidence": "artifact-recovery-and-scanner-2026-09-02.json",
+    "artifactCleanup": {
+      "qaProjectExecuteOperationId": "4b7d82db4bf3eaffe1782743835e305c",
+      "regressionArtifactsExecuteOperationId": "78c9418d0d9e138cfa14f0cfdb4ec9f4",
+      "result": "removed"
+    },
+    "scannerGate": "open: unchanged eight-second Gitleaks command still exceeds its deadline on a separate historical worktree QA copy"
+  },
+  "safetyRule": "After explicit user approval and reboot, proceed only if the environment GUID is unchanged, BootId differs from 52, and the dry-run selects exactly the five listed leases with reason previous_boot."
+}

@@ -209,11 +209,11 @@ blockers:
 - id: IC-HARD-BLK-2026-08-31-02
   jira_issue_key: null
   unit_id: null
-  title: Native ICook onboarding is blocked at the folder-picker boundary
+  title: Native ICook onboarding acceptance remains blocked
   wave: null
   type: capability
   risk: high
-  description: Choose-folder remains Abriendo with disabled controls while Pumarejo exposes only the main surface, reports no supported pending dialog, and unknown coverage. Native registration was not observed after manual recovery and one supported relaunch.
+  description: A typed local-path onboarding route now uses the existing canonical add_repo backend and has focused application coverage. The earlier choose-folder stall remains historical, while native select/cancel, parent-control recovery and persisted ICook identity are still unverified because the public instance is not semantically ready.
   decision_required: current local hardening authorized with explicit documentation-gate bypass; native acceptance still blocked
   impact_if_ignored: ICook execution could proceed in the wrong scope or be falsely reported as verified.
   affected_units: []
@@ -222,7 +222,7 @@ blockers:
   detected_at: '2026-08-31'
   status: open
   evidence: docs/orchestration/2026-08-31-icook-hardening-handoff.md#tin-hard-02--native-project-registration-cannot-be-completed-through-the-supported-gui-boundary
-  next_action: Prove supported select/cancel and control recovery in the same controlled instance, then verify native project identity survives a clean restart.
+  next_action: After supported custody recovery makes doctor semantically ready, verify the typed-path and select/cancel routes in the same controlled instance, prove parent-control recovery, and confirm native project identity survives a clean restart.
 - id: IC-HARD-BLK-2026-08-31-03
   jira_issue_key: null
   unit_id: null
@@ -243,34 +243,34 @@ blockers:
 - id: IC-HARD-BLK-2026-08-31-04
   jira_issue_key: null
   unit_id: null
-  title: Supported Pumarejo integration reconciliation is unavailable for current source
+  title: Windows custody residues recovered through supported identity-bound maintenance
   wave: null
   type: environment
   risk: high
-  description: Fresh doctor flags debug-registration. Original attributed edits and staged provider match their manifest, but lib.rs full hash has unrelated drift and the current provider bundle differs. Supported init/remove previews reject ALREADY_INTEGRATED_MODIFIED. A pristine isolated checkout also rejects init because committed attribution has no ignored integration manifest. Public ready status does not clear integrity errors.
-  decision_required: provide a supported attribution-preserving migration or a maintainer-approved matching integration snapshot; no integrity bypass is authorized
+  description: After an approved reboot changed BootId from 52 to 53, supported recovery selected exactly the five expected previous-boot leases, recovered them, and proved idempotence. Elevated identity-bound maintenance then removed the two manifested protected artifact roots without traversing a descendant junction. Doctor now reports ready and verifies all five v2 leases closed.
+  decision_required: null
   impact_if_ignored: Native acceptance could be claimed against an unverified provider or overwrite unrelated source.
   affected_units: []
   blocks_dependents: true
   suggested_owner: pumarejo-maintainer
   detected_at: '2026-08-31'
-  status: open
-  evidence: docs/orchestration/runs/icook-hardening-2026-08-31/progress.md
-  next_action: Repair supported staging/restore provenance before repeating ICook binding, folder select/cancel, history and large-transcript native acceptance; preserve all quarantined artifacts.
+  status: resolved
+  evidence: docs/orchestration/runs/icook-integration-repair-2026-08-31/artifact-recovery-and-scanner-2026-09-02.json
+  next_action: None for custody recovery. Keep the manifests and operation evidence with the run record.
 - id: IC-HARD-BLK-2026-08-31-05
   jira_issue_key: null
   unit_id: null
-  title: Full Gitleaks verification times out on inaccessible retained artifacts
+  title: Full Gitleaks verification times out on a recursively nested historical worktree copy
   wave: null
   type: verification
   risk: high
-  description: Fresh Gitleaks 8.30.1 invocation exits 1 after permission-denied warnings in retained Pumarejo artifact directories and context deadline exceeded at the unchanged eight-second budget. Partial report and heuristic fallback cannot certify a full scan.
-  decision_required: supported custody or ownership remediation for retained artifacts; no recursive deletion or scanner-rule weakening
+  description: The two identity-attested protected artifact roots are removed and the unchanged Gitleaks 8.30.1 invocation no longer reports permission-denied warnings, but it still exits 1 at the unchanged eight-second deadline. A sixty-second diagnostic also times out after scanning about 121.08 MB and reports two redacted partial findings under another saved worktree. Tinto lint independently reaches the same historical worktree QA copy and its recursively repeated package store. Partial reports cannot certify a full scan.
+  decision_required: choose an attributable cleanup or bounded scanner topology for the unmanifested historical worktree copy; do not weaken rules or treat partial findings as a complete report
   impact_if_ignored: A degraded heuristic check could be misrepresented as complete secret verification.
   affected_units: []
   blocks_dependents: false
   suggested_owner: tinto-pumarejo-maintainers
   detected_at: '2026-08-31'
   status: open
-  evidence: docs/orchestration/runs/icook-hardening-2026-08-31/checks/scanner-diagnostic.json
-  next_action: Complete authorized custody repair, rerun the unchanged full scanner, and require a successful complete report; diagnostic code improvements do not close this gate.
+  evidence: docs/orchestration/runs/icook-integration-repair-2026-08-31/artifact-recovery-and-scanner-2026-09-02.json
+  next_action: Establish identity and originating-workflow attribution for .worktrees/pumarejo-dialog-broker/.pumarejo/qa-project, then either clean it through the supported manifested flow or define an explicitly approved bounded scan topology. Rerun the unchanged eight-second scanner and require a successful complete report.

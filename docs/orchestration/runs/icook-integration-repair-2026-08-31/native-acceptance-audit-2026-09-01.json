@@ -1,0 +1,309 @@
+{
+  "schema": "tinto-native-acceptance-audit/v1",
+  "capturedAt": "2026-09-01T06:52:28.5061965Z",
+  "doctor": {
+    "argv": [
+      "node",
+      "C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js",
+      "doctor",
+      "--json",
+      "--project",
+      "C:/Users/User/Documents/personal/tinto"
+    ],
+    "exitCode": 0,
+    "report": {
+      "status": "warn",
+      "diagnostics": [
+        {
+          "id": "project.detected",
+          "status": "ready",
+          "summary": "A supported Tauri 2 project was detected."
+        },
+        {
+          "id": "config.valid",
+          "status": "ready",
+          "summary": "The v1 project configuration is valid."
+        },
+        {
+          "id": "integration.manifest",
+          "status": "ready",
+          "summary": "The owned integration projections are intact; full-file hashes differ only outside attributed content."
+        },
+        {
+          "id": "integration.debug-registration",
+          "status": "ready",
+          "summary": "Cargo and Rust retain the attributable debug-and-feature registration."
+        },
+        {
+          "id": "integration.capability-permission",
+          "status": "ready",
+          "summary": "The isolated agent capability grants the provider permission."
+        },
+        {
+          "id": "integration.version-alignment",
+          "status": "ready",
+          "summary": "CLI, integration manifest, and Tauri plugin versions are aligned.",
+          "classification": "verified"
+        },
+        {
+          "id": "toolchain.node",
+          "status": "ready",
+          "summary": "Node runtime is v24.13.0."
+        },
+        {
+          "id": "toolchain.rust",
+          "status": "ready",
+          "summary": "Cargo is available."
+        },
+        {
+          "id": "toolchain.launch",
+          "status": "ready",
+          "summary": "The project launch executable is available.",
+          "classification": "verified",
+          "evidence": {
+            "executable": "npm",
+            "arguments": [
+              "run",
+              "tauri",
+              "--",
+              "dev",
+              "--features",
+              "pumarejo",
+              "--config",
+              "{tauriConfig}"
+            ],
+            "provenance": "project-config",
+            "confidence": "verified"
+          }
+        },
+        {
+          "id": "platform.supported",
+          "status": "ready",
+          "summary": "Platform win32 is supported."
+        },
+        {
+          "id": "platform.display",
+          "status": "ready",
+          "summary": "A desktop display session is available."
+        },
+        {
+          "id": "platform.webview",
+          "status": "ready",
+          "summary": "A successful Pumarejo launch verified the WebView runtime.",
+          "classification": "verified",
+          "evidence": {
+            "provenance": "successful-launch",
+            "confidence": "verified"
+          }
+        },
+        {
+          "id": "port.available",
+          "status": "ready",
+          "summary": "A dynamic loopback port can be reserved."
+        },
+        {
+          "id": "residue.owned",
+          "status": "warn",
+          "summary": "5 owned session residue entries require recovery.",
+          "action": "Run the documented cleanup flow; doctor never terminates processes."
+        }
+      ]
+    }
+  },
+  "custody": {
+    "bootedAt": "2026-08-20T06:14:30.0458920Z",
+    "leases": [
+      {
+        "file": "661e13c04151f419c550df3fbe94a5f7.json",
+        "sha256": "79e44eb4aed07db997d7a6cbd3d44e521709a58ce8aa85bd1f0fe0577bc99f2e",
+        "state": "retryable",
+        "mechanism": "windows_job_object",
+        "controllerPid": 37324,
+        "pid": 30280,
+        "createdAt": 1788166916563,
+        "updatedAt": 1788178311159
+      },
+      {
+        "file": "7da8f17b8bf931336d6c6b2e63fe7d4f.json",
+        "sha256": "c38f428f37bbccc490a3332394dda0828461597bf8586bd3c9245a2ddf7fa735",
+        "state": "retryable",
+        "mechanism": "windows_job_object",
+        "controllerPid": 37324,
+        "pid": 34736,
+        "createdAt": 1787931685311,
+        "updatedAt": 1788178311169
+      },
+      {
+        "file": "7ea16368f2c9bb1e490810f558df0ffc.json",
+        "sha256": "947aa45b9ba143c7eceea2562bfb86e71cb35c49ddadcb2638ae10f04b4c15f8",
+        "state": "retryable",
+        "mechanism": "windows_job_object",
+        "controllerPid": 37324,
+        "pid": 8076,
+        "createdAt": 1787933508322,
+        "updatedAt": 1788178311183
+      },
+      {
+        "file": "abae9656d28350ea6d16ae83aadbd06e.json",
+        "sha256": "f72e9a4a1f17b88748710a9b6d718a3e7565603b01c20d827abc379885283671",
+        "state": "retryable",
+        "mechanism": "windows_job_object",
+        "controllerPid": 37324,
+        "pid": 34348,
+        "createdAt": 1787930458192,
+        "updatedAt": 1788178311195
+      },
+      {
+        "file": "e89b7e4994b9ca1f748dae9d562af35e.json",
+        "sha256": "aca412f8a69562f4690283ac28f01696d61f5565538f7e2fb2225257421148c7",
+        "state": "retryable",
+        "mechanism": "windows_job_object",
+        "controllerPid": 37324,
+        "pid": 29612,
+        "createdAt": 1787967810780,
+        "updatedAt": 1788178311208
+      }
+    ],
+    "conclusion": "Five byte-identical current-boot Windows Job leases remain retryable; absent PIDs are not Job custody proof."
+  },
+  "scanner": {
+    "exitCode": 1,
+    "timeoutSeconds": 8,
+    "output": "8:52AM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts\"\r\n8:52AM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-2\"\r\n8:52AM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-3\"\r\n8:52AM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-4\"\r\n8:52AM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\qa-project\\\\.pumarejo\\\\artifacts-5\"\r\n8:52AM WRN skipping directory error=\"permission denied\" path=\"C:\\\\Users\\\\User\\\\Documents\\\\personal\\\\tinto\\\\.pumarejo\\\\regression-artifacts\"\r\n8:52AM ERR failed scan directory error=\"context deadline exceeded\"\r\n8:52AM WRN scanned ~344685079 bytes (344.69 MB)\r\n8:52AM WRN partial scan completed in 7.85s\r\n8:52AM WRN 4 leaks found in partial scan",
+    "rawReportPublished": false,
+    "conclusion": "The unchanged scan is partial: protected artifact roots are unreadable and a nested ignored QA copy/package store consumes the fixed deadline."
+  },
+  "runtimeEntries": [
+    {
+      "name": "artifacts",
+      "kind": "directory",
+      "createdAt": "2026-07-28T08:45:46.1419953Z",
+      "updatedAt": "2026-08-31T12:13:23.8772867Z"
+    },
+    {
+      "name": "provider",
+      "kind": "directory",
+      "createdAt": "2026-08-28T07:49:27.6240123Z",
+      "updatedAt": "2026-08-28T07:49:27.6240123Z"
+    },
+    {
+      "name": "qa-project",
+      "kind": "directory",
+      "createdAt": "2026-07-29T07:29:43.4793828Z",
+      "updatedAt": "2026-07-30T10:05:24.3464338Z"
+    },
+    {
+      "name": "regression-artifacts",
+      "kind": "directory",
+      "createdAt": "2026-07-29T07:25:06.0708863Z",
+      "updatedAt": "2026-07-29T07:25:06.0708863Z"
+    },
+    {
+      "name": "runtime-0gDOev",
+      "kind": "directory",
+      "createdAt": "2026-08-21T09:59:08.2097964Z",
+      "updatedAt": "2026-08-21T09:59:08.2113334Z"
+    },
+    {
+      "name": "runtime-1WgqYA",
+      "kind": "directory",
+      "createdAt": "2026-08-21T09:48:14.9336976Z",
+      "updatedAt": "2026-08-21T09:48:14.9346970Z"
+    },
+    {
+      "name": "runtime-bME58B",
+      "kind": "directory",
+      "createdAt": "2026-08-28T15:41:23.0961528Z",
+      "updatedAt": "2026-08-28T15:41:23.0966565Z"
+    },
+    {
+      "name": "runtime-hF08yg",
+      "kind": "directory",
+      "createdAt": "2026-08-28T16:11:46.2769216Z",
+      "updatedAt": "2026-08-28T16:11:46.2789209Z"
+    },
+    {
+      "name": "runtime-i6w0vs",
+      "kind": "directory",
+      "createdAt": "2026-08-21T09:36:57.1061165Z",
+      "updatedAt": "2026-08-21T09:36:57.1081212Z"
+    },
+    {
+      "name": "runtime-l4FU5V",
+      "kind": "directory",
+      "createdAt": "2026-08-21T10:05:32.3629792Z",
+      "updatedAt": "2026-08-21T10:05:32.3639805Z"
+    },
+    {
+      "name": "runtime-NINawC",
+      "kind": "directory",
+      "createdAt": "2026-08-29T01:43:28.5191154Z",
+      "updatedAt": "2026-08-29T01:43:28.5206215Z"
+    },
+    {
+      "name": "runtime-r8lWaD",
+      "kind": "directory",
+      "createdAt": "2026-08-31T09:01:54.2119728Z",
+      "updatedAt": "2026-08-31T09:01:54.2139792Z"
+    },
+    {
+      "name": "runtime-TZPZF5",
+      "kind": "directory",
+      "createdAt": "2026-08-21T09:28:01.5129429Z",
+      "updatedAt": "2026-08-21T09:28:01.5139045Z"
+    },
+    {
+      "name": "runtime-VKJEna",
+      "kind": "directory",
+      "createdAt": "2026-08-28T15:20:55.1287034Z",
+      "updatedAt": "2026-08-28T15:20:55.1302104Z"
+    },
+    {
+      "name": "runtime-ZiLAce",
+      "kind": "directory",
+      "createdAt": "2026-08-21T09:15:41.2640352Z",
+      "updatedAt": "2026-08-21T09:15:41.2650420Z"
+    },
+    {
+      "name": "sessions",
+      "kind": "directory",
+      "createdAt": "2026-08-28T07:42:32.7534055Z",
+      "updatedAt": "2026-08-31T12:13:23.8608336Z"
+    },
+    {
+      "name": "tools",
+      "kind": "directory",
+      "createdAt": "2026-07-29T07:35:49.2716274Z",
+      "updatedAt": "2026-07-29T07:35:49.2762002Z"
+    },
+    {
+      "name": "agent-capability.json",
+      "kind": "file",
+      "createdAt": "2026-07-28T08:43:43.3966141Z",
+      "updatedAt": "2026-08-28T09:33:01.2962467Z"
+    },
+    {
+      "name": "client-bridge.mjs",
+      "kind": "file",
+      "createdAt": "2026-08-28T10:27:09.0873637Z",
+      "updatedAt": "2026-08-28T17:49:09.2651172Z"
+    },
+    {
+      "name": "integration-manifest.json",
+      "kind": "file",
+      "createdAt": "2026-08-31T12:11:25.6954711Z",
+      "updatedAt": "2026-08-31T12:11:25.6964713Z"
+    },
+    {
+      "name": "launch-verification.json",
+      "kind": "file",
+      "createdAt": "2026-08-21T09:38:26.6936207Z",
+      "updatedAt": "2026-08-21T09:38:26.6936207Z"
+    }
+  ],
+  "sourceAudit": {
+    "windowsJobReattach": "explicitly unsupported by PID",
+    "artifactQuarantineDeleter": "typed internal seam exists but default runtime does not inject a native identity-bound deleter",
+    "mutationPerformed": false
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "schema": "tinto-continuation-code-review/v1",
+  "captured_at": "2026-09-01T06:45:41.7377309Z",
+  "reviewed_scope": [
+    "typed local-path onboarding",
+    "journal exit-code persistence",
+    "archived outcome presentation"
+  ],
+  "reviewers": [
+    "correctness",
+    "testing",
+    "security",
+    "reliability",
+    "maintainability",
+    "adversarial"
+  ],
+  "fixed": [
+    {
+      "finding": "Enter in local path submitted WSL flow",
+      "severity": "P2"
+    },
+    {
+      "finding": "same-render duplicate local mutation",
+      "severity": "P2"
+    },
+    {
+      "finding": "journal upsert path lacked regression coverage",
+      "severity": "P2"
+    },
+    {
+      "finding": "typed-path backend rejection/retry lacked coverage",
+      "severity": "P2"
+    },
+    {
+      "finding": "NativeApp typed-path wiring lacked integration coverage",
+      "severity": "P2"
+    },
+    {
+      "finding": "picker and typed path duplicated add/reload transaction",
+      "severity": "P3"
+    },
+    {
+      "finding": "reload failure could look like failed add and invite duplicate retry",
+      "severity": "P2"
+    },
+    {
+      "finding": "restored exit code was not visible in archived outcome",
+      "severity": "P2"
+    }
+  ],
+  "no_findings": [
+    "security",
+    "integration compatibility/idempotence"
+  ],
+  "not_applied": [
+    {
+      "finding": "best-effort journal write failures are discarded",
+      "disposition": "pre-existing system-wide persistence policy, not introduced by this patch; bounded retry/atomic transition requires its own scoped reliability change and fault model"
+    }
+  ],
+  "external_routes": "claude, grok, and cursor-agent executables unavailable; local adversarial reviewer used"
+}

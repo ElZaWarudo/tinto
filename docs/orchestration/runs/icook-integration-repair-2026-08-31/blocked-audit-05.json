@@ -1,0 +1,193 @@
+{
+  "schema": "tinto-resumed-blocked-audit/v1",
+  "capturedAt": "2026-09-01T06:54:42.0016428Z",
+  "resumedAuditTurn": 3,
+  "previousTurns": [
+    "User-directed continuation repaired independent source and aggregate failures but native acceptance remained gated.",
+    "Fresh native acceptance audit attributed the unchanged scanner failure to protected roots and a nested historical QA copy."
+  ],
+  "doctor": {
+    "exitCode": 0,
+    "report": {
+      "status": "warn",
+      "diagnostics": [
+        {
+          "id": "project.detected",
+          "status": "ready",
+          "summary": "A supported Tauri 2 project was detected."
+        },
+        {
+          "id": "config.valid",
+          "status": "ready",
+          "summary": "The v1 project configuration is valid."
+        },
+        {
+          "id": "integration.manifest",
+          "status": "ready",
+          "summary": "The owned integration projections are intact; full-file hashes differ only outside attributed content."
+        },
+        {
+          "id": "integration.debug-registration",
+          "status": "ready",
+          "summary": "Cargo and Rust retain the attributable debug-and-feature registration."
+        },
+        {
+          "id": "integration.capability-permission",
+          "status": "ready",
+          "summary": "The isolated agent capability grants the provider permission."
+        },
+        {
+          "id": "integration.version-alignment",
+          "status": "ready",
+          "summary": "CLI, integration manifest, and Tauri plugin versions are aligned.",
+          "classification": "verified"
+        },
+        {
+          "id": "toolchain.node",
+          "status": "ready",
+          "summary": "Node runtime is v24.13.0."
+        },
+        {
+          "id": "toolchain.rust",
+          "status": "ready",
+          "summary": "Cargo is available."
+        },
+        {
+          "id": "toolchain.launch",
+          "status": "ready",
+          "summary": "The project launch executable is available.",
+          "classification": "verified",
+          "evidence": {
+            "executable": "npm",
+            "arguments": [
+              "run",
+              "tauri",
+              "--",
+              "dev",
+              "--features",
+              "pumarejo",
+              "--config",
+              "{tauriConfig}"
+            ],
+            "provenance": "project-config",
+            "confidence": "verified"
+          }
+        },
+        {
+          "id": "platform.supported",
+          "status": "ready",
+          "summary": "Platform win32 is supported."
+        },
+        {
+          "id": "platform.display",
+          "status": "ready",
+          "summary": "A desktop display session is available."
+        },
+        {
+          "id": "platform.webview",
+          "status": "ready",
+          "summary": "A successful Pumarejo launch verified the WebView runtime.",
+          "classification": "verified",
+          "evidence": {
+            "provenance": "successful-launch",
+            "confidence": "verified"
+          }
+        },
+        {
+          "id": "port.available",
+          "status": "ready",
+          "summary": "A dynamic loopback port can be reserved."
+        },
+        {
+          "id": "residue.owned",
+          "status": "warn",
+          "summary": "5 owned session residue entries require recovery.",
+          "action": "Run the documented cleanup flow; doctor never terminates processes."
+        }
+      ]
+    }
+  },
+  "host": {
+    "bootId": "0x33",
+    "bootedAt": "2026-08-20T06:14:30.0458920Z"
+  },
+  "custody": {
+    "leases": [
+      {
+        "file": "661e13c04151f419c550df3fbe94a5f7.json",
+        "sha256": "79e44eb4aed07db997d7a6cbd3d44e521709a58ce8aa85bd1f0fe0577bc99f2e",
+        "state": "retryable",
+        "mechanism": "windows_job_object"
+      },
+      {
+        "file": "7da8f17b8bf931336d6c6b2e63fe7d4f.json",
+        "sha256": "c38f428f37bbccc490a3332394dda0828461597bf8586bd3c9245a2ddf7fa735",
+        "state": "retryable",
+        "mechanism": "windows_job_object"
+      },
+      {
+        "file": "7ea16368f2c9bb1e490810f558df0ffc.json",
+        "sha256": "947aa45b9ba143c7eceea2562bfb86e71cb35c49ddadcb2638ae10f04b4c15f8",
+        "state": "retryable",
+        "mechanism": "windows_job_object"
+      },
+      {
+        "file": "abae9656d28350ea6d16ae83aadbd06e.json",
+        "sha256": "f72e9a4a1f17b88748710a9b6d718a3e7565603b01c20d827abc379885283671",
+        "state": "retryable",
+        "mechanism": "windows_job_object"
+      },
+      {
+        "file": "e89b7e4994b9ca1f748dae9d562af35e.json",
+        "sha256": "aca412f8a69562f4690283ac28f01696d61f5565538f7e2fb2225257421148c7",
+        "state": "retryable",
+        "mechanism": "windows_job_object"
+      }
+    ],
+    "unchangedFromPriorAudit": true,
+    "supportedActionAvailable": false,
+    "reason": "Unnamed Windows Job handles were lost with the old controller; PID reattachment is explicitly unsupported and PID absence is insufficient proof."
+  },
+  "artifacts": {
+    "protectedRoots": [
+      {
+        "path": "C:/Users/User/Documents/personal/tinto/.pumarejo/qa-project/.pumarejo/artifacts",
+        "access": "denied",
+        "category": "UnauthorizedAccessException"
+      },
+      {
+        "path": "C:/Users/User/Documents/personal/tinto/.pumarejo/qa-project/.pumarejo/artifacts-2",
+        "access": "denied",
+        "category": "UnauthorizedAccessException"
+      },
+      {
+        "path": "C:/Users/User/Documents/personal/tinto/.pumarejo/qa-project/.pumarejo/artifacts-3",
+        "access": "denied",
+        "category": "UnauthorizedAccessException"
+      },
+      {
+        "path": "C:/Users/User/Documents/personal/tinto/.pumarejo/qa-project/.pumarejo/artifacts-4",
+        "access": "denied",
+        "category": "UnauthorizedAccessException"
+      },
+      {
+        "path": "C:/Users/User/Documents/personal/tinto/.pumarejo/qa-project/.pumarejo/artifacts-5",
+        "access": "denied",
+        "category": "UnauthorizedAccessException"
+      },
+      {
+        "path": "C:/Users/User/Documents/personal/tinto/.pumarejo/regression-artifacts",
+        "access": "denied",
+        "category": "UnauthorizedAccessException"
+      }
+    ],
+    "supportedActionAvailable": false,
+    "reason": "Current identity cannot read the roots; the default runtime has no native identity-bound deleter and ACL mutation, relocation, deletion, or scanner exclusion is outside the accepted safety boundary."
+  },
+  "acceptance": {
+    "achieved": false,
+    "scannerComplete": false,
+    "nativeCampaignAllowed": false,
+    "status": "blocked"
+  }
+}

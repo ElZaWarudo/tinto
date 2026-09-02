@@ -137,5 +137,103 @@ and [machine-readable reconciliation](runs/icook-hardening-2026-08-31/reconcilia
 The supported-integration and complete-scanner prerequisites are retained as
 `IC-HARD-BLK-2026-08-31-04` and `IC-HARD-BLK-2026-08-31-05` in the blocker ledger.
 
+## ICook resumption preflight — 2026-08-31 11:24 UTC
+
+**Still blocked before implementation.** This section records the resumed
+`IC-RUN-2026-08-28-001` findings at the user's explicit request. It does not
+restart the Tinto hardening campaign or advance ICook's canonical queue.
+
+Current Tinto HEAD is `4b9e259c029ab72b323ad84b10c06927b7638df1`;
+the three repairs are now committed as `7aec8bb` (WSL diagnostics), `9c6fe68`
+(archived titles), and `d0b2046` (scanner diagnostics). SHA-256 checks of all
+four repaired code files match the accepted hardening snapshot in
+`runs/icook-hardening-2026-08-31/reconciliation.json`. Pumarejo HEAD remains
+`f0af7c65ee5f6a866e6d5cfbf31579231e4e9fec`. These are source facts, **not
+proof that the repaired versions are running**.
+
+Fresh exact command/exits/output are retained in the external supervisor
+[evidence packet](C:/Users/User/.codex/visualizations/2026/08/31/01a0578d-8db1-7941-b8e9-b62d1591598e/icook-continuation/continuation-report.md).
+
+| Finding / existing tracker | Current evidence and impact | Owner / next closure evidence |
+| --- | --- | --- |
+| Integration barrier / `IC-HARD-BLK-2026-08-31-04` | Pumarejo `doctor --project C:/Users/User/Documents/personal/tinto --json` exits **0**, but its JSON status is **error**, with `integration.debug-registration` error, manifest drift and five residue warnings. The process exit is not a green gate. | Pumarejo maintainer: supported attribution-preserving reconciliation, then semantically green doctor. Preserve unrelated edits and quarantines. |
+| Supported recovery rejected / same tracker | One bounded `init --project C:/Users/User/Documents/personal/tinto --dry-run` exits **1**, `INTEGRATION_INCOMPLETE (ALREADY_INTEGRATED_MODIFIED)`, `retryable:false`. No apply/remove, guessed manifest or hash rewrite was attempted. | Pumarejo maintainer: authoritative matching integration/provenance or a supported migration; do not repeat the same rejected recovery without new evidence. |
+| Native acceptance unavailable / `IC-HARD-BLK-2026-08-31-01`–`03` | The new public MCP controller reports `idle`, `lastAction:none`. This describes only that controller, not every running Tinto process. No launch was attempted past the integrity gate; no ICook workspace binding, managed command, permissions or executable-resolution proof was obtained. | Tinto runtime maintainer, after integration recovery: verify native ICook identity/effective workspace and capture one bounded command's exact output and exit. Host Node/Cargo availability is not managed-runtime evidence. |
+| History/observation acceptance / `TIN-HARD-04`, `TIN-HARD-05` | Prior archive `bd65c1a3-4444-4b04-8522-00d8f4345b22` and unknown-send observations were reconciled from retained evidence only. No fresh archive observation or resend occurred. | Tinto/Pumarejo maintainers: after a verified launch, inspect full session IDs and terminal dispositions before any resume; prove scoped long-transcript recovery. |
+| Full scan / `IC-HARD-BLK-2026-08-31-05` | Historical Gitleaks timeout/permission finding remains open; no new full scan ran. Fixed diagnostics and a basic detector do not certify ICook or Tinto secret safety. | Tinto/Pumarejo maintainers: supported custody remediation and complete scanner evidence, without weakening rules. |
+
+### ICook and orchestration findings retained separately
+
+- **Recipe content:** the recovered 43-recipe inventory and five omissions
+  remain historical, not current-tree findings certified by this preflight:
+  stock in Roasted Vegetable Couscous; cumin in Black Bean and Sweet Potato
+  Tacos; lemon in Mediterranean Lentil Salad; lemon in Roasted Chickpea Pita;
+  stock in Garden Vegetable Minestrone. The existing
+  [static review](C:/Users/User/.codex/visualizations/2026/08/31/01a056e3-6d9a-7911-bf89-2221dbabb68e/icook-continuation/recovered-static-review.md)
+  owns the details. A Tinto implementation worker must confirm still-needed
+  corrections and focused regressions; optional garnish/pantry seasoning must
+  not automatically become required. Classification correctness is unverified.
+- **Native campaign:** prior 13 observed passes remain historical. Cases 10
+  (zero recommendations), 14 (inner-list scrolling), 15 (keyboard activation)
+  and 16 (actual reload persistence) remain partial/blocked. All 17 current-tree
+  outcomes require reconciliation after acceptance; none was newly passed here.
+- **Canonical state drift:** the queue remains `in_review` with null approval
+  fields and historical `release-ready` labels. Its IC-VERIFY-001 hash is
+  `sha256:74d4770e290cf3d2b252ed3373dccedf0ceb4f211f7588c2bf204a3937d72757`,
+  while the materialized v2 contract contains
+  `sha256:0e6359c9d568426e344a1feeecd03e287c3dad653c7964c406c3eb9c1d20cf4b`.
+  These are freshly read documentary facts, not a validator result. The Tinto
+  supervisor must reconcile them without silently replacing hashes or inventing
+  certification. The external transition-compiler limitation remains preserved.
+- **Authorization:** the current request explicitly authorizes the local
+  workflow and documentation-gate bypass, not a fabricated approval receipt.
+  The sole canonical ledger found still expires at `2026-08-30T15:47:50Z` despite
+  its stored `active` label. The authorized successor has **not** been created;
+  its 48-hour publication window has not started. Creation/validation must occur
+  through Tinto. Only the bounded `branch_push` to ICook `main` is authorized;
+  no PR, release, deployment, Jira operation or force push is allowed.
+- **Android/environment:** the missing-SDK findings are historical. No current
+  managed SDK/emulator/signing inventory or Android build was possible. Android
+  alone must not block independent desktop work once tooling acceptance passes.
+
+No ICook edit, development/test/Git command, worker dispatch, commit or push
+occurred. Current ICook HEAD, remote URL/history and remote-main equality remain
+unverified. Canonical ICook queue, blockers, autonomy and dogfood files are
+unchanged because their update requires a working Tinto-managed route.
+This documentation update does not resolve any blocker or authorize repairs.
+
+**Next action:** resolve `IC-HARD-BLK-2026-08-31-04` through the supported
+Pumarejo integration path, then resume the existing ICook run with
+`$krt-swarm-seneschal Mode: autonomous-team-flow`. Re-run tooling acceptance
+first; import this continuation through Tinto, renew the ledger, and execute
+only the still-unverified work. No safe independent ICook execution path was
+established in this preflight.
 
 
+
+
+## Local integration repair — 2026-08-31 12:15 UTC
+
+Supported Pumarejo init is repaired and applied locally: one verified provider
+line-ending change, unchanged application bytes, and an idempotent second init.
+All integration diagnostics are ready. Overall doctor remains warn for five old
+Windows Job custody records after supported launch/close recovery; no native
+acceptance or ICook command occurred. The full scanner again exited 1 with
+permission errors and the unchanged eight-second timeout. All six TIN-HARD
+findings remain open for native acceptance. No commits or publication occurred.
+
+See [repair handoff](runs/icook-integration-repair-2026-08-31/final-handoff.md)
+and [reconciliation](runs/icook-integration-repair-2026-08-31/reconciliation.json).
+The reconciliation links the original task evidence directory; source changes are
+local in Pumarejo. Existing blocker IDs and expired ICook authority are preserved.
+
+## Source continuation — 2026-09-01
+
+The remaining independent source work is now addressed: typed local-path
+onboarding is wired through the canonical backend, terminal exit disposition is
+persisted and shown for archived sessions, and both Pumarejo aggregate failures
+are repaired. Current checks are green (Tinto 84 onboarding/application tests,
+135 terminal tests and 479 Rust tests; Pumarejo 734 applicable tests with 9
+capability-gated skips). The linked repair handoff contains exact dispositions,
+review results and hashes. Native findings remain open until supported custody
+recovery yields a semantically ready doctor; no safety boundary was relaxed.

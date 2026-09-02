@@ -1,0 +1,149 @@
+{
+  "schema": "tinto-pre-reboot-lease-evidence/v1",
+  "capturedAt": "2026-09-01T11:41:24.4798147+02:00",
+  "hostPlatform": "win32",
+  "repositories": {
+    "tinto": {
+      "branch": "codex/windows-recovery-maintenance",
+      "head": "4b9e259c029ab72b323ad84b10c06927b7638df1"
+    },
+    "pumarejo": {
+      "branch": "codex/fix-agent-certification-gaps",
+      "head": "f0af7c65ee5f6a866e6d5cfbf31579231e4e9fec",
+      "workingTreeContainsUncommittedRecoveryImplementation": true
+    }
+  },
+  "currentBootIdentifier": {
+    "scheme": "windows-boot-environment-guid/v1",
+    "value": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898"
+  },
+  "dryRun": {
+    "command": "node C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js recover-leases --project C:/Users/User/Documents/personal/tinto --dry-run --json",
+    "exitCode": 0,
+    "semanticStatus": "complete",
+    "operationId": "60815a8ee24201ec51a358f23992fc09",
+    "mutationPerformed": false,
+    "results": [
+      {
+        "leaseId": "661e13c04151f419c550df3fbe94a5f7",
+        "decision": "rejected",
+        "reason": "ambiguous_missing_boot"
+      },
+      {
+        "leaseId": "7da8f17b8bf931336d6c6b2e63fe7d4f",
+        "decision": "rejected",
+        "reason": "ambiguous_missing_boot"
+      },
+      {
+        "leaseId": "7ea16368f2c9bb1e490810f558df0ffc",
+        "decision": "rejected",
+        "reason": "ambiguous_missing_boot"
+      },
+      {
+        "leaseId": "abae9656d28350ea6d16ae83aadbd06e",
+        "decision": "rejected",
+        "reason": "ambiguous_missing_boot"
+      },
+      {
+        "leaseId": "e89b7e4994b9ca1f748dae9d562af35e",
+        "decision": "rejected",
+        "reason": "ambiguous_missing_boot"
+      }
+    ]
+  },
+  "leases": [
+    {
+      "leaseId": "661e13c04151f419c550df3fbe94a5f7",
+      "version": 1,
+      "controllerPid": 37324,
+      "pid": 30280,
+      "startedAt": 1788166915857,
+      "mechanism": "windows_job_object",
+      "state": "retryable",
+      "createdAt": 1788166916563,
+      "updatedAt": 1788178311159,
+      "hasBootIdentifier": false,
+      "hasRecoveryHistory": false
+    },
+    {
+      "leaseId": "7da8f17b8bf931336d6c6b2e63fe7d4f",
+      "version": 1,
+      "controllerPid": 37324,
+      "pid": 34736,
+      "startedAt": 1787931684610,
+      "mechanism": "windows_job_object",
+      "state": "retryable",
+      "createdAt": 1787931685311,
+      "updatedAt": 1788178311169,
+      "hasBootIdentifier": false,
+      "hasRecoveryHistory": false
+    },
+    {
+      "leaseId": "7ea16368f2c9bb1e490810f558df0ffc",
+      "version": 1,
+      "controllerPid": 37324,
+      "pid": 8076,
+      "startedAt": 1787933507681,
+      "mechanism": "windows_job_object",
+      "state": "retryable",
+      "createdAt": 1787933508322,
+      "updatedAt": 1788178311183,
+      "hasBootIdentifier": false,
+      "hasRecoveryHistory": false
+    },
+    {
+      "leaseId": "abae9656d28350ea6d16ae83aadbd06e",
+      "version": 1,
+      "controllerPid": 37324,
+      "pid": 34348,
+      "startedAt": 1787930456796,
+      "mechanism": "windows_job_object",
+      "state": "retryable",
+      "createdAt": 1787930458192,
+      "updatedAt": 1788178311195,
+      "hasBootIdentifier": false,
+      "hasRecoveryHistory": false
+    },
+    {
+      "leaseId": "e89b7e4994b9ca1f748dae9d562af35e",
+      "version": 1,
+      "controllerPid": 37324,
+      "pid": 29612,
+      "startedAt": 1787967810127,
+      "mechanism": "windows_job_object",
+      "state": "retryable",
+      "createdAt": 1787967810780,
+      "updatedAt": 1788178311208,
+      "hasBootIdentifier": false,
+      "hasRecoveryHistory": false
+    }
+  ],
+  "legacyBinding": {
+    "dryRunOperationId": "c561afe1b1646d018ee2cd40950a4408",
+    "executeOperationId": "f37ef27b0e2287fe873f86529b0e22af",
+    "action": "bind-legacy",
+    "bootIdentifier": {
+      "scheme": "windows-boot-environment-guid/v1",
+      "value": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898"
+    },
+    "actingSid": "S-1-5-21-253028406-3978028226-1178244906-1001",
+    "capturedAt": 1788255732280,
+    "leaseHashes": {
+      "661e13c04151f419c550df3fbe94a5f7": "79e44eb4aed07db997d7a6cbd3d44e521709a58ce8aa85bd1f0fe0577bc99f2e",
+      "7da8f17b8bf931336d6c6b2e63fe7d4f": "c38f428f37bbccc490a3332394dda0828461597bf8586bd3c9245a2ddf7fa735",
+      "7ea16368f2c9bb1e490810f558df0ffc": "947aa45b9ba143c7eceea2562bfb86e71cb35c49ddadcb2638ae10f04b4c15f8",
+      "abae9656d28350ea6d16ae83aadbd06e": "f72e9a4a1f17b88748710a9b6d718a3e7565603b01c20d827abc379885283671",
+      "e89b7e4994b9ca1f748dae9d562af35e": "aca412f8a69562f4690283ac28f01696d61f5565538f7e2fb2225257421148c7"
+    },
+    "bindingCount": 5,
+    "auditCount": 5,
+    "leaseRecordsModified": false,
+    "sameBootConfirmation": {
+      "operationId": "30d33d46ddab300df02387fa0ffe2313",
+      "decisionForAllFive": "rejected",
+      "reasonForAllFive": "same_boot",
+      "evidenceSourceForAllFive": "legacy_binding"
+    }
+  },
+  "safetyConclusion": "The supported recovery command first refused all five legacy records because they lacked durable boot provenance. The explicit bind-legacy operation then recorded an immutable current-boot observation and a per-lease audit without changing the lease records or touching processes. A second recovery dry-run rejected all five as same-boot. A real reboot is now required to create previous-boot proof."
+}

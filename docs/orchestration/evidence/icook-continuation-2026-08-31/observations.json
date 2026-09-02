@@ -1,0 +1,768 @@
+{
+  "captured_at": "2026-08-31T09:20:13.2417927Z",
+  "purpose": "Tinto hardening handoff; diagnostics, not certification",
+  "observations": [
+    {
+      "label": "unknown-send-draft-retained",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto\\026-tauri_snapshot.json",
+      "source_sha256": "777227125b4a9035862ac58a0ea522341117795e77bd8b4bef0b3e7efc57da95",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 5291,
+          "candidates": 1375,
+          "matched": 7,
+          "returned": 7,
+          "filtered": 1368
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e13-3",
+          "role": "alert",
+          "name": null,
+          "text": "No se pudo confirmar el envío. Tu borrador sigue aquí; revisa la conversación antes de volver a enviarlo.",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "wsl-provider-failure",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto\\040-tauri_snapshot.json",
+      "source_sha256": "27b0f5fa0d39bd3ad1824db83d8387cf654bdb30caf2ea3e985dd9797a712979",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 193,
+          "candidates": 66,
+          "matched": 66,
+          "returned": 66,
+          "filtered": 0
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e25-33",
+          "role": "alert",
+          "name": null,
+          "text": "Error permanente: el agente WSL cerro stdout Reintentar",
+          "enabled": true
+        },
+        {
+          "ref": "e25-34",
+          "role": null,
+          "name": null,
+          "text": "Error permanente: el agente WSL cerro stdout",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "wsl-retry-unchanged",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto\\042-tauri_snapshot.json",
+      "source_sha256": "82b5023c24bef6b836dc65e2c61d2306df232a06875f934e3a9a34d90262f49a",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 193,
+          "candidates": 66,
+          "matched": 8,
+          "returned": 8,
+          "filtered": 58
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e27-3",
+          "role": "alert",
+          "name": null,
+          "text": "Error permanente: el agente WSL cerro stdout Reintentar",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "native-picker-surface-discovery",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto\\050-tauri_surface_discover.json",
+      "source_sha256": "5c502bb79f9b734da6b78685a8cdcc1dd0ba85cb20574631f590e987c4ed31e0",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": null,
+      "truncation": null,
+      "nodes": [],
+      "result": {
+        "graph": {
+          "sessionId": "585865d919d538161414cd0f9307ee2d",
+          "generation": 1,
+          "activeSurfaceRef": "s1-bf59d0f8c564b5f897d0c66a",
+          "surfaces": [
+            {
+              "surfaceRef": "s1-bf59d0f8c564b5f897d0c66a",
+              "identity": "bf59d0f8c564b5f897d0c66a",
+              "kind": "window",
+              "label": "main",
+              "title": "Tinto",
+              "bounds": {
+                "x": 52,
+                "y": 52,
+                "width": 816,
+                "height": 609
+              },
+              "lifecycle": "available",
+              "active": true,
+              "capabilities": {
+                "discovery": {
+                  "state": "supported",
+                  "code": "provider_window_enumerated"
+                },
+                "selection": {
+                  "state": "supported",
+                  "code": "provider_window_selectable"
+                },
+                "observation": {
+                  "state": "supported",
+                  "code": "provider_semantics_available"
+                },
+                "interaction": {
+                  "state": "supported",
+                  "code": "provider_actions_available"
+                },
+                "screenshot": {
+                  "state": "supported",
+                  "code": "provider_screenshot_available"
+                }
+              }
+            }
+          ],
+          "provider": {
+            "runtime": "webdriver",
+            "platform": "windows"
+          }
+        }
+      }
+    },
+    {
+      "label": "native-picker-dialog-detection",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto\\051-tauri_dialog.json",
+      "source_sha256": "e2f12a2923c1f00799520e07556b2d4784f46fe06c7b8d82062baf4266130ef9",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": null,
+      "truncation": null,
+      "nodes": [],
+      "result": {
+        "state": "unavailable",
+        "code": "provider_dialog_absent",
+        "pending": false
+      }
+    },
+    {
+      "label": "native-picker-coverage",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto\\052-tauri_surface_coverage.json",
+      "source_sha256": "1663c253dbd14cf621dcb30d8509afb5d957bbbaf4cfb90c3a449272a2e0e4c1",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": null,
+      "truncation": null,
+      "nodes": [],
+      "result": {
+        "graphGeneration": 1,
+        "activeSurfaceRef": "s1-bf59d0f8c564b5f897d0c66a",
+        "screenshotGeneration": 33,
+        "diagnostic": {
+          "status": "coverage_unknown",
+          "screenshot": {
+            "width": 800,
+            "height": 600
+          },
+          "gaps": []
+        }
+      }
+    },
+    {
+      "label": "native-picker-stuck",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto\\053-tauri_snapshot.json",
+      "source_sha256": "2ddd15eab2a13104b65c96fcd821990a351e1bfe43d5cffe7678aee31d7faee3",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 535,
+          "candidates": 23,
+          "matched": 10,
+          "returned": 10,
+          "filtered": 13
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e34-1",
+          "role": "dialog",
+          "name": "Agregar repo",
+          "text": "Agregar repo × Carpeta local Abriendo… Linux en WSL Distro Ubuntu-24.04 docker-desktop Alias Ruta Linux Ir Inicio Subir No se pudo leer esa carpeta en WSL. Cancelar Agregar",
+          "enabled": true
+        },
+        {
+          "ref": "e34-3",
+          "role": "button",
+          "name": "Abriendo…",
+          "text": "Abriendo…",
+          "enabled": false
+        },
+        {
+          "ref": "e34-9",
+          "role": "button",
+          "name": "Cancelar",
+          "text": "Cancelar",
+          "enabled": false
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "native-managed-preflight",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\010-tauri_snapshot.json",
+      "source_sha256": "cc78519885bc709d62b31d3469f2b123e65d2b2dbe5af342892325b5e5c9e22d",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 1088,
+          "candidates": 100,
+          "matched": 100,
+          "returned": 100,
+          "filtered": 0
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e8-73",
+          "role": null,
+          "name": null,
+          "text": "=== EFFECTIVE CONTEXT === cwd=C:\\Users\\User\\Documents\\personal\\tinto project_resolved=C:\\Users\\User\\Documents\\personal\\ICook declared_sandbox_write_root=C:\\Users\\User\\Documents\\personal\\tinto ICook write access not tested and not inferred === git -C C:/Users/User/Documents/personal/ICook status --short --branch === fatal: detected dubious ownership in repository at 'C:/Users/User/Documents/personal/ICook''C:/Users/User/Documents/personal/ICook' is owned by:AIR103/User (S-1-5-21-253028406-3978028226-1178244906-1001)but the current user is:AIR103/CodexSandboxOffline (S-1-5-21-253028406-3978028226-1178244906-1005)To add an exception for this directory, call:git config --global --add safe.directory C:/Users/User/Documents/personal/ICook exit=128 === git -C C:/Users/User/Documents/personal/ICook symbolic-ref --short -q HEAD === fatal: detected dubious ownership in repository at 'C:/Users/User/Documents/personal/ICook''C:/Users/User/Documents/personal/ICook' is owned by:AIR103/User (S-1-5-21-253028406-3978028226-1178244906-1001)but the current user is:AIR103/CodexSandboxOffline (S-1-5-21-253028406-3978028226-1178244906-1005)To add an exception for this directory, call:git config --global --add safe.directory C:/Users/User/Documents/personal/ICook exit=128 === git -C C:/Users/User/Documents/personal/ICook rev-parse --verify HEAD === fatal: detected dubious ownership in repository at 'C:/Users/User/Documents/personal/ICook''C:/Users/User/Documents/personal/ICook' is owned by:AIR103/User (S-1-5-21-253028406-3978028226-1178244906-1001)but the current user is:AIR103/CodexSandboxOffline (S-1-5-21-253028406-3978028226-1178244906-1005)To add an exception for this directory, call:git config --global --add safe.directory C:/Users/User/Documents/personal/ICook exit=128 HEAD_STATE=unborn_or_missing === git -C C:/Users/User/Documents/personal/ICook remote -v === fatal: detected dubious ownership in repository at 'C:/Users/User/Documents/personal/ICook''C:/Users/User/Documents/personal/ICook' is owned by:AIR103/User (S-1-5-21-253028406-3978028226-1178244906-1001)but the current user is:AIR103/CodexSandboxOffline (S-1-5-21-253028406-3978028226-1178244906-1005)To add an exception for this directory, call:git config --global --add safe.directory C:/Users/User/Documents/personal/ICook exit=128 === PACKAGE SCRIPTS (read package.json) === {\"dev\":\"vite\",\"build\":\"tsc -b && vite build\",\"preview\":\"vite preview\",\"test\":\"vitest\",\"test:run\":\"vitest run\",\"tauri\":\"tauri\",\"tauri:dev\":\"tauri dev\",\"tauri:build\":\"tauri build\"} exit=0 === CANONICAL DOC/SOURCE READABILITY (read only) === READABLE_FILE docs\\tinto-pumarejo-repair-handoff.md READABLE_FILE docs\\tinto-pumarejo-dogfood-report.md READABLE_FILE docs\\pumarejo-development.md READABLE_DIR docs\\orchestration sample=docs\\orchestration\\autonomy-ledgers\\IC-RUN-2026-08-28-001.json READABLE_DIR src sample=src\\App.tsx READABLE_DIR src-tauri sample=src-tauri\\build.rs === node C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js doctor --project C:/Users/User/Documents/personal/ICook --json === &: Line | 60 | & node $pumarejoCli doctor --project 'C:/Users/User/Documents/persona … | ~~~~ | The term 'node' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again. DOCTOR_EXIT=128 === TOOL AVAILABILITY (no secrets) === NOT_FOUND node FOUND cargo path=C:\\Users\\User\\.cargo\\bin\\cargo.exe cargo 1.97.1 (c980f4866 2026-06-30) version_exit=0 NOT_FOUND python NOT_FOUND py ANDROID_HOME_SET=False ANDROID_SDK_ROOT_SET=False EMULATOR_NOT_FOUND_ON_PATH EMULATOR_CANDIDATE C:\\Users\\User\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe exists=False",
+          "enabled": true
+        },
+        {
+          "ref": "e8-83",
+          "role": null,
+          "name": null,
+          "text": "\"node\" no se reconoce como un comando interno o externo,programa o archivo por lotes ejecutable. EXACT_DOCTOR_PROCESS_EXIT=1",
+          "enabled": true
+        },
+        {
+          "ref": "e8-87",
+          "role": null,
+          "name": null,
+          "text": "{\"status\":\"blocked_preflight\",\"effective_scope\":{\"cwd\":\"C:\\Users\\User\\Documents\\personal\\tinto\",\"managed_identity\":\"AIR103\\CodexSandboxOffline\",\"declared_write_root\":\"C:\\Users\\User\\Documents\\personal\\tinto\",\"icook\":\"Read access confirmed for canonical docs, orchestration artifacts, package.json, src, and src-tauri. Write access was not tested or inferred.\"},\"commands\":[{\"command\":\"Get-Content -LiteralPath C:\\Users\\User\\.codex\\attachments\\e7c4312b-c671-44fc-beb0-04fc827f69e8\\pasted-text-1.txt; Get-Content -LiteralPath C:\\Users\\User\\Documents\\personal\\ICook\\docs\\tinto-pumarejo-repair-handoff.md\",\"exit\":0,\"result\":\"Both files read successfully.\"},{\"command\":\"git -C C:/Users/User/Documents/personal/ICook status --short --branch\",\"exit\":128,\"result\":\"Git refused the repository: dubious ownership; owner AIR103/User, current user AIR103/CodexSandboxOffline. No safe.directory exception was added.\"},{\"command\":\"git -C C:/Users/User/Documents/personal/ICook symbolic-ref --short -q HEAD\",\"exit\":128,\"result\":\"Same dubious-ownership refusal; branch could not be determined.\"},{\"command\":\"git -C C:/Users/User/Documents/personal/ICook rev-parse --verify HEAD\",\"exit\":128,\"result\":\"Same dubious-ownership refusal; HEAD existence/value could not be determined, so unborn main is not claimed.\"},{\"command\":\"git -C C:/Users/User/Documents/personal/ICook remote -v\",\"exit\":128,\"result\":\"Same dubious-ownership refusal; remotes could not be determined.\"},{\"command\":\"Get-Content -LiteralPath C:\\Users\\User\\Documents\\personal\\ICook\\package.json -Raw | ConvertFrom-Json\",\"exit\":0,\"result\":{\"dev\":\"vite\",\"build\":\"tsc -b && vite build\",\"preview\":\"vite preview\",\"test\":\"vitest\",\"test:run\":\"vitest run\",\"tauri\":\"tauri\",\"tauri:dev\":\"tauri dev\",\"tauri:build\":\"tauri build\"}},{\"command\":\"Read-only Get-Item/Get-ChildItem/Get-Content checks\",\"exit\":0,\"result\":\"Readable: docs/tinto-pumarejo-repair-handoff.md, docs/tinto-pumarejo-dogfood-report.md, docs/pumarejo-development.md, docs/orchestration, src/App.tsx, src-tauri/build.rs.\"},{\"command\":\"node C:/Users/User/Documents/personal/pumarejo/dist/cli/index.js doctor --project C:/Users/User/Documents/personal/ICook --json\",\"exit\":1,\"result\":\"Doctor did not start: \"node\" is not recognized as an executable in the managed session.\"},{\"command\":\"Get-Command node,cargo,python,py plus Android environment/path checks\",\"exit\":0,\"result\":\"node absent; cargo available at C:\\Users\\User\\.cargo\\bin\\cargo.exe, version 1.97.1; python and py absent; ANDROID_HOME unset; ANDROID_SDK_ROOT unset; emulator absent from PATH; C:\\Users\\User\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe absent.\"}],\"icook_branch\":null,\"icook_head\":null,\"remotes\":null,\"preflight_blockers\":[\"Git repository inspection is blocked by dubious ownership; changing Git configuration was prohibited.\",\"Node is unavailable, so the required Pumarejo doctor cannot execute.\",\"Python is unavailable.\",\"Android SDK variables and emulator executable are unavailable.\"],\"can_run_next_managed_step\":false}",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "automatic-discovery-pending",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\015-tauri_click.json",
+      "source_sha256": "bd484d0a85c361b841a956c41ecc36280102ced0a19bba643bf88a61e62dacf4",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": true,
+        "reasons": [
+          "maxDepth"
+        ],
+        "counts": {
+          "visited": 109,
+          "candidates": 22,
+          "matched": 22,
+          "returned": 22,
+          "filtered": 0
+        },
+        "refineWith": [
+          "rootRef",
+          "maxNodes",
+          "maxDepth",
+          "maxTextLength",
+          "filters"
+        ]
+      },
+      "nodes": [
+        {
+          "ref": "e12-8",
+          "role": "status",
+          "name": null,
+          "text": "Buscando repositorios… ×",
+          "enabled": true
+        },
+        {
+          "ref": "e12-9",
+          "role": null,
+          "name": null,
+          "text": "Buscando repositorios…",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "owned-session-became-idle",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\017-tauri_status.json",
+      "source_sha256": "865be37f06724ff72f815b74df0fcec19bd2d6e610e73157148586cb92bc6ebc",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": null,
+      "truncation": null,
+      "nodes": [],
+      "result": {
+        "state": "idle",
+        "lastAction": "snapshot"
+      }
+    },
+    {
+      "label": "relaunch-ready",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\019-tauri_status.json",
+      "source_sha256": "afb79154cbde6bf99e44c6f201964f9cee70542a7462ae6d13b4d09a20240fb0",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": "main",
+      "truncation": null,
+      "nodes": [],
+      "result": {
+        "state": "ready",
+        "window": "main",
+        "proxyReady": true,
+        "webdriverReady": true,
+        "ownedPid": 30280,
+        "generation": 1,
+        "windowCapabilities": {
+          "resize": {
+            "state": "supported",
+            "code": "provider_resize_supported"
+          },
+          "maximize": {
+            "state": "supported",
+            "code": "provider_maximize_supported"
+          },
+          "restore": {
+            "state": "supported",
+            "code": "provider_restore_supported"
+          },
+          "initialSize": {
+            "state": "supported",
+            "code": "provider_initial_size_supported"
+          }
+        },
+        "lastAction": "launch"
+      }
+    },
+    {
+      "label": "icook-still-wsl-only",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\020-tauri_snapshot.json",
+      "source_sha256": "b0534e4c2c05cf2210f0bd82cb54f40c264a2be33ed1efe8a8ed548e6d6c29d1",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 284,
+          "candidates": 128,
+          "matched": 5,
+          "returned": 5,
+          "filtered": 123
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e2-1",
+          "role": "button",
+          "name": "WSL Ubuntu-24.04:ICook",
+          "text": "WSL Ubuntu-24.04:ICook",
+          "enabled": true
+        },
+        {
+          "ref": "e2-2",
+          "role": null,
+          "name": "/mnt/c/Users/User/Documents/personal/ICook",
+          "text": "Ubuntu-24.04:ICook",
+          "enabled": true
+        },
+        {
+          "ref": "e2-3",
+          "role": "button",
+          "name": "Quitar Ubuntu-24.04:ICook del workbench",
+          "text": "✕",
+          "enabled": true
+        },
+        {
+          "ref": "e2-4",
+          "role": "combobox",
+          "name": "Tipo de Agent para Ubuntu-24.04:ICook",
+          "text": "Codex Claude Code Kimi Code OpenCode",
+          "enabled": true
+        },
+        {
+          "ref": "e2-5",
+          "role": "button",
+          "name": "Iniciar Codex en Ubuntu-24.04:ICook",
+          "text": "Iniciar",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "archived-audit-identity",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\022-tauri_click.json",
+      "source_sha256": "2ee52e365ae5b7f603fc568d671f8c56f8924809bfbb3b2fe0aab6a1d49c8688",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": true,
+        "reasons": [
+          "maxDepth",
+          "maxTextLength"
+        ],
+        "counts": {
+          "visited": 305,
+          "candidates": 138,
+          "matched": 138,
+          "returned": 138,
+          "filtered": 0
+        },
+        "refineWith": [
+          "rootRef",
+          "maxNodes",
+          "maxDepth",
+          "maxTextLength",
+          "filters"
+        ]
+      },
+      "nodes": [
+        {
+          "ref": "e4-17",
+          "role": null,
+          "name": null,
+          "text": "No hay Agents activos",
+          "enabled": true
+        },
+        {
+          "ref": "e4-41",
+          "role": "group",
+          "name": "tinto, 12 conversaciones",
+          "text": "TINTO 12 ICook continuation runtime preflight, read-only,… Codex · archivada / 3401 eventos · bd65c1a3 Static inspection found 43 recipes. Every item has a unique ID, nonempty required ingredients, and four nonempty steps; all “under 30” tags exactly agree with times below 30. The other three classifications lack measurable criteria, so I’m treating questionable assignments as editorial uncertainty, not contradictions. I’m checking reachability/coverage and the exact installed toolchain paths next. Abrir Tooling repair smoke 2026-08-31: reply exactly… Codex · archivada / 12 eventos · feb611bf FINAL_IDLE_OK Abrir Tooling repair smoke 2026-08-31: reply exactly… Codex · archivada / 8 eventos · 47331a89 RESUME_REPAIR_OK Abrir Tooling acceptance smoke. Do not edit any files or use… Codex · archivada / 88 eventos · 12533223 - **Alpha — completed:** `ALPHA_ROUTED`- **Beta — completed:** `BETA_ROUTED The paragraph names the project.`Alpha was not reported as interrupted, so it was not restarted.`ROOT_ROUTED` Abrir Tooling repair smoke 2026-08-31: reply exactly… Codex · archivada / 4 eventos · 1fac9edb TINTO_REPAIR_OK Abrir Recovery dispatch: complete ONLY the mandatory… Codex · archivada / 240 eventos · 2cf1e18a Blocked: the recovery run still has workspace-only access.- ICook target: `C:\\Users\\User\\Documents\\personal\\ICook`- Target state: empty, not a Git repository- `git init -b main` result: `Permission denied`- Callable Pumarejo/Tinto automation tools: none- Canonical ledger checker: present, but no Python launcher is available- Ledger validation: **not run**- Files created or changed: none- Commits, remotes, pushes, dispatches, or app-code changes: nonePlanned contracts, all uncreated:- core data/ranking- React UX- Tauri/Android/Pumarejo integration- automated verification- functional QA/dogfood- review/reconciliation- releasePlanned canonical locations included:- `docs/orchestration/seneschal/source-digest.md`- `docs/orchestration/seneschal/execution-plan.md`- `docs/orchestration/seneschal/roadmap.md`- `docs/orchestration/seneschal/queue-state.json`- `docs/orchestration/seneschal/blocker-ledger.md`- `docs/orchestration/seneschal/contracts/`- `docs/orchestration/seneschal/review-reconciliation/`- `docs/orchestration/autonomy-ledgers/`- `docs/tinto-pumarejo-dogfood-report.md`Authorization evidence was successfully read:- SHA-256: `3fa18e80aa0d8fec8453e2a5059f9a8d8643ecfabd2ba1082273e1aee59879c2`- Observed issuance time: `2026-08-28T15:31:44Z`- Required 48-hour expiry: `2026-08-30T15:31:44Z`Queue summary: seven documentary worker units planned conceptually, zero executable contracts materialized, zero units dispatched.Open blockers:1. ICook is outside the effective writable root.2. No Pumarejo capability is callable for the required fallback workflow.3. No Python runtime is available to execute the canonical autonomy-ledger checker.Approval and review receipt fields were not created or populated; no user review was claimed. Abrir Documentary planning unit for the user-authorized ICook… Codex · archivada / 238 eventos · 24fba128 Blocked by the managed filesystem sandbox. No files were created or modified.- Authorized target: `C:\\Users\\User\\Documents\\personal\\ICook`- Target exists but is empty and is not a Git repository.- Permitted write root: `C:\\Users\\User\\Documents\\personal\\tinto`- Write failure: `writing outside of the project; rejected by user approval settings`- Git was not initialized.- Queue state: not created- Worker contracts: none created- Autonomy-ledger validation: not run because no ledger could be materialized- Application code, commits, remotes, pushes, and workers: noneTo continue, reopen the session with `C:\\Users\\User\\Documents\\personal\\ICook` as the workspace or add it as a writable root. I will then create the requested packet under:- `docs/orchestration/seneschal/`- `docs/orchestration/autonomy-ledgers/`- `docs/tinto-pumarejo-dogfood-report.md` Abrir Read-only Tinto version preflight. From this Tinto… Codex · archivada / 26 eventos · 1e239f8d Preflight results:```text> git remote get-url originhttps://git",
+          "enabled": true
+        },
+        {
+          "ref": "e4-44",
+          "role": "button",
+          "name": "Abrir la transcripción de tinto con Codex: ICook continuation runtime preflight, read-only,… · sesión bd65c1a3-4444-4b04-8522-00d8f4345b22",
+          "text": "ICook continuation runtime preflight, read-only,… Codex · archivada / 3401 eventos · bd65c1a3 Static inspection found 43 recipes. Every item has a unique ID, nonempty required ingredients, and four nonempty steps; all “under 30” tags exactly agree with times below 30. The other three classifications lack measurable criteria, so I’m treating questionable assignments as editorial uncertainty, not contradictions. I’m checking reachability/coverage and the exact installed toolchain paths next. Abrir",
+          "enabled": true
+        },
+        {
+          "ref": "e4-45",
+          "role": null,
+          "name": null,
+          "text": "ICook continuation runtime preflight, read-only,…",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "archived-tab-title-and-zero-active",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\024-tauri_snapshot.json",
+      "source_sha256": "39993dd439a9a5647b43b2ac2324f17473b0f7f4aaed8c787388e1b3541e42b3",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 6359,
+          "candidates": 84,
+          "matched": 26,
+          "returned": 26,
+          "filtered": 58
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e6-7",
+          "role": "button",
+          "name": "Cerrar Nueva conversación",
+          "text": "×",
+          "enabled": true
+        },
+        {
+          "ref": "e6-8",
+          "role": "status",
+          "name": "Estado: Archivada / Cambios: 0 / Antigüedad: 850s / Sesiones activas: 0",
+          "text": "Archivada",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "large-transcript-field-budget",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\025-tauri_snapshot.json",
+      "source_sha256": "a56e051ac46bc8629837c8310db737a30505e29bf05398365661e3b0c4a2beb6",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": true,
+        "reasons": [
+          "fieldBudget"
+        ],
+        "counts": {
+          "visited": 6359,
+          "candidates": 84,
+          "matched": 84,
+          "returned": 84,
+          "filtered": 0
+        },
+        "refineWith": [
+          "rootRef",
+          "maxNodes",
+          "maxDepth",
+          "maxTextLength",
+          "filters"
+        ]
+      },
+      "nodes": [],
+      "result": null
+    },
+    {
+      "label": "scoped-transcript-read-recovers",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\026-tauri_snapshot.json",
+      "source_sha256": "36dc5a1266c4f5b674e7672a6e6a668bfa85c78b334d6400e6bd6607797cd66d",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 1,
+          "candidates": 1,
+          "matched": 1,
+          "returned": 1,
+          "filtered": 0
+        },
+        "refineWith": []
+      },
+      "nodes": [],
+      "result": null
+    },
+    {
+      "label": "wsl-file-refresh-is-not-agent-readiness",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\030-tauri_click.json",
+      "source_sha256": "d7cc37856abbec67f31ebd77f6267361420e4d76ab92bb75b6df4685033e76f6",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 284,
+          "candidates": 125,
+          "matched": 125,
+          "returned": 125,
+          "filtered": 0
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e11-41",
+          "role": "status",
+          "name": null,
+          "text": "Ubuntu-24.04:ICook actualizado: 308 archivos con cambios y 0 señales.",
+          "enabled": true
+        },
+        {
+          "ref": "e11-42",
+          "role": null,
+          "name": null,
+          "text": "Ubuntu-24.04:ICook actualizado: 308 archivos con cambios y 0 señales.",
+          "enabled": true
+        },
+        {
+          "ref": "e11-100",
+          "role": "button",
+          "name": "WSL Ubuntu-24.04:ICook",
+          "text": "WSL Ubuntu-24.04:ICook",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "fresh-agent-launch-blocked",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\033-tauri_snapshot.json",
+      "source_sha256": "384b6ffc9b7a76468d69e2fb43be57b46388b217877a1c73f64890493d1235eb",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 289,
+          "candidates": 129,
+          "matched": 129,
+          "returned": 129,
+          "filtered": 0
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e14-41",
+          "role": "status",
+          "name": null,
+          "text": "Ubuntu-24.04:ICook requiere atención por child_exit.",
+          "enabled": true
+        },
+        {
+          "ref": "e14-42",
+          "role": null,
+          "name": null,
+          "text": "Ubuntu-24.04:ICook requiere atención por child_exit.",
+          "enabled": true
+        },
+        {
+          "ref": "e14-103",
+          "role": null,
+          "name": "child_exit",
+          "text": "BLOQUEADO",
+          "enabled": true
+        },
+        {
+          "ref": "e14-125",
+          "role": "alert",
+          "name": null,
+          "text": "Error: el agente WSL cerro stdout Reintentar",
+          "enabled": true
+        }
+      ],
+      "result": null
+    },
+    {
+      "label": "gitleaks-basic-detector-fallback",
+      "source_file": "C:\\Users\\User\\AppData\\Local\\Temp\\icook-continuation-20260831\\tinto-audit2\\033-tauri_snapshot.json",
+      "source_sha256": "384b6ffc9b7a76468d69e2fb43be57b46388b217877a1c73f64890493d1235eb",
+      "extraction": "public MCP structured result; selected semantic nodes, or non-transcript result; no direct ICook source read",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "truncation": {
+        "truncated": false,
+        "reasons": [],
+        "counts": {
+          "visited": 289,
+          "candidates": 129,
+          "matched": 129,
+          "returned": 129,
+          "filtered": 0
+        },
+        "refineWith": []
+      },
+      "nodes": [
+        {
+          "ref": "e14-64",
+          "role": "status",
+          "name": "Gitleaks no pudo completar el análisis; revisa .gitleaks.toml. Se usó el detector básico.",
+          "text": "Gitleaks falló Detector básico activo",
+          "enabled": true
+        }
+      ],
+      "result": null
+    }
+  ]
+}

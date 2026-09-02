@@ -1,0 +1,69 @@
+{
+  "schema": "tinto-boot-identity-correction/v1",
+  "capturedAt": "2026-09-01T12:00:30.7163534+02:00",
+  "firstReboot": {
+    "lastBootUpTime": "2026-09-01T11:44:19.5000000+02:00",
+    "preRebootRegistryBootId": 51,
+    "postRebootRegistryBootId": 52,
+    "bootEnvironmentGuidBefore": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898",
+    "bootEnvironmentGuidAfter": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898",
+    "recoveryDryRunOperationId": "84779a78421fd534645a7605d731b730",
+    "leaseCount": 5,
+    "decisionForAllFive": "rejected",
+    "reasonForAllFive": "same_boot",
+    "recoveryMutationPerformed": false
+  },
+  "finding": "SystemBootEnvironmentInformation remained stable across this host reboot and is therefore only an environment scope, not sufficient per-boot proof on this machine.",
+  "correction": {
+    "identifierScheme": "windows-boot-sequence/v2",
+    "components": [
+      "SystemBootEnvironmentInformation boot environment GUID",
+      "HKLM Session Manager PrefetchParameters BootId"
+    ],
+    "failClosedRule": "Both components must validate. Recovery requires an exact environment match and a changed boot sequence; GUID-only bindings are never accepted for recovery.",
+    "focusedVerification": {
+      "typecheck": "passed",
+      "testFiles": 44,
+      "testsPassed": 600,
+      "testsSkipped": 4,
+      "lint": "passed",
+      "build": "passed"
+    }
+  },
+  "bindingUpgrade": {
+    "dryRunOperationId": "292cbceb3a17dfc06649540d010ddc55",
+    "executeOperationId": "4d4c62459a6923bf65e1e073d4b631ed",
+    "currentBootIdentifier": {
+      "scheme": "windows-boot-sequence/v2",
+      "bootEnvironmentGuid": "b6dc03ce-ea16-11f0-b0a8-96a4b3fa7898",
+      "bootId": 52
+    },
+    "upgradedCount": 5,
+    "auditCount": 5,
+    "legacyBindingDirectory": ".pumarejo/lease-recovery/bindings",
+    "upgradedBindingDirectory": ".pumarejo/lease-recovery/bindings-v2",
+    "legacyBindingsRetained": true,
+    "leaseRecordsModified": false,
+    "sameBootConfirmation": {
+      "operationId": "9047a76da81e5a17117b16b7ada2c9ec",
+      "decisionForAllFive": "rejected",
+      "reasonForAllFive": "same_boot",
+      "evidenceSourceForAllFive": "legacy_binding"
+    },
+    "legacyBindingHashes": {
+      "661e13c04151f419c550df3fbe94a5f7": "0a355478a5448342aa12aabbd5b166c067b1a422af975b21ab98588625a56430",
+      "7da8f17b8bf931336d6c6b2e63fe7d4f": "c8d03a7881835f36acf41a8c46ff9e27bb40adc84aae9a133b5f7e3691ef36ff",
+      "7ea16368f2c9bb1e490810f558df0ffc": "4b593792129d0a00ba087afae9ff659e23d8635e45b669424cda0fa3542ac6af",
+      "abae9656d28350ea6d16ae83aadbd06e": "a9c963356a7aa1439489a7740126211c08ead86ad1f096513f2d32dae933f5a0",
+      "e89b7e4994b9ca1f748dae9d562af35e": "35339acc94e99dc7a6c7db44b0bd9292da5dfa1cdc59da0072b9ba12f0184e55"
+    },
+    "upgradedBindingHashes": {
+      "661e13c04151f419c550df3fbe94a5f7": "a8d341b0e89143017c0110731819fbb906e9e30125e4a696ffa477bd88013cbc",
+      "7da8f17b8bf931336d6c6b2e63fe7d4f": "479b527ea20184df610e4c7fd37a58dae4a95a6f07be56a3488bda9a757d1b5d",
+      "7ea16368f2c9bb1e490810f558df0ffc": "4747898023295f761a82706ee7b7816fc4562ef5041e8d3c4308b57859a868b1",
+      "abae9656d28350ea6d16ae83aadbd06e": "a764a09b59dfe0204fcf7f1357389eee0e68984cecf978b8cf97db23bf886848",
+      "e89b7e4994b9ca1f748dae9d562af35e": "cf0ceebd96df9a2b47e4f57f9a36560fa2a2e2dbe3af2fcaf5266eb488fe0316"
+    }
+  },
+  "safetyConclusion": "The first reboot caused no recovery mutation because the original identifier did not prove a changed boot. The corrected implementation has now bound the unchanged records to boot sequence 52 and again refuses recovery on boot sequence 52. A separately approved reboot is required before recovery can be considered."
+}

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "run_id": "icook-integration-repair-2026-08-31",
+  "reconciled_at": "2026-08-31T12:16:34.930658+00:00",
+  "status": "integration_repaired_native_acceptance_blocked",
+  "repositories": {
+    "tinto": {
+      "path": "C:\\Users\\User\\Documents\\personal\\tinto",
+      "head": "4b9e259c029ab72b323ad84b10c06927b7638df1",
+      "status": " M docs/orchestration/2026-08-31-icook-hardening-handoff.md\n M src-tauri/Cargo.lock\n M src-tauri/Cargo.toml\n?? docs/orchestration/evidence/\n?? output/\n"
+    },
+    "pumarejo": {
+      "path": "C:\\Users\\User\\Documents\\personal\\pumarejo",
+      "head": "f0af7c65ee5f6a866e6d5cfbf31579231e4e9fec",
+      "status": " M src/installer/plan.ts\n M src/installer/provider-source.ts\n M tests/integration/init.test.ts\n"
+    }
+  },
+  "accepted_patch": "root.patch",
+  "contract": "root-contract.json",
+  "review_plan": "review-plan.json",
+  "reviews": [
+    "integration-review-terminal.json",
+    "integration-security-terminal.json"
+  ],
+  "review_validation": "finding-validation-result.json",
+  "aggregate": {
+    "status": "failed",
+    "passed": 732,
+    "skipped": 9,
+    "failed": 2,
+    "registry": "verification-registry.json",
+    "baseline_eol_reproduced": true,
+    "isolated_package_recheck": "3 passed"
+  },
+  "integration": {
+    "supported_apply": "applied",
+    "repeat": "already-integrated",
+    "all_integration_diagnostics": "ready",
+    "doctor_overall": "warn",
+    "application_bytes_preserved": true
+  },
+  "native": {
+    "evidence": "native/001-tools.json through native/022-doctor-after-close.json",
+    "final_controller_state": "idle",
+    "remaining_residue_count": 5,
+    "acceptance": "blocked",
+    "diagnostics": "request timed out after 30 seconds; no session-loss inference"
+  },
+  "scanner": {
+    "exit_code": 1,
+    "full_scan": "incomplete",
+    "evidence": "scanner-recheck.json",
+    "rules_or_timeout_changed": false
+  },
+  "findings": [
+    {
+      "id": "TIN-HARD-01",
+      "status": "native_acceptance_blocked"
+    },
+    {
+      "id": "TIN-HARD-02",
+      "status": "native_acceptance_blocked"
+    },
+    {
+      "id": "TIN-HARD-03",
+      "status": "native_acceptance_blocked"
+    },
+    {
+      "id": "TIN-HARD-04",
+      "status": "native_acceptance_blocked"
+    },
+    {
+      "id": "TIN-HARD-05",
+      "status": "native_acceptance_blocked"
+    },
+    {
+      "id": "TIN-HARD-06",
+      "status": "native_acceptance_blocked"
+    }
+  ],
+  "blockers_retained": [
+    "IC-HARD-BLK-2026-08-31-01",
+    "IC-HARD-BLK-2026-08-31-02",
+    "IC-HARD-BLK-2026-08-31-03",
+    "IC-HARD-BLK-2026-08-31-04",
+    "IC-HARD-BLK-2026-08-31-05"
+  ],
+  "boundaries": {
+    "icook_commands": false,
+    "icook_edits": false,
+    "commits": false,
+    "pushes": false,
+    "permission_changes": false,
+    "recursive_deletion": false,
+    "validator_changes": false,
+    "approval_receipts_fabricated": false,
+    "autonomy_renewed": false
+  },
+  "canonical_evidence_root": "C:\\Users\\User\\.codex\\worktrees\\1f7c\\tinto\\docs\\orchestration\\runs\\icook-integration-repair-2026-08-31",
+  "goal_completed": false,
+  "goal_status": "blocked",
+  "blocked_audit": "blocked-audit-03.json in canonical_evidence_root",
+  "blocked_at": "2026-08-31T12:19:27.752460+00:00"
+}

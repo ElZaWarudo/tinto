@@ -1,0 +1,37 @@
+{
+  "schema": "pumarejo-artifact-cleanup-manifest/v1",
+  "manifestId": "b27e13708f05118355a4c5654507cae4",
+  "projectRoot": "C:\\Users\\User\\Documents\\personal\\tinto",
+  "authorizedArtifactRoot": "C:\\Users\\User\\Documents\\personal\\tinto\\.pumarejo",
+  "target": {
+    "artifactId": "qa-project",
+    "canonicalPath": "C:\\Users\\User\\Documents\\personal\\tinto\\.pumarejo\\qa-project",
+    "filesystemIdentity": {
+      "volumeSerialNumber": "6e5ac0375abff9c3",
+      "fileId": "ca051a00000013000000000000000000"
+    },
+    "expectedOwnerSid": "S-1-5-21-253028406-3978028226-1178244906-1005",
+    "creationMetadata": {
+      "creationTimeFiletime": "134297837834793828",
+      "lastWriteTimeFiletime": "134298795243464338"
+    },
+    "origin": {
+      "workflowId": "icook-integration-repair-2026-08-31",
+      "sessionId": "historical-qa-project",
+      "command": "historical-qa"
+    },
+    "eligibility": {
+      "state": "historical-orphaned",
+      "verifiedAt": 1788257237016,
+      "reason": "Historical QA project copy retained after its originating validation workflow; it is not the active Tinto checkout."
+    }
+  },
+  "authorization": {
+    "basis": "explicit-maintenance",
+    "authorizedSid": "S-1-5-21-253028406-3978028226-1178244906-1001",
+    "authorizedAt": 1788257237016,
+    "approvedBy": "workspace-owner",
+    "reference": "user-request-2026-09-01"
+  },
+  "reason": "Remove the identity-bound historical QA copy that blocks the unchanged complete scanner after all safety checks pass."
+}
