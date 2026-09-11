@@ -109,10 +109,7 @@ export function RepoAgentLauncher({
     Promise.resolve(onLaunch(agentType, mode))
       .catch((error) =>
         setLaunchMessage(
-          reportActionFailure(
-            error,
-            "No se inició el Agent. Comprueba que esté disponible y vuelve a intentarlo.",
-          ),
+          reportLaunchFailure(error),
         ),
       )
       .finally(() => setLaunching(false));
@@ -624,4 +621,42 @@ export const RepoCard = memo(RepoCardImpl);
 function reportActionFailure(error: unknown, userMessage: string): string {
   console.error("tinto: repo action failed", error);
   return userMessage;
+}
+
+function reportLaunchFailure(error: unknown): string {
+  console.error("tinto: repo action failed", error);
+  const failure =
+    typeof error === "object" && error !== null
+      ? (error as { category?: unknown; message?: unknown })
+      : {};
+  const categories = [
+    "timeout",
+    "child_exit",
+    "binary_not_found",
+    "repository_not_found",
+    "checkpoint_too_large",
+    "checkpoint_git_failed",
+    "checkpoint_home_unavailable",
+    "permission_denied",
+    "spawn_failed",
+    "io",
+    "session_limit_reached",
+  ];
+  const category =
+    typeof failure.category === "string" &&
+    categories.includes(failure.category)
+      ? failure.category
+      : "error";
+  const stage =
+    typeof failure.message === "string"
+      ? /^WSL startup \[(binary_check|checkpoint_create|provider_spawn)\]:/.exec(
+          failure.message,
+        )?.[1]
+      : undefined;
+  const detail = stage ? category + "; " + stage : category;
+  return (
+    "No se pudo confirmar el inicio del Agent (" +
+    detail +
+    "). Comprueba las sesiones antes de volver a intentarlo."
+  );
 }

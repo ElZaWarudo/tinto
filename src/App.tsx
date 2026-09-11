@@ -98,10 +98,10 @@ function NativeApp() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionRetry, setActionRetry] = useState<(() => void) | null>(null);
 
-  const addLocalRepoFromPicker = async () => {
+  const addLocalRepo = async (localPath?: string) => {
     const active = busStore.getState().config?.active;
     if (!active) return;
-    const path = await addRepoFlow(active);
+    const path = await addRepoFlow(active, localPath);
     if (!path) return;
     setShowAddRepo(false);
     if (apiRef.current) {
@@ -129,7 +129,7 @@ function NativeApp() {
         else {
           setActionError(null);
           setActionRetry(null);
-          void addLocalRepoFromPicker().catch((error) => {
+          void addLocalRepo().catch((error) => {
             setActionError(commandErrorMessage(error, "No se pudo añadir el repositorio local."));
             setActionRetry(null);
           });
@@ -331,7 +331,7 @@ function NativeApp() {
           <AddRepoDialog
             activeWorkbench={config.active}
             onClose={() => setShowAddRepo(false)}
-            onAddLocal={addLocalRepoFromPicker}
+            onAddLocal={addLocalRepo}
           />
         )}
         <div className="app-shell__body">

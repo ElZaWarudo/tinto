@@ -7,7 +7,7 @@ use std::io::Read;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 #[cfg(target_os = "windows")]
 use std::sync::mpsc;
 #[cfg(target_os = "windows")]
@@ -617,8 +617,9 @@ fn with_process_diagnostics(
 #[cfg(target_os = "windows")]
 struct PooledAgent {
     child: Mutex<Child>,
-    io: Mutex<()>,
-    stdin: Mutex<ChildStdin>,
+    // A failed exchange retires this protocol stream before releasing the I/O lock.
+    io: Mutex<bool>,
+    writer: mpsc::Sender<(String, mpsc::SyncSender<std::io::Result<()>>)>,
     stdout: Mutex<mpsc::Receiver<Result<String, AgentError>>>,
     stderr: Arc<Mutex<ProcessStderr>>,
 }
@@ -641,11 +642,39 @@ fn request_with_persistent_agent(
     timeout: Duration,
 ) -> Result<AgentResponse, AgentError> {
     let argv = build_wsl_argv(config)?;
-    let key = pooled_agent_key(&argv);
+    request_with_persistent_agent_argv(&argv, request, timeout)
+}
+
+#[cfg(target_os = "windows")]
+fn request_with_persistent_agent_argv(
+    argv: &[String],
+    request: &AgentRequest,
+    timeout: Duration,
+) -> Result<AgentResponse, AgentError> {
+    let key = pooled_agent_key(argv);
     let request_line = encode_agent_request(request)?;
+    let started = Instant::now();
+    if matches!(request,
+        AgentRequest::AgentBinaryAvailable { .. }
+            | AgentRequest::AgentCheckpointCreate { .. }
+            | AgentRequest::AgentCheckpointScan { .. }
+    ) {
+        // Agent start/status requests need no watcher-local state and must not wait behind
+        // repository watchers. Provider spawn already uses its own direct process.
+        // One owned helper/exchange; never retry an uncertain checkpoint mutation.
+        let agent = start_pooled_agent(argv)?;
+        let response = agent.exchange(&request_line, timeout.saturating_sub(started.elapsed()));
+        agent.kill();
+        return parse_agent_response_line(&response.map_err(|failure| failure.error)?);
+    }
     for attempt in 0..2 {
-        let agent = pooled_agent(&key, &argv)?;
-        match agent.exchange(&request_line, timeout) {
+        if started.elapsed() >= timeout {
+            return Err(AgentError::new(
+                AgentErrorCategory::Timeout, "timeout antes de enviar solicitud al agente WSL",
+            ));
+        }
+        let agent = pooled_agent(&key, argv)?;
+        match agent.exchange(&request_line, timeout.saturating_sub(started.elapsed())) {
             Ok(line) => match parse_agent_response_line(&line) {
                 Ok(response) => {
                     let retry = attempt == 0
@@ -662,10 +691,12 @@ fn request_with_persistent_agent(
                     return Err(error);
                 }
             },
-            Err(error) => {
+            Err(failure) => {
+                let error = failure.error;
+                if !failure.retire { return Err(error); }
                 let retry = error.category == AgentErrorCategory::ChildExit
                     && attempt == 0
-                    && request_is_retry_safe(request);
+                    && (failure.retired_before_dispatch || request_is_retry_safe(request));
                 drop_pooled_agent(&key, Some(&agent));
                 if retry {
                     continue;
@@ -754,7 +785,7 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
     .map_err(|error| map_spawn_error(program, error))?;
 
     let stderr = capture_process_stderr(&mut child);
-    let stdin = match child.stdin.take() {
+    let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
             let _ = child.kill();
@@ -805,22 +836,75 @@ fn start_pooled_agent(argv: &[String]) -> Result<PooledAgent, AgentError> {
         }
     });
 
+    let (write_tx, write_rx) = mpsc::channel::<(String, mpsc::SyncSender<std::io::Result<()>>)>();
+    std::thread::spawn(move || {
+        while let Ok((line, reply)) = write_rx.recv() {
+            let result = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush());
+            let failed = result.is_err();
+            let _ = reply.send(result);
+            if failed { break; }
+        }
+    });
+
     Ok(PooledAgent {
         child: Mutex::new(child),
-        io: Mutex::new(()),
-        stdin: Mutex::new(stdin),
+        io: Mutex::new(true),
+        writer: write_tx,
         stdout: Mutex::new(rx),
         stderr,
     })
 }
 
 #[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct ExchangeFailure {
+    error: AgentError,
+    // A queue timeout belongs to this caller, not to the request owning the helper.
+    retire: bool,
+    // Set only while holding I/O, before this request reaches the writer.
+    retired_before_dispatch: bool,
+}
+
+#[cfg(target_os = "windows")]
 impl PooledAgent {
-    fn exchange(&self, request_line: &str, timeout: Duration) -> Result<String, AgentError> {
-        let _io = self
-            .io
-            .lock()
-            .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "agente bloqueado"))?;
+    fn exchange(&self, request_line: &str, timeout: Duration) -> Result<String, ExchangeFailure> {
+        let deadline = Instant::now() + timeout;
+        let mut usable = loop {
+            if Instant::now() >= deadline {
+                return Err(ExchangeFailure {
+                    error: AgentError::new(AgentErrorCategory::Timeout, "timeout en cola del agente WSL; solicitud no enviada"),
+                    retire: false,
+                    retired_before_dispatch: false,
+                });
+            }
+            match self.io.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(5)));
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => return Err(ExchangeFailure {
+                    error: AgentError::new(AgentErrorCategory::ChildExit, "agente bloqueado"),
+                    retire: false,
+                    retired_before_dispatch: false,
+                }),
+            }
+        };
+        if !*usable {
+            return Err(ExchangeFailure {
+                error: AgentError::new(AgentErrorCategory::ChildExit, "agente WSL retirado tras fallo de transporte; solicitud no enviada"),
+                retire: true,
+                retired_before_dispatch: true,
+            });
+        }
+        let result = self.exchange_locked(request_line, deadline);
+        if result.is_err() {
+            *usable = false;
+            self.kill();
+        }
+        result.map_err(|error| ExchangeFailure { error, retire: true, retired_before_dispatch: false })
+    }
+
+    fn exchange_locked(&self, request_line: &str, deadline: Instant) -> Result<String, AgentError> {
         {
             let mut child = self
                 .child
@@ -839,22 +923,22 @@ impl PooledAgent {
             }
         }
 
-        {
-            let mut stdin = self
-                .stdin
-                .lock()
-                .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdin bloqueado"))?;
-            stdin
-                .write_all(request_line.as_bytes())
-                .and_then(|_| stdin.flush())
-                .map_err(|_| self.diagnose(AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado")))?;
+        let (reply, written) = mpsc::sync_channel(1);
+        self.writer.send((request_line.to_string(), reply))
+            .map_err(|_| self.diagnose(AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado")))?;
+        match written.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Ok(())) => {},
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(self.diagnose(AgentError::new(
+                AgentErrorCategory::Timeout, "timeout escribiendo solicitud al agente WSL; resultado incierto",
+            ))),
+            _ => return Err(self.diagnose(AgentError::new(AgentErrorCategory::ChildExit, "stdin cerrado"))),
         }
 
         let stdout = self
             .stdout
             .lock()
             .map_err(|_| AgentError::new(AgentErrorCategory::ChildExit, "stdout bloqueado"))?;
-        let result = match stdout.recv_timeout(timeout) {
+        let result = match stdout.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => Err(AgentError::new(
                 AgentErrorCategory::Timeout,
@@ -885,10 +969,18 @@ impl PooledAgent {
 #[cfg(target_os = "windows")]
 fn drop_pooled_agent(key: &str, agent: Option<&Arc<PooledAgent>>) {
     if let Ok(mut pool) = pooled_agents().lock() {
-        pool.remove(key);
+        if agent.is_some_and(|expected| {
+            pool.get(key).is_some_and(|current| Arc::ptr_eq(current, expected))
+        }) {
+            pool.remove(key);
+        }
     }
     if let Some(agent) = agent {
-        agent.kill();
+        // Cleanup must not kill a request that already owns this helper's I/O lock.
+        if let Ok(mut usable) = agent.io.lock() {
+            *usable = false;
+            agent.kill();
+        }
     }
 }
 
@@ -1399,7 +1491,7 @@ mod tests {
         agent.child.lock().unwrap().wait().unwrap();
         // Deterministic snapshot: collector draining/bounds are tested separately.
         agent.stderr.lock().unwrap().append(b"command not found synthetic-secret");
-        let error = agent.exchange("{}\n", Duration::from_secs(2)).unwrap_err();
+        let error = agent.exchange("{}\n", Duration::from_secs(2)).unwrap_err().error;
         assert_eq!(error.category, AgentErrorCategory::ChildExit);
         assert!(error.message.contains("codigo de salida: 17"));
         assert!(error.message.contains("comando o archivo no encontrado"));
@@ -1429,9 +1521,211 @@ mod tests {
         ]).unwrap();
         let result = agent.exchange("{}\n", Duration::from_millis(20));
         agent.kill();
-        let error = result.unwrap_err();
+        let error = result.unwrap_err().error;
         assert_eq!(error.category, AgentErrorCategory::Timeout);
         assert!(error.message.contains("codigo de salida: no disponible"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn pooled_timeout_retires_before_next_request_can_consume_late_response() {
+        let agent = start_pooled_agent(&[
+            "powershell.exe".into(), "-NoProfile".into(), "-NonInteractive".into(),
+            "-Command".into(),
+            "$null = [Console]::ReadLine(); Start-Sleep -Milliseconds 300; [Console]::WriteLine('late-first-response'); $null = [Console]::ReadLine(); [Console]::WriteLine('second-response')".into(),
+        ]).unwrap();
+        let first = agent.exchange("first\n", Duration::from_millis(20));
+        let second = agent.exchange("second\n", Duration::from_secs(3));
+        agent.kill();
+        assert_eq!(first.unwrap_err().error.category, AgentErrorCategory::Timeout);
+        assert!(second.is_err(), "retired helper returned a stale response: {second:?}");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn stale_pool_removal_preserves_replacement_identity() {
+        let argv = vec!["powershell.exe".into(), "-NoProfile".into(),
+            "-NonInteractive".into(), "-Command".into(),
+            "$null = [Console]::ReadLine()".into()];
+        let old = Arc::new(start_pooled_agent(&argv).unwrap());
+        let replacement = Arc::new(start_pooled_agent(&argv).unwrap());
+        let key = format!("replacement-test-{}", uuid::Uuid::new_v4());
+        pooled_agents().lock().unwrap().insert(key.clone(), Arc::clone(&replacement));
+        drop_pooled_agent(&key, Some(&old));
+        let retained = pooled_agents().lock().unwrap().get(&key).cloned();
+        drop_pooled_agent(&key, Some(&replacement));
+        assert!(retained.as_ref().is_some_and(|value| Arc::ptr_eq(value, &replacement)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn pooled_queue_deadline_does_not_wait_for_or_retire_busy_owner() {
+        let agent = Arc::new(start_pooled_agent(&[
+            "powershell.exe".into(), "-NoProfile".into(), "-NonInteractive".into(),
+            "-Command".into(), "$null = [Console]::ReadLine(); [Console]::WriteLine('ready')".into(),
+        ]).unwrap());
+        let owner = Arc::clone(&agent);
+        let (tx, rx) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let _guard = owner.io.lock().unwrap();
+            tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+        });
+        rx.recv().unwrap();
+        let started = Instant::now();
+        let result = agent.exchange("queued\n", Duration::from_millis(30));
+        let elapsed = started.elapsed();
+        thread.join().unwrap();
+        let owner_reply = agent.exchange("owner\n", Duration::from_secs(3));
+        agent.kill();
+        assert!(elapsed < Duration::from_millis(250), "queue took {elapsed:?}");
+        let failure = result.unwrap_err();
+        assert_eq!(failure.error.category, AgentErrorCategory::Timeout);
+        assert!(!failure.retire, "queue timeout must not remove the busy helper");
+        assert_eq!(owner_reply.unwrap().trim(), "ready");
+        assert!(*agent.io.lock().unwrap(), "queue timeout retired another request's helper");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn pooled_write_deadline_bounds_a_child_that_never_reads_stdin() {
+        let agent = start_pooled_agent(&[
+            "powershell.exe".into(), "-NoProfile".into(), "-NonInteractive".into(),
+            "-Command".into(), "Start-Sleep -Seconds 3".into(),
+        ]).unwrap();
+        let started = Instant::now();
+        let result = agent.exchange(&"x".repeat(1_048_576), Duration::from_millis(40));
+        let elapsed = started.elapsed();
+        agent.kill();
+        assert!(result.is_err());
+        assert!(elapsed < Duration::from_secs(1), "write took {elapsed:?}");
+    }
+
+    #[cfg(target_os = "windows")]
+    fn checkpoint_transport_fixture(log: &Path, reply: bool) -> (Vec<String>, AgentRequest) {
+        let script = format!(
+            "$null = [Console]::ReadLine(); Add-Content -LiteralPath '{}' -Value 'dispatch'; {}",
+            log.to_string_lossy().replace("'", "''"),
+            if reply { "[Console]::WriteLine('{\"type\":\"unit\"}')" } else { "exit 17" },
+        );
+        let argv = vec!["powershell.exe".into(), "-NoProfile".into(),
+            "-NonInteractive".into(), "-Command".into(), script];
+        let request = AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION, repo: "/fixture".into(),
+            allowed_repos: vec!["/fixture".into()], session_id: "fixture".into(),
+            created_at_ms: 0, ephemeral: false,
+        };
+        (argv, request)
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn checkpoint_uses_fresh_helper_once_when_retired_helper_sent_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("dispatch.txt");
+        let (argv, request) = checkpoint_transport_fixture(&log, true);
+        let key = pooled_agent_key(&argv);
+        let retired = Arc::new(start_pooled_agent(&argv).unwrap());
+        *retired.io.lock().unwrap() = false;
+        retired.kill();
+        pooled_agents().lock().unwrap().insert(key.clone(), retired);
+        let result = request_with_persistent_agent_argv(&argv, &request, Duration::from_secs(5));
+        let current = pooled_agents().lock().unwrap().get(&key).cloned();
+        drop_pooled_agent(&key, current.as_ref());
+        assert!(matches!(result, Ok(AgentResponse::Unit)), "{result:?}");
+        assert_eq!(std::fs::read_to_string(log).unwrap().lines().count(), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn checkpoint_never_retries_after_helper_read_request_and_lost_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("dispatch.txt");
+        let (argv, request) = checkpoint_transport_fixture(&log, false);
+        let result = request_with_persistent_agent_argv(&argv, &request, Duration::from_secs(5));
+        assert_eq!(result.unwrap_err().category, AgentErrorCategory::ChildExit);
+        assert_eq!(std::fs::read_to_string(log).unwrap().lines().count(), 1);
+        assert!(!pooled_agents().lock().unwrap().contains_key(&pooled_agent_key(&argv)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn binary_check_completes_without_waiting_for_or_retiring_scan_helper() {
+        let argv = vec!["powershell.exe".into(), "-NoProfile".into(),
+            "-NonInteractive".into(), "-Command".into(),
+            "$null = [Console]::ReadLine(); [Console]::WriteLine('{\"type\":\"agent_binary_available\",\"available\":true}')".into()];
+        let key = pooled_agent_key(&argv);
+        let scan = Arc::new(start_pooled_agent(&argv).unwrap());
+        pooled_agents().lock().unwrap().insert(key.clone(), Arc::clone(&scan));
+        // Deterministically hold the same lock used by a long repository scan.
+        let owner = scan.io.lock().unwrap();
+        let result = request_with_persistent_agent_argv(&argv, &AgentRequest::AgentBinaryAvailable {
+            protocol_version: PROTOCOL_VERSION, agent_type: "codex".into(),
+        }, Duration::from_secs(3));
+        let retained = pooled_agents().lock().unwrap().get(&key).cloned();
+        let scan_alive = scan.child.lock().unwrap().try_wait().unwrap().is_none();
+        drop(owner);
+        drop_pooled_agent(&key, Some(&scan));
+        assert!(matches!(result, Ok(AgentResponse::AgentBinaryAvailable { available: true })), "{result:?}");
+        assert!(scan_alive);
+        assert!(retained.as_ref().is_some_and(|current| Arc::ptr_eq(current, &scan)));
+    }
+
+    #[cfg(target_os = "windows")]
+    fn lifecycle_checkpoint_fixture() -> crate::agent_console::checkpoint::CheckpointRecord {
+        crate::agent_console::checkpoint::CheckpointRecord {
+            contract: crate::bus::contract::AgentSessionCheckpoint {
+                checkpoint_type: crate::bus::contract::AgentSessionCheckpointType::FsSnapshot,
+                git_hash: None, snapshot_files: Vec::new(),
+            },
+            repo: "/fixture".into(), session_id: "fixture".into(),
+            checkpoint_dir: "/fixture-checkpoint".into(), created_at_ms: 0, ephemeral: false,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn assert_lifecycle_checkpoint_not_queued(request: AgentRequest, response: AgentResponse) {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("dispatch.txt");
+        let expected = serde_json::to_string(&response).unwrap();
+        let script = format!(
+            "$null = [Console]::ReadLine(); Add-Content -LiteralPath '{}' -Value 'dispatch'; [Console]::WriteLine('{}')",
+            log.to_string_lossy().replace("'", "''"), expected.replace("'", "''"),
+        );
+        let argv = vec!["powershell.exe".into(), "-NoProfile".into(),
+            "-NonInteractive".into(), "-Command".into(), script];
+        let key = pooled_agent_key(&argv);
+        let scan = Arc::new(start_pooled_agent(&argv).unwrap());
+        pooled_agents().lock().unwrap().insert(key.clone(), Arc::clone(&scan));
+        let owner = scan.io.lock().unwrap();
+        let result = request_with_persistent_agent_argv(&argv, &request, Duration::from_secs(3));
+        let retained = pooled_agents().lock().unwrap().get(&key).cloned();
+        let scan_alive = scan.child.lock().unwrap().try_wait().unwrap().is_none();
+        drop(owner);
+        drop_pooled_agent(&key, Some(&scan));
+        assert_eq!(serde_json::to_string(&result.expect("lifecycle request blocked by scan")).unwrap(), expected);
+        assert!(scan_alive);
+        assert!(retained.as_ref().is_some_and(|current| Arc::ptr_eq(current, &scan)));
+        assert_eq!(std::fs::read_to_string(log).unwrap().lines().count(), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn startup_checkpoint_creation_does_not_queue_behind_repo_scan() {
+        assert_lifecycle_checkpoint_not_queued(AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION, repo: "/fixture".into(),
+            allowed_repos: vec!["/fixture".into()], session_id: "fixture".into(),
+            created_at_ms: 0, ephemeral: false,
+        }, AgentResponse::AgentCheckpoint { checkpoint: lifecycle_checkpoint_fixture() });
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn startup_existing_session_checkpoint_scan_does_not_queue_behind_repo_scan() {
+        assert_lifecycle_checkpoint_not_queued(AgentRequest::AgentCheckpointScan {
+            protocol_version: PROTOCOL_VERSION, allowed_repos: vec!["/fixture".into()],
+            checkpoint: lifecycle_checkpoint_fixture(), timestamp_ms: 0,
+        }, AgentResponse::AgentChangeLog { changes: Vec::new() });
     }
 
     #[test]

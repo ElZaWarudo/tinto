@@ -372,6 +372,39 @@ describe("MenuBar", () => {
     expect(screen.getByTestId("wsl-path")).toBeInTheDocument();
   });
 
+  it("routes typed local Enter to the local callback and permits retry after rejection", async () => {
+    const addLocal = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("not a repository"))
+      .mockResolvedValue(undefined);
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} onAddLocal={addLocal} />);
+    const input = screen.getByLabelText("Ruta local");
+    fireEvent.change(input, { target: { value: "C:/repos/example" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("not a repository");
+    expect(addLocal).toHaveBeenCalledWith("C:/repos/example");
+    expect(ops.addWslRepoFlow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Añadir ruta local" }));
+    await waitFor(() => expect(addLocal).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not dispatch a second local add while the first is pending", async () => {
+    let finish!: () => void;
+    const addLocal = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} onAddLocal={addLocal} />);
+    const input = screen.getByLabelText("Ruta local");
+    fireEvent.change(input, { target: { value: "C:/repos/example" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(addLocal).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+  });
+
   it("keeps local-picker failures inside the focused add-repo dialog", async () => {
     const addLocal = vi.fn(() => Promise.reject(new Error("selector no disponible")));
     render(<AddRepoDialog activeWorkbench="Work" onClose={vi.fn()} onAddLocal={addLocal} />);

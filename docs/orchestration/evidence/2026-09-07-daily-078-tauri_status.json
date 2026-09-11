@@ -1,0 +1,21 @@
+{
+  "sequence": 78,
+  "at": "2026-09-07T10:17:23.229Z",
+  "durationMs": 1,
+  "request": {
+    "name": "tauri_status",
+    "arguments": {}
+  },
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"state\":\"idle\",\"lastAction\":\"screenshot\"}"
+      }
+    ],
+    "structuredContent": {
+      "state": "idle",
+      "lastAction": "screenshot"
+    }
+  }
+}

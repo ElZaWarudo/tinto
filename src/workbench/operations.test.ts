@@ -315,6 +315,21 @@ describe("workbench operations", () => {
     expect(reloadMock).not.toHaveBeenCalled();
   });
 
+  it("adds a typed local path without opening the picker", async () => {
+    client.addRepo.mockResolvedValue("/canonical/repo");
+    await expect(addRepoFlow("Work", "  C:/repos/example  ")).resolves.toBe("/canonical/repo");
+    expect(dialogMock.open).not.toHaveBeenCalled();
+    expect(client.addRepo).toHaveBeenCalledWith("Work", "C:/repos/example");
+  });
+
+  it("retains a successful add when configuration refresh fails", async () => {
+    client.addRepo.mockResolvedValue("/canonical/repo");
+    reloadMock.mockRejectedValueOnce(new Error("refresh unavailable"));
+    await expect(addRepoFlow("Work", "C:/repos/example")).resolves.toBe("/canonical/repo");
+    expect(client.addRepo).toHaveBeenCalledTimes(1);
+    expect(busStore.getState().configError).toContain("repositorio se añadió");
+  });
+
   it("addRepoFlow surfaces a failed add and does not pretend the reload succeeded", async () => {
     dialogMock.open.mockResolvedValueOnce("/dup");
     client.addRepo.mockRejectedValueOnce(new Error("duplicate"));

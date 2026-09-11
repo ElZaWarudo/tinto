@@ -4459,9 +4459,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-wdio-webdriver"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ad665bda48567107b6a3d070fe6d58a98e21f3ebf52abe41308fa4d5919f61b"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4477,6 +4475,7 @@ dependencies = [
  "objc2-web-kit",
  "serde",
  "serde_json",
+ "subtle",
  "tauri",
  "tauri-plugin",
  "tempfile",

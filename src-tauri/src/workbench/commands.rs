@@ -13,7 +13,7 @@ use crate::agent_console::commands::read_codex_mcp_inventory;
 use crate::bus::contract::McpProfileState;
 
 #[cfg(target_os = "windows")]
-use crate::windows_process::hide_console;
+use crate::windows_process::output_with_timeout;
 #[cfg(target_os = "windows")]
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -239,11 +239,18 @@ pub fn remove_wsl_repo(
 
 #[cfg(target_os = "windows")]
 #[tauri::command]
-pub fn list_wsl_distros() -> Result<Vec<String>, WorkbenchError> {
+pub async fn list_wsl_distros() -> Result<Vec<String>, WorkbenchError> {
+    offload_wsl_query(list_wsl_distros_blocking).await
+}
+
+#[cfg(target_os = "windows")]
+fn list_wsl_distros_blocking() -> Result<Vec<String>, WorkbenchError> {
     let mut command = Command::new("wsl.exe");
-    let output = hide_console(command.args(["--list", "--quiet"]))
-        .output()
-        .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?;
+    let output = output_with_timeout(
+        command.args(["--list", "--quiet"]),
+        std::time::Duration::from_secs(5),
+    )
+    .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?;
     if !output.status.success() {
         return Err(WorkbenchError::WslCommandFailed(
             decode_wsl_output(&output.stderr).trim().to_string(),
@@ -261,7 +268,15 @@ pub fn list_wsl_distros() -> Result<Vec<String>, WorkbenchError> {
 
 #[cfg(target_os = "windows")]
 #[tauri::command]
-pub fn list_wsl_directory(
+pub async fn list_wsl_directory(
+    distro: String,
+    path: Option<String>,
+) -> Result<WslDirectoryListing, WorkbenchError> {
+    offload_wsl_query(move || list_wsl_directory_blocking(distro, path)).await
+}
+
+#[cfg(target_os = "windows")]
+fn list_wsl_directory_blocking(
     distro: String,
     path: Option<String>,
 ) -> Result<WslDirectoryListing, WorkbenchError> {
@@ -446,5 +461,40 @@ name = "B"
             assert_eq!(repos[1].distro.as_deref(), Some("Ubuntu"));
         }
         assert_eq!(active_runtime_repos_for(&store, "B"), None);
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn offload_wsl_query<T: Send + 'static>(
+    query: impl FnOnce() -> Result<T, WorkbenchError> + Send + 'static,
+) -> Result<T, WorkbenchError> {
+    tauri::async_runtime::spawn_blocking(query)
+        .await
+        .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod wsl_dispatch_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_wsl_query_keeps_local_runtime_responsive() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let query = tokio::spawn(offload_wsl_query(move || {
+            let _ = started_tx.send(());
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .map_err(|error| WorkbenchError::WslCommandFailed(error.to_string()))?;
+            Ok(7)
+        }));
+        started_rx.await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            !query.is_finished(),
+            "blocking WSL ran on the local runtime thread"
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(query.await.unwrap().unwrap(), 7);
     }
 }

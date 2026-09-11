@@ -1,0 +1,21 @@
+{
+  "sequence": 46,
+  "at": "2026-09-07T09:55:40.672Z",
+  "durationMs": 1582,
+  "request": {
+    "name": "tauri_close",
+    "arguments": {}
+  },
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"alreadyClosed\":false,\"state\":\"idle\"}"
+      }
+    ],
+    "structuredContent": {
+      "alreadyClosed": false,
+      "state": "idle"
+    }
+  }
+}

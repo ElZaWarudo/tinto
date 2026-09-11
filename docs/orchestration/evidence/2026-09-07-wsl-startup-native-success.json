@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "status": "passed-bounded-native-wsl-startup-task-and-owned-cleanup",
+  "date": "2026-09-07",
+  "sourceDirectory": "C:/Users/User/AppData/Local/Temp/tinto-wsl-startup-acceptance-20260907/",
+  "scope": "Public Pum native actions; journal and OS read-only verification are separate observation fallback. No fallback native actions.",
+  "build": {
+    "reportedBy": "controller",
+    "cwd": "C:/Users/User/Documents/personal/tinto",
+    "toolchain": "existing stable MSVC directory override",
+    "command": "cargo build --offline --locked --manifest-path src-tauri/Cargo.toml --features pumarejo --bin tinto",
+    "result": "passed",
+    "seconds": 44.86,
+    "repeatedByReconciler": false
+  },
+  "windowsIdentities": [
+    {
+      "pid": 13520,
+      "parentPid": 27300,
+      "name": "node.exe",
+      "creationDate": "2026-09-07T17:17:51.716654+02:00"
+    },
+    {
+      "pid": 8976,
+      "parentPid": 28196,
+      "name": "tinto.exe",
+      "creationDate": "2026-09-07T17:18:36.979834+02:00"
+    },
+    {
+      "pid": 26824,
+      "parentPid": 8976,
+      "name": "msedgewebview2.exe",
+      "creationDate": "2026-09-07T17:18:37.218587+02:00"
+    },
+    {
+      "pid": 25816,
+      "parentPid": 8976,
+      "name": "wsl.exe",
+      "creationDate": "2026-09-07T17:20:01.581265+02:00"
+    },
+    {
+      "pid": 14004,
+      "parentPid": 8976,
+      "name": "wsl.exe",
+      "creationDate": "2026-09-07T17:23:19.527249+02:00"
+    },
+    {
+      "pid": 29156,
+      "parentPid": 8976,
+      "name": "wsl.exe",
+      "creationDate": "2026-09-07T17:23:22.706571+02:00"
+    }
+  ],
+  "launch": {
+    "ownedPid": 13520,
+    "tintoPid": 8976,
+    "noWatch": true,
+    "ready": "ready"
+  },
+  "startup": {
+    "publicClick": "005-tauri_click.json",
+    "dispatch": {
+      "method": "webdriver",
+      "dispatched": true
+    },
+    "sessionId": "4d2e4f9d-5009-44a1-a7a3-33231765bf7a",
+    "providerSessionId": "01a07c74-7dc2-7631-9891-eaa29ab0b430",
+    "startClicks": 1,
+    "retries": 0,
+    "repositoryScans": "failed while ICook start remained enabled"
+  },
+  "linux": {
+    "nodePid": 214367,
+    "codexPid": 214847,
+    "processGroupId": 214367,
+    "nodeStartLocal": "2026-09-07 17:20:00",
+    "codexStartLocal": "2026-09-07 17:20:02",
+    "procStat": "214367 (MainThread) S 214366 214367 214367 34822 214367 4194560 6360 37693 0 12 11 7 22 35 20 0 7 0 4184889 1436864512 12050 18446744073709551615 7454720 50333345 140726869219744 0 0 0 0 16781312 83459 0 0 0 17 0 0 0 0 0 0 107370024 107558368 1046597632 140726869227736 140726869227842 140726869227842 140726869229513 0\r\n214847 (codex) S 214367 214367 214367 34822 214367 4194304 128446 106250 49 119 464 307 132 191 20 0 26 0 4185071 518336512 45396 18446744073709551615 139777058562048 139777258937142 140728568925424 0 0 0 0 4096 1088 0 0 0 17 6 0 0 0 0 0 139777304775168 139777310055344 93825693454336 140728568932285 140728568932453 140728568932453 140728568934243 0"
+  },
+  "taskProof": [
+    {
+      "timestamp": "2026-09-07T15:21:27.626Z",
+      "type": "task_started",
+      "turnId": "01a07c75-c14d-7c11-a857-1a134950036a",
+      "message": null
+    },
+    {
+      "timestamp": "2026-09-07T15:22:03.31Z",
+      "type": "task_complete",
+      "turnId": "01a07c75-c14d-7c11-a857-1a134950036a",
+      "message": "Workspace matches the expected ICook root.\n\n| Check | Actual value |\n|---|---|\n| CWD | `/mnt/c/Users/User/Documents/personal/ICook` |\n| Git root | `/mnt/c/Users/User/Documents/personal/ICook` |\n| OS | Ubuntu 24.04, WSL2, x86_64 |\n| Kernel | `6.6.87.2-microsoft-standard-WSL2` |\n| Dirty-file count | **580**, including untracked files |\n\n| Tool | Version | Executable |\n|---|---|---|\n| Git | 2.43.0 | `/usr/bin/git` |\n| Node | v24.13.0 | `/home/teb/.nvm/versions/node/v24.13.0/bin/node` |\n| npm | 11.6.2 | `/home/teb/.nvm/versions/node/v24.13.0/bin/npm` |\n| Cargo | 1.93.1 | `/home/teb/.cargo/bin/cargo` |\n\n`package.json` SHA256:\n```text\n40aa54478e354d760b571db804df0c22bd841533f6dc02bafbdb944647a91675\n```\n\nActive configured permissions: `workspace-write`; writable roots are ICook and `/tmp`. Repository `.git`, `.agents`, and `.codex` have explicit read-only entries. Network is restricted; approval policy is `never`. Write access was not probed.\n\nOnly read-only checks ran. No edits, installations, servers, agents, commits, or pushes.\n\nIC_WSL_PREFLIGHT_DONE"
+    },
+    {
+      "timestamp": "2026-09-07T15:23:23.449Z",
+      "type": "task_started",
+      "turnId": "01a07c77-85d0-7641-adcd-d9584f39979c",
+      "message": null
+    },
+    {
+      "timestamp": "2026-09-07T15:24:11.638Z",
+      "type": "task_complete",
+      "turnId": "01a07c77-85d0-7641-adcd-d9584f39979c",
+      "message": "```text\nIC_WSL_STEP_1 40aa54478e354d760b571db804df0c22bd841533f6dc02bafbdb944647a91675\nIC_WSL_STEP_2 40aa54478e354d760b571db804df0c22bd841533f6dc02bafbdb944647a91675\nIC_WSL_STEP_3 40aa54478e354d760b571db804df0c22bd841533f6dc02bafbdb944647a91675\n```\n\nThree read-only checks completed with five-second waits between reads. Existing work preserved.\n\nIC_WSL_ACCEPT_DONE count=3"
+    }
+  ],
+  "permissions": {
+    "sandbox": "workspace-write",
+    "network": "restricted",
+    "approval": "never",
+    "fullAccessAccepted": false
+  },
+  "observations": {
+    "activeSnapshotMs": 418,
+    "activeLabel": "Trabajando",
+    "finalScreenshotMs": 1890,
+    "finalMarker": "IC_WSL_ACCEPT_DONE count=3",
+    "finalState": "idle",
+    "screenshot": "2026-09-07-wsl-startup-native-final.png",
+    "screenshotSha256": "c0133dcc61f1c5baba75d954c7b5a07e86cc05f3f4d1f13eca418da1cd11b759",
+    "screenshotViewedByReconciler": true
+  },
+  "cleanup": {
+    "publicClose": {
+      "alreadyClosed": false,
+      "state": "idle"
+    },
+    "publicStatus": {
+      "state": "idle",
+      "lastAction": "close"
+    },
+    "windowsPassed": true,
+    "windowsSurvivors": [],
+    "linuxPassed": true,
+    "linuxExit": 0,
+    "linuxOwnedSurvivors": [],
+    "limit": "Recorded identity/process-group/helper check at close time; not a global process absence claim or protection against later PID reuse. Unrelated Linux workloads preserved; their command lines deliberately omitted."
+  },
+  "source": {
+    "backend": {
+      "path": "src-tauri/src/wsl_agent/launcher.rs",
+      "sha256": "f6ad6f23e872906380ccf413434ca98776e7000a8e1b66dc0bd985df5b919b85"
+    },
+    "frontend": "Previously applied final bytes preserved; no restaging."
+  },
+  "limits": [
+    "Background repository scan timeouts remain.",
+    "Long-history action latency remains; bounded 418ms/1890ms observations do not prove full maturity.",
+    "WSL full-access acceptance remains untested.",
+    "No ICook 21-case rerun: retain 17 pass + 1 limited + 3 blocked; original Windows app readiness is separate."
+  ],
+  "reconciliation": {
+    "cwd": "C:/Users/User/Documents/personal/pumarejo",
+    "effectiveWindowsPermissions": "danger-full-access; network enabled; approval never",
+    "controllerHandle": 3446,
+    "currentTauriPid": 25576,
+    "currentTintoPid": 11492,
+    "currentNoWatchVerified": true,
+    "testsBuildsDispatchLifecyclePerformed": false,
+    "baselineDirty": {
+      "pumarejo": 19,
+      "tinto": 47,
+      "ICook": 580
+    }
+  },
+  "sha256Manifest": {
+    "001-tauri_launch.json": "ca779ee2c6f8ad81541594d0d772852593bf398ec9d0cb68ffe4c36d0c795f02",
+    "003-tauri_status.json": "20ff852c5dc3b70a4c748fc50df1107e4135620626d959fd955b6689c444f26a",
+    "004-tauri_snapshot.json": "7d338c5c39c2786aa5ee412b8deecfb0241cc76d3ae415d17bd3b5053b47d37b",
+    "005-tauri_click.json": "86349d688086ecf9f8544417fb2110803e0fa3d156fb323b3a393bcd1647d00b",
+    "006-tauri_snapshot.json": "353fd9783672542c7165638d56f4a7c44012b4f842d224112692b01a952ffcbf",
+    "007-tauri_type.json": "b40424c647feb8ad7ce0c6d6d2ac09905b0d0edb3ac2b1e9595aec40de011b1c",
+    "008-tauri_press_key.json": "e904e39faac981b9395d98c70f4eeb2e38c989638b95759f95cc6156dbb4d70f",
+    "009-tauri_snapshot.json": "ebc97893a2e0971123133a19a3e22091a18a2a7acae5b91e7bc2e6a4d102095f",
+    "010-tauri_type.json": "68d1d56361ae8a19b571dba0b362773b5d4ebb8de90844e4b3ebbc8be373cd2d",
+    "011-tauri_press_key.json": "8b1b848e2e0e51efda389f6e88910a2314747e613cd5dc14907b18c0f2a1e91c",
+    "012-tauri_snapshot.json": "88aa06cc4aae9a042c98b9345cf384452447677cd661561f948ce7ce5fcb18d9",
+    "013-tauri_screenshot.json": "6332b60c317f853b88db68310be1a1c3f61ef1548a2a88b581d094b5396e84a5",
+    "014-tauri_close.json": "7d48071b37a8c5d5f2563b68dd79319abe2829557269802f150b1a47dc58be97",
+    "015-tauri_status.json": "ac64bdbe4f5dfcd61f5c8ca4a1a6733ee33ccdfd889333030044d63bfe6755d0",
+    "016-tauri_launch.json": "8a4f539cdbde635b2c53defd40003f5c0529696d0ab6066c57c6118e3d01ba89",
+    "after-start-linux.json": "876fe887251822c75a3b9c8ca1d853e74591b20a3281484ab53fb313d856616e",
+    "provider-proc-stat.txt": "2aeaa80053e1d9a9fc099945bd0d8dd9b4a00052603f3a47966d840ee5316e52",
+    "provider-task-proof.json": "7e98b8267047034eb7679ff4e9052d674ddf1be2892dda0c41eef93144848eef",
+    "current-owned-identities.json": "5f4f3ffd1acbf9be23f2428213facef1b8a281b0034032ed2b613eb643e231e1",
+    "explicit-close-process-check.json": "f21462857acba94c22f9da653e69b0b4a54aad53f442ef2e8bfa63eab737d7df",
+    "wire.jsonl": "cdffcef05c6844db9460f23e08d68ee9128d59045c1c97d52bbe5425ae9b0c9e",
+    "13-0.png": "c0133dcc61f1c5baba75d954c7b5a07e86cc05f3f4d1f13eca418da1cd11b759"
+  }
+}

@@ -1,4 +1,5 @@
 import type { DockviewWillDropEvent, IDockviewPanel } from "dockview-react";
+import type { AgentProviderReadiness } from "../../bus/contract";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { consoleDock } from "../../workspace/consoleDock";
@@ -52,7 +53,7 @@ const clientMocks = vi.hoisted(() => ({
 
 const availabilityMocks = vi.hoisted(() => ({
   agentAvailabilityKey: vi.fn(() => "host"),
-  checkAgentAvailabilityForRepo: vi.fn(() =>
+  checkAgentAvailabilityForRepo: vi.fn<() => Promise<AgentProviderReadiness>>(() =>
     Promise.resolve({
       agent_type: "codex",
       source: "local",
@@ -363,6 +364,21 @@ describe("ConsoleDockPanel detach drop", () => {
     unmount();
   });
 
+  it("keeps an unavailable WSL target disabled and identifies its distro", async () => {
+    availabilityMocks.checkAgentAvailabilityForRepo.mockResolvedValueOnce({
+      agent_type: "codex",
+      source: "wsl",
+      distro: "Ubuntu",
+      state: "unavailable",
+    });
+    markRecentAgentLaunch({ repo: "/r/api", agentType: "codex" });
+    const { unmount } = render(<ConsoleDockPanel />);
+    expect(await screen.findByText("No disponible en WSL Ubuntu")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /iniciar api con codex/i })).toBeDisabled();
+    expect(clientMocks.startAgentSession).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it("starts a new session from a recent launch shortcut", async () => {
     markRecentAgentLaunch({ repo: "/r/api", agentType: "codex" });
     const openSpy = vi.spyOn(consoleDock, "openTerminal");
@@ -490,32 +506,65 @@ describe("ConsoleDockPanel detach drop", () => {
   });
 
   it.each([
-    { name: "persisted fallback", live: undefined, savedId: "same-prefix-target", expected: "Saved first message" },
-    { name: "live precedence", live: "Live first message", savedId: "same-prefix-target", expected: "Live first message" },
-    { name: "different full ID", live: undefined, savedId: "same-prefix-other", expected: undefined },
+    {
+      name: "persisted fallback",
+      live: undefined,
+      savedId: "same-prefix-target",
+      expected: "Saved first message",
+    },
+    {
+      name: "live precedence",
+      live: "Live first message",
+      savedId: "same-prefix-target",
+      expected: "Live first message",
+    },
+    {
+      name: "different full ID",
+      live: undefined,
+      savedId: "same-prefix-other",
+      expected: undefined,
+    },
     { name: "missing summary", live: undefined, savedId: undefined, expected: undefined },
   ])("updates archived tab titles safely: $name", async ({ live, savedId, expected }) => {
     const sessionId = "same-prefix-target";
     consoleDock.openTerminal({ sessionId, repo: "/r/api", agentType: "codex", mode: "journal" });
     sessionStoreMocks.state.timeline[sessionId] = live
       ? [{ id: "first", session_id: sessionId, kind: "user_message", text: live, timestamp_ms: 1 }]
-      : [{ id: "later", session_id: sessionId, kind: "agent_message", text: "Partial output", timestamp_ms: 2 }];
-    clientMocks.listAgentJournalSessions.mockResolvedValue(savedId ? [{
-      id: savedId,
-      repo: "/r/api",
-      agent_type: "codex",
-      status: "completed",
-      started_at_ms: 1,
-      updated_at_ms: 3,
-      event_count: 2001,
-      first_user_message: "Saved first message",
-    }] : []);
+      : [
+          {
+            id: "later",
+            session_id: sessionId,
+            kind: "agent_message",
+            text: "Partial output",
+            timestamp_ms: 2,
+          },
+        ];
+    clientMocks.listAgentJournalSessions.mockResolvedValue(
+      savedId
+        ? [
+            {
+              id: savedId,
+              repo: "/r/api",
+              agent_type: "codex",
+              status: "completed",
+              started_at_ms: 1,
+              updated_at_ms: 3,
+              event_count: 2001,
+              first_user_message: "Saved first message",
+            },
+          ]
+        : [],
+    );
 
     const { unmount } = render(<ConsoleDockPanel />);
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      await Promise.resolve();
+    });
     const panel = dockviewMocks.api!.getPanel(agentTerminalPanelId(sessionId))!;
     if (expected) {
-      await waitFor(() => expect(panel.api.setTitle).toHaveBeenLastCalledWith(`Codex · api · ${expected}`));
+      await waitFor(() =>
+        expect(panel.api.setTitle).toHaveBeenLastCalledWith(`Codex · api · ${expected}`),
+      );
     } else {
       expect(panel.api.setTitle).not.toHaveBeenCalled();
     }

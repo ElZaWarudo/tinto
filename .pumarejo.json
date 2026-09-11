@@ -2,7 +2,7 @@
   "version": 1,
   "launch": {
     "command": "npm",
-    "args": ["run", "tauri", "--", "dev", "--features", "pumarejo", "--config", "{tauriConfig}"],
+    "args": ["run", "tauri", "--", "dev", "--no-watch", "--features", "pumarejo", "--config", "{tauriConfig}"],
     "pathPrepend": ["C:\\Users\\User\\.cargo\\bin"]
   },
   "window": "main",

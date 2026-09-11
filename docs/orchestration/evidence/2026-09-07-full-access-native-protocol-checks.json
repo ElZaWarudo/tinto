@@ -1,0 +1,4 @@
+{
+  "passed": true,
+  "manualReviewRequired": "Confirm cancellation reached an active observation, actual Tinto/provider process identity, and same Agent session/thread task completion without archival/resume. Public runtime readiness alone does not prove these."
+}

@@ -18,8 +18,9 @@ export function AddRepoDialog({
 }: {
   activeWorkbench: string;
   onClose: () => void;
-  onAddLocal?: () => Promise<void> | void;
+  onAddLocal?: (path?: string) => Promise<void> | void;
 }) {
+  const [localPath, setLocalPath] = useState("");
   const [path, setPath] = useState("");
   const [alias, setAlias] = useState("");
   const [distro, setDistro] = useState("Ubuntu");
@@ -35,10 +36,11 @@ export function AddRepoDialog({
   const pathInputRef = useRef<HTMLInputElement>(null);
   const localButtonRef = useRef<HTMLButtonElement>(null);
   const browseRequestRef = useRef(0);
+  const mutationBusyRef = useRef(false);
   const isMutationBusy = isSaving || isAddingLocal;
   const isBrowseBusy = isBrowsing || isLoadingDistros;
   const requestClose = () => {
-    if (!isMutationBusy) onClose();
+    if (!mutationBusyRef.current) onClose();
   };
   const dialogRef = useAccessibleDialog<HTMLFormElement>({
     onClose: requestClose,
@@ -121,6 +123,7 @@ export function AddRepoDialog({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (mutationBusyRef.current) return;
     if (isMutationBusy || isBrowseBusy) return;
     setLocalError("");
     const normalized = normalizeWslLinuxPath(path);
@@ -129,6 +132,7 @@ export function AddRepoDialog({
       return;
     }
     setError("");
+    mutationBusyRef.current = true;
     setIsSaving(true);
     try {
       const stored = await addWslRepoFlow(activeWorkbench, {
@@ -141,18 +145,25 @@ export function AddRepoDialog({
     } catch (e) {
       setError(extractErrorMessage(e, "No se pudo agregar el repo."));
     } finally {
+      mutationBusyRef.current = false;
       setIsSaving(false);
     }
   };
-  const addLocal = async () => {
-    if (!onAddLocal || isMutationBusy) return;
+  const addLocal = async (typedPath?: string) => {
+    if (!onAddLocal || mutationBusyRef.current) return;
+    if (typedPath !== undefined && !typedPath.trim()) {
+      setLocalError("Escribe la ruta del repositorio local.");
+      return;
+    }
+    mutationBusyRef.current = true;
     setLocalError("");
     setIsAddingLocal(true);
     try {
-      await onAddLocal();
+      await onAddLocal(typedPath?.trim());
     } catch (cause) {
       setLocalError(extractErrorMessage(cause, "No se pudo añadir el repositorio local."));
     } finally {
+      mutationBusyRef.current = false;
       setIsAddingLocal(false);
     }
   };
@@ -190,6 +201,34 @@ export function AddRepoDialog({
             <section className="addons-card addons-card--repo-source">
               <div className="addons-card__main">
                 <h3 className="addons-card__title">Carpeta local</h3>
+                <label className="wsl-field" htmlFor="local-repo-path">
+                  <span className="wsl-field__label">Ruta local</span>
+                  <input
+                    id="local-repo-path"
+                    className="wsl-input"
+                    value={localPath}
+                    disabled={isMutationBusy}
+                    aria-invalid={Boolean(localError)}
+                    aria-describedby={localError ? "add-repo-error" : undefined}
+                    placeholder="C:\repos\proyecto"
+                    onChange={(event) => setLocalPath(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void addLocal(localPath);
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="addons-refresh"
+                  disabled={isMutationBusy || !localPath.trim()}
+                  onClick={() => void addLocal(localPath)}
+                >
+                  Añadir ruta local
+                </button>
               </div>
               <button
                 ref={localButtonRef}
@@ -326,7 +365,12 @@ export function AddRepoDialog({
             )}
 
             {(localError || error) && (
-              <p className="addons-card__error" data-testid="add-repo-error" role="alert">
+              <p
+                id="add-repo-error"
+                className="addons-card__error"
+                data-testid="add-repo-error"
+                role="alert"
+              >
                 {localError || error}
               </p>
             )}

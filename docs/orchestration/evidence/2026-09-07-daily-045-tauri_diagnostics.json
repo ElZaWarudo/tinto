@@ -1,0 +1,403 @@
+{
+  "sequence": 45,
+  "at": "2026-09-07T09:55:29.353Z",
+  "durationMs": 3,
+  "request": {
+    "name": "tauri_diagnostics",
+    "arguments": {}
+  },
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"capabilities\":{\"console\":{\"state\":\"unsupported\",\"code\":\"provider_console_unsupported\",\"evidence\":\"The configured provider exposes no approved console boundary.\"},\"process_stdout\":{\"state\":\"supported\",\"code\":\"owned_process_stream_available\"},\"process_stderr\":{\"state\":\"supported\",\"code\":\"owned_process_stream_available\"},\"invocation\":{\"state\":\"supported\",\"code\":\"invocation_trace_available\"},\"phase\":{\"state\":\"supported\",\"code\":\"launch_phase_history_available\"},\"last_error\":{\"state\":\"supported\",\"code\":\"last_error_projection_available\"}},\"records\":[{\"id\":\"diagnostic-000001\",\"sequence\":1,\"observedAt\":\"2026-09-07T09:54:38.502Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"phase\":\"preparing_runtime\"},{\"id\":\"diagnostic-000002\",\"sequence\":2,\"observedAt\":\"2026-09-07T09:54:38.514Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"phase\":\"starting_process\"},{\"id\":\"diagnostic-000003\",\"sequence\":3,\"observedAt\":\"2026-09-07T09:54:41.362Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"Running\"},{\"id\":\"diagnostic-000004\",\"sequence\":4,\"observedAt\":\"2026-09-07T09:54:41.362Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"BeforeDevCommand (`npm run dev`)\"},{\"id\":\"diagnostic-000005\",\"sequence\":5,\"observedAt\":\"2026-09-07T09:54:42.130Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"code\":\"windows_job_object_available\",\"retryable\":false,\"capability\":{\"state\":\"supported\",\"code\":\"windows_job_object_available\",\"evidence\":\"windows_job_object\"}},{\"id\":\"diagnostic-000006\",\"sequence\":6,\"observedAt\":\"2026-09-07T09:54:42.130Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"phase\":\"waiting_provider\"},{\"id\":\"diagnostic-000007\",\"sequence\":7,\"observedAt\":\"2026-09-07T09:54:44.054Z\",\"source\":\"process_stdout\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"> tinto@0.1.0 dev > vite\"},{\"id\":\"diagnostic-000008\",\"sequence\":8,\"observedAt\":\"2026-09-07T09:54:45.398Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"Warn\"},{\"id\":\"diagnostic-000009\",\"sequence\":9,\"observedAt\":\"2026-09-07T09:54:45.398Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"Waiting for your frontend dev server to start on htt[REDACTED_PATH]\"},{\"id\":\"diagnostic-000010\",\"sequence\":10,\"observedAt\":\"2026-09-07T09:54:45.487Z\",\"source\":\"process_stdout\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"[32m [1mVITE [22m v8.2.2 [39m [2mready in [0m [1m1295 [22m [2m [0m ms [22m\"},{\"id\":\"diagnostic-000011\",\"sequence\":11,\"observedAt\":\"2026-09-07T09:54:45.487Z\",\"source\":\"process_stdout\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"[32m➜ [39m [1mLocal [22m: [36mhtt[REDACTED_PATH] [1m1420 [22m/ [39m\"},{\"id\":\"diagnostic-000012\",\"sequence\":12,\"observedAt\":\"2026-09-07T09:54:47.399Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"Running\"},{\"id\":\"diagnostic-000013\",\"sequence\":13,\"observedAt\":\"2026-09-07T09:54:47.399Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"DevCommand (`cargo run --no-default-features --features pumarejo --color always --`)\"},{\"id\":\"diagnostic-000014\",\"sequence\":14,\"observedAt\":\"2026-09-07T09:54:47.489Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"Info\"},{\"id\":\"diagnostic-000015\",\"sequence\":15,\"observedAt\":\"2026-09-07T09:54:47.489Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"Watching [REDACTED_PATH] for changes...\"},{\"id\":\"diagnostic-000016\",\"sequence\":16,\"observedAt\":\"2026-09-07T09:55:00.114Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"[1m [92m Finished [0m `dev` profile [unoptimized + debuginfo] target(s) in 12.66s\"},{\"id\":\"diagnostic-000017\",\"sequence\":17,\"observedAt\":\"2026-09-07T09:55:00.158Z\",\"source\":\"process_stderr\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"message\":\"[1m [92m Running [0m `target\\\\debug\\\\tinto.exe`\"},{\"id\":\"diagnostic-000018\",\"sequence\":18,\"observedAt\":\"2026-09-07T09:55:01.899Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"code\":\"loopback_ready\",\"retryable\":false,\"suggestion\":\"The owned loopback provider is ready.\",\"family\":\"ipv4\",\"port\":64025},{\"id\":\"diagnostic-000019\",\"sequence\":19,\"observedAt\":\"2026-09-07T09:55:03.729Z\",\"source\":\"phase\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"phase\":\"starting_proxy\"},{\"id\":\"diagnostic-000020\",\"sequence\":20,\"observedAt\":\"2026-09-07T09:55:03.740Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"app_start_failed\",\"retryable\":true,\"suggestion\":\"Check stderr diagnostics and the approved launch profile.\"},{\"id\":\"diagnostic-000021\",\"sequence\":21,\"observedAt\":\"2026-09-07T09:55:03.756Z\",\"source\":\"invocation\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"launch\"},{\"id\":\"diagnostic-000022\",\"sequence\":22,\"observedAt\":\"2026-09-07T09:55:03.756Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"session_not_active\",\"retryable\":true,\"suggestion\":\"Call tauri_launch first.\"},{\"id\":\"diagnostic-000023\",\"sequence\":23,\"observedAt\":\"2026-09-07T09:55:03.756Z\",\"source\":\"invocation\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"launch\",\"durationMs\":0,\"retryable\":true},{\"id\":\"diagnostic-000024\",\"sequence\":24,\"observedAt\":\"2026-09-07T09:55:20.700Z\",\"source\":\"invocation\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"snapshot\"},{\"id\":\"diagnostic-000025\",\"sequence\":25,\"observedAt\":\"2026-09-07T09:55:20.700Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"session_not_active\",\"retryable\":true,\"suggestion\":\"Call tauri_launch first.\"},{\"id\":\"diagnostic-000026\",\"sequence\":26,\"observedAt\":\"2026-09-07T09:55:20.700Z\",\"source\":\"invocation\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"snapshot\",\"durationMs\":0,\"retryable\":true},{\"id\":\"diagnostic-000027\",\"sequence\":27,\"observedAt\":\"2026-09-07T09:55:29.352Z\",\"source\":\"invocation\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"snapshot\"}],\"lastErrors\":[{\"id\":\"diagnostic-000018\",\"sequence\":18,\"observedAt\":\"2026-09-07T09:55:01.899Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"process\"},\"code\":\"loopback_ready\",\"retryable\":false,\"suggestion\":\"The owned loopback provider is ready.\",\"family\":\"ipv4\",\"port\":64025},{\"id\":\"diagnostic-000025\",\"sequence\":25,\"observedAt\":\"2026-09-07T09:55:20.700Z\",\"source\":\"last_error\",\"scope\":{\"sessionId\":\"a0fb4c9c8e46ba8131e0bcc4b98ce6b3\",\"owner\":\"session\"},\"code\":\"session_not_active\",\"retryable\":true,\"suggestion\":\"Call tauri_launch first.\"}],\"truncation\":{\"truncated\":false,\"evicted\":0,\"returned\":27,\"maxRecords\":128,\"maxBytes\":49152}}"
+      }
+    ],
+    "structuredContent": {
+      "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+      "capabilities": {
+        "console": {
+          "state": "unsupported",
+          "code": "provider_console_unsupported",
+          "evidence": "The configured provider exposes no approved console boundary."
+        },
+        "process_stdout": {
+          "state": "supported",
+          "code": "owned_process_stream_available"
+        },
+        "process_stderr": {
+          "state": "supported",
+          "code": "owned_process_stream_available"
+        },
+        "invocation": {
+          "state": "supported",
+          "code": "invocation_trace_available"
+        },
+        "phase": {
+          "state": "supported",
+          "code": "launch_phase_history_available"
+        },
+        "last_error": {
+          "state": "supported",
+          "code": "last_error_projection_available"
+        }
+      },
+      "records": [
+        {
+          "id": "diagnostic-000001",
+          "sequence": 1,
+          "observedAt": "2026-09-07T09:54:38.502Z",
+          "source": "phase",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "phase": "preparing_runtime"
+        },
+        {
+          "id": "diagnostic-000002",
+          "sequence": 2,
+          "observedAt": "2026-09-07T09:54:38.514Z",
+          "source": "phase",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "phase": "starting_process"
+        },
+        {
+          "id": "diagnostic-000003",
+          "sequence": 3,
+          "observedAt": "2026-09-07T09:54:41.362Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "Running"
+        },
+        {
+          "id": "diagnostic-000004",
+          "sequence": 4,
+          "observedAt": "2026-09-07T09:54:41.362Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "BeforeDevCommand (`npm run dev`)"
+        },
+        {
+          "id": "diagnostic-000005",
+          "sequence": 5,
+          "observedAt": "2026-09-07T09:54:42.130Z",
+          "source": "last_error",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "code": "windows_job_object_available",
+          "retryable": false,
+          "capability": {
+            "state": "supported",
+            "code": "windows_job_object_available",
+            "evidence": "windows_job_object"
+          }
+        },
+        {
+          "id": "diagnostic-000006",
+          "sequence": 6,
+          "observedAt": "2026-09-07T09:54:42.130Z",
+          "source": "phase",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "phase": "waiting_provider"
+        },
+        {
+          "id": "diagnostic-000007",
+          "sequence": 7,
+          "observedAt": "2026-09-07T09:54:44.054Z",
+          "source": "process_stdout",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "> tinto@0.1.0 dev > vite"
+        },
+        {
+          "id": "diagnostic-000008",
+          "sequence": 8,
+          "observedAt": "2026-09-07T09:54:45.398Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "Warn"
+        },
+        {
+          "id": "diagnostic-000009",
+          "sequence": 9,
+          "observedAt": "2026-09-07T09:54:45.398Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "Waiting for your frontend dev server to start on htt[REDACTED_PATH]"
+        },
+        {
+          "id": "diagnostic-000010",
+          "sequence": 10,
+          "observedAt": "2026-09-07T09:54:45.487Z",
+          "source": "process_stdout",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "[32m [1mVITE [22m v8.2.2 [39m [2mready in [0m [1m1295 [22m [2m [0m ms [22m"
+        },
+        {
+          "id": "diagnostic-000011",
+          "sequence": 11,
+          "observedAt": "2026-09-07T09:54:45.487Z",
+          "source": "process_stdout",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "[32m➜ [39m [1mLocal [22m: [36mhtt[REDACTED_PATH] [1m1420 [22m/ [39m"
+        },
+        {
+          "id": "diagnostic-000012",
+          "sequence": 12,
+          "observedAt": "2026-09-07T09:54:47.399Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "Running"
+        },
+        {
+          "id": "diagnostic-000013",
+          "sequence": 13,
+          "observedAt": "2026-09-07T09:54:47.399Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "DevCommand (`cargo run --no-default-features --features pumarejo --color always --`)"
+        },
+        {
+          "id": "diagnostic-000014",
+          "sequence": 14,
+          "observedAt": "2026-09-07T09:54:47.489Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "Info"
+        },
+        {
+          "id": "diagnostic-000015",
+          "sequence": 15,
+          "observedAt": "2026-09-07T09:54:47.489Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "Watching [REDACTED_PATH] for changes..."
+        },
+        {
+          "id": "diagnostic-000016",
+          "sequence": 16,
+          "observedAt": "2026-09-07T09:55:00.114Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "[1m [92m Finished [0m `dev` profile [unoptimized + debuginfo] target(s) in 12.66s"
+        },
+        {
+          "id": "diagnostic-000017",
+          "sequence": 17,
+          "observedAt": "2026-09-07T09:55:00.158Z",
+          "source": "process_stderr",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "message": "[1m [92m Running [0m `target\\debug\\tinto.exe`"
+        },
+        {
+          "id": "diagnostic-000018",
+          "sequence": 18,
+          "observedAt": "2026-09-07T09:55:01.899Z",
+          "source": "last_error",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "code": "loopback_ready",
+          "retryable": false,
+          "suggestion": "The owned loopback provider is ready.",
+          "family": "ipv4",
+          "port": 64025
+        },
+        {
+          "id": "diagnostic-000019",
+          "sequence": 19,
+          "observedAt": "2026-09-07T09:55:03.729Z",
+          "source": "phase",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "phase": "starting_proxy"
+        },
+        {
+          "id": "diagnostic-000020",
+          "sequence": 20,
+          "observedAt": "2026-09-07T09:55:03.740Z",
+          "source": "last_error",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "app_start_failed",
+          "retryable": true,
+          "suggestion": "Check stderr diagnostics and the approved launch profile."
+        },
+        {
+          "id": "diagnostic-000021",
+          "sequence": 21,
+          "observedAt": "2026-09-07T09:55:03.756Z",
+          "source": "invocation",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "launch"
+        },
+        {
+          "id": "diagnostic-000022",
+          "sequence": 22,
+          "observedAt": "2026-09-07T09:55:03.756Z",
+          "source": "last_error",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "session_not_active",
+          "retryable": true,
+          "suggestion": "Call tauri_launch first."
+        },
+        {
+          "id": "diagnostic-000023",
+          "sequence": 23,
+          "observedAt": "2026-09-07T09:55:03.756Z",
+          "source": "invocation",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "launch",
+          "durationMs": 0,
+          "retryable": true
+        },
+        {
+          "id": "diagnostic-000024",
+          "sequence": 24,
+          "observedAt": "2026-09-07T09:55:20.700Z",
+          "source": "invocation",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "snapshot"
+        },
+        {
+          "id": "diagnostic-000025",
+          "sequence": 25,
+          "observedAt": "2026-09-07T09:55:20.700Z",
+          "source": "last_error",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "session_not_active",
+          "retryable": true,
+          "suggestion": "Call tauri_launch first."
+        },
+        {
+          "id": "diagnostic-000026",
+          "sequence": 26,
+          "observedAt": "2026-09-07T09:55:20.700Z",
+          "source": "invocation",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "snapshot",
+          "durationMs": 0,
+          "retryable": true
+        },
+        {
+          "id": "diagnostic-000027",
+          "sequence": 27,
+          "observedAt": "2026-09-07T09:55:29.352Z",
+          "source": "invocation",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "snapshot"
+        }
+      ],
+      "lastErrors": [
+        {
+          "id": "diagnostic-000018",
+          "sequence": 18,
+          "observedAt": "2026-09-07T09:55:01.899Z",
+          "source": "last_error",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "process"
+          },
+          "code": "loopback_ready",
+          "retryable": false,
+          "suggestion": "The owned loopback provider is ready.",
+          "family": "ipv4",
+          "port": 64025
+        },
+        {
+          "id": "diagnostic-000025",
+          "sequence": 25,
+          "observedAt": "2026-09-07T09:55:20.700Z",
+          "source": "last_error",
+          "scope": {
+            "sessionId": "a0fb4c9c8e46ba8131e0bcc4b98ce6b3",
+            "owner": "session"
+          },
+          "code": "session_not_active",
+          "retryable": true,
+          "suggestion": "Call tauri_launch first."
+        }
+      ],
+      "truncation": {
+        "truncated": false,
+        "evicted": 0,
+        "returned": 27,
+        "maxRecords": 128,
+        "maxBytes": 49152
+      }
+    }
+  }
+}

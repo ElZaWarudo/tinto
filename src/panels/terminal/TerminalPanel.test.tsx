@@ -3972,73 +3972,84 @@ describe("TerminalPanel", () => {
     expect(screen.getByRole("button", { name: "Copiado" })).not.toHaveAttribute("title");
   });
 
-  it("loads archived transcripts without enabling live input or stop cleanup", async () => {
-    const archived = sessionFixture({
-      status: "completed",
-      pid: null,
-      checkpoint: null,
-      timeline: [
-        {
-          session_id: "sess-1",
-          id: "evt-1",
-          kind: "agent_message",
-          text: "Archived answer",
-          timestamp_ms: 2,
-        },
-      ],
-    });
-    getAgentJournalSessionMock.mockResolvedValueOnce(archived);
-    const { unmount } = render(
-      <TerminalPanel
-        {...props({
-          sessionId: "sess-1",
-          repo: "/r/a",
-          agentType: "codex",
-          mode: "journal",
-        })}
-      />,
-    );
+  it.each([
+    [0, "Código de salida: 0"],
+    [7, "Código de salida: 7"],
+    [null, "Código de salida desconocido"],
+  ])(
+    "loads archived transcripts with exit outcome %s and without stop cleanup",
+    async (exitCode, outcome) => {
+      const archived = sessionFixture({
+        status: "completed",
+        exit_code: exitCode as number | null,
+        pid: null,
+        checkpoint: null,
+        timeline: [
+          {
+            session_id: "sess-1",
+            id: "evt-1",
+            kind: "agent_message",
+            text: "Archived answer",
+            timestamp_ms: 2,
+          },
+        ],
+      });
+      getAgentJournalSessionMock.mockResolvedValueOnce(archived);
+      const { unmount } = render(
+        <TerminalPanel
+          {...props({
+            sessionId: "sess-1",
+            repo: "/r/a",
+            agentType: "codex",
+            mode: "journal",
+          })}
+        />,
+      );
 
-    expect(
-      await within(screen.getByLabelText("Conversación con Agent")).findByText("Archived answer"),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByLabelText("Actividad de Agent")).getByText("Transcripción archivada"),
-    ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Continúa esta conversación")).toBeEnabled();
-    expect(screen.getByPlaceholderText("Continúa esta conversación")).toHaveAttribute(
-      "title",
-      "Entrada de mensajes de Codex para a: el próximo mensaje retomará la conversación archivada.",
-    );
-    const archivedComposer = screen.getByPlaceholderText("Continúa esta conversación");
-    const archivedComposerHint = archivedComposer.getAttribute("aria-describedby");
-    expect(archivedComposerHint).toBeTruthy();
-    expect(document.getElementById(archivedComposerHint!)).toHaveTextContent(
-      "Escribe un mensaje para retomar esta conversación archivada.",
-    );
-    expect(
-      screen.queryByRole("listbox", { name: "Comandos del compositor" }),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Enviar" })).toHaveAttribute(
-      "title",
-      "Enviar mensaje a Codex para a: escribe un mensaje para retomar la conversación archivada.",
-    );
-    expect(screen.queryByRole("button", { name: "Retomar conversación" })).not.toBeInTheDocument();
-    const archivedFocus = screen.getByLabelText("Turno seleccionado");
-    expect(
-      within(archivedFocus).getByTitle(
-        "Contenedor de restauración del turno seleccionado 1: detén la sesión antes de restaurar.",
-      ),
-    ).toHaveClass("agent-panel__turn-focus-actions");
-    expect(
-      within(archivedFocus).getByRole("button", { name: "Restaurar desde este turno" }),
-    ).toHaveAttribute("title", "Restaurar el turno 1: detén la sesión antes.");
+      expect(
+        await within(screen.getByLabelText("Conversación con Agent")).findByText("Archived answer"),
+      ).toBeInTheDocument();
+      expect(
+        within(screen.getByLabelText("Actividad de Agent")).getByText("Transcripción archivada"),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Actividad de Agent")).toHaveTextContent(outcome as string);
+      expect(screen.getByPlaceholderText("Continúa esta conversación")).toBeEnabled();
+      expect(screen.getByPlaceholderText("Continúa esta conversación")).toHaveAttribute(
+        "title",
+        "Entrada de mensajes de Codex para a: el próximo mensaje retomará la conversación archivada.",
+      );
+      const archivedComposer = screen.getByPlaceholderText("Continúa esta conversación");
+      const archivedComposerHint = archivedComposer.getAttribute("aria-describedby");
+      expect(archivedComposerHint).toBeTruthy();
+      expect(document.getElementById(archivedComposerHint!)).toHaveTextContent(
+        "Escribe un mensaje para retomar esta conversación archivada.",
+      );
+      expect(
+        screen.queryByRole("listbox", { name: "Comandos del compositor" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Enviar" })).toHaveAttribute(
+        "title",
+        "Enviar mensaje a Codex para a: escribe un mensaje para retomar la conversación archivada.",
+      );
+      expect(
+        screen.queryByRole("button", { name: "Retomar conversación" }),
+      ).not.toBeInTheDocument();
+      const archivedFocus = screen.getByLabelText("Turno seleccionado");
+      expect(
+        within(archivedFocus).getByTitle(
+          "Contenedor de restauración del turno seleccionado 1: detén la sesión antes de restaurar.",
+        ),
+      ).toHaveClass("agent-panel__turn-focus-actions");
+      expect(
+        within(archivedFocus).getByRole("button", { name: "Restaurar desde este turno" }),
+      ).toHaveAttribute("title", "Restaurar el turno 1: detén la sesión antes.");
 
-    unmount();
-    expect(listAgentSessionsMock).not.toHaveBeenCalled();
-    expect(stopAgentSessionMock).not.toHaveBeenCalled();
-  });
+      unmount();
+      expect(listAgentSessionsMock).not.toHaveBeenCalled();
+      expect(stopAgentSessionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("opens a resumed journal conversation once and keeps its pending panel usable", async () => {
     const user = userEvent.setup();

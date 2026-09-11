@@ -66,6 +66,7 @@ import {
 } from "./workspace/panels";
 import type { WorkbenchConfig } from "./bus/contract";
 import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { setWindowsHostOverrideForTests } from "./workbench/platform";
 
 describe("App", () => {
@@ -209,6 +210,47 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByTestId("app-shell-error")).toHaveTextContent("selector no disponible"),
     );
+  });
+
+  it("adds a typed local repository through the native app and opens the canonical panel", async () => {
+    setWindowsHostOverrideForTests(true);
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "add_repo") return "/canonical/repo" as never;
+      if (command === "list_wsl_distros") return [] as never;
+      return null as never;
+    });
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [] }],
+      });
+      busStore.loadSnapshot([], { available: true });
+    });
+    render(<App />);
+    const addPanel = vi.fn(() => ({ api: { setActive: vi.fn() } }));
+    act(() => captured.props?.onApi?.({ panels: [], getPanel: () => undefined, addPanel }));
+    fireEvent.click(screen.getByTestId("menu-repos"));
+    fireEvent.click(screen.getByTestId("add-repo"));
+    fireEvent.change(screen.getByLabelText("Ruta local"), {
+      target: { value: "C:/repos/example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Añadir ruta local" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("add_repo", {
+        workbench: "Work",
+        path: "C:/repos/example",
+        alias: null,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Agregar repo" })).not.toBeInTheDocument(),
+    );
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: repoPanelId("/canonical/repo") }),
+    );
+    expect(open).not.toHaveBeenCalled();
+    vi.mocked(invoke).mockReset();
   });
 
   it("shows the workspace with all panel types registered when a workbench is active", () => {

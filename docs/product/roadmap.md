@@ -1,9 +1,26 @@
 # Tinto delivery roadmap
 
-## Active initiative — Codex subagent parity
+## Current work — Native hardening reconciliation
+
+Updated: 2026-09-07
+
+The current checkout contains the Codex subagent implementation (`a799faa`,
+`62b6174`) and the first MCP control-plane slice (`81b7927`). Remaining work is
+native acceptance and hardening, rather than reimplementing these initiatives.
+
+The September 1 handoff described local source repairs that were absent from
+`67560d3`. The current repair restores typed local onboarding, journal exit-code
+persistence, and the local Pumarejo Cargo registration. It also repairs the
+frontend availability lint failure and reconciles the WSL surface test.
+
+See [current verification and remaining work](../orchestration/2026-09-07-native-hardening-reconciliation.md).
+Historical acceptance gaps remain open unless that report contains new evidence.
+The application atlas has not received a comprehensive new audit.
+
+## Implemented initiative — Codex subagent parity
 
 Created: 2026-08-28
-Status: approved for autonomous local implementation; release requires manual approval
+Status: implementation committed; remaining live acceptance is tracked in native hardening
 
 ### Product framing
 

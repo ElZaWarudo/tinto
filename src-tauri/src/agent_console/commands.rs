@@ -425,12 +425,13 @@ pub async fn resume_agent_journal_session(
                 .map_err(CommandError::from)?;
         }
     }
+    if let Err(error) = restore_archived_timeline(app.clone(), started.id.clone(), resumed_timeline).await {
+        let error = cleanup_failed_resume_session(&registry, &started.id, error);
+        refresh_and_emit_sessions(&app);
+        return Err(error);
+    }
     if let Some(output_reader) = started.output_reader.take() {
         spawn_output_reader(app.clone(), started.id.clone(), output_reader);
-    }
-    for item in resumed_timeline {
-        record_timeline_item(&app, item.clone());
-        let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, item);
     }
 
     if let Some(resume_result) = started.resume_result.take() {
@@ -522,6 +523,31 @@ fn permission_mode_for_resume(
 fn should_restore_archived_goal(agent_type: &str, mode: AgentSessionResumeMode) -> bool {
     matches!(agent_type, "kimi" | "opencode")
         || (agent_type == "codex" && mode == AgentSessionResumeMode::ContextBridge)
+}
+
+// Archived items are already history, not live provider output. Persist them in one
+// transaction off the async executor and publish only the existing final session refresh.
+async fn restore_archived_timeline(
+    app: AppHandle,
+    session_id: String,
+    items: Vec<AgentSessionTimelineItem>,
+) -> Result<(), CommandError> {
+    tokio::task::spawn_blocking(move || {
+        let snapshot = {
+            let registry = app.state::<Mutex<AgentSessionRegistry>>();
+            let mut registry = lock_registry(&registry)?;
+            for item in &items {
+                registry.record_session_timeline_item(item.clone()).map_err(CommandError::from)?;
+            }
+            registry.get_session(&session_id).ok_or_else(|| {
+                CommandError::new("session_not_found", "la sesion reanudada ya no existe")
+            })?
+        };
+        let journal = app.state::<Mutex<AgentJournal>>();
+        let journal = lock_journal(&journal)?;
+        journal.record_resumed_timeline(&snapshot, &items)
+            .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))
+    }).await.map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?
 }
 
 fn remap_archived_timeline(
@@ -676,12 +702,15 @@ pub async fn branch_agent_session_from_message(
             )
             .map_err(CommandError::from)?;
     }
+    if let Err(error) = restore_archived_timeline(
+        app.clone(), started.id.clone(), remap_archived_timeline(&previous_timeline, &started.id),
+    ).await {
+        let error = cleanup_failed_resume_session(&registry, &started.id, error);
+        refresh_and_emit_sessions(&app);
+        return Err(error);
+    }
     if let Some(output_reader) = started.output_reader {
         spawn_output_reader(app.clone(), started.id.clone(), output_reader);
-    }
-    for item in remap_archived_timeline(&previous_timeline, &started.id) {
-        record_timeline_item(&app, item.clone());
-        let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, item);
     }
     emit_timeline_text(
         &app,
@@ -970,7 +999,7 @@ pub async fn agent_binary_available_for_repo(
     agent_type: String,
 ) -> Result<bool, CommandError> {
     let resolved = ensure_known_agent_repo(&bus, &repo).await?;
-    match resolved.source {
+    tauri::async_runtime::spawn_blocking(move || match resolved.source {
         RepoSource::Local => agent_binary_available(agent_type),
         RepoSource::Wsl => wsl_agent_binary_available(
             resolved
@@ -979,7 +1008,9 @@ pub async fn agent_binary_available_for_repo(
                 .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?,
             agent_type,
         ),
-    }
+    })
+    .await
+    .map_err(|error| CommandError::new("wsl_probe_failed", error.to_string()))?
 }
 
 #[tauri::command]
@@ -989,14 +1020,19 @@ pub async fn agent_provider_readiness_for_repo(
     agent_type: String,
 ) -> Result<AgentProviderReadiness, CommandError> {
     let resolved = ensure_known_agent_repo(&bus, &repo).await?;
-    provider_readiness_for_source(
-        resolved.source,
-        resolved.distro.as_deref(),
-        agent_type,
-        agent_binary_available,
-        wsl_agent_binary_available,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        provider_readiness_for_source(
+            resolved.source,
+            resolved.distro.as_deref(),
+            agent_type,
+            agent_binary_available,
+            wsl_agent_binary_available,
+        )
+    })
+    .await
+    .map_err(|error| CommandError::new("wsl_probe_failed", error.to_string()))?
 }
+
 
 fn provider_readiness_for_source<HostProbe, WslProbe>(
     source: RepoSource,
@@ -3619,11 +3655,6 @@ fn emit_timeline_item_for_thread(
     };
     record_timeline_item_for_thread(app, root_session_id, thread_id, payload.clone());
     let _ = app.emit(EVENT_AGENT_SESSION_TIMELINE, payload);
-}
-
-fn record_timeline_item(app: &AppHandle, item: AgentSessionTimelineItem) {
-    let session_id = item.session_id.clone();
-    record_timeline_item_for_thread(app, &session_id, None, item);
 }
 
 fn record_timeline_item_for_thread(

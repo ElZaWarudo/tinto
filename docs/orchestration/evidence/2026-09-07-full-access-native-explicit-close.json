@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "idle": {
+    "state": "idle",
+    "lastAction": "close"
+  },
+  "manualReviewRequired": "Verify owned OS processes/resources are gone."
+}

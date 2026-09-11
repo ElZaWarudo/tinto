@@ -146,9 +146,11 @@ export function ConsoleDockPanel({
     () => workspacePanelApi?.isMaximized() ?? false,
   );
   const [mcpRepo, setMcpRepo] = useState<string | null>(null);
-  const [quickLaunchAvailability, setQuickLaunchAvailability] = useState<
-    Record<string, QuickLaunchAvailability>
-  >({});
+  const [quickLaunchResults, setQuickLaunchResults] = useState<{
+    config: typeof config;
+    signature: string;
+    values: Record<string, QuickLaunchAvailability>;
+  } | null>(null);
 
   const scheduleConsoleDockLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) {
@@ -248,9 +250,9 @@ export function ConsoleDockPanel({
       const liveMessage = agentState.timeline[terminal.sessionId]?.find(
         (item) => item.kind === "user_message",
       )?.text;
-      const firstUserMessage = liveMessage ?? journalSessions.find(
-        (session) => session.id === terminal.sessionId,
-      )?.first_user_message;
+      const firstUserMessage =
+        liveMessage ??
+        journalSessions.find((session) => session.id === terminal.sessionId)?.first_user_message;
       if (!firstUserMessage) continue;
       api
         .getPanel(agentTerminalPanelId(terminal.sessionId))
@@ -307,18 +309,36 @@ export function ConsoleDockPanel({
       : quickLaunchGroups.map((group) => group.repo);
   const quickLaunchProjects = mergeVisibleProjectGroups(quickLaunchGroups, visibleProjectRepos);
   const quickLaunchSignature = visibleQuickLaunches.map(recentLaunchKey).join("\n");
+  const quickLaunchAvailability =
+    quickLaunchResults !== null &&
+    quickLaunchResults.config === config &&
+    quickLaunchResults.signature === quickLaunchSignature
+      ? quickLaunchResults.values
+      : {};
+  const setQuickLaunchAvailability = (
+    update: (
+      current: Record<string, QuickLaunchAvailability>,
+    ) => Record<string, QuickLaunchAvailability>,
+  ) => {
+    setQuickLaunchResults((current) => ({
+      config,
+      signature: quickLaunchSignature,
+      values: update(
+        current !== null && current.config === config && current.signature === quickLaunchSignature
+          ? current.values
+          : {},
+      ),
+    }));
+  };
 
   useEffect(() => {
     const launches = visibleQuickLaunches;
     if (launches.length === 0) return;
     let alive = true;
-    setQuickLaunchAvailability((current) => {
-      const next = { ...current };
-      for (const launch of launches) {
-        next[recentLaunchKey(launch)] = { state: "checking" };
-      }
-      return next;
-    });
+    const recordAvailability = (key: string, availability: QuickLaunchAvailability) => {
+      if (!alive) return;
+      setQuickLaunchAvailability((current) => ({ ...current, [key]: availability }));
+    };
     for (const launch of launches) {
       void checkAgentAvailabilityForRepo(
         launch.repo,
@@ -326,21 +346,13 @@ export function ConsoleDockPanel({
         launch.agentType,
       )
         .then((readiness) => {
-          if (!alive) return;
-          setQuickLaunchAvailability((current) => ({
-            ...current,
-            [recentLaunchKey(launch)]: {
-              state: readiness.state === "binary_available" ? "available" : "unavailable",
-              readiness,
-            },
-          }));
+          recordAvailability(recentLaunchKey(launch), {
+            state: readiness.state === "binary_available" ? "available" : "unavailable",
+            readiness,
+          });
         })
         .catch(() => {
-          if (!alive) return;
-          setQuickLaunchAvailability((current) => ({
-            ...current,
-            [recentLaunchKey(launch)]: { state: "unknown" },
-          }));
+          recordAvailability(recentLaunchKey(launch), { state: "unknown" });
         });
     }
     return () => {

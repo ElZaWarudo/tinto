@@ -24,6 +24,8 @@ const WSL_ALLOWED_RUNTIME_FILES = new Set([
   "src/panels/repoSource.ts",
   "src/panels/RepoCard.tsx",
   "src/panels/RepoSourceBadge.tsx",
+  // Agent shortcuts display readiness for the repository's actual runtime target.
+  "src/panels/terminal/ConsoleDockPanel.tsx",
   "src/workbench/AddRepoDialog.tsx",
   "src/workbench/ManageWorkbenchesDialog.tsx",
   "src/workbench/MenuBar.tsx",

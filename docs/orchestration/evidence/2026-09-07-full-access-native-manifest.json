@@ -1,0 +1,86 @@
+{
+  "recordedAt": "2026-09-07T10:47:07.213Z",
+  "sourceDirectory": "C:/Users/User/AppData/Local/Temp/tinto-full-access-native-20260907",
+  "controllerReportedExitCode": 0,
+  "exitCodeLimit": "No separate exit-code receipt in source directory; protocol and explicit-close receipts report passed.",
+  "entries": [
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\continuity.json",
+      "file": "2026-09-07-full-access-native-continuity.json",
+      "bytes": 24887,
+      "sha256": "0e6c6b493fdfa3fc3157c5fe8f01079516d55009db6813d8a153a08a67973cd2"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\protocol-checks.json",
+      "file": "2026-09-07-full-access-native-protocol-checks.json",
+      "bytes": 265,
+      "sha256": "c9f47eb09c52e6e1116febe673ceb034e35ccf5452ee892ae0aceb3f832510dc"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\explicit-close.json",
+      "file": "2026-09-07-full-access-native-explicit-close.json",
+      "bytes": 159,
+      "sha256": "959ca91522166929628decb871dc30a2e4c26e688ea43fc1a329425243825c71"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\client-wire.jsonl",
+      "file": "2026-09-07-full-access-native-client-wire.jsonl",
+      "bytes": 2786,
+      "sha256": "bd2135cf70f2b7708f2163f3ef22e6395ac90d30383f35b7388228de5e6a80d7"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\007-tauri_status.json",
+      "file": "2026-09-07-full-access-native-007-tauri_status.json",
+      "bytes": 1420,
+      "sha256": "175fe9ec47c1fac480bc27f46bcdef8e17561dcfdfa2fb09b977bb309ef17e84"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\009-tauri_snapshot-error.json",
+      "file": "2026-09-07-full-access-native-009-tauri_snapshot-error.json",
+      "bytes": 980,
+      "sha256": "14434deda9ddbd9663695f925d9aaa3772fc95913d515a93b6ed2ba2a2ef591e"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\010-tauri_status.json",
+      "file": "2026-09-07-full-access-native-010-tauri_status.json",
+      "bytes": 1424,
+      "sha256": "f07a655ff83ab6147312aaa5ba8018d1c4b3cdddcff6341e795cbf9ffb705a54"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\012-tauri_snapshot.json",
+      "file": "2026-09-07-full-access-native-012-tauri_snapshot.json",
+      "bytes": 2343,
+      "sha256": "1055e151583af12fa59cefe8a79da7e44dd0fe0148b13a7e03ffe0191b4a27a6"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\013-tauri_status.json",
+      "file": "2026-09-07-full-access-native-013-tauri_status.json",
+      "bytes": 1424,
+      "sha256": "8c1fc40f1673a867e5433debb0f349f477d8894face7ce7e98fb9893008e92d7"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\014-tauri_close.json",
+      "file": "2026-09-07-full-access-native-014-tauri_close.json",
+      "bytes": 351,
+      "sha256": "145545ec7d1c33fe058283024af00e6f0e7e66b8f4bf7118eeb996f66e1167ac"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\015-tauri_status.json",
+      "file": "2026-09-07-full-access-native-015-tauri_status.json",
+      "bytes": 351,
+      "sha256": "802d2bc0f1ffd1eedb52debeae3cc8da5be114c1ab992fdcb96547f361ac9d8d"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\tinto-full-access-native-20260907\\build.json",
+      "file": "2026-09-07-full-access-native-build.json",
+      "bytes": 4320,
+      "sha256": "92a0d02f525bb8952babc295e734ca23fd87bb0d8160ce181a42d724db718983"
+    },
+    {
+      "source": "C:\\Users\\User\\AppData\\Local\\Temp\\pumarejo-native-reconciliation-process.json",
+      "file": "2026-09-07-full-access-native-process-check.json",
+      "bytes": 333,
+      "sha256": "e30b512a5ae7ce1273326f4b0a4f8af80880afca7a812c0b6a8ac23742b90a0d"
+    }
+  ]
+}

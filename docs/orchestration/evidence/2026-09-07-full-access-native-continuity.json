@@ -1,0 +1,881 @@
+{
+  "timedOut": true,
+  "cancellationSent": true,
+  "before": {
+    "state": "ready",
+    "window": "main",
+    "proxyReady": true,
+    "webdriverReady": true,
+    "ownedPid": 23940,
+    "generation": 1,
+    "windowCapabilities": {
+      "resize": {
+        "state": "supported",
+        "code": "provider_resize_supported"
+      },
+      "maximize": {
+        "state": "supported",
+        "code": "provider_maximize_supported"
+      },
+      "restore": {
+        "state": "supported",
+        "code": "provider_restore_supported"
+      },
+      "initialSize": {
+        "state": "supported",
+        "code": "provider_initial_size_supported"
+      }
+    },
+    "lastAction": "launch"
+  },
+  "after": {
+    "state": "ready",
+    "window": "main",
+    "proxyReady": true,
+    "webdriverReady": true,
+    "ownedPid": 23940,
+    "generation": 1,
+    "windowCapabilities": {
+      "resize": {
+        "state": "supported",
+        "code": "provider_resize_supported"
+      },
+      "maximize": {
+        "state": "supported",
+        "code": "provider_maximize_supported"
+      },
+      "restore": {
+        "state": "supported",
+        "code": "provider_restore_supported"
+      },
+      "initialSize": {
+        "state": "supported",
+        "code": "provider_initial_size_supported"
+      }
+    },
+    "lastAction": "snapshot"
+  },
+  "afterFresh": {
+    "state": "ready",
+    "window": "main",
+    "proxyReady": true,
+    "webdriverReady": true,
+    "ownedPid": 23940,
+    "generation": 2,
+    "windowCapabilities": {
+      "resize": {
+        "state": "supported",
+        "code": "provider_resize_supported"
+      },
+      "maximize": {
+        "state": "supported",
+        "code": "provider_maximize_supported"
+      },
+      "restore": {
+        "state": "supported",
+        "code": "provider_restore_supported"
+      },
+      "initialSize": {
+        "state": "supported",
+        "code": "provider_initial_size_supported"
+      }
+    },
+    "lastAction": "snapshot"
+  },
+  "diagnosticsBefore": {
+    "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+    "capabilities": {
+      "console": {
+        "state": "unsupported",
+        "code": "provider_console_unsupported",
+        "evidence": "The configured provider exposes no approved console boundary."
+      },
+      "process_stdout": {
+        "state": "supported",
+        "code": "owned_process_stream_available"
+      },
+      "process_stderr": {
+        "state": "supported",
+        "code": "owned_process_stream_available"
+      },
+      "invocation": {
+        "state": "supported",
+        "code": "invocation_trace_available"
+      },
+      "phase": {
+        "state": "supported",
+        "code": "launch_phase_history_available"
+      },
+      "last_error": {
+        "state": "supported",
+        "code": "last_error_projection_available"
+      }
+    },
+    "records": [
+      {
+        "id": "diagnostic-000001",
+        "sequence": 1,
+        "observedAt": "2026-09-07T10:40:05.696Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "artifact_recovery",
+        "retryable": true,
+        "suggestion": "Unproven artifact entries were preserved.",
+        "count": 0
+      },
+      {
+        "id": "diagnostic-000002",
+        "sequence": 2,
+        "observedAt": "2026-09-07T10:40:08.162Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "preparing_runtime"
+      },
+      {
+        "id": "diagnostic-000003",
+        "sequence": 3,
+        "observedAt": "2026-09-07T10:40:08.208Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "starting_process"
+      },
+      {
+        "id": "diagnostic-000004",
+        "sequence": 4,
+        "observedAt": "2026-09-07T10:40:11.363Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Running"
+      },
+      {
+        "id": "diagnostic-000005",
+        "sequence": 5,
+        "observedAt": "2026-09-07T10:40:11.363Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "BeforeDevCommand (`npm run dev`)"
+      },
+      {
+        "id": "diagnostic-000006",
+        "sequence": 6,
+        "observedAt": "2026-09-07T10:40:11.877Z",
+        "source": "process_stdout",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "> tinto@0.1.0 dev > vite"
+      },
+      {
+        "id": "diagnostic-000007",
+        "sequence": 7,
+        "observedAt": "2026-09-07T10:40:12.404Z",
+        "source": "process_stdout",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[32m [1mVITE [22m v8.2.2 [39m [2mready in [0m [1m396 [22m [2m [0m ms [22m"
+      },
+      {
+        "id": "diagnostic-000008",
+        "sequence": 8,
+        "observedAt": "2026-09-07T10:40:12.406Z",
+        "source": "process_stdout",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[32m➜ [39m [1mLocal [22m: [36mhtt[REDACTED_PATH] [1m1420 [22m/ [39m"
+      },
+      {
+        "id": "diagnostic-000009",
+        "sequence": 9,
+        "observedAt": "2026-09-07T10:40:13.638Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "code": "windows_job_object_available",
+        "retryable": false,
+        "capability": {
+          "state": "supported",
+          "code": "windows_job_object_available",
+          "evidence": "windows_job_object"
+        }
+      },
+      {
+        "id": "diagnostic-000010",
+        "sequence": 10,
+        "observedAt": "2026-09-07T10:40:13.638Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "waiting_provider"
+      },
+      {
+        "id": "diagnostic-000011",
+        "sequence": 11,
+        "observedAt": "2026-09-07T10:40:14.396Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Running"
+      },
+      {
+        "id": "diagnostic-000012",
+        "sequence": 12,
+        "observedAt": "2026-09-07T10:40:14.396Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "DevCommand (`cargo run --no-default-features --features pumarejo --color always --`)"
+      },
+      {
+        "id": "diagnostic-000013",
+        "sequence": 13,
+        "observedAt": "2026-09-07T10:40:14.494Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Info"
+      },
+      {
+        "id": "diagnostic-000014",
+        "sequence": 14,
+        "observedAt": "2026-09-07T10:40:14.494Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Watching [REDACTED_PATH] for changes..."
+      },
+      {
+        "id": "diagnostic-000015",
+        "sequence": 15,
+        "observedAt": "2026-09-07T10:40:24.511Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[1m [92m Finished [0m `dev` profile [unoptimized + debuginfo] target(s) in 10.05s"
+      },
+      {
+        "id": "diagnostic-000016",
+        "sequence": 16,
+        "observedAt": "2026-09-07T10:40:24.557Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[1m [92m Running [0m `target\\debug\\tinto.exe`"
+      },
+      {
+        "id": "diagnostic-000017",
+        "sequence": 17,
+        "observedAt": "2026-09-07T10:40:26.452Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "code": "loopback_ready",
+        "retryable": false,
+        "suggestion": "The owned loopback provider is ready.",
+        "family": "ipv4",
+        "port": 56723
+      },
+      {
+        "id": "diagnostic-000018",
+        "sequence": 18,
+        "observedAt": "2026-09-07T10:40:28.432Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "starting_proxy"
+      },
+      {
+        "id": "diagnostic-000019",
+        "sequence": 19,
+        "observedAt": "2026-09-07T10:40:33.297Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "creating_session"
+      },
+      {
+        "id": "diagnostic-000020",
+        "sequence": 20,
+        "observedAt": "2026-09-07T10:40:33.359Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "selecting_window"
+      },
+      {
+        "id": "diagnostic-000021",
+        "sequence": 21,
+        "observedAt": "2026-09-07T10:40:33.372Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "capturing_first_snapshot"
+      },
+      {
+        "id": "diagnostic-000022",
+        "sequence": 22,
+        "observedAt": "2026-09-07T10:40:37.641Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "tauri_launch",
+        "phase": "capturing_first_snapshot",
+        "durationMs": 0,
+        "retryable": false,
+        "suggestion": "The owned session is ready for a bounded observation."
+      },
+      {
+        "id": "diagnostic-000023",
+        "sequence": 23,
+        "observedAt": "2026-09-07T10:40:37.808Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "launch"
+      }
+    ],
+    "lastErrors": [
+      {
+        "id": "diagnostic-000001",
+        "sequence": 1,
+        "observedAt": "2026-09-07T10:40:05.696Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "artifact_recovery",
+        "retryable": true,
+        "suggestion": "Unproven artifact entries were preserved.",
+        "count": 0
+      },
+      {
+        "id": "diagnostic-000017",
+        "sequence": 17,
+        "observedAt": "2026-09-07T10:40:26.452Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "code": "loopback_ready",
+        "retryable": false,
+        "suggestion": "The owned loopback provider is ready.",
+        "family": "ipv4",
+        "port": 56723
+      }
+    ],
+    "truncation": {
+      "truncated": false,
+      "evicted": 0,
+      "returned": 23,
+      "maxRecords": 128,
+      "maxBytes": 49152
+    }
+  },
+  "diagnosticsAfter": {
+    "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+    "capabilities": {
+      "console": {
+        "state": "unsupported",
+        "code": "provider_console_unsupported",
+        "evidence": "The configured provider exposes no approved console boundary."
+      },
+      "process_stdout": {
+        "state": "supported",
+        "code": "owned_process_stream_available"
+      },
+      "process_stderr": {
+        "state": "supported",
+        "code": "owned_process_stream_available"
+      },
+      "invocation": {
+        "state": "supported",
+        "code": "invocation_trace_available"
+      },
+      "phase": {
+        "state": "supported",
+        "code": "launch_phase_history_available"
+      },
+      "last_error": {
+        "state": "supported",
+        "code": "last_error_projection_available"
+      }
+    },
+    "records": [
+      {
+        "id": "diagnostic-000001",
+        "sequence": 1,
+        "observedAt": "2026-09-07T10:40:05.696Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "artifact_recovery",
+        "retryable": true,
+        "suggestion": "Unproven artifact entries were preserved.",
+        "count": 0
+      },
+      {
+        "id": "diagnostic-000002",
+        "sequence": 2,
+        "observedAt": "2026-09-07T10:40:08.162Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "preparing_runtime"
+      },
+      {
+        "id": "diagnostic-000003",
+        "sequence": 3,
+        "observedAt": "2026-09-07T10:40:08.208Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "starting_process"
+      },
+      {
+        "id": "diagnostic-000004",
+        "sequence": 4,
+        "observedAt": "2026-09-07T10:40:11.363Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Running"
+      },
+      {
+        "id": "diagnostic-000005",
+        "sequence": 5,
+        "observedAt": "2026-09-07T10:40:11.363Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "BeforeDevCommand (`npm run dev`)"
+      },
+      {
+        "id": "diagnostic-000006",
+        "sequence": 6,
+        "observedAt": "2026-09-07T10:40:11.877Z",
+        "source": "process_stdout",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "> tinto@0.1.0 dev > vite"
+      },
+      {
+        "id": "diagnostic-000007",
+        "sequence": 7,
+        "observedAt": "2026-09-07T10:40:12.404Z",
+        "source": "process_stdout",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[32m [1mVITE [22m v8.2.2 [39m [2mready in [0m [1m396 [22m [2m [0m ms [22m"
+      },
+      {
+        "id": "diagnostic-000008",
+        "sequence": 8,
+        "observedAt": "2026-09-07T10:40:12.406Z",
+        "source": "process_stdout",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[32m➜ [39m [1mLocal [22m: [36mhtt[REDACTED_PATH] [1m1420 [22m/ [39m"
+      },
+      {
+        "id": "diagnostic-000009",
+        "sequence": 9,
+        "observedAt": "2026-09-07T10:40:13.638Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "code": "windows_job_object_available",
+        "retryable": false,
+        "capability": {
+          "state": "supported",
+          "code": "windows_job_object_available",
+          "evidence": "windows_job_object"
+        }
+      },
+      {
+        "id": "diagnostic-000010",
+        "sequence": 10,
+        "observedAt": "2026-09-07T10:40:13.638Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "waiting_provider"
+      },
+      {
+        "id": "diagnostic-000011",
+        "sequence": 11,
+        "observedAt": "2026-09-07T10:40:14.396Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Running"
+      },
+      {
+        "id": "diagnostic-000012",
+        "sequence": 12,
+        "observedAt": "2026-09-07T10:40:14.396Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "DevCommand (`cargo run --no-default-features --features pumarejo --color always --`)"
+      },
+      {
+        "id": "diagnostic-000013",
+        "sequence": 13,
+        "observedAt": "2026-09-07T10:40:14.494Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Info"
+      },
+      {
+        "id": "diagnostic-000014",
+        "sequence": 14,
+        "observedAt": "2026-09-07T10:40:14.494Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "Watching [REDACTED_PATH] for changes..."
+      },
+      {
+        "id": "diagnostic-000015",
+        "sequence": 15,
+        "observedAt": "2026-09-07T10:40:24.511Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[1m [92m Finished [0m `dev` profile [unoptimized + debuginfo] target(s) in 10.05s"
+      },
+      {
+        "id": "diagnostic-000016",
+        "sequence": 16,
+        "observedAt": "2026-09-07T10:40:24.557Z",
+        "source": "process_stderr",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "message": "[1m [92m Running [0m `target\\debug\\tinto.exe`"
+      },
+      {
+        "id": "diagnostic-000017",
+        "sequence": 17,
+        "observedAt": "2026-09-07T10:40:26.452Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "code": "loopback_ready",
+        "retryable": false,
+        "suggestion": "The owned loopback provider is ready.",
+        "family": "ipv4",
+        "port": 56723
+      },
+      {
+        "id": "diagnostic-000018",
+        "sequence": 18,
+        "observedAt": "2026-09-07T10:40:28.432Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "starting_proxy"
+      },
+      {
+        "id": "diagnostic-000019",
+        "sequence": 19,
+        "observedAt": "2026-09-07T10:40:33.297Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "creating_session"
+      },
+      {
+        "id": "diagnostic-000020",
+        "sequence": 20,
+        "observedAt": "2026-09-07T10:40:33.359Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "selecting_window"
+      },
+      {
+        "id": "diagnostic-000021",
+        "sequence": 21,
+        "observedAt": "2026-09-07T10:40:33.372Z",
+        "source": "phase",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "phase": "capturing_first_snapshot"
+      },
+      {
+        "id": "diagnostic-000022",
+        "sequence": 22,
+        "observedAt": "2026-09-07T10:40:37.641Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "tauri_launch",
+        "phase": "capturing_first_snapshot",
+        "durationMs": 0,
+        "retryable": false,
+        "suggestion": "The owned session is ready for a bounded observation."
+      },
+      {
+        "id": "diagnostic-000023",
+        "sequence": 23,
+        "observedAt": "2026-09-07T10:40:37.808Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "launch"
+      },
+      {
+        "id": "diagnostic-000024",
+        "sequence": 24,
+        "observedAt": "2026-09-07T10:40:37.809Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "launch",
+        "durationMs": 1,
+        "retryable": false
+      },
+      {
+        "id": "diagnostic-000025",
+        "sequence": 25,
+        "observedAt": "2026-09-07T10:40:37.815Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "diagnostics"
+      },
+      {
+        "id": "diagnostic-000026",
+        "sequence": 26,
+        "observedAt": "2026-09-07T10:40:37.936Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "internal_error",
+        "retryable": false,
+        "suggestion": "Check stderr diagnostics and retry."
+      },
+      {
+        "id": "diagnostic-000027",
+        "sequence": 27,
+        "observedAt": "2026-09-07T10:40:37.936Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "diagnostics",
+        "durationMs": 121,
+        "retryable": false
+      },
+      {
+        "id": "diagnostic-000028",
+        "sequence": 28,
+        "observedAt": "2026-09-07T10:40:37.943Z",
+        "source": "invocation",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "snapshot"
+      }
+    ],
+    "lastErrors": [
+      {
+        "id": "diagnostic-000017",
+        "sequence": 17,
+        "observedAt": "2026-09-07T10:40:26.452Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "process"
+        },
+        "code": "loopback_ready",
+        "retryable": false,
+        "suggestion": "The owned loopback provider is ready.",
+        "family": "ipv4",
+        "port": 56723
+      },
+      {
+        "id": "diagnostic-000026",
+        "sequence": 26,
+        "observedAt": "2026-09-07T10:40:37.936Z",
+        "source": "last_error",
+        "scope": {
+          "sessionId": "f25ba4fca6a45a321cadd8862580e063",
+          "owner": "session"
+        },
+        "code": "internal_error",
+        "retryable": false,
+        "suggestion": "Check stderr diagnostics and retry."
+      }
+    ],
+    "truncation": {
+      "truncated": false,
+      "evicted": 0,
+      "returned": 28,
+      "maxRecords": 128,
+      "maxBytes": 49152
+    }
+  },
+  "fresh": {
+    "generation": 2,
+    "observedAt": "2026-09-07T10:40:40.626Z",
+    "window": {
+      "label": "main",
+      "title": "Tinto",
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "ref": "e2-1",
+        "kind": "status",
+        "tag": "span",
+        "role": "status",
+        "name": "Observación de archivos activa",
+        "text": "● observando",
+        "redacted": false,
+        "enabled": true,
+        "visible": true,
+        "focused": false,
+        "bounds": {
+          "x": 621.09375,
+          "y": 4.5,
+          "width": 72.90625,
+          "height": 18
+        },
+        "relationships": {
+          "labelledBy": [],
+          "describedBy": [],
+          "controls": [],
+          "owns": []
+        }
+      }
+    ],
+    "truncation": {
+      "truncated": true,
+      "reasons": [
+        "maxDepth"
+      ],
+      "counts": {
+        "visited": 21,
+        "candidates": 1,
+        "matched": 1,
+        "returned": 1,
+        "filtered": 0
+      },
+      "refineWith": [
+        "rootRef",
+        "maxNodes",
+        "maxDepth",
+        "maxTextLength",
+        "filters"
+      ]
+    }
+  }
+}

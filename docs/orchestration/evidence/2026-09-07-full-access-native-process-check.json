@@ -1,0 +1,6 @@
+{
+  "observedAt": "2026-09-07T10:45:44.4923905Z",
+  "query": "Win32_Process WHERE ProcessId = 23940",
+  "matches": [],
+  "limits": "Later point-in-time PID query only; no acceptance-time OS creation identity or descendant inventory. PID reuse is possible. Does not prove all owned resources were cleaned. No process killed."
+}

@@ -1,0 +1,44 @@
+{
+  "sequence": 48,
+  "at": "2026-09-07T09:56:33.495Z",
+  "durationMs": 1,
+  "request": {
+    "name": "tauri_status",
+    "arguments": {}
+  },
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"state\":\"ready\",\"window\":\"main\",\"proxyReady\":true,\"webdriverReady\":true,\"ownedPid\":10224,\"generation\":1,\"windowCapabilities\":{\"resize\":{\"state\":\"supported\",\"code\":\"provider_resize_supported\"},\"maximize\":{\"state\":\"supported\",\"code\":\"provider_maximize_supported\"},\"restore\":{\"state\":\"supported\",\"code\":\"provider_restore_supported\"},\"initialSize\":{\"state\":\"supported\",\"code\":\"provider_initial_size_supported\"}},\"lastAction\":\"launch\"}"
+      }
+    ],
+    "structuredContent": {
+      "state": "ready",
+      "window": "main",
+      "proxyReady": true,
+      "webdriverReady": true,
+      "ownedPid": 10224,
+      "generation": 1,
+      "windowCapabilities": {
+        "resize": {
+          "state": "supported",
+          "code": "provider_resize_supported"
+        },
+        "maximize": {
+          "state": "supported",
+          "code": "provider_maximize_supported"
+        },
+        "restore": {
+          "state": "supported",
+          "code": "provider_restore_supported"
+        },
+        "initialSize": {
+          "state": "supported",
+          "code": "provider_initial_size_supported"
+        }
+      },
+      "lastAction": "launch"
+    }
+  }
+}

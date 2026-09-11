@@ -1,0 +1,74 @@
+{
+  "startedAt": "2026-09-07T10:40:37.945Z",
+  "endedAt": "2026-09-07T10:40:40.626Z",
+  "timeout": 65000,
+  "args": {
+    "maxDepth": 4,
+    "maxNodes": 64,
+    "maxTextLength": 2000
+  },
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"generation\":2,\"observedAt\":\"2026-09-07T10:40:40.626Z\",\"window\":{\"label\":\"main\",\"title\":\"Tinto\",\"width\":800,\"height\":600},\"nodes\":[{\"ref\":\"e2-1\",\"kind\":\"status\",\"tag\":\"span\",\"role\":\"status\",\"name\":\"Observación de archivos activa\",\"text\":\"● observando\",\"redacted\":false,\"enabled\":true,\"visible\":true,\"focused\":false,\"bounds\":{\"x\":621.09375,\"y\":4.5,\"width\":72.90625,\"height\":18},\"relationships\":{\"labelledBy\":[],\"describedBy\":[],\"controls\":[],\"owns\":[]}}],\"truncation\":{\"truncated\":true,\"reasons\":[\"maxDepth\"],\"counts\":{\"visited\":21,\"candidates\":1,\"matched\":1,\"returned\":1,\"filtered\":0},\"refineWith\":[\"rootRef\",\"maxNodes\",\"maxDepth\",\"maxTextLength\",\"filters\"]}}"
+      }
+    ],
+    "structuredContent": {
+      "generation": 2,
+      "observedAt": "2026-09-07T10:40:40.626Z",
+      "window": {
+        "label": "main",
+        "title": "Tinto",
+        "width": 800,
+        "height": 600
+      },
+      "nodes": [
+        {
+          "ref": "e2-1",
+          "kind": "status",
+          "tag": "span",
+          "role": "status",
+          "name": "Observación de archivos activa",
+          "text": "● observando",
+          "redacted": false,
+          "enabled": true,
+          "visible": true,
+          "focused": false,
+          "bounds": {
+            "x": 621.09375,
+            "y": 4.5,
+            "width": 72.90625,
+            "height": 18
+          },
+          "relationships": {
+            "labelledBy": [],
+            "describedBy": [],
+            "controls": [],
+            "owns": []
+          }
+        }
+      ],
+      "truncation": {
+        "truncated": true,
+        "reasons": [
+          "maxDepth"
+        ],
+        "counts": {
+          "visited": 21,
+          "candidates": 1,
+          "matched": 1,
+          "returned": 1,
+          "filtered": 0
+        },
+        "refineWith": [
+          "rootRef",
+          "maxNodes",
+          "maxDepth",
+          "maxTextLength",
+          "filters"
+        ]
+      }
+    }
+  }
+}

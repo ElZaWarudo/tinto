@@ -25,6 +25,8 @@ pub enum AgentJournalError {
     CreateDir(#[source] std::io::Error),
     #[error("sqlite fallo: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("el historial no pertenece a la sesion reanudada")]
+    ReplaySessionMismatch,
     #[error("json fallo: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -86,7 +88,8 @@ impl AgentJournal {
               context_summary_source_events INTEGER,
               context_summary_source_turns INTEGER,
               subagents_json TEXT,
-              turn_checkpoints_json TEXT
+              turn_checkpoints_json TEXT,
+              exit_code INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS agent_turns (
@@ -134,6 +137,7 @@ impl AgentJournal {
         self.ensure_agent_sessions_column("context_summary_source_turns", "INTEGER")?;
         self.ensure_agent_sessions_column("subagents_json", "TEXT")?;
         self.ensure_agent_sessions_column("turn_checkpoints_json", "TEXT")?;
+        self.ensure_agent_sessions_column("exit_code", "INTEGER")?;
         Ok(())
     }
 
@@ -231,8 +235,8 @@ impl AgentJournal {
               personality_updated_at_ms, plan_mode_enabled, plan_mode_updated_at_ms,
               feedback_json, context_summary_text, context_summary_created_at_ms,
               context_summary_source_events, context_summary_source_turns, permission_mode,
-              subagents_json, turn_checkpoints_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
+              subagents_json, turn_checkpoints_json, exit_code
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
             ON CONFLICT(id) DO UPDATE SET
               repo = excluded.repo,
               agent_type = excluded.agent_type,
@@ -257,7 +261,8 @@ impl AgentJournal {
               context_summary_source_turns = excluded.context_summary_source_turns,
               permission_mode = excluded.permission_mode,
               subagents_json = excluded.subagents_json,
-              turn_checkpoints_json = excluded.turn_checkpoints_json
+              turn_checkpoints_json = excluded.turn_checkpoints_json,
+              exit_code = excluded.exit_code
             "#,
             params![
                 &session.id,
@@ -290,8 +295,28 @@ impl AgentJournal {
                 permission_mode,
                 subagents_json,
                 turn_checkpoints_json,
+                session.exit_code,
             ],
         )?;
+        Ok(())
+    }
+
+    /// Restore the complete archived history atomically, without one commit per event.
+    /// The session snapshot may retain only the bounded live tail; the journal keeps all items.
+    pub fn record_resumed_timeline(
+        &self,
+        session: &AgentSession,
+        items: &[AgentSessionTimelineItem],
+    ) -> Result<(), AgentJournalError> {
+        let transaction = self.conn.unchecked_transaction()?;
+        self.record_session(session)?;
+        for item in items {
+            if item.session_id != session.id {
+                return Err(AgentJournalError::ReplaySessionMismatch);
+            }
+            self.record_timeline_item(item)?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -483,7 +508,7 @@ impl AgentJournal {
                   feedback_json,
                   context_summary_text, context_summary_created_at_ms,
                   context_summary_source_events, context_summary_source_turns,
-                  permission_mode, subagents_json, turn_checkpoints_json
+                  permission_mode, subagents_json, turn_checkpoints_json, exit_code
                 FROM agent_sessions
                 WHERE id = ?1
                 "#,
@@ -514,6 +539,7 @@ impl AgentJournal {
                         row.get::<_, Option<String>>(21)?,
                         row.get::<_, Option<String>>(22)?,
                         row.get::<_, Option<String>>(23)?,
+                        row.get::<_, Option<i32>>(24)?,
                     ))
                 },
             )
@@ -543,6 +569,7 @@ impl AgentJournal {
             permission_mode,
             subagents_json,
             turn_checkpoints_json,
+            exit_code,
         )) = session
         else {
             return Ok(None);
@@ -584,7 +611,7 @@ impl AgentJournal {
             pid: None,
             started_at_ms: started_at_ms as u64,
             ended_at_ms,
-            exit_code: None,
+            exit_code,
             error: None,
             checkpoint: None,
             change_log: Vec::new(),
@@ -777,6 +804,31 @@ mod tests {
             active_sessions: 1,
             age_ms: 10,
             output_bytes_per_second: None,
+        }
+    }
+
+    #[test]
+    fn journal_preserves_exit_codes_on_insert_update_and_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.sqlite");
+        {
+            let journal = AgentJournal::open(&path).unwrap();
+            let mut running = session("failed");
+            journal.record_session(&running).unwrap();
+            running.status = AgentSessionStatus::Failed;
+            running.exit_code = Some(7);
+            running.ended_at_ms = Some(200);
+            journal.record_session(&running).unwrap();
+            let mut done = session("success");
+            done.status = AgentSessionStatus::Exited;
+            done.exit_code = Some(0);
+            done.ended_at_ms = Some(200);
+            journal.record_session(&done).unwrap();
+            journal.record_session(&session("unknown")).unwrap();
+        }
+        let journal = AgentJournal::open(&path).unwrap();
+        for (id, expected) in [("failed", Some(7)), ("success", Some(0)), ("unknown", None)] {
+            assert_eq!(journal.session_from_journal(id).unwrap().unwrap().exit_code, expected, "{id}");
         }
     }
 
@@ -1324,4 +1376,53 @@ mod tests {
         assert_eq!(archived_acp.permission_mode, None);
         assert!(!archived_acp.permission_mode_change_supported);
     }
+    #[test]
+    #[ignore = "controller recorded-history measurement; requires TINTO_REPLAY_FIXTURE"]
+    fn recorded_history_replay_budget() {
+        let fixture = std::env::var("TINTO_REPLAY_FIXTURE").unwrap();
+        let items: Vec<AgentSessionTimelineItem> = serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
+        assert_eq!(items.len(), 10208);
+        let dir = tempfile::tempdir().unwrap();
+        let journal = AgentJournal::open(dir.path().join("replay.sqlite")).unwrap();
+        let mut snapshot = session("replay-test");
+        journal.record_session(&snapshot).unwrap();
+        let items: Vec<_> = items.into_iter().enumerate().map(|(index, mut item)| {
+            item.id = format!("replay-test:resumed:{index}");
+            item.session_id = snapshot.id.clone();
+            item
+        }).collect();
+        snapshot.timeline = items.iter().rev().take(2000).cloned().collect();
+        snapshot.timeline.reverse();
+        let started = std::time::Instant::now();
+        journal.record_resumed_timeline(&snapshot, &items).unwrap();
+        let elapsed = started.elapsed();
+        let restored = journal.timeline_for_session(&snapshot.id).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), serde_json::to_value(&items).unwrap());
+        eprintln!("REPLAY_BATCH count={} elapsed_ms={}", items.len(), elapsed.as_millis());
+        assert!(elapsed.as_secs() < 2, "recorded replay blocks resume longer than two seconds");
+    }
+
+    #[test]
+    fn resumed_history_transaction_preserves_order_and_rolls_back_mixed_sessions() {
+        let journal = AgentJournal::open_in_memory().unwrap();
+        let snapshot = session("resumed");
+        let items: Vec<_> = (0..10208).map(|index| AgentSessionTimelineItem {
+            id: format!("resumed:{index}"), session_id: snapshot.id.clone(),
+            kind: AgentSessionTimelineKind::CommandOutput,
+            text: format!("chunk {index}"), timestamp_ms: index + 100, attachments: Vec::new(),
+        }).collect();
+        journal.record_resumed_timeline(&snapshot, &items).unwrap();
+        let restored = journal.timeline_for_session(&snapshot.id).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), serde_json::to_value(&items).unwrap());
+        // Repeated persistence does not duplicate events.
+        journal.record_resumed_timeline(&snapshot, &items).unwrap();
+        assert_eq!(journal.timeline_for_session(&snapshot.id).unwrap().len(), items.len());
+        let other = session("failed");
+        let mut valid = items[0].clone();
+        valid.id = "failed:0".into(); valid.session_id = other.id.clone();
+        assert!(matches!(journal.record_resumed_timeline(&other, &[valid, items[1].clone()]), Err(AgentJournalError::ReplaySessionMismatch)));
+        assert!(journal.session_from_journal(&other.id).unwrap().is_none());
+        assert!(journal.timeline_for_session(&other.id).unwrap().is_empty());
+    }
+
 }

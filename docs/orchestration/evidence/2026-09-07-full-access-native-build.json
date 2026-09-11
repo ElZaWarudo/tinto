@@ -1,0 +1,83 @@
+{
+  "at": "2026-09-07T10:40:04.197Z",
+  "root": "C:\\Users\\User\\Documents\\personal\\pumarejo",
+  "project": "C:\\Users\\User\\Documents\\personal\\tinto",
+  "node": "C:\\nvm4w\\nodejs\\node.exe",
+  "nodeVersion": "v24.13.0",
+  "runtimeSha256": "407482ee2ba520b7c1480b7693a8d0747bbeae83b89d8143a0af0ca861b49e56",
+  "browserSha256": "71e1851330d3ca912ffaeb964146e86d27d71b349f7dfdd34f1041e4bfe5b31d",
+  "package": {
+    "name": "pumarejo",
+    "version": "0.1.0",
+    "description": "Semantic MCP control for an instrumented Tauri 2 WebView",
+    "private": true,
+    "type": "module",
+    "license": "UNLICENSED",
+    "packageManager": "pnpm@11.9.0",
+    "bin": {
+      "pumarejo": "./dist/cli/index.js"
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./config": {
+        "types": "./dist/config/index.d.ts",
+        "import": "./dist/config/index.js"
+      },
+      "./errors": {
+        "types": "./dist/shared/errors.d.ts",
+        "import": "./dist/shared/errors.js"
+      },
+      "./result": {
+        "types": "./dist/shared/result.d.ts",
+        "import": "./dist/shared/result.js"
+      },
+      "./package.json": "./package.json"
+    },
+    "files": [
+      "dist"
+    ],
+    "engines": {
+      "node": ">=22 <25"
+    },
+    "scripts": {
+      "clean": "node scripts/clean.mjs",
+      "build": "pnpm clean && tsc -p tsconfig.build.json && node scripts/build-browser-bundle.mjs && node scripts/build-provider-bundle.mjs",
+      "typecheck": "tsc -p tsconfig.json --noEmit",
+      "lint": "eslint .",
+      "format:check": "prettier --check package.json tsconfig.json tsconfig.build.json eslint.config.js vitest.config.ts src tests/platform tests/unit tests/integration tests/contract tests/agent tests/release tests/fixtures/tauri-app/.pumarejo.json tests/fixtures/tauri-app/package.json tests/fixtures/tauri-app/src tests/fixtures/tauri-app/src-tauri/tauri.conf.json tests/fixtures/tauri-app/src-tauri/capabilities/default.json \"tests/fixtures/projects/**/*.{json,json5}\"",
+      "test:unit": "vitest run tests/unit",
+      "test:contract": "pnpm build && vitest run tests/contract",
+      "test:integration": "vitest run tests/integration",
+      "test:release-safety": "pnpm build && vitest run tests/release",
+      "test:agent": "vitest run tests/agent",
+      "pack:check": "pnpm build && npm pack --dry-run --json",
+      "test:platform:structural": "vitest run tests/platform/ownership-proof.test.ts tests/platform/owned-launch.test.ts tests/platform/host-exception.test.ts tests/platform/provider-proof.test.ts tests/platform/background-proof.test.ts tests/platform/cargo-proof.test.ts",
+      "test:platform:windows": "node tests/platform/gate.mjs windows && vitest run --no-file-parallelism tests/platform/provider-proof.test.ts tests/platform/background-proof.test.ts tests/platform/snapshot-proof.test.ts tests/platform/public-journey.test.ts tests/platform/cargo-proof.test.ts",
+      "test:platform:linux": "node tests/platform/gate.mjs ubuntu && vitest run --no-file-parallelism tests/platform/provider-proof.test.ts tests/platform/background-proof.test.ts tests/platform/public-journey.test.ts tests/platform/cargo-proof.test.ts",
+      "test": "vitest run",
+      "validate": "pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm pack:check"
+    },
+    "dependencies": {
+      "@modelcontextprotocol/sdk": "1.29.0",
+      "dom-accessibility-api": "0.7.1",
+      "json5": "2.2.3",
+      "smol-toml": "1.7.1",
+      "zod": "4.2.1"
+    },
+    "devDependencies": {
+      "@types/node": "^22.15.0",
+      "@typescript-eslint/eslint-plugin": "^8.32.0",
+      "@typescript-eslint/parser": "^8.32.0",
+      "esbuild": "0.28.1",
+      "eslint": "^9.26.0",
+      "happy-dom": "20.11.1",
+      "prettier": "3.5.3",
+      "typescript": "^5.8.3",
+      "vitest": "^3.1.2"
+    }
+  },
+  "launchConfig": "{\r\n  \"version\": 1,\r\n  \"launch\": {\r\n    \"command\": \"npm\",\r\n    \"args\": [\"run\", \"tauri\", \"--\", \"dev\", \"--features\", \"pumarejo\", \"--config\", \"{tauriConfig}\"],\r\n    \"pathPrepend\": [\"C:\\\\Users\\\\User\\\\.cargo\\\\bin\"]\r\n  },\r\n  \"window\": \"main\",\r\n  \"artifactsDirectory\": \".pumarejo/artifacts\",\r\n  \"retainArtifacts\": false\r\n}\r\n"
+}

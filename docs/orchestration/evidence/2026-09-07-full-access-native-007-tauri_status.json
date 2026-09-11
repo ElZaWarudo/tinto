@@ -1,0 +1,41 @@
+{
+  "startedAt": "2026-09-07T10:40:37.801Z",
+  "endedAt": "2026-09-07T10:40:37.803Z",
+  "timeout": 65000,
+  "args": {},
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"state\":\"ready\",\"window\":\"main\",\"proxyReady\":true,\"webdriverReady\":true,\"ownedPid\":23940,\"generation\":1,\"windowCapabilities\":{\"resize\":{\"state\":\"supported\",\"code\":\"provider_resize_supported\"},\"maximize\":{\"state\":\"supported\",\"code\":\"provider_maximize_supported\"},\"restore\":{\"state\":\"supported\",\"code\":\"provider_restore_supported\"},\"initialSize\":{\"state\":\"supported\",\"code\":\"provider_initial_size_supported\"}},\"lastAction\":\"launch\"}"
+      }
+    ],
+    "structuredContent": {
+      "state": "ready",
+      "window": "main",
+      "proxyReady": true,
+      "webdriverReady": true,
+      "ownedPid": 23940,
+      "generation": 1,
+      "windowCapabilities": {
+        "resize": {
+          "state": "supported",
+          "code": "provider_resize_supported"
+        },
+        "maximize": {
+          "state": "supported",
+          "code": "provider_maximize_supported"
+        },
+        "restore": {
+          "state": "supported",
+          "code": "provider_restore_supported"
+        },
+        "initialSize": {
+          "state": "supported",
+          "code": "provider_initial_size_supported"
+        }
+      },
+      "lastAction": "launch"
+    }
+  }
+}

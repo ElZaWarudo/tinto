@@ -7812,9 +7812,13 @@ function agentActivitySummary(
       ? `${Math.round(session.output_bytes_per_second)} B/s`
       : "Transmisión en reposo";
   if (readOnly) {
+    const exitOutcome =
+      session.exit_code == null
+        ? "Código de salida desconocido"
+        : `Código de salida: ${session.exit_code}`;
     return {
       title: "Transcripción archivada",
-      detail: `${countLabel(changeCount, "cambio registrado", "cambios registrados")}. La sesión es de solo lectura.`,
+      detail: `${countLabel(changeCount, "cambio registrado", "cambios registrados")}. ${exitOutcome}. La sesión es de solo lectura.`,
       checkpoint,
       throughput,
       tone: "done",

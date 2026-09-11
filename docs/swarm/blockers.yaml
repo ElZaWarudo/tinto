@@ -110,8 +110,7 @@ blockers:
   wave: tooling-repair-2026-08-31
   type: dependency
   risk: medium
-  description: Doctor detects provider byte drift; native restore falsely reports
-    restored for a minimized window. A coordinated provider upgrade is required.
+  description: Provider registration was reconciled and doctor reports ready on 2026-09-07. Native restore still falsely reports restored while returning an off-screen minimized rectangle.
   decision_required: none for completed local work; prerequisite recorded
   impact_if_ignored: Would overstate acceptance or violate the safety boundary.
   affected_units:
@@ -175,8 +174,7 @@ blockers:
   wave: tooling-repair-2026-08-31
   type: verification
   risk: low
-  description: Full Tinto suite has one baseline WSL text-policy failure; changed-file
-    lint exposes a pre-existing setState-in-effect diagnostic.
+  description: The WSL text-policy and setState-in-effect baseline failures were repaired on 2026-09-07.
   decision_required: none for completed local work; prerequisite recorded
   impact_if_ignored: Would overstate acceptance or violate the safety boundary.
   affected_units:
@@ -185,10 +183,9 @@ blockers:
   blocks_dependents: false
   suggested_owner: tooling-maintainer
   detected_at: '2026-08-31'
-  status: open
+  status: resolved
   evidence: ../ICook/docs/tooling-repair-evidence/checks/tinto-final-aggregate/
-  next_action: Resolve policy/availability ownership in a separate bounded maintenance
-    change. Current fixes have scoped coverage; do not label full aggregate green.
+  next_action: Resolved on 2026-09-07. Repository lint and the complete 783-test frontend suite pass. See docs/orchestration/2026-09-07-native-hardening-reconciliation.md.
 - id: IC-HARD-BLK-2026-08-31-01
   jira_issue_key: null
   unit_id: null
@@ -213,7 +210,7 @@ blockers:
   wave: null
   type: capability
   risk: high
-  description: A typed local-path onboarding route now uses the existing canonical add_repo backend and has focused application coverage. The earlier choose-folder stall remains historical, while native select/cancel, parent-control recovery and persisted ICook identity are still unverified because the public instance is not semantically ready.
+  description: A typed local-path onboarding route now uses the existing canonical add_repo backend and has focused application coverage. The earlier choose-folder stall remains historical, while native select/cancel, parent-control recovery and persisted ICook identity are still unverified for ICook. On 2026-09-07 the public instance was ready and typed-path onboarding succeeded for a disposable local Git fixture.
   decision_required: current local hardening authorized with explicit documentation-gate bypass; native acceptance still blocked
   impact_if_ignored: ICook execution could proceed in the wrong scope or be falsely reported as verified.
   affected_units: []
@@ -260,12 +257,12 @@ blockers:
 - id: IC-HARD-BLK-2026-08-31-05
   jira_issue_key: null
   unit_id: null
-  title: Full Gitleaks verification times out on a recursively nested historical worktree copy
+  title: Native scanner acceptance and finding triage remain
   wave: null
   type: verification
   risk: high
-  description: The two identity-attested protected artifact roots are removed and the unchanged Gitleaks 8.30.1 invocation no longer reports permission-denied warnings, but it still exits 1 at the unchanged eight-second deadline. A sixty-second diagnostic also times out after scanning about 121.08 MB and reports two redacted partial findings under another saved worktree. Tinto lint independently reaches the same historical worktree QA copy and its recursively repeated package store. Partial reports cannot certify a full scan.
-  decision_required: choose an attributable cleanup or bounded scanner topology for the unmanifested historical worktree copy; do not weaken rules or treat partial findings as a complete report
+  description: On 2026-09-07 the historical nested copy was absent and the unchanged eight-second CLI scan completed successfully with two findings in demo/test files. Native scanner presentation and finding triage remain unverified.
+  decision_required: null
   impact_if_ignored: A degraded heuristic check could be misrepresented as complete secret verification.
   affected_units: []
   blocks_dependents: false
@@ -273,4 +270,4 @@ blockers:
   detected_at: '2026-08-31'
   status: open
   evidence: docs/orchestration/runs/icook-integration-repair-2026-08-31/artifact-recovery-and-scanner-2026-09-02.json
-  next_action: Establish identity and originating-workflow attribution for .worktrees/pumarejo-dialog-broker/.pumarejo/qa-project, then either clean it through the supported manifested flow or define an explicitly approved bounded scan topology. Rerun the unchanged eight-second scanner and require a successful complete report.
+  next_action: Verify the in-app scanner result and triage the two findings. See docs/orchestration/2026-09-07-native-hardening-reconciliation.md.

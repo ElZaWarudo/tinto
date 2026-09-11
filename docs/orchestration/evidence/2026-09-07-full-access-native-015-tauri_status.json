@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-09-07T10:40:44.316Z",
+  "endedAt": "2026-09-07T10:40:44.318Z",
+  "timeout": 65000,
+  "args": {},
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"state\":\"idle\",\"lastAction\":\"close\"}"
+      }
+    ],
+    "structuredContent": {
+      "state": "idle",
+      "lastAction": "close"
+    }
+  }
+}

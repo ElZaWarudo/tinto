@@ -156,14 +156,22 @@ function ensureCreatedWorkbenchVisible(
   );
 }
 
-/** Pick a folder and add it as a repo. Resolves to the stored canonical path so
+/** Add a supplied path, or pick a folder when omitted. Resolves to the stored canonical path so
  * the caller can open the new project's tab, or null when the picker is cancelled.
  * Backend failures are surfaced so the caller can explain them. */
-export async function addRepoFlow(active: string): Promise<string | null> {
-  const picked = await open({ directory: true, title: "Añadir repositorio" });
+export async function addRepoFlow(active: string, path?: string): Promise<string | null> {
+  const picked =
+    path === undefined ? await open({ directory: true, title: "Añadir repositorio" }) : path.trim();
   if (typeof picked !== "string") return null;
+  if (!picked) throw new Error("Escribe la ruta del repositorio local.");
   const canonical = await addRepo(active, picked);
-  await reloadActiveWorkbench();
+  try {
+    await reloadActiveWorkbench();
+  } catch {
+    busStore.setConfigError(
+      "El repositorio se añadió, pero no se pudo actualizar la configuración. Reintenta la actualización.",
+    );
+  }
   return canonical;
 }
 

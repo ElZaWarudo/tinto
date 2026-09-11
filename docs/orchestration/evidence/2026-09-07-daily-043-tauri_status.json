@@ -1,0 +1,31 @@
+{
+  "sequence": 43,
+  "at": "2026-09-07T09:55:20.698Z",
+  "durationMs": 1,
+  "request": {
+    "name": "tauri_status",
+    "arguments": {}
+  },
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"state\":\"cleanup_failed\",\"lastAction\":\"snapshot\",\"lastFailure\":{\"code\":\"APP_START_FAILED\",\"phase\":\"launch\",\"retryable\":true,\"suggestion\":\"Check stderr diagnostics and the approved launch profile.\"},\"ownedPid\":6800,\"cleanupPending\":[\"application-process\"]}"
+      }
+    ],
+    "structuredContent": {
+      "state": "cleanup_failed",
+      "lastAction": "snapshot",
+      "lastFailure": {
+        "code": "APP_START_FAILED",
+        "phase": "launch",
+        "retryable": true,
+        "suggestion": "Check stderr diagnostics and the approved launch profile."
+      },
+      "ownedPid": 6800,
+      "cleanupPending": [
+        "application-process"
+      ]
+    }
+  }
+}

@@ -78,6 +78,86 @@ impl Drop for KillOnCloseJob {
     }
 }
 
+
+/// Bound a diagnostic child and its pipe reads; never change distro lifecycle.
+pub(crate) fn output_with_timeout(
+    command: &mut Command,
+    timeout: std::time::Duration,
+) -> io::Result<std::process::Output> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Instant;
+    let deadline = Instant::now() + timeout;
+    let mut child = hide_console(command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let (tx, rx) = mpsc::channel();
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    for (is_stdout, stream) in [
+        (true, Box::new(stdout) as Box<dyn Read + Send>),
+        (false, Box::new(stderr) as Box<dyn Read + Send>),
+    ] {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let result = stream
+                .take(64 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .and_then(|_| {
+                    if bytes.len() > 64 * 1024 {
+                        Err(io::Error::other("WSL diagnostic output exceeded limit"))
+                    } else {
+                        Ok(bytes)
+                    }
+                });
+            let _ = tx.send((is_stdout, result));
+        });
+    }
+    drop(tx);
+    let result = (|| {
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "timeout esperando comando WSL",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        for _ in 0..2 {
+            let (is_stdout, bytes) = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "timeout leyendo salida WSL")
+                })?;
+            if is_stdout {
+                stdout = bytes?;
+            } else {
+                stderr = bytes?;
+            }
+        }
+        Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        })
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +215,18 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+
+    #[test]
+    fn bounded_output_preserves_exit_and_bounds_stalled_child() {
+        let output = output_with_timeout(Command::new("cmd.exe").args(["/C", "echo ready & exit /b 7"]), std::time::Duration::from_secs(3)).unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("ready"));
+        let started = std::time::Instant::now();
+        let error = output_with_timeout(Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 10"]), std::time::Duration::from_millis(100)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
     }
 
     fn process_is_running(pid: u32) -> bool {

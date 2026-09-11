@@ -10,7 +10,10 @@ interface CachedAvailability {
 
 const availabilityCache = new Map<string, CachedAvailability>();
 
-export function agentAvailabilityKey(source?: RepoSource | null, distro?: string | null): string {
+export function agentAvailabilityKey(
+  source?: RepoSource | null,
+  distro?: string | null,
+): string {
   if (source === "wsl" && distro) return `wsl:${distro}`;
   return "host";
 }
@@ -28,12 +31,22 @@ export function checkAgentAvailabilityForRepo(
     return cached.promise;
   }
 
-  const promise = agentProviderReadinessForRepo(repo, agentType).catch((error) => {
-    availabilityCache.delete(cacheKey);
-    throw error;
-  });
+  const promise = agentProviderReadinessForRepo(repo, agentType)
+    .then((readiness) => {
+      const current = availabilityCache.get(cacheKey);
+      if (current?.promise === promise)
+        current.expiresAt = Date.now() + AVAILABILITY_TTL_MS;
+      return readiness;
+    })
+    .catch((error) => {
+      if (availabilityCache.get(cacheKey)?.promise === promise) {
+        availabilityCache.delete(cacheKey);
+      }
+      throw error;
+    });
   availabilityCache.set(cacheKey, {
-    expiresAt: now + AVAILABILITY_TTL_MS,
+    // Pending probes remain shared; only a settled result has a TTL.
+    expiresAt: Infinity,
     promise,
   });
   return promise;
@@ -43,6 +56,9 @@ export function resetAgentAvailabilityCacheForTests(): void {
   availabilityCache.clear();
 }
 
-export function invalidateAgentAvailability(environmentKey: string, agentType: string): void {
+export function invalidateAgentAvailability(
+  environmentKey: string,
+  agentType: string,
+): void {
   availabilityCache.delete(`${environmentKey}:${agentType}`);
 }

@@ -351,12 +351,16 @@ impl AgentSessionRegistry {
         };
         validate_wsl_repo(&repo)?;
         validate_agent_type(&agent_type)?;
-        ensure_wsl_agent_binary_via_agent(&distro, &agent_type)?;
+        ensure_wsl_agent_binary_via_agent(&distro, &agent_type)
+            .map_err(|error| wsl_startup_error("binary_check", error))?;
         self.refresh_session_statuses()?;
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let checkpoint = Some(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)?);
+        let checkpoint = Some(
+            create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)
+                .map_err(|error| wsl_startup_error("checkpoint_create", error))?,
+        );
         let mut process = self.process_factory.resume_wsl_agent(
             &agent_type,
             &distro,
@@ -417,20 +421,24 @@ impl AgentSessionRegistry {
         validate_agent_type(&agent_type)?;
         validate_permission_mode(&agent_type, permission_mode)?;
         if check_binary {
-            ensure_wsl_agent_binary_via_agent(&distro, &agent_type)?;
+            ensure_wsl_agent_binary_via_agent(&distro, &agent_type)
+                .map_err(|error| wsl_startup_error("binary_check", error))?;
         }
         self.refresh_session_statuses()?;
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
         let checkpoint = if create_remote_checkpoint {
-            Some(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)?)
+            Some(
+                create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)
+                    .map_err(|error| wsl_startup_error("checkpoint_create", error))?,
+            )
         } else {
             None
         };
-        let process =
-            self.process_factory
-                .spawn_wsl_agent(&agent_type, &distro, &repo, permission_mode)?;
+        let process = self.process_factory
+            .spawn_wsl_agent(&agent_type, &distro, &repo, permission_mode)
+            .map_err(|error| wsl_startup_error("provider_spawn", error))?;
         let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
             "kimi" => Box::new(PtyCompatibilityProcess::new(
                 process,
@@ -1110,6 +1118,10 @@ fn canonical_repo(repo: &Path) -> Result<PathBuf, AgentConsoleError> {
     }
 }
 
+fn wsl_startup_error(stage: &str, error: AgentConsoleError) -> AgentConsoleError {
+    AgentConsoleError::new(error.category, format!("WSL startup [{stage}]: {}", error.message))
+}
+
 fn ensure_wsl_agent_binary_via_agent(
     distro: &str,
     agent_type: &str,
@@ -1230,6 +1242,7 @@ mod tests {
 
     #[derive(Default)]
     struct FakeProcessFactory {
+        fail_wsl_spawn: AtomicBool,
         next_pid: AtomicUsize,
         spawned: Mutex<Vec<PathBuf>>,
         writes: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -1278,6 +1291,9 @@ mod tests {
                 "{distro}:{agent_type}:{}",
                 working_dir.display()
             )));
+            if self.fail_wsl_spawn.load(Ordering::SeqCst) {
+                return Err(AgentConsoleError::new("child_exit", "synthetic provider exit"));
+            }
             let pid = self.next_pid.fetch_add(1, Ordering::SeqCst) as u32 + 100;
             Ok(Box::new(FakeProcess {
                 pid,
@@ -1797,6 +1813,21 @@ mod tests {
             factory.spawned.lock().unwrap().as_slice(),
             &[PathBuf::from("Ubuntu:codex:/home/me/repo")]
         );
+    }
+
+    #[test]
+    fn wsl_startup_failure_identifies_stage_without_recording_or_retrying_session() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        factory.fail_wsl_spawn.store(true, Ordering::SeqCst);
+        let mut registry = AgentSessionRegistry::with_process_factory(factory.clone());
+        let result = registry.start_wsl_session_with_output_for_test(
+            "/home/me/repo".into(), "Ubuntu".into(), "codex".into(),
+        );
+        let error = result.err().expect("provider failure");
+        assert_eq!(error.category, "child_exit");
+        assert!(error.message.starts_with("WSL startup [provider_spawn]:"));
+        assert!(registry.list_sessions().is_empty());
+        assert_eq!(factory.spawned.lock().unwrap().len(), 1);
     }
 
     #[test]
