@@ -4237,6 +4237,26 @@ mod tests {
     }
 
     #[test]
+    fn timeline_frames_preserve_line_breaks_for_markdown() {
+        let frame = timeline_frame_for_thread(
+            AgentSessionTimelineKind::AgentMessage,
+            "Updated:\r\n- one\n- two\u{0}\tdone\rend",
+            None,
+        );
+        let payload: Value = serde_json::from_slice(
+            &frame[TIMELINE_FRAME_PREFIX.len()..frame.len().saturating_sub(1)],
+        )
+        .unwrap();
+        let decoded = STANDARD
+            .decode(payload["text_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(decoded).unwrap(),
+            "Updated:\n- one\n- two\tdone\nend"
+        );
+    }
+
+    #[test]
     fn command_start_is_forwarded_as_provider_neutral_activity() {
         let (tx, rx) = mpsc::channel();
         let (event_tx, _event_rx) = mpsc::channel();

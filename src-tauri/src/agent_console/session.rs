@@ -23,7 +23,8 @@ use super::{
         CheckpointRecord,
     },
     pty::{AgentProcess, AgentProcessEvent, AgentTurnAttachment},
-    sanitize_provider_timeline_text, AgentConsoleError, MAX_SUBAGENT_THREADS,
+    sanitize_provider_multiline_text, sanitize_provider_timeline_text, AgentConsoleError,
+    MAX_SUBAGENT_THREADS,
 };
 
 const OUTPUT_QUIET_MS: u64 = 2_000;
@@ -1763,6 +1764,12 @@ fn bounded_provider_text(value: &mut Option<String>, max_chars: usize) {
     *text = bounded;
 }
 
+fn bounded_provider_multiline_text(value: &mut Option<String>, max_chars: usize) {
+    if let Some(text) = value.as_mut() {
+        *text = sanitize_provider_multiline_text(text, max_chars);
+    }
+}
+
 fn is_sparse_subagent_update(subagent: &AgentSubagentThread) -> bool {
     subagent.source_kind == "subAgent"
         && subagent.parent_id.is_none()
@@ -1850,8 +1857,8 @@ fn sanitize_subagent(subagent: &mut AgentSubagentThread) {
     bounded_provider_text(&mut subagent.consolidation_id, 256);
     bounded_provider_text(&mut subagent.runtime_state, 96);
     bounded_provider_text(&mut subagent.approval_request_id, 256);
-    bounded_provider_text(&mut subagent.prompt, 16_384);
-    bounded_provider_text(&mut subagent.preview, 16_384);
+    bounded_provider_multiline_text(&mut subagent.prompt, 16_384);
+    bounded_provider_multiline_text(&mut subagent.preview, 16_384);
     for activity in &mut subagent.activities {
         activity.id = activity
             .id
@@ -1888,12 +1895,7 @@ fn sanitize_subagent(subagent: &mut AgentSubagentThread) {
     }
     for item in &mut subagent.timeline {
         item.session_id = subagent.id.clone();
-        item.text = item
-            .text
-            .chars()
-            .filter(|ch| !ch.is_control())
-            .take(16_384)
-            .collect();
+        item.text = sanitize_provider_multiline_text(&item.text, 16_384);
     }
     if let Some(result) = subagent.result.as_mut() {
         result.status = result
@@ -1902,8 +1904,8 @@ fn sanitize_subagent(subagent: &mut AgentSubagentThread) {
             .filter(|ch| !ch.is_control())
             .take(96)
             .collect();
-        bounded_provider_text(&mut result.summary, 16_384);
-        bounded_provider_text(&mut result.error, 4_000);
+        bounded_provider_multiline_text(&mut result.summary, 16_384);
+        bounded_provider_multiline_text(&mut result.error, 4_000);
     }
     if is_terminal_subagent_status(&subagent.thread_status)
         || matches!(

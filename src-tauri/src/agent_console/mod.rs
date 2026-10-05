@@ -16,9 +16,17 @@ pub(crate) const MAX_PROVIDER_TIMELINE_TEXT_CHARS: usize = 16_384;
 pub(crate) const MAX_SUBAGENT_THREADS: usize = 4_096;
 
 pub(crate) fn sanitize_provider_timeline_text(text: &str) -> String {
-    text.chars()
-        .filter(|character| !character.is_control())
-        .take(MAX_PROVIDER_TIMELINE_TEXT_CHARS)
+    sanitize_provider_multiline_text(text, MAX_PROVIDER_TIMELINE_TEXT_CHARS)
+}
+
+/// Drops control characters except line breaks and tabs, which carry Markdown
+/// structure. CRLF and lone CR are normalized to LF.
+pub(crate) fn sanitize_provider_multiline_text(text: &str, max_chars: usize) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+        .take(max_chars)
         .collect()
 }
 
