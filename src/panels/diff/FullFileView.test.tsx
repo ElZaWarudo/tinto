@@ -59,6 +59,32 @@ describe("FullFileView", () => {
     expect(screen.getByTestId("full-truncated")).toHaveTextContent("Archivo truncado");
   });
 
+  it("keeps showing loaded content while a newer repo revision reloads", async () => {
+    const { container, rerender } = render(
+      <FullFileView repo="/r/a" path="src/a.ts" repoRevision={1} changedLines={new Set()} />,
+    );
+    await screen.findByTestId("full-file");
+
+    let resolveFresh: (value: FileContent) => void = () => {};
+    contentLoads = [
+      new Promise<FileContent>((resolve) => {
+        resolveFresh = resolve;
+      }),
+    ];
+    rerender(
+      <FullFileView repo="/r/a" path="src/a.ts" repoRevision={2} changedLines={new Set()} />,
+    );
+    expect(screen.queryByTestId("full-loading")).not.toBeInTheDocument();
+    expect(container.querySelector(".full-file__line .diff-content")).toHaveTextContent("one");
+
+    await act(async () => {
+      resolveFresh({ encoding: "utf8", content: "fresh\n", truncated: false });
+    });
+    await waitFor(() => {
+      expect(container.querySelector(".full-file__line .diff-content")).toHaveTextContent("fresh");
+    });
+  });
+
   it("ignores stale full-file content when the repo revision changes mid-load", async () => {
     let resolveOld: (value: FileContent) => void = () => {};
     let resolveFresh: (value: FileContent) => void = () => {};

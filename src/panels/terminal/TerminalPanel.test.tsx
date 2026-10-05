@@ -1028,6 +1028,82 @@ describe("TerminalPanel", () => {
     expect(within(conversation).queryByText(/powershell\.exe/i)).not.toBeInTheDocument();
   });
 
+  it("shows each command as a row with its own output, Codex-style", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({
+        timeline: [
+          {
+            session_id: "sess-1",
+            id: "user-1",
+            kind: "user_message",
+            text: "Revisa",
+            timestamp_ms: 10,
+          },
+          {
+            session_id: "sess-1",
+            id: "activity-1",
+            kind: "activity",
+            text: "Ejecutando rg --files -g '*2026-09-07*'",
+            timestamp_ms: 11,
+          },
+          {
+            session_id: "sess-1",
+            id: "output-1",
+            kind: "command_output",
+            text: "rg: .agents: not found\ndocs/a.md",
+            timestamp_ms: 12,
+          },
+          {
+            session_id: "sess-1",
+            id: "activity-2",
+            kind: "activity",
+            text: `Ejecutando '$ErrorActionPreference='"'"'Stop'"'"'\nGet-Content a.json'`,
+            timestamp_ms: 13,
+          },
+          {
+            session_id: "sess-1",
+            id: "activity-3",
+            kind: "activity",
+            text: "Ejecutando Write-Output $env:TINTO_TURN_DONE_MARKER",
+            timestamp_ms: 14,
+          },
+          {
+            session_id: "sess-1",
+            id: "output-3",
+            kind: "command_output",
+            text: "turn-done-marker",
+            timestamp_ms: 15,
+          },
+          {
+            session_id: "sess-1",
+            id: "agent-1",
+            kind: "agent_message",
+            text: "Listo:\n- uno\n- dos",
+            timestamp_ms: 16,
+          },
+        ],
+      }),
+    ]);
+
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    const conversation = screen.getByLabelText("Conversación con Agent");
+    const commands = await within(conversation).findAllByRole("group", {
+      name: "1 comando ejecutado",
+      hidden: true,
+    });
+    expect(commands).toHaveLength(2);
+    expect(within(commands[0]).getByText("rg --files -g '*2026-09-07*'", { selector: "code" }));
+    expect(commands[0].querySelector("em")).toBeNull();
+    expect(commands[0]).toHaveTextContent("docs/a.md");
+    expect(
+      within(commands[1]).getByText("$ErrorActionPreference='Stop' …", { selector: "code" }),
+    ).toBeInTheDocument();
+    expect(within(conversation).queryByText(/TINTO_TURN_DONE_MARKER/)).not.toBeInTheDocument();
+    expect(within(conversation).queryByText("turn-done-marker")).not.toBeInTheDocument();
+    expect(within(conversation).getAllByRole("listitem")).toHaveLength(2);
+  });
+
   it("filters generic progress filler from the visible conversation", async () => {
     listAgentSessionsMock.mockResolvedValueOnce([
       sessionFixture({
@@ -3005,12 +3081,12 @@ describe("TerminalPanel", () => {
     expect(within(conversation).getByText("Haz el cambio")).toBeInTheDocument();
     expect(within(conversation).getAllByText("Agent")).toHaveLength(2);
     expect(within(conversation).getByText("Voy con ello")).toBeInTheDocument();
-    expect(within(conversation).getByText("Comando")).toBeInTheDocument();
+    expect(within(conversation).getByText("Salida")).toBeInTheDocument();
     expect(within(conversation).getAllByText("cargo test").length).toBeGreaterThan(0);
     expect(within(conversation).getByText("4 mensajes / 1 comando")).toBeInTheDocument();
-    const orderedMessages = [...conversation.querySelectorAll(".agent-panel__message")].map(
-      (element) => element.textContent,
-    );
+    const orderedMessages = [
+      ...conversation.querySelectorAll(".agent-panel__message, .agent-panel__thought-command"),
+    ].map((element) => element.textContent);
     expect(orderedMessages[0]).toContain("Haz el cambio");
     expect(orderedMessages[1]).toContain("Voy con ello");
     expect(orderedMessages[2]).toContain("cargo test");
@@ -3651,8 +3727,8 @@ describe("TerminalPanel", () => {
     expect(screen.getByLabelText("1 turno coincidentes de 2 en total.")).not.toHaveAttribute(
       "title",
     );
-    expect(screen.getByRole("button", { name: "Resultado anterior" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Resultado siguiente" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Resultado anterior" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Resultado siguiente" })).toBeEnabled();
     const messageMatch = within(conversation).getByLabelText(
       "Coincidencias de búsqueda del turno 1",
     );

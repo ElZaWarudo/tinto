@@ -71,7 +71,9 @@ import { consoleDock } from "../../workspace/consoleDock";
 import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
 import { AgentRuntimeControls, type CodexRuntimeMenu } from "./AgentRuntimeControls";
 import {
+  lastRuntimeCatalog,
   reasoningSupportedByModel,
+  rememberRuntimeCatalog,
   speedSupportedByModel,
   type CodexModelSelection,
   type CodexReasoningSelection,
@@ -444,7 +446,7 @@ type AgentTurnDisplayItem =
 
 type AgentThoughtDisplayItem =
   | { type: "narrative"; event: AgentTurnEventView }
-  | { type: "commands"; id: string; events: AgentTurnEventView[] };
+  | { type: "command"; id: string; command: string | null; output: string };
 
 interface EditingAgentMessage {
   id: string;
@@ -760,7 +762,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   );
   const sessionRepo = session?.repo ?? repo;
   const hasTranscriptQuery = transcriptQuery.trim().length > 0;
-  const canNavigateSearchResults = hasTranscriptQuery && visibleTurns.length > 1;
+  const canNavigateSearchResults = hasTranscriptQuery && visibleTurns.length > 0;
   const activeSearchResultIndex = hasTranscriptQuery
     ? visibleTurns.findIndex((turn) => turn.index === focusedTurnIndex)
     : -1;
@@ -1063,7 +1065,23 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   }, [isCodexSession, session]);
 
   useEffect(() => {
-    if (!isCodexSession || !session?.id || readOnly) return;
+    if (!isCodexSession || !session?.id) return;
+    if (readOnly) {
+      // Archived transcripts have no Codex process to list models; reuse the last known catalog.
+      queueMicrotask(() =>
+        setRuntimeCatalog(
+          lastRuntimeCatalog() ?? {
+            status: "error",
+            source: "codex_fallback",
+            models: [],
+            default_model: null,
+            error: "Inicia o retoma una sesión de Codex para cargar los modelos disponibles.",
+            updated_at_ms: Date.now(),
+          },
+        ),
+      );
+      return;
+    }
     let active = true;
     let timer: number | undefined;
     const sessionChanged = runtimeCatalogSessionRef.current !== session.id;
@@ -1086,6 +1104,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           return;
         }
         setRuntimeCatalog(catalog);
+        rememberRuntimeCatalog(catalog);
         if (catalog.status === "loading") {
           timer = window.setTimeout(() => void loadCatalog(false), 300);
         }
@@ -1162,6 +1181,11 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     setFocusedTurnIndex(nextTurn.index);
     scrollToAgentTurn(sessionId, nextTurn.index, "center");
   };
+
+  useEffect(() => {
+    const chat = chatRef.current;
+    return chat ? highlightTranscriptMatches(chat, transcriptQuery) : undefined;
+  }, [transcriptQuery, visibleTurns]);
 
   const resetTranscriptSearch = ({ focusSearch = false }: { focusSearch?: boolean } = {}) => {
     setFocusedTurnIndex(null);
@@ -4697,33 +4721,27 @@ function AgentThoughtDisclosure({
             </div>
           ) : (
             <details
-              aria-label={`${item.events.length} ${item.events.length === 1 ? "comando ejecutado" : "comandos ejecutados"}`}
-              className="agent-panel__thought-command-group"
+              aria-label={item.command === null ? "Salida de comando" : "1 comando ejecutado"}
+              className="agent-panel__thought-command"
               key={item.id}
             >
               <summary>
-                <span>{commandOutputSummary(item.events[item.events.length - 1].text)}</span>
-                <small>
-                  {item.events.length} {item.events.length === 1 ? "comando" : "comandos"}
-                </small>
+                <span>{item.command === null ? "Salida" : "Ejecutó"}</span>
+                {item.command === null ? (
+                  <strong>{commandOutputSummary(item.output)}</strong>
+                ) : (
+                  <code>{commandFirstLine(item.command)}</code>
+                )}
+                {(item.output || item.command?.includes("\n")) && <small>Mostrar salida</small>}
                 <span aria-hidden="true" className="agent-panel__thought-chevron">
                   ›
                 </span>
               </summary>
-              <div className="agent-panel__thought-command-list">
-                {item.events.map((event) => (
-                  <details
-                    className="agent-panel__thought-command agent-panel__message agent-panel__message--command_output"
-                    key={event.id}
-                  >
-                    <summary>
-                      <span>Comando</span>
-                      <strong>{commandOutputSummary(event.text)}</strong>
-                      <small>Mostrar salida</small>
-                    </summary>
-                    <pre>{event.text}</pre>
-                  </details>
-                ))}
+              <div className="agent-panel__thought-command-body">
+                {item.command !== null && (
+                  <pre className="agent-panel__thought-command-input">{item.command}</pre>
+                )}
+                {item.output && <pre>{item.output}</pre>}
               </div>
             </details>
           ),
@@ -5223,6 +5241,8 @@ function latestAgentActivity(timeline: AgentSessionTimelineItem[]): string | nul
 function activityEventSummary(event: AgentTurnEventView | undefined): string {
   if (!event) return "Trabajo en curso";
   if (event.kind === "command_output") return commandOutputSummary(event.text);
+  const command = activityCommandText(event.text);
+  if (command !== null) return `Ejecutando ${commandFirstLine(command)}`;
   return compactProcessLabel(event.text) ?? "Trabajo en curso";
 }
 
@@ -5283,6 +5303,47 @@ function stripMatchingShellQuotes(value: string): string {
 
 function shouldCollapseCommandOutput(text: string): boolean {
   return text.length > 360 || text.split(/\r\n|\r|\n/).length > 8;
+}
+
+const TRANSCRIPT_SEARCH_HIGHLIGHT = "agent-transcript-search";
+
+/** Highlights query matches inside the chat with the CSS Custom Highlight API; returns a cleanup. */
+function highlightTranscriptMatches(
+  container: HTMLElement,
+  query: string,
+): (() => void) | undefined {
+  const highlights = (globalThis.CSS as { highlights?: Map<string, unknown> } | undefined)
+    ?.highlights;
+  const HighlightCtor = (globalThis as { Highlight?: new (...ranges: Range[]) => unknown })
+    .Highlight;
+  if (!highlights || !HighlightCtor) return undefined;
+  const needle = query.trim().toLocaleLowerCase("es");
+  if (!needle) {
+    highlights.delete(TRANSCRIPT_SEARCH_HIGHLIGHT);
+    return undefined;
+  }
+  const ranges: Range[] = [];
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const original = node.textContent ?? "";
+    const text = original.toLocaleLowerCase("es");
+    if (text.length !== original.length) continue;
+    for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length)) {
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + needle.length);
+      ranges.push(range);
+    }
+  }
+  highlights.set(TRANSCRIPT_SEARCH_HIGHLIGHT, new HighlightCtor(...ranges));
+  return () => highlights.delete(TRANSCRIPT_SEARCH_HIGHLIGHT);
+}
+
+function commandFirstLine(command: string): string {
+  const lines = command.split("\n").filter((line) => line.trim());
+  const first = lines[0]?.trim() ?? command;
+  const line = first.length > 120 ? `${first.slice(0, 117)}...` : first;
+  return lines.length > 1 && line === first ? `${line} …` : line;
 }
 
 function commandOutputSummary(text: string): string {
@@ -8486,7 +8547,12 @@ function appendTimelineText(turn: AgentTurnView, item: AgentSessionTimelineItem,
 
 function visibleTurnEvents(events: AgentTurnEventView[]): AgentTurnEventView[] {
   const visible: AgentTurnEventView[] = [];
+  let hidingMarkerOutput = false;
   events.forEach((event, index) => {
+    if (event.kind === "command_output" && hidingMarkerOutput) return;
+    const command = event.kind === "activity" ? activityCommandText(event.text) : null;
+    hidingMarkerOutput = command !== null && isTurnDoneMarkerCommand(command);
+    if (hidingMarkerOutput) return;
     const progress = event.kind === "activity" || event.kind === "agent_progress";
     if (progress && isGenericActivityText(event.text)) return;
     if (
@@ -8544,23 +8610,61 @@ function groupThoughtEvents(events: AgentTurnEventView[]): AgentThoughtDisplayIt
   let index = 0;
   while (index < events.length) {
     const event = events[index];
-    if (event.kind !== "command_output") {
+    const command = event.kind === "command_output" ? null : activityCommandText(event.text);
+    if (event.kind !== "command_output" && command === null) {
       items.push({ type: "narrative", event });
       index += 1;
       continue;
     }
-    const commands: AgentTurnEventView[] = [];
+    if (command !== null) index += 1;
+    const outputs: AgentTurnEventView[] = [];
     while (index < events.length && events[index].kind === "command_output") {
-      commands.push(events[index]);
+      outputs.push(events[index]);
       index += 1;
     }
     items.push({
-      type: "commands",
-      id: `commands:${commands[0]?.id ?? index}`,
-      events: commands,
+      type: "command",
+      id: `command:${command === null ? outputs[0]?.id : event.id}`,
+      command,
+      output: outputs.map((output) => output.text).join("\n"),
     });
   }
   return items;
+}
+
+/** Returns the command of an "Ejecutando …" activity, unwrapped from shell launchers and quoting. */
+function activityCommandText(text: string): string | null {
+  const match = activityDisplayText(text.trim()).match(/^Ejecutando\s+([\s\S]+)$/i);
+  if (!match) return null;
+  return unquoteShellWord(match[1].trim());
+}
+
+function isTurnDoneMarkerCommand(command: string): boolean {
+  return /^(?:Write-Output|printf\s+'%s\\n'|echo)\s+"?\$(?:env:)?\{?TINTO_TURN_DONE_MARKER\}?"?\s*;?$/i.test(
+    command.trim(),
+  );
+}
+
+/** Unquotes a value that is entirely one POSIX shell word, e.g. 'a'"'"'b' -> a'b. */
+function unquoteShellWord(value: string): string {
+  if (!value.startsWith("'") && !value.startsWith('"')) return value;
+  let result = "";
+  let index = 0;
+  while (index < value.length) {
+    const quote = value[index];
+    if (quote === "'" || quote === '"') {
+      const end = value.indexOf(quote, index + 1);
+      if (end < 0) return value;
+      result += value.slice(index + 1, end);
+      index = end + 1;
+    } else if (/\s/.test(quote)) {
+      return value;
+    } else {
+      result += quote;
+      index += 1;
+    }
+  }
+  return result;
 }
 
 function isOperationalEvent(event: AgentTurnEventView | undefined): boolean {
@@ -8785,10 +8889,20 @@ function auditTitle(session: AgentSession): string {
       : null,
     session.checkpoint?.git_hash ? `Git: ${session.checkpoint.git_hash.slice(0, 12)}` : null,
     `Cambios: ${session.change_log?.length ?? 0}`,
-    `Antigüedad: ${Math.round(session.age_ms / 1000)}s`,
+    `Antigüedad: ${durationLabel(session.age_ms)}`,
     `Sesiones activas: ${session.active_sessions}`,
   ];
   return pieces.filter(Boolean).join(" / ");
+}
+
+function durationLabel(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ${minutes % 60} min`;
+  return `${Math.floor(hours / 24)} d ${hours % 24} h`;
 }
 
 function sessionStatusFacetTitle(session: AgentSession): string {

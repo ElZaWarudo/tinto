@@ -127,6 +127,7 @@ export function ConsoleDockPanel({
   const movePanelDisposeRef = useRef<(() => void) | null>(null);
   const journalLoadedOnceRef = useRef(false);
   const [terminalCount, setTerminalCount] = useState(0);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [openTerminals, setOpenTerminals] = useState<TerminalPanelParams[]>([]);
   const [recentLaunches, setRecentLaunches] = useState<RecentAgentLaunch[]>(() =>
     readRecentAgentLaunches(),
@@ -276,6 +277,12 @@ export function ConsoleDockPanel({
     };
     updateTerminalCount();
     const layoutDisposable = event.api.onDidLayoutChange(updateTerminalCount);
+    const activePanelDisposable = event.api.onDidActivePanelChange(({ panel }) => {
+      setActiveSessionId(panel ? sessionIdFromAgentTerminalPanelId(panel.id) : null);
+    });
+    setActiveSessionId(
+      event.api.activePanel ? sessionIdFromAgentTerminalPanelId(event.api.activePanel.id) : null,
+    );
     const disposable = event.api.onDidMovePanel((moveEvent) => {
       if (moveEvent.panel.api.location.type === "grid") return;
       void detachTerminalPanel(event.api, moveEvent.panel.id, moveEvent.panel);
@@ -289,6 +296,7 @@ export function ConsoleDockPanel({
     });
     movePanelDisposeRef.current = () => {
       layoutDisposable.dispose();
+      activePanelDisposable.dispose();
       disposable.dispose();
       dragDisposable.dispose();
     };
@@ -574,6 +582,7 @@ export function ConsoleDockPanel({
     <div className="console-dock-panel" data-testid="console-dock-panel" ref={panelRef}>
       {terminalCount > 0 && (
         <AgentNavigator
+          activeSessionId={activeSessionId}
           openTerminals={openTerminals}
           sessions={agentState.sessions}
           timeline={agentState.timeline}
@@ -694,11 +703,22 @@ export function ConsoleDockPanel({
                                       <span>{agentLogoText(launch.agentType)}</span>
                                     )}
                                   </span>
-                                  <span className="console-dock-panel__quick-main">
+                                  <span
+                                    className="console-dock-panel__quick-main"
+                                    title={quickLaunchAvailabilityLabel(
+                                      availability,
+                                      launch.agentType,
+                                    )}
+                                  >
                                     <span>{agentLabel(launch.agentType)}</span>
-                                    <small>
-                                      {quickLaunchAvailabilityLabel(availability, launch.agentType)}
-                                    </small>
+                                    {availability.state !== "available" && (
+                                      <small>
+                                        {quickLaunchAvailabilityLabel(
+                                          availability,
+                                          launch.agentType,
+                                        )}
+                                      </small>
+                                    )}
                                   </span>
                                   <span className="console-dock-panel__quick-action">
                                     {launchingKey === key ? "Iniciando…" : "Ejecutar"}
@@ -822,6 +842,7 @@ function JournalLoadNotice({ state, onRetry }: { state: JournalLoadState; onRetr
 }
 
 function AgentNavigator({
+  activeSessionId,
   openTerminals,
   sessions,
   timeline,
@@ -838,6 +859,7 @@ function AgentNavigator({
   onRetryJournalLoad,
   onRestoreWorkspace,
 }: {
+  activeSessionId: string | null;
   openTerminals: TerminalPanelParams[];
   sessions: Record<string, AgentSession>;
   timeline: Record<string, AgentSessionTimelineItem[]>;
@@ -976,6 +998,7 @@ function AgentNavigator({
                 const active = isActiveAgentSession(session);
                 return (
                   <button
+                    aria-current={terminal.sessionId === activeSessionId ? "page" : undefined}
                     className={`console-dock-panel__navigator-item console-dock-panel__navigator-item--${tone}`}
                     type="button"
                     key={terminal.sessionId}
@@ -1034,6 +1057,7 @@ function AgentNavigator({
                 );
                 return (
                   <button
+                    aria-current={terminal.sessionId === activeSessionId ? "page" : undefined}
                     className="console-dock-panel__navigator-item console-dock-panel__navigator-item--recent"
                     type="button"
                     key={terminal.sessionId}
@@ -1066,6 +1090,7 @@ function AgentNavigator({
                 const title = conversationTitle(session.first_user_message);
                 return (
                   <button
+                    aria-current={session.id === activeSessionId ? "page" : undefined}
                     className="console-dock-panel__navigator-item console-dock-panel__navigator-item--recent"
                     type="button"
                     key={session.id}
@@ -1107,7 +1132,7 @@ function AgentNavigator({
                           ? "Eliminando…"
                           : openingJournalId === session.id
                             ? "Abriendo…"
-                            : `${agentLabel(session.agent_type)} · ${busStore.displayName(session.repo)} · ${session.id.slice(0, 8)}`}
+                            : `${agentLabel(session.agent_type)} · ${busStore.displayName(session.repo)} · ${compactAgeLabel(session.updated_at_ms)} · ${session.id.slice(0, 8)}`}
                       </small>
                     </span>
                   </button>
@@ -1132,20 +1157,35 @@ function activeSessionPreview(
   const lastMessage = [...(timeline ?? [])]
     .reverse()
     .find((item) => item.kind !== "lifecycle" && item.text.trim().length > 0);
-  if (lastMessage) return lastMessage.text;
+  if (lastMessage) return plainPreviewText(lastMessage.text);
   if (!session) return null;
   if (session.turn_status === "working") return "Trabajando en el turno actual";
   if (session.turn_status === "settling") return "Recopilando los archivos modificados";
   return null;
 }
 
-function conversationTitle(text: string | null | undefined): string {
-  const compact = (text ?? "")
+function compactAgeLabel(timestampMs: number): string {
+  const minutes = Math.floor(Math.max(0, Date.now() - timestampMs) / 60_000);
+  if (minutes < 1) return "ahora";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return days < 7 ? `${days} d` : `${Math.floor(days / 7)} sem`;
+}
+
+/** Flattens Markdown (links, emphasis, code marks, line breaks) into one line of plain text. */
+function plainPreviewText(text: string | null | undefined): string {
+  return (text ?? "")
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/[`*_>#]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function conversationTitle(text: string | null | undefined): string {
+  const compact = plainPreviewText(text);
   if (!compact) return "Nueva conversación";
   if (compact.length <= 58) return compact;
   const prefix = compact.slice(0, 58);
@@ -1250,27 +1290,28 @@ function AgentJournalBrowser({
                     )}
                   </span>
                   <span className="console-dock-panel__journal-main">
-                    <span>{title}</span>
-                    <small>
-                      {agentLabel(session.agent_type)} ·{" "}
-                      {sessionLabel(session, liveSessions[session.id])} · {session.id.slice(0, 8)}
-                    </small>
+                    <span className="console-dock-panel__journal-title">
+                      <span>{title}</span>
+                      <small>
+                        {agentLabel(session.agent_type)} ·{" "}
+                        {sessionLabel(session, liveSessions[session.id])} ·{" "}
+                        {compactAgeLabel(session.updated_at_ms)} · {session.id.slice(0, 8)}
+                      </small>
+                    </span>
                     {session.last_event_text && (
                       <em
-                        aria-label={`Último evento: ${session.last_event_text}`}
+                        aria-label={`Último evento: ${plainPreviewText(session.last_event_text)}`}
                         title={session.last_event_text}
                       >
-                        {session.last_event_text}
+                        {plainPreviewText(session.last_event_text)}
                       </em>
                     )}
                   </span>
-                  <span className="console-dock-panel__journal-action">
-                    {deletingJournalId === session.id
-                      ? "Eliminando…"
-                      : openingJournalId === session.id
-                        ? "Abriendo…"
-                        : "Abrir"}
-                  </span>
+                  {(deletingJournalId === session.id || openingJournalId === session.id) && (
+                    <span className="console-dock-panel__journal-action">
+                      {deletingJournalId === session.id ? "Eliminando…" : "Abriendo…"}
+                    </span>
+                  )}
                 </button>
               );
             })}

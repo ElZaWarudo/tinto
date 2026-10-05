@@ -29,7 +29,10 @@ vi.mock("../bus/client", () => ({
 }));
 
 import { RepoCard } from "./RepoCard";
-import { checkAgentAvailabilityForRepo, resetAgentAvailabilityCacheForTests } from "./agentAvailability";
+import {
+  checkAgentAvailabilityForRepo,
+  resetAgentAvailabilityCacheForTests,
+} from "./agentAvailability";
 
 function makeDelta(over: Partial<RepoDelta> = {}): RepoDelta {
   return {
@@ -290,6 +293,19 @@ describe("RepoCard", () => {
     // transient: no retry button rendered for that card
   });
 
+  it("offers removing a project whose folder no longer exists", () => {
+    const { onRemove, onOpen } = renderCard({
+      error: {
+        class: "terminal",
+        category: "repository-not-found",
+        message: "el path no existe o no es accesible: C:/tmp/gone",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Quitar del workbench" }));
+    expect(onRemove).toHaveBeenCalledOnce();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it("single click opens the repo", () => {
     const { onOpen } = renderCard();
     fireEvent.click(screen.getByTestId("card-/r/api"));
@@ -509,17 +525,9 @@ describe("WSL launch readiness under slow scans", () => {
     );
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     try {
-      const first = checkAgentAvailabilityForRepo(
-        "/r/api",
-        "wsl:Ubuntu",
-        "codex",
-      );
+      const first = checkAgentAvailabilityForRepo("/r/api", "wsl:Ubuntu", "codex");
       clock.mockReturnValue(12000);
-      const second = checkAgentAvailabilityForRepo(
-        "/r/api",
-        "wsl:Ubuntu",
-        "codex",
-      );
+      const second = checkAgentAvailabilityForRepo("/r/api", "wsl:Ubuntu", "codex");
       resolve({
         agent_type: "codex",
         source: "wsl",
@@ -528,9 +536,7 @@ describe("WSL launch readiness under slow scans", () => {
       });
       await first;
       expect(second).toBe(first);
-      expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledTimes(
-        1,
-      );
+      expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledTimes(1);
     } finally {
       clock.mockRestore();
     }
@@ -542,29 +548,22 @@ describe("WSL launch readiness under slow scans", () => {
         reject = fail;
       }),
     );
-    const first = checkAgentAvailabilityForRepo(
-      "/r/api",
-      "wsl:Ubuntu",
-      "codex",
-    ).catch(() => undefined);
+    const first = checkAgentAvailabilityForRepo("/r/api", "wsl:Ubuntu", "codex").catch(
+      () => undefined,
+    );
     clientMocks.agentProviderReadinessForRepo.mockResolvedValue({
       agent_type: "codex",
       source: "wsl",
       distro: "Ubuntu",
       state: "binary_available",
     });
-    const replacement = checkAgentAvailabilityForRepo(
-      "/r/api",
-      "wsl:Ubuntu",
-      "codex",
-      { force: true },
-    );
+    const replacement = checkAgentAvailabilityForRepo("/r/api", "wsl:Ubuntu", "codex", {
+      force: true,
+    });
     await replacement;
     reject(new Error("old probe"));
     await first;
-    expect(checkAgentAvailabilityForRepo("/r/api", "wsl:Ubuntu", "codex")).toBe(
-      replacement,
-    );
+    expect(checkAgentAvailabilityForRepo("/r/api", "wsl:Ubuntu", "codex")).toBe(replacement);
     expect(clientMocks.agentProviderReadinessForRepo).toHaveBeenCalledTimes(2);
   });
   it("shows the backend startup stage without raw error text or claiming no session", async () => {
@@ -575,21 +574,15 @@ describe("WSL launch readiness under slow scans", () => {
       state: "binary_available",
     });
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const onLaunch = vi
-      .fn()
-      .mockRejectedValue({
-        category: "timeout",
-        message: "WSL startup [binary_check]: synthetic-secret",
-      });
+    const onLaunch = vi.fn().mockRejectedValue({
+      category: "timeout",
+      message: "WSL startup [binary_check]: synthetic-secret",
+    });
     try {
       renderCard({}, { onLaunch });
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Iniciar Codex en api" }),
-      );
+      fireEvent.click(await screen.findByRole("button", { name: "Iniciar Codex en api" }));
       expect(
-        await screen.findByText(
-          /No se pudo confirmar el inicio del Agent.*timeout.*binary_check/,
-        ),
+        await screen.findByText(/No se pudo confirmar el inicio del Agent.*timeout.*binary_check/),
       ).toBeInTheDocument();
       expect(screen.queryByText(/synthetic-secret/)).not.toBeInTheDocument();
       expect(onLaunch).toHaveBeenCalledTimes(1);

@@ -292,6 +292,16 @@ export function MenuBar() {
     }
   };
 
+  // Menubar convention: once a menu is open, pointing at another top-level
+  // item switches to it without a click.
+  const handleTriggerHover = (id: MenuId) => {
+    if (!open || open === id || triggerFor(id)?.disabled) return;
+    pendingMenuFocus.current = null;
+    setActiveTrigger(id);
+    setOpen(id);
+    triggerFor(id)?.focus();
+  };
+
   const handleTriggerClick = (id: MenuId) => {
     if (open === id) closeMenu(false);
     else openMenu(id);
@@ -354,6 +364,7 @@ export function MenuBar() {
             aria-expanded={open === "workbench"}
             aria-controls="menu-popup-workbench"
             onFocus={() => setActiveTrigger("workbench")}
+            onPointerEnter={() => handleTriggerHover("workbench")}
             onKeyDown={(event) => handleTriggerKeyDown(event, "workbench")}
             onClick={() => handleTriggerClick("workbench")}
           >
@@ -415,6 +426,7 @@ export function MenuBar() {
             aria-controls="menu-popup-repos"
             disabled={!active}
             onFocus={() => setActiveTrigger("repos")}
+            onPointerEnter={() => handleTriggerHover("repos")}
             onKeyDown={(event) => handleTriggerKeyDown(event, "repos")}
             onClick={() => handleTriggerClick("repos")}
           >
@@ -456,6 +468,7 @@ export function MenuBar() {
             aria-expanded={open === "projects"}
             aria-controls="menu-popup-projects"
             onFocus={() => setActiveTrigger("projects")}
+            onPointerEnter={() => handleTriggerHover("projects")}
             onKeyDown={(event) => handleTriggerKeyDown(event, "projects")}
             onClick={() => handleTriggerClick("projects")}
           >
@@ -506,6 +519,7 @@ export function MenuBar() {
             aria-expanded={open === "view"}
             aria-controls="menu-popup-view"
             onFocus={() => setActiveTrigger("view")}
+            onPointerEnter={() => handleTriggerHover("view")}
             onKeyDown={(event) => handleTriggerKeyDown(event, "view")}
             onClick={() => handleTriggerClick("view")}
           >
@@ -586,6 +600,7 @@ export function MenuBar() {
             aria-expanded={open === "addons"}
             aria-controls="menu-popup-addons"
             onFocus={() => setActiveTrigger("addons")}
+            onPointerEnter={() => handleTriggerHover("addons")}
             onKeyDown={(event) => handleTriggerKeyDown(event, "addons")}
             onClick={() => handleTriggerClick("addons")}
           >
@@ -621,6 +636,7 @@ export function MenuBar() {
             aria-expanded={open === "help"}
             aria-controls="menu-popup-help"
             onFocus={() => setActiveTrigger("help")}
+            onPointerEnter={() => handleTriggerHover("help")}
             onKeyDown={(event) => handleTriggerKeyDown(event, "help")}
             onClick={() => handleTriggerClick("help")}
           >

@@ -234,14 +234,13 @@ export function AgentRuntimeControls({
   const showPresets = menu === "presets";
   const showPermission = menu === "summary" && permissionModeChangeSupported;
   const resolvedModel = effectiveRuntimeModel(catalog, model);
-  const modelDisplay =
-    model === "auto" && resolvedModel
-      ? `Predeterminado · ${resolvedModel.display_name}`
+  const summaryModel =
+    model === "auto"
+      ? (resolvedModel?.display_name ?? "Modelo predeterminado")
       : codexModelLabel(catalog, model);
-  const reasoningDisplay =
-    reasoning === "auto" && resolvedModel
-      ? `Predeterminado · ${codexReasoningLabel(resolvedModel.default_reasoning_effort)}`
-      : codexReasoningLabel(reasoning);
+  const summaryReasoning = codexReasoningLabel(
+    reasoning === "auto" && resolvedModel ? resolvedModel.default_reasoning_effort : reasoning,
+  ).toLocaleLowerCase("es");
 
   return (
     <div
@@ -262,8 +261,7 @@ export function AgentRuntimeControls({
       >
         <span>Configuración guardada</span>
         <strong>
-          {activePreset?.name ?? "Personalizado"} · {modelDisplay} · {reasoningDisplay} ·{" "}
-          {codexSpeedLabel(speed)}
+          {activePreset?.name ?? "Personalizado"} · {summaryModel} · Razonamiento {summaryReasoning}
         </strong>
         <span aria-hidden="true" className="agent-panel__runtime-chevron">
           ▾

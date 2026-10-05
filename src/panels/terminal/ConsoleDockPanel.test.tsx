@@ -131,13 +131,18 @@ import { detachTerminalFromConsoleDrop, detachTerminalPanel } from "./detachTerm
 function nestedDockApi() {
   const panels: Record<string, IDockviewPanel> = {};
   const panelList: IDockviewPanel[] = [];
+  const activePanelListeners: Array<(event: { panel: IDockviewPanel }) => void> = [];
   return {
     panels: panelList,
     addPanel: vi.fn((opts: { id: string; params?: unknown }) => {
       const panel = {
         id: opts.id,
         params: opts.params,
-        api: { setActive: vi.fn(), setTitle: vi.fn(), location: { type: "grid" } },
+        api: {
+          setActive: vi.fn(() => activePanelListeners.forEach((listener) => listener({ panel }))),
+          setTitle: vi.fn(),
+          location: { type: "grid" },
+        },
       } as unknown as IDockviewPanel;
       panels[opts.id] = panel;
       panelList.push(panel);
@@ -150,6 +155,10 @@ function nestedDockApi() {
     layout: vi.fn(),
     onDidRemovePanel: vi.fn(() => ({ dispose: vi.fn() })),
     onDidLayoutChange: vi.fn(() => ({ dispose: vi.fn() })),
+    onDidActivePanelChange: vi.fn((listener: (event: { panel: IDockviewPanel }) => void) => {
+      activePanelListeners.push(listener);
+      return { dispose: vi.fn() };
+    }),
     onDidMovePanel: vi.fn(() => ({ dispose: vi.fn() })),
     onWillDragPanel: vi.fn(() => ({ dispose: vi.fn() })),
   };
@@ -1045,10 +1054,12 @@ describe("ConsoleDockPanel detach drop", () => {
     consoleDock.openTerminal({ sessionId: "sess-live", repo: "/r/api", agentType: "codex" });
 
     const { unmount } = render(<ConsoleDockPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /mostrar api codex/i }));
+    const navigatorItem = await screen.findByRole("button", { name: /mostrar api codex/i });
+    fireEvent.click(navigatorItem);
 
     const panel = dockviewMocks.api?.getPanel(id);
     expect(panel?.api.setActive).toHaveBeenCalled();
+    expect(navigatorItem).toHaveAttribute("aria-current", "page");
     unmount();
   });
 

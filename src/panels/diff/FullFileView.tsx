@@ -29,9 +29,12 @@ export function FullFileView({
   const [loaded, setLoaded] = useState<LoadedFileContent | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const requestKey = `${repo}\0${path}\0${repoRevision ?? "unknown"}\0${reloadToken}`;
-  const content = loaded?.key === requestKey ? loaded.content : undefined;
-  const errorMessage = error?.key === requestKey ? error.message : null;
+  const fileKey = `${repo}\0${path}\0`;
+  const requestKey = `${fileKey}${repoRevision ?? "unknown"}\0${reloadToken}`;
+  // Keep showing this file's last content while a newer revision loads, so a
+  // repo refresh never blanks the view back to "Cargando…".
+  const content = loaded?.key.startsWith(fileKey) ? loaded.content : undefined;
+  const errorMessage = error?.key === requestKey && content === undefined ? error.message : null;
 
   const lang = languageFromPath(path);
   const highlightable =

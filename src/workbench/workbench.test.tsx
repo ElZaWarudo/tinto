@@ -189,6 +189,22 @@ describe("MenuBar", () => {
     expect(screen.getByTestId("qol-glance")).toHaveAttribute("role", "menuitemcheckbox");
   });
 
+  it("switches the open menu when the pointer moves to another top-level item", () => {
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    fireEvent.pointerEnter(screen.getByTestId("menu-view"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("menu-workbench"));
+    expect(screen.getByRole("menu", { name: "Workbench" })).toBeInTheDocument();
+
+    fireEvent.pointerEnter(screen.getByTestId("menu-view"));
+    expect(screen.queryByRole("menu", { name: "Workbench" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "Ver" })).toBeInTheDocument();
+    expect(screen.getByTestId("menu-view")).toHaveFocus();
+  });
+
   it("focuses an empty menu state and lets pointer users switch menus directly", async () => {
     act(() => busStore.setConfig(config));
     render(<MenuBar />);

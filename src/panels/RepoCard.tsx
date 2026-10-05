@@ -107,11 +107,7 @@ export function RepoAgentLauncher({
     setLaunching(true);
     setLaunchMessage(null);
     Promise.resolve(onLaunch(agentType, mode))
-      .catch((error) =>
-        setLaunchMessage(
-          reportLaunchFailure(error),
-        ),
-      )
+      .catch((error) => setLaunchMessage(reportLaunchFailure(error)))
       .finally(() => setLaunching(false));
   };
 
@@ -397,7 +393,11 @@ function RepoCardImpl({
   const signals = getRepoSignals(delta);
   const counts = signalCounts(signals);
 
-  const cls = ["repo-card", error ? "repo-card--error" : active ? "repo-card--active" : ""]
+  const cls = [
+    "repo-card",
+    error ? "repo-card--error" : active ? "repo-card--active" : "",
+    error?.class === "transient" ? "repo-card--transient" : "",
+  ]
     .filter(Boolean)
     .join(" ");
   const stateLabel = pending
@@ -610,6 +610,18 @@ function RepoCardImpl({
               Reintentar
             </button>
           )}
+          {error.category === "repository-not-found" && (
+            <button
+              className="repo-card__retry"
+              data-testid="remove-missing"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove();
+              }}
+            >
+              Quitar del workbench
+            </button>
+          )}
         </div>
       )}
     </article>
@@ -643,8 +655,7 @@ function reportLaunchFailure(error: unknown): string {
     "session_limit_reached",
   ];
   const category =
-    typeof failure.category === "string" &&
-    categories.includes(failure.category)
+    typeof failure.category === "string" && categories.includes(failure.category)
       ? failure.category
       : "error";
   const stage =

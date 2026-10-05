@@ -186,6 +186,10 @@ select:disabled {
   opacity: 0.55;
 }
 
+select {
+  color-scheme: dark;
+}
+
 select option {
   background: var(--bg-elev);
   color: var(--fg);
@@ -1311,105 +1315,107 @@ select option:checked {
 
 .agent-panel__thought-events {
   display: grid;
-  gap: 4px;
-  padding: 2px 24px 12px 26px;
+  gap: 2px;
+  padding: 2px 0 10px 18px;
 }
 
 .agent-panel__thought-event {
   min-width: 0;
-  padding: 6px 0;
-  color: #b8c3c0;
-  font-size: 12px;
-  line-height: 1.6;
+  padding: 4px 0;
+  color: #aab4b1;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .agent-panel__thought-event .agent-panel__markdown {
-  width: min(100%, 108ch);
+  width: 100%;
   padding: 0;
 }
 
-.agent-panel__thought-command-group {
+.agent-panel__thought-event p {
+  margin: 0;
+}
+
+/* One row per executed command, Codex-style: "Ejecutó <command>", output on demand. */
+.agent-panel__thought-command {
   min-width: 0;
-  margin: 2px 0;
   color: var(--fg-muted);
 }
 
-.agent-panel__thought-command-group > summary {
-  min-height: 32px;
+.agent-panel__thought-command > summary {
+  min-height: 28px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 18px;
+  grid-template-columns: auto minmax(0, 1fr) auto 18px;
   align-items: center;
   gap: 8px;
-  padding: 4px 0;
+  padding: 3px 0;
   cursor: pointer;
   list-style: none;
-  font-size: 11px;
+  font-size: 12px;
 }
 
-.agent-panel__thought-command-group > summary::-webkit-details-marker {
+.agent-panel__thought-command > summary::-webkit-details-marker {
   display: none;
 }
 
-.agent-panel__thought-command-group > summary span:first-child {
+.agent-panel__thought-command > summary:hover {
+  color: #d7dfdd;
+}
+
+.agent-panel__thought-command > summary > span:first-child {
   color: #9aa7a4;
 }
 
-.agent-panel__thought-command-group > summary small {
-  font-size: 10px;
-}
-
-.agent-panel__thought-command-group[open] > summary .agent-panel__thought-chevron {
-  transform: rotate(90deg);
-}
-
-.agent-panel__thought-command-list {
-  display: grid;
-  gap: 8px;
-  padding: 4px 0 6px 10px;
-}
-
-.agent-panel__thought-command {
-  min-width: 0;
-  border-left: 1px solid rgba(94, 234, 212, 0.22);
-  padding-left: 10px;
-}
-
-.agent-panel__thought-command > summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: baseline;
-  color: #cbd5e1;
-  cursor: pointer;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11px;
-}
-
+.agent-panel__thought-command > summary code,
 .agent-panel__thought-command > summary strong {
   min-width: 0;
   overflow: hidden;
-  color: #d7dfdd;
-  font-weight: 550;
+  color: #cfd8d6;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  font-weight: 450;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .agent-panel__thought-command > summary small {
-  color: var(--fg-muted);
-  font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
 }
 
-.agent-panel__thought-command > pre {
-  max-height: 220px;
-  margin: 8px 0 2px;
-  padding: 9px 10px;
-  overflow: auto;
-  border: 1px solid rgba(148, 163, 184, 0.12);
+.agent-panel__thought-command[open] > summary .agent-panel__thought-chevron {
+  transform: rotate(90deg);
+}
+
+.agent-panel__thought-command-body {
+  margin: 4px 0 8px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
   background: #0c0c0c;
+}
+
+.agent-panel__thought-command-body pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 9px 12px;
+  overflow: auto;
   color: #b8c3c0;
-  font-size: 11px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
   white-space: pre-wrap;
+}
+
+.agent-panel__thought-command-body pre + pre {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.agent-panel__thought-command-input {
+  color: #e2e8f0;
+}
+
+.agent-panel__thought-command-input::before {
+  content: "$ ";
+  color: var(--fg-muted);
 }
 
 @keyframes agent-activity-summary-update {
@@ -1527,6 +1533,8 @@ select option:checked {
 /* Drop-down menus */
 .menu {
   position: relative;
+  /* Above .menu__backdrop so pointing at another trigger can switch menus. */
+  z-index: 21;
 }
 .menu__trigger {
   background: transparent;
@@ -2296,7 +2304,7 @@ select option:checked {
 }
 .project-explorer__head {
   flex: none;
-  min-height: 38px;
+  min-height: 30px;
   padding: 0 6px 0 10px;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -2319,8 +2327,8 @@ select option:checked {
 .project-explorer__toggle {
   margin-left: auto;
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   border: 1px solid transparent;
@@ -3096,6 +3104,17 @@ select option:checked {
 }
 .repo-card--active {
   border-left-color: var(--accent-fg);
+}
+/* Transient errors (e.g. a WSL queue timeout) recover on the next poll: amber, not alarm red. */
+.repo-card--transient {
+  border-left-color: #b98a2e;
+}
+.repo-card--transient .error-badge {
+  color: #d9a441;
+  border-color: rgba(217, 164, 65, 0.6);
+}
+.repo-card--transient .repo-card__error {
+  color: #c9a85f;
 }
 .repo-card--skeleton {
   min-height: 82px;
@@ -3932,7 +3951,9 @@ select option:checked {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 8px;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 3px 8px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
@@ -4246,6 +4267,11 @@ select option:checked {
   padding-block: 4px;
 }
 
+.console-dock-panel__navigator-item[aria-current="page"] {
+  border-left-color: #7dd3c7;
+  background: #2a2b2f;
+}
+
 .console-dock-panel__navigator-item .console-dock-panel__quick-icon {
   width: 24px;
   height: 24px;
@@ -4366,7 +4392,8 @@ select option:checked {
   width: 100%;
   min-width: 0;
   display: grid;
-  align-content: start;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: 0;
   border-bottom: 1px solid var(--border);
   background: transparent;
@@ -4374,13 +4401,19 @@ select option:checked {
 }
 
 .console-dock-panel__quick-project-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  border-bottom: 1px solid var(--border);
-  background: #18191b;
+  display: contents;
+}
+
+.console-dock-panel__quick-project-head .console-dock-panel__mcp-link {
+  order: 3;
+  min-height: 24px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--fg-muted);
+}
+
+.console-dock-panel__quick-project .console-dock-panel__quick-agents {
+  order: 2;
 }
 
 .console-dock-panel__quick-project-title {
@@ -4393,9 +4426,8 @@ select option:checked {
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     monospace;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .console-dock-panel__mcp-link,
@@ -4503,7 +4535,7 @@ select option:checked {
 }
 
 .console-dock-panel__quick {
-  min-height: 42px;
+  min-height: 36px;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
@@ -4730,7 +4762,7 @@ select option:checked {
 }
 
 .console-dock-panel__journal-card {
-  min-height: 52px;
+  min-height: 44px;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
@@ -4741,10 +4773,27 @@ select option:checked {
   border-radius: 0;
   background: transparent;
   color: var(--fg);
-  padding: 5px 14px 5px 11px;
+  padding: 4px 14px 4px 11px;
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.console-dock-panel__journal-main .console-dock-panel__journal-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.console-dock-panel__journal-title > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.console-dock-panel__journal-title > small {
+  flex: 0 0 auto;
+  font-size: 11px;
 }
 
 .console-dock-panel__journal-card:hover,
@@ -4788,7 +4837,7 @@ select option:checked {
 }
 
 .console-dock-panel__journal-main em {
-  color: #b8c7c2;
+  color: #8f9c98;
   font-size: 12px;
   font-style: normal;
   line-height: 15px;
@@ -5743,6 +5792,12 @@ select option:checked {
   background: rgba(148, 163, 184, 0.08);
   color: var(--fg-muted);
   cursor: default;
+  opacity: 0.45;
+}
+
+::highlight(agent-transcript-search) {
+  background-color: rgba(250, 204, 21, 0.38);
+  color: #fff;
 }
 
 @media (min-width: 901px) and (max-width: 1180px) {
@@ -11303,8 +11358,9 @@ a:focus-visible {
 
 /* Segmented toggles (Hunks/Full, Inline/Side, Formateado/Fuente). */
 .seg__btn {
-  padding: 6px 13px;
+  padding: 2px 10px;
   font-size: 12px;
+  line-height: 18px;
 }
 .seg__btn:not(.seg__btn--on):not(:disabled):hover {
   background: var(--hover-strong);
@@ -11938,10 +11994,10 @@ a:focus-visible {
   line-height: 1;
 }
 
-/* Roomier project (level-1) tabs: the themeVisualStudio default is a cramped
-   20px. Override the dockview height + font for a comfortable hit target. */
+/* Project and file tabs share one 30px rhythm with the explorer header and
+   file toolbar (the themeVisualStudio default of 20px is too cramped). */
 .app-shell .dockview-theme-vs {
-  --dv-tabs-and-actions-container-height: 34px;
+  --dv-tabs-and-actions-container-height: 30px;
   --dv-tab-font-size: 13px;
 }
 .app-shell .dockview-theme-vs .dv-tab {
@@ -12038,6 +12094,14 @@ a:focus-visible {
 }
 .tree-file--active:hover {
   background: var(--accent-soft);
+}
+/* Consecutive marked rows (changed or active) read as one continuous bar:
+   only the outer ends of the run keep their rounded left corners. */
+:is(.tree-file--changed, .tree-file--active) + :is(.tree-file--changed, .tree-file--active) {
+  border-top-left-radius: 0;
+}
+:is(.tree-file--changed, .tree-file--active):has(+ :is(.tree-file--changed, .tree-file--active)) {
+  border-bottom-left-radius: 0;
 }
 /* ---- File operations: drag/drop + paste + conflict modal ---- */
 .file-op-modal-overlay {
@@ -12589,20 +12653,28 @@ a:focus-visible {
 
 .agent-panel__chat-turn,
 .agent-panel__chat-turn--focused {
-  width: min(100%, 1180px);
+  width: min(100%, 780px);
   margin-inline: auto;
-  padding: 18px 0 24px;
+  padding: 14px 0 22px;
   border: 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   background: transparent;
   box-shadow: none;
 }
 
+/* Turn metadata recedes until the turn is hovered, focused or selected. */
 .agent-panel__chat-turn-head {
-  min-height: 28px;
-  padding: 0 2px 12px;
+  min-height: 24px;
+  padding: 0 2px 8px;
   border: 0;
   background: transparent;
+  opacity: 0.45;
+  transition: opacity 120ms ease;
+}
+
+.agent-panel__chat-turn:hover .agent-panel__chat-turn-head,
+.agent-panel__chat-turn:focus-within .agent-panel__chat-turn-head,
+.agent-panel__chat-turn--focused .agent-panel__chat-turn-head {
+  opacity: 1;
 }
 
 .agent-panel__turn-artifacts,
@@ -12632,9 +12704,9 @@ a:focus-visible {
   display: block;
   align-self: flex-end;
   width: fit-content;
-  max-width: min(720px, 76%);
+  max-width: 80%;
   margin: 6px 0 20px auto;
-  padding: 11px 42px 11px 15px;
+  padding: 10px 42px 10px 16px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 16px;
   background: #252525;
@@ -12653,8 +12725,11 @@ a:focus-visible {
 
 .agent-panel__message--user_message .agent-panel__markdown {
   width: auto;
-  max-width: 68ch;
+  max-width: none;
   padding: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .agent-panel__message--agent_message {
@@ -12672,14 +12747,18 @@ a:focus-visible {
 }
 
 .agent-panel__message--agent_message .agent-panel__markdown {
-  width: min(100%, 82ch);
+  width: 100%;
   padding: 0;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 .agent-panel__message--activity,
 .agent-panel__message--agent_progress {
   display: grid;
-  width: min(100%, 82ch);
+  width: 100%;
   margin: 3px 0;
   padding: 5px 2px;
   border: 0;
@@ -12725,15 +12804,6 @@ a:focus-visible {
   .agent-panel__message--command_output {
     margin-left: 0;
   }
-}
-
-.agent-panel__thought-command.agent-panel__message--command_output {
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
-  padding: 0 0 0 10px;
-  border-left: 1px solid rgba(94, 234, 212, 0.22);
-  background: transparent;
 }
 
 /* Agent conversation controls: compact, turn-scoped, and context-aware. */
@@ -12931,4 +13001,143 @@ a:focus-visible {
     padding-inline: 7px;
     font-size: 10px;
   }
+}
+
+/* Codex-style composer: one rounded input card centered on the chat column,
+   attach and send in its bottom toolbar, run settings as a quiet footer. */
+.agent-panel__composer {
+  padding: 8px clamp(14px, 3vw, 44px) 12px;
+  border-top: 0;
+  background: #101010;
+}
+
+.agent-panel__composer > :not(.sr-only) {
+  box-sizing: border-box;
+  width: min(100%, 780px);
+  margin-inline: auto;
+}
+
+.agent-panel__composer-row {
+  order: 1;
+  grid-template-columns: 32px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  background: #1b1b1b;
+}
+
+.agent-panel__composer-row:focus-within {
+  border-color: rgba(148, 163, 184, 0.42);
+}
+
+.agent-panel__composer-row textarea {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-height: 44px;
+  padding: 4px 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 14px;
+  resize: none;
+}
+
+.agent-panel__composer-row textarea:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.agent-panel__composer-row .agent-panel__attach {
+  grid-column: 1;
+  grid-row: 2;
+  width: 32px;
+  height: 32px;
+  min-height: 0;
+  border-radius: 999px;
+  font-size: 18px;
+}
+
+.agent-panel__composer-row .agent-panel__steer {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.agent-panel__composer-row .agent-panel__interrupt {
+  grid-column: 4;
+  grid-row: 2;
+}
+
+.agent-panel__composer-row .agent-panel__steer,
+.agent-panel__composer-row .agent-panel__interrupt {
+  min-height: 32px;
+  border-radius: 999px;
+}
+
+.agent-panel__composer-row .agent-panel__send {
+  grid-column: 5;
+  grid-row: 2;
+  align-self: center;
+  min-width: 0;
+  height: 32px;
+  min-height: 0;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #0f0f0f;
+}
+
+.agent-panel__composer-row .agent-panel__send:disabled {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--fg-muted);
+}
+
+.agent-panel__composer .agent-panel__runtime {
+  order: 2;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px 0;
+}
+
+.agent-panel__composer .agent-panel__runtime-summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto;
+  justify-self: start;
+  width: auto;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+}
+
+.agent-panel__composer .agent-panel__runtime-summary > span:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.agent-panel__composer .agent-panel__runtime-summary strong {
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-panel__composer .agent-panel__runtime-chevron {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.agent-panel__composer .agent-panel__runtime-fast {
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 10px;
 }

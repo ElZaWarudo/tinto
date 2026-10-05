@@ -66,3 +66,25 @@ export function codexReasoningLabel(value: CodexReasoningSelection): string {
 export function codexSpeedLabel(value: CodexSpeedSelection): string {
   return value === "fast" ? "Rápido" : "Normal";
 }
+
+const LAST_CATALOG_KEY = "tinto.agents.lastRuntimeCatalog";
+
+/** Remembers the last ready Codex model catalog so archived sessions can offer the same choices. */
+export function rememberRuntimeCatalog(catalog: AgentRuntimeCatalog): void {
+  if (catalog.status !== "ready" || !catalog.models?.length) return;
+  try {
+    localStorage.setItem(LAST_CATALOG_KEY, JSON.stringify(catalog));
+  } catch {
+    // Storage may be unavailable; the catalog is only a convenience here.
+  }
+}
+
+export function lastRuntimeCatalog(): AgentRuntimeCatalog | null {
+  try {
+    const stored = localStorage.getItem(LAST_CATALOG_KEY);
+    const catalog = stored ? (JSON.parse(stored) as AgentRuntimeCatalog) : null;
+    return catalog?.status === "ready" && Array.isArray(catalog.models) ? catalog : null;
+  } catch {
+    return null;
+  }
+}
