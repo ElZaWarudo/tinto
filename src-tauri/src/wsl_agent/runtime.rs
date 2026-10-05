@@ -909,6 +909,12 @@ fn file_fingerprints(
     let repo = repo
         .canonicalize()
         .map_err(|_| AgentRuntimeError::new("repository-not-found", "el repo no existe"))?;
+    // Only gitignored files matching the watchlist are fingerprinted, so an empty
+    // watchlist can never match. Skipping both walks keeps the 3 s poll cheap on
+    // slow mounts such as /mnt/c.
+    if fs_watch.is_empty() {
+        return Ok(Vec::new());
+    }
     let classifier = PathClassifier::new(&repo, &fs_watch)
         .map_err(|error| AgentRuntimeError::new("watchlist", error.to_string()))?;
     let mut files = Vec::new();
@@ -919,6 +925,7 @@ fn file_fingerprints(
         .git_ignore(false)
         .git_global(false)
         .git_exclude(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
         .build();
 
     for entry in walker {

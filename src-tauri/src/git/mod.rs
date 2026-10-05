@@ -75,6 +75,74 @@ pub struct RepoStatus {
     pub untracked: Vec<PathBuf>,
 }
 
+/// Status via the `git` CLI for repos on Windows drives seen from WSL
+/// (`/mnt/<letter>/...`). libgit2 stats every untracked entry, which costs
+/// seconds per poll over the drvfs mount; `git status` takes ~0.1 s there.
+/// Returns `None` when the path is not on such a mount or `git` fails, so the
+/// caller falls back to libgit2.
+pub fn drvfs_cli_status(repo: &Path) -> Option<RepoStatus> {
+    if !is_wsl_windows_drive_path(repo) {
+        return None;
+    }
+    let output = std::process::Command::new("git")
+        .args([
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| parse_porcelain_v1_z(&output.stdout))
+}
+
+fn is_wsl_windows_drive_path(path: &Path) -> bool {
+    cfg!(target_os = "linux")
+        && path
+            .to_str()
+            .and_then(|path| path.strip_prefix("/mnt/"))
+            .is_some_and(|rest| {
+                let mut chars = rest.chars();
+                chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                    && matches!(chars.next(), None | Some('/'))
+            })
+}
+
+/// Maps `git status --porcelain=v1 -z --no-renames` to the same buckets the
+/// libgit2 engine uses: `??` untracked, index column staged, worktree column
+/// modified. Unmerged entries are skipped, as libgit2 reports them only as
+/// conflicted.
+fn parse_porcelain_v1_z(stdout: &[u8]) -> RepoStatus {
+    let mut status = RepoStatus::default();
+    for record in stdout.split(|byte| *byte == 0) {
+        if record.len() < 4 {
+            continue;
+        }
+        let (x, y) = (record[0], record[1]);
+        let path = PathBuf::from(String::from_utf8_lossy(&record[3..]).into_owned());
+        if x == b'?' && y == b'?' {
+            status.untracked.push(path);
+            continue;
+        }
+        if x == b'U' || y == b'U' || (x == b'A' && y == b'A') || (x == b'D' && y == b'D') {
+            continue;
+        }
+        if matches!(x, b'A' | b'M' | b'D' | b'R' | b'T' | b'C') {
+            status.staged.push(path.clone());
+        }
+        if matches!(y, b'M' | b'D' | b'T') {
+            status.modified.push(path);
+        }
+    }
+    status
+}
+
 /// Branch actual y divergencia con su upstream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BranchInfo {
@@ -176,4 +244,44 @@ pub trait GitEngine: Send + Sync {
     /// Diff de un commit contra su primer padre (o contra el árbol vacío para
     /// el commit raíz).
     fn commit_diff(&self, commit_id: &str) -> Result<Vec<FileDiff>, GitError>;
+}
+
+#[cfg(test)]
+mod porcelain_tests {
+    use super::*;
+
+    #[test]
+    fn porcelain_maps_like_the_libgit2_engine() {
+        let stdout = b"?? new.txt\0M  staged.rs\0MM both.rs\0 M changed.rs\0 D gone.rs\0D  removed.rs\0UU conflict.rs\0A  added dir/x y.md\0";
+        let status = parse_porcelain_v1_z(stdout);
+        assert_eq!(status.untracked, vec![PathBuf::from("new.txt")]);
+        assert_eq!(
+            status.staged,
+            vec![
+                PathBuf::from("staged.rs"),
+                PathBuf::from("both.rs"),
+                PathBuf::from("removed.rs"),
+                PathBuf::from("added dir/x y.md"),
+            ]
+        );
+        assert_eq!(
+            status.modified,
+            vec![
+                PathBuf::from("both.rs"),
+                PathBuf::from("changed.rs"),
+                PathBuf::from("gone.rs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_windows_drive_mounts_use_the_cli() {
+        let linux = cfg!(target_os = "linux");
+        assert_eq!(
+            is_wsl_windows_drive_path(Path::new("/mnt/c/Users/me/repo")),
+            linux
+        );
+        assert!(!is_wsl_windows_drive_path(Path::new("/mnt/wsl/repo")));
+        assert!(!is_wsl_windows_drive_path(Path::new("/home/me/repo")));
+    }
 }

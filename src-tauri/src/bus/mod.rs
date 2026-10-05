@@ -169,7 +169,38 @@ impl RepoLiveState {
         self.revision += 1;
     }
 
-    pub(crate) fn apply_external_delta(&mut self, delta: &RepoDelta, analysis_included: bool) {
+    /// Applies a WSL snapshot and returns whether anything visible changed.
+    /// Unchanged polls keep the revision, so views keyed on it (e.g. the full
+    /// file view) do not refetch every 3 s.
+    pub(crate) fn apply_external_delta(&mut self, delta: &RepoDelta, analysis_included: bool) -> bool {
+        // A transient failure (e.g. a WSL queue timeout) carries no repo data;
+        // keep the last good snapshot visible and only surface the error.
+        if delta
+            .error
+            .as_ref()
+            .is_some_and(|error| error.class == RepoErrorClass::Transient)
+        {
+            if self.error == delta.error {
+                return false;
+            }
+            self.error = delta.error.clone();
+            self.revision += 1;
+            return true;
+        }
+        let changed = self.status != delta.status
+            || self.branch != delta.branch
+            || self.head != delta.head
+            || self.error != delta.error
+            || self.gitleaks_configured != delta.gitleaks_configured
+            || self.agents_md_configured != delta.agents_md_configured
+            || (analysis_included
+                && (self.metrics != delta.metrics
+                    || self.signals != delta.signals
+                    || self.secret_findings != delta.secret_findings
+                    || self.secret_scan_status != delta.secret_scan_status));
+        if !changed {
+            return false;
+        }
         self.status = delta.status.clone();
         self.branch = delta.branch.clone();
         self.head = delta.head.clone();
@@ -184,6 +215,7 @@ impl RepoLiveState {
             self.secret_scan_status = delta.secret_scan_status.clone();
         }
         self.revision += 1;
+        true
     }
 
     /// Construye los FsEvents del Plano 2 con tamaño/delta (stat best-effort).
@@ -619,8 +651,15 @@ fn watcher_error_state(error: &WatcherError) -> RepoErrorState {
 }
 
 pub(crate) fn git_error_state(error: &GitError) -> RepoErrorState {
+    // A missing folder will not fix itself on the next scan; marking it terminal
+    // offers Retry/Remove and lets GetSnapshot remount it if the folder returns.
+    let class = if matches!(error, GitError::RepositoryNotFound(_)) {
+        RepoErrorClass::Terminal
+    } else {
+        RepoErrorClass::Transient
+    };
     RepoErrorState {
-        class: RepoErrorClass::Transient,
+        class,
         category: error.category().into(),
         message: error.to_string(),
     }
@@ -1097,10 +1136,12 @@ async fn run_bus_inner(
                             }
                         }
                         let subscribed_diffs = external.subscribed_diffs.clone();
-                        state.apply_external_delta(&external, analysis_included);
-                        let mut delta = state.delta(&result.repo);
-                        delta.subscribed_diffs = subscribed_diffs;
-                        emit(&sink, EVENT_WORKBENCH_DELTA, &delta);
+                        let changed = state.apply_external_delta(&external, analysis_included);
+                        if changed || subscribed_diffs.is_some() {
+                            let mut delta = state.delta(&result.repo);
+                            delta.subscribed_diffs = subscribed_diffs;
+                            emit(&sink, EVENT_WORKBENCH_DELTA, &delta);
+                        }
                     }
                 }
                 // Coalescing: si llegaron disparadores durante el vuelo, un
@@ -1221,6 +1262,7 @@ fn trigger_wsl_recalc_batch(
                 payload: RecalcPayload::WslPoll {
                     delta: empty_wsl_error_delta(
                         &entry.path,
+                        RepoErrorClass::Terminal,
                         "missing_distro",
                         "repo WSL sin distro",
                     ),
@@ -1285,6 +1327,7 @@ fn trigger_wsl_recalc_batch(
                                 .unwrap_or_else(|| {
                                     empty_wsl_error_delta(
                                         &repo,
+                                        RepoErrorClass::Terminal,
                                         "empty-response",
                                         "el agente WSL no devolvio el repo",
                                     )
@@ -1311,7 +1354,7 @@ fn trigger_wsl_recalc_batch(
                             (
                                 repo.clone(),
                                 RecalcPayload::WslPoll {
-                                    delta: empty_wsl_error_delta(&repo, &category, &message),
+                                    delta: empty_wsl_error_delta(&repo, RepoErrorClass::Terminal, &category, &message),
                                     fingerprints: None,
                                     fs_watch: entry.fs_watch,
                                     analysis_included: false,
@@ -1328,6 +1371,7 @@ fn trigger_wsl_recalc_batch(
                                 RecalcPayload::WslPoll {
                                     delta: empty_wsl_error_delta(
                                         &repo,
+                                        RepoErrorClass::Terminal,
                                         "malformed_response",
                                         "respuesta inesperada del agente WSL",
                                     ),
@@ -1345,8 +1389,11 @@ fn trigger_wsl_recalc_batch(
                             (
                                 repo.clone(),
                                 RecalcPayload::WslPoll {
+                                    // Queue/read timeouts and helper exits are transient
+                                    // transport failures; the next poll retries them.
                                     delta: empty_wsl_error_delta(
                                         &repo,
+                                        RepoErrorClass::Transient,
                                         error.safe_category(),
                                         &error.message,
                                     ),
@@ -1370,6 +1417,7 @@ fn trigger_wsl_recalc_batch(
                             RecalcPayload::WslPoll {
                                 delta: empty_wsl_error_delta(
                                     &repo,
+                                    RepoErrorClass::Transient,
                                     "internal",
                                     "la tarea WSL fallo",
                                 ),
@@ -1437,7 +1485,12 @@ fn trigger_entry_recalc(
     }
 }
 
-fn empty_wsl_error_delta(repo: &Path, category: &str, message: &str) -> RepoDelta {
+fn empty_wsl_error_delta(
+    repo: &Path,
+    class: RepoErrorClass,
+    category: &str,
+    message: &str,
+) -> RepoDelta {
     RepoDelta {
         repo: repo.to_path_buf(),
         revision: 0,
@@ -1446,7 +1499,7 @@ fn empty_wsl_error_delta(repo: &Path, category: &str, message: &str) -> RepoDelt
         head: None,
         last_activity_ms: now_ms(),
         error: Some(RepoErrorState {
-            class: RepoErrorClass::Terminal,
+            class,
             category: category.into(),
             message: message.into(),
         }),
@@ -1619,7 +1672,10 @@ pub(crate) fn recalc_blocking(
     subs: &[SubscriptionTarget],
 ) -> Result<RecalcOutcome, GitError> {
     let engine = Git2Engine::open(repo)?;
-    let status = engine.status()?;
+    let status = match crate::git::drvfs_cli_status(repo) {
+        Some(status) => status,
+        None => engine.status()?,
+    };
     let (branch, head) = match scope {
         RecalcScope::StatusOnly => (None, None),
         RecalcScope::Metadata | RecalcScope::Everything => {
@@ -1861,6 +1917,30 @@ mod tests {
         assert_eq!(state.status.modified, vec![PathBuf::from("src/main.rs")]);
         assert!(state.gitleaks_configured);
         assert!(state.agents_md_configured);
+
+        // A transient WSL transport failure keeps the last good snapshot.
+        let timeout = empty_wsl_error_delta(
+            Path::new("/repo"),
+            RepoErrorClass::Transient,
+            "timeout",
+            "timeout en cola del agente WSL; solicitud no enviada",
+        );
+        state.apply_external_delta(&timeout, false);
+        assert_eq!(state.status.modified, vec![PathBuf::from("src/main.rs")]);
+        assert!(state.gitleaks_configured);
+        assert_eq!(
+            state.error.as_ref().map(|error| error.class),
+            Some(RepoErrorClass::Transient)
+        );
+
+        // The next successful poll clears it.
+        assert!(state.apply_external_delta(&delta, false));
+        assert!(state.error.is_none());
+
+        // An identical poll changes nothing, so the revision stays put.
+        let revision = state.revision;
+        assert!(!state.apply_external_delta(&delta, false));
+        assert_eq!(state.revision, revision);
     }
 
     #[test]
