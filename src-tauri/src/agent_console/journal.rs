@@ -761,11 +761,11 @@ mod tests {
     use super::*;
 
     use crate::bus::contract::{
-        AgentSession, AgentSessionAcpMode, AgentSessionAcpPermission, AgentSessionChange,
-        AgentSessionChangeKind, AgentSessionCheckpoint, AgentSessionCheckpointType,
+        AgentSession, AgentSessionAcpMode, AgentSessionAcpPermission,
         AgentSessionAcpPermissionState, AgentSessionAcpRuntime, AgentSessionAcpState,
-        AgentSessionPermissionMode, AgentSessionTimelineKind, AgentSessionTurnCheckpoint,
-        AgentSubagentCapabilities, AgentSubagentThread,
+        AgentSessionChange, AgentSessionChangeKind, AgentSessionCheckpoint,
+        AgentSessionCheckpointType, AgentSessionPermissionMode, AgentSessionTimelineKind,
+        AgentSessionTurnCheckpoint, AgentSubagentCapabilities, AgentSubagentThread,
     };
 
     fn session(id: &str) -> AgentSession {
@@ -828,7 +828,11 @@ mod tests {
         }
         let journal = AgentJournal::open(&path).unwrap();
         for (id, expected) in [("failed", Some(7)), ("success", Some(0)), ("unknown", None)] {
-            assert_eq!(journal.session_from_journal(id).unwrap().unwrap().exit_code, expected, "{id}");
+            assert_eq!(
+                journal.session_from_journal(id).unwrap().unwrap().exit_code,
+                expected,
+                "{id}"
+            );
         }
     }
 
@@ -956,8 +960,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("legacy.sqlite");
         let legacy = Connection::open(&path).unwrap();
-        legacy.execute_batch(
-            "CREATE TABLE agent_sessions (
+        legacy
+            .execute_batch(
+                "CREATE TABLE agent_sessions (
                 id TEXT PRIMARY KEY, repo TEXT NOT NULL, agent_type TEXT NOT NULL,
                 source_kind TEXT NOT NULL DEFAULT 'local', distro TEXT,
                 status TEXT NOT NULL, started_at_ms INTEGER NOT NULL,
@@ -966,22 +971,30 @@ mod tests {
             INSERT INTO agent_sessions
                 (id, repo, agent_type, status, started_at_ms, updated_at_ms)
                 VALUES ('legacy', '/repo', 'codex', 'completed', 1, 2);",
-        ).unwrap();
+            )
+            .unwrap();
         drop(legacy);
 
         let journal = AgentJournal::open(&path).unwrap();
         let restored = journal.session_from_journal("legacy").unwrap().unwrap();
         assert_eq!(restored.id, "legacy");
         assert!(restored.turn_checkpoints.is_empty());
-        let column: Option<String> = journal.conn.query_row(
-            "SELECT turn_checkpoints_json FROM agent_sessions WHERE id = 'legacy'",
-            [], |row| row.get(0),
-        ).unwrap();
+        let column: Option<String> = journal
+            .conn
+            .query_row(
+                "SELECT turn_checkpoints_json FROM agent_sessions WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert!(column.is_none());
         journal.record_session(&restored).unwrap();
         drop(journal);
-        assert!(AgentJournal::open(&path).unwrap()
-            .session_from_journal("legacy").unwrap().is_some());
+        assert!(AgentJournal::open(&path)
+            .unwrap()
+            .session_from_journal("legacy")
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -1380,49 +1393,78 @@ mod tests {
     #[ignore = "controller recorded-history measurement; requires TINTO_REPLAY_FIXTURE"]
     fn recorded_history_replay_budget() {
         let fixture = std::env::var("TINTO_REPLAY_FIXTURE").unwrap();
-        let items: Vec<AgentSessionTimelineItem> = serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
+        let items: Vec<AgentSessionTimelineItem> =
+            serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
         assert_eq!(items.len(), 10208);
         let dir = tempfile::tempdir().unwrap();
         let journal = AgentJournal::open(dir.path().join("replay.sqlite")).unwrap();
         let mut snapshot = session("replay-test");
         journal.record_session(&snapshot).unwrap();
-        let items: Vec<_> = items.into_iter().enumerate().map(|(index, mut item)| {
-            item.id = format!("replay-test:resumed:{index}");
-            item.session_id = snapshot.id.clone();
-            item
-        }).collect();
+        let items: Vec<_> = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut item)| {
+                item.id = format!("replay-test:resumed:{index}");
+                item.session_id = snapshot.id.clone();
+                item
+            })
+            .collect();
         snapshot.timeline = items.iter().rev().take(2000).cloned().collect();
         snapshot.timeline.reverse();
         let started = std::time::Instant::now();
         journal.record_resumed_timeline(&snapshot, &items).unwrap();
         let elapsed = started.elapsed();
         let restored = journal.timeline_for_session(&snapshot.id).unwrap();
-        assert_eq!(serde_json::to_value(&restored).unwrap(), serde_json::to_value(&items).unwrap());
-        eprintln!("REPLAY_BATCH count={} elapsed_ms={}", items.len(), elapsed.as_millis());
-        assert!(elapsed.as_secs() < 2, "recorded replay blocks resume longer than two seconds");
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&items).unwrap()
+        );
+        eprintln!(
+            "REPLAY_BATCH count={} elapsed_ms={}",
+            items.len(),
+            elapsed.as_millis()
+        );
+        assert!(
+            elapsed.as_secs() < 2,
+            "recorded replay blocks resume longer than two seconds"
+        );
     }
 
     #[test]
     fn resumed_history_transaction_preserves_order_and_rolls_back_mixed_sessions() {
         let journal = AgentJournal::open_in_memory().unwrap();
         let snapshot = session("resumed");
-        let items: Vec<_> = (0..10208).map(|index| AgentSessionTimelineItem {
-            id: format!("resumed:{index}"), session_id: snapshot.id.clone(),
-            kind: AgentSessionTimelineKind::CommandOutput,
-            text: format!("chunk {index}"), timestamp_ms: index + 100, attachments: Vec::new(),
-        }).collect();
+        let items: Vec<_> = (0..10208)
+            .map(|index| AgentSessionTimelineItem {
+                id: format!("resumed:{index}"),
+                session_id: snapshot.id.clone(),
+                kind: AgentSessionTimelineKind::CommandOutput,
+                text: format!("chunk {index}"),
+                timestamp_ms: index + 100,
+                attachments: Vec::new(),
+            })
+            .collect();
         journal.record_resumed_timeline(&snapshot, &items).unwrap();
         let restored = journal.timeline_for_session(&snapshot.id).unwrap();
-        assert_eq!(serde_json::to_value(&restored).unwrap(), serde_json::to_value(&items).unwrap());
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&items).unwrap()
+        );
         // Repeated persistence does not duplicate events.
         journal.record_resumed_timeline(&snapshot, &items).unwrap();
-        assert_eq!(journal.timeline_for_session(&snapshot.id).unwrap().len(), items.len());
+        assert_eq!(
+            journal.timeline_for_session(&snapshot.id).unwrap().len(),
+            items.len()
+        );
         let other = session("failed");
         let mut valid = items[0].clone();
-        valid.id = "failed:0".into(); valid.session_id = other.id.clone();
-        assert!(matches!(journal.record_resumed_timeline(&other, &[valid, items[1].clone()]), Err(AgentJournalError::ReplaySessionMismatch)));
+        valid.id = "failed:0".into();
+        valid.session_id = other.id.clone();
+        assert!(matches!(
+            journal.record_resumed_timeline(&other, &[valid, items[1].clone()]),
+            Err(AgentJournalError::ReplaySessionMismatch)
+        ));
         assert!(journal.session_from_journal(&other.id).unwrap().is_none());
         assert!(journal.timeline_for_session(&other.id).unwrap().is_empty());
     }
-
 }

@@ -1308,12 +1308,14 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 ));
             }
             if is_root_thread {
-                let _ = context.output_tx.send(timeline_frame_for_thread_with_turn_done(
-                    AgentSessionTimelineKind::Lifecycle,
-                    "",
-                    None,
-                    true,
-                ));
+                let _ = context
+                    .output_tx
+                    .send(timeline_frame_for_thread_with_turn_done(
+                        AgentSessionTimelineKind::Lifecycle,
+                        "",
+                        None,
+                        true,
+                    ));
             }
             if is_root_thread {
                 if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
@@ -2878,7 +2880,8 @@ fn timeline_frame_for_thread_with_turn_done(
             "thread_id": thread_id,
         }))
         .unwrap_or_else(|_| {
-            b"{\"kind\":\"lifecycle\",\"text\":\"timeline encode failed\",\"turn_done\":false}".to_vec()
+            b"{\"kind\":\"lifecycle\",\"text\":\"timeline encode failed\",\"turn_done\":false}"
+                .to_vec()
         }),
     );
     frame.push(b'\n');
@@ -3358,7 +3361,9 @@ mod tests {
             &context,
         );
 
-        let frame = rx.recv().expect("empty completion should still emit a frame");
+        let frame = rx
+            .recv()
+            .expect("empty completion should still emit a frame");
         let frame = crate::agent_console::commands::parse_timeline_frame(&frame)
             .expect("completion frame should be parseable");
         assert!(frame.turn_done);

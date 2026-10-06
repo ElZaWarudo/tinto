@@ -100,7 +100,9 @@ impl ScanFailure {
             Self::PermissionDenied => {
                 "Gitleaks no pudo acceder a algunos archivos; se usó el detector básico."
             }
-            Self::ScanFailed => "Gitleaks no pudo completar el análisis; se usó el detector básico.",
+            Self::ScanFailed => {
+                "Gitleaks no pudo completar el análisis; se usó el detector básico."
+            }
             Self::ReportUnavailable => {
                 "Gitleaks no produjo un reporte legible; se usó el detector básico."
             }
@@ -1176,7 +1178,10 @@ mod tests {
     fn unknown_or_ambiguous_diagnostics_remain_generic() {
         let unknown = classify_scan_failure(b"unexpected scanner output /repo/secret.env");
         assert_eq!(unknown, ScanFailure::ScanFailed);
-        assert_eq!(unknown.message(), "Gitleaks no pudo completar el análisis; se usó el detector básico.");
+        assert_eq!(
+            unknown.message(),
+            "Gitleaks no pudo completar el análisis; se usó el detector básico."
+        );
         assert!(!unknown.message().contains(".gitleaks.toml"));
 
         let ambiguous = classify_scan_failure(b"permission denied while operation timed out");

@@ -78,7 +78,6 @@ impl Drop for KillOnCloseJob {
     }
 }
 
-
 /// Bound a diagnostic child and its pipe reads; never change distro lifecycle.
 pub(crate) fn output_with_timeout(
     command: &mut Command,
@@ -217,14 +216,26 @@ mod tests {
         }
     }
 
-
     #[test]
     fn bounded_output_preserves_exit_and_bounds_stalled_child() {
-        let output = output_with_timeout(Command::new("cmd.exe").args(["/C", "echo ready & exit /b 7"]), std::time::Duration::from_secs(3)).unwrap();
+        let output = output_with_timeout(
+            Command::new("cmd.exe").args(["/C", "echo ready & exit /b 7"]),
+            std::time::Duration::from_secs(3),
+        )
+        .unwrap();
         assert_eq!(output.status.code(), Some(7));
         assert!(String::from_utf8_lossy(&output.stdout).contains("ready"));
         let started = std::time::Instant::now();
-        let error = output_with_timeout(Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 10"]), std::time::Duration::from_millis(100)).unwrap_err();
+        let error = output_with_timeout(
+            Command::new("powershell.exe").args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 10",
+            ]),
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(started.elapsed() < std::time::Duration::from_secs(3));
     }
