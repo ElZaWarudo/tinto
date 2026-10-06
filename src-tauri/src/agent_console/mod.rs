@@ -5,6 +5,7 @@
 pub mod acp;
 pub mod app_server;
 pub mod checkpoint;
+pub mod cli_update;
 pub mod commands;
 pub mod install;
 pub mod journal;
@@ -41,7 +42,8 @@ use std::{
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionContextSummary, AgentSessionError,
     AgentSessionFeedback, AgentSessionLimits, AgentSessionPermissionMode, AgentSessionResumeMode,
-    AgentSessionRuntimeOptions, AgentSessionTimelineItem, AgentSubagentThread,
+    AgentSessionRuntimeOptions, AgentSessionTimelineItem, AgentSessionTimelineKind,
+    AgentSubagentThread,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -194,12 +196,12 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let checkpoint = Some(create_checkpoint(
+        let (checkpoint, checkpoint_notice) = checkpoint_unless_oversized(create_checkpoint(
             &repo,
             &id,
             started_at_ms,
             &self.checkpoint_config,
-        )?);
+        ))?;
         let acp_provider = matches!(agent_type.as_str(), "kimi" | "opencode");
         let mut process: Box<dyn AgentProcess> = if acp_provider {
             let intent = AcpLaunchIntent::LoadSession {
@@ -245,6 +247,9 @@ impl AgentSessionRegistry {
         if !acp_provider {
             session.set_provider_session_id(provider_session_id);
         }
+        if let Some(notice) = checkpoint_notice {
+            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
+        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -283,12 +288,12 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let checkpoint = Some(create_checkpoint(
+        let (checkpoint, checkpoint_notice) = checkpoint_unless_oversized(create_checkpoint(
             &repo,
             &id,
             started_at_ms,
             &self.checkpoint_config,
-        )?);
+        ))?;
         let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
             "kimi" => Box::new(AcpProcessSupervisor::spawn(
                 binary_path.clone(),
@@ -317,6 +322,9 @@ impl AgentSessionRegistry {
             self.checkpoint_config.clone(),
             CheckpointBackend::Local,
         );
+        if let Some(notice) = checkpoint_notice {
+            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
+        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -365,10 +373,9 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let checkpoint = Some(
-            create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)
-                .map_err(|error| wsl_startup_error("checkpoint_create", error))?,
-        );
+        let (checkpoint, checkpoint_notice) =
+            checkpoint_unless_oversized(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms))
+                .map_err(|error| wsl_startup_error("checkpoint_create", error))?;
         let mut process = self.process_factory.resume_wsl_agent(
             &agent_type,
             &distro,
@@ -390,6 +397,9 @@ impl AgentSessionRegistry {
         );
         session.set_wsl_distro(distro);
         session.set_provider_session_id(provider_session_id);
+        if let Some(notice) = checkpoint_notice {
+            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
+        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -436,15 +446,14 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let checkpoint = if create_remote_checkpoint {
-            Some(
-                create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)
-                    .map_err(|error| wsl_startup_error("checkpoint_create", error))?,
-            )
+        let (checkpoint, checkpoint_notice) = if create_remote_checkpoint {
+            checkpoint_unless_oversized(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms))
+                .map_err(|error| wsl_startup_error("checkpoint_create", error))?
         } else {
-            None
+            (None, None)
         };
-        let process = self.process_factory
+        let process = self
+            .process_factory
             .spawn_wsl_agent(&agent_type, &distro, &repo, permission_mode)
             .map_err(|error| wsl_startup_error("provider_spawn", error))?;
         let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
@@ -470,6 +479,9 @@ impl AgentSessionRegistry {
             CheckpointBackend::Wsl,
         );
         session.set_wsl_distro(distro);
+        if let Some(notice) = checkpoint_notice {
+            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
+        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -1127,7 +1139,10 @@ fn canonical_repo(repo: &Path) -> Result<PathBuf, AgentConsoleError> {
 }
 
 fn wsl_startup_error(stage: &str, error: AgentConsoleError) -> AgentConsoleError {
-    AgentConsoleError::new(error.category, format!("WSL startup [{stage}]: {}", error.message))
+    AgentConsoleError::new(
+        error.category,
+        format!("WSL startup [{stage}]: {}", error.message),
+    )
 }
 
 fn ensure_wsl_agent_binary_via_agent(
@@ -1189,13 +1204,53 @@ fn validate_wsl_repo(repo: &Path) -> Result<(), AgentConsoleError> {
     Ok(())
 }
 
+/// The safety checkpoint is a convenience, not a requirement: a repo with
+/// more uncommitted data than the checkpoint limit still gets its session,
+/// just without undo, and the conversation says so.
+fn checkpoint_unless_oversized(
+    result: Result<CheckpointRecord, AgentConsoleError>,
+) -> Result<(Option<CheckpointRecord>, Option<String>), AgentConsoleError> {
+    match result {
+        Ok(checkpoint) => Ok((Some(checkpoint), None)),
+        Err(error) if error.category == "checkpoint_too_large" => {
+            Ok((None, Some(checkpoint_skipped_notice(&error.message))))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn checkpoint_skipped_notice(detail: &str) -> String {
+    let size = detail
+        .split_once(": ")
+        .map(|(_, rest)| format!(" ({rest})"))
+        .unwrap_or_default();
+    format!(
+        "Sesión iniciada sin punto de control de seguridad: el repo tiene demasiados cambios sin confirmar{size}. Deshacer los cambios del Agent no estará disponible en esta sesión."
+    )
+}
+
+fn checkpoint_skipped_item(
+    session_id: &str,
+    timestamp_ms: u64,
+    text: String,
+) -> AgentSessionTimelineItem {
+    AgentSessionTimelineItem {
+        session_id: session_id.to_string(),
+        id: format!("{session_id}:checkpoint-skipped"),
+        kind: AgentSessionTimelineKind::Lifecycle,
+        text,
+        timestamp_ms,
+        attachments: Vec::new(),
+    }
+}
+
 fn create_wsl_checkpoint(
     repo: &Path,
     distro: &str,
     session_id: &str,
     created_at_ms: u64,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
-    let response = request_wsl_agent(
+    let response = crate::wsl_agent::launcher::request_wsl_agent_with_timeout(
         distro,
         &AgentRequest::AgentCheckpointCreate {
             protocol_version: PROTOCOL_VERSION,
@@ -1205,6 +1260,7 @@ fn create_wsl_checkpoint(
             created_at_ms,
             ephemeral: false,
         },
+        crate::wsl_agent::launcher::CHECKPOINT_CREATE_TIMEOUT,
     )
     .map_err(map_wsl_agent_error)?;
 
@@ -1300,7 +1356,10 @@ mod tests {
                 working_dir.display()
             )));
             if self.fail_wsl_spawn.load(Ordering::SeqCst) {
-                return Err(AgentConsoleError::new("child_exit", "synthetic provider exit"));
+                return Err(AgentConsoleError::new(
+                    "child_exit",
+                    "synthetic provider exit",
+                ));
             }
             let pid = self.next_pid.fetch_add(1, Ordering::SeqCst) as u32 + 100;
             Ok(Box::new(FakeProcess {
@@ -1401,6 +1460,37 @@ mod tests {
         assert_eq!(sessions[0].status, AgentSessionStatus::Running);
         assert_eq!(sessions[0].pid, Some(100));
         assert_eq!(factory.spawned.lock().unwrap().as_slice(), &[binary]);
+    }
+
+    #[test]
+    fn oversized_checkpoint_starts_the_session_without_undo_and_says_so() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory)
+            .with_checkpoint_config(CheckpointConfig {
+                max_checkpoint_bytes: 1024,
+                ..CheckpointConfig::default()
+            });
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("big.log"), vec![b'x'; 4096]).unwrap();
+        let binary = repo.path().join("codex-bin");
+        std::fs::write(&binary, "fake").unwrap();
+
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
+            .unwrap();
+
+        let session = registry.get_session(&id).unwrap();
+        assert_eq!(session.status, AgentSessionStatus::Running);
+        assert!(session.checkpoint.is_none());
+        let notice = session
+            .timeline
+            .iter()
+            .find(|item| item.id == format!("{id}:checkpoint-skipped"))
+            .expect("checkpoint notice");
+        assert!(notice
+            .text
+            .starts_with("Sesión iniciada sin punto de control de seguridad"));
+        assert!(notice.text.contains("MB in"), "{}", notice.text);
     }
 
     #[test]
@@ -1829,7 +1919,9 @@ mod tests {
         factory.fail_wsl_spawn.store(true, Ordering::SeqCst);
         let mut registry = AgentSessionRegistry::with_process_factory(factory.clone());
         let result = registry.start_wsl_session_with_output_for_test(
-            "/home/me/repo".into(), "Ubuntu".into(), "codex".into(),
+            "/home/me/repo".into(),
+            "Ubuntu".into(),
+            "codex".into(),
         );
         let error = result.err().expect("provider failure");
         assert_eq!(error.category, "child_exit");

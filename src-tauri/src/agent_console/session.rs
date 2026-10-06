@@ -1636,7 +1636,7 @@ fn create_wsl_checkpoint_with_mode(
 ) -> Result<CheckpointRecord, AgentConsoleError> {
     let distro =
         distro.ok_or_else(|| AgentConsoleError::new("missing_distro", "repo WSL sin distro"))?;
-    let response = request_wsl_agent(
+    let response = crate::wsl_agent::launcher::request_wsl_agent_with_timeout(
         distro,
         &AgentRequest::AgentCheckpointCreate {
             protocol_version: PROTOCOL_VERSION,
@@ -1646,6 +1646,7 @@ fn create_wsl_checkpoint_with_mode(
             created_at_ms,
             ephemeral,
         },
+        crate::wsl_agent::launcher::CHECKPOINT_CREATE_TIMEOUT,
     )
     .map_err(map_wsl_agent_error)?;
 

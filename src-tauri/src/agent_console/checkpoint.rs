@@ -4,7 +4,7 @@ use std::{
     hash::{Hash, Hasher},
     io,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -69,10 +69,13 @@ struct CheckpointMetadata {
     dirty_created_files: Vec<PathBuf>,
     #[serde(default)]
     dirty_deleted_files: Vec<PathBuf>,
+    /// Content-addressed snapshot of the whole working tree, stored as a git
+    /// tree in the shadow store. Absent on legacy file-copy checkpoints.
+    #[serde(default)]
+    shadow_tree: Option<String>,
 }
 
 struct GitCheckpointState {
-    head_hash: String,
     snapshot_files: Vec<PathBuf>,
     created_files: Vec<PathBuf>,
     deleted_files: Vec<PathBuf>,
@@ -114,39 +117,46 @@ fn create_checkpoint_inner(
     }
     fs::create_dir_all(&checkpoint_dir).map_err(io_error)?;
 
-    let contract = match git_checkpoint_state(&repo)? {
-        Some(state) if state.snapshot_files.is_empty() && state.deleted_files.is_empty() => {
-            let contract = AgentSessionCheckpoint {
-                checkpoint_type: AgentSessionCheckpointType::GitRef,
-                git_hash: Some(state.head_hash),
-                snapshot_files: Vec::new(),
-            };
-            write_metadata(
-                &checkpoint_dir,
-                &repo,
-                session_id,
-                created_at_ms,
-                &contract,
-                &[],
-                &[],
-            )?;
-            contract
-        }
-        Some(state) => {
-            let (contract, created_files, deleted_files) =
-                snapshot_dirty_git_filesystem(&repo, &checkpoint_dir, config, state)?;
-            write_metadata(
-                &checkpoint_dir,
-                &repo,
-                session_id,
-                created_at_ms,
-                &contract,
-                &created_files,
-                &deleted_files,
-            )?;
-            contract
-        }
-        None => {
+    let contract = match Repository::open(&repo) {
+        Ok(repository) => match clean_git_head(&repository)? {
+            Some(head_hash) => {
+                let contract = AgentSessionCheckpoint {
+                    checkpoint_type: AgentSessionCheckpointType::GitRef,
+                    git_hash: Some(head_hash),
+                    snapshot_files: Vec::new(),
+                };
+                write_metadata(
+                    &checkpoint_dir,
+                    &repo,
+                    session_id,
+                    created_at_ms,
+                    &contract,
+                    None,
+                )?;
+                contract
+            }
+            None => {
+                let snapshot =
+                    shadow_snapshot(&repo, &repository, &repo_dir, &checkpoint_dir, session_id);
+                let (contract, tree) = match snapshot {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&checkpoint_dir);
+                        return Err(error);
+                    }
+                };
+                write_metadata(
+                    &checkpoint_dir,
+                    &repo,
+                    session_id,
+                    created_at_ms,
+                    &contract,
+                    Some(tree),
+                )?;
+                contract
+            }
+        },
+        Err(_) => {
             let contract = snapshot_filesystem(&repo, &checkpoint_dir, config)?;
             write_metadata(
                 &checkpoint_dir,
@@ -154,8 +164,7 @@ fn create_checkpoint_inner(
                 session_id,
                 created_at_ms,
                 &contract,
-                &[],
-                &[],
+                None,
             )?;
             contract
         }
@@ -201,13 +210,16 @@ pub fn remove_ephemeral_checkpoint(record: &CheckpointRecord) -> Result<(), Agen
             "checkpoint cleanup target is outside the managed repository directory",
         ));
     }
-    fs::remove_dir_all(checkpoint_dir).map_err(io_error)
+    remove_checkpoint_dir(&expected_parent, &checkpoint_dir)
 }
 
 pub fn revert_checkpoint(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
     match record.contract.checkpoint_type {
         AgentSessionCheckpointType::GitRef => revert_git(record),
-        AgentSessionCheckpointType::FsSnapshot => revert_fs(record),
+        AgentSessionCheckpointType::FsSnapshot => match shadow_of(record)? {
+            Some(shadow) => revert_shadow(record, &shadow),
+            None => revert_fs(record),
+        },
     }?;
     if record.ephemeral {
         restore_ephemeral_git_index(record)?;
@@ -222,7 +234,10 @@ pub fn revert_checkpoint_file(
     validate_checkpoint_relative_path(path)?;
     match record.contract.checkpoint_type {
         AgentSessionCheckpointType::GitRef => revert_git_file(record, path),
-        AgentSessionCheckpointType::FsSnapshot => revert_fs_file(record, path),
+        AgentSessionCheckpointType::FsSnapshot => match shadow_of(record)? {
+            Some(shadow) => revert_shadow_file(record, &shadow, path),
+            None => revert_fs_file(record, path),
+        },
     }
 }
 
@@ -232,7 +247,10 @@ pub fn scan_change_log(
 ) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
     match record.contract.checkpoint_type {
         AgentSessionCheckpointType::GitRef => scan_git_changes(&record.repo, timestamp_ms),
-        AgentSessionCheckpointType::FsSnapshot => scan_fs_changes(record, timestamp_ms),
+        AgentSessionCheckpointType::FsSnapshot => match shadow_of(record)? {
+            Some(shadow) => scan_shadow_changes(&shadow, timestamp_ms),
+            None => scan_fs_changes(record, timestamp_ms),
+        },
     }
 }
 
@@ -449,20 +467,23 @@ fn git_checkpoint_state(repo: &Path) -> Result<Option<GitCheckpointState>, Agent
         Ok(head) => head,
         Err(_) => return Ok(None),
     };
-    let Some(oid) = head.target() else {
+    if head.target().is_none() {
         return Ok(None);
-    };
+    }
 
     let mut opts = StatusOptions::new();
+    // A submodule is its own repository: its dirty working tree shows up here
+    // as one directory entry, which forced a full-tree copy (node_modules
+    // included) that always exceeded the size limit.
     opts.include_untracked(true)
         .recurse_untracked_dirs(true)
-        .include_ignored(false);
+        .include_ignored(false)
+        .exclude_submodules(true);
     let statuses = repository
         .statuses(Some(&mut opts))
         .map_err(|e| AgentConsoleError::new("checkpoint_git_failed", e.to_string()))?;
     if statuses.is_empty() {
         return Ok(Some(GitCheckpointState {
-            head_hash: oid.to_string(),
             snapshot_files: Vec::new(),
             created_files: Vec::new(),
             deleted_files: Vec::new(),
@@ -501,7 +522,6 @@ fn git_checkpoint_state(repo: &Path) -> Result<Option<GitCheckpointState>, Agent
     created_files.sort();
     deleted_files.sort();
     Ok(Some(GitCheckpointState {
-        head_hash: oid.to_string(),
         snapshot_files,
         created_files,
         deleted_files,
@@ -517,18 +537,10 @@ fn snapshot_filesystem(
     fs::create_dir_all(&snapshot_root).map_err(io_error)?;
 
     let files = collect_repo_files(repo)?;
-    let total_bytes = files.iter().try_fold(0u64, |acc, rel| {
-        file_size(repo.join(rel)).map(|size| acc + size)
-    })?;
-    if total_bytes > config.max_checkpoint_bytes {
+    let sized = sized_files(repo, &files)?;
+    if total_size(&sized) > config.max_checkpoint_bytes {
         let _ = fs::remove_dir_all(checkpoint_dir);
-        return Err(AgentConsoleError::new(
-            "checkpoint_too_large",
-            format!(
-                "checkpoint exceeds {} MB",
-                config.max_checkpoint_bytes / 1024 / 1024
-            ),
-        ));
+        return Err(checkpoint_too_large(&sized, config.max_checkpoint_bytes));
     }
 
     for rel in &files {
@@ -545,49 +557,6 @@ fn snapshot_filesystem(
         git_hash: None,
         snapshot_files: files,
     })
-}
-
-fn snapshot_dirty_git_filesystem(
-    repo: &Path,
-    checkpoint_dir: &Path,
-    config: &CheckpointConfig,
-    state: GitCheckpointState,
-) -> Result<(AgentSessionCheckpoint, Vec<PathBuf>, Vec<PathBuf>), AgentConsoleError> {
-    let snapshot_root = checkpoint_dir.join("files");
-    fs::create_dir_all(&snapshot_root).map_err(io_error)?;
-
-    let total_bytes = state.snapshot_files.iter().try_fold(0u64, |acc, rel| {
-        file_size(repo.join(rel)).map(|size| acc + size)
-    })?;
-    if total_bytes > config.max_checkpoint_bytes {
-        let _ = fs::remove_dir_all(checkpoint_dir);
-        return Err(AgentConsoleError::new(
-            "checkpoint_too_large",
-            format!(
-                "checkpoint exceeds {} MB",
-                config.max_checkpoint_bytes / 1024 / 1024
-            ),
-        ));
-    }
-
-    for rel in &state.snapshot_files {
-        let source = repo.join(rel);
-        let target = snapshot_root.join(rel);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(io_error)?;
-        }
-        fs::copy(&source, &target).map_err(io_error)?;
-    }
-
-    Ok((
-        AgentSessionCheckpoint {
-            checkpoint_type: AgentSessionCheckpointType::FsSnapshot,
-            git_hash: Some(state.head_hash),
-            snapshot_files: state.snapshot_files,
-        },
-        state.created_files,
-        state.deleted_files,
-    ))
 }
 
 fn revert_git(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
@@ -782,7 +751,6 @@ fn scan_dirty_git_snapshot_changes(
 ) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
     let metadata = read_metadata(&record.checkpoint_dir)?;
     let state = git_checkpoint_state(&record.repo)?.unwrap_or(GitCheckpointState {
-        head_hash: record.contract.git_hash.clone().unwrap_or_default(),
         snapshot_files: Vec::new(),
         created_files: Vec::new(),
         deleted_files: Vec::new(),
@@ -841,6 +809,459 @@ fn scan_dirty_git_snapshot_changes(
             .then_with(|| kind_name(a.kind).cmp(kind_name(b.kind)))
     });
     Ok(changes)
+}
+
+// ---- Content-addressed checkpoints ----------------------------------------
+//
+// A dirty git working tree is snapshotted as a git tree in a per-repo shadow
+// store (a bare repository under ~/.tinto/checkpoints/<repo>/store.git):
+// - content is compressed and deduplicated, so a turn that changed 3 files
+//   adds 3 blobs, and files identical to commits cost nothing (the repo's own
+//   object database is a read-only alternate);
+// - each snapshot starts from the previous one's index, whose stat cache
+//   means only files changed since then are read;
+// - the user's repository (index, refs, objects, hooks) is never written.
+
+const SHADOW_STORE_DIR: &str = "store.git";
+const SHADOW_INDEX: &str = "index";
+const SHADOW_LATEST_INDEX: &str = "latest.index";
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const INHERITED_GIT_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+];
+
+/// HEAD when the working tree matches it exactly (submodules aside); such a
+/// checkpoint needs no snapshot at all.
+fn clean_git_head(repository: &Repository) -> Result<Option<String>, AgentConsoleError> {
+    let Some(head) = repository.head().ok().and_then(|head| head.target()) else {
+        return Ok(None);
+    };
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .include_ignored(false)
+        .exclude_submodules(true);
+    let statuses = repository
+        .statuses(Some(&mut opts))
+        .map_err(|e| AgentConsoleError::new("checkpoint_git_failed", e.to_string()))?;
+    Ok(statuses.is_empty().then(|| head.to_string()))
+}
+
+struct ShadowGit {
+    store: PathBuf,
+    worktree: PathBuf,
+    index: PathBuf,
+}
+
+struct ShadowCheckpoint {
+    git: ShadowGit,
+}
+
+impl ShadowGit {
+    fn run(&self, args: &[&str]) -> Result<Vec<u8>, AgentConsoleError> {
+        self.run_with_input(args, None)
+    }
+
+    fn run_with_input(
+        &self,
+        args: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<Vec<u8>, AgentConsoleError> {
+        let mut command = git_command(&self.store);
+        command
+            .env("GIT_WORK_TREE", git_path(&self.worktree))
+            .env("GIT_INDEX_FILE", git_path(&self.index))
+            .current_dir(&self.worktree)
+            .args(args);
+        run_git_command(command, args, input)
+    }
+}
+
+/// `git` bound to the shadow store, isolated from inherited repository
+/// variables. Snapshots are byte-exact (see the store's info/attributes) and
+/// never trigger background maintenance.
+fn git_command(store: &Path) -> Command {
+    let mut command = Command::new("git");
+    for name in INHERITED_GIT_ENV {
+        command.env_remove(name);
+    }
+    command.env("GIT_DIR", git_path(store)).args([
+        "-c",
+        "core.autocrlf=false",
+        "-c",
+        "core.safecrlf=false",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.quotepath=false",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "advice.addEmbeddedRepo=false",
+        "--literal-pathspecs",
+    ]);
+    #[cfg(target_os = "windows")]
+    hide_console(&mut command);
+    command
+}
+
+fn run_git_command(
+    mut command: Command,
+    args: &[&str],
+    input: Option<&[u8]>,
+) -> Result<Vec<u8>, AgentConsoleError> {
+    command
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        AgentConsoleError::new(
+            "checkpoint_git_failed",
+            format!("no se pudo ejecutar git: {error}"),
+        )
+    })?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        use std::io::Write;
+        stdin.write_all(input).map_err(io_error)?;
+    }
+    let output = child.wait_with_output().map_err(io_error)?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(AgentConsoleError::new(
+            "checkpoint_git_failed",
+            format!(
+                "git {}: {}",
+                args.first().copied().unwrap_or_default(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ))
+    }
+}
+
+/// Path text git accepts on every platform (no `\\?\` verbatim prefix).
+fn git_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let text = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text.into_owned()
+    };
+    if cfg!(target_os = "windows") {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
+}
+
+fn shadow_ref(checkpoint_name: &str) -> String {
+    let name: String = checkpoint_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("refs/tinto/{name}")
+}
+
+fn ensure_shadow_store(
+    repo_dir: &Path,
+    repository: &Repository,
+) -> Result<PathBuf, AgentConsoleError> {
+    let store = repo_dir.join(SHADOW_STORE_DIR);
+    if !store.join("HEAD").is_file() {
+        fs::create_dir_all(&store).map_err(io_error)?;
+        let mut command = Command::new("git");
+        for name in INHERITED_GIT_ENV {
+            command.env_remove(name);
+        }
+        command
+            .args(["init", "--bare", "--quiet", "--template="])
+            .arg(git_path(&store));
+        #[cfg(target_os = "windows")]
+        hide_console(&mut command);
+        run_git_command(command, &["init"], None)?;
+    }
+    let info = store.join("info");
+    fs::create_dir_all(&info).map_err(io_error)?;
+    // Byte-exact snapshots: no line-ending conversion, no LFS or clean filters.
+    fs::write(
+        info.join("attributes"),
+        "* -text -filter -ident -working-tree-encoding\n",
+    )
+    .map_err(io_error)?;
+    // Honour the repo's private ignore rules as well as its .gitignore files.
+    let common = repository.commondir();
+    match fs::read(common.join("info").join("exclude")) {
+        Ok(rules) => fs::write(info.join("exclude"), rules).map_err(io_error)?,
+        Err(_) => {
+            let _ = fs::remove_file(info.join("exclude"));
+        }
+    }
+    // Committed content is read from the repo itself, never copied.
+    let alternates = store.join("objects").join("info");
+    fs::create_dir_all(&alternates).map_err(io_error)?;
+    fs::write(
+        alternates.join("alternates"),
+        format!("{}\n", git_path(&common.join("objects"))),
+    )
+    .map_err(io_error)?;
+    Ok(store)
+}
+
+fn shadow_snapshot(
+    repo: &Path,
+    repository: &Repository,
+    repo_dir: &Path,
+    checkpoint_dir: &Path,
+    checkpoint_name: &str,
+) -> Result<(AgentSessionCheckpoint, String), AgentConsoleError> {
+    let git = ShadowGit {
+        store: ensure_shadow_store(repo_dir, repository)?,
+        worktree: repo.to_path_buf(),
+        index: checkpoint_dir.join(SHADOW_INDEX),
+    };
+    // Seed from the newest snapshot (or the repo's own index): their stat
+    // cache means only files changed since then are read and hashed.
+    let seeded = [
+        repo_dir.join(SHADOW_LATEST_INDEX),
+        repository.path().join("index"),
+    ]
+    .iter()
+    .any(|seed| seed.is_file() && fs::copy(seed, &git.index).is_ok());
+    let snapshot = |git: &ShadowGit| -> Result<String, AgentConsoleError> {
+        // --ignore-errors skips unreadable files (exit status 1) instead of
+        // aborting; write-tree is what proves the index is complete.
+        let _ = git.run(&["add", "--all", "--ignore-errors", "--", "."]);
+        let tree = git.run(&["write-tree"])?;
+        Ok(String::from_utf8_lossy(&tree).trim().to_string())
+    };
+    let tree = match snapshot(&git) {
+        Ok(tree) => tree,
+        Err(_) if seeded => {
+            // A seed git cannot use here (split index, pruned objects): start clean.
+            let _ = fs::remove_file(&git.index);
+            snapshot(&git)?
+        }
+        Err(error) => return Err(error),
+    };
+    git.run(&["update-ref", &shadow_ref(checkpoint_name), &tree])?;
+
+    let head = repository
+        .head()
+        .ok()
+        .and_then(|head| head.target())
+        .map(|oid| oid.to_string());
+    let base = head.clone().unwrap_or_else(|| EMPTY_TREE.to_string());
+    let differing = git.run(&[
+        "diff-index",
+        "--cached",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        "--ignore-submodules=all",
+        &base,
+    ])?;
+
+    let latest = repo_dir.join(SHADOW_LATEST_INDEX);
+    let staging = repo_dir.join(format!("{SHADOW_LATEST_INDEX}.{}", std::process::id()));
+    if fs::copy(&git.index, &staging).is_ok() && fs::rename(&staging, &latest).is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+
+    Ok((
+        AgentSessionCheckpoint {
+            checkpoint_type: AgentSessionCheckpointType::FsSnapshot,
+            git_hash: head,
+            snapshot_files: nul_separated_paths(&differing),
+        },
+        tree,
+    ))
+}
+
+fn shadow_of(record: &CheckpointRecord) -> Result<Option<ShadowCheckpoint>, AgentConsoleError> {
+    let Ok(metadata) = read_metadata(&record.checkpoint_dir) else {
+        return Ok(None);
+    };
+    let Some(tree) = metadata.shadow_tree else {
+        return Ok(None);
+    };
+    let repo_dir = record.checkpoint_dir.parent().ok_or_else(|| {
+        AgentConsoleError::new(
+            "checkpoint_invalid",
+            "checkpoint has no repository directory",
+        )
+    })?;
+    let git = ShadowGit {
+        store: repo_dir.join(SHADOW_STORE_DIR),
+        worktree: record.repo.clone(),
+        index: record.checkpoint_dir.join(SHADOW_INDEX),
+    };
+    if !git.index.is_file() {
+        git.run(&["read-tree", &tree])?;
+    }
+    Ok(Some(ShadowCheckpoint { git }))
+}
+
+fn scan_shadow_changes(
+    shadow: &ShadowCheckpoint,
+    timestamp_ms: u64,
+) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    let git = &shadow.git;
+    // Refreshing only updates this checkpoint's stat cache (its content stays
+    // the snapshot), so later scans skip files that did not change.
+    let _ = git.run(&["update-index", "-q", "--refresh"]);
+    let mut changes = Vec::new();
+    let modified = git.run(&[
+        "diff-files",
+        "--name-status",
+        "-z",
+        "--no-renames",
+        "--ignore-submodules=all",
+    ])?;
+    let mut fields = modified
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        let kind = if status.first() == Some(&b'D') {
+            AgentSessionChangeKind::Removed
+        } else {
+            AgentSessionChangeKind::Modified
+        };
+        changes.push(change(
+            Path::new(&*String::from_utf8_lossy(path)),
+            kind,
+            timestamp_ms,
+        ));
+    }
+    let created = git.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+    for path in nul_separated_paths(&created) {
+        // A nested repository shows up as "dir/"; it is not ours to track.
+        if !path.to_string_lossy().ends_with('/') {
+            changes.push(change(&path, AgentSessionChangeKind::Created, timestamp_ms));
+        }
+    }
+    changes.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| kind_name(a.kind).cmp(kind_name(b.kind)))
+    });
+    Ok(changes)
+}
+
+fn revert_shadow(
+    record: &CheckpointRecord,
+    shadow: &ShadowCheckpoint,
+) -> Result<(), AgentConsoleError> {
+    let mut restore = Vec::new();
+    for change in scan_shadow_changes(shadow, 0)? {
+        match change.kind {
+            AgentSessionChangeKind::Created => remove_created_file(&record.repo, &change.path)?,
+            _ => {
+                prepare_restore_target(&record.repo, &change.path)?;
+                restore.push(change.path);
+            }
+        }
+    }
+    restore_from_shadow(&shadow.git, &restore)
+}
+
+fn revert_shadow_file(
+    record: &CheckpointRecord,
+    shadow: &ShadowCheckpoint,
+    rel: &Path,
+) -> Result<(), AgentConsoleError> {
+    let rel_text = git_relative(rel);
+    let in_snapshot = !shadow
+        .git
+        .run(&["ls-files", "-z", "--", &rel_text])?
+        .is_empty();
+    if in_snapshot {
+        prepare_restore_target(&record.repo, rel)?;
+        restore_from_shadow(&shadow.git, &[rel.to_path_buf()])
+    } else {
+        remove_created_file(&record.repo, rel)
+    }
+}
+
+fn restore_from_shadow(git: &ShadowGit, paths: &[PathBuf]) -> Result<(), AgentConsoleError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut input = Vec::new();
+    for path in paths {
+        input.extend_from_slice(git_relative(path).as_bytes());
+        input.push(0);
+    }
+    git.run_with_input(
+        &["checkout-index", "--force", "-z", "--stdin"],
+        Some(&input),
+    )
+    .map(|_| ())
+    .map_err(|error| AgentConsoleError::new("revert_failed", error.message))
+}
+
+fn remove_created_file(repo: &Path, rel: &Path) -> Result<(), AgentConsoleError> {
+    validate_current_path_ancestors(repo, rel)?;
+    let target = repo.join(rel);
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if !metadata.is_dir() => fs::remove_file(target).map_err(io_error),
+        _ => Ok(()),
+    }
+}
+
+fn git_relative(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn nul_separated_paths(output: &[u8]) -> Vec<PathBuf> {
+    output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| PathBuf::from(String::from_utf8_lossy(field).into_owned()))
+        .collect()
+}
+
+/// Removes a checkpoint and releases its snapshot in the shadow store.
+fn remove_checkpoint_dir(repo_dir: &Path, checkpoint_dir: &Path) -> Result<(), AgentConsoleError> {
+    let store = repo_dir.join(SHADOW_STORE_DIR);
+    if let Some(name) = checkpoint_dir.file_name().and_then(|name| name.to_str()) {
+        if store.join("HEAD").is_file() {
+            let reference = shadow_ref(name);
+            let args = ["update-ref", "-d", reference.as_str()];
+            let mut command = git_command(&store);
+            command.args(args);
+            let _ = run_git_command(command, &args, None);
+        }
+    }
+    fs::remove_dir_all(checkpoint_dir).map_err(io_error)
+}
+
+/// Deletes snapshot content no remaining checkpoint references.
+fn prune_shadow_store(repo_dir: &Path) {
+    let store = repo_dir.join(SHADOW_STORE_DIR);
+    if store.join("HEAD").is_file() {
+        let args = ["prune", "--expire=now"];
+        let mut command = git_command(&store);
+        command.args(args);
+        let _ = run_git_command(command, &args, None);
+    }
 }
 
 fn change(path: &Path, kind: AgentSessionChangeKind, timestamp_ms: u64) -> AgentSessionChange {
@@ -981,8 +1402,7 @@ fn write_metadata(
     session_id: &str,
     created_at_ms: u64,
     contract: &AgentSessionCheckpoint,
-    dirty_created_files: &[PathBuf],
-    dirty_deleted_files: &[PathBuf],
+    shadow_tree: Option<String>,
 ) -> Result<(), AgentConsoleError> {
     let metadata = CheckpointMetadata {
         repo: repo.to_path_buf(),
@@ -991,8 +1411,9 @@ fn write_metadata(
         checkpoint_type: contract.checkpoint_type,
         git_hash: contract.git_hash.clone(),
         snapshot_files: contract.snapshot_files.clone(),
-        dirty_created_files: dirty_created_files.to_vec(),
-        dirty_deleted_files: dirty_deleted_files.to_vec(),
+        dirty_created_files: Vec::new(),
+        dirty_deleted_files: Vec::new(),
+        shadow_tree,
     };
     let json = serde_json::to_vec_pretty(&metadata)
         .map_err(|e| AgentConsoleError::new("checkpoint_metadata_failed", e.to_string()))?;
@@ -1013,7 +1434,7 @@ fn prune_checkpoints(repo_dir: &Path, keep: usize) -> Result<(), AgentConsoleErr
     dirs.sort_by_key(|(_, modified)| *modified);
     while dirs.len() > keep {
         if let Some((path, _)) = dirs.first() {
-            fs::remove_dir_all(path).map_err(io_error)?;
+            remove_checkpoint_dir(repo_dir, path)?;
         }
         dirs.remove(0);
     }
@@ -1031,9 +1452,10 @@ fn enforce_repo_budget(repo_dir: &Path, max_bytes: u64) -> Result<(), AgentConso
 
     while total > max_bytes && dirs.len() > 1 {
         let (path, _) = dirs.remove(0);
-        let reclaimed = dir_size(&path)?;
-        fs::remove_dir_all(path).map_err(io_error)?;
-        total = total.saturating_sub(reclaimed);
+        remove_checkpoint_dir(repo_dir, &path)?;
+        // Shared objects are reclaimed once no remaining checkpoint uses them.
+        prune_shadow_store(repo_dir);
+        total = dir_size(repo_dir)?;
     }
 
     if total <= max_bytes {
@@ -1055,6 +1477,9 @@ fn checkpoint_dirs(
     }
     for entry in fs::read_dir(repo_dir).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
+        if entry.file_name() == SHADOW_STORE_DIR {
+            continue;
+        }
         if entry.file_type().map_err(io_error)?.is_dir() {
             let modified = entry
                 .metadata()
@@ -1109,6 +1534,50 @@ fn dir_size(path: &Path) -> Result<u64, AgentConsoleError> {
                 Ok(acc)
             }
         })
+}
+
+fn sized_files<'a>(
+    repo: &Path,
+    files: &'a [PathBuf],
+) -> Result<Vec<(&'a PathBuf, u64)>, AgentConsoleError> {
+    files
+        .iter()
+        .map(|rel| file_size(repo.join(rel)).map(|size| (rel, size)))
+        .collect()
+}
+
+fn total_size(files: &[(&PathBuf, u64)]) -> u64 {
+    files.iter().map(|(_, size)| size).sum()
+}
+
+/// Names the size and the folder that contributes most, so the user knows
+/// what to commit, discard or ignore instead of a bare "too large".
+fn checkpoint_too_large(files: &[(&PathBuf, u64)], limit: u64) -> AgentConsoleError {
+    let mut by_folder: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
+    for (rel, size) in files {
+        let folder: PathBuf = rel
+            .parent()
+            .map(|parent| parent.components().take(2).collect::<PathBuf>())
+            .filter(|folder| !folder.as_os_str().is_empty())
+            .unwrap_or_else(|| PathBuf::from("."));
+        *by_folder.entry(folder).or_default() += size;
+    }
+    let largest = by_folder.into_iter().max_by_key(|(_, size)| *size);
+    let mb = |bytes: u64| bytes / 1024 / 1024;
+    let mut message = format!(
+        "checkpoint exceeds {} MB: {} MB in {} changed files",
+        mb(limit),
+        mb(total_size(files)),
+        files.len()
+    );
+    if let Some((folder, size)) = largest {
+        message.push_str(&format!(
+            "; largest: {} ({} MB)",
+            folder.display(),
+            mb(size)
+        ));
+    }
+    AgentConsoleError::new("checkpoint_too_large", message)
 }
 
 fn file_size(path: PathBuf) -> Result<u64, AgentConsoleError> {
@@ -1193,12 +1662,177 @@ mod tests {
             record.contract.snapshot_files,
             vec![PathBuf::from("base.txt"), PathBuf::from("untracked.txt")]
         );
-        assert!(record
-            .contract
-            .snapshot_files
-            .contains(&PathBuf::from("base.txt")));
-        assert!(record.checkpoint_dir.join("files/base.txt").is_file());
-        assert!(record.checkpoint_dir.join("files/untracked.txt").is_file());
+        // Content lives in the shared shadow store, not as per-checkpoint copies.
+        assert!(!record.checkpoint_dir.join("files").exists());
+        assert!(record.checkpoint_dir.join(SHADOW_INDEX).is_file());
+        let repo_dir = record.checkpoint_dir.parent().unwrap();
+        assert!(repo_dir.join(SHADOW_STORE_DIR).join("HEAD").is_file());
+    }
+
+    #[test]
+    fn dirty_submodule_does_not_force_a_full_tree_snapshot() {
+        let repo = TempRepo::with_initial_commit();
+        // A nested repository registered as a gitlink, like a git submodule.
+        let sub_path = repo.path().join("sub");
+        let sub = Repository::init(&sub_path).unwrap();
+        fs::write(sub_path.join("lib.txt"), "v1\n").unwrap();
+        let mut sub_index = sub.index().unwrap();
+        sub_index.add_path(Path::new("lib.txt")).unwrap();
+        sub_index.write().unwrap();
+        let sub_tree = sub.find_tree(sub_index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("t", "t@example.com").unwrap();
+        let sub_head = sub
+            .commit(Some("HEAD"), &signature, &signature, "sub", &sub_tree, &[])
+            .unwrap();
+        let outer = Repository::open(repo.path()).unwrap();
+        let mut index = outer.index().unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o160000,
+                uid: 0,
+                gid: 0,
+                file_size: 0,
+                id: sub_head,
+                flags: 0,
+                flags_extended: 0,
+                path: b"sub".to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+        let tree = outer.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = outer.head().unwrap().peel_to_commit().unwrap();
+        outer
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "add sub",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        // The submodule's own working tree gets large and dirty.
+        fs::write(sub_path.join("lib.txt"), "v2\n").unwrap();
+        fs::create_dir_all(sub_path.join("node_modules")).unwrap();
+        fs::write(sub_path.join("node_modules/big.bin"), vec![1u8; 4096]).unwrap();
+        repo.write("base.txt", "dirty\n");
+        let config = CheckpointConfig {
+            max_checkpoint_bytes: 1024,
+            ..CheckpointConfig::default()
+        };
+
+        let record = create_checkpoint(repo.path(), "sess-submodule", 1, &config).unwrap();
+
+        assert_eq!(
+            record.contract.snapshot_files,
+            vec![PathBuf::from("base.txt")]
+        );
+    }
+
+    /// Incompressible bytes, so store sizes reflect real storage.
+    fn noise(len: usize, seed: u64) -> Vec<u8> {
+        let mut state = seed;
+        (0..len)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 33) as u8
+            })
+            .collect()
+    }
+
+    fn loose_object_count(git_dir: &Path) -> usize {
+        WalkDir::new(git_dir.join("objects"))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .count()
+    }
+
+    #[test]
+    fn large_dirty_content_is_stored_once_and_restored_exactly() {
+        let repo = TempRepo::with_initial_commit();
+        let big = noise(3 * 1024 * 1024, 7);
+        fs::create_dir_all(repo.path().join("docs/runs")).unwrap();
+        fs::write(repo.path().join("docs/runs/a.log"), &big).unwrap();
+        repo.write("base.txt", "dirty\n");
+        let config = CheckpointConfig {
+            max_checkpoint_bytes: 1024 * 1024,
+            ..CheckpointConfig::default()
+        };
+
+        let first = create_checkpoint(repo.path(), "sess-large-1", 1, &config).unwrap();
+        repo.write("base.txt", "dirty again\n");
+        let _second = create_checkpoint(repo.path(), "sess-large-2", 2, &config).unwrap();
+
+        let store = first
+            .checkpoint_dir
+            .parent()
+            .unwrap()
+            .join(SHADOW_STORE_DIR);
+        let stored = dir_size(&store).unwrap();
+        assert!(stored < 4 * 1024 * 1024, "store holds {stored} bytes");
+
+        fs::remove_file(repo.path().join("docs/runs/a.log")).unwrap();
+        repo.write("base.txt", "agent edit\n");
+        revert_checkpoint(&first).unwrap();
+        assert_eq!(fs::read(repo.path().join("docs/runs/a.log")).unwrap(), big);
+        assert_eq!(
+            fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "dirty\n"
+        );
+    }
+
+    #[test]
+    fn snapshots_never_write_to_the_user_repository() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write_and_stage("staged.txt", "staged\n");
+        repo.write("base.txt", "dirty\n");
+        repo.write("untracked.txt", "new\n");
+        let git_dir = repo.path().join(".git");
+        let status_before = git_status_porcelain(repo.path());
+        let objects_before = loose_object_count(&git_dir);
+        let index_before = fs::read(git_dir.join("index")).unwrap();
+
+        let record = create_checkpoint(
+            repo.path(),
+            "sess-readonly",
+            1,
+            &CheckpointConfig::default(),
+        )
+        .unwrap();
+        repo.write("base.txt", "agent edit\n");
+        scan_change_log(&record, 2).unwrap();
+        revert_checkpoint(&record).unwrap();
+
+        assert_eq!(git_status_porcelain(repo.path()), status_before);
+        assert_eq!(loose_object_count(&git_dir), objects_before);
+        assert_eq!(fs::read(git_dir.join("index")).unwrap(), index_before);
+    }
+
+    #[test]
+    fn renamed_files_are_snapshotted_without_a_full_tree_copy() {
+        let repo = TempRepo::with_initial_commit();
+        run_git(repo.path(), &["mv", "base.txt", "renamed.txt"]).unwrap();
+        let record =
+            create_checkpoint(repo.path(), "sess-rename", 1, &CheckpointConfig::default()).unwrap();
+
+        assert!(record.checkpoint_dir.join(SHADOW_INDEX).is_file());
+        repo.write("renamed.txt", "agent edit\n");
+        repo.write("created.txt", "new\n");
+        revert_checkpoint(&record).unwrap();
+
+        assert!(!repo.path().join("base.txt").exists());
+        assert!(!repo.path().join("created.txt").exists());
+        assert_eq!(
+            fs::read(repo.path().join("renamed.txt")).unwrap(),
+            git_output(repo.path(), &["show", "HEAD:base.txt"]).into_bytes()
+        );
     }
 
     #[test]
