@@ -4,8 +4,14 @@
 // are drilled into via the project's own explorer, not here.
 
 import { memo, useEffect, useState } from "react";
-import { cancelAgentInstall, confirmAgentInstall, prepareAgentInstall } from "../bus/client";
+import {
+  cancelAgentInstall,
+  confirmAgentInstall,
+  prepareAgentInstall,
+  updateAgentCliForRepo,
+} from "../bus/client";
 import type {
+  AgentCliUpdateStatus,
   AgentInstallOutcome,
   AgentInstallPreview,
   AgentProviderReadiness,
@@ -14,7 +20,11 @@ import type {
   RepoDelta,
 } from "../bus/contract";
 import { commitDate, getRepoMetrics, getRepoSignals, signalCounts } from "../bus/store";
-import { checkAgentAvailabilityForRepo, invalidateAgentAvailability } from "./agentAvailability";
+import {
+  checkAgentAvailabilityForRepo,
+  checkAgentCliUpdateForRepo,
+  invalidateAgentAvailability,
+} from "./agentAvailability";
 import { ACTIVITY_WINDOW_MS } from "./constants";
 import { RepoSourceBadge } from "./RepoSourceBadge";
 import { SecretScanIndicator } from "./SecretScanIndicator";
@@ -44,6 +54,8 @@ const AGENT_OPTIONS = [
   { id: "opencode", label: "OpenCode" },
 ];
 
+const SLOW_START_NOTICE_MS = 4000;
+
 export interface RepoAgentLauncherProps {
   repo: string;
   repoName?: string;
@@ -71,6 +83,9 @@ export function RepoAgentLauncher({
   const [preparingInstall, setPreparingInstall] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [cancellingInstall, setCancellingInstall] = useState(false);
+  const [cliUpdate, setCliUpdate] = useState<AgentCliUpdateStatus | null>(null);
+  const [updateState, setUpdateState] = useState<"idle" | "updating" | "updated">("idle");
+  const updating = updateState === "updating";
   const selectedAgent = AGENT_OPTIONS.find((agent) => agent.id === agentType) ?? AGENT_OPTIONS[0];
 
   useEffect(() => {
@@ -102,13 +117,61 @@ export function RepoAgentLauncher({
     };
   }, [agentType, availabilityKey, forceRecheckToken, pending, repo, selectedAgent.label]);
 
+  // Version check runs only once the CLI is known to be installed; it is
+  // cached for an hour because it queries the npm registry.
+  useEffect(() => {
+    if (pending || available !== true) return;
+    let alive = true;
+    checkAgentCliUpdateForRepo(repo, availabilityKey, agentType)
+      .then((status) => alive && setCliUpdate(status.agent_type === agentType ? status : null))
+      .catch(() => alive && setCliUpdate(null));
+    return () => {
+      alive = false;
+    };
+  }, [agentType, availabilityKey, available, pending, repo]);
+
+  // The button itself reports progress: Actualizar → Actualizando… → Actualizado.
+  const runUpdate = () => {
+    if (!cliUpdate?.command_display || updateState !== "idle") return;
+    const label = selectedAgent.label;
+    setUpdateState("updating");
+    setLaunchMessage(null);
+    updateAgentCliForRepo(repo, agentType)
+      .then((outcome) => {
+        if (outcome.updated) {
+          invalidateAgentAvailability(availabilityKey, agentType);
+          setUpdateState("updated");
+          return;
+        }
+        setUpdateState("idle");
+        setLaunchMessage(outcome.message);
+      })
+      .catch((error) => {
+        setUpdateState("idle");
+        setLaunchMessage(reportActionFailure(error, `No se pudo actualizar ${label}.`));
+      });
+  };
+
   const runLaunch = (mode: AgentSessionPermissionMode) => {
     if (pending || available === false || launching) return;
     setLaunching(true);
     setLaunchMessage(null);
+    // The first safety checkpoint of a large dirty repo snapshots every
+    // changed file once; say so instead of leaving a silent "Iniciando…".
+    const slowStart = window.setTimeout(
+      () =>
+        setLaunchMessage(
+          "Preparando el punto de control de seguridad… la primera vez en un repo grande puede tardar.",
+        ),
+      SLOW_START_NOTICE_MS,
+    );
     Promise.resolve(onLaunch(agentType, mode))
+      .then(() => setLaunchMessage(null))
       .catch((error) => setLaunchMessage(reportLaunchFailure(error)))
-      .finally(() => setLaunching(false));
+      .finally(() => {
+        window.clearTimeout(slowStart);
+        setLaunching(false);
+      });
   };
 
   const launch = () => {
@@ -187,7 +250,7 @@ export function RepoAgentLauncher({
         className="repo-card__agent-select"
         aria-label={`Tipo de Agent para ${repoName}`}
         value={agentType}
-        disabled={preparingInstall || installing}
+        disabled={preparingInstall || installing || updating}
         onChange={(event) => {
           if (installPreview)
             void cancelAgentInstall(installPreview.attempt_id).catch(() => undefined);
@@ -195,6 +258,8 @@ export function RepoAgentLauncher({
           setAvailable(null);
           setAvailabilityMessage(null);
           setForceRecheckToken(0);
+          setCliUpdate(null);
+          setUpdateState("idle");
           setAgentType(event.target.value);
         }}
       >
@@ -223,6 +288,37 @@ export function RepoAgentLauncher({
             availabilityMessage ??
             (available === null ? "Comprobando disponibilidad…" : "\u00a0"))}
       </span>
+      {available === true && cliUpdate?.update_available ? (
+        cliUpdate.command_display ? (
+          <button
+            type="button"
+            className="repo-card__update-agent"
+            data-state={updateState}
+            title={`${selectedAgent.label} ${cliUpdate.installed_version ?? "?"} → ${cliUpdate.latest_version ?? "?"} · ${cliUpdate.command_display}`}
+            disabled={updateState !== "idle" || launching}
+            aria-live="polite"
+            onClick={runUpdate}
+          >
+            {updateState === "updating" ? (
+              <>
+                Actualizando
+                <span className="repo-card__update-dots" aria-hidden="true" />
+              </>
+            ) : updateState === "updated" ? (
+              `Actualizado a ${cliUpdate.latest_version}`
+            ) : (
+              `Actualizar a ${cliUpdate.latest_version}`
+            )}
+          </button>
+        ) : (
+          <span className="repo-card__update-hint">
+            {selectedAgent.label} {cliUpdate.latest_version} disponible ·{" "}
+            {cliUpdate.method === "app"
+              ? "actualízalo desde la app de Codex"
+              : "actualízalo manualmente"}
+          </span>
+        )
+      ) : null}
       {available === false ? (
         <span className="repo-card__availability-actions">
           <button

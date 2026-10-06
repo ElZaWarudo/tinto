@@ -176,6 +176,8 @@ pub fn run() {
             agent_console::commands::agent_binary_available,
             agent_console::commands::agent_binary_available_for_repo,
             agent_console::commands::agent_provider_readiness_for_repo,
+            agent_console::commands::agent_cli_update_status_for_repo,
+            agent_console::commands::update_agent_cli_for_repo,
             agent_console::commands::prepare_agent_install,
             agent_console::commands::confirm_agent_install,
             agent_console::commands::cancel_agent_install,

@@ -173,6 +173,47 @@ pub struct AgentInstallOutcome {
     pub message: String,
 }
 
+/// How an installed agent CLI can be updated from Tinto.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCliUpdateMethod {
+    /// Global npm package: `npm install -g <package>@latest`.
+    Npm,
+    /// The CLI updates itself (Claude Code native installer: `claude update`).
+    SelfUpdate,
+    /// Managed by another app (the Codex desktop app); Tinto does not update it.
+    App,
+    /// Installed some other way; Tinto only reports versions.
+    Unmanaged,
+    /// The CLI is not installed in this runtime.
+    Missing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentCliUpdateStatus {
+    pub agent_type: String,
+    pub source: AgentProviderSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    pub method: AgentCliUpdateMethod,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    pub update_available: bool,
+    /// Exact command Tinto would run; present only when it can update.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_display: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentCliUpdateOutcome {
+    pub updated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionAcpState {

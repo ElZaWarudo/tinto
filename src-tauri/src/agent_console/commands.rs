@@ -31,11 +31,11 @@ use crate::bus::contract::McpDefinition;
 use crate::bus::{
     commands::write_repo_agents_md_config,
     contract::{
-        AgentHostCommandResult, AgentHostCommandStatus, AgentInstallOutcome,
-        AgentInstallOutcomeKind, AgentInstallPreview, AgentJournalSessionSummary,
-        AgentProviderReadiness, AgentProviderReadinessState, AgentProviderSource,
-        AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog, AgentSession,
-        AgentSessionAttachment, AgentSessionChangeLog, AgentSessionContextSummary,
+        AgentCliUpdateOutcome, AgentCliUpdateStatus, AgentHostCommandResult,
+        AgentHostCommandStatus, AgentInstallOutcome, AgentInstallOutcomeKind, AgentInstallPreview,
+        AgentJournalSessionSummary, AgentProviderReadiness, AgentProviderReadinessState,
+        AgentProviderSource, AgentReviewFinding, AgentReviewSummary, AgentRuntimeCatalog,
+        AgentSession, AgentSessionAttachment, AgentSessionChangeLog, AgentSessionContextSummary,
         AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput,
         AgentSessionPermissionMode, AgentSessionResumeMode, AgentSessionResumeResult,
         AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
@@ -425,7 +425,9 @@ pub async fn resume_agent_journal_session(
                 .map_err(CommandError::from)?;
         }
     }
-    if let Err(error) = restore_archived_timeline(app.clone(), started.id.clone(), resumed_timeline).await {
+    if let Err(error) =
+        restore_archived_timeline(app.clone(), started.id.clone(), resumed_timeline).await
+    {
         let error = cleanup_failed_resume_session(&registry, &started.id, error);
         refresh_and_emit_sessions(&app);
         return Err(error);
@@ -537,7 +539,9 @@ async fn restore_archived_timeline(
             let registry = app.state::<Mutex<AgentSessionRegistry>>();
             let mut registry = lock_registry(&registry)?;
             for item in &items {
-                registry.record_session_timeline_item(item.clone()).map_err(CommandError::from)?;
+                registry
+                    .record_session_timeline_item(item.clone())
+                    .map_err(CommandError::from)?;
             }
             registry.get_session(&session_id).ok_or_else(|| {
                 CommandError::new("session_not_found", "la sesion reanudada ya no existe")
@@ -545,9 +549,12 @@ async fn restore_archived_timeline(
         };
         let journal = app.state::<Mutex<AgentJournal>>();
         let journal = lock_journal(&journal)?;
-        journal.record_resumed_timeline(&snapshot, &items)
+        journal
+            .record_resumed_timeline(&snapshot, &items)
             .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))
-    }).await.map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?
+    })
+    .await
+    .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?
 }
 
 fn remap_archived_timeline(
@@ -703,8 +710,12 @@ pub async fn branch_agent_session_from_message(
             .map_err(CommandError::from)?;
     }
     if let Err(error) = restore_archived_timeline(
-        app.clone(), started.id.clone(), remap_archived_timeline(&previous_timeline, &started.id),
-    ).await {
+        app.clone(),
+        started.id.clone(),
+        remap_archived_timeline(&previous_timeline, &started.id),
+    )
+    .await
+    {
         let error = cleanup_failed_resume_session(&registry, &started.id, error);
         refresh_and_emit_sessions(&app);
         return Err(error);
@@ -1033,6 +1044,54 @@ pub async fn agent_provider_readiness_for_repo(
     .map_err(|error| CommandError::new("wsl_probe_failed", error.to_string()))?
 }
 
+/// Installed vs latest version of an agent CLI in the repo's runtime, and
+/// whether Tinto can update it there.
+#[tauri::command]
+pub async fn agent_cli_update_status_for_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    agent_type: String,
+) -> Result<AgentCliUpdateStatus, CommandError> {
+    let resolved = ensure_known_agent_repo(&bus, &repo).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        super::cli_update::status(
+            provider_source(resolved.source),
+            resolved.distro.as_deref(),
+            &agent_type,
+        )
+        .map_err(CommandError::from)
+    })
+    .await
+    .map_err(|error| CommandError::new("cli_update_failed", error.to_string()))?
+}
+
+/// Updates an agent CLI in the repo's runtime with the command derived from
+/// how it was installed (never a command supplied by the UI).
+#[tauri::command]
+pub async fn update_agent_cli_for_repo(
+    bus: State<'_, BusHandle>,
+    repo: PathBuf,
+    agent_type: String,
+) -> Result<AgentCliUpdateOutcome, CommandError> {
+    let resolved = ensure_known_agent_repo(&bus, &repo).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        super::cli_update::update(
+            provider_source(resolved.source),
+            resolved.distro.as_deref(),
+            &agent_type,
+        )
+        .map_err(CommandError::from)
+    })
+    .await
+    .map_err(|error| CommandError::new("cli_update_failed", error.to_string()))?
+}
+
+fn provider_source(source: RepoSource) -> AgentProviderSource {
+    match source {
+        RepoSource::Local => AgentProviderSource::Local,
+        RepoSource::Wsl => AgentProviderSource::Wsl,
+    }
+}
 
 fn provider_readiness_for_source<HostProbe, WslProbe>(
     source: RepoSource,
@@ -3833,7 +3892,9 @@ mod tests {
 
         struct Process(Arc<AtomicUsize>);
         impl AgentProcess for Process {
-            fn pid(&self) -> Option<u32> { Some(77) }
+            fn pid(&self) -> Option<u32> {
+                Some(77)
+            }
             fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
                 Ok((self.0.load(Ordering::SeqCst) > 0).then_some(0))
             }
@@ -3841,38 +3902,56 @@ mod tests {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
-            fn write_input(&mut self, _: &[u8]) -> Result<(), AgentConsoleError> { Ok(()) }
-            fn resize(&mut self, _: u16, _: u16) -> Result<(), AgentConsoleError> { Ok(()) }
-            fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> { None }
+            fn write_input(&mut self, _: &[u8]) -> Result<(), AgentConsoleError> {
+                Ok(())
+            }
+            fn resize(&mut self, _: u16, _: u16) -> Result<(), AgentConsoleError> {
+                Ok(())
+            }
+            fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+                None
+            }
         }
         struct Factory(Arc<AtomicUsize>);
         impl AgentProcessFactory for Factory {
-            fn spawn_agent(&self, _: &Path, _: &Path, _: AgentSessionPermissionMode)
-                -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+            fn spawn_agent(
+                &self,
+                _: &Path,
+                _: &Path,
+                _: AgentSessionPermissionMode,
+            ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
                 Ok(Box::new(Process(Arc::clone(&self.0))))
             }
         }
         let killed = Arc::new(AtomicUsize::new(0));
-        let registry = Mutex::new(AgentSessionRegistry::with_process_factory(
-            Arc::new(Factory(Arc::clone(&killed))),
-        ));
+        let registry = Mutex::new(AgentSessionRegistry::with_process_factory(Arc::new(
+            Factory(Arc::clone(&killed)),
+        )));
         let repo = tempfile::tempdir().unwrap();
         let binary = repo.path().join("fake-codex");
         std::fs::write(&binary, "fixture").unwrap();
-        let id = registry.lock().unwrap().start_session_with_binary(
-            repo.path().into(), "codex".into(), binary.clone(),
-        ).unwrap();
+        let id = registry
+            .lock()
+            .unwrap()
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary.clone())
+            .unwrap();
         let error = cleanup_failed_resume_session(
-            &registry, &id, CommandError::new("agent_resume_failed", "provider rejected resume"),
+            &registry,
+            &id,
+            CommandError::new("agent_resume_failed", "provider rejected resume"),
         );
         assert_eq!(error.category, "agent_resume_failed");
         assert_eq!(error.message, "provider rejected resume");
         assert_eq!(killed.load(Ordering::SeqCst), 1);
-        assert_eq!(registry.lock().unwrap().get_session(&id).unwrap().status,
-            AgentSessionStatus::Completed);
-        assert!(registry.lock().unwrap().start_session_with_binary(
-            repo.path().into(), "codex".into(), binary,
-        ).is_ok());
+        assert_eq!(
+            registry.lock().unwrap().get_session(&id).unwrap().status,
+            AgentSessionStatus::Completed
+        );
+        assert!(registry
+            .lock()
+            .unwrap()
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary,)
+            .is_ok());
     }
 
     fn prepared_install_for_command_test() -> PreparedInstall {

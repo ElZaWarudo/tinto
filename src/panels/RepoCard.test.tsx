@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ACTIVITY_WINDOW_MS } from "./constants";
-import type { AgentInstallPreview, AgentProviderReadiness, RepoDelta } from "../bus/contract";
+import type {
+  AgentCliUpdateStatus,
+  AgentInstallPreview,
+  AgentProviderReadiness,
+  RepoDelta,
+} from "../bus/contract";
 
 const NOW = 1_700_000_000_000;
 const clientMocks = vi.hoisted(() => ({
@@ -17,6 +22,8 @@ const clientMocks = vi.hoisted(() => ({
   prepareAgentInstall: vi.fn<(...args: unknown[]) => Promise<AgentInstallPreview>>(),
   confirmAgentInstall: vi.fn(),
   cancelAgentInstall: vi.fn(),
+  agentCliUpdateStatusForRepo: vi.fn<(...args: unknown[]) => Promise<AgentCliUpdateStatus>>(),
+  updateAgentCliForRepo: vi.fn(),
 }));
 vi.mock("../bus/client", () => ({
   agentProviderReadinessForRepo: (...args: unknown[]) => {
@@ -26,6 +33,9 @@ vi.mock("../bus/client", () => ({
   prepareAgentInstall: (...args: unknown[]) => clientMocks.prepareAgentInstall(...args),
   confirmAgentInstall: (...args: unknown[]) => clientMocks.confirmAgentInstall(...args),
   cancelAgentInstall: (...args: unknown[]) => clientMocks.cancelAgentInstall(...args),
+  agentCliUpdateStatusForRepo: (...args: unknown[]) =>
+    clientMocks.agentCliUpdateStatusForRepo(...args),
+  updateAgentCliForRepo: (...args: unknown[]) => clientMocks.updateAgentCliForRepo(...args),
 }));
 
 import { RepoCard } from "./RepoCard";
@@ -84,6 +94,16 @@ describe("RepoCard", () => {
       distro: null,
       state: "binary_available",
     });
+    clientMocks.agentCliUpdateStatusForRepo.mockReset();
+    clientMocks.agentCliUpdateStatusForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      method: "npm",
+      installed_version: "0.160.1",
+      latest_version: "0.160.1",
+      update_available: false,
+    });
+    clientMocks.updateAgentCliForRepo.mockReset();
     clientMocks.prepareAgentInstall.mockReset();
     clientMocks.prepareAgentInstall.mockResolvedValue({
       attempt_id: "attempt-1",
@@ -306,6 +326,89 @@ describe("RepoCard", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  it("updates the CLI in place, reporting progress on the button itself", async () => {
+    clientMocks.agentCliUpdateStatusForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "wsl",
+      distro: "Ubuntu-24.04",
+      method: "npm",
+      installed_version: "0.158.0",
+      latest_version: "0.160.1",
+      update_available: true,
+      command_display: "npm install -g @openai/codex@latest",
+    });
+    let finishUpdate: (value: unknown) => void = () => {};
+    clientMocks.updateAgentCliForRepo.mockReturnValue(
+      new Promise((resolve) => {
+        finishUpdate = resolve;
+      }),
+    );
+    const { onOpen } = renderCard();
+
+    const button = await screen.findByRole("button", { name: "Actualizar a 0.160.1" });
+    expect(button).toHaveAttribute(
+      "title",
+      expect.stringContaining("npm install -g @openai/codex@latest"),
+    );
+    fireEvent.click(button);
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(button).toHaveAttribute("data-state", "updating");
+    expect(button).toHaveTextContent("Actualizando");
+    expect(button).toBeDisabled();
+    expect(clientMocks.updateAgentCliForRepo).toHaveBeenCalledWith("/r/api", "codex");
+
+    finishUpdate({ updated: true, version: "0.160.1", message: "CLI actualizado" });
+    await waitFor(() => expect(button).toHaveAttribute("data-state", "updated"));
+    expect(button).toHaveTextContent("Actualizado a 0.160.1");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("returns the update button to idle and explains a failed update", async () => {
+    clientMocks.agentCliUpdateStatusForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      method: "npm",
+      installed_version: "0.158.0",
+      latest_version: "0.160.1",
+      update_available: true,
+      command_display: "npm install -g @openai/codex@latest",
+    });
+    clientMocks.updateAgentCliForRepo.mockResolvedValue({
+      updated: false,
+      message: "No se pudo actualizar: EBUSY",
+    });
+    renderCard();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Actualizar a 0.160.1" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-launch-message")).toHaveTextContent(
+        "No se pudo actualizar: EBUSY",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Actualizar a 0.160.1" })).toHaveAttribute(
+      "data-state",
+      "idle",
+    );
+  });
+
+  it("points app-managed CLIs to their own updater instead of offering a button", async () => {
+    clientMocks.agentCliUpdateStatusForRepo.mockResolvedValue({
+      agent_type: "codex",
+      source: "local",
+      method: "app",
+      installed_version: "0.158.0",
+      latest_version: "0.160.1",
+      update_available: true,
+    });
+    renderCard();
+
+    expect(
+      await screen.findByText(/Codex 0\.160\.1 disponible · actualízalo desde la app de Codex/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Actualizar a/ })).not.toBeInTheDocument();
+  });
+
   it("single click opens the repo", () => {
     const { onOpen } = renderCard();
     fireEvent.click(screen.getByTestId("card-/r/api"));
@@ -436,6 +539,36 @@ describe("RepoCard", () => {
     fireEvent.click(button);
 
     expect(onLaunch).toHaveBeenCalledWith("codex", "workspace");
+  });
+
+  it("explains a slow start instead of a silent Iniciando", async () => {
+    let finishLaunch: () => void = () => {};
+    const onLaunch = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLaunch = resolve;
+        }),
+    );
+    renderCard({}, { onLaunch });
+    const launch = await screen.findByRole("button", { name: "Iniciar Codex en api" });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(launch);
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(screen.getByTestId("agent-launch-message")).toHaveTextContent(
+        "Preparando el punto de control de seguridad",
+      );
+      await act(async () => {
+        finishLaunch();
+      });
+      expect(screen.getByTestId("agent-launch-message")).not.toHaveTextContent(
+        "Preparando el punto de control",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("launches the selected agent without opening the card", async () => {

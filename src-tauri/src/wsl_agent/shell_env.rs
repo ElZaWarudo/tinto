@@ -111,6 +111,70 @@ exit 1
     )
 }
 
+/// Reports an agent CLI's version and install method (`status`) or updates it
+/// (`update`). Args: mode, agent, then candidate npm packages. The report is
+/// printed as `tinto:<key>=<value>` lines; updater output goes to stderr.
+pub(crate) fn agent_cli_update_script() -> String {
+    format!(
+        r#"{AGENT_SHELL_RESOLVER}
+mode=${{1-}}
+agent_name=${{2-}}
+[ -n "$mode" ] && [ -n "$agent_name" ] || exit 2
+shift 2
+load_tinto_agent_environment
+if ! resolved_agent=$(resolve_tinto_agent_binary "$agent_name"); then
+  printf 'tinto:path=\n'
+  exit 0
+fi
+agent_bin_dir=${{resolved_agent%/*}}
+export PATH="$agent_bin_dir:$PATH"
+
+package=
+first_package=${{1-}}
+if command -v npm >/dev/null 2>&1; then
+  for candidate in "$@"; do
+    if npm ls -g --depth=0 --json "$candidate" 2>/dev/null | grep -q "\"$candidate\""; then
+      package=$candidate
+      break
+    fi
+  done
+fi
+method=unmanaged
+if [ -n "$package" ]; then
+  method=npm
+else
+  case "$agent_name:$resolved_agent" in
+    claude:*/.local/share/claude/*|claude:*/.local/bin/*) method=self ;;
+    opencode:*) method=self ;;
+  esac
+fi
+
+if [ "$mode" = update ]; then
+  case "$method" in
+    npm) npm install -g "$package@latest" >&2 || exit 1 ;;
+    self)
+      case "$agent_name" in
+        opencode) "$resolved_agent" upgrade >&2 || exit 1 ;;
+        *) "$resolved_agent" update >&2 || exit 1 ;;
+      esac ;;
+    *) printf 'Tinto no puede actualizar esta instalacion de %s\n' "$agent_name" >&2; exit 3 ;;
+  esac
+  hash -r 2>/dev/null || true
+fi
+
+printf 'tinto:path=%s\n' "$resolved_agent"
+printf 'tinto:version=%s\n' "$("$resolved_agent" --version 2>/dev/null | head -n 1)"
+printf 'tinto:method=%s\n' "$method"
+printf 'tinto:package=%s\n' "$package"
+if [ "$mode" = status ] && command -v npm >/dev/null 2>&1; then
+  lookup=${{package:-$first_package}}
+  [ -n "$lookup" ] && printf 'tinto:latest=%s\n' "$(npm view "$lookup" version 2>/dev/null | head -n 1)"
+fi
+exit 0
+"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

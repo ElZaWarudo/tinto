@@ -2386,10 +2386,21 @@ select option:checked {
 .repo-overview__agent-launcher {
   grid-column: auto;
   grid-row: auto;
-  grid-template-columns: auto minmax(120px, 220px) minmax(68px, auto);
-  width: min(100%, 420px);
+  /* One left-aligned row: AGENT · selector · Iniciar · Actualizar. */
+  grid-template-columns: auto minmax(120px, 220px) auto auto;
+  justify-content: start;
+  width: 100%;
   margin-top: 8px;
   padding: 4px 0 0;
+}
+.repo-overview__agent-launcher .repo-card__launch {
+  grid-column: 3;
+  grid-row: 1;
+}
+.repo-overview__agent-launcher .repo-card__update-agent,
+.repo-overview__agent-launcher .repo-card__update-hint {
+  grid-column: 4;
+  grid-row: 1;
 }
 .repo-panel__path {
   color: var(--fg-muted);
@@ -3377,7 +3388,9 @@ select option:checked {
   grid-column: 6;
   grid-row: 1;
   display: grid;
-  grid-template-columns: auto minmax(72px, 1fr) minmax(96px, 1fr) minmax(68px, auto);
+  /* Packed to the left: AGENT · selector · Iniciar · Actualizar. */
+  grid-template-columns: auto minmax(110px, 180px) auto auto;
+  justify-content: start;
   grid-template-rows: 28px 16px;
   gap: 6px;
   align-items: center;
@@ -3403,7 +3416,7 @@ select option:checked {
   padding: 2px 28px 2px 8px;
 }
 .repo-card__launch {
-  grid-column: 4;
+  grid-column: 3;
   padding: 2px 10px;
   cursor: pointer;
 }
@@ -3435,6 +3448,83 @@ select option:checked {
 
 .repo-card__availability-actions button {
   min-height: 26px;
+}
+
+/* CLI update: a regular button under the launcher (same shape as Iniciar)
+   that reports its own progress: Actualizar → Actualizando… → Actualizado. */
+.repo-card__update-agent,
+.repo-card__update-hint {
+  /* Dashboard cards are narrow: own line under the agent controls. */
+  grid-column: 2 / -1;
+  grid-row: 3;
+  justify-self: start;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.repo-card__update-agent {
+  min-width: 0;
+  height: 28px;
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background-color: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  transition:
+    border-color var(--ease),
+    color var(--ease),
+    background-color var(--ease);
+}
+.repo-card__update-agent:not(:disabled):hover {
+  border-color: var(--accent-fg);
+  color: var(--accent-fg);
+}
+.repo-card__update-agent[data-state="updating"] {
+  color: var(--fg-muted);
+  cursor: progress;
+}
+.repo-card__update-agent[data-state="updated"] {
+  border-color: color-mix(in srgb, var(--added) 60%, transparent);
+  background-color: color-mix(in srgb, var(--added) 14%, transparent);
+  color: var(--added);
+  cursor: default;
+}
+.repo-card__update-dots {
+  display: inline-block;
+  width: 3ch;
+  text-align: left;
+}
+.repo-card__update-dots::after {
+  content: "";
+  animation: repo-card-update-dots 1.2s steps(1, end) infinite;
+}
+@keyframes repo-card-update-dots {
+  0% {
+    content: "";
+  }
+  25% {
+    content: ".";
+  }
+  50% {
+    content: "..";
+  }
+  75% {
+    content: "...";
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .repo-card__update-dots::after {
+    content: "...";
+    animation: none;
+  }
+}
+.repo-card__update-hint {
+  /* Informational only; shown in the roomy repo panel, not on every card. */
+  display: none;
+  color: var(--fg-muted);
+}
+.repo-overview__agent-launcher .repo-card__update-hint {
+  display: inline;
 }
 
 .agent-install-dialog-backdrop {
@@ -3719,6 +3809,11 @@ select option:checked {
   .repo-card__launch-msg {
     grid-column: 2 / -1;
   }
+  .repo-card__update-agent,
+  .repo-card__update-hint {
+    grid-column: 2 / -1;
+    grid-row: 3;
+  }
 }
 
 @media (max-width: 560px) {
@@ -3802,6 +3897,11 @@ select option:checked {
   }
   .repo-card__launch-msg {
     grid-column: 2 / -1;
+  }
+  .repo-card__update-agent,
+  .repo-card__update-hint {
+    grid-column: 2 / -1;
+    grid-row: 3;
   }
 }
 
@@ -3920,6 +4020,13 @@ select option:checked {
 
   .repo-card__launch-msg {
     grid-column: 2 / -1;
+  }
+
+  .repo-card__update-agent,
+  .repo-card__update-hint {
+    grid-column: 2 / -1;
+
+    grid-row: 3;
   }
 }
 
@@ -10978,6 +11085,13 @@ select option:checked {
   .repo-overview__agent-launcher .repo-card__launch-msg {
     grid-column: 1 / -1;
     grid-row: 3;
+  }
+
+  .repo-overview__agent-launcher .repo-card__update-agent,
+  .repo-overview__agent-launcher .repo-card__update-hint {
+    grid-column: 1 / -1;
+    grid-row: 4;
+    justify-self: start;
   }
 
   .repo-panel__path {

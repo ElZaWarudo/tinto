@@ -22,8 +22,8 @@ use super::{validation::validate_agent_type, AgentConsoleError};
 pub const MAX_CAPTURE_BYTES: usize = 32 * 1024;
 const ATTEMPT_TTL_MS: u64 = 10 * 60 * 1000;
 const MAX_ATTEMPTS: usize = 32;
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
-const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct InstallRecipe {
@@ -120,7 +120,7 @@ pub fn windows_npm_launcher_from_node(node: &Path) -> Result<ProcessLaunch, Agen
     })
 }
 
-fn local_npm_launcher() -> Result<ProcessLaunch, AgentConsoleError> {
+pub(super) fn local_npm_launcher() -> Result<ProcessLaunch, AgentConsoleError> {
     #[cfg(target_os = "windows")]
     {
         let node = which::which("node.exe").map_err(|_| {
@@ -140,7 +140,7 @@ fn local_npm_launcher() -> Result<ProcessLaunch, AgentConsoleError> {
     }
 }
 
-fn runtime_launch(
+pub(super) fn runtime_launch(
     source: AgentProviderSource,
     distro: Option<&str>,
     executable: &str,
@@ -489,10 +489,10 @@ fn outcome_for_category(category: &str) -> AgentInstallOutcomeKind {
 }
 
 #[derive(Debug)]
-struct ProcessResult {
-    success: bool,
-    stdout: String,
-    stderr: String,
+pub(super) struct ProcessResult {
+    pub(super) success: bool,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
 }
 
 trait InstallProcessRunner {
@@ -540,7 +540,7 @@ impl InstallProcessRunner for SystemProcessRunner {
     }
 }
 
-fn run_process(
+pub(super) fn run_process(
     launch: &ProcessLaunch,
     args: &[OsString],
     timeout: Duration,

@@ -66,6 +66,25 @@ export interface AgentInstallOutcome {
   message: string;
 }
 
+export type AgentCliUpdateMethod = "npm" | "self_update" | "app" | "unmanaged" | "missing";
+
+export interface AgentCliUpdateStatus {
+  agent_type: string;
+  source: AgentProviderSource;
+  distro?: string | null;
+  method: AgentCliUpdateMethod;
+  installed_version?: string | null;
+  latest_version?: string | null;
+  update_available: boolean;
+  command_display?: string | null;
+}
+
+export interface AgentCliUpdateOutcome {
+  updated: boolean;
+  version?: string | null;
+  message: string;
+}
+
 export type AgentSessionAcpState =
   | "unavailable"
   | "authentication_required"
@@ -747,6 +766,9 @@ export interface CuratedBusContractTypeMap {
   AgentInstallOutcomeKind: AgentInstallOutcomeKind;
   AgentInstallPreview: AgentInstallPreview;
   AgentInstallOutcome: AgentInstallOutcome;
+  AgentCliUpdateMethod: AgentCliUpdateMethod;
+  AgentCliUpdateStatus: AgentCliUpdateStatus;
+  AgentCliUpdateOutcome: AgentCliUpdateOutcome;
   AgentSessionAcpState: AgentSessionAcpState;
   AgentSessionAcpMode: AgentSessionAcpMode;
   AgentSessionAcpConfigCategory: AgentSessionAcpConfigCategory;

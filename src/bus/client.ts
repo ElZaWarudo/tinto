@@ -28,6 +28,8 @@ import {
   type McpProfileState,
   type AgentProviderReadiness,
   type AgentInstallPreview,
+  type AgentCliUpdateOutcome,
+  type AgentCliUpdateStatus,
   type AgentInstallOutcome,
   type GitleaksSetupStatus,
   type GitleaksInstallResult,
@@ -283,6 +285,12 @@ export const confirmAgentInstall = (attemptId: string) =>
 
 export const cancelAgentInstall = (attemptId: string) =>
   invoke<void>("cancel_agent_install", { attemptId });
+
+export const agentCliUpdateStatusForRepo = (repo: string, agentType: string) =>
+  invoke<AgentCliUpdateStatus>("agent_cli_update_status_for_repo", { repo, agentType });
+
+export const updateAgentCliForRepo = (repo: string, agentType: string) =>
+  invoke<AgentCliUpdateOutcome>("update_agent_cli_for_repo", { repo, agentType });
 
 export const writeAgentSessionInput = (
   sessionId: string,
