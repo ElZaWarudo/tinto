@@ -490,9 +490,17 @@ fn git_review_summary_linux(repo: &Path) -> Result<GitReviewSummary, AgentRuntim
     })
 }
 
+/// Conflict-marker scans read whole files; over a slow mount such as /mnt/c a
+/// large untracked tree took minutes and blocked the shared helper. Bound the
+/// scan by file count and wall time so the summary stays responsive.
+const REVIEW_CONFLICT_SCAN_MAX_FILES: usize = 64;
+const REVIEW_CONFLICT_SCAN_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
 fn git_review_findings_linux(repo: &Path, status_lines: &[String]) -> Vec<GitReviewFinding> {
     let mut findings = Vec::new();
     let changed_paths = changed_paths_from_status(repo, status_lines);
+    let scan_started = std::time::Instant::now();
+    let mut scanned = 0usize;
     let has_package_json = changed_paths
         .iter()
         .any(|path| path == Path::new("package.json"));
@@ -522,6 +530,12 @@ fn git_review_findings_linux(repo: &Path, status_lines: &[String]) -> Vec<GitRev
                 line: None,
             });
         }
+        let scan_allowed = scanned < REVIEW_CONFLICT_SCAN_MAX_FILES
+            && scan_started.elapsed() < REVIEW_CONFLICT_SCAN_BUDGET;
+        if !scan_allowed {
+            continue;
+        }
+        scanned += 1;
         if let Some(line) = conflict_marker_line(repo, &path) {
             findings.push(GitReviewFinding {
                 severity: "high".to_string(),
@@ -782,7 +796,7 @@ fn command_output_message(output: &std::process::Output) -> String {
     }
 }
 
-fn repo_delta(
+pub(crate) fn repo_delta(
     repo: &Path,
     subscriptions: &[SubscriptionTarget],
     scope: RepoSnapshotScope,
@@ -902,7 +916,7 @@ fn agent_binary_available(agent_type: &str) -> Result<bool, AgentRuntimeError> {
     Ok(output.status.success() && !output.stdout.is_empty())
 }
 
-fn file_fingerprints(
+pub(crate) fn file_fingerprints(
     repo: &Path,
     fs_watch: Vec<String>,
 ) -> Result<Vec<FileFingerprint>, AgentRuntimeError> {
@@ -1386,7 +1400,7 @@ fn redo_deleted_from_repo_linux_with_hook(
     Ok(FileOpOutcome { warnings })
 }
 
-struct AgentRuntimeError {
+pub(crate) struct AgentRuntimeError {
     category: String,
     message: String,
 }

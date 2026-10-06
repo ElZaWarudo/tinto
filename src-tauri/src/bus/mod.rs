@@ -172,7 +172,11 @@ impl RepoLiveState {
     /// Applies a WSL snapshot and returns whether anything visible changed.
     /// Unchanged polls keep the revision, so views keyed on it (e.g. the full
     /// file view) do not refetch every 3 s.
-    pub(crate) fn apply_external_delta(&mut self, delta: &RepoDelta, analysis_included: bool) -> bool {
+    pub(crate) fn apply_external_delta(
+        &mut self,
+        delta: &RepoDelta,
+        analysis_included: bool,
+    ) -> bool {
         // A transient failure (e.g. a WSL queue timeout) carries no repo data;
         // keep the last good snapshot visible and only surface the error.
         if delta
@@ -1081,9 +1085,12 @@ async fn run_bus_inner(
                 }
             }
             _ = wsl_poll.tick(), if current_entries.iter().any(|entry| entry.source == RepoSource::Wsl) => {
+                // A repo still being polled is skipped, not queued: queuing made
+                // slow mounts (/mnt/c) poll back-to-back and starve every other
+                // request on the distro's single helper. The next tick catches up.
                 let wsl_entries: Vec<RepoEntry> = current_entries
                     .iter()
-                    .filter(|entry| entry.source == RepoSource::Wsl)
+                    .filter(|entry| entry.source == RepoSource::Wsl && !inflight.contains(&entry.path))
                     .cloned()
                     .collect();
                 trigger_wsl_recalc_batch(
@@ -1278,6 +1285,10 @@ fn trigger_wsl_recalc_batch(
             continue;
         }
         inflight.insert(repo);
+        if let Some(native) = crate::wsl_agent::launcher::native_windows_repo_path(&entry.path) {
+            spawn_native_wsl_recalc(entry, native, scope, subscriptions, results_tx);
+            continue;
+        }
         by_distro.entry(distro).or_default().push(entry);
     }
 
@@ -1354,7 +1365,12 @@ fn trigger_wsl_recalc_batch(
                             (
                                 repo.clone(),
                                 RecalcPayload::WslPoll {
-                                    delta: empty_wsl_error_delta(&repo, RepoErrorClass::Terminal, &category, &message),
+                                    delta: empty_wsl_error_delta(
+                                        &repo,
+                                        RepoErrorClass::Terminal,
+                                        &category,
+                                        &message,
+                                    ),
                                     fingerprints: None,
                                     fs_watch: entry.fs_watch,
                                     analysis_included: false,
@@ -1483,6 +1499,59 @@ fn trigger_entry_recalc(
             pending,
         ),
     }
+}
+
+/// Snapshot of a WSL repo stored on a Windows drive, computed on the host from
+/// its native path: ~0.1 s instead of seconds through the WSL drive mount, and
+/// it never occupies the distro's single helper. The delta keeps the WSL path
+/// as the repo identity, so consumers see no difference.
+fn spawn_native_wsl_recalc(
+    entry: RepoEntry,
+    native: PathBuf,
+    scope: RecalcScope,
+    subscriptions: &[SubscriptionTarget],
+    results_tx: &mpsc::UnboundedSender<RecalcResult>,
+) {
+    let subs: Vec<SubscriptionTarget> = subscriptions
+        .iter()
+        .filter(|target| target.repo == entry.path)
+        .map(|target| SubscriptionTarget {
+            repo: native.clone(),
+            ..target.clone()
+        })
+        .collect();
+    let snapshot_scope = repo_snapshot_scope(scope);
+    let analysis_included = snapshot_scope == RepoSnapshotScope::Everything;
+    let tx = results_tx.clone();
+    tokio::spawn(async move {
+        let repo = entry.path.clone();
+        let fs_watch = entry.fs_watch.clone();
+        let payload = tokio::task::spawn_blocking(move || {
+            let mut delta = crate::wsl_agent::runtime::repo_delta(&native, &subs, snapshot_scope);
+            delta.repo = entry.path.clone();
+            let fingerprints =
+                crate::wsl_agent::runtime::file_fingerprints(&native, entry.fs_watch.clone()).ok();
+            RecalcPayload::WslPoll {
+                delta,
+                fingerprints,
+                fs_watch: entry.fs_watch,
+                analysis_included,
+            }
+        })
+        .await
+        .unwrap_or_else(|_| RecalcPayload::WslPoll {
+            delta: empty_wsl_error_delta(
+                &repo,
+                RepoErrorClass::Transient,
+                "internal",
+                "la lectura nativa del repo fallo",
+            ),
+            fingerprints: None,
+            fs_watch,
+            analysis_included: false,
+        });
+        let _ = tx.send(RecalcResult { repo, payload });
+    });
 }
 
 fn empty_wsl_error_delta(
@@ -2652,6 +2721,40 @@ mod tests {
         .expect("delta de A con el untracked");
         assert_eq!(p["repo"], ca.to_string_lossy().as_ref());
         handle.shutdown().await;
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wsl_repo_on_a_windows_drive_is_polled_natively() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write("nuevo.txt", "hola\n");
+        let wsl_path =
+            crate::wsl_agent::launcher::windows_path_to_wsl_mount(repo.path()).expect("mount path");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut inflight = HashSet::new();
+        let mut pending = HashMap::new();
+
+        // The distro does not exist: only the native route can answer.
+        trigger_wsl_recalc_batch(
+            vec![wsl_entry(&wsl_path)],
+            RecalcScope::Metadata,
+            &[],
+            &tx,
+            &mut inflight,
+            &mut pending,
+        );
+        let result = tokio::time::timeout(Duration::from_secs(20), rx.recv())
+            .await
+            .expect("native poll finishes")
+            .expect("result");
+
+        assert_eq!(result.repo, PathBuf::from(&wsl_path));
+        let RecalcPayload::WslPoll { delta, .. } = result.payload else {
+            panic!("expected a WSL poll payload");
+        };
+        assert_eq!(delta.repo, PathBuf::from(&wsl_path));
+        assert!(delta.error.is_none(), "{:?}", delta.error);
+        assert_eq!(delta.status.untracked, vec![PathBuf::from("nuevo.txt")]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

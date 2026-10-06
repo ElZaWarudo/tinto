@@ -588,6 +588,23 @@ async fn resolve_read_repo(bus: &BusHandle, repo: &Path) -> Result<ResolvedRepo,
         .map_err(map_repo_resolve_error)
 }
 
+/// Like `resolve_read_repo`, but a WSL repo stored on a Windows drive is read
+/// natively from the host path: file, tree, diff and log reads then skip the
+/// slow WSL drive mount and the distro's single helper queue.
+async fn resolve_file_read_repo(
+    bus: &BusHandle,
+    repo: &Path,
+) -> Result<ResolvedRepo, CommandError> {
+    let mut resolved = resolve_read_repo(bus, repo).await?;
+    if resolved.source == RepoSource::Wsl {
+        if let Some(native) = crate::wsl_agent::launcher::native_windows_repo_path(&resolved.path) {
+            resolved.source = RepoSource::Local;
+            resolved.path = native;
+        }
+    }
+    Ok(resolved)
+}
+
 pub(crate) fn map_repo_resolve_error(error: RepoResolveError) -> CommandError {
     match error {
         RepoResolveError::UnsupportedRepoSource { .. } => CommandError::new(
@@ -781,7 +798,7 @@ pub async fn get_worktree_diff(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
 ) -> Result<Vec<FileDiff>, CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
+    let resolved = resolve_file_read_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => {
             let repo = resolved.path;
@@ -812,7 +829,7 @@ pub async fn get_commit_diff(
     repo: PathBuf,
     commit_id: String,
 ) -> Result<Vec<FileDiff>, CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
+    let resolved = resolve_file_read_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => {
             let repo = resolved.path;
@@ -845,7 +862,7 @@ pub async fn get_commit_log(
     offset: usize,
     limit: usize,
 ) -> Result<Vec<CommitInfo>, CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
+    let resolved = resolve_file_read_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => {
             let repo = resolved.path;
@@ -879,7 +896,7 @@ pub async fn get_blob(
     commit_id: String,
     path: PathBuf,
 ) -> Result<FileContent, CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
+    let resolved = resolve_file_read_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => {
             let repo = resolved.path;
@@ -916,7 +933,7 @@ pub async fn get_file_content(
     repo: PathBuf,
     path: PathBuf,
 ) -> Result<FileContent, CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
+    let resolved = resolve_file_read_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => {
             let repo = resolved.path;
@@ -952,7 +969,7 @@ pub async fn get_media_content(
     repo: PathBuf,
     path: PathBuf,
 ) -> Result<FileContent, CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
+    let resolved = resolve_file_read_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => {
             let repo = resolved.path;
@@ -988,7 +1005,7 @@ pub async fn list_repo_tree(
     bus: State<'_, BusHandle>,
     repo: PathBuf,
 ) -> Result<RepoTree, CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
+    let resolved = resolve_file_read_repo(&bus, &repo).await?;
     match resolved.source {
         RepoSource::Local => {
             let repo = resolved.path;
