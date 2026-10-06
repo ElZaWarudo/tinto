@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-request-dialog"
+description = "Enables the request_dialog command without any pre-configured scope."
+commands.allow = ["request_dialog"]
+
+[[permission]]
+identifier = "deny-request-dialog"
+description = "Denies the request_dialog command without any pre-configured scope."
+commands.deny = ["request_dialog"]

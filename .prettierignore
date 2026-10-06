@@ -5,3 +5,5 @@ src-tauri/gen/
 package-lock.json
 docs/
 *.md
+.pumarejo/
+.pumarejo.json

@@ -29,3 +29,8 @@ src-tauri/resources/tinto-agent-linux-x86_64
 # <pumarejo:begin>
 /.pumarejo/
 # <pumarejo:end>
+# The vendored Pumarejo provider is a path dependency of src-tauri/Cargo.toml,
+# so CI needs it; everything else under .pumarejo stays local.
+!/.pumarejo/
+/.pumarejo/*
+!/.pumarejo/provider/
