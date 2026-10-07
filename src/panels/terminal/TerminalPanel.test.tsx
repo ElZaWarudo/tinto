@@ -179,8 +179,11 @@ vi.mock("../../bus/client", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: (...a: unknown[]) => confirmMock(...a),
   open: (...a: unknown[]) => openMock(...a),
+}));
+
+vi.mock("../../workbench/confirmDialog", () => ({
+  confirm: (...a: unknown[]) => confirmMock(...a),
 }));
 
 import {
@@ -3107,7 +3110,7 @@ describe("TerminalPanel", () => {
     expect(filesMetric).toHaveTextContent("Archivos");
     expect(within(overview).getByText("Actividad reciente")).toBeInTheDocument();
     expect(within(overview).getByText("Ya quedó verificado")).toBeInTheDocument();
-    expect(within(overview).getByText("+0s")).toBeInTheDocument();
+    expect(within(overview).queryByText("+0s")).not.toBeInTheDocument();
     const turnMap = screen.getByLabelText("Mapa de turnos");
     const firstTurnButton = within(turnMap).getByRole("button", { name: /T1/ });
     expect(firstTurnButton).toHaveTextContent("T1");
@@ -3289,7 +3292,8 @@ describe("TerminalPanel", () => {
     const lastCall =
       writeClipboardTextMock.mock.calls[writeClipboardTextMock.mock.calls.length - 1];
     const copied = String(lastCall?.[0] ?? "");
-    expect(copied).toContain("Turno 1 (+0s)");
+    expect(copied).toContain("Turno 1\n");
+    expect(copied).not.toContain("(+0s)");
     expect(copied).toContain("Tú:\nHaz el cambio");
     expect(copied).toContain("Agent:\nVoy con ello");
     expect(copied).toContain("Comando:\nnpm test");

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import type { FormEvent, KeyboardEvent, SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import type { IDockviewPanelProps } from "dockview-react";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../../workbench/confirmDialog";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { agentErrorCategory, retryAgentRecoveryOperation } from "../../agent/boundedRetry";
@@ -7572,7 +7573,7 @@ function changeKindLabel(kind: string): string {
 }
 
 function changeKindShortLabel(kind: string): string {
-  if (kind === "added" || kind === "untracked") return "A";
+  if (kind === "created" || kind === "added" || kind === "untracked") return "A";
   if (kind === "deleted" || kind === "removed") return "D";
   if (kind === "renamed") return "R";
   return "M";
@@ -7993,6 +7994,8 @@ function latestActivityText(turn: AgentTurnView): string | null {
 }
 
 function turnTimeLabel(turn: AgentTurnView, firstTurnAtMs: number | null): string | null {
+  // The offset is relative to the first turn, so on that turn it is always +0s.
+  if (turn.startedAtMs === firstTurnAtMs) return null;
   return timeOffsetLabel(turn.startedAtMs, firstTurnAtMs);
 }
 

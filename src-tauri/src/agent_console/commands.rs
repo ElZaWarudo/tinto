@@ -3461,7 +3461,7 @@ fn git_output_message(output: &std::process::Output) -> String {
 }
 
 fn git_command(repo: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = Command::new(crate::git::git_program());
     command.arg("-C").arg(repo);
     #[cfg(target_os = "windows")]
     {

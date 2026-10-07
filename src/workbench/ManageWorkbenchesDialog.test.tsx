@@ -10,7 +10,7 @@ const ops = vi.hoisted(() => ({
 vi.mock("./operations", () => ops);
 
 const dialogMock = vi.hoisted(() => ({ confirm: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => dialogMock);
+vi.mock("./confirmDialog", () => dialogMock);
 
 import { ManageWorkbenchesDialog } from "./ManageWorkbenchesDialog";
 import type { WorkbenchConfig } from "../bus/contract";

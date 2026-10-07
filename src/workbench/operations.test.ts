@@ -23,6 +23,7 @@ vi.mock("../bus/client", () => client);
 
 const dialogMock = vi.hoisted(() => ({ open: vi.fn(), confirm: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => dialogMock);
+vi.mock("./confirmDialog", () => dialogMock);
 
 const reloadMock = vi.hoisted(() => vi.fn());
 vi.mock("../bus/connection", () => ({ reloadActiveWorkbench: reloadMock }));
@@ -470,23 +471,6 @@ describe("workbench operations", () => {
     expect(client.forgetRepo).toHaveBeenCalledWith("/r/orphan");
     expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/r/orphan");
     expect(reloadMock).toHaveBeenCalledOnce();
-  });
-
-  it("removeRepoFlow falls back to window.confirm when the Tauri dialog fails", async () => {
-    act(() =>
-      busStore.setConfig({
-        version: 1,
-        active: "Work",
-        workbenches: [{ name: "Work", repos: [{ path: "/r/a", alias: null, fs_watch: [] }] }],
-      }),
-    );
-    dialogMock.confirm.mockRejectedValueOnce(new Error("permission denied"));
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const ok = await removeRepoFlow("Work", "/r/a");
-    expect(ok).toBe(true);
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(client.removeRepoEntry).toHaveBeenCalledWith("Work", "/r/a");
-    confirmSpy.mockRestore();
   });
 
   it("removeRepoFlow delegates WSL repo removal to the unified backend command", async () => {

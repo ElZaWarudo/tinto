@@ -1808,6 +1808,94 @@ mod tests {
     }
 
     #[test]
+    fn registry_local_revert_restores_a_dirty_git_repo() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(
+            repo.path().join("README.md"),
+            "base
+",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.path().join("value.ts"),
+            "41
+",
+        )
+        .unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        std::fs::write(
+            repo.path().join("README.md"),
+            "base
+dirty
+",
+        )
+        .unwrap();
+        let binary = tempfile::NamedTempFile::new().unwrap();
+
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary.path().into())
+            .unwrap();
+        registry
+            .record_session_timeline_item(AgentSessionTimelineItem {
+                session_id: id.clone(),
+                id: "turn-user-1".into(),
+                kind: crate::bus::contract::AgentSessionTimelineKind::UserMessage,
+                text: "edit".into(),
+                timestamp_ms: 10,
+                attachments: Vec::new(),
+            })
+            .unwrap();
+        std::fs::write(
+            repo.path().join("value.ts"),
+            "42
+",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.path().join("notes.md"),
+            "alpha
+",
+        )
+        .unwrap();
+        registry.record_session_turn_done(&id, 11).unwrap();
+        registry.stop_session(&id).unwrap();
+        let turn = registry.get_session(&id).unwrap().turn_checkpoints[0].clone();
+        registry
+            .revert_turn_file(&id, &turn.id, Path::new("notes.md"), true)
+            .unwrap();
+        assert!(!repo.path().join("notes.md").exists());
+
+        let reverted = registry.revert_session(&id, true).unwrap();
+
+        assert_eq!(reverted.status, AgentSessionStatus::Reverted);
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("value.ts")).unwrap(),
+            "41
+"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("README.md")).unwrap(),
+            "base
+dirty
+"
+        );
+        assert!(!repo.path().join("notes.md").exists());
+    }
+
+    #[test]
     fn registry_local_turn_checkpoint_can_restore_completed_session_to_post_turn_state() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry = AgentSessionRegistry::with_process_factory(factory);

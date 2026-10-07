@@ -75,6 +75,33 @@ pub struct RepoStatus {
     pub untracked: Vec<PathBuf>,
 }
 
+/// The `git` executable for CLI calls. A GUI-launched Tinto may not inherit
+/// Git on its PATH (Git for Windows installed "from Git Bash only", or
+/// installed after login), so Windows also checks the standard install dirs.
+pub fn git_program() -> &'static Path {
+    static PROGRAM: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PROGRAM.get_or_init(|| {
+        if let Ok(path) = which::which("git") {
+            return path;
+        }
+        #[cfg(target_os = "windows")]
+        for (var, dir) in [
+            ("ProgramFiles", "Git"),
+            ("ProgramW6432", "Git"),
+            ("ProgramFiles(x86)", "Git"),
+            ("LOCALAPPDATA", r"Programs\Git"),
+        ] {
+            if let Some(root) = std::env::var_os(var) {
+                let candidate = PathBuf::from(root).join(dir).join("cmd").join("git.exe");
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+        PathBuf::from("git")
+    })
+}
+
 /// Status via the `git` CLI for repos on Windows drives seen from WSL
 /// (`/mnt/<letter>/...`). libgit2 stats every untracked entry, which costs
 /// seconds per poll over the drvfs mount; `git status` takes ~0.1 s there.
@@ -84,7 +111,7 @@ pub fn drvfs_cli_status(repo: &Path) -> Option<RepoStatus> {
     if !is_wsl_windows_drive_path(repo) {
         return None;
     }
-    let output = std::process::Command::new("git")
+    let output = std::process::Command::new(git_program())
         .args([
             "--no-optional-locks",
             "status",

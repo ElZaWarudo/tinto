@@ -379,7 +379,7 @@ pub(crate) fn fetch_repo_local(
         ));
     }
 
-    let mut command = Command::new("git");
+    let mut command = Command::new(crate::git::git_program());
     command
         .arg("-C")
         .arg(repo_abs)

@@ -887,7 +887,7 @@ impl ShadowGit {
 /// variables. Snapshots are byte-exact (see the store's info/attributes) and
 /// never trigger background maintenance.
 fn git_command(store: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = Command::new(crate::git::git_program());
     for name in INHERITED_GIT_ENV {
         command.env_remove(name);
     }
@@ -987,7 +987,7 @@ fn ensure_shadow_store(
     let store = repo_dir.join(SHADOW_STORE_DIR);
     if !store.join("HEAD").is_file() {
         fs::create_dir_all(&store).map_err(io_error)?;
-        let mut command = Command::new("git");
+        let mut command = Command::new(crate::git::git_program());
         for name in INHERITED_GIT_ENV {
             command.env_remove(name);
         }
@@ -1273,7 +1273,7 @@ fn change(path: &Path, kind: AgentSessionChangeKind, timestamp_ms: u64) -> Agent
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<(), AgentConsoleError> {
-    let mut command = Command::new("git");
+    let mut command = Command::new(crate::git::git_program());
     command.arg("-C").arg(repo).args(args);
     #[cfg(target_os = "windows")]
     hide_console(&mut command);
@@ -1293,7 +1293,7 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<(), AgentConsoleError> {
 fn git_file_exists_at(repo: &Path, hash: &str, rel: &Path) -> Result<bool, AgentConsoleError> {
     let rel_text = rel.to_string_lossy();
     let spec = format!("{hash}:{rel_text}");
-    let mut command = Command::new("git");
+    let mut command = Command::new(crate::git::git_program());
     command.arg("-C").arg(repo).args(["cat-file", "-e", &spec]);
     #[cfg(target_os = "windows")]
     hide_console(&mut command);

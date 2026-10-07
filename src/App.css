@@ -12255,6 +12255,9 @@ a:focus-visible {
   font-size: 13px;
   color: var(--fg-muted);
 }
+.file-op-modal__body--message {
+  white-space: pre-line;
+}
 .file-op-modal__list {
   list-style: none;
   padding: 0;
