@@ -73,6 +73,7 @@ import { consoleDock } from "../../workspace/consoleDock";
 import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
 import { AgentRuntimeControls, type CodexRuntimeMenu } from "./AgentRuntimeControls";
 import {
+  effectiveRuntimeModel,
   lastRuntimeCatalog,
   reasoningSupportedByModel,
   rememberRuntimeCatalog,
@@ -961,8 +962,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     ? composerCommandOptionId(sessionId, activeComposerCommand.id)
     : undefined;
   const effectiveRuntimeOptions = useMemo(
-    () => codexRuntimeOptions(selectedModel, selectedReasoning, selectedSpeed),
-    [selectedModel, selectedReasoning, selectedSpeed],
+    () => codexRuntimeOptions(selectedModel, selectedReasoning, selectedSpeed, runtimeCatalog),
+    [selectedModel, selectedReasoning, selectedSpeed, runtimeCatalog],
   );
 
   useEffect(() => {
@@ -5593,9 +5594,14 @@ function codexRuntimeOptions(
   model: CodexModelSelection,
   reasoning: CodexReasoningSelection,
   speed: CodexSpeedSelection,
+  catalog: AgentRuntimeCatalog | null,
 ): AgentSessionRuntimeOptions {
   const options: AgentSessionRuntimeOptions = { speed };
-  if (model !== "auto") options.model = model;
+  // "auto" shows the catalog's default model, so send that one: without a
+  // model Codex falls back to its config file, which may name a model the
+  // account can no longer use.
+  const resolvedModel = model === "auto" ? effectiveRuntimeModel(catalog, "auto")?.id : model;
+  if (resolvedModel) options.model = resolvedModel;
   if (reasoning !== "auto") options.reasoning_effort = reasoning;
   return options;
 }

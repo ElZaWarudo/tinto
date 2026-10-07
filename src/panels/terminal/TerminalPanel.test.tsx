@@ -1216,6 +1216,7 @@ describe("TerminalPanel", () => {
     await user.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(composer).toHaveValue("");
@@ -1251,6 +1252,7 @@ describe("TerminalPanel", () => {
 
     await waitFor(() => expect(resumeAgentJournalSessionMock).toHaveBeenCalledWith("sess-1"));
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-resumed", "Seguimos\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(openAgentTerminal).toHaveBeenCalledWith({
@@ -1306,7 +1308,7 @@ describe("TerminalPanel", () => {
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith(
       "sess-resumed",
       "Seguimos después del reinicio\r",
-      { speed: "standard" },
+      { model: "gpt-5.6-sol", speed: "standard" },
     );
     expect(openAgentTerminal).toHaveBeenCalledWith({
       sessionId: "sess-resumed",
@@ -1348,6 +1350,7 @@ describe("TerminalPanel", () => {
     await waitFor(() => expect(writeAgentSessionInputMock).toHaveBeenCalledTimes(2));
     expect(resumeAgentJournalSessionMock).toHaveBeenCalledTimes(1);
     expect(writeAgentSessionInputMock).toHaveBeenLastCalledWith("sess-resumed", "Seguimos\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(openAgentTerminal).toHaveBeenCalledWith({
@@ -1499,6 +1502,7 @@ describe("TerminalPanel", () => {
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "analiza el sistema\r", {
       reasoning_effort: "high",
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
   });
@@ -1616,6 +1620,7 @@ describe("TerminalPanel", () => {
     await user.click(screen.getByRole("button", { name: "Reanudar cola" }));
     await waitFor(() =>
       expect(writeAgentSessionTurnMock).toHaveBeenCalledWith("sess-1", "Haz esto después", [], {
+        model: "gpt-5.6-sol",
         speed: "fast",
       }),
     );
@@ -1705,6 +1710,7 @@ describe("TerminalPanel", () => {
 
     await waitFor(() =>
       expect(writeAgentSessionTurnMock).toHaveBeenCalledWith("sess-1", "Usa rápido", [], {
+        model: "gpt-5.6-sol",
         speed: "fast",
       }),
     );
@@ -2494,6 +2500,7 @@ describe("TerminalPanel", () => {
 
     await user.type(composer, "{Enter}");
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", `${expectedReviewPrompt}\r`, {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(
@@ -3028,6 +3035,7 @@ describe("TerminalPanel", () => {
 
     await user.type(composer, "{Enter}");
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "line one\nline two\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
   });
