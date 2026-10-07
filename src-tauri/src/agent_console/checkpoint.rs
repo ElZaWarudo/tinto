@@ -84,7 +84,7 @@ pub fn create_checkpoint(
     created_at_ms: u64,
     config: &CheckpointConfig,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
-    create_checkpoint_inner(repo, session_id, created_at_ms, config, true)
+    create_checkpoint_inner(repo, session_id, created_at_ms, config, true, false)
 }
 
 pub fn create_ephemeral_checkpoint(
@@ -93,7 +93,93 @@ pub fn create_ephemeral_checkpoint(
     created_at_ms: u64,
     config: &CheckpointConfig,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
-    create_checkpoint_inner(repo, session_id, created_at_ms, config, false)
+    create_checkpoint_inner(repo, session_id, created_at_ms, config, false, false)
+}
+
+/// A job-boundary snapshot for Delivery. It is always a shadow tree, even on
+/// a clean repo, so the tree id doubles as the candidate identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeSnapshot {
+    pub checkpoint: CheckpointRecord,
+    pub head: Option<String>,
+    pub tree: String,
+    /// Paths that differ from the `compare_to` tree, when one was given.
+    pub changes: Vec<AgentSessionChange>,
+}
+
+impl WorktreeSnapshot {
+    /// `<HEAD>:<tree>`, the format `run_state.py candidate` uses.
+    pub fn candidate_id(&self) -> String {
+        format!("{}:{}", self.head.as_deref().unwrap_or("none"), self.tree)
+    }
+}
+
+pub fn snapshot_worktree(
+    repo: &Path,
+    name: &str,
+    created_at_ms: u64,
+    config: &CheckpointConfig,
+    compare_to: Option<&str>,
+) -> Result<WorktreeSnapshot, AgentConsoleError> {
+    let checkpoint = create_checkpoint_inner(repo, name, created_at_ms, config, true, true)?;
+    let tree = read_metadata(&checkpoint.checkpoint_dir)?
+        .shadow_tree
+        .ok_or_else(|| {
+            AgentConsoleError::new("checkpoint_invalid", "the snapshot has no shadow tree")
+        })?;
+    let changes = match compare_to {
+        Some(from) => diff_snapshot_trees(&checkpoint, from, &tree, created_at_ms)?,
+        None => Vec::new(),
+    };
+    Ok(WorktreeSnapshot {
+        head: checkpoint.contract.git_hash.clone(),
+        checkpoint,
+        tree,
+        changes,
+    })
+}
+
+fn diff_snapshot_trees(
+    record: &CheckpointRecord,
+    from: &str,
+    to: &str,
+    timestamp_ms: u64,
+) -> Result<Vec<AgentSessionChange>, AgentConsoleError> {
+    let repo_dir = record.checkpoint_dir.parent().ok_or_else(|| {
+        AgentConsoleError::new(
+            "checkpoint_invalid",
+            "checkpoint has no repository directory",
+        )
+    })?;
+    let args = [
+        "diff-tree",
+        "-r",
+        "--name-status",
+        "-z",
+        "--no-renames",
+        from,
+        to,
+    ];
+    let mut command = git_command(&repo_dir.join(SHADOW_STORE_DIR));
+    command.args(args);
+    let output = run_git_command(command, &args, None)?;
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    let mut changes = Vec::new();
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        let kind = match status.first() {
+            Some(b'A') => AgentSessionChangeKind::Created,
+            Some(b'D') => AgentSessionChangeKind::Removed,
+            _ => AgentSessionChangeKind::Modified,
+        };
+        changes.push(change(
+            Path::new(&*String::from_utf8_lossy(path)),
+            kind,
+            timestamp_ms,
+        ));
+    }
+    Ok(changes)
 }
 
 fn create_checkpoint_inner(
@@ -102,6 +188,7 @@ fn create_checkpoint_inner(
     created_at_ms: u64,
     config: &CheckpointConfig,
     enforce_retention: bool,
+    force_shadow: bool,
 ) -> Result<CheckpointRecord, AgentConsoleError> {
     let repo = canonical_repo(repo)?;
     if !enforce_retention {
@@ -116,8 +203,8 @@ fn create_checkpoint_inner(
 
     let repository = Repository::open(&repo).ok();
     let clean_head = match &repository {
-        Some(repository) => clean_git_head(repository)?,
-        None => None,
+        Some(repository) if !force_shadow => clean_git_head(repository)?,
+        _ => None,
     };
     let contract = match clean_head {
         Some(head_hash) => {

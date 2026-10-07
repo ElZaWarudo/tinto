@@ -12,6 +12,7 @@ fn pumarejo_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bui
 
 pub mod agent_console;
 pub mod bus;
+pub mod delivery;
 pub mod file_ops;
 pub mod git;
 pub mod paths;
@@ -96,6 +97,9 @@ pub fn run() {
     let mut initial_repos = Some(initial_repos);
     let agent_journal = agent_console::journal::AgentJournal::open_default()
         .expect("no se pudo abrir el diario SQLite de agentes");
+    let delivery = delivery::service::DeliveryService::open_default()
+        .expect("no se pudo abrir el estado SQLite de Delivery");
+    let delivery_for_setup = delivery.clone();
 
     let builder = pumarejo_builder(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
@@ -113,9 +117,31 @@ pub fn run() {
             agent_console::install::AgentInstallRegistry::default(),
         ))
         .manage(std::sync::Mutex::new(agent_journal))
+        .manage(delivery)
         .manage(bus_handle)
         .invoke_handler(tauri::generate_handler![
             ping,
+            delivery::commands::delivery_overview,
+            delivery::commands::delivery_create_task,
+            delivery::commands::delivery_remove_task,
+            delivery::commands::delivery_update_task,
+            delivery::commands::delivery_dispatch_job,
+            delivery::commands::delivery_cancel_job,
+            delivery::commands::delivery_retry_job,
+            delivery::commands::delivery_undo_job,
+            delivery::commands::delivery_job_log,
+            delivery::commands::delivery_update_settings,
+            delivery::commands::delivery_repo_settings,
+            delivery::commands::delivery_set_repo_settings,
+            delivery::commands::delivery_release_lease,
+            delivery::commands::delivery_request_approval,
+            delivery::commands::delivery_decide_approval,
+            delivery::commands::delivery_complete_approval,
+            delivery::commands::delivery_create_run,
+            delivery::commands::delivery_takeover_run,
+            delivery::commands::delivery_close_run,
+            delivery::commands::delivery_open_task_in_agents,
+            delivery::commands::delivery_open_job_in_agents,
             workbench::commands::list_workbenches,
             workbench::commands::create_workbench,
             workbench::commands::rename_workbench,
@@ -208,6 +234,16 @@ pub fn run() {
             ui_state::set_ui_state
         ])
         .setup(move |app| {
+            {
+                let handle = app.handle().clone();
+                delivery_for_setup.set_notify(std::sync::Arc::new(move || {
+                    let _ = handle.emit(delivery::commands::EVENT_DELIVERY_CHANGED, ());
+                }));
+                if let Err(error) = delivery::mcp::start(delivery_for_setup.clone()) {
+                    eprintln!("tinto: el API de coordinador de Delivery no arrancó: {error}");
+                }
+                delivery_for_setup.tick();
+            }
             #[cfg(feature = "e2e-wdio")]
             {
                 let data_dir = runtime_paths::e2e_webview_data_dir().ok_or_else(|| {

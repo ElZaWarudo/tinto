@@ -71,7 +71,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(category: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(category: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             category: category.into(),
             message: message.into(),
@@ -174,6 +174,112 @@ fn start_resolved_agent_session(
     );
     refresh_and_emit_sessions(app);
     Ok(started.id)
+}
+
+/// Opens an Agents conversation in a Delivery worktree. The worktree joins
+/// the active workbench (as session forks do) so the usual repo views work,
+/// then a session starts there, or resumes the given provider thread.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn open_worktree_conversation(
+    app: &AppHandle,
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    registry: &Mutex<AgentSessionRegistry>,
+    worktree: &Path,
+    distro: Option<&str>,
+    alias: &str,
+    agent_type: &str,
+    resume_thread: Option<&str>,
+) -> Result<(String, PathBuf), CommandError> {
+    let resolved = match ensure_known_agent_repo(bus, worktree).await {
+        Ok(resolved) => resolved,
+        Err(_) => {
+            let repos = {
+                let mut store = lock_workbenches(workbenches)?;
+                let active = store.active_workbench_runtime().ok_or_else(|| {
+                    CommandError::new("workbench_not_active", "no active workbench")
+                })?;
+                let added = match distro {
+                    None => store
+                        .add_repo(
+                            &active.name,
+                            worktree.to_path_buf(),
+                            Some(alias.to_string()),
+                            true,
+                        )
+                        .map(|_| ()),
+                    Some(distro) => store
+                        .add_wsl_repo(
+                            &active.name,
+                            distro.to_string(),
+                            worktree.to_string_lossy().into_owned(),
+                            Some(alias.to_string()),
+                        )
+                        .map(|_| ()),
+                };
+                added.map_err(map_workbench_error)?;
+                store
+                    .active_workbench_runtime()
+                    .filter(|workbench| workbench.name == active.name)
+                    .map(|workbench| workbench.repos)
+                    .unwrap_or_default()
+            };
+            bus.set_workbench(repos);
+            ensure_known_agent_repo(bus, worktree).await?
+        }
+    };
+    let permission_mode = AgentSessionPermissionMode::Workspace;
+    let repo = resolved.path.clone();
+    let session_id = match resume_thread {
+        None => start_resolved_agent_session(
+            app,
+            registry,
+            resolved,
+            agent_type.to_string(),
+            permission_mode,
+        )?,
+        Some(thread) => {
+            let started = {
+                let mut registry = lock_registry(registry)?;
+                match resolved.source {
+                    RepoSource::Local => registry.resume_session_with_output(
+                        resolved.path,
+                        agent_type.to_string(),
+                        thread.to_string(),
+                        AgentSessionContextSummary {
+                            text: String::new(),
+                            created_at_ms: now_ms(),
+                            source_events: 0,
+                            source_turns: 0,
+                        },
+                        permission_mode,
+                    )?,
+                    RepoSource::Wsl => registry.resume_wsl_session_with_output(
+                        resolved.path,
+                        resolved.distro.ok_or_else(|| {
+                            CommandError::new("missing_distro", "repo WSL sin distro")
+                        })?,
+                        agent_type.to_string(),
+                        thread.to_string(),
+                        permission_mode,
+                    )?,
+                }
+            };
+            if let Some(output_reader) = started.output_reader {
+                spawn_output_reader(app.clone(), started.id.clone(), output_reader);
+            }
+            emit_timeline_text(
+                app,
+                &started.id,
+                AgentSessionTimelineKind::Lifecycle,
+                Some("Session started".to_string()),
+                now_ms(),
+            );
+            refresh_and_emit_sessions(app);
+            started.id
+        }
+    };
+    Ok((session_id, repo))
 }
 
 #[tauri::command]

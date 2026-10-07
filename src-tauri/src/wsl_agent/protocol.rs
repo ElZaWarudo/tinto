@@ -242,6 +242,17 @@ pub enum AgentRequest {
         checkpoint: CheckpointRecord,
         path: PathBuf,
     },
+    /// Delivery job boundary: a shadow snapshot, optionally diffed against
+    /// an earlier snapshot tree.
+    WorktreeSnapshot {
+        protocol_version: u16,
+        repo: PathBuf,
+        allowed_repos: Vec<PathBuf>,
+        name: String,
+        created_at_ms: u64,
+        #[serde(default)]
+        compare_to: Option<String>,
+    },
     AgentCheckpointRemove {
         protocol_version: u16,
         allowed_repos: Vec<PathBuf>,
@@ -363,6 +374,9 @@ pub enum AgentResponse {
     },
     AgentChangeLog {
         changes: Vec<AgentSessionChange>,
+    },
+    WorktreeSnapshot {
+        snapshot: crate::agent_console::checkpoint::WorktreeSnapshot,
     },
     CopyResult {
         result: CopyResult,
@@ -618,6 +632,9 @@ impl AgentRequest {
                 protocol_version, ..
             }
             | Self::AgentCheckpointRemove {
+                protocol_version, ..
+            }
+            | Self::WorktreeSnapshot {
                 protocol_version, ..
             }
             | Self::CopyToRepo {

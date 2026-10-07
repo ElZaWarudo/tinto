@@ -8,7 +8,7 @@ use ignore::WalkBuilder;
 use crate::agent_console::checkpoint::{
     create_checkpoint, create_ephemeral_checkpoint, load_session_checkpoint,
     remove_ephemeral_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
-    CheckpointConfig,
+    snapshot_worktree, CheckpointConfig,
 };
 use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
@@ -356,6 +356,23 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
         } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
             revert_checkpoint_file(&checkpoint, &path)?;
             Ok(AgentResponse::Unit)
+        }),
+        AgentRequest::WorktreeSnapshot {
+            repo,
+            allowed_repos,
+            name,
+            created_at_ms,
+            compare_to,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            let snapshot = snapshot_worktree(
+                &repo,
+                &name,
+                created_at_ms,
+                &CheckpointConfig::default(),
+                compare_to.as_deref(),
+            )?;
+            Ok(AgentResponse::WorktreeSnapshot { snapshot })
         }),
         AgentRequest::AgentCheckpointRemove {
             allowed_repos,
