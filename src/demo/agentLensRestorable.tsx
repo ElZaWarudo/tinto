@@ -360,6 +360,7 @@ const actions: WorkspaceActions = {
   openTimeline: () => {},
   openDashboard: () => {},
   openAgents: () => {},
+  openDelivery: () => {},
   openAgentTerminal: (params) => {
     document.documentElement.dataset.openedAgentSession = params.sessionId;
   },

@@ -340,6 +340,7 @@ describe("RepoPanel", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal,
     };
 
@@ -407,6 +408,7 @@ describe("RepoPanel", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     render(
@@ -431,6 +433,7 @@ describe("RepoPanel", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     render(

@@ -5,6 +5,7 @@ import {
   PANEL_AGENT_CONSOLES,
   PANEL_AGENT_TERMINAL,
   PANEL_DASHBOARD,
+  PANEL_DELIVERY,
   PANEL_REPO,
   PANEL_TIMELINE,
   TAB_REPO,
@@ -14,6 +15,7 @@ import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
 import { openDashboardPanel, resetToDashboardPanel } from "./workspace/openDashboard";
 import { openAgentConsolesPanel, openAgentTerminalPanel } from "./workspace/openAgentTerminal";
+import { openDeliveryPanel } from "./workspace/openDelivery";
 import {
   closePanelsForRemovedRepo,
   closePanelsOutsideActiveWorkbench,
@@ -27,6 +29,7 @@ import { RepoTab } from "./panels/RepoTab";
 import { TimelinePanel } from "./panels/timeline/TimelinePanel";
 import { ConsoleDockPanel } from "./panels/terminal/ConsoleDockPanel";
 import { TerminalPanel } from "./panels/terminal/TerminalPanel";
+import { DeliveryPanel } from "./panels/delivery/DeliveryPanel";
 import { onDetachedConsolesReattach } from "./panels/terminal/detachTerminalWindow";
 import {
   armConsolesExternalDetach,
@@ -56,6 +59,7 @@ const components: PanelComponents = {
   [PANEL_TIMELINE]: TimelinePanel,
   [PANEL_AGENT_CONSOLES]: ConsoleDockPanel,
   [PANEL_AGENT_TERMINAL]: TerminalPanel,
+  [PANEL_DELIVERY]: DeliveryPanel,
 };
 
 const tabComponents: TabComponents = {
@@ -182,6 +186,11 @@ function NativeApp() {
       openAgents: () => {
         if (apiRef.current) {
           openAgentConsolesPanel(apiRef.current);
+        }
+      },
+      openDelivery: () => {
+        if (apiRef.current) {
+          openDeliveryPanel(apiRef.current);
         }
       },
       openAgentTerminal: (params) => {

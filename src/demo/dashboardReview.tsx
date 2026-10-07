@@ -140,6 +140,7 @@ const actions: WorkspaceActions = {
   openTimeline: () => {},
   openDashboard: () => {},
   openAgents: () => {},
+  openDelivery: () => {},
   openAgentTerminal: () => {},
 };
 

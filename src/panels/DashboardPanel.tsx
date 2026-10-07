@@ -267,7 +267,8 @@ export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
-  const { openRepo, addRepo, openAgents, openAgentTerminal, removeRepo } = useWorkspaceActions();
+  const { openRepo, addRepo, openAgents, openDelivery, openAgentTerminal, removeRepo } =
+    useWorkspaceActions();
   const nowMs = useNow(1000);
   const deltaAnnouncement = useDeltaAnnouncement(
     repos,
@@ -356,6 +357,9 @@ export function DashboardPanel() {
           </button>
           <button type="button" onClick={openAgents} data-testid="dashboard-open-agents">
             Abrir Agents
+          </button>
+          <button type="button" onClick={openDelivery} data-testid="dashboard-open-delivery">
+            Abrir Delivery
           </button>
         </div>
       </div>

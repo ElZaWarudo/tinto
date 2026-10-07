@@ -338,6 +338,7 @@ function renderWithWorkspaceActions(ui: ReactElement, actions: Partial<Workspace
     openTimeline: vi.fn(),
     openDashboard: vi.fn(),
     openAgents: vi.fn(),
+    openDelivery: vi.fn(),
     openAgentTerminal: vi.fn(),
   };
   return render(

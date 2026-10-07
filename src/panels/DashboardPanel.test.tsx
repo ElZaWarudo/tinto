@@ -65,6 +65,7 @@ function renderDash(actions: Partial<WorkspaceActions> = {}) {
     openTimeline: vi.fn(),
     openDashboard: vi.fn(),
     openAgents: vi.fn(),
+    openDelivery: vi.fn(),
     openAgentTerminal: vi.fn(),
     ...actions,
   };

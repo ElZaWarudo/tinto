@@ -71,7 +71,7 @@ export function MenuBar() {
   const state = useBusState();
   const { config, watching } = state;
   const quality = useQualityState();
-  const { openTimeline, openDashboard, openRepo, addRepo } = useWorkspaceActions();
+  const { openTimeline, openDashboard, openDelivery, openRepo, addRepo } = useWorkspaceActions();
   const [open, setOpen] = useState<MenuId | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAddons, setShowAddons] = useState(false);
@@ -544,6 +544,12 @@ export function MenuBar() {
                 testid="open-timeline"
                 close={close}
                 onSelect={openTimeline}
+              />
+              <MenuItem
+                label="Abrir Delivery"
+                testid="open-delivery"
+                close={close}
+                onSelect={openDelivery}
               />
               <div className="menu__sep" role="separator" />
               <MenuItem

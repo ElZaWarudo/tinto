@@ -20,6 +20,8 @@ export interface WorkspaceActions {
   openDashboard: (options?: { closeAll?: boolean }) => void;
   /** Open (or focus) the agent quick-launch / terminal dock. */
   openAgents: () => void;
+  /** Open (or focus) the Delivery mode view. */
+  openDelivery: () => void;
   /** Open (or focus) an attached terminal for an agent session. */
   openAgentTerminal: (params: AgentTerminalOpenParams) => void;
 }
@@ -32,6 +34,7 @@ const noop: WorkspaceActions = {
   openTimeline: () => {},
   openDashboard: () => {},
   openAgents: () => {},
+  openDelivery: () => {},
   openAgentTerminal: () => {},
 };
 
