@@ -6,8 +6,9 @@ use std::{fs, io};
 use ignore::WalkBuilder;
 
 use crate::agent_console::checkpoint::{
-    create_checkpoint, create_ephemeral_checkpoint, remove_ephemeral_checkpoint, revert_checkpoint,
-    revert_checkpoint_file, scan_change_log, CheckpointConfig,
+    create_checkpoint, create_ephemeral_checkpoint, load_session_checkpoint,
+    remove_ephemeral_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
+    CheckpointConfig,
 };
 use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
@@ -337,6 +338,13 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             checkpoint,
             ..
         } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
+            // An empty directory asks for the session's saved start checkpoint
+            // (undo of a session reopened from history).
+            let checkpoint = if checkpoint.checkpoint_dir.as_os_str().is_empty() {
+                load_session_checkpoint(&checkpoint.repo, &checkpoint.session_id)?
+            } else {
+                checkpoint
+            };
             revert_checkpoint(&checkpoint)?;
             Ok(AgentResponse::Unit)
         }),
@@ -1935,6 +1943,45 @@ mod tests {
             std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
             "before\n"
         );
+        assert!(!repo.path().join("created.txt").exists());
+    }
+
+    #[test]
+    fn agent_reverts_a_saved_checkpoint_resolved_on_its_side() {
+        let repo = TempRepo::with_initial_commit();
+        let create = AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.path().to_path_buf(),
+            allowed_repos: vec![repo.path().to_path_buf()],
+            session_id: "sess-wsl-saved".into(),
+            created_at_ms: 1,
+            ephemeral: false,
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&create).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+        let AgentResponse::AgentCheckpoint { mut checkpoint } = response else {
+            panic!("expected checkpoint");
+        };
+        repo.write("base.txt", "after\n");
+        repo.write("created.txt", "new\n");
+        // What the host sends after a restart: no directory, only repo + id.
+        checkpoint.checkpoint_dir = PathBuf::new();
+
+        let revert = AgentRequest::AgentCheckpointRevert {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint,
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&revert).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+
+        assert_eq!(response, AgentResponse::Unit);
         assert!(!repo.path().join("created.txt").exists());
     }
 

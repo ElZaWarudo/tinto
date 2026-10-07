@@ -7073,14 +7073,18 @@ select option:checked {
 }
 .agent-panel__chat-turn-file-kind {
   display: grid;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   place-items: center;
   border-radius: 3px;
   background: rgba(251, 191, 36, 0.12);
   color: #fbbf24;
-  font: 700 10px/1 var(--font-mono);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
 }
+.agent-panel__chat-turn-file-kind[data-change-kind="created"],
 .agent-panel__chat-turn-file-kind[data-change-kind="added"],
 .agent-panel__chat-turn-file-kind[data-change-kind="untracked"] {
   background: rgba(74, 222, 128, 0.12);
@@ -12234,7 +12238,7 @@ a:focus-visible {
   box-sizing: border-box;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 18px 20px 14px;
   min-width: 0;
   max-width: 520px;
@@ -12314,7 +12318,7 @@ a:focus-visible {
   border: 1px solid var(--border);
   background: var(--bg-elev);
   color: var(--fg);
-  border-radius: 4px;
+  border-radius: 0;
   padding: 6px 14px;
   font-size: 13px;
   cursor: pointer;

@@ -28,6 +28,7 @@ import {
   setAgentSessionPermissionMode,
   setAgentSessionAcpConfigOption,
   setMcpDefaultProfile,
+  revertJournalSession,
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
@@ -1267,13 +1268,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     };
   }, [mode, readOnly, sessionId]);
 
+  // Reverting a live session stops it first (the backend does both). A
+  // conversation reopened from history reverts from its saved checkpoint.
   const canRevert =
     !!session &&
-    !readOnly &&
-    !!session.checkpoint &&
-    session.status !== "running" &&
+    (readOnly || !!session.checkpoint) &&
     session.status !== "starting" &&
-    session.status !== "reverted";
+    session.status !== "reverted" &&
+    !(readOnly && session.status === "running");
 
   const canRevertTurnFile =
     !!session &&
@@ -1914,8 +1916,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const onRevert = async () => {
     if (!sessionId || !canRevert || reverting) return;
+    if (readOnly) {
+      await onRevertSaved();
+      return;
+    }
     const ok = await confirm(
-      "Se desharán todos los cambios hechos por esta sesión. ¿Quieres continuar?",
+      session?.status === "running"
+        ? "Se detendrá la sesión y se desharán todos los cambios que hizo. ¿Quieres continuar?"
+        : "Se desharán todos los cambios hechos por esta sesión. ¿Quieres continuar?",
       {
         title: "Revertir sesión de Agent",
         kind: "warning",
@@ -1934,6 +1942,35 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         reportAgentFailure(
           e,
           "No se revirtió la sesión. Los cambios permanecen como estaban; vuelve a intentarlo.",
+        ),
+      );
+    } finally {
+      setReverting(false);
+    }
+  };
+
+  const onRevertSaved = async () => {
+    const ok = await confirm(
+      `Se restaurará ${repo ? repoName(repo) : "el repo"} al estado que tenía cuando empezó esta sesión.
+
+También se desharán los cambios hechos después en este repo, incluidos los de otras sesiones y tus propias ediciones. ¿Quieres continuar?`,
+      {
+        title: "Revertir sesión anterior",
+        kind: "warning",
+        okLabel: "Revertir sesión",
+        cancelLabel: "Cancelar",
+      },
+    );
+    if (!ok) return;
+    setReverting(true);
+    setError(null);
+    try {
+      setArchivedSession(await revertJournalSession(sessionId, true));
+    } catch (e) {
+      setError(
+        reportAgentFailure(
+          e,
+          "No se revirtió la sesión. Puede que su punto de control ya no exista o que haya sesiones activas en este repo.",
         ),
       );
     } finally {
@@ -2128,7 +2165,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         </div>
         <SessionStatus session={session} />
         <AgentContextRemaining usage={session?.context_usage ?? null} />
-        {!readOnly && (
+        {(!readOnly || canRevert) && (
           <details className="agent-panel__session-menu">
             <summary aria-label="Acciones de sesión" role="button" title="Acciones de sesión">
               <span aria-hidden="true">•••</span>
@@ -2139,16 +2176,18 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   {session.permission_mode === "full_access" ? "Acceso completo" : "Workspace"}
                 </span>
               )}
-              <button
-                aria-label="Detener sesión"
-                className="agent-panel__stop"
-                disabled={!canStop}
-                onClick={onStopSession}
-                title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
-                type="button"
-              >
-                <span>{stopping ? "Deteniendo sesión" : "Detener sesión"}</span>
-              </button>
+              {!readOnly && (
+                <button
+                  aria-label="Detener sesión"
+                  className="agent-panel__stop"
+                  disabled={!canStop}
+                  onClick={onStopSession}
+                  title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
+                  type="button"
+                >
+                  <span>{stopping ? "Deteniendo sesión" : "Detener sesión"}</span>
+                </button>
+              )}
               <button
                 className="agent-panel__revert"
                 disabled={!canRevert || reverting}
@@ -4672,7 +4711,7 @@ function AgentTurn({
                 className="agent-panel__chat-turn-file-kind"
                 data-change-kind={change.kind}
               >
-                {changeKindShortLabel(change.kind)}
+                {changeKindSymbol(change.kind)}
               </span>
               <span className="agent-panel__chat-turn-file-path">{change.path}</span>
             </button>
@@ -5741,6 +5780,9 @@ function agentRevertControlTitle(
   if (reverting) {
     return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: revirtiendo cambios.`;
   }
+  if (readOnly && canRevert) {
+    return `Revertir la sesión de ${agentLabel(agentType)} en ${repoLabel} desde su punto de control guardado.`;
+  }
   if (readOnly) {
     return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: la transcripción archivada es de solo lectura.`;
   }
@@ -5753,7 +5795,7 @@ function agentRevertControlTitle(
   if (canRevert) {
     return `Revertir la sesión de ${agentLabel(agentType)} en ${repoLabel} y deshacer sus cambios.`;
   }
-  return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: detén el turno antes de revertir.`;
+  return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: espera a que la sesión termine de iniciar.`;
 }
 
 function SessionStatus({ session }: { session: AgentSession | undefined }) {
@@ -7554,11 +7596,19 @@ function fileStatusLabel(label: string): string {
   }
 }
 
+function changeKindSymbol(kind: string): string {
+  if (kind === "created" || kind === "added" || kind === "untracked") return "+";
+  if (kind === "deleted" || kind === "removed") return "×";
+  if (kind === "renamed") return "→";
+  return "−";
+}
+
 function changeKindLabel(kind: string): string {
   switch (kind.toLocaleLowerCase()) {
     case "added":
       return "añadido";
     case "created":
+    case "untracked":
       return "creado";
     case "modified":
       return "modificado";
@@ -7570,13 +7620,6 @@ function changeKindLabel(kind: string): string {
     default:
       return kind;
   }
-}
-
-function changeKindShortLabel(kind: string): string {
-  if (kind === "created" || kind === "added" || kind === "untracked") return "A";
-  if (kind === "deleted" || kind === "removed") return "D";
-  if (kind === "renamed") return "R";
-  return "M";
 }
 
 function artifactKindLabel(kind: string): string {

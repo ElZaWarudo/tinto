@@ -1678,6 +1678,46 @@ pub fn revert_session(
     Ok(session)
 }
 
+/// Revert a conversation opened from history. A session still in the
+/// registry takes the live path; otherwise its saved checkpoint is used.
+#[tauri::command]
+pub fn revert_agent_journal_session(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    journal: State<'_, Mutex<AgentJournal>>,
+    session_id: String,
+    user_consent: bool,
+) -> Result<AgentSession, CommandError> {
+    if !user_consent {
+        return Err(CommandError::new(
+            "consent_required",
+            "revert requires explicit user consent",
+        ));
+    }
+    let mut registry = lock_registry(&registry)?;
+    if registry.get_session(&session_id).is_some() {
+        let session = registry
+            .revert_session(&session_id, true)
+            .map_err(CommandError::from)?;
+        let sessions = registry.list_sessions();
+        emit_sessions_snapshot(&app, &sessions);
+        return Ok(session);
+    }
+    let journal = lock_journal(&journal)?;
+    let mut saved = journal
+        .session_from_journal(&session_id)
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?
+        .ok_or_else(|| CommandError::from(AgentConsoleError::session_not_found(&session_id)))?;
+    registry
+        .revert_saved_session(&saved)
+        .map_err(CommandError::from)?;
+    saved.status = AgentSessionStatus::Reverted;
+    journal
+        .record_session(&saved)
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?;
+    Ok(saved)
+}
+
 #[tauri::command]
 pub fn revert_session_turn_file(
     app: AppHandle,

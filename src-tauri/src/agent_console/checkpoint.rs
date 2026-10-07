@@ -190,6 +190,50 @@ fn create_checkpoint_inner(
     })
 }
 
+/// The start checkpoint a session left on disk, for undoing a session that
+/// is no longer live (e.g. reopened from history after a restart).
+pub fn load_session_checkpoint(
+    repo: &Path,
+    session_id: &str,
+) -> Result<CheckpointRecord, AgentConsoleError> {
+    validate_session_id(session_id)?;
+    let repo = canonical_repo(repo)?;
+    let checkpoint_dir = checkpoints_repo_dir(&repo)?.join(session_id);
+    let metadata = read_metadata(&checkpoint_dir).map_err(|_| {
+        AgentConsoleError::new(
+            "checkpoint_not_found",
+            "el punto de control de esta sesión ya no existe",
+        )
+    })?;
+    Ok(CheckpointRecord {
+        contract: AgentSessionCheckpoint {
+            checkpoint_type: metadata.checkpoint_type,
+            git_hash: metadata.git_hash,
+            snapshot_files: metadata.snapshot_files,
+        },
+        repo,
+        session_id: session_id.to_string(),
+        checkpoint_dir,
+        created_at_ms: metadata.created_at_ms,
+        ephemeral: false,
+    })
+}
+
+fn validate_session_id(session_id: &str) -> Result<(), AgentConsoleError> {
+    let valid = !session_id.is_empty()
+        && session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(AgentConsoleError::new(
+            "checkpoint_invalid",
+            "identificador de sesión no válido",
+        ))
+    }
+}
+
 pub fn remove_ephemeral_checkpoint(record: &CheckpointRecord) -> Result<(), AgentConsoleError> {
     if !record.ephemeral {
         return Err(AgentConsoleError::new(

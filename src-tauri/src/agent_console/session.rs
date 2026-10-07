@@ -18,9 +18,9 @@ use crate::wsl_agent::{
 
 use super::{
     checkpoint::{
-        create_checkpoint, create_ephemeral_checkpoint, remove_ephemeral_checkpoint,
-        revert_checkpoint, revert_checkpoint_file, scan_change_log, CheckpointConfig,
-        CheckpointRecord,
+        create_checkpoint, create_ephemeral_checkpoint, load_session_checkpoint,
+        remove_ephemeral_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
+        CheckpointConfig, CheckpointRecord,
     },
     pty::{AgentProcess, AgentProcessEvent, AgentTurnAttachment},
     sanitize_provider_multiline_text, sanitize_provider_timeline_text, AgentConsoleError,
@@ -816,12 +816,11 @@ impl AgentSessionRecord {
 
     pub fn revert(&mut self) -> Result<(), AgentConsoleError> {
         self.refresh_status()?;
+        // Undoing a session ends it: the agent must not keep editing files
+        // that are being restored underneath it.
         if self.status == AgentSessionStatus::Running || self.status == AgentSessionStatus::Starting
         {
-            return Err(AgentConsoleError::new(
-                "session_still_running",
-                "stop the session before reverting it",
-            ));
+            self.stop()?;
         }
         if self.status == AgentSessionStatus::Reverted {
             return Ok(());
@@ -1399,6 +1398,46 @@ impl AgentSessionRecord {
             ),
         }
     }
+}
+
+/// Undo a session that is no longer live, from the start checkpoint it left
+/// on disk. Runs under the same safety checkpoint as a live revert.
+pub fn revert_saved_session(
+    backend: CheckpointBackend,
+    distro: Option<&str>,
+    repo: &Path,
+    session_id: &str,
+    config: &CheckpointConfig,
+) -> Result<(), AgentConsoleError> {
+    let checkpoint = match backend {
+        CheckpointBackend::Local => load_session_checkpoint(repo, session_id)?,
+        // The helper resolves the checkpoint on its side when the directory
+        // is empty (see AgentCheckpointRevert).
+        CheckpointBackend::Wsl => CheckpointRecord {
+            contract: crate::bus::contract::AgentSessionCheckpoint {
+                checkpoint_type: crate::bus::contract::AgentSessionCheckpointType::FsSnapshot,
+                git_hash: None,
+                snapshot_files: Vec::new(),
+            },
+            repo: repo.to_path_buf(),
+            session_id: session_id.to_string(),
+            checkpoint_dir: PathBuf::new(),
+            created_at_ms: 0,
+            ephemeral: false,
+        },
+    };
+    let repo = checkpoint.repo.clone();
+    let safety_id = format!("{session_id}-saved-revert-{}", now_ms());
+    execute_backend_checkpoint_transaction(
+        backend,
+        distro,
+        &repo,
+        &safety_id,
+        config,
+        || apply_checkpoint_mutation(backend, distro, &CheckpointMutation::Full(checkpoint)),
+        || Ok(Vec::new()),
+    )
+    .map(|_| ())
 }
 
 enum CheckpointMutation {

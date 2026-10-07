@@ -936,6 +936,38 @@ impl AgentSessionRegistry {
         Ok(session.to_contract())
     }
 
+    /// Undo a session that is no longer live (reopened from history), from
+    /// the start checkpoint it left on disk.
+    pub fn revert_saved_session(&mut self, saved: &AgentSession) -> Result<(), AgentConsoleError> {
+        self.refresh_session_statuses()?;
+        let repo_busy = self.list_sessions().iter().any(|session| {
+            session.repo == saved.repo
+                && matches!(
+                    session.status,
+                    crate::bus::contract::AgentSessionStatus::Starting
+                        | crate::bus::contract::AgentSessionStatus::Running
+                )
+        });
+        if repo_busy {
+            return Err(AgentConsoleError::new(
+                "agent_session_active",
+                "detén las sesiones activas de este repo antes de revertir una sesión anterior",
+            ));
+        }
+        let backend = if saved.wsl_distro.is_some() {
+            session::CheckpointBackend::Wsl
+        } else {
+            session::CheckpointBackend::Local
+        };
+        session::revert_saved_session(
+            backend,
+            saved.wsl_distro.as_deref(),
+            &saved.repo,
+            &saved.id,
+            &self.checkpoint_config,
+        )
+    }
+
     pub fn record_session_output(
         &mut self,
         session_id: &str,
@@ -1530,19 +1562,36 @@ mod tests {
     }
 
     #[test]
-    fn registry_rejects_revert_for_running_session() {
+    fn registry_revert_stops_a_running_session_first() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry = AgentSessionRegistry::with_process_factory(factory);
         let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("base.txt"),
+            "before
+",
+        )
+        .unwrap();
         let binary = repo.path().join("codex-bin");
         std::fs::write(&binary, "fake").unwrap();
         let id = registry
             .start_session_with_binary(repo.path().into(), "codex".into(), binary)
             .unwrap();
+        std::fs::write(
+            repo.path().join("base.txt"),
+            "after
+",
+        )
+        .unwrap();
 
-        let error = registry.revert_session(&id, true).unwrap_err();
+        let reverted = registry.revert_session(&id, true).unwrap();
 
-        assert_eq!(error.category, "session_still_running");
+        assert_eq!(reverted.status, AgentSessionStatus::Reverted);
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "before
+"
+        );
     }
 
     #[test]
@@ -1893,6 +1942,50 @@ dirty
 "
         );
         assert!(!repo.path().join("notes.md").exists());
+    }
+
+    #[test]
+    fn saved_session_can_be_reverted_after_a_restart() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("base.txt"),
+            "before
+",
+        )
+        .unwrap();
+        let binary = tempfile::NamedTempFile::new().unwrap();
+        let saved = {
+            let mut registry =
+                AgentSessionRegistry::with_process_factory(Arc::new(FakeProcessFactory::default()));
+            let id = registry
+                .start_session_with_binary(repo.path().into(), "codex".into(), binary.path().into())
+                .unwrap();
+            std::fs::write(
+                repo.path().join("base.txt"),
+                "after
+",
+            )
+            .unwrap();
+            std::fs::write(
+                repo.path().join("created.txt"),
+                "new
+",
+            )
+            .unwrap();
+            registry.stop_session(&id).unwrap();
+            registry.get_session(&id).unwrap()
+        };
+
+        let mut restarted =
+            AgentSessionRegistry::with_process_factory(Arc::new(FakeProcessFactory::default()));
+        restarted.revert_saved_session(&saved).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "before
+"
+        );
+        assert!(!repo.path().join("created.txt").exists());
     }
 
     #[test]

@@ -241,6 +241,9 @@ export const fetchRepo = (
 export const revertSession = (sessionId: string, userConsent: boolean) =>
   invoke<AgentSession>("revert_session", { sessionId, userConsent });
 
+export const revertJournalSession = (sessionId: string, userConsent: boolean) =>
+  invoke<AgentSession>("revert_agent_journal_session", { sessionId, userConsent });
+
 export const revertSessionTurnFile = (
   sessionId: string,
   turnCheckpointId: string,

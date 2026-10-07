@@ -92,6 +92,10 @@ const revertSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(sessionFixture({ status: "reverted", reverted_at_ms: 3 }));
 });
+const revertJournalSessionMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve(sessionFixture({ status: "reverted", pid: null, checkpoint: null }));
+});
 const revertSessionTurnFileMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(sessionFixture({ status: "completed", turn_checkpoints: [] }));
@@ -168,6 +172,7 @@ vi.mock("../../bus/client", () => ({
   setMcpDefaultProfile: (workbench: string, profileId: string) =>
     setMcpDefaultProfileMock(workbench, profileId),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
+  revertJournalSession: (...a: unknown[]) => revertJournalSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
   restoreSessionTurn: (...a: unknown[]) => restoreSessionTurnMock(...a),
   runAgentHostCommand: (...a: unknown[]) => runAgentHostCommandMock(...a),
@@ -4131,6 +4136,31 @@ describe("TerminalPanel", () => {
     },
   );
 
+  it("reverts a conversation reopened from history from its saved checkpoint", async () => {
+    const user = userEvent.setup();
+    getAgentJournalSessionMock.mockResolvedValueOnce(
+      sessionFixture({ status: "completed", pid: null, checkpoint: null }),
+    );
+    renderWithWorkspaceActions(
+      <TerminalPanel
+        {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex", mode: "journal" })}
+      />,
+      {},
+    );
+
+    const revert = await screen.findByRole("button", { name: "Revertir sesión", hidden: true });
+    await waitFor(() => expect(revert).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Detener sesión", hidden: true })).toBeNull();
+    await user.click(revert);
+
+    expect(confirmMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("También se desharán los cambios hechos después"),
+      expect.objectContaining({ title: "Revertir sesión anterior" }),
+    );
+    await waitFor(() => expect(revertJournalSessionMock).toHaveBeenCalledWith("sess-1", true));
+    expect(revertSessionMock).not.toHaveBeenCalled();
+  });
+
   it("opens a resumed journal conversation once and keeps its pending panel usable", async () => {
     const user = userEvent.setup();
     const openAgentTerminal = vi.fn();
@@ -4448,7 +4478,7 @@ describe("TerminalPanel", () => {
     expect(screen.getByLabelText("Archivos: 1")).toBeInTheDocument();
     expect(screen.getByTitle("Turno 1: 0 comandos, 1 archivo")).toBeInTheDocument();
     const changedFile = screen.getByRole("button", { name: "Abrir diff de src/a.ts" });
-    expect(changedFile).toHaveTextContent("Msrc/a.ts");
+    expect(changedFile).toHaveTextContent("−src/a.ts");
     expect(changedFile).not.toHaveTextContent("Diff");
 
     await user.click(changedFile);
