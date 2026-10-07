@@ -1671,6 +1671,9 @@ mod tests {
     #[test]
     fn create_git_worktree_request_creates_detached_worktree_under_tinto_home() {
         let repo = TempRepo::with_initial_commit();
+        let _home_lock = crate::HOME_ENV_LOCK
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home");
         let old_home = std::env::var_os("HOME");
         std::env::set_var("HOME", home.path());
@@ -1964,7 +1967,48 @@ mod tests {
     }
 
     #[test]
+    fn worktree_snapshots_give_a_candidate_and_the_changes_since_the_start() {
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let repo = TempRepo::with_initial_commit();
+        let snapshot = |name: &str, compare_to: Option<String>| {
+            let request = AgentRequest::WorktreeSnapshot {
+                protocol_version: PROTOCOL_VERSION,
+                repo: repo.path().to_path_buf(),
+                allowed_repos: vec![repo.path().to_path_buf()],
+                name: name.to_string(),
+                created_at_ms: 1,
+                compare_to,
+            };
+            let response = parse_agent_response_line(
+                &respond_to_request_line(&encode_agent_request(&request).expect("encode"))
+                    .expect("respond"),
+            )
+            .expect("parse");
+            let AgentResponse::WorktreeSnapshot { snapshot } = response else {
+                panic!("expected a snapshot, got {response:?}");
+            };
+            snapshot
+        };
+        let start = snapshot("job-x-start", None);
+        assert!(start.head.is_some());
+        repo.write(
+            "added.txt",
+            "new
+",
+        );
+        let end = snapshot("job-x-end", Some(start.tree.clone()));
+        assert_ne!(start.candidate_id(), end.candidate_id());
+        assert_eq!(end.changes.len(), 1);
+        assert_eq!(end.changes[0].path, PathBuf::from("added.txt"));
+    }
+
+    #[test]
     fn agent_reverts_a_saved_checkpoint_resolved_on_its_side() {
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         let create = AgentRequest::AgentCheckpointCreate {
             protocol_version: PROTOCOL_VERSION,

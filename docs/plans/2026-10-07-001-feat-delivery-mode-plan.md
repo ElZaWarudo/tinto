@@ -212,6 +212,25 @@ Cada unidad termina con sus tests, `cargo clippy --all-targets -- -D warnings`, 
 
 U1 se puede usar sola para trabajar por tareas con worktree. U2 ejecuta y recupera trabajos sin intervención del modelo. U3 elimina el papeleo de cerrojos, colas y aprobaciones. U4 permite que backlog-delivery corra dentro de Tinto sin cambiar cómo funciona fuera.
 
+# Implementation Status (2026-10-07)
+
+Rama `feat/delivery-mode`. U0 a U4 implementadas.
+
+- **U0.** Verificado con las CLIs reales fuera de la app: `codex exec` 0.158 (resultado con esquema, código de salida 1 y `turn.failed` al rechazar el modelo) y `claude -p` 2.1.285 en WSL (resultado en `structured_output`). Las salidas, ya saneadas, quedan como fixtures de los tests.
+- **Backend.** `src-tauri/src/delivery/`: almacén SQLite propio, tareas con worktree, trabajos de una sola ejecución, instantáneas al empezar y al terminar (`snapshot_worktree`, también por el helper de WSL con `WorktreeSnapshot`), recursos exclusivos, aprobaciones, ejecuciones con fencing y el servidor MCP en `127.0.0.1:47920`.
+- **Vista.** `src/panels/delivery/` (Ver → Abrir Delivery, o el botón del resumen).
+- **Skill.** `references/tinto.md` en backlog-delivery, enlazada desde su `SKILL.md`.
+
+Comprobado en la app con Pumarejo sobre el repo de pruebas: un coordinador por MCP creó la ejecución y la tarea (worktree y rama desde `main`) y su escritura con una generación vieja se rechazó; despachó un trabajo real de Codex, que terminó en 53 s con resultado aceptado y los dos archivos que tocó detectados por las instantáneas; la vista mostró resultado, comprobaciones, archivos y candidato; el commit aprobado desde la vista se ejecutó en la rama de la tarea sin tocar `main`; y "Continuar en Agents" retomó el hilo de Codex, que respondió qué había hecho.
+
+Límites conocidos:
+
+- Claude Code como trabajador solo se probó con la CLI real en U0; en la app, con fixtures.
+- Repos WSL en Delivery: cubiertos por tests del helper, sin una ejecución real en la app.
+- Cancelar un trabajo en WSL termina `wsl.exe`; no está comprobado que el proceso de Linux termine con él.
+- El perfil de flujo es el integrado (roles `tests`, `implementation`, `review` y `qa` con sus valores por defecto); todavía no hay un archivo de perfil por repo.
+- Abrir en Agents añade el worktree al workbench, como las bifurcaciones.
+
 # Resolved Decisions (2026-10-07)
 
 Aceptadas todas las recomendaciones:

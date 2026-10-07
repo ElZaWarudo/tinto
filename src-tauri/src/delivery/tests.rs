@@ -92,6 +92,7 @@ fn fake_launcher() -> Launcher {
 }
 
 struct Harness {
+    _home_lock: std::sync::RwLockReadGuard<'static, ()>,
     service: DeliveryService,
     repo: tempfile::TempDir,
     _worktrees: tempfile::TempDir,
@@ -99,6 +100,9 @@ struct Harness {
 }
 
 fn harness_with_store(store: DeliveryStore) -> Harness {
+    let home_lock = crate::HOME_ENV_LOCK
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let repo = repo_with_commit();
     let worktrees = tempfile::tempdir().unwrap();
     let jobs = tempfile::tempdir().unwrap();
@@ -121,6 +125,7 @@ fn harness_with_store(store: DeliveryStore) -> Harness {
     )
     .unwrap();
     Harness {
+        _home_lock: home_lock,
         service,
         repo,
         _worktrees: worktrees,
@@ -622,8 +627,8 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
     );
     assert_eq!(waited["result"]["structuredContent"]["done"], true);
     assert_eq!(
-        waited["result"]["structuredContent"]["job"]["result_state"],
-        "accepted"
+        waited["result"]["structuredContent"]["job"]["result_state"], "accepted",
+        "{waited}"
     );
     let unknown = call(8, "nope", json!({}));
     assert_eq!(unknown["error"]["code"], -32601);

@@ -13,6 +13,12 @@ fn pumarejo_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bui
 pub mod agent_console;
 pub mod bus;
 pub mod delivery;
+
+/// Tests that change `HOME` hold this exclusively; tests whose checkpoints
+/// live under the user's home hold it shared, so they never write into a
+/// temporary home that is about to be deleted.
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 pub mod file_ops;
 pub mod git;
 pub mod paths;

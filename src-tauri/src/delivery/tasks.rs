@@ -328,7 +328,12 @@ mod tests {
 
     #[test]
     fn worktree_root_sits_next_to_the_repo() {
-        let root = default_worktree_root(Path::new(r"C:\work\agentos"));
+        let repo = if cfg!(target_os = "windows") {
+            r"C:\work\agentos"
+        } else {
+            "/work/agentos"
+        };
+        let root = default_worktree_root(Path::new(repo));
         assert!(root.ends_with("agentos-wt"));
         assert_eq!(
             join_place(Place::Wsl("Ubuntu"), Path::new("/home/me/app-wt/"), "K-1"),
