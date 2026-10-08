@@ -232,12 +232,20 @@ Segunda ronda (2026-10-08), también en la app, por la API del coordinador:
 - **Modelo por defecto de Codex.** Agents y la vista Delivery informan el modelo por defecto del catálogo, y los trabajos de Codex sin modelo lo usan. Un trabajo despachado sin modelo terminó con `gpt-6-astra`; con el modelo de `config.toml` habría fallado.
 - **Abrir en Agents.** Al eliminar una tarea, su worktree sale también de los workbenches.
 
+Tercera ronda (2026-10-08), por la interfaz con Pumarejo, que ya maneja los `<select>` nativos:
+
+- Tarea creada desde el formulario, eligiendo el repositorio en la lista; trabajo de Claude despachado desde "Nuevo trabajo", con los comandos del repo precargados y guardados al ponerlo en cola.
+- **Ruta del repo.** La vista pasa rutas `\\?\C:\…` y el coordinador `C:\…`; la misma tarea salía en dos grupos y no veía los comandos guardados. Ahora las tareas guardan la ruta sin prefijo y los ajustes por repo usan la misma clave.
+- **Git dentro de WSL en worktrees de Windows.** Claude corre en WSL para los repos de Windows y no podía usar git: el `.git` del worktree apuntaba a `C:/…`. Ahora el enlace es relativo (si está en la misma unidad) y el trabajo recibe el `core.autocrlf` del repo, para que los finales de línea CRLF no parezcan cambios. Comprobado: `git status` limpio desde el trabajo.
+- **Modelo por defecto.** Abrir una conversación de Codex en Agents lo informó sin abrir Delivery.
+- **Eliminar con una conversación abierta.** Windows no deja borrar la carpeta en uso y la eliminación quedaba a medias. Ahora Tinto lo rechaza con un mensaje claro, y una tarea que quedó a medias se puede eliminar.
+
 Límites conocidos:
 
+- Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.
 - El perfil de flujo es el integrado (roles `tests`, `implementation`, `review` y `qa` con sus valores por defecto); todavía no hay un archivo de perfil por repo. Se añade cuando una ejecución real necesite otra etapa.
 - "Abrir en Agents" sigue añadiendo el worktree al workbench mientras la tarea existe.
 - La limpieza al reabrir Tinto tras un cierre brusco no se pudo provocar: en la prueba, Claude terminó solo al cerrarse `wsl.exe`.
-- Pumarejo no maneja los `<select>` nativos; los formularios se probaron con tests de componentes.
 
 # Resolved Decisions (2026-10-07)
 
