@@ -3,7 +3,7 @@
   "launch": {
     "command": "npm",
     "args": ["run", "tauri", "--", "dev", "--no-watch", "--features", "pumarejo", "--config", "{tauriConfig}"],
-    "pathPrepend": ["C:\\Users\\User\\.cargo\\bin"]
+    "pathPrepend": ["C:/Users/User/.cargo/bin", "C:/ProgramData/nvm/v24.13.0"]
   },
   "window": "main",
   "artifactsDirectory": ".pumarejo/artifacts",
