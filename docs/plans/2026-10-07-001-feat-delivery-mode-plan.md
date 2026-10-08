@@ -223,13 +223,21 @@ Rama `feat/delivery-mode`. U0 a U4 implementadas.
 
 Comprobado en la app con Pumarejo sobre el repo de pruebas: un coordinador por MCP creó la ejecución y la tarea (worktree y rama desde `main`) y su escritura con una generación vieja se rechazó; despachó un trabajo real de Codex, que terminó en 53 s con resultado aceptado y los dos archivos que tocó detectados por las instantáneas; la vista mostró resultado, comprobaciones, archivos y candidato; el commit aprobado desde la vista se ejecutó en la rama de la tarea sin tocar `main`; y "Continuar en Agents" retomó el hilo de Codex, que respondió qué había hecho.
 
+Segunda ronda (2026-10-08), también en la app, por la API del coordinador:
+
+- **Claude Code real.** En el repo de pruebas de Windows (Claude corre en WSL): resultado aceptado y archivo creado detectado. Un trabajo de solo lectura no pudo escribir con `touch`, `rm`, Python ni la herramienta Write, y sí ejecutó su comprobación.
+- **Repo WSL.** Tarea en `/home/teb/tinto-e2e-wsl` con worktree y rama en Linux, trabajo de Claude con `./check.sh` y cambio detectado por las instantáneas del helper.
+- **Cancelar en WSL.** Cada proceso del trabajo lleva `TINTO_DELIVERY_JOB=<id>` en su entorno; al cancelar o agotar el tiempo, Tinto manda `TERM` a todos ellos, y `KILL` a los 5 s. Cancelado en 2 s sin procesos sobrantes, incluido el `sleep` que Claude lanzó en su propio grupo de procesos. Antes del cambio, cerrar `wsl.exe` dejaba vivos los procesos. Si Tinto se cierra, al abrirse marca el trabajo como interrumpido y termina lo que quede.
+- **Comandos de Claude sin acceso completo.** Cada repo guarda sus comandos de verificación (se editan en "Nuevo trabajo"); los trabajos de Claude con acceso de workspace reciben `--allowedTools` con ellos y los de solo lectura usan el modo `default`, que deniega ediciones. Claude Code también permite por su cuenta los comandos de solo lectura (`ls`, `grep`); los demás se deniegan.
+- **Modelo por defecto de Codex.** Agents y la vista Delivery informan el modelo por defecto del catálogo, y los trabajos de Codex sin modelo lo usan. Un trabajo despachado sin modelo terminó con `gpt-6-astra`; con el modelo de `config.toml` habría fallado.
+- **Abrir en Agents.** Al eliminar una tarea, su worktree sale también de los workbenches.
+
 Límites conocidos:
 
-- Claude Code como trabajador solo se probó con la CLI real en U0; en la app, con fixtures.
-- Repos WSL en Delivery: cubiertos por tests del helper, sin una ejecución real en la app.
-- Cancelar un trabajo en WSL termina `wsl.exe`; no está comprobado que el proceso de Linux termine con él.
-- El perfil de flujo es el integrado (roles `tests`, `implementation`, `review` y `qa` con sus valores por defecto); todavía no hay un archivo de perfil por repo.
-- Abrir en Agents añade el worktree al workbench, como las bifurcaciones.
+- El perfil de flujo es el integrado (roles `tests`, `implementation`, `review` y `qa` con sus valores por defecto); todavía no hay un archivo de perfil por repo. Se añade cuando una ejecución real necesite otra etapa.
+- "Abrir en Agents" sigue añadiendo el worktree al workbench mientras la tarea existe.
+- La limpieza al reabrir Tinto tras un cierre brusco no se pudo provocar: en la prueba, Claude terminó solo al cerrarse `wsl.exe`.
+- Pumarejo no maneja los `<select>` nativos; los formularios se probaron con tests de componentes.
 
 # Resolved Decisions (2026-10-07)
 
