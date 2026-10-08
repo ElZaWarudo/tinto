@@ -248,7 +248,10 @@ impl DeliveryService {
 
     // ---- tasks ----
 
-    pub fn create_task(&self, request: NewTask) -> Result<DeliveryTask, DeliveryError> {
+    pub fn create_task(&self, mut request: NewTask) -> Result<DeliveryTask, DeliveryError> {
+        // The view passes `\\?\` paths and coordinators plain ones; a task
+        // records the plain form so both see the same repo.
+        request.repo = PathBuf::from(plain_path(&request.repo));
         let key = tasks::validate_key(&request.key)?;
         let place = Place::of(request.distro.as_deref());
         let repo_text = plain_path(&request.repo);
@@ -370,8 +373,17 @@ impl DeliveryService {
             ));
         }
         let place = Place::of(task.distro.as_deref());
+        // A removal that failed halfway (e.g. a folder in use on Windows)
+        // leaves the folder without its `.git` link: nothing left to keep.
         let present = match place {
-            Place::Native => Path::new(&plain_path(&task.worktree)).exists(),
+            Place::Native => {
+                let folder = PathBuf::from(plain_path(&task.worktree));
+                let linked = folder.join(".git").exists();
+                if !linked {
+                    let _ = std::fs::remove_dir(&folder);
+                }
+                linked
+            }
             Place::Wsl(_) => true,
         };
         if present {

@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry, DeliveryTask,
 };
-use super::tasks::plain_path;
+use super::tasks::{git, plain_path, Place};
 use super::DeliveryError;
 
 /// Shape of the result every agent job ends with; Codex and Claude both
@@ -299,8 +299,27 @@ fn claude_launch(
         let tools: Vec<String> = allowed.iter().map(|tool| sh_quote(tool)).collect();
         format!(" --allowedTools {}", tools.join(" "))
     };
+    // A Windows checkout read by git inside WSL: without Windows' line-ending
+    // setting, every CRLF file would look modified.
+    let line_endings = match task.distro {
+        Some(_) => None,
+        None => git(
+            Place::Native,
+            &task.worktree,
+            &["config", "--get", "core.autocrlf"],
+        )
+        .ok()
+        .filter(|value| !value.is_empty()),
+    }
+    .map(|value| {
+        format!(
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0={}; ",
+            sh_quote(&value)
+        )
+    })
+    .unwrap_or_default();
     let script = format!(
-        "exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{allowed}",
+        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{allowed}",
         sh_quote(&wsl_path(&paths.schema)?)
     );
     wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)

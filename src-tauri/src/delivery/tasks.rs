@@ -206,7 +206,54 @@ pub fn create_worktree(
             &["worktree", "add", "-b", branch, &target, base_commit],
         )?;
     }
+    if place == Place::Native {
+        link_worktree_relatively(worktree);
+    }
     git(place, worktree, &["rev-parse", "HEAD"])
+}
+
+/// Rewrites the worktree's `.git` link as a relative path. Git writes it as
+/// `C:/…`, which git inside WSL (where Claude Code runs for Windows repos)
+/// cannot follow. Left as is when the two are on different drives.
+fn link_worktree_relatively(worktree: &Path) {
+    let link = Path::new(&plain_path(worktree)).join(".git");
+    let Ok(text) = std::fs::read_to_string(&link) else {
+        return;
+    };
+    let Some(gitdir) = text.trim().strip_prefix("gitdir:") else {
+        return;
+    };
+    if let Some(relative) =
+        relative_path(Path::new(&plain_path(worktree)), Path::new(gitdir.trim()))
+    {
+        let _ = std::fs::write(&link, format!("gitdir: {relative}\n"));
+    }
+}
+
+/// `to` relative to the directory `from`, with `/` separators; `None` when
+/// they share no root (another drive).
+fn relative_path(from: &Path, to: &Path) -> Option<String> {
+    let parts = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .filter(|part| part != "\\" && part != "/")
+            .collect()
+    };
+    let same = |a: &String, b: &String| {
+        if cfg!(windows) {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+    let (from, to) = (parts(from), parts(to));
+    let common = from.iter().zip(&to).take_while(|(a, b)| same(a, b)).count();
+    if common == 0 {
+        return None;
+    }
+    let mut relative = vec!["..".to_string(); from.len() - common];
+    relative.extend(to[common..].iter().cloned());
+    Some(relative.join("/"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,6 +363,36 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::{git as run_git, repo_with_commit};
     use super::*;
+
+    #[test]
+    fn relative_paths_climb_to_the_common_root() {
+        assert_eq!(
+            relative_path(
+                Path::new("/work/repo-wt/K-1"),
+                Path::new("/work/repo/.git/worktrees/K-1")
+            )
+            .as_deref(),
+            Some("../../repo/.git/worktrees/K-1")
+        );
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                relative_path(
+                    Path::new(r"C:\Work\repo-wt\K-1"),
+                    Path::new("c:/work/repo/.git/worktrees/K-1")
+                )
+                .as_deref(),
+                Some("../../repo/.git/worktrees/K-1")
+            );
+            assert_eq!(
+                relative_path(
+                    Path::new(r"D:\wt\K-1"),
+                    Path::new("C:/repo/.git/worktrees/K-1")
+                ),
+                None
+            );
+        }
+    }
 
     #[test]
     fn keys_become_safe_folder_and_branch_names() {

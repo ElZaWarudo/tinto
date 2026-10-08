@@ -14,9 +14,11 @@ use super::model::{
     DeliveryTask,
 };
 use super::service::{DeliveryService, NewJob, NewTask};
+use super::tasks::plain_path;
 use super::DeliveryError;
 use crate::agent_console::commands::CommandError;
 use crate::agent_console::AgentSessionRegistry;
+use crate::bus::contract::AgentSessionStatus;
 use crate::bus::BusHandle;
 use crate::workbench::WorkbenchStore;
 
@@ -70,14 +72,39 @@ pub async fn delivery_remove_task(
     service: State<'_, DeliveryService>,
     bus: State<'_, BusHandle>,
     workbenches: State<'_, Mutex<WorkbenchStore>>,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
     task_id: String,
     force: bool,
 ) -> Result<(), CommandError> {
     let worktree = service.task(&task_id).map_err(CommandError::from)?.worktree;
+    // A live conversation keeps the folder in use, and Windows refuses to
+    // delete it halfway through.
+    if agents_working_in(&registry, &worktree) {
+        return Err(CommandError::new(
+            "agent_session_active",
+            "Hay una conversación de Agents activa en este worktree. Detenla antes de eliminar la tarea.",
+        ));
+    }
     let service = service.inner().clone();
     blocking(move || service.remove_task(&task_id, force)).await?;
     forget_worktree(&bus, &workbenches, &worktree);
     Ok(())
+}
+
+fn agents_working_in(registry: &Mutex<AgentSessionRegistry>, worktree: &Path) -> bool {
+    let Ok(mut registry) = registry.lock() else {
+        return false;
+    };
+    let _ = registry.refresh_session_statuses();
+    let target = plain_path(worktree).replace('\\', "/");
+    registry.list_sessions().iter().any(|session| {
+        matches!(
+            session.status,
+            AgentSessionStatus::Starting | AgentSessionStatus::Running
+        ) && plain_path(&session.repo)
+            .replace('\\', "/")
+            .eq_ignore_ascii_case(&target)
+    })
 }
 
 /// Drops a removed task's worktree from the workbenches, where "Abrir en

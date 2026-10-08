@@ -2,7 +2,7 @@
 //! the Agents journal so the two never share migrations. Each record is
 //! stored as JSON next to the few columns that are queried.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
@@ -11,6 +11,7 @@ use super::model::{
     DeliveryApproval, DeliveryJob, DeliveryLease, DeliveryRepoSettings, DeliveryRun,
     DeliverySettings, DeliveryTask,
 };
+use super::tasks::plain_path;
 use super::DeliveryError;
 use crate::agent_console::checkpoint::WorktreeSnapshot;
 
@@ -311,8 +312,9 @@ impl DeliveryStore {
     }
 }
 
+/// The same repo is one key whether or not its path has the `\\?\` prefix.
 fn path_key(path: &Path) -> String {
-    PathBuf::from(path).to_string_lossy().into_owned()
+    plain_path(path)
 }
 
 fn encode<T: Serialize + ?Sized>(value: &T) -> Result<String, DeliveryError> {

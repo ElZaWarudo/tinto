@@ -290,6 +290,24 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
 }
 
 #[test]
+fn a_repo_is_the_same_with_or_without_the_verbatim_prefix() {
+    let store = DeliveryStore::open_in_memory().unwrap();
+    let settings = DeliveryRepoSettings {
+        checks: vec!["npm test".into()],
+        ..Default::default()
+    };
+    store
+        .set_repo_settings(std::path::Path::new(r"\\?\C:\work\repo"), &settings)
+        .unwrap();
+    assert_eq!(
+        store
+            .repo_settings(std::path::Path::new(r"C:\work\repo"))
+            .unwrap(),
+        settings
+    );
+}
+
+#[test]
 fn a_read_only_job_that_changes_files_is_invalid() {
     let h = harness();
     let task = h.task("K-2");
@@ -457,6 +475,20 @@ fn removing_a_task_protects_unsaved_work() {
     assert!(h.service.overview().unwrap().tasks.is_empty());
     // The same key can be started again once the task is gone.
     h.task("K-11");
+}
+
+#[test]
+fn a_task_whose_removal_failed_halfway_can_be_removed() {
+    let h = harness();
+    let task = h.task("K-7");
+    let folder = PathBuf::from(plain_path(&task.worktree));
+    git(
+        h.repo.path(),
+        &["worktree", "remove", "--force", &plain_path(&folder)],
+    );
+    std::fs::create_dir(&folder).unwrap();
+    h.service.remove_task(&task.id, false).unwrap();
+    assert!(!folder.exists());
 }
 
 #[test]
