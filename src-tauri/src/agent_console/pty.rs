@@ -635,6 +635,11 @@ pub(crate) fn build_agent_command_with_permission(
         command.arg(arg);
     }
     append_codex_permission_args(&mut command, is_codex_binary(binary_path), permission_mode);
+    if is_claude_binary(binary_path) {
+        for arg in crate::delivery::wiring::claude_args(false) {
+            command.arg(arg);
+        }
+    }
     apply_terminal_env(&mut command);
     command
 }
@@ -685,6 +690,11 @@ pub(crate) fn build_wsl_agent_command(
         agent_type.eq_ignore_ascii_case("codex"),
         permission_mode,
     );
+    if agent_type.eq_ignore_ascii_case("claude") {
+        for arg in crate::delivery::wiring::claude_args(true) {
+            command.arg(arg);
+        }
+    }
     apply_terminal_env(&mut command);
     Ok(command)
 }
@@ -712,6 +722,13 @@ fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
     } else {
         &[]
     }
+}
+
+fn is_claude_binary(binary_path: &Path) -> bool {
+    binary_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("claude"))
 }
 
 fn is_codex_binary(binary_path: &Path) -> bool {

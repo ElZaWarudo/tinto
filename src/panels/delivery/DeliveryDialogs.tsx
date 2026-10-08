@@ -436,6 +436,11 @@ export function CoordinatorDialog({
       </p>
       {endpoint ? (
         <>
+          <p className="file-op-modal__body">
+            Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
+            herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
+            fuera de Tinto.
+          </p>
           <Field label="Claude Code">
             <textarea readOnly rows={3} value={claude} className="delivery-code" />
           </Field>

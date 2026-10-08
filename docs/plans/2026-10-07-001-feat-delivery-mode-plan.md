@@ -240,6 +240,8 @@ Tercera ronda (2026-10-08), por la interfaz con Pumarejo, que ya maneja los `<se
 - **Modelo por defecto.** Abrir una conversación de Codex en Agents lo informó sin abrir Delivery.
 - **Eliminar con una conversación abierta.** Windows no deja borrar la carpeta en uso y la eliminación quedaba a medias. Ahora Tinto lo rechaza con un mensaje claro, y una tarea que quedó a medias se puede eliminar.
 
+**Coordinador desde Agents (2026-10-08).** Las conversaciones de Codex y Claude Code que se abren en Agents reciben el servidor `tinto-delivery` con sus herramientas preaprobadas (`--mcp-config` y `--allowedTools` en Claude; `-c mcp_servers.tinto-delivery.*` con `default_tools_approval_mode = "approve"` en Codex, porque Agents corre Codex sin aprobaciones y las rechazaría). Dentro de WSL, con la red NAT por defecto, `127.0.0.1` no es Windows: allí el CLI arranca `tinto.exe --delivery-mcp-proxy`, que reenvía cada mensaje al servidor. Comprobado: Codex desde Agents y Claude en WSL con los mismos argumentos llamaron a `delivery_overview` sin pedir permiso. Una conversación de Claude abierta en Agents no llega a aceptar mensajes, por el problema de turnos de Claude ya conocido; el conector no influye.
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.

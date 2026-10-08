@@ -869,6 +869,7 @@ fn build_app_server_command(binary_path: &Path, working_dir: &Path) -> Command {
     let mut command = Command::new(binary_path);
     command
         .arg("app-server")
+        .args(crate::delivery::wiring::codex_args(false))
         .arg("--stdio")
         .current_dir(working_dir)
         .stdin(Stdio::piped())
@@ -900,6 +901,7 @@ pub(crate) fn build_wsl_app_server_command(
         .arg(working_dir.as_os_str())
         .arg("codex")
         .arg("app-server")
+        .args(crate::delivery::wiring::codex_args(true))
         .arg("--stdio")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

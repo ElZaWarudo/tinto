@@ -52,6 +52,7 @@ pub fn start(service: DeliveryService) -> Result<DeliveryCoordinatorEndpoint, De
     if let Ok(mut slot) = service.inner.coordinator.lock() {
         *slot = Some(endpoint.clone());
     }
+    super::wiring::publish(&endpoint);
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let service = service.clone();
