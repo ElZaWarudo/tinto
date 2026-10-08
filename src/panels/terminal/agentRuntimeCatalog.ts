@@ -1,4 +1,5 @@
 import type { AgentRuntimeCatalog, AgentRuntimeModel } from "../../bus/contract";
+import { setDeliveryCodexModel } from "../../delivery/client";
 
 export type CodexModelSelection = string;
 export type CodexReasoningSelection = string;
@@ -69,13 +70,22 @@ export function codexSpeedLabel(value: CodexSpeedSelection): string {
 
 const LAST_CATALOG_KEY = "tinto.agents.lastRuntimeCatalog";
 
-/** Remembers the last ready Codex model catalog so archived sessions can offer the same choices. */
+/**
+ * Remembers the last ready Codex model catalog so archived sessions can offer the same choices,
+ * and tells Delivery its default, which Codex jobs that name no model use.
+ */
 export function rememberRuntimeCatalog(catalog: AgentRuntimeCatalog): void {
   if (catalog.status !== "ready" || !catalog.models?.length) return;
   try {
     localStorage.setItem(LAST_CATALOG_KEY, JSON.stringify(catalog));
   } catch {
     // Storage may be unavailable; the catalog is only a convenience here.
+  }
+  const model = catalog.default_model;
+  if (model) {
+    Promise.resolve()
+      .then(() => setDeliveryCodexModel(model))
+      .catch(() => {});
   }
 }
 

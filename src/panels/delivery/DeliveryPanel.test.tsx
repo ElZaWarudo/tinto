@@ -26,6 +26,7 @@ const client = vi.hoisted(() => ({
   getDeliveryJobLog: vi.fn(),
   getDeliveryRepoSettings: vi.fn(),
   setDeliveryRepoSettings: vi.fn(),
+  setDeliveryCodexModel: vi.fn(() => Promise.resolve()),
   openDeliveryTaskInAgents: vi.fn(),
   openDeliveryJobInAgents: vi.fn(),
   completeDeliveryApproval: vi.fn(),
@@ -221,6 +222,56 @@ describe("DeliveryPanel", () => {
         prompt: "Make it pass",
       }),
     );
+  });
+
+  it("lets Claude without full access run the repo's commands, saved for the repo", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: "npm ci",
+      default_base: null,
+      checks: ["npm test"],
+    });
+    client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Nuevo trabajo" }));
+    const dialog = screen.getByRole("dialog", { name: "Nuevo trabajo en AGOS-501" });
+    expect(
+      within(dialog).queryByRole("textbox", { name: /Comandos que puede ejecutar/ }),
+    ).toBeNull();
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "claude");
+    const commands = within(dialog).getByRole("textbox", { name: /Comandos que puede ejecutar/ });
+    await waitFor(() => expect(commands).toHaveValue("npm test"));
+    await user.type(commands, "\nnpm run lint");
+    await user.type(
+      within(dialog).getByPlaceholderText("Qué debe hacer este trabajo y cómo comprobarlo."),
+      "Review it",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
+    await waitFor(() => expect(client.dispatchDeliveryJob).toHaveBeenCalled());
+    expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(REPO, {
+      worktree_root: null,
+      bootstrap: "npm ci",
+      default_base: null,
+      checks: ["npm test", "npm run lint"],
+    });
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the catalog's default model for Codex jobs that name none", async () => {
+    localStorage.setItem(
+      "tinto.agents.lastRuntimeCatalog",
+      JSON.stringify({
+        status: "ready",
+        models: [{ id: "gpt-6-astra" }],
+        default_model: "gpt-6-astra",
+      }),
+    );
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    renderPanel();
+    await waitFor(() => expect(client.setDeliveryCodexModel).toHaveBeenCalledWith("gpt-6-astra"));
+    localStorage.removeItem("tinto.agents.lastRuntimeCatalog");
   });
 
   it("shows the exact text of a pending approval and approves it", async () => {

@@ -66,6 +66,7 @@ fn fake_launcher() -> Launcher {
                 cwd: Some(worktree),
                 stdin: String::new(),
                 provider_session_id: None,
+                wsl_job: None,
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -86,6 +87,7 @@ fn fake_launcher() -> Launcher {
                 cwd: Some(worktree),
                 stdin: String::new(),
                 provider_session_id: None,
+                wsl_job: None,
             })
         }
     })
@@ -113,6 +115,7 @@ fn harness_with_store(store: DeliveryStore) -> Harness {
                 worktree_root: Some(worktrees.path().to_path_buf()),
                 bootstrap: None,
                 default_base: None,
+                checks: Vec::new(),
             },
         )
         .unwrap();
@@ -234,6 +237,56 @@ fn a_job_snapshots_runs_and_its_result_is_accepted_and_undoable() {
     assert!(undone.undone_at_ms.is_some());
     assert!(!worktree.join("made.txt").exists());
     assert!(h.service.undo(&job.id).is_err());
+}
+
+#[test]
+fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
+    let h = harness();
+    let task = h.task("K-9");
+    h.service
+        .set_codex_model(Some(" gpt-6-astra ".into()))
+        .unwrap();
+    let codex = h.dispatch(&task, "tests", "events=codex-ok");
+    assert_eq!(codex.model.as_deref(), Some("gpt-6-astra"));
+    assert!(codex.allowed_commands.is_empty());
+    h.wait(&codex.id);
+
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.checks = vec!["npm test".into()];
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let new_job = |agent, access| NewJob {
+        task_id: task.id.clone(),
+        role: "review".into(),
+        agent,
+        model: None,
+        access,
+        prompt: "events=claude-ok".into(),
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+    };
+    let claude = h
+        .service
+        .dispatch(new_job(DeliveryAgent::Claude, DeliveryAccess::Workspace))
+        .unwrap();
+    assert_eq!(claude.model, None);
+    assert_eq!(claude.allowed_commands, vec!["npm test".to_string()]);
+    h.wait(&claude.id);
+    let full = h
+        .service
+        .dispatch(new_job(DeliveryAgent::Claude, DeliveryAccess::Full))
+        .unwrap();
+    assert!(full.allowed_commands.is_empty());
+    h.wait(&full.id);
 }
 
 #[test]

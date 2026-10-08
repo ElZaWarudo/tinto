@@ -1,7 +1,7 @@
 //! Tauri commands for the Delivery view. Slow work (git, snapshots, pushes)
 //! runs off the async runtime.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -68,11 +68,40 @@ pub async fn delivery_create_task(
 #[tauri::command]
 pub async fn delivery_remove_task(
     service: State<'_, DeliveryService>,
+    bus: State<'_, BusHandle>,
+    workbenches: State<'_, Mutex<WorkbenchStore>>,
     task_id: String,
     force: bool,
 ) -> Result<(), CommandError> {
+    let worktree = service.task(&task_id).map_err(CommandError::from)?.worktree;
     let service = service.inner().clone();
-    blocking(move || service.remove_task(&task_id, force)).await
+    blocking(move || service.remove_task(&task_id, force)).await?;
+    forget_worktree(&bus, &workbenches, &worktree);
+    Ok(())
+}
+
+/// Drops a removed task's worktree from the workbenches, where "Abrir en
+/// Agents" may have added it.
+fn forget_worktree(bus: &BusHandle, workbenches: &Mutex<WorkbenchStore>, worktree: &Path) {
+    let Ok(mut store) = workbenches.lock() else {
+        return;
+    };
+    let names: Vec<String> = store
+        .config()
+        .workbenches
+        .iter()
+        .map(|workbench| workbench.name.clone())
+        .collect();
+    let path = worktree.to_string_lossy();
+    let mut removed = false;
+    for name in names {
+        removed |= store.remove_repo_entry(&name, &path).unwrap_or(false);
+    }
+    if removed {
+        if let Some(active) = store.active_workbench_runtime() {
+            bus.set_workbench(active.repos);
+        }
+    }
 }
 
 #[tauri::command]
@@ -163,6 +192,16 @@ pub fn delivery_update_settings(
         .map_err(CommandError::from)
 }
 
+/// The model Codex jobs use when they do not name one: the default of the
+/// account's model catalog, reported by the view.
+#[tauri::command]
+pub fn delivery_set_codex_model(
+    service: State<'_, DeliveryService>,
+    model: Option<String>,
+) -> Result<(), CommandError> {
+    service.set_codex_model(model).map_err(CommandError::from)
+}
+
 #[tauri::command]
 pub fn delivery_repo_settings(
     service: State<'_, DeliveryService>,
@@ -191,6 +230,11 @@ pub fn delivery_set_repo_settings(
             .filter(|root| !root.as_os_str().is_empty()),
         bootstrap: clean(settings.bootstrap),
         default_base: clean(settings.default_base),
+        checks: settings
+            .checks
+            .into_iter()
+            .filter_map(|check| clean(Some(check)))
+            .collect(),
     };
     service
         .store()

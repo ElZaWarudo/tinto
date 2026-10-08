@@ -143,6 +143,10 @@ pub struct DeliveryJob {
     pub result_state: Option<DeliveryResultState>,
     pub result_note: Option<String>,
     pub undone_at_ms: Option<u64>,
+    /// Shell commands a Claude job without full access may run, taken from
+    /// the repo's verification commands when the job was dispatched.
+    #[serde(default)]
+    pub allowed_commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,6 +247,10 @@ pub struct DeliveryRepoSettings {
     pub bootstrap: Option<String>,
     /// Base ref for new tasks; default the repo's integration branch.
     pub default_base: Option<String>,
+    /// Commands jobs use to verify their work (e.g. `npm test`). Claude jobs
+    /// without full access may run these and nothing else.
+    #[serde(default)]
+    pub checks: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

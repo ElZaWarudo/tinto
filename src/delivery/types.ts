@@ -76,6 +76,8 @@ export interface DeliveryJob {
   result_state: DeliveryResultState | null;
   result_note: string | null;
   undone_at_ms: number | null;
+  /** Commands a Claude job without full access may run. */
+  allowed_commands?: string[];
 }
 
 export interface DeliveryLeaseWaiter {
@@ -128,6 +130,8 @@ export interface DeliveryRepoSettings {
   worktree_root: string | null;
   bootstrap: string | null;
   default_base: string | null;
+  /** Verification commands; Claude jobs without full access may run only these. */
+  checks?: string[];
 }
 
 export interface DeliveryCoordinatorEndpoint {

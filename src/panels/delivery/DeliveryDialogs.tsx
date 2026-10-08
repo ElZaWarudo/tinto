@@ -221,15 +221,27 @@ export interface DispatchValues {
   model: string;
   access: DeliveryAccess;
   prompt: string;
+  /** The repo's verification commands when they were edited, else null. */
+  checks: string[] | null;
+}
+
+function parseChecks(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 export function DispatchDialog({
   task,
+  checks,
   busy,
   onSubmit,
   onCancel,
 }: {
   task: DeliveryTask;
+  /** The repo's verification commands, once loaded. */
+  checks: string[] | null;
   busy: boolean;
   onSubmit: (values: DispatchValues) => void;
   onCancel: () => void;
@@ -241,6 +253,9 @@ export function DispatchDialog({
   const [model, setModel] = useState(defaultCodexModel);
   const [access, setAccess] = useState<DeliveryAccess>("workspace");
   const [prompt, setPrompt] = useState("");
+  const [checksText, setChecksText] = useState<string | null>(null);
+  const shownChecks = checksText ?? (checks ?? []).join("\n");
+  const limitedClaude = agent === "claude" && access === "workspace";
   const roleHint = DELIVERY_ROLES.find((choice) => choice.value === role)?.hint;
   return (
     <FormDialog
@@ -252,7 +267,14 @@ export function DispatchDialog({
       onSubmit={() => {
         const finalRole = role === "custom" ? customRole.trim() : role;
         if (!finalRole || !prompt.trim()) return;
-        onSubmit({ role: finalRole, agent, model: model.trim(), access, prompt });
+        onSubmit({
+          role: finalRole,
+          agent,
+          model: model.trim(),
+          access,
+          prompt,
+          checks: checksText === null ? null : parseChecks(checksText),
+        });
       }}
     >
       <div className="delivery-field-row">
@@ -296,14 +318,7 @@ export function DispatchDialog({
           />
         </Field>
       </div>
-      <Field
-        label="Acceso"
-        hint={
-          agent === "claude" && access === "workspace"
-            ? "Claude Code edita archivos, pero no puede ejecutar comandos sin acceso completo."
-            : undefined
-        }
-      >
+      <Field label="Acceso">
         <select
           value={access}
           onChange={(event) => setAccess(event.target.value as DeliveryAccess)}
@@ -312,6 +327,19 @@ export function DispatchDialog({
           <option value="full">Acceso completo</option>
         </select>
       </Field>
+      {limitedClaude && (
+        <Field
+          label="Comandos que puede ejecutar"
+          hint="Uno por línea, con cualquier argumento. Además puede ejecutar comandos de solo lectura (ls, grep, git status…); el resto se le deniega. Se guardan para este repositorio y también los usan los trabajos del coordinador."
+        >
+          <textarea
+            value={shownChecks}
+            onChange={(event) => setChecksText(event.target.value)}
+            rows={3}
+            placeholder={"npm test\nnpm run lint"}
+          />
+        </Field>
+      )}
       <Field
         label="Encargo"
         hint="Tinto añade la tarea, el worktree, el rol y el formato del resultado."

@@ -34,6 +34,12 @@ pub type Launcher = Arc<
 >;
 pub type PathsFor = Arc<dyn Fn(&str) -> Result<JobPaths, DeliveryError> + Send + Sync>;
 
+const CODEX_MODEL_SETTING: &str = "codex_model";
+/// Written next to a WSL job's files so a restart can stop what is left.
+const WSL_JOB_FILE: &str = "wsl-job.json";
+/// How long a WSL job gets to exit after `TERM` before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+
 /// Roles of the built-in flow (backlog-delivery's stages) and their defaults.
 pub fn role_defaults(role: &str) -> (bool, Option<&'static str>, u32) {
     match role {
@@ -157,6 +163,7 @@ impl DeliveryService {
     fn reconcile(&self) -> Result<(), DeliveryError> {
         let store = self.store()?;
         let now = now_ms();
+        let mut leftovers = Vec::new();
         for mut job in store.jobs()? {
             if !job.status.is_active() {
                 continue;
@@ -173,6 +180,19 @@ impl DeliveryService {
                 Some(&job.id),
                 "",
             )?;
+            let wsl_job = (self.inner.paths_for)(&job.id)
+                .ok()
+                .and_then(|paths| std::fs::read(paths.dir.join(WSL_JOB_FILE)).ok())
+                .and_then(|data| serde_json::from_slice::<adapters::WslJob>(&data).ok());
+            leftovers.extend(wsl_job);
+        }
+        // WSL jobs outlive Tinto; stop what is left without delaying startup.
+        if !leftovers.is_empty() {
+            std::thread::spawn(move || {
+                for wsl_job in leftovers {
+                    adapters::stop_wsl_job(&wsl_job, "KILL");
+                }
+            });
         }
         Ok(())
     }
@@ -217,6 +237,13 @@ impl DeliveryService {
         self.store()?.set_settings(&settings)?;
         self.tick();
         Ok(settings)
+    }
+
+    pub fn set_codex_model(&self, model: Option<String>) -> Result<(), DeliveryError> {
+        let model = model
+            .map(|model| model.trim().to_string())
+            .filter(|model| !model.is_empty());
+        self.store()?.set_setting(CODEX_MODEL_SETTING, &model)
     }
 
     // ---- tasks ----
@@ -447,6 +474,18 @@ impl DeliveryService {
         }
         let (writes, lease, timeout) = role_defaults(&role);
         let store = self.store()?;
+        let model = match request.model.filter(|model| !model.trim().is_empty()) {
+            None if request.agent == DeliveryAgent::Codex => store
+                .setting::<Option<String>>(CODEX_MODEL_SETTING)?
+                .flatten(),
+            model => model,
+        };
+        let allowed_commands = match (request.agent, request.access) {
+            (DeliveryAgent::Claude, DeliveryAccess::Workspace) => {
+                store.repo_settings(&task.repo)?.checks
+            }
+            _ => Vec::new(),
+        };
         let attempt = store
             .task_jobs(&task.id)?
             .iter()
@@ -462,7 +501,7 @@ impl DeliveryService {
             role,
             attempt,
             agent: request.agent,
-            model: request.model.filter(|model| !model.trim().is_empty()),
+            model,
             access: request.access,
             prompt: request.prompt,
             contract_version: task.contract_version,
@@ -487,6 +526,7 @@ impl DeliveryService {
             result_state: None,
             result_note: None,
             undone_at_ms: None,
+            allowed_commands,
         };
         store.put_job(&job)?;
         store.record_event(
@@ -831,6 +871,11 @@ impl DeliveryService {
         })?;
         #[cfg(target_os = "windows")]
         let process_tree = crate::windows_process::KillOnCloseJob::attach(&child).ok();
+        if let Some(wsl_job) = &launch.wsl_job {
+            if let Ok(data) = serde_json::to_vec(wsl_job) {
+                let _ = std::fs::write(paths.dir.join(WSL_JOB_FILE), data);
+            }
+        }
 
         {
             let store = self.store()?;
@@ -904,6 +949,8 @@ impl DeliveryService {
         let deadline = Instant::now() + Duration::from_secs(u64::from(job.timeout_minutes) * 60);
         let mut cancelled = false;
         let mut timed_out = false;
+        // When the job is being stopped: kill it outright once this passes.
+        let mut kill_at: Option<Instant> = None;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Some(status),
@@ -917,11 +964,26 @@ impl DeliveryService {
                     timed_out = true;
                 }
                 if cancelled || timed_out {
-                    let _ = child.kill();
-                    #[cfg(target_os = "windows")]
-                    if let Some(tree) = &process_tree {
-                        let _ = tree.kill_all();
-                    }
+                    // Closing `wsl.exe` would leave the Linux processes
+                    // running, so a WSL job is asked to stop first.
+                    kill_at = Some(match &launch.wsl_job {
+                        Some(wsl_job) => {
+                            adapters::stop_wsl_job(wsl_job, "TERM");
+                            Instant::now() + STOP_GRACE
+                        }
+                        None => Instant::now(),
+                    });
+                }
+            }
+            if kill_at.is_some_and(|at| Instant::now() >= at) {
+                kill_at = None;
+                if let Some(wsl_job) = &launch.wsl_job {
+                    adapters::stop_wsl_job(wsl_job, "KILL");
+                }
+                let _ = child.kill();
+                #[cfg(target_os = "windows")]
+                if let Some(tree) = &process_tree {
+                    let _ = tree.kill_all();
                 }
             }
             std::thread::sleep(Duration::from_millis(200));

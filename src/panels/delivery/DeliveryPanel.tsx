@@ -7,6 +7,7 @@ import { busStore, useBusState } from "../../bus/store";
 import { useWorkspaceActions } from "../../workspace/actions";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
+import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import {
   cancelDeliveryJob,
   closeDeliveryRun,
@@ -25,6 +26,7 @@ import {
   removeDeliveryTask,
   requestDeliveryApproval,
   retryDeliveryJob,
+  setDeliveryCodexModel,
   setDeliveryRepoSettings,
   takeoverDeliveryRun,
   undoDeliveryJob,
@@ -145,6 +147,7 @@ export function DeliveryPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [repoChecks, setRepoChecks] = useState<string[] | null>(null);
 
   const refresh = useCallback(
     () =>
@@ -154,6 +157,13 @@ export function DeliveryPanel() {
       ),
     [],
   );
+
+  useEffect(() => {
+    // Codex jobs that name no model (e.g. from a coordinator) use the
+    // account's default from the last model catalog Tinto loaded.
+    const model = lastRuntimeCatalog()?.default_model;
+    if (model) setDeliveryCodexModel(model).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -354,7 +364,14 @@ export function DeliveryPanel() {
               now={now}
               busy={busy}
               run={run}
-              onDispatch={() => setDialog({ kind: "dispatch", task: selectedTask })}
+              onDispatch={() => {
+                setRepoChecks(null);
+                getDeliveryRepoSettings(selectedTask.repo).then(
+                  (settings) => setRepoChecks(settings.checks ?? []),
+                  () => setRepoChecks([]),
+                );
+                setDialog({ kind: "dispatch", task: selectedTask });
+              }}
               onOpenConversation={async (agentType) => {
                 await run(async () => {
                   const conversation = await openDeliveryTaskInAgents(selectedTask.id, agentType);
@@ -416,6 +433,7 @@ export function DeliveryPanel() {
       {dialog?.kind === "dispatch" && (
         <DispatchDialog
           task={dialog.task}
+          checks={repoChecks}
           busy={busy}
           onCancel={() => setDialog(null)}
           onSubmit={(values) =>
@@ -431,16 +449,23 @@ export function DeliveryPanel() {
                 );
                 if (!ok) return;
               }
-              const done = await run(() =>
-                dispatchDeliveryJob({
+              const done = await run(async () => {
+                if (values.checks) {
+                  const current = await getDeliveryRepoSettings(dialog.task.repo);
+                  await setDeliveryRepoSettings(dialog.task.repo, {
+                    ...current,
+                    checks: values.checks,
+                  });
+                }
+                return dispatchDeliveryJob({
                   taskId: dialog.task.id,
                   role: values.role,
                   agent: values.agent,
                   model: values.model,
                   access: values.access,
                   prompt: values.prompt,
-                }),
-              );
+                });
+              });
               if (done) setDialog(null);
             })()
           }

@@ -137,6 +137,7 @@ pub fn run() {
             delivery::commands::delivery_undo_job,
             delivery::commands::delivery_job_log,
             delivery::commands::delivery_update_settings,
+            delivery::commands::delivery_set_codex_model,
             delivery::commands::delivery_repo_settings,
             delivery::commands::delivery_set_repo_settings,
             delivery::commands::delivery_release_lease,

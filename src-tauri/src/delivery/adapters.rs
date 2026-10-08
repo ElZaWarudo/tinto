@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::model::{
@@ -84,6 +85,18 @@ pub struct JobLaunch {
     pub stdin: String,
     /// Known before the process starts (Claude takes it as an argument).
     pub provider_session_id: Option<String>,
+    /// Set for jobs that run in WSL, where closing `wsl.exe` does not stop
+    /// the Linux processes.
+    pub wsl_job: Option<WslJob>,
+}
+
+/// A job running in WSL. Every process it starts inherits
+/// `TINTO_DELIVERY_JOB=<job_id>`, which is how [`stop_wsl_job`] finds them,
+/// including commands the agent runs in their own process groups.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WslJob {
+    pub distro: String,
+    pub job_id: String,
 }
 
 /// The instructions an agent job receives: Tinto's envelope around the
@@ -105,6 +118,16 @@ pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
     ];
     if !job.writes {
         lines.push("This job is read-only: do not modify, create or delete files.".to_string());
+    }
+    if job.agent == DeliveryAgent::Claude && job.access == DeliveryAccess::Workspace {
+        if job.allowed_commands.is_empty() {
+            lines.push("You can run read-only shell commands only; list the checks you could not run in the result.".to_string());
+        } else {
+            lines.push(format!(
+                "Besides read-only shell commands, you can run only: {}. List any other check you could not run in the result.",
+                job.allowed_commands.join("; ")
+            ));
+        }
     }
     lines.push(
         "Do not commit, push, open pull requests or change issue trackers: Tinto asks the user for those steps."
@@ -173,6 +196,7 @@ fn codex_launch(
                 cwd: Some(PathBuf::from(plain_path(&task.worktree))),
                 stdin: prompt,
                 provider_session_id: None,
+                wsl_job: None,
             })
         }
         Some(distro) => {
@@ -187,13 +211,14 @@ fn codex_launch(
                 sh_quote(&wsl_path(&paths.schema)?),
                 sh_quote(&wsl_path(&paths.result)?),
             );
-            Ok(wsl_launch(
+            wsl_launch(
                 distro,
                 &task.worktree.to_string_lossy(),
                 script,
                 prompt,
                 None,
-            ))
+                job,
+            )
         }
     }
 }
@@ -204,10 +229,13 @@ fn claude_launch(
     paths: &JobPaths,
     claude_distro: Option<&str>,
 ) -> Result<JobLaunch, DeliveryError> {
-    let mode = match job.access {
-        DeliveryAccess::Workspace => "acceptEdits",
-        DeliveryAccess::Full => "bypassPermissions",
+    let mode = match (job.access, job.writes) {
+        (DeliveryAccess::Full, _) => "bypassPermissions",
+        (DeliveryAccess::Workspace, true) => "acceptEdits",
+        // Without anyone to approve prompts, `default` denies edits.
+        (DeliveryAccess::Workspace, false) => "default",
     };
+    let allowed = claude_allowed_tools(job);
     let session_id = uuid::Uuid::new_v4().to_string();
     let prompt = job_prompt(job, task);
     let native = match task.distro {
@@ -233,12 +261,17 @@ fn claude_launch(
         if let Some(model) = job.model.as_deref() {
             args.extend(["--model".to_string(), model.to_string()]);
         }
+        if !allowed.is_empty() {
+            args.push("--allowedTools".to_string());
+            args.extend(allowed);
+        }
         return Ok(JobLaunch {
             program,
             args,
             cwd: Some(PathBuf::from(plain_path(&task.worktree))),
             stdin: prompt,
             provider_session_id: Some(session_id),
+            wsl_job: None,
         });
     }
     let (distro, cwd) = match task.distro.as_deref() {
@@ -260,11 +293,33 @@ fn claude_launch(
         .as_deref()
         .map(|model| format!(" --model {}", sh_quote(model)))
         .unwrap_or_default();
+    let allowed = if allowed.is_empty() {
+        String::new()
+    } else {
+        let tools: Vec<String> = allowed.iter().map(|tool| sh_quote(tool)).collect();
+        format!(" --allowedTools {}", tools.join(" "))
+    };
     let script = format!(
-        "exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}",
+        "exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{allowed}",
         sh_quote(&wsl_path(&paths.schema)?)
     );
-    Ok(wsl_launch(&distro, &cwd, script, prompt, Some(session_id)))
+    wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)
+}
+
+/// Commands a Claude job without full access may run besides the read-only
+/// ones Claude Code already allows: the repo's verification commands (each
+/// with any arguments). The git ones are listed in case a version stops
+/// treating them as read-only.
+fn claude_allowed_tools(job: &DeliveryJob) -> Vec<String> {
+    if job.access == DeliveryAccess::Full {
+        return Vec::new();
+    }
+    ["git status", "git diff", "git log"]
+        .into_iter()
+        .map(str::to_string)
+        .chain(job.allowed_commands.iter().cloned())
+        .map(|command| format!("Bash({command}:*)"))
+        .collect()
 }
 
 fn shell_launch(
@@ -273,13 +328,14 @@ fn shell_launch(
     paths: &JobPaths,
 ) -> Result<JobLaunch, DeliveryError> {
     if let Some(distro) = task.distro.as_deref() {
-        return Ok(wsl_launch(
+        return wsl_launch(
             distro,
             &task.worktree.to_string_lossy(),
             job.prompt.clone(),
             String::new(),
             None,
-        ));
+            job,
+        );
     }
     // A script file avoids cmd.exe's quoting rules for the command text.
     #[cfg(target_os = "windows")]
@@ -305,17 +361,29 @@ fn shell_launch(
         cwd: Some(PathBuf::from(plain_path(&task.worktree))),
         stdin: String::new(),
         provider_session_id: None,
+        wsl_job: None,
     })
 }
 
+/// Runs `script` in WSL with the job's marker in its environment (see
+/// [`stop_wsl_job`]). The script is the last argument, passed untouched.
 fn wsl_launch(
     distro: &str,
     cwd: &str,
     script: String,
     stdin: String,
     provider_session_id: Option<String>,
-) -> JobLaunch {
-    JobLaunch {
+    job: &DeliveryJob,
+) -> Result<JobLaunch, DeliveryError> {
+    let wsl_job = WslJob {
+        distro: distro.to_string(),
+        job_id: job.id.clone(),
+    };
+    let leader = format!(
+        r#"export TINTO_DELIVERY_JOB={}; eval "$1""#,
+        sh_quote(&wsl_job.job_id)
+    );
+    Ok(JobLaunch {
         program: PathBuf::from("wsl.exe"),
         args: vec![
             "-d".to_string(),
@@ -325,12 +393,35 @@ fn wsl_launch(
             "--exec".to_string(),
             "bash".to_string(),
             "-lc".to_string(),
+            leader,
+            "tinto-job".to_string(),
             script,
         ],
         cwd: None,
         stdin,
         provider_session_id,
+        wsl_job: Some(wsl_job),
+    })
+}
+
+/// Sends `signal` (`TERM` or `KILL`) to every Linux process of a WSL job.
+pub fn stop_wsl_job(job: &WslJob, signal: &str) {
+    let script = format!(
+        r#"for env in /proc/[0-9]*/environ; do grep -qzx {marker} "$env" 2>/dev/null || continue; pid=${{env#/proc/}}; kill -{signal} "${{pid%/environ}}" 2>/dev/null; done; true"#,
+        marker = sh_quote(&format!("TINTO_DELIVERY_JOB={}", job.job_id)),
+    );
+    let mut command = std::process::Command::new("wsl.exe");
+    command.args(["-d", &job.distro, "--exec", "bash", "-c", &script]);
+    #[cfg(target_os = "windows")]
+    {
+        crate::windows_process::hide_console(&mut command);
+        let _ = crate::windows_process::output_with_timeout(
+            &mut command,
+            std::time::Duration::from_secs(15),
+        );
     }
+    #[cfg(not(target_os = "windows"))]
+    let _ = command.output();
 }
 
 /// The WSL distro used to run Claude Code when it is not installed on
@@ -683,6 +774,7 @@ mod tests {
             result_state: None::<DeliveryResultState>,
             result_note: None,
             undone_at_ms: None,
+            allowed_commands: Vec::new(),
         }
     }
 
@@ -760,6 +852,15 @@ mod tests {
         assert!(launch
             .stdin
             .contains("Assignment:\nWrite the failing test."));
+        assert_eq!(
+            launch.wsl_job,
+            Some(WslJob {
+                distro: "Ubuntu".into(),
+                job_id: "j1".into()
+            })
+        );
+        let leader = &launch.args[launch.args.len() - 3];
+        assert_eq!(leader, r#"export TINTO_DELIVERY_JOB='j1'; eval "$1""#);
 
         let mut claude = sample_job(DeliveryAgent::Claude);
         claude.access = DeliveryAccess::Full;
@@ -772,6 +873,37 @@ mod tests {
         );
         assert!(launch.provider_session_id.is_some());
         assert!(launch.stdin.contains("This job is read-only"));
+        assert!(!script.contains("--allowedTools"), "{script}");
+    }
+
+    #[test]
+    fn claude_without_full_access_runs_only_allowed_commands() {
+        let mut task = sample_task();
+        task.distro = Some("Ubuntu".into());
+        let paths = JobPaths::in_dir(PathBuf::from(
+            r"C:\Users\me\AppData\Roaming\tinto\delivery\jobs\j1",
+        ));
+        let mut job = sample_job(DeliveryAgent::Claude);
+        job.allowed_commands = vec!["npm test".into(), "cargo test".into()];
+        let launch = claude_launch(&job, &task, &paths, None).unwrap();
+        let script = launch.args.last().unwrap();
+        assert!(script.contains("--permission-mode acceptEdits"), "{script}");
+        assert!(
+            script.ends_with(" --allowedTools 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(npm test:*)' 'Bash(cargo test:*)'"),
+            "{script}"
+        );
+        assert!(launch
+            .stdin
+            .contains("you can run only: npm test; cargo test."));
+
+        job.writes = false;
+        job.allowed_commands.clear();
+        let launch = claude_launch(&job, &task, &paths, None).unwrap();
+        let script = launch.args.last().unwrap();
+        assert!(script.contains("--permission-mode default"), "{script}");
+        assert!(launch
+            .stdin
+            .contains("You can run read-only shell commands only"));
     }
 
     #[test]
