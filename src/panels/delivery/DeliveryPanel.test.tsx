@@ -173,7 +173,7 @@ describe("DeliveryPanel", () => {
     expect(within(changes).getByText("tests/new.test.ts")).toBeInTheDocument();
     expect(within(changes).getByText("+")).toBeInTheDocument();
     expect(within(changes).getByText("−")).toBeInTheDocument();
-    expect(screen.getByText(/Candidato 11111111 → 22222222/)).toBeInTheDocument();
+    expect(screen.getByText("11111111 → 22222222")).toBeInTheDocument();
     expect(screen.getByText("Implement the parser change.")).toBeInTheDocument();
   });
 
@@ -195,18 +195,21 @@ describe("DeliveryPanel", () => {
     expect(client.setDeliveryRepoSettings).not.toHaveBeenCalled();
   });
 
-  it("dispatches a job, asking before full access", async () => {
+  it("launches the next stage with the previous handoff, asking before full access", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(overview());
     client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Nuevo trabajo" }));
-    const dialog = screen.getByRole("dialog", { name: "Nuevo trabajo en AGOS-501" });
+    await user.click(await screen.findByRole("button", { name: "Lanzar implementación" }));
+    const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
+    expect(within(dialog).getByRole("combobox", { name: /Etapa/ })).toHaveValue("implementation");
+    const instructions = within(dialog).getByRole("textbox", { name: /Instrucciones/ });
+    expect(instructions).toHaveValue("Implement the parser change.");
+    expect(
+      within(dialog).getByText(/Tomado de «Para la siguiente etapa» de Tests/),
+    ).toBeInTheDocument();
     await user.selectOptions(within(dialog).getByRole("combobox", { name: "Acceso" }), "full");
-    await user.type(
-      within(dialog).getByPlaceholderText("Qué debe hacer este trabajo y cómo comprobarlo."),
-      "Make it pass",
-    );
+    await user.type(instructions, " Make it pass");
     await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
     await waitFor(() => expect(client.dispatchDeliveryJob).toHaveBeenCalled());
     expect(confirmMock).toHaveBeenCalledWith(
@@ -216,10 +219,10 @@ describe("DeliveryPanel", () => {
     expect(client.dispatchDeliveryJob).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: "t1",
-        role: "tests",
+        role: "implementation",
         agent: "codex",
         access: "full",
-        prompt: "Make it pass",
+        prompt: "Implement the parser change. Make it pass",
       }),
     );
   });
@@ -235,8 +238,8 @@ describe("DeliveryPanel", () => {
     });
     client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Nuevo trabajo" }));
-    const dialog = screen.getByRole("dialog", { name: "Nuevo trabajo en AGOS-501" });
+    await user.click(await screen.findByRole("button", { name: "Otra etapa…" }));
+    const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
     expect(
       within(dialog).queryByRole("textbox", { name: /Comandos que puede ejecutar/ }),
     ).toBeNull();
@@ -245,7 +248,7 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(commands).toHaveValue("npm test"));
     await user.type(commands, "\nnpm run lint");
     await user.type(
-      within(dialog).getByPlaceholderText("Qué debe hacer este trabajo y cómo comprobarlo."),
+      within(dialog).getByPlaceholderText("Qué debe hacer esta etapa y cómo comprobarlo."),
       "Review it",
     );
     await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
@@ -295,8 +298,12 @@ describe("DeliveryPanel", () => {
     const group = await screen.findByRole("group", { name: "Aprobación commit" });
     expect(within(group).getByText(/Parser now rejects empty input\./)).toBeInTheDocument();
     expect(within(group).getByText(/pedido por/)).toHaveTextContent("coord");
-    expect(screen.getByText("1 aprobaciones pendientes")).toBeInTheDocument();
-    await user.click(within(group).getByRole("button", { name: "Aprobar y confirmar" }));
+    expect(within(group).getByText(/No publica nada/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1 tarea te necesita" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Te necesitan" })).getByText("Aprobar commit"),
+    ).toBeInTheDocument();
+    await user.click(within(group).getByRole("button", { name: "Aprobar y hacer commit" }));
     await waitFor(() => expect(client.decideDeliveryApproval).toHaveBeenCalledWith("a1", true));
   });
 
@@ -305,10 +312,10 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(overview());
     client.undoDeliveryJob.mockResolvedValue(job({ undone_at_ms: 5 }));
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Deshacer" }));
+    await user.click(await screen.findByRole("button", { name: "Deshacer estos cambios" }));
     expect(confirmMock).toHaveBeenCalledWith(
       expect.stringContaining("2 archivos"),
-      expect.objectContaining({ title: "Deshacer trabajo" }),
+      expect.objectContaining({ title: "Deshacer intento" }),
     );
     await waitFor(() => expect(client.undoDeliveryJob).toHaveBeenCalledWith("j1"));
   });
@@ -333,7 +340,9 @@ describe("DeliveryPanel", () => {
     );
     client.releaseDeliveryLease.mockResolvedValue({});
     renderPanel();
-    expect(await screen.findByText(/QA en cuarentena/)).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "El recurso QA está en cuarentena tras AGOS-501.",
+    );
     await user.click(screen.getByRole("button", { name: "Liberar…" }));
     const dialog = screen.getByRole("dialog", { name: "Liberar el recurso qa" });
     await user.type(
@@ -363,5 +372,114 @@ describe("DeliveryPanel", () => {
         agentType: "codex",
       }),
     );
+  });
+
+  it("flags a failed stage and retries it from the banner", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job(),
+          job({
+            id: "j2",
+            role: "implementation",
+            attempt: 2,
+            status: "failed",
+            error: "El proceso terminó con código 1 sin un resultado válido.",
+            result: null,
+            result_state: "invalid",
+            changes: [],
+          }),
+        ],
+      }),
+    );
+    client.retryDeliveryJob.mockResolvedValue(job({ id: "j3" }));
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Etapa fallida" });
+    expect(banner).toHaveTextContent("Implementación falló");
+    expect(banner).toHaveTextContent("código 1");
+    expect(screen.queryByRole("button", { name: "Lanzar implementación" })).toBeNull();
+    await user.click(within(banner).getByRole("button", { name: "Reintentar" }));
+    await waitFor(() => expect(client.retryDeliveryJob).toHaveBeenCalledWith("j2"));
+  });
+
+  it("has no manual state control and deletes the task from the menu", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.removeDeliveryTask.mockResolvedValue(undefined);
+    renderPanel();
+    await screen.findByRole("heading", { name: /AGOS-501/ });
+    expect(screen.queryByRole("combobox", { name: /Estado/ })).toBeNull();
+    expect(screen.getByText("Estado: Tests")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Más acciones de la tarea" }));
+    await user.click(screen.getByRole("menuitem", { name: "Eliminar tarea…" }));
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining("C:\\work\\agentos-wt\\AGOS-501"),
+      expect.objectContaining({ title: "Eliminar tarea" }),
+    );
+    await waitFor(() => expect(client.removeDeliveryTask).toHaveBeenCalledWith("t1", false));
+  });
+
+  it("offers only the next delivery rung, behind a button", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [
+          {
+            id: "a1",
+            task_id: "t1",
+            rung: "commit",
+            title: "AGOS-501: Fix the thing",
+            body: "",
+            status: "executed",
+            requested_by: "user",
+            requested_at_ms: 1,
+            decided_at_ms: 2,
+            executed_at_ms: 3,
+            outcome: "abc1234",
+          },
+        ],
+      }),
+    );
+    client.requestDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Preparar push…" }));
+    const form = screen.getByRole("form", { name: "Pedir aprobación de push" });
+    await user.click(within(form).getByRole("button", { name: "Pedir aprobación" }));
+    await waitFor(() =>
+      expect(client.requestDeliveryApproval).toHaveBeenCalledWith(
+        "t1",
+        "push",
+        "Publicar delivery/agos-501",
+        "",
+      ),
+    );
+  });
+
+  it("shows one batch inline and several behind a single button", async () => {
+    const user = userEvent.setup();
+    const batch = (id: string, title: string) => ({
+      id,
+      repo: REPO,
+      title,
+      status: "active",
+      generation: 1,
+      owner: "coord",
+      created_at_ms: 1,
+      updated_at_ms: 1,
+    });
+    client.getDeliveryOverview.mockResolvedValue(overview({ runs: [batch("r1", "Lote A")] }));
+    const { unmount } = renderPanel();
+    expect(await screen.findByText("Lote A")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tomar el control" })).toBeInTheDocument();
+    unmount();
+
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ runs: [batch("r1", "Lote A"), batch("r2", "Lote B"), batch("r3", "Lote C")] }),
+    );
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "3 lotes activos" }));
+    const dialog = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    expect(within(dialog).getAllByRole("button", { name: "Tomar el control" })).toHaveLength(3);
   });
 });

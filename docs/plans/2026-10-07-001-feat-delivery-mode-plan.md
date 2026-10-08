@@ -242,6 +242,14 @@ Tercera ronda (2026-10-08), por la interfaz con Pumarejo, que ya maneja los `<se
 
 **Coordinador desde Agents (2026-10-08).** Las conversaciones de Codex y Claude Code que se abren en Agents reciben el servidor `tinto-delivery` con sus herramientas preaprobadas (`--mcp-config` y `--allowedTools` en Claude; `-c mcp_servers.tinto-delivery.*` con `default_tools_approval_mode = "approve"` en Codex, porque Agents corre Codex sin aprobaciones y las rechazaría). Dentro de WSL, con la red NAT por defecto, `127.0.0.1` no es Windows: allí el CLI arranca `tinto.exe --delivery-mcp-proxy`, que reenvía cada mensaje al servidor. Comprobado: Codex desde Agents y Claude en WSL con los mismos argumentos llamaron a `delivery_overview` sin pedir permiso. Una conversación de Claude abierta en Agents no llega a aceptar mensajes, por el problema de turnos de Claude ya conocido; el conector no influye.
 
+**Vista reorganizada (2026-10-08).** La vista parte de dos preguntas: qué necesita al usuario y en qué punto está cada tarea. Todo se deriva del `DeliveryOverview` en `src/panels/delivery/taskStatus.ts`; no cambia el backend ni la API del coordinador.
+
+- La lista agrupa las tareas en *Te necesitan*, *En marcha*, *En espera* y *Sin actividad*, con una línea de estado por tarea (icono y texto). La cabecera muestra el lote activo y quién lo coordina, la carga de agentes, el recurso QA y cuántas tareas te necesitan.
+- Cada tarea muestra un recorrido único: las etapas de agentes (tests, implementación, revisión, QA) y los peldaños de entrega (commit, push, PR, Jira). Las aprobaciones y los fallos aparecen arriba como avisos con su acción.
+- El botón principal lanza la etapa siguiente con las instrucciones de «Para la siguiente etapa» del resultado anterior. La entrega solo ofrece el siguiente peldaño.
+- Ya no se cambia el estado de la tarea a mano: lo fija el coordinador y la vista solo lo muestra. Eliminar la tarea y subir la versión del contrato pasan al menú ⋯.
+- Vocabulario de la interfaz: *ejecución* → **lote**, *trabajo* → **etapa** (lo que se lanza) e **intento** (cada ejecución de un agente), *encargo* → **instrucciones**, *rol* → **etapa**, *candidato* → **instantánea** (en «Detalles técnicos»). Los nombres de las herramientas MCP y los valores guardados no cambian.
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.

@@ -175,9 +175,9 @@ export function NewTaskDialog({
             placeholder="automática"
           />
         </Field>
-        <Field label="Ejecución">
+        <Field label="Lote">
           <select value={runId} onChange={(event) => setRunId(event.target.value)}>
-            <option value="">Sin ejecución</option>
+            <option value="">Sin lote</option>
             {activeRuns.map((run) => (
               <option key={run.id} value={run.id}>
                 {run.title || run.id}
@@ -235,6 +235,9 @@ function parseChecks(text: string): string[] {
 export function DispatchDialog({
   task,
   checks,
+  initialRole,
+  initialPrompt,
+  promptSource,
   busy,
   onSubmit,
   onCancel,
@@ -242,24 +245,31 @@ export function DispatchDialog({
   task: DeliveryTask;
   /** The repo's verification commands, once loaded. */
   checks: string[] | null;
+  /** The stage to preselect, usually the task's next one. */
+  initialRole: string;
+  /** Instructions to start from, usually the previous stage's handoff. */
+  initialPrompt: string;
+  /** Where initialPrompt came from, shown under the field. */
+  promptSource: string | null;
   busy: boolean;
   onSubmit: (values: DispatchValues) => void;
   onCancel: () => void;
 }) {
   const defaultCodexModel = lastRuntimeCatalog()?.default_model ?? "";
-  const [role, setRole] = useState<string>("tests");
-  const [customRole, setCustomRole] = useState("");
+  const builtIn = DELIVERY_ROLES.some((choice) => choice.value === initialRole);
+  const [role, setRole] = useState<string>(builtIn ? initialRole : "custom");
+  const [customRole, setCustomRole] = useState(builtIn ? "" : initialRole);
   const [agent, setAgent] = useState<DeliveryAgent>("codex");
   const [model, setModel] = useState(defaultCodexModel);
   const [access, setAccess] = useState<DeliveryAccess>("workspace");
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(initialPrompt);
   const [checksText, setChecksText] = useState<string | null>(null);
   const shownChecks = checksText ?? (checks ?? []).join("\n");
   const limitedClaude = agent === "claude" && access === "workspace";
   const roleHint = DELIVERY_ROLES.find((choice) => choice.value === role)?.hint;
   return (
     <FormDialog
-      title={`Nuevo trabajo en ${task.key}`}
+      title={`Lanzar etapa en ${task.key}`}
       submitLabel="Poner en cola"
       busy={busy}
       wide
@@ -278,7 +288,7 @@ export function DispatchDialog({
       }}
     >
       <div className="delivery-field-row">
-        <Field label="Rol" hint={roleHint}>
+        <Field label="Etapa" hint={roleHint}>
           <select value={role} onChange={(event) => setRole(event.target.value)}>
             {DELIVERY_ROLES.map((choice) => (
               <option key={choice.value} value={choice.value}>
@@ -289,7 +299,7 @@ export function DispatchDialog({
           </select>
         </Field>
         {role === "custom" && (
-          <Field label="Nombre del rol">
+          <Field label="Nombre de la etapa">
             <input
               value={customRole}
               onChange={(event) => setCustomRole(event.target.value)}
@@ -341,14 +351,18 @@ export function DispatchDialog({
         </Field>
       )}
       <Field
-        label="Encargo"
-        hint="Tinto añade la tarea, el worktree, el rol y el formato del resultado."
+        label="Instrucciones"
+        hint={
+          promptSource
+            ? `Tomado de ${promptSource}. Puedes editarlo. Tinto añade la tarea, el worktree, la etapa y el formato del resultado.`
+            : "Tinto añade la tarea, el worktree, la etapa y el formato del resultado."
+        }
       >
         <textarea
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           rows={8}
-          placeholder="Qué debe hacer este trabajo y cómo comprobarlo."
+          placeholder="Qué debe hacer esta etapa y cómo comprobarlo."
           required
         />
       </Field>
@@ -399,20 +413,24 @@ export function ReleaseLeaseDialog({
   );
 }
 
-export function CoordinatorDialog({
+export function SettingsDialog({
+  capacity,
   endpoint,
   runs,
   repos,
   busy,
+  onCapacity,
   onCreateRun,
   onTakeover,
   onClose,
   onCancel,
 }: {
+  capacity: number;
   endpoint: DeliveryCoordinatorEndpoint | null;
   runs: DeliveryRun[];
   repos: RepoChoice[];
   busy: boolean;
+  onCapacity: (capacity: number) => void;
   onCreateRun: (repo: string, title: string) => void;
   onTakeover: (run: DeliveryRun) => void;
   onClose: (run: DeliveryRun) => void;
@@ -428,40 +446,36 @@ export function CoordinatorDialog({
     : "";
   const activeRuns = runs.filter((run) => run.status === "active");
   return (
-    <FormDialog title="Coordinador" wide onCancel={onCancel}>
+    <FormDialog title="Ajustes de Delivery" wide onCancel={onCancel}>
+      <Field
+        label="Agentes en paralelo"
+        hint="Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
+      >
+        <select
+          value={capacity}
+          disabled={busy}
+          onChange={(event) => onCapacity(Number(event.target.value))}
+        >
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <h3 className="delivery-dialog__subtitle">Lotes activos</h3>
       <p className="file-op-modal__body">
-        Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante MCP:
-        crea tareas, despacha trabajos y pide aprobaciones. Las aprobaciones siempre las decides tú
-        aquí.
+        Un lote agrupa las tareas que dirige un coordinador. Las aprobaciones siempre las decides
+        tú.
       </p>
-      {endpoint ? (
-        <>
-          <p className="file-op-modal__body">
-            Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
-            herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
-            fuera de Tinto.
-          </p>
-          <Field label="Claude Code">
-            <textarea readOnly rows={3} value={claude} className="delivery-code" />
-          </Field>
-          <Field label="Codex (config.toml)">
-            <textarea readOnly rows={3} value={codex} className="delivery-code" />
-          </Field>
-        </>
-      ) : (
-        <p className="file-op-modal__body">El API de coordinador no está disponible.</p>
-      )}
-      <h3 className="delivery-dialog__subtitle">Ejecuciones activas</h3>
-      {activeRuns.length === 0 && <p className="file-op-modal__body">Ninguna.</p>}
+      {activeRuns.length === 0 && <p className="file-op-modal__body">Ninguno.</p>}
       <ul className="delivery-run-list">
         {activeRuns.map((run) => (
           <li key={run.id}>
             <span>
               <strong>{run.title || run.id}</strong>
-              <small>
-                {run.owner ? `coordina ${run.owner}` : "sin coordinador"} · generación{" "}
-                {run.generation}
-              </small>
+              <small>{run.owner ? `coordina ${run.owner}` : "sin coordinador"}</small>
             </span>
             <span className="delivery-run-list__actions">
               {run.owner && run.owner !== "user" && (
@@ -486,7 +500,7 @@ export function CoordinatorDialog({
             ))}
           </select>
         </Field>
-        <Field label="Nueva ejecución">
+        <Field label="Nuevo lote">
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
@@ -503,8 +517,31 @@ export function CoordinatorDialog({
           setTitle("");
         }}
       >
-        Crear ejecución
+        Crear lote
       </button>
+
+      <h3 className="delivery-dialog__subtitle">Conectar un coordinador</h3>
+      <p className="file-op-modal__body">
+        Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante MCP:
+        crea tareas, lanza etapas y pide aprobaciones.
+      </p>
+      {endpoint ? (
+        <>
+          <p className="file-op-modal__body">
+            Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
+            herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
+            fuera de Tinto.
+          </p>
+          <Field label="Claude Code">
+            <textarea readOnly rows={3} value={claude} className="delivery-code" />
+          </Field>
+          <Field label="Codex (config.toml)">
+            <textarea readOnly rows={3} value={codex} className="delivery-code" />
+          </Field>
+        </>
+      ) : (
+        <p className="file-op-modal__body">El API de coordinador no está disponible.</p>
+      )}
     </FormDialog>
   );
 }
