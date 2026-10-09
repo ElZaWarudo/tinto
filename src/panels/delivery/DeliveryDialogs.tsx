@@ -90,6 +90,16 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
   );
 }
 
+/** The same repo, whether or not the path carries Windows' `\\?\` prefix. */
+function samePath(a: string, b: string): boolean {
+  const plain = (path: string) =>
+    path
+      .replace(/^\\\\\?\\/, "")
+      .replace(/\//g, "\\")
+      .toLowerCase();
+  return plain(a) === plain(b);
+}
+
 export interface NewTaskValues {
   repo: RepoChoice;
   key: string;
@@ -118,10 +128,14 @@ export function NewTaskDialog({
   const [title, setTitle] = useState("");
   const [base, setBase] = useState("");
   const [branch, setBranch] = useState("");
-  const [runId, setRunId] = useState("");
+  const [runChoice, setRunChoice] = useState<string | null>(null);
   const [bootstrap, setBootstrap] = useState("");
   const repo = repos.find((choice) => choice.path === repoPath);
-  const activeRuns = runs.filter((run) => run.status === "active" && run.repo === repoPath);
+  const activeRuns = runs
+    .filter((run) => run.status === "active" && samePath(run.repo, repoPath))
+    .sort((a, b) => b.created_at_ms - a.created_at_ms);
+  // The repo's most recent active batch, until the user picks another or none.
+  const runId = runChoice ?? activeRuns[0]?.id ?? "";
   const branchPlaceholder = `delivery/${key.trim().toLowerCase() || "clave"}`;
   return (
     <FormDialog
@@ -135,7 +149,13 @@ export function NewTaskDialog({
       }}
     >
       <Field label="Repositorio">
-        <select value={repoPath} onChange={(event) => setRepoPath(event.target.value)}>
+        <select
+          value={repoPath}
+          onChange={(event) => {
+            setRepoPath(event.target.value);
+            setRunChoice(null);
+          }}
+        >
           {repos.map((choice) => (
             <option key={choice.path} value={choice.path}>
               {choice.label}
@@ -177,7 +197,7 @@ export function NewTaskDialog({
           />
         </Field>
         <Field label="Lote">
-          <select value={runId} onChange={(event) => setRunId(event.target.value)}>
+          <select value={runId} onChange={(event) => setRunChoice(event.target.value)}>
             <option value="">Sin lote</option>
             {activeRuns.map((run) => (
               <option key={run.id} value={run.id}>
@@ -460,6 +480,41 @@ export function ReleaseLeaseDialog({
   );
 }
 
+const MASK = "••••••••";
+
+/** A setup snippet whose secret stays hidden; the button copies it whole. */
+function CopySnippet({ label, shown, copied }: { label: string; shown: string; copied: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  return (
+    <div className="delivery-field">
+      <span className="delivery-field__label">{label}</span>
+      <pre className="delivery-code delivery-snippet">{shown}</pre>
+      <div className="delivery-actions">
+        <button
+          type="button"
+          className="file-op-modal__button"
+          aria-label={`Copiar la configuración de ${label}`}
+          onClick={() =>
+            navigator.clipboard
+              .writeText(copied)
+              .then(() => setState("copied"))
+              .catch(() => setState("failed"))
+          }
+        >
+          Copiar
+        </button>
+        <span className="delivery-field__hint" role="status">
+          {state === "copied"
+            ? "Copiado, con el token."
+            : state === "failed"
+              ? "No se pudo copiar."
+              : "El token no se muestra; se copia con el botón."}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsDialog({
   capacity,
   endpoint,
@@ -485,12 +540,16 @@ export function SettingsDialog({
 }) {
   const [repo, setRepo] = useState(repos[0]?.path ?? "");
   const [title, setTitle] = useState("");
-  const claude = endpoint
-    ? `claude mcp add --transport http tinto-delivery ${endpoint.url} --header "Authorization: Bearer ${endpoint.token}"`
-    : "";
-  const codex = endpoint
-    ? `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${endpoint.token}" }`
-    : "";
+  // The token is a credential: the dialog shows it masked and only the copy
+  // buttons carry it.
+  const claude = (token: string) =>
+    endpoint
+      ? `claude mcp add --transport http tinto-delivery ${endpoint.url} --header "Authorization: Bearer ${token}"`
+      : "";
+  const codex = (token: string) =>
+    endpoint
+      ? `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`
+      : "";
   const activeRuns = runs.filter((run) => run.status === "active");
   return (
     <FormDialog title="Ajustes de Delivery" wide onCancel={onCancel}>
@@ -526,11 +585,21 @@ export function SettingsDialog({
             </span>
             <span className="delivery-run-list__actions">
               {run.owner && run.owner !== "user" && (
-                <button type="button" disabled={busy} onClick={() => onTakeover(run)}>
+                <button
+                  type="button"
+                  aria-label={`Tomar el control del lote ${run.title || run.id}`}
+                  disabled={busy}
+                  onClick={() => onTakeover(run)}
+                >
                   Tomar el control
                 </button>
               )}
-              <button type="button" disabled={busy} onClick={() => onClose(run)}>
+              <button
+                type="button"
+                aria-label={`Cerrar el lote ${run.title || run.id}`}
+                disabled={busy}
+                onClick={() => onClose(run)}
+              >
                 Cerrar
               </button>
             </span>
@@ -579,12 +648,12 @@ export function SettingsDialog({
             herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
             fuera de Tinto.
           </p>
-          <Field label="Claude Code">
-            <textarea readOnly rows={3} value={claude} className="delivery-code" />
-          </Field>
-          <Field label="Codex (config.toml)">
-            <textarea readOnly rows={3} value={codex} className="delivery-code" />
-          </Field>
+          <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
+          <CopySnippet
+            label="Codex (config.toml)"
+            shown={codex(MASK)}
+            copied={codex(endpoint.token)}
+          />
         </>
       ) : (
         <p className="file-op-modal__body">El API de coordinador no está disponible.</p>

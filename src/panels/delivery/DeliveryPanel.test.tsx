@@ -528,7 +528,9 @@ describe("DeliveryPanel", () => {
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "3 lotes activos" }));
     const dialog = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
-    expect(within(dialog).getAllByRole("button", { name: "Tomar el control" })).toHaveLength(3);
+    expect(
+      within(dialog).getAllByRole("button", { name: /^Tomar el control del lote/ }),
+    ).toHaveLength(3);
   });
 
   it("waits for the user's decisions before any stage runs", async () => {
@@ -650,5 +652,47 @@ describe("DeliveryPanel", () => {
       expect(screen.getByRole("region", { name: "Decisiones" })).toHaveTextContent("Sí"),
     );
     expect(screen.getByRole("heading", { name: /DEC-1/ })).toBeInTheDocument();
+  });
+
+  it("names each batch's buttons and never shows the coordinator token", async () => {
+    const user = userEvent.setup();
+    const batch = (id: string, title: string, created: number) => ({
+      id,
+      // As the interface stores it, with Windows' verbatim prefix.
+      repo: "\\\\?\\" + REPO,
+      title,
+      status: "active",
+      generation: 1,
+      owner: id === "r1" ? "coord" : null,
+      created_at_ms: created,
+      updated_at_ms: created,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ runs: [batch("r1", "Lote A", 1), batch("r2", "Lote B", 2)] }),
+    );
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
+    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    expect(
+      within(settings).getByRole("button", { name: "Cerrar el lote Lote A" }),
+    ).toBeInTheDocument();
+    expect(
+      within(settings).getByRole("button", { name: "Cerrar el lote Lote B" }),
+    ).toBeInTheDocument();
+    expect(
+      within(settings).getByRole("button", { name: "Tomar el control del lote Lote A" }),
+    ).toBeInTheDocument();
+    expect(settings).not.toHaveTextContent("secret");
+    await user.click(
+      within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
+    );
+    expect(await navigator.clipboard.readText()).toContain("Bearer secret");
+    expect(within(settings).getByText("Copiado, con el token.")).toBeInTheDocument();
+    await user.click(within(settings).getByRole("button", { name: "Cerrar" }));
+
+    // New tasks go to the repo's most recent active batch by default.
+    await user.click(screen.getByRole("button", { name: "Nueva tarea" }));
+    const dialog = screen.getByRole("dialog", { name: "Nueva tarea" });
+    expect(within(dialog).getByRole("combobox", { name: "Lote" })).toHaveValue("r2");
   });
 });

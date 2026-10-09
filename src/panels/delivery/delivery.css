@@ -869,6 +869,14 @@
   font-family: var(--font-mono, monospace);
   font-size: 12px;
 }
+.delivery-snippet {
+  margin: 0;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
 .file-op-modal__button.delivery-dialog__submit {
   background: var(--accent);
   border-color: var(--accent);
