@@ -40,13 +40,17 @@ const WSL_JOB_FILE: &str = "wsl-job.json";
 /// How long a WSL job gets to exit after `TERM` before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
+/// The stage that gets QA tools: network, the main checkout, QA commands
+/// and, when the repo enables it, a browser.
+pub const QA_ROLE: &str = "qa";
+
 /// Roles of the built-in flow (backlog-delivery's stages) and their defaults.
 pub fn role_defaults(role: &str) -> (bool, Option<&'static str>, u32) {
     match role {
         "tests" => (true, None, 45),
         "implementation" => (true, None, 60),
         "review" => (false, None, 30),
-        "qa" => (false, Some("qa"), 60),
+        QA_ROLE => (false, Some("qa"), 60),
         "bootstrap" => (true, None, 30),
         _ => (true, None, 60),
     }
@@ -496,12 +500,19 @@ impl DeliveryService {
                 .flatten(),
             model => model,
         };
+        let settings = store.repo_settings(&task.repo)?;
+        let qa = role == QA_ROLE;
         let allowed_commands = match (request.agent, request.access) {
             (DeliveryAgent::Claude, DeliveryAccess::Workspace) => {
-                store.repo_settings(&task.repo)?.checks
+                let mut commands = settings.checks;
+                if qa {
+                    commands.extend(settings.qa_commands);
+                }
+                commands
             }
             _ => Vec::new(),
         };
+        let qa_browser = qa && settings.qa_browser;
         let attempt = store
             .task_jobs(&task.id)?
             .iter()
@@ -543,6 +554,7 @@ impl DeliveryService {
             result_note: None,
             undone_at_ms: None,
             allowed_commands,
+            qa_browser,
         };
         store.put_job(&job)?;
         store.record_event(

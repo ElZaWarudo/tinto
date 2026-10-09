@@ -262,6 +262,12 @@ pub fn delivery_set_repo_settings(
             .into_iter()
             .filter_map(|check| clean(Some(check)))
             .collect(),
+        qa_commands: settings
+            .qa_commands
+            .into_iter()
+            .filter_map(|command| clean(Some(command)))
+            .collect(),
+        qa_browser: settings.qa_browser,
     };
     service
         .store()

@@ -78,6 +78,8 @@ export interface DeliveryJob {
   undone_at_ms: number | null;
   /** Commands a Claude job without full access may run. */
   allowed_commands?: string[];
+  /** QA jobs: whether it had a browser. */
+  qa_browser?: boolean;
 }
 
 export interface DeliveryLeaseWaiter {
@@ -132,6 +134,10 @@ export interface DeliveryRepoSettings {
   default_base: string | null;
   /** Verification commands; Claude jobs without full access may run only these. */
   checks?: string[];
+  /** More commands QA jobs may run (e.g. the CLI an issue changes). */
+  qa_commands?: string[];
+  /** Whether QA jobs get a headless browser. */
+  qa_browser?: boolean;
 }
 
 export interface DeliveryCoordinatorEndpoint {

@@ -38,6 +38,7 @@ import type {
   DeliveryJob,
   DeliveryJobLog,
   DeliveryOverview,
+  DeliveryRepoSettings,
   DeliveryRun,
   DeliveryRung,
   DeliveryTask,
@@ -234,7 +235,7 @@ export function DeliveryPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [repoChecks, setRepoChecks] = useState<string[] | null>(null);
+  const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
 
   const refresh = useCallback(
     () =>
@@ -498,10 +499,9 @@ export function DeliveryPanel() {
               busy={busy}
               run={run}
               onDispatch={(role, prompt, source) => {
-                setRepoChecks(null);
-                getDeliveryRepoSettings(selectedTask.repo).then(
-                  (settings) => setRepoChecks(settings.checks ?? []),
-                  () => setRepoChecks([]),
+                setRepoSettings(null);
+                getDeliveryRepoSettings(selectedTask.repo).then(setRepoSettings, () =>
+                  setRepoSettings({ worktree_root: null, bootstrap: null, default_base: null }),
                 );
                 setDialog({ kind: "dispatch", task: selectedTask, role, prompt, source });
               }}
@@ -566,7 +566,7 @@ export function DeliveryPanel() {
       {dialog?.kind === "dispatch" && (
         <DispatchDialog
           task={dialog.task}
-          checks={repoChecks}
+          settings={repoSettings}
           initialRole={dialog.role}
           initialPrompt={dialog.prompt}
           promptSource={dialog.source}
@@ -586,11 +586,11 @@ export function DeliveryPanel() {
                 if (!ok) return;
               }
               const done = await run(async () => {
-                if (values.checks) {
+                if (values.settings) {
                   const current = await getDeliveryRepoSettings(dialog.task.repo);
                   await setDeliveryRepoSettings(dialog.task.repo, {
                     ...current,
-                    checks: values.checks,
+                    ...values.settings,
                   });
                 }
                 return dispatchDeliveryJob({
@@ -1255,7 +1255,9 @@ function JobRow({
   onContinue: () => void;
 }) {
   const outcome = attemptOutcome(job);
-  const scope = job.access === "full" ? " · acceso completo" : job.writes ? "" : " · solo lectura";
+  const scope =
+    (job.access === "full" ? " · acceso completo" : job.writes ? "" : " · solo lectura") +
+    (job.qa_browser ? " · navegador" : "");
   return (
     <li className="delivery-job">
       <button

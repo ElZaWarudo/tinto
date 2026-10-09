@@ -115,7 +115,7 @@ fn harness_with_store(store: DeliveryStore) -> Harness {
                 worktree_root: Some(worktrees.path().to_path_buf()),
                 bootstrap: None,
                 default_base: None,
-                checks: Vec::new(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -287,6 +287,50 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
         .unwrap();
     assert!(full.allowed_commands.is_empty());
     h.wait(&full.id);
+}
+
+#[test]
+fn only_qa_jobs_get_the_qa_commands_and_the_browser() {
+    let h = harness();
+    let task = h.task("K-10");
+    let settings = DeliveryRepoSettings {
+        checks: vec!["npm test".into()],
+        qa_commands: vec!["agentos skills install".into()],
+        qa_browser: true,
+        ..h.service
+            .store()
+            .unwrap()
+            .repo_settings(h.repo.path())
+            .unwrap()
+    };
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let new_job = |role: &str| NewJob {
+        task_id: task.id.clone(),
+        role: role.into(),
+        agent: DeliveryAgent::Claude,
+        model: None,
+        access: DeliveryAccess::Workspace,
+        prompt: "events=claude-ok".into(),
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+    };
+    let review = h.service.dispatch(new_job("review")).unwrap();
+    assert_eq!(review.allowed_commands, vec!["npm test".to_string()]);
+    assert!(!review.qa_browser);
+    h.wait(&review.id);
+    let qa = h.service.dispatch(new_job("qa")).unwrap();
+    assert_eq!(
+        qa.allowed_commands,
+        vec!["npm test".to_string(), "agentos skills install".to_string()]
+    );
+    assert!(qa.qa_browser);
+    assert_eq!(qa.lease.as_deref(), Some("qa"));
+    h.wait(&qa.id);
 }
 
 #[test]

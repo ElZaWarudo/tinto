@@ -723,6 +723,22 @@
   font-size: 11px;
   color: var(--fg-muted);
 }
+.delivery-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.delivery-check input {
+  margin: 3px 0 0;
+}
+.delivery-check span {
+  display: grid;
+  gap: 2px;
+}
+.delivery-check small {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
 .delivery-field input,
 .delivery-field select,
 .delivery-field textarea {

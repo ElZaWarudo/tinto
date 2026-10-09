@@ -8,6 +8,7 @@ import type {
   DeliveryAccess,
   DeliveryAgent,
   DeliveryCoordinatorEndpoint,
+  DeliveryRepoSettings,
   DeliveryRun,
   DeliveryTask,
 } from "../../delivery/types";
@@ -212,7 +213,11 @@ const DELIVERY_ROLES = [
     label: "Revisión",
     hint: "Solo lectura: revisa alcance, estilo y corrección.",
   },
-  { value: "qa", label: "QA", hint: "Solo lectura y exclusivo: usa el recurso QA mientras corre." },
+  {
+    value: "qa",
+    label: "QA",
+    hint: "Exclusiva y de solo lectura en el worktree. Tiene red y puede leer el checkout principal.",
+  },
 ] as const;
 
 export interface DispatchValues {
@@ -221,8 +226,8 @@ export interface DispatchValues {
   model: string;
   access: DeliveryAccess;
   prompt: string;
-  /** The repo's verification commands when they were edited, else null. */
-  checks: string[] | null;
+  /** Repo settings edited in the dialog, to save before queueing; null when untouched. */
+  settings: Pick<DeliveryRepoSettings, "checks" | "qa_commands" | "qa_browser"> | null;
 }
 
 function parseChecks(text: string): string[] {
@@ -234,7 +239,7 @@ function parseChecks(text: string): string[] {
 
 export function DispatchDialog({
   task,
-  checks,
+  settings,
   initialRole,
   initialPrompt,
   promptSource,
@@ -243,8 +248,8 @@ export function DispatchDialog({
   onCancel,
 }: {
   task: DeliveryTask;
-  /** The repo's verification commands, once loaded. */
-  checks: string[] | null;
+  /** The repo's settings (checks and QA tools), once loaded. */
+  settings: DeliveryRepoSettings | null;
   /** The stage to preselect, usually the task's next one. */
   initialRole: string;
   /** Instructions to start from, usually the previous stage's handoff. */
@@ -264,8 +269,13 @@ export function DispatchDialog({
   const [access, setAccess] = useState<DeliveryAccess>("workspace");
   const [prompt, setPrompt] = useState(initialPrompt);
   const [checksText, setChecksText] = useState<string | null>(null);
-  const shownChecks = checksText ?? (checks ?? []).join("\n");
+  const [qaCommandsText, setQaCommandsText] = useState<string | null>(null);
+  const [qaBrowser, setQaBrowser] = useState<boolean | null>(null);
+  const shownChecks = checksText ?? (settings?.checks ?? []).join("\n");
+  const shownQaCommands = qaCommandsText ?? (settings?.qa_commands ?? []).join("\n");
+  const shownQaBrowser = qaBrowser ?? settings?.qa_browser ?? false;
   const limitedClaude = agent === "claude" && access === "workspace";
+  const qa = role === "qa";
   const roleHint = DELIVERY_ROLES.find((choice) => choice.value === role)?.hint;
   return (
     <FormDialog
@@ -283,7 +293,14 @@ export function DispatchDialog({
           model: model.trim(),
           access,
           prompt,
-          checks: checksText === null ? null : parseChecks(checksText),
+          settings:
+            checksText === null && qaCommandsText === null && qaBrowser === null
+              ? null
+              : {
+                  checks: parseChecks(shownChecks),
+                  qa_commands: parseChecks(shownQaCommands),
+                  qa_browser: shownQaBrowser,
+                },
         });
       }}
     >
@@ -347,6 +364,36 @@ export function DispatchDialog({
             onChange={(event) => setChecksText(event.target.value)}
             rows={3}
             placeholder={"npm test\nnpm run lint"}
+          />
+        </Field>
+      )}
+      {qa && (
+        <label className="delivery-check">
+          <input
+            type="checkbox"
+            checked={shownQaBrowser}
+            onChange={(event) => setQaBrowser(event.target.checked)}
+          />
+          <span>
+            Navegador para la QA
+            <small>
+              Un navegador sin interfaz (Playwright) en Windows, con un perfil limpio; ve los
+              servicios publicados en localhost. Las capturas se guardan con el trabajo, fuera del
+              worktree. Se recuerda para este repositorio.
+            </small>
+          </span>
+        </label>
+      )}
+      {qa && limitedClaude && (
+        <Field
+          label="Comandos de QA"
+          hint="Uno por línea, con cualquier argumento: lo que la QA necesita además de los comandos de arriba, por ejemplo la CLI que cambia el issue. Pueden escribir fuera del worktree, aunque Claude Code sigue bloqueando sus propios comandos de archivos (cat, touch, rm…) fuera del worktree y del checkout principal. Se guardan para este repositorio."
+        >
+          <textarea
+            value={shownQaCommands}
+            onChange={(event) => setQaCommandsText(event.target.value)}
+            rows={2}
+            placeholder={"agentos skills install"}
           />
         </Field>
       )}

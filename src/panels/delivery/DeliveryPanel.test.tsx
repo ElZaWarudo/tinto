@@ -258,8 +258,52 @@ describe("DeliveryPanel", () => {
       bootstrap: "npm ci",
       default_base: null,
       checks: ["npm test", "npm run lint"],
+      qa_commands: [],
+      qa_browser: false,
     });
     expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("gives the QA stage a browser and QA commands, saved for the repo", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      checks: ["npm test"],
+    });
+    client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Otra etapa…" }));
+    const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
+    expect(within(dialog).queryByRole("checkbox", { name: /Navegador para la QA/ })).toBeNull();
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: /Etapa/ }), "qa");
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "claude");
+    const browser = within(dialog).getByRole("checkbox", { name: /Navegador para la QA/ });
+    expect(browser).not.toBeChecked();
+    await user.click(browser);
+    await user.type(
+      within(dialog).getByRole("textbox", { name: /Comandos de QA/ }),
+      "agentos skills install",
+    );
+    await user.type(
+      within(dialog).getByPlaceholderText("Qué debe hacer esta etapa y cómo comprobarlo."),
+      "Run the QA matrix",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
+    await waitFor(() => expect(client.dispatchDeliveryJob).toHaveBeenCalled());
+    expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
+      REPO,
+      expect.objectContaining({
+        checks: ["npm test"],
+        qa_commands: ["agentos skills install"],
+        qa_browser: true,
+      }),
+    );
+    expect(client.dispatchDeliveryJob).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "qa", agent: "claude" }),
+    );
   });
 
   it("reports the catalog's default model for Codex jobs that name none", async () => {

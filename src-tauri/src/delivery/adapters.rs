@@ -14,8 +14,13 @@ use serde_json::Value;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry, DeliveryTask,
 };
+use super::service::QA_ROLE;
 use super::tasks::{git, plain_path, Place};
 use super::DeliveryError;
+
+/// The browser QA jobs get, pinned so a new release cannot change a run.
+pub const PLAYWRIGHT_MCP: &str = "@playwright/mcp@0.0.82";
+const BROWSER_SERVER: &str = "playwright";
 
 /// Shape of the result every agent job ends with; Codex and Claude both
 /// enforce it on the final answer.
@@ -49,6 +54,9 @@ pub struct JobPaths {
     pub stderr: PathBuf,
     pub result: PathBuf,
     pub schema: PathBuf,
+    /// Where a QA job's browser saves screenshots, outside the worktree.
+    pub qa_output: PathBuf,
+    pub qa_browser_script: PathBuf,
 }
 
 impl JobPaths {
@@ -67,6 +75,8 @@ impl JobPaths {
             stderr: dir.join("stderr.log"),
             result: dir.join("result.json"),
             schema: dir.join("result.schema.json"),
+            qa_output: dir.join("qa"),
+            qa_browser_script: dir.join("qa-browser.mjs"),
             dir,
         }
     }
@@ -118,6 +128,17 @@ pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
     ];
     if !job.writes {
         lines.push("This job is read-only: do not modify, create or delete files.".to_string());
+    }
+    if job.role == QA_ROLE {
+        lines.push(format!(
+            "This is the QA stage: you have network access and can read the main checkout at {} (for example the project's local QA configuration). Do not change it.",
+            plain_path(&task.repo)
+        ));
+        if job.qa_browser {
+            lines.push(format!(
+                "You have a headless browser with a fresh profile through the {BROWSER_SERVER} MCP tools. The screenshots it saves go to the job's folder, outside the worktree; name them in the result's checks."
+            ));
+        }
     }
     if job.agent == DeliveryAgent::Claude && job.access == DeliveryAccess::Workspace {
         if job.allowed_commands.is_empty() {
@@ -189,6 +210,7 @@ fn codex_launch(
             if let Some(model) = job.model.as_deref() {
                 args.extend(["-m".to_string(), model.to_string()]);
             }
+            args.extend(codex_qa_overrides(job, false, paths)?);
             args.push("-".to_string());
             Ok(JobLaunch {
                 program,
@@ -205,8 +227,12 @@ fn codex_launch(
                 .as_deref()
                 .map(|model| format!(" -m {}", sh_quote(model)))
                 .unwrap_or_default();
+            let qa: String = codex_qa_overrides(job, true, paths)?
+                .iter()
+                .map(|value| format!(" {}", sh_quote(value)))
+                .collect();
             let script = format!(
-                "exec codex exec --json -C {} -s {sandbox} --output-schema {} -o {}{model} -",
+                "exec codex exec --json -C {} -s {sandbox} --output-schema {} -o {}{model}{qa} -",
                 sh_quote(&task.worktree.to_string_lossy()),
                 sh_quote(&wsl_path(&paths.schema)?),
                 sh_quote(&wsl_path(&paths.result)?),
@@ -261,6 +287,13 @@ fn claude_launch(
         if let Some(model) = job.model.as_deref() {
             args.extend(["--model".to_string(), model.to_string()]);
         }
+        args.extend(claude_qa_args(
+            job,
+            &plain_path(&task.repo),
+            &plain_path(&paths.qa_output),
+            false,
+            paths,
+        )?);
         if !allowed.is_empty() {
             args.push("--allowedTools".to_string());
             args.extend(allowed);
@@ -318,8 +351,22 @@ fn claude_launch(
         )
     })
     .unwrap_or_default();
+    let main_checkout = match task.distro {
+        Some(_) => task.repo.to_string_lossy().into_owned(),
+        None => wsl_path(&task.repo)?,
+    };
+    let qa: String = claude_qa_args(
+        job,
+        &main_checkout,
+        &wsl_path(&paths.qa_output)?,
+        true,
+        paths,
+    )?
+    .iter()
+    .map(|value| format!(" {}", sh_quote(value)))
+    .collect();
     let script = format!(
-        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{allowed}",
+        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{qa}{allowed}",
         sh_quote(&wsl_path(&paths.schema)?)
     );
     wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)
@@ -333,12 +380,115 @@ fn claude_allowed_tools(job: &DeliveryJob) -> Vec<String> {
     if job.access == DeliveryAccess::Full {
         return Vec::new();
     }
-    ["git status", "git diff", "git log"]
+    let mut tools: Vec<String> = ["git status", "git diff", "git log"]
         .into_iter()
         .map(str::to_string)
         .chain(job.allowed_commands.iter().cloned())
         .map(|command| format!("Bash({command}:*)"))
-        .collect()
+        .collect();
+    if job.qa_browser {
+        tools.push(format!("mcp__{BROWSER_SERVER}"));
+    }
+    tools
+}
+
+/// Wraps Playwright MCP for QA jobs (see the file's header).
+const QA_BROWSER_SCRIPT: &str = include_str!("qa_browser.mjs");
+
+/// How the browser MCP server starts. On Windows it always runs on the
+/// Windows side, also for agents in WSL: that is where Chrome is and where
+/// Docker Desktop publishes the app under test, and WSL may have no Node.
+fn browser_server(
+    from_wsl: bool,
+    paths: &JobPaths,
+) -> Result<(String, Vec<String>), DeliveryError> {
+    std::fs::create_dir_all(&paths.qa_output).map_err(DeliveryError::io)?;
+    std::fs::write(&paths.qa_browser_script, QA_BROWSER_SCRIPT).map_err(DeliveryError::io)?;
+    let args = vec![
+        plain_path(&paths.qa_browser_script),
+        plain_path(&paths.qa_output),
+        PLAYWRIGHT_MCP.to_string(),
+    ];
+    if !cfg!(windows) {
+        return Ok(("node".to_string(), args));
+    }
+    let cmd = if from_wsl {
+        "/mnt/c/Windows/System32/cmd.exe"
+    } else {
+        "cmd"
+    };
+    let mut wrapped = vec!["/c".to_string(), "node".to_string()];
+    wrapped.extend(args);
+    Ok((cmd.to_string(), wrapped))
+}
+
+/// A Claude QA job reads the main checkout and its own QA folder (to look at
+/// its screenshots) and, when enabled, gets the browser. Paths are as the
+/// agent sees them; `from_wsl` says whether it runs in WSL.
+fn claude_qa_args(
+    job: &DeliveryJob,
+    main_checkout: &str,
+    qa_output: &str,
+    from_wsl: bool,
+    paths: &JobPaths,
+) -> Result<Vec<String>, DeliveryError> {
+    if job.role != QA_ROLE {
+        return Ok(Vec::new());
+    }
+    let mut args = vec![
+        "--add-dir".to_string(),
+        main_checkout.to_string(),
+        qa_output.to_string(),
+    ];
+    if job.qa_browser {
+        let (command, server_args) = browser_server(from_wsl, paths)?;
+        args.push("--mcp-config".to_string());
+        args.push(
+            serde_json::json!({
+                "mcpServers": {
+                    BROWSER_SERVER: { "type": "stdio", "command": command, "args": server_args }
+                }
+            })
+            .to_string(),
+        );
+    }
+    Ok(args)
+}
+
+/// `-c` overrides for a Codex QA job: network in the sandbox and, when
+/// enabled, the browser, pre-approved because `exec` has no one to ask.
+fn codex_qa_overrides(
+    job: &DeliveryJob,
+    from_wsl: bool,
+    paths: &JobPaths,
+) -> Result<Vec<String>, DeliveryError> {
+    if job.role != QA_ROLE {
+        return Ok(Vec::new());
+    }
+    let mut values = vec!["sandbox_workspace_write.network_access=true".to_string()];
+    if job.qa_browser {
+        // `-c` values are TOML; JSON strings are valid TOML basic strings.
+        let text = |value: &str| Value::from(value).to_string();
+        let key = |name: &str| format!("mcp_servers.{BROWSER_SERVER}.{name}");
+        let (command, args) = browser_server(from_wsl, paths)?;
+        values.push(format!("{}={}", key("command"), text(&command)));
+        values.push(format!(
+            "{}=[{}]",
+            key("args"),
+            args.iter()
+                .map(|arg| text(arg))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        values.push(format!(
+            "{}=\"approve\"",
+            key("default_tools_approval_mode")
+        ));
+    }
+    Ok(values
+        .into_iter()
+        .flat_map(|value| ["-c".to_string(), value])
+        .collect())
 }
 
 fn shell_launch(
@@ -794,6 +944,7 @@ mod tests {
             result_note: None,
             undone_at_ms: None,
             allowed_commands: Vec::new(),
+            qa_browser: false,
         }
     }
 
@@ -923,6 +1074,82 @@ mod tests {
         assert!(launch
             .stdin
             .contains("You can run read-only shell commands only"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn qa_jobs_get_network_the_main_checkout_and_the_browser() {
+        let mut task = sample_task();
+        task.distro = Some("Ubuntu".into());
+        task.repo = PathBuf::from("/home/me/repo");
+        let dir = tempfile::tempdir().unwrap();
+        let paths = JobPaths::in_dir(dir.path().join("j1"));
+        let qa_output = wsl_path(&paths.qa_output).unwrap();
+        let mut job = sample_job(DeliveryAgent::Claude);
+        job.role = QA_ROLE.into();
+        job.writes = false;
+        job.qa_browser = true;
+        job.allowed_commands = vec!["agentos skills install".into()];
+        let launch = claude_launch(&job, &task, &paths, None).unwrap();
+        let script = launch.args.last().unwrap();
+        assert!(
+            script.contains(&format!(" '--add-dir' '/home/me/repo' '{qa_output}'")),
+            "{script}"
+        );
+        assert!(
+            script.contains(r#""command":"/mnt/c/Windows/System32/cmd.exe""#),
+            "{script}"
+        );
+        assert!(script.contains(r#""args":["/c","node","#), "{script}");
+        assert!(script.contains(r#""@playwright/mcp@0.0.82"]"#), "{script}");
+        assert!(
+            script.ends_with(" 'Bash(agentos skills install:*)' 'mcp__playwright'"),
+            "{script}"
+        );
+        assert!(paths.qa_output.is_dir());
+        assert_eq!(
+            std::fs::read_to_string(&paths.qa_browser_script).unwrap(),
+            QA_BROWSER_SCRIPT
+        );
+        assert!(launch.stdin.contains("main checkout at /home/me/repo"));
+        assert!(launch.stdin.contains("headless browser"));
+
+        let mut codex = sample_job(DeliveryAgent::Codex);
+        codex.role = QA_ROLE.into();
+        codex.qa_browser = true;
+        let launch = codex_launch(&codex, &task, &paths).unwrap();
+        let script = launch.args.last().unwrap();
+        assert!(
+            script.contains(" '-c' 'sandbox_workspace_write.network_access=true'"),
+            "{script}"
+        );
+        assert!(
+            script.contains(
+                r#" '-c' 'mcp_servers.playwright.command="/mnt/c/Windows/System32/cmd.exe"'"#
+            ),
+            "{script}"
+        );
+        assert!(
+            script.contains(r#"'mcp_servers.playwright.default_tools_approval_mode="approve"' -"#),
+            "{script}"
+        );
+
+        codex.role = "review".into();
+        let launch = codex_launch(&codex, &task, &paths).unwrap();
+        assert!(!launch.args.last().unwrap().contains("network_access"));
+        assert!(!launch.stdin.contains("QA stage"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn on_windows_the_browser_starts_through_cmd_and_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = JobPaths::in_dir(dir.path().join("j1"));
+        let (command, args) = browser_server(false, &paths).unwrap();
+        assert_eq!(command, "cmd");
+        assert_eq!(&args[..2], ["/c", "node"]);
+        assert_eq!(args[2], plain_path(&paths.qa_browser_script));
+        assert_eq!(args[3], plain_path(&paths.qa_output));
     }
 
     #[test]

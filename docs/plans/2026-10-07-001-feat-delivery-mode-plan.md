@@ -250,6 +250,16 @@ Tercera ronda (2026-10-08), por la interfaz con Pumarejo, que ya maneja los `<se
 - Ya no se cambia el estado de la tarea a mano: lo fija el coordinador y la vista solo lo muestra. Eliminar la tarea y subir la versión del contrato pasan al menú ⋯.
 - Vocabulario de la interfaz: *ejecución* → **lote**, *trabajo* → **etapa** (lo que se lanza) e **intento** (cada ejecución de un agente), *encargo* → **instrucciones**, *rol* → **etapa**, *candidato* → **instantánea** (en «Detalles técnicos»). Los nombres de las herramientas MCP y los valores guardados no cambian.
 
+**Herramientas de QA (2026-10-09).** Un trabajo de QA (`role: "qa"`) sigue siendo de solo lectura en el worktree y ahora recibe:
+
+- Red: Codex con `sandbox_workspace_write.network_access=true`. Claude Code no tiene sandbox de red.
+- Lectura del checkout principal (para la configuración local de QA, como `.agent/env/qa.env`) y de su carpeta de capturas: `--add-dir` en Claude; Codex ya puede leer fuera del worktree.
+- Los comandos de QA del repo, además de los de verificación: `--allowedTools` en Claude, como los checks.
+- Si el repo lo activa, un navegador: Playwright MCP (`@playwright/mcp@0.0.82`, sin interfaz y con perfil aislado) preaprobado. Corre siempre en Windows, también cuando el agente está en WSL, porque ahí están Chrome y los puertos que publica Docker Desktop, y WSL puede no tener Node. Lo arranca `qa_browser.mjs`, que lo ejecuta en la carpeta `qa` del trabajo y le oculta las *roots* del cliente: Claude Code las manda como rutas de WSL y Playwright guardaba las capturas con nombre en `C:\mnt\c\…` (o, con Claude nativo, en el worktree).
+- Se configura en "Lanzar etapa…" al elegir QA y se guarda por repo (`qa_browser`, `qa_commands`).
+
+Comprobado en la app con Pumarejo sobre el repo de pruebas. Claude Code en WSL: navegó, guardó una captura con nombre en la carpeta del trabajo y la abrió, listó el checkout principal y escribió fuera del worktree con un comando de QA (`python3 -c`). Codex en Windows: navegó y guardó la captura, y leyó el checkout principal. El worktree quedó limpio en todas las pruebas. Dos límites: Claude Code bloquea sus comandos de archivos (`cat`, `touch`…) fuera de sus carpetas aunque estén permitidos, y en el sandbox de Codex en Windows el HTTPS desde la shell falla (`SEC_E_NO_CREDENTIALS`), aunque el navegador y el HTTP plano funcionan.
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.

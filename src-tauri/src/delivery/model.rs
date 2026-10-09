@@ -144,9 +144,13 @@ pub struct DeliveryJob {
     pub result_note: Option<String>,
     pub undone_at_ms: Option<u64>,
     /// Shell commands a Claude job without full access may run, taken from
-    /// the repo's verification commands when the job was dispatched.
+    /// the repo's verification commands (and, for QA, its QA commands) when
+    /// the job was dispatched.
     #[serde(default)]
     pub allowed_commands: Vec<String>,
+    /// QA jobs only: a browser through Playwright's MCP server.
+    #[serde(default)]
+    pub qa_browser: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -251,6 +255,12 @@ pub struct DeliveryRepoSettings {
     /// without full access may run these and nothing else.
     #[serde(default)]
     pub checks: Vec<String>,
+    /// More commands QA jobs may run, such as the CLI an issue changes.
+    #[serde(default)]
+    pub qa_commands: Vec<String>,
+    /// Whether QA jobs get a browser.
+    #[serde(default)]
+    pub qa_browser: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
