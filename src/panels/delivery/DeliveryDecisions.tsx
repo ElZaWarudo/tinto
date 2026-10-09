@@ -2,7 +2,7 @@
 // texts and QA permissions, asked by the coordinator and answered here.
 // Answers are final; changing one is a new contract version.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { acceptRecommendedDecisions, answerDeliveryDecision } from "../../delivery/client";
 import type { DeliveryDecision } from "../../delivery/types";
 
@@ -206,33 +206,128 @@ export function PendingDecisions({
   );
 }
 
-function answerText(decision: DeliveryDecision): string {
-  if (decision.kind === "permission") {
-    return decision.answer === ALLOWED ? "Permitido" : "No permitido";
-  }
-  return decision.answer ?? "";
+function decidedOn(ms: number | null): string {
+  return ms ? new Date(ms).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "";
 }
 
-/** Who decided what and when, for the task's record. */
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** Who decided when, said once when it is the same for every decision. */
+function byLine(decisions: DeliveryDecision[]): string | null {
+  const people = new Set(decisions.map((decision) => who(decision.decided_by)));
+  const days = new Set(
+    decisions.map((decision) =>
+      decision.decided_at_ms ? new Date(decision.decided_at_ms).toDateString() : "",
+    ),
+  );
+  if (people.size !== 1 || days.size !== 1) return null;
+  const last = Math.max(...decisions.map((decision) => decision.decided_at_ms ?? 0));
+  return `decididas por ${[...people][0]} el ${decidedOn(last)}`;
+}
+
+function LogRow({
+  decision,
+  shared,
+  children,
+}: {
+  decision: DeliveryDecision;
+  shared: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <li>
+      <span className="delivery-decision-log__question">{decision.question}</span>
+      <span className="delivery-decision-log__answer">
+        {children}
+        {!shared && (
+          <small className="delivery-muted">
+            {who(decision.decided_by)} · {decidedOn(decision.decided_at_ms)}
+          </small>
+        )}
+      </span>
+    </li>
+  );
+}
+
+/** What was decided before the stages ran, folded by default: a summary
+ *  line, then choices, approved texts and permissions apart. */
 export function DecisionLog({ decisions }: { decisions: DeliveryDecision[] }) {
   if (decisions.length === 0) return null;
+  const choices = decisions.filter((decision) => decision.kind === "choice");
+  const texts = decisions.filter((decision) => decision.kind === "text");
+  const permissions = decisions.filter((decision) => decision.kind === "permission");
+  const by = byLine(decisions);
+  const counts = [
+    choices.length > 0 && plural(choices.length, "elección", "elecciones"),
+    texts.length > 0 && plural(texts.length, "texto", "textos"),
+    permissions.length > 0 && plural(permissions.length, "permiso", "permisos"),
+  ].filter(Boolean);
   return (
     <section className="delivery-section" aria-label="Decisiones">
-      <h3>Decisiones</h3>
-      <ul className="delivery-decision-log">
-        {decisions.map((decision) => (
-          <li key={decision.id}>
-            <span>{decision.question}</span>
-            <strong>{answerText(decision)}</strong>
-            <small>
-              {who(decision.decided_by)}
-              {decision.decided_at_ms
-                ? ` · ${new Date(decision.decided_at_ms).toLocaleString()}`
-                : ""}
-            </small>
-          </li>
-        ))}
-      </ul>
+      <details className="delivery-decision-log">
+        <summary>
+          <h3>Decisiones</h3>
+          <span className="delivery-muted">
+            {plural(decisions.length, "tomada", "tomadas")} · {counts.join(", ")}
+            {by ? ` · ${by}` : ""}
+          </span>
+        </summary>
+        {choices.length > 0 && (
+          <>
+            <h4 className="delivery-decisions__group">Elecciones</h4>
+            <ul>
+              {choices.map((decision) => {
+                const recommended = decision.options.find((option) => option.recommended);
+                return (
+                  <LogRow key={decision.id} decision={decision} shared={by !== null}>
+                    <strong>{decision.answer}</strong>
+                    {recommended && recommended.label !== decision.answer && (
+                      <span className="delivery-badge delivery-badge--muted">
+                        no era la recomendada
+                      </span>
+                    )}
+                  </LogRow>
+                );
+              })}
+            </ul>
+          </>
+        )}
+        {texts.length > 0 && (
+          <>
+            <h4 className="delivery-decisions__group">Textos aprobados</h4>
+            <ul>
+              {texts.map((decision) => (
+                <LogRow key={decision.id} decision={decision} shared={by !== null}>
+                  <pre className="delivery-decision-log__text">{decision.answer}</pre>
+                  {decision.answer !== decision.text && (
+                    <span className="delivery-badge delivery-badge--muted">editado</span>
+                  )}
+                </LogRow>
+              ))}
+            </ul>
+          </>
+        )}
+        {permissions.length > 0 && (
+          <>
+            <h4 className="delivery-decisions__group">Permisos</h4>
+            <ul>
+              {permissions.map((decision) => {
+                const allowed = decision.answer === ALLOWED;
+                return (
+                  <LogRow key={decision.id} decision={decision} shared={by !== null}>
+                    <strong className={allowed ? "delivery-tone--ok" : "delivery-tone--danger"}>
+                      {allowed ? "✓ Permitido" : "✕ No permitido"}
+                    </strong>
+                    {decision.command && <code>{decision.command}</code>}
+                  </LogRow>
+                );
+              })}
+            </ul>
+          </>
+        )}
+      </details>
     </section>
   );
 }

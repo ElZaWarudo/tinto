@@ -471,30 +471,84 @@
 .delivery-decision--permission {
   border-color: var(--warn);
 }
-.delivery-decision-log {
+.delivery-decision-log summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.delivery-decision-log summary h3 {
+  display: inline;
+}
+.delivery-decision-log summary {
   list-style: none;
-  margin: 0;
+}
+.delivery-decision-log summary::-webkit-details-marker {
+  display: none;
+}
+.delivery-decision-log summary::before {
+  content: "▸";
+  color: var(--fg-muted);
+}
+.delivery-decision-log[open] summary::before {
+  content: "▾";
+}
+.delivery-decision-log[open] summary {
+  margin-bottom: 4px;
+}
+.delivery-decision-log ul {
+  list-style: none;
+  margin: 0 0 6px;
   padding: 0;
   border: 1px solid var(--border);
 }
 .delivery-decision-log li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: baseline;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 4px 16px;
+  align-items: start;
   padding: 6px 10px;
 }
 .delivery-decision-log li + li {
   border-top: 1px solid var(--border);
 }
-.delivery-decision-log strong {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.delivery-decision-log small {
+.delivery-decision-log__question {
   color: var(--fg-muted);
   font-size: 12px;
-  white-space: nowrap;
+}
+.delivery-decision-log__answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.delivery-decision-log__answer strong {
+  font-weight: 600;
+}
+.delivery-decision-log__answer code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.delivery-decision-log__answer small {
+  font-size: 11px;
+}
+.delivery-decision-log__text {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.delivery-badge--muted {
+  border-color: var(--border);
+  color: var(--fg-muted);
 }
 
 /* ---------- Stage track ---------- */
@@ -941,7 +995,6 @@
   }
   .delivery-decision-log li {
     grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
   }
 }
 @container delivery-panel (max-width: 720px) {
