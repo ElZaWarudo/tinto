@@ -95,6 +95,9 @@ pub struct NewJob {
     pub writes: Option<bool>,
     pub lease: Option<String>,
     pub timeout_minutes: Option<u32>,
+    /// Reasoning effort (`low`, `medium`, `high`…); the CLI's default when
+    /// `None`.
+    pub reasoning: Option<String>,
 }
 
 /// How a job's process ended, before its result is evaluated.
@@ -355,6 +358,7 @@ impl DeliveryService {
                 writes: Some(true),
                 lease: None,
                 timeout_minutes: None,
+                reasoning: None,
             })?;
         } else {
             self.notify();
@@ -501,6 +505,18 @@ impl DeliveryService {
             ));
         }
         let (writes, lease, timeout) = role_defaults(&role);
+        let reasoning = request
+            .reasoning
+            .map(|effort| effort.trim().to_ascii_lowercase())
+            .filter(|effort| !effort.is_empty());
+        if let Some(effort) = reasoning.as_deref() {
+            if !effort.chars().all(|c| c.is_ascii_lowercase()) {
+                return Err(DeliveryError::new(
+                    "invalid_reasoning",
+                    format!("nivel de razonamiento desconocido: {effort}"),
+                ));
+            }
+        }
         let store = self.store()?;
         let model = match request.model.filter(|model| !model.trim().is_empty()) {
             None if request.agent == DeliveryAgent::Codex => store
@@ -597,6 +613,7 @@ impl DeliveryService {
             qa_browser,
             decisions: decision_notes,
             qa_environment,
+            reasoning,
         };
         store.put_job(&job)?;
         store.record_event(
@@ -679,6 +696,7 @@ impl DeliveryService {
             writes: Some(job.writes),
             lease: job.lease,
             timeout_minutes: Some(job.timeout_minutes),
+            reasoning: job.reasoning,
         })
     }
 

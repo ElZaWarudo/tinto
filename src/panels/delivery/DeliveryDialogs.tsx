@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { getDeliveryRepoSettings, setDeliveryRepoSettings } from "../../delivery/client";
 import { useAccessibleDialog } from "../../workbench/useAccessibleDialog";
-import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
+import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import type {
   DeliveryAccess,
   DeliveryAgent,
@@ -241,10 +241,70 @@ const DELIVERY_ROLES = [
   },
 ] as const;
 
+interface Choice {
+  value: string;
+  label: string;
+}
+
+const DEFAULT_EFFORT = "medium";
+const CLAUDE_MODELS: Choice[] = [
+  { value: "", label: "Predeterminado" },
+  { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "fable", label: "Fable" },
+];
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const CODEX_FALLBACK_EFFORTS = ["low", "medium", "high"];
+
+/** The models an agent offers. Codex's come from the catalog Agents keeps;
+ *  Sol 6.1 is the default when the account has it. */
+function modelChoices(agent: DeliveryAgent): { choices: Choice[]; preferred: string } {
+  if (agent !== "codex") return { choices: CLAUDE_MODELS, preferred: "" };
+  const catalog = lastRuntimeCatalog();
+  const models = catalog?.models ?? [];
+  if (models.length === 0)
+    return { choices: [{ value: "", label: "Predeterminado" }], preferred: "" };
+  const sol = models.find(
+    (model) =>
+      /sol/i.test(`${model.display_name} ${model.model}`) &&
+      /6\.1/.test(`${model.display_name} ${model.model}`),
+  );
+  const fallback = models.find(
+    (model) => model.model === catalog?.default_model || model.id === catalog?.default_model,
+  );
+  return {
+    choices: models.map((model) => ({
+      value: model.model,
+      label: model.display_name || model.model,
+    })),
+    preferred: (sol ?? fallback ?? models[0]).model,
+  };
+}
+
+/** Reasoning levels for an agent and model, and the one to preselect: medium
+ *  when the model supports it. */
+function effortChoices(
+  agent: DeliveryAgent,
+  model: string,
+): { choices: Choice[]; preferred: string } {
+  const values =
+    agent === "codex"
+      ? (lastRuntimeCatalog()
+          ?.models?.find((option) => option.model === model)
+          ?.supported_reasoning_efforts.map((effort) => effort.value) ?? CODEX_FALLBACK_EFFORTS)
+      : CLAUDE_EFFORTS;
+  const preferred = values.includes(DEFAULT_EFFORT) ? DEFAULT_EFFORT : (values[0] ?? "");
+  return {
+    choices: values.map((value) => ({ value, label: codexReasoningLabel(value) })),
+    preferred,
+  };
+}
+
 export interface DispatchValues {
   role: string;
   agent: DeliveryAgent;
   model: string;
+  reasoning: string;
   access: DeliveryAccess;
   prompt: string;
   /** Repo settings edited in the dialog, to save before queueing; null when untouched. */
@@ -281,12 +341,16 @@ export function DispatchDialog({
   onSubmit: (values: DispatchValues) => void;
   onCancel: () => void;
 }) {
-  const defaultCodexModel = lastRuntimeCatalog()?.default_model ?? "";
   const builtIn = DELIVERY_ROLES.some((choice) => choice.value === initialRole);
   const [role, setRole] = useState<string>(builtIn ? initialRole : "custom");
   const [customRole, setCustomRole] = useState(builtIn ? "" : initialRole);
   const [agent, setAgent] = useState<DeliveryAgent>("codex");
-  const [model, setModel] = useState(defaultCodexModel);
+  const [model, setModel] = useState(() => modelChoices("codex").preferred);
+  const [reasoning, setReasoning] = useState(
+    () => effortChoices("codex", modelChoices("codex").preferred).preferred,
+  );
+  const models = modelChoices(agent);
+  const efforts = effortChoices(agent, model);
   const [access, setAccess] = useState<DeliveryAccess>("workspace");
   const [prompt, setPrompt] = useState(initialPrompt);
   const [checksText, setChecksText] = useState<string | null>(null);
@@ -311,7 +375,8 @@ export function DispatchDialog({
         onSubmit({
           role: finalRole,
           agent,
-          model: model.trim(),
+          model,
+          reasoning,
           access,
           prompt,
           settings:
@@ -350,31 +415,55 @@ export function DispatchDialog({
             value={agent}
             onChange={(event) => {
               const next = event.target.value as DeliveryAgent;
+              const nextModel = modelChoices(next).preferred;
               setAgent(next);
-              setModel(next === "codex" ? defaultCodexModel : "");
+              setModel(nextModel);
+              setReasoning(effortChoices(next, nextModel).preferred);
             }}
           >
             <option value="codex">Codex</option>
             <option value="claude">Claude Code</option>
           </select>
         </Field>
+      </div>
+      <div className="delivery-field-row">
         <Field label="Modelo">
-          <input
+          <select
             value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder="predeterminado"
-          />
+            onChange={(event) => {
+              setModel(event.target.value);
+              const next = effortChoices(agent, event.target.value);
+              if (!next.choices.some((choice) => choice.value === reasoning)) {
+                setReasoning(next.preferred);
+              }
+            }}
+          >
+            {models.choices.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Razonamiento">
+          <select value={reasoning} onChange={(event) => setReasoning(event.target.value)}>
+            {efforts.choices.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Acceso">
+          <select
+            value={access}
+            onChange={(event) => setAccess(event.target.value as DeliveryAccess)}
+          >
+            <option value="workspace">Workspace</option>
+            <option value="full">Acceso completo</option>
+          </select>
         </Field>
       </div>
-      <Field label="Acceso">
-        <select
-          value={access}
-          onChange={(event) => setAccess(event.target.value as DeliveryAccess)}
-        >
-          <option value="workspace">Workspace</option>
-          <option value="full">Acceso completo</option>
-        </select>
-      </Field>
       {limitedClaude && (
         <Field
           label="Comandos que puede ejecutar"

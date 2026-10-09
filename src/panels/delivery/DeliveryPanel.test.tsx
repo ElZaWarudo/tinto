@@ -763,4 +763,74 @@ describe("DeliveryPanel", () => {
     );
     expect(await within(qa).findByText(/^Guardado para/)).toBeInTheDocument();
   });
+
+  it("picks the model and reasoning from selectors, Sol 6.1 at medium by default", async () => {
+    const user = userEvent.setup();
+    const effort = (value: string) => ({ value, description: value });
+    localStorage.setItem(
+      "tinto.agents.lastRuntimeCatalog",
+      JSON.stringify({
+        status: "ready",
+        source: "test",
+        updated_at_ms: 1,
+        default_model: "gpt-6-astra",
+        models: [
+          {
+            id: "gpt-6-astra",
+            model: "gpt-6-astra",
+            display_name: "GPT-6 Astra",
+            description: "",
+            supported_reasoning_efforts: [effort("low"), effort("high")],
+            default_reasoning_effort: "low",
+            is_default: true,
+          },
+          {
+            id: "gpt-6.1-sol",
+            model: "gpt-6.1-sol",
+            display_name: "GPT-6.1-Sol",
+            description: "",
+            supported_reasoning_efforts: [effort("low"), effort("medium"), effort("high")],
+            default_reasoning_effort: "low",
+            is_default: false,
+          },
+        ],
+      }),
+    );
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Otra etapa…" }));
+    const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
+    const model = within(dialog).getByRole("combobox", { name: "Modelo" });
+    const reasoning = within(dialog).getByRole("combobox", { name: "Razonamiento" });
+    expect(model).toHaveValue("gpt-6.1-sol");
+    expect(reasoning).toHaveValue("medium");
+
+    // Astra has no medium: the level falls back to one it supports.
+    await user.selectOptions(model, "gpt-6-astra");
+    expect(reasoning).toHaveValue("low");
+    await user.selectOptions(model, "gpt-6.1-sol");
+    await user.selectOptions(reasoning, "high");
+
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "claude");
+    expect(model).toHaveValue("");
+    expect(
+      within(model)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Predeterminado", "Opus", "Sonnet", "Fable"]);
+    expect(reasoning).toHaveValue("medium");
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "codex");
+    await user.type(
+      within(dialog).getByPlaceholderText("Qué debe hacer esta etapa y cómo comprobarlo."),
+      "Write the tests",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
+    await waitFor(() =>
+      expect(client.dispatchDeliveryJob).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "codex", model: "gpt-6.1-sol", reasoning: "medium" }),
+      ),
+    );
+    localStorage.removeItem("tinto.agents.lastRuntimeCatalog");
+  });
 });

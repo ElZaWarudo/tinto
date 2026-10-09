@@ -157,6 +157,7 @@ pub fn delivery_dispatch_job(
     writes: Option<bool>,
     lease: Option<String>,
     timeout_minutes: Option<u32>,
+    reasoning: Option<String>,
 ) -> Result<DeliveryJob, CommandError> {
     service
         .dispatch(NewJob {
@@ -169,6 +170,7 @@ pub fn delivery_dispatch_job(
             writes,
             lease,
             timeout_minutes,
+            reasoning,
         })
         .map_err(CommandError::from)
 }

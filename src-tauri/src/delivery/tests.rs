@@ -167,6 +167,7 @@ impl Harness {
                 writes: None,
                 lease: None,
                 timeout_minutes: None,
+                reasoning: None,
             })
             .unwrap()
     }
@@ -273,6 +274,7 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
         writes: None,
         lease: None,
         timeout_minutes: None,
+        reasoning: None,
     };
     let claude = h
         .service
@@ -318,6 +320,7 @@ fn only_qa_jobs_get_the_qa_commands_and_the_browser() {
         writes: None,
         lease: None,
         timeout_minutes: None,
+        reasoning: None,
     };
     let review = h.service.dispatch(new_job("review")).unwrap();
     assert_eq!(review.allowed_commands, vec!["npm test".to_string()]);
@@ -905,6 +908,7 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             writes: None,
             lease: None,
             timeout_minutes: None,
+            reasoning: None,
         })
         .unwrap_err();
     assert_eq!(blocked.category, "decisions_pending");
@@ -955,6 +959,7 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             writes: None,
             lease: None,
             timeout_minutes: None,
+            reasoning: None,
         })
         .unwrap();
     assert!(qa
@@ -1121,6 +1126,7 @@ fn coordinators_read_what_the_user_configured() {
             writes: None,
             lease: None,
             timeout_minutes: None,
+            reasoning: None,
         })
         .unwrap();
     assert_eq!(

@@ -63,6 +63,7 @@ export interface NewDeliveryJob {
   role: string;
   agent: DeliveryAgent;
   model?: string | null;
+  reasoning?: string | null;
   access: DeliveryAccess;
   prompt: string;
 }
@@ -78,6 +79,7 @@ export const dispatchDeliveryJob = (job: NewDeliveryJob) =>
     writes: null,
     lease: null,
     timeoutMinutes: null,
+    reasoning: job.reasoning || null,
   });
 
 export const cancelDeliveryJob = (jobId: string) =>

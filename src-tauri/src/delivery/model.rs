@@ -158,6 +158,9 @@ pub struct DeliveryJob {
     /// QA jobs only: the repo's QA environment when the job was dispatched.
     #[serde(default)]
     pub qa_environment: String,
+    /// Reasoning effort passed to the CLI; its default when `None`.
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

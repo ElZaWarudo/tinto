@@ -917,7 +917,13 @@
 .delivery-field-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  align-items: start;
   gap: 10px;
+}
+.delivery-field input:not([type="checkbox"]):not([type="radio"]),
+.delivery-field select {
+  box-sizing: border-box;
+  height: 30px;
 }
 .delivery-code {
   font-family: var(--font-mono, monospace);

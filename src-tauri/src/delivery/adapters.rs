@@ -220,6 +220,9 @@ fn codex_launch(
             if let Some(model) = job.model.as_deref() {
                 args.extend(["-m".to_string(), model.to_string()]);
             }
+            if let Some(effort) = job.reasoning.as_deref() {
+                args.extend(["-c".to_string(), codex_reasoning(effort)]);
+            }
             args.extend(codex_qa_overrides(job, false, paths)?);
             args.push("-".to_string());
             Ok(JobLaunch {
@@ -237,12 +240,17 @@ fn codex_launch(
                 .as_deref()
                 .map(|model| format!(" -m {}", sh_quote(model)))
                 .unwrap_or_default();
+            let reasoning = job
+                .reasoning
+                .as_deref()
+                .map(|effort| format!(" -c {}", sh_quote(&codex_reasoning(effort))))
+                .unwrap_or_default();
             let qa: String = codex_qa_overrides(job, true, paths)?
                 .iter()
                 .map(|value| format!(" {}", sh_quote(value)))
                 .collect();
             let script = format!(
-                "exec codex exec --json -C {} -s {sandbox} --output-schema {} -o {}{model}{qa} -",
+                "exec codex exec --json -C {} -s {sandbox} --output-schema {} -o {}{model}{reasoning}{qa} -",
                 sh_quote(&task.worktree.to_string_lossy()),
                 sh_quote(&wsl_path(&paths.schema)?),
                 sh_quote(&wsl_path(&paths.result)?),
@@ -297,6 +305,9 @@ fn claude_launch(
         if let Some(model) = job.model.as_deref() {
             args.extend(["--model".to_string(), model.to_string()]);
         }
+        if let Some(effort) = job.reasoning.as_deref() {
+            args.extend(["--effort".to_string(), effort.to_string()]);
+        }
         args.extend(claude_qa_args(
             job,
             &plain_path(&task.repo),
@@ -331,6 +342,11 @@ fn claude_launch(
             wsl_path(&task.worktree)?,
         ),
     };
+    let effort = job
+        .reasoning
+        .as_deref()
+        .map(|effort| format!(" --effort {}", sh_quote(effort)))
+        .unwrap_or_default();
     let model = job
         .model
         .as_deref()
@@ -376,7 +392,7 @@ fn claude_launch(
     .map(|value| format!(" {}", sh_quote(value)))
     .collect();
     let script = format!(
-        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{qa}{allowed}",
+        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{effort}{qa}{allowed}",
         sh_quote(&wsl_path(&paths.schema)?)
     );
     wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)
@@ -430,6 +446,11 @@ fn browser_server(
     let mut wrapped = vec!["/c".to_string(), "node".to_string()];
     wrapped.extend(args);
     Ok((cmd.to_string(), wrapped))
+}
+
+/// The `-c` override that sets Codex's reasoning effort.
+fn codex_reasoning(effort: &str) -> String {
+    format!("model_reasoning_effort={}", Value::from(effort))
 }
 
 /// A Claude QA job reads the main checkout and its own QA folder (to look at
@@ -957,6 +978,7 @@ mod tests {
             qa_browser: false,
             decisions: Vec::new(),
             qa_environment: String::new(),
+            reasoning: None,
         }
     }
 
@@ -1162,6 +1184,41 @@ mod tests {
         assert_eq!(&args[..2], ["/c", "node"]);
         assert_eq!(args[2], plain_path(&paths.qa_browser_script));
         assert_eq!(args[3], plain_path(&paths.qa_output));
+    }
+
+    #[test]
+    fn reasoning_reaches_both_clis() {
+        let mut task = sample_task();
+        task.distro = Some("Ubuntu".into());
+        let paths = JobPaths::in_dir(PathBuf::from(
+            r"C:\Users\me\AppData\Roaming\tinto\delivery\jobs\j1",
+        ));
+        let mut codex = sample_job(DeliveryAgent::Codex);
+        codex.reasoning = Some("medium".into());
+        let script = codex_launch(&codex, &task, &paths)
+            .unwrap()
+            .args
+            .pop()
+            .unwrap();
+        assert!(
+            script.contains(r#" -c 'model_reasoning_effort="medium"' -"#),
+            "{script}"
+        );
+        let mut claude = sample_job(DeliveryAgent::Claude);
+        claude.reasoning = Some("high".into());
+        let script = claude_launch(&claude, &task, &paths, None)
+            .unwrap()
+            .args
+            .pop()
+            .unwrap();
+        assert!(script.contains(" --effort 'high'"), "{script}");
+        codex.reasoning = None;
+        let script = codex_launch(&codex, &task, &paths)
+            .unwrap()
+            .args
+            .pop()
+            .unwrap();
+        assert!(!script.contains("model_reasoning_effort"), "{script}");
     }
 
     #[test]

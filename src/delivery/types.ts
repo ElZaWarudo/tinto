@@ -78,6 +78,8 @@ export interface DeliveryJob {
   undone_at_ms: number | null;
   /** Commands a Claude job without full access may run. */
   allowed_commands?: string[];
+  /** Reasoning effort passed to the CLI; its default when null. */
+  reasoning?: string | null;
   /** QA jobs: whether it had a browser. */
   qa_browser?: boolean;
   /** The task's answered decisions as the job received them. */

@@ -7,7 +7,7 @@ import { busStore, useBusState } from "../../bus/store";
 import { useWorkspaceActions } from "../../workspace/actions";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
-import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
+import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import {
   cancelDeliveryJob,
   closeDeliveryRun,
@@ -604,6 +604,7 @@ export function DeliveryPanel() {
                   role: values.role,
                   agent: values.agent,
                   model: values.model,
+                  reasoning: values.reasoning,
                   access: values.access,
                   prompt: values.prompt,
                 });
@@ -1301,6 +1302,7 @@ function JobRow({
         <span className="delivery-job__agent">
           {agentName(job.agent)}
           {job.model ? ` · ${job.model}` : ""}
+          {job.reasoning ? ` · ${codexReasoningLabel(job.reasoning).toLowerCase()}` : ""}
           {scope}
         </span>
         <span className={`delivery-outcome delivery-tone--${outcome.tone}`}>
