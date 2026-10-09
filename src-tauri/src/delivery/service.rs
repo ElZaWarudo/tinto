@@ -14,10 +14,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::adapters::{self, JobLaunch, JobOutcome, JobPaths};
+use super::decisions;
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryJob,
-    DeliveryJobLog, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter,
-    DeliveryOverview, DeliveryResultState, DeliverySettings, DeliveryTask,
+    DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint,
+    DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryJob, DeliveryJobLog, DeliveryJobStatus,
+    DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview, DeliveryResultState,
+    DeliverySettings, DeliveryTask,
 };
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
@@ -215,10 +217,16 @@ impl DeliveryService {
             .into_iter()
             .filter(|approval| live.contains(approval.task_id.as_str()))
             .collect();
+        let decisions = store
+            .decisions()?
+            .into_iter()
+            .filter(|decision| live.contains(decision.task_id.as_str()))
+            .collect();
         Ok(DeliveryOverview {
             runs: store.runs()?,
             jobs,
             approvals,
+            decisions,
             leases: store.leases()?,
             settings: store.settings()?,
             coordinator: self
@@ -502,16 +510,43 @@ impl DeliveryService {
         };
         let settings = store.repo_settings(&task.repo)?;
         let qa = role == QA_ROLE;
+        let decisions = store.task_decisions(&task.id)?;
+        if request.agent != DeliveryAgent::Shell {
+            let pending = decisions
+                .iter()
+                .filter(|decision| decision.status == DeliveryDecisionStatus::Pending)
+                .count();
+            if pending > 0 {
+                return Err(DeliveryError::new(
+                    "decisions_pending",
+                    format!(
+                        "la tarea tiene {pending} decisiones pendientes; el usuario las contesta en Tinto"
+                    ),
+                ));
+            }
+        }
+        // Commands the user allowed for this task's QA, on top of the repo's.
+        let permitted = decisions.iter().filter_map(|decision| {
+            (decision.kind == DeliveryDecisionKind::Permission
+                && decision.answer.as_deref() == Some(decisions::ALLOWED))
+            .then(|| decision.command.clone())
+            .flatten()
+        });
         let allowed_commands = match (request.agent, request.access) {
             (DeliveryAgent::Claude, DeliveryAccess::Workspace) => {
                 let mut commands = settings.checks;
                 if qa {
                     commands.extend(settings.qa_commands);
+                    commands.extend(permitted);
                 }
                 commands
             }
             _ => Vec::new(),
         };
+        let decision_notes = decisions
+            .iter()
+            .filter_map(decisions::decision_note)
+            .collect();
         let qa_browser = qa && settings.qa_browser;
         let attempt = store
             .task_jobs(&task.id)?
@@ -555,6 +590,7 @@ impl DeliveryService {
             undone_at_ms: None,
             allowed_commands,
             qa_browser,
+            decisions: decision_notes,
         };
         store.put_job(&job)?;
         store.record_event(

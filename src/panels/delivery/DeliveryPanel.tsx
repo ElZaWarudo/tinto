@@ -50,6 +50,7 @@ import {
   SettingsDialog,
   type RepoChoice,
 } from "./DeliveryDialogs";
+import { DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import {
   GROUPS,
   RUNGS,
@@ -308,6 +309,10 @@ export function DeliveryPanel() {
   })).filter((group) => group.tasks.length > 0);
   const ordered = groups.flatMap((group) => group.tasks);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? ordered[0] ?? null;
+  const shownTaskId = selectedTask?.id ?? null;
+  // Keep showing the same task when its group changes (e.g. after answering
+  // its decisions) instead of jumping to whatever is first in the list.
+  if (shownTaskId && shownTaskId !== selectedTaskId) setSelectedTaskId(shownTaskId);
   const needYou = groups.find((group) => group.group === "attention")?.tasks ?? [];
   const multiRepo = new Set(tasks.map((task) => task.repo)).size > 1;
 
@@ -688,7 +693,12 @@ function TaskDetail({
   );
   const rung = openApprovals.length === 0 ? nextRung(approvals) : null;
   const [requesting, setRequesting] = useState(false);
-  const needsYou = openApprovals.length > 0 || broken !== null;
+  const taskDecisions = (overview.decisions ?? []).filter(
+    (decision) => decision.task_id === task.id,
+  );
+  const pendingDecisions = taskDecisions.filter((decision) => decision.status === "pending");
+  const blocked = pendingDecisions.length > 0;
+  const needsYou = blocked || openApprovals.length > 0 || broken !== null;
   const stateLabel = TASK_STATE_LABEL[task.state] ?? task.state;
 
   const dispatch = (role: string, withHandoff: boolean) => {
@@ -815,6 +825,10 @@ function TaskDetail({
         </Menu>
       </header>
 
+      {blocked && (
+        <PendingDecisions taskId={task.id} decisions={pendingDecisions} busy={busy} run={run} />
+      )}
+
       {openApprovals.map((approval) => (
         <ApprovalBanner key={approval.id} task={task} approval={approval} busy={busy} run={run} />
       ))}
@@ -868,13 +882,14 @@ function TaskDetail({
           <button
             type="button"
             className={needsYou ? undefined : "delivery-button--primary"}
+            disabled={blocked}
             onClick={() => dispatch(next, true)}
           >
             <Icon name="play" />
             Lanzar {lower(stageLabel(next))}
           </button>
         )}
-        <button type="button" onClick={() => dispatch(next ?? "tests", false)}>
+        <button type="button" disabled={blocked} onClick={() => dispatch(next ?? "tests", false)}>
           {next && !broken ? "Otra etapa…" : "Lanzar etapa…"}
         </button>
         <Menu
@@ -906,6 +921,11 @@ function TaskDetail({
             Preparar {lower(rungLabel(rung))}…
           </button>
         )}
+        {blocked && (
+          <span className="delivery-muted">
+            Contesta las decisiones pendientes para lanzar etapas.
+          </span>
+        )}
         {!next && !hasOpenJob && !needsYou && (
           <span className="delivery-muted">
             {rung ? "Todas las etapas pasaron. Lo siguiente es la entrega." : "Tarea entregada."}
@@ -923,6 +943,8 @@ function TaskDetail({
           onClose={() => setRequesting(false)}
         />
       )}
+
+      <DecisionLog decisions={taskDecisions.filter((decision) => decision.status === "answered")} />
 
       <section className="delivery-section" aria-label="Historial">
         <h3>Historial</h3>

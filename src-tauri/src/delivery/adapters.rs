@@ -150,6 +150,10 @@ pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
             ));
         }
     }
+    if !job.decisions.is_empty() {
+        lines.push("Decisions the user made for this task (follow them):".to_string());
+        lines.extend(job.decisions.iter().map(|note| format!("- {note}")));
+    }
     lines.push(
         "Do not commit, push, open pull requests or change issue trackers: Tinto asks the user for those steps."
             .to_string(),
@@ -945,6 +949,7 @@ mod tests {
             undone_at_ms: None,
             allowed_commands: Vec::new(),
             qa_browser: false,
+            decisions: Vec::new(),
         }
     }
 

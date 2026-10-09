@@ -204,11 +204,26 @@ function ordinal(position: number): string {
   return `${position}.º`;
 }
 
+export function pendingDecisions(overview: DeliveryOverview, taskId: string): number {
+  return (overview.decisions ?? []).filter(
+    (decision) => decision.task_id === taskId && decision.status === "pending",
+  ).length;
+}
+
 export function taskStatus(
   task: DeliveryTask,
   overview: DeliveryOverview,
   now: number,
 ): TaskStatus {
+  const decisions = pendingDecisions(overview, task.id);
+  if (decisions > 0) {
+    return {
+      group: "attention",
+      tone: "attention",
+      icon: "flag",
+      label: decisions === 1 ? "1 decisión pendiente" : `${decisions} decisiones pendientes`,
+    };
+  }
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const pending = approvals.find((approval) => approval.status === "pending");
   if (pending) {

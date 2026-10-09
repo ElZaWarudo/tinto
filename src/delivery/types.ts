@@ -80,6 +80,8 @@ export interface DeliveryJob {
   allowed_commands?: string[];
   /** QA jobs: whether it had a browser. */
   qa_browser?: boolean;
+  /** The task's answered decisions as the job received them. */
+  decisions?: string[];
 }
 
 export interface DeliveryLeaseWaiter {
@@ -111,6 +113,39 @@ export interface DeliveryApproval {
   decided_at_ms: number | null;
   executed_at_ms: number | null;
   outcome: string | null;
+}
+
+export type DeliveryDecisionKind = "choice" | "text" | "permission";
+
+export interface DeliveryDecisionOption {
+  label: string;
+  consequence: string;
+  recommended: boolean;
+}
+
+/** Something the user settles before a task's stages run; answers are final. */
+export interface DeliveryDecision {
+  id: string;
+  task_id: string;
+  kind: DeliveryDecisionKind;
+  /** Plain language, for the user. */
+  question: string;
+  /** Technical context, folded. */
+  detail: string;
+  options: DeliveryDecisionOption[];
+  /** `text`: the proposed text, exactly as it will be shown. */
+  text: string;
+  /** `permission`: the command QA may run once allowed. */
+  command: string | null;
+  /** `permission`: how to undo it. */
+  undo: string;
+  status: "pending" | "answered";
+  /** The chosen option, the approved text, or "allowed"/"denied". */
+  answer: string | null;
+  requested_by: string;
+  requested_at_ms: number;
+  decided_by: string | null;
+  decided_at_ms: number | null;
 }
 
 export interface DeliveryRun {
@@ -151,6 +186,7 @@ export interface DeliveryOverview {
   jobs: DeliveryJob[];
   leases: DeliveryLease[];
   approvals: DeliveryApproval[];
+  decisions: DeliveryDecision[];
   settings: DeliverySettings;
   coordinator: DeliveryCoordinatorEndpoint | null;
 }

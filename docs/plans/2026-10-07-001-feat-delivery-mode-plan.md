@@ -260,6 +260,14 @@ Tercera ronda (2026-10-08), por la interfaz con Pumarejo, que ya maneja los `<se
 
 Comprobado en la app con Pumarejo sobre el repo de pruebas. Claude Code en WSL: navegó, guardó una captura con nombre en la carpeta del trabajo y la abrió, listó el checkout principal y escribió fuera del worktree con un comando de QA (`python3 -c`). Codex en Windows: navegó y guardó la captura, y leyó el checkout principal. El worktree quedó limpio en todas las pruebas. Dos límites: Claude Code bloquea sus comandos de archivos (`cat`, `touch`…) fuera de sus carpetas aunque estén permitidos, y en el sandbox de Codex en Windows el HTTPS desde la shell falla (`SEC_E_NO_CREDENTIALS`), aunque el navegador y el HTTP plano funcionan.
 
+**Decisiones (2026-10-09).** Lo que el usuario tiene que decidir antes de que corran las etapas ya no va por el chat. El coordinador lo pide con `request_decisions` y el usuario lo contesta en la tarea. Hay tres clases:
+
+- **Elección:** una pregunta en lenguaje llano, de 2 a 4 opciones con su consecuencia y como mucho una recomendada.
+- **Texto:** el texto que verá el usuario final, para aprobarlo o editarlo tal cual.
+- **Permiso:** algo fuera del worktree, con cómo se deshace y, si la QA lo necesita, el comando.
+
+El detalle técnico va plegado. Mientras haya decisiones pendientes, la tarea aparece en "Te necesitan" con su contador, "Lanzar…" está desactivado con el motivo y `dispatch_job` responde `decisions_pending`. "Aceptar recomendadas" resuelve elecciones y textos, nunca permisos. Las respuestas son definitivas, quedan en un registro de la tarea (qué, quién y cuándo) y entran en las instrucciones de cada trabajo posterior. El comando de un permiso concedido se suma a los comandos de la QA de esa tarea. Comprobado en la app con Pumarejo y un coordinador de prueba: la API rechazó el despacho con tres decisiones pendientes; en la interfaz, aceptar las recomendadas dejó solo el permiso; al permitirlo se habilitó "Lanzar tests", y el coordinador leyó las tres respuestas.
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.

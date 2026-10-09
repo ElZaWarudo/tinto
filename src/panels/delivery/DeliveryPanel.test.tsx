@@ -5,6 +5,7 @@ import { busStore } from "../../bus/store";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/actions";
 import type {
   DeliveryApproval,
+  DeliveryDecision,
   DeliveryJob,
   DeliveryOverview,
   DeliveryTask,
@@ -30,6 +31,8 @@ const client = vi.hoisted(() => ({
   openDeliveryTaskInAgents: vi.fn(),
   openDeliveryJobInAgents: vi.fn(),
   completeDeliveryApproval: vi.fn(),
+  answerDeliveryDecision: vi.fn(),
+  acceptRecommendedDecisions: vi.fn(),
   createDeliveryRun: vi.fn(),
   takeoverDeliveryRun: vi.fn(),
   closeDeliveryRun: vi.fn(),
@@ -114,6 +117,7 @@ function overview(over: Partial<DeliveryOverview> = {}): DeliveryOverview {
     jobs: [job()],
     leases: [],
     approvals: [],
+    decisions: [],
     settings: { capacity: 3 },
     coordinator: { url: "http://127.0.0.1:47920/mcp", token: "secret" },
     ...over,
@@ -525,5 +529,126 @@ describe("DeliveryPanel", () => {
     await user.click(await screen.findByRole("button", { name: "3 lotes activos" }));
     const dialog = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
     expect(within(dialog).getAllByRole("button", { name: "Tomar el control" })).toHaveLength(3);
+  });
+
+  it("waits for the user's decisions before any stage runs", async () => {
+    const user = userEvent.setup();
+    const decision = (over: Partial<DeliveryDecision>): DeliveryDecision => ({
+      id: "d1",
+      task_id: "t1",
+      kind: "choice",
+      question: "¿Instalamos también para Codex?",
+      detail: "--dir apunta a la carpeta final",
+      options: [
+        { label: "Sí", consequence: "Instala en Claude y Codex", recommended: true },
+        { label: "No", consequence: "Solo Claude", recommended: false },
+      ],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+      ...over,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        decisions: [
+          decision({}),
+          decision({
+            id: "d2",
+            kind: "permission",
+            question: "¿Escribir en tu ~/.claude real?",
+            options: [],
+            command: "agentos skills install",
+            undo: "agentos skills uninstall demo",
+          }),
+          decision({
+            id: "d3",
+            question: "¿Formato del aviso?",
+            status: "answered",
+            answer: "Corto",
+            decided_by: "user",
+            decided_at_ms: 2,
+          }),
+        ],
+      }),
+    );
+    client.answerDeliveryDecision.mockResolvedValue({});
+    client.acceptRecommendedDecisions.mockResolvedValue([]);
+    renderPanel();
+    const pending = await screen.findByRole("region", { name: "Decisiones pendientes" });
+    expect(pending).toHaveTextContent("2 pendientes");
+    expect(
+      within(screen.getByRole("region", { name: "Te necesitan" })).getByText(
+        "2 decisiones pendientes",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lanzar implementación" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Otra etapa…" })).toBeDisabled();
+    expect(within(pending).getByRole("radio", { name: /Sí/ })).toBeChecked();
+    expect(within(pending).getByText(/agentos skills install/)).toBeInTheDocument();
+    expect(
+      within(pending).getByText(/Cómo se deshace: agentos skills uninstall demo/),
+    ).toBeInTheDocument();
+
+    await user.click(within(pending).getByRole("radio", { name: /No/ }));
+    await user.click(within(pending).getByRole("button", { name: "Decidir" }));
+    await waitFor(() => expect(client.answerDeliveryDecision).toHaveBeenCalledWith("d1", "No"));
+    await user.click(within(pending).getByRole("button", { name: "Permitir" }));
+    await waitFor(() =>
+      expect(client.answerDeliveryDecision).toHaveBeenCalledWith("d2", "allowed"),
+    );
+    await user.click(within(pending).getByRole("button", { name: "Aceptar recomendadas" }));
+    await waitFor(() => expect(client.acceptRecommendedDecisions).toHaveBeenCalledWith("t1"));
+
+    const log = screen.getByRole("region", { name: "Decisiones" });
+    expect(log).toHaveTextContent("¿Formato del aviso?");
+    expect(log).toHaveTextContent("Corto");
+  });
+
+  it("keeps showing a task after it leaves the needs-you group", async () => {
+    const user = userEvent.setup();
+    const pending: DeliveryDecision = {
+      id: "d1",
+      task_id: "t2",
+      kind: "choice",
+      question: "¿Codex también?",
+      detail: "",
+      options: [
+        { label: "Sí", consequence: "", recommended: true },
+        { label: "No", consequence: "", recommended: false },
+      ],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    };
+    const tasks = [task(), task({ id: "t2", key: "DEC-1", title: "Decide first" })];
+    client.getDeliveryOverview
+      .mockResolvedValueOnce(overview({ tasks, jobs: [], decisions: [pending] }))
+      .mockResolvedValue(
+        overview({
+          tasks,
+          jobs: [],
+          decisions: [{ ...pending, status: "answered", answer: "Sí", decided_by: "user" }],
+        }),
+      );
+    client.answerDeliveryDecision.mockResolvedValue({});
+    renderPanel();
+    expect(await screen.findByRole("heading", { name: /DEC-1/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Decidir" }));
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Decisiones" })).toHaveTextContent("Sí"),
+    );
+    expect(screen.getByRole("heading", { name: /DEC-1/ })).toBeInTheDocument();
   });
 });

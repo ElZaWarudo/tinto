@@ -7,6 +7,7 @@ import type {
   DeliveryAgent,
   DeliveryApproval,
   DeliveryConversation,
+  DeliveryDecision,
   DeliveryJob,
   DeliveryJobLog,
   DeliveryLease,
@@ -123,6 +124,12 @@ export const decideDeliveryApproval = (approvalId: string, approve: boolean, not
 
 export const completeDeliveryApproval = (approvalId: string, success: boolean, outcome: string) =>
   invoke<DeliveryApproval>("delivery_complete_approval", { approvalId, success, outcome });
+
+export const answerDeliveryDecision = (decisionId: string, answer: string) =>
+  invoke<DeliveryDecision>("delivery_answer_decision", { decisionId, answer });
+
+export const acceptRecommendedDecisions = (taskId: string) =>
+  invoke<DeliveryDecision[]>("delivery_accept_recommended", { taskId });
 
 export const createDeliveryRun = (repo: string, title: string) =>
   invoke<DeliveryRun>("delivery_create_run", { repo, title });

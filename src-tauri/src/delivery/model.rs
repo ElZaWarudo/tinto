@@ -151,6 +151,10 @@ pub struct DeliveryJob {
     /// QA jobs only: a browser through Playwright's MCP server.
     #[serde(default)]
     pub qa_browser: bool,
+    /// The task's answered decisions when the job was dispatched, as the
+    /// job's instructions state them.
+    #[serde(default)]
+    pub decisions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -218,6 +222,68 @@ pub struct DeliveryApproval {
     pub outcome: Option<String>,
 }
 
+/// What a decision asks of the user before work starts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryDecisionKind {
+    /// Pick one of a few options.
+    Choice,
+    /// Approve or edit a text exactly as end users will see it.
+    Text,
+    /// Allow something outside the worktree, such as a QA command.
+    Permission,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryDecisionStatus {
+    Pending,
+    Answered,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryDecisionOption {
+    pub label: String,
+    /// One line on what choosing it means.
+    #[serde(default)]
+    pub consequence: String,
+    #[serde(default)]
+    pub recommended: bool,
+}
+
+/// A question the coordinator needs the user to answer before a task's
+/// stages run. Answers are final: changing one is a new contract version.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryDecision {
+    pub id: String,
+    pub task_id: String,
+    pub kind: DeliveryDecisionKind,
+    /// Plain language, for the user.
+    pub question: String,
+    /// Technical context, folded in the interface.
+    #[serde(default)]
+    pub detail: String,
+    /// `choice` only.
+    #[serde(default)]
+    pub options: Vec<DeliveryDecisionOption>,
+    /// `text` only: the proposed text, exactly as it will be shown.
+    #[serde(default)]
+    pub text: String,
+    /// `permission` only: the command QA may run once allowed, if any.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// `permission` only: how to undo its effect.
+    #[serde(default)]
+    pub undo: String,
+    pub status: DeliveryDecisionStatus,
+    /// The chosen option's label, the approved text, or `allowed`/`denied`.
+    pub answer: Option<String>,
+    pub requested_by: String,
+    pub requested_at_ms: u64,
+    pub decided_by: Option<String>,
+    pub decided_at_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryRun {
     pub id: String,
@@ -276,6 +342,7 @@ pub struct DeliveryOverview {
     pub jobs: Vec<DeliveryJob>,
     pub leases: Vec<DeliveryLease>,
     pub approvals: Vec<DeliveryApproval>,
+    pub decisions: Vec<DeliveryDecision>,
     pub settings: DeliverySettings,
     pub coordinator: Option<DeliveryCoordinatorEndpoint>,
 }

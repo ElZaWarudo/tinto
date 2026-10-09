@@ -376,7 +376,7 @@
 .delivery-banner .delivery-muted {
   font-size: 12px;
 }
-.delivery-panel .delivery-banner input {
+.delivery-panel .delivery-banner input:not([type="radio"]):not([type="checkbox"]) {
   flex: 1;
   min-width: 180px;
   padding: 4px 8px;
@@ -392,6 +392,107 @@
   border: 1px solid var(--border);
   font-family: var(--font-mono, monospace);
   font-size: 12px;
+}
+
+/* ---------- Decisions ---------- */
+.delivery-decisions__group {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+.delivery-decision {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  min-width: 0;
+}
+.delivery-decision legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+.delivery-decision p {
+  margin: 0;
+}
+.delivery-decision__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.delivery-decision__option input {
+  margin: 3px 0 0;
+}
+.delivery-decision__option > span {
+  display: grid;
+  gap: 1px;
+}
+.delivery-decision__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.delivery-decision__option small {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.delivery-badge {
+  padding: 0 6px;
+  border: 1px solid var(--accent-fg);
+  color: var(--accent-fg);
+  font-size: 11px;
+}
+.delivery-decision__detail summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.delivery-decision__detail pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.delivery-panel .delivery-decision textarea {
+  padding: 4px 8px;
+  background: var(--bg-elev);
+}
+.delivery-decision--permission {
+  border-color: var(--warn);
+}
+.delivery-decision-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+}
+.delivery-decision-log li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 10px;
+}
+.delivery-decision-log li + li {
+  border-top: 1px solid var(--border);
+}
+.delivery-decision-log strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.delivery-decision-log small {
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* ---------- Stage track ---------- */

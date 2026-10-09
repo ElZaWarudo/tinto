@@ -16,7 +16,11 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::coordination::NewApproval;
-use super::model::{DeliveryAccess, DeliveryAgent, DeliveryCoordinatorEndpoint, DeliveryRung};
+use super::decisions::NewDecision;
+use super::model::{
+    DeliveryAccess, DeliveryAgent, DeliveryCoordinatorEndpoint, DeliveryDecisionKind,
+    DeliveryDecisionOption, DeliveryRung,
+};
 use super::service::{DeliveryService, NewJob, NewTask};
 use super::DeliveryError;
 
@@ -136,7 +140,7 @@ pub fn handle_message(service: &DeliveryService, message: &Value) -> Option<Valu
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "tinto-delivery", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), dispatch jobs and wait for their results. Pass your run owner and generation on every write. Approvals for commit, push, PR and Jira are requested here and decided by the user in Tinto."
+            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat."
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
@@ -329,6 +333,14 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             })?)
         }
         "read_approval" => to_json(&service.approval(&text("approval_id")?)?),
+        "request_decisions" => {
+            let run_id = fence()?;
+            let task_id = text("task_id")?;
+            task_in_run(&run_id, &task_id)?;
+            let decisions = parse_decisions(&args["decisions"])?;
+            to_json(&service.request_decisions(&task_id, decisions, &text("owner")?)?)
+        }
+        "read_decisions" => to_json(&service.task_decisions(&text("task_id")?)?),
         "complete_approval" => {
             let run_id = fence()?;
             let approval = service.approval(&text("approval_id")?)?;
@@ -344,6 +356,45 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             format!("herramienta desconocida: {name}"),
         )),
     }
+}
+
+fn parse_decisions(value: &Value) -> Result<Vec<NewDecision>, DeliveryError> {
+    let invalid = |message: &str| DeliveryError::new("invalid_arguments", message.to_string());
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid("decisions debe ser una lista"))?;
+    let text = |item: &Value, key: &str| item[key].as_str().unwrap_or_default().to_string();
+    items
+        .iter()
+        .map(|item| {
+            let kind = match item["kind"].as_str().unwrap_or_default() {
+                "choice" => DeliveryDecisionKind::Choice,
+                "text" => DeliveryDecisionKind::Text,
+                "permission" => DeliveryDecisionKind::Permission,
+                _ => return Err(invalid("kind debe ser choice, text o permission")),
+            };
+            let options = match item.get("options") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(options) => serde_json::from_value::<Vec<DeliveryDecisionOption>>(
+                    options.clone(),
+                )
+                .map_err(|_| {
+                    invalid(
+                        "options: cada opción necesita label, consequence y recommended opcional",
+                    )
+                })?,
+            };
+            Ok(NewDecision {
+                kind,
+                question: text(item, "question"),
+                detail: text(item, "detail"),
+                options,
+                text: text(item, "text"),
+                command: item["command"].as_str().map(str::to_string),
+                undo: text(item, "undo"),
+            })
+        })
+        .collect()
 }
 
 fn to_json<T: serde::Serialize>(value: &T) -> Result<Value, DeliveryError> {
@@ -388,6 +439,8 @@ fn tool_definitions() -> Value {
         { "name": "retry_job", "description": "Queue a new attempt of a finished job; the old attempt's late results become stale.", "inputSchema": fenced(json!({"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]})) },
         { "name": "request_approval", "description": "Ask the user to approve one delivery rung (commit, push, pr or jira) with the exact text. Tinto runs commit and push itself once approved.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "rung": {"type": "string", "enum": ["commit", "push", "pr", "jira"]}, "title": {"type": "string"}, "body": {"type": "string"}}, "required": ["task_id", "rung", "title"]})) },
         { "name": "read_approval", "description": "An approval's status and outcome.", "inputSchema": schema(json!({"approval_id": {"type": "string"}}), json!(["approval_id"])) },
+        { "name": "request_decisions", "description": "Ask the user what they must settle before a task's stages run; they answer in Tinto, and no stage can be dispatched on the task until every decision is answered. Write questions in plain language for the user and put paths, flags and formats in `detail`. Kinds: `choice` (2-4 options, each with a one-line consequence, at most one recommended), `text` (a user-facing text to approve exactly as shown, in `text`), `permission` (something outside the worktree, such as installing into the user's real client config; give `undo`, and `command` when QA needs to run it: once allowed it joins that task's QA commands). Answers are final and reach every later job's instructions.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "decisions": {"type": "array", "items": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}}, "required": ["kind", "question"]}}}, "required": ["task_id", "decisions"]})) },
+        { "name": "read_decisions", "description": "A task's decisions with their status, answer, who decided and when.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
         { "name": "complete_approval", "description": "Report how an approved PR or Jira step went after you ran it.", "inputSchema": fenced(json!({"properties": {"approval_id": {"type": "string"}, "success": {"type": "boolean"}, "outcome": {"type": "string"}}, "required": ["approval_id", "success"]})) }
     ])
 }

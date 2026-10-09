@@ -97,6 +97,7 @@ function overview(over: Partial<DeliveryOverview> = {}): DeliveryOverview {
     jobs: [],
     leases: [],
     approvals: [],
+    decisions: [],
     settings: { capacity: 3 },
     coordinator: null,
     ...over,
@@ -191,6 +192,37 @@ describe("taskStatus", () => {
     expect(status({ jobs: [job()] }).label).toBe("Siguiente: implementación");
     expect(status({ approvals: [approval({ rung: "jira", status: "executed" })] }).label).toBe(
       "Entregada",
+    );
+  });
+});
+
+describe("pending decisions", () => {
+  it("come before anything else", () => {
+    const pending = {
+      id: "d1",
+      task_id: "t1",
+      kind: "choice" as const,
+      question: "?",
+      detail: "",
+      options: [],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending" as const,
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    };
+    expect(status({ decisions: [pending], approvals: [approval({ rung: "commit" })] })).toEqual({
+      group: "attention",
+      tone: "attention",
+      icon: "flag",
+      label: "1 decisión pendiente",
+    });
+    expect(status({ decisions: [{ ...pending, status: "answered", answer: "x" }] }).label).toBe(
+      "Siguiente: tests",
     );
   });
 });

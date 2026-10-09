@@ -8,8 +8,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::model::{
-    DeliveryApproval, DeliveryJob, DeliveryLease, DeliveryRepoSettings, DeliveryRun,
-    DeliverySettings, DeliveryTask,
+    DeliveryApproval, DeliveryDecision, DeliveryJob, DeliveryLease, DeliveryRepoSettings,
+    DeliveryRun, DeliverySettings, DeliveryTask,
 };
 use super::tasks::plain_path;
 use super::DeliveryError;
@@ -61,6 +61,9 @@ impl DeliveryStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_task ON jobs(task_id);
             CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS approvals (
+              id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS decisions (
               id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS events (
@@ -264,6 +267,32 @@ impl DeliveryStore {
 
     pub fn approvals(&self) -> Result<Vec<DeliveryApproval>, DeliveryError> {
         self.all("SELECT data FROM approvals ORDER BY rowid", [])
+    }
+
+    // ---- decisions ----
+
+    pub fn put_decision(&self, decision: &DeliveryDecision) -> Result<(), DeliveryError> {
+        self.conn.execute(
+            "INSERT INTO decisions (id, task_id, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+            params![decision.id, decision.task_id, encode(decision)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn decision(&self, id: &str) -> Result<Option<DeliveryDecision>, DeliveryError> {
+        self.one("SELECT data FROM decisions WHERE id = ?1", id)
+    }
+
+    pub fn decisions(&self) -> Result<Vec<DeliveryDecision>, DeliveryError> {
+        self.all("SELECT data FROM decisions ORDER BY rowid", [])
+    }
+
+    pub fn task_decisions(&self, task_id: &str) -> Result<Vec<DeliveryDecision>, DeliveryError> {
+        self.all(
+            "SELECT data FROM decisions WHERE task_id = ?1 ORDER BY rowid",
+            [task_id],
+        )
     }
 
     // ---- events ----

@@ -9,9 +9,9 @@ use tauri::{AppHandle, State};
 
 use super::coordination::NewApproval;
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryJob, DeliveryJobLog, DeliveryLease,
-    DeliveryOverview, DeliveryRepoSettings, DeliveryRun, DeliveryRung, DeliverySettings,
-    DeliveryTask,
+    DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryDecision, DeliveryJob, DeliveryJobLog,
+    DeliveryLease, DeliveryOverview, DeliveryRepoSettings, DeliveryRun, DeliveryRung,
+    DeliverySettings, DeliveryTask,
 };
 use super::service::{DeliveryService, NewJob, NewTask};
 use super::tasks::plain_path;
@@ -332,6 +332,27 @@ pub fn delivery_complete_approval(
 ) -> Result<DeliveryApproval, CommandError> {
     service
         .complete_approval(&approval_id, success, &outcome)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delivery_answer_decision(
+    service: State<'_, DeliveryService>,
+    decision_id: String,
+    answer: String,
+) -> Result<DeliveryDecision, CommandError> {
+    service
+        .answer_decision(&decision_id, &answer, "user")
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delivery_accept_recommended(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Vec<DeliveryDecision>, CommandError> {
+    service
+        .accept_recommended(&task_id, "user")
         .map_err(CommandError::from)
 }
 

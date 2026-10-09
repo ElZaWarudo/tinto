@@ -11,9 +11,9 @@ use serde_json::json;
 use super::adapters::{JobLaunch, JobPaths};
 use super::coordination::NewApproval;
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryJob, DeliveryJobStatus,
-    DeliveryLeaseState, DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings,
-    DeliveryTask,
+    DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryDecisionKind,
+    DeliveryDecisionOption, DeliveryJob, DeliveryJobStatus, DeliveryLeaseState,
+    DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings, DeliveryTask,
 };
 use super::service::{DeliveryService, Launcher, NewJob, NewTask};
 use super::store::DeliveryStore;
@@ -811,4 +811,204 @@ fn bootstrap_runs_as_a_shell_job_in_new_worktrees() {
     assert_eq!(bootstrap.agent, DeliveryAgent::Shell);
     assert_eq!(bootstrap.role, "bootstrap");
     assert_eq!(h.wait(&bootstrap.id).status, DeliveryJobStatus::Finished);
+}
+
+fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDecision {
+    super::decisions::NewDecision {
+        kind: DeliveryDecisionKind::Choice,
+        question: question.into(),
+        detail: "flag --dir".into(),
+        options: ["Sí", "No"]
+            .iter()
+            .enumerate()
+            .map(|(index, label)| DeliveryDecisionOption {
+                label: label.to_string(),
+                consequence: format!("consecuencia {label}"),
+                recommended: recommended == Some(index),
+            })
+            .collect(),
+        text: String::new(),
+        command: None,
+        undo: String::new(),
+    }
+}
+
+fn permission(command: &str) -> super::decisions::NewDecision {
+    super::decisions::NewDecision {
+        kind: DeliveryDecisionKind::Permission,
+        question: "¿Instalar en tu ~/.claude real?".into(),
+        detail: String::new(),
+        options: Vec::new(),
+        text: String::new(),
+        command: Some(command.into()),
+        undo: "agentos skills uninstall demo".into(),
+    }
+}
+
+#[test]
+fn decisions_are_validated() {
+    let h = harness();
+    let task = h.task("D-1");
+    let mut one_option = choice("¿Codex?", Some(0));
+    one_option.options.truncate(1);
+    let mut two_recommended = choice("¿Codex?", Some(0));
+    two_recommended.options[1].recommended = true;
+    let mut no_undo = permission("agentos skills install");
+    no_undo.undo.clear();
+    let mut empty_text = choice("Texto del aviso", None);
+    empty_text.kind = DeliveryDecisionKind::Text;
+    for bad in [one_option, two_recommended, no_undo, empty_text] {
+        let error = h
+            .service
+            .request_decisions(&task.id, vec![bad], "coord")
+            .unwrap_err();
+        assert_eq!(error.category, "invalid_decision");
+    }
+    assert!(h.service.task_decisions(&task.id).unwrap().is_empty());
+}
+
+#[test]
+fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
+    let h = harness();
+    let task = h.task("D-2");
+    let mut text = choice("Texto del aviso", None);
+    text.kind = DeliveryDecisionKind::Text;
+    text.options.clear();
+    text.text = "Instalado en la carpeta final".into();
+    let asked = h
+        .service
+        .request_decisions(
+            &task.id,
+            vec![
+                choice("¿Instalamos también para Codex?", Some(0)),
+                text,
+                permission("agentos skills install"),
+            ],
+            "coord",
+        )
+        .unwrap();
+    assert_eq!(asked.len(), 3);
+    let blocked = h
+        .service
+        .dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "tests".into(),
+            agent: DeliveryAgent::Codex,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=codex-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+        })
+        .unwrap_err();
+    assert_eq!(blocked.category, "decisions_pending");
+
+    // Recommended choices and texts are accepted; the permission waits.
+    let accepted = h.service.accept_recommended(&task.id, "user").unwrap();
+    assert_eq!(accepted.len(), 2);
+    assert_eq!(accepted[0].answer.as_deref(), Some("Sí"));
+    assert_eq!(
+        accepted[1].answer.as_deref(),
+        Some("Instalado en la carpeta final")
+    );
+    assert_eq!(accepted[0].decided_by.as_deref(), Some("user"));
+    let permission_id = asked[2].id.clone();
+    assert_eq!(
+        h.service
+            .answer_decision(&permission_id, "maybe", "user")
+            .unwrap_err()
+            .category,
+        "invalid_decision"
+    );
+    h.service
+        .answer_decision(&permission_id, super::decisions::ALLOWED, "user")
+        .unwrap();
+    assert_eq!(
+        h.service
+            .answer_decision(&permission_id, super::decisions::DENIED, "user")
+            .unwrap_err()
+            .category,
+        "decision_answered"
+    );
+
+    let tests = h.dispatch(&task, "tests", "events=codex-ok");
+    assert_eq!(tests.decisions.len(), 3);
+    assert!(tests.decisions[0].ends_with("→ Sí"));
+    assert!(tests.decisions[2].contains("allowed (command: agentos skills install)"));
+    assert!(tests.allowed_commands.is_empty());
+    h.wait(&tests.id);
+    let qa = h
+        .service
+        .dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "qa".into(),
+            agent: DeliveryAgent::Claude,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=claude-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+        })
+        .unwrap();
+    assert!(qa
+        .allowed_commands
+        .contains(&"agentos skills install".to_string()));
+    h.wait(&qa.id);
+    assert_eq!(h.service.overview().unwrap().decisions.len(), 3);
+}
+
+#[test]
+fn a_coordinator_asks_for_decisions_over_mcp() {
+    let h = harness();
+    let call = |id: u64, name: &str, arguments: serde_json::Value| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    let repo = plain_path(h.repo.path());
+    let run = call(
+        1,
+        "create_run",
+        json!({"repo": repo, "title": "B", "owner": "coord"}),
+    );
+    let run_id = run["structuredContent"]["id"].as_str().unwrap().to_string();
+    let task = call(
+        2,
+        "create_task",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "repo": repo, "key": "D-3", "title": "x"}),
+    );
+    let task_id = task["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let asked = call(
+        3,
+        "request_decisions",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "decisions": [
+            {"kind": "choice", "question": "¿Codex también?", "options": [
+                {"label": "Sí", "consequence": "Instala en los dos", "recommended": true},
+                {"label": "No", "consequence": "Solo Claude"}
+            ]},
+            {"kind": "permission", "question": "¿Escribir en ~/.claude?", "undo": "borrar la carpeta", "command": "agentos skills install"}
+        ]}),
+    );
+    assert_eq!(
+        asked["structuredContent"].as_array().unwrap().len(),
+        2,
+        "{asked}"
+    );
+    let bad = call(
+        4,
+        "request_decisions",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "decisions": [{"kind": "vote", "question": "?"}]}),
+    );
+    assert_eq!(bad["isError"], true);
+    let read = call(5, "read_decisions", json!({"task_id": task_id}));
+    assert_eq!(read["structuredContent"][0]["status"], "pending");
+    assert_eq!(read["structuredContent"][1]["kind"], "permission");
 }
