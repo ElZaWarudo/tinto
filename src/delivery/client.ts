@@ -131,8 +131,11 @@ export const answerDeliveryDecision = (decisionId: string, answer: string) =>
 export const acceptRecommendedDecisions = (taskId: string) =>
   invoke<DeliveryDecision[]>("delivery_accept_recommended", { taskId });
 
-export const createDeliveryRun = (repo: string, title: string) =>
-  invoke<DeliveryRun>("delivery_create_run", { repo, title });
+export const createDeliveryRun = (repo: string, title: string, qaJiraComment: boolean) =>
+  invoke<DeliveryRun>("delivery_create_run", { repo, title, qaJiraComment });
+
+export const setDeliveryRunQaJiraComment = (runId: string, post: boolean) =>
+  invoke<DeliveryRun>("delivery_set_run_qa_jira_comment", { runId, post });
 
 export const takeoverDeliveryRun = (runId: string) =>
   invoke<DeliveryRun>("delivery_takeover_run", { runId });

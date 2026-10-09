@@ -663,7 +663,12 @@ fn a_replaced_coordinator_is_fenced() {
     let h = harness();
     let run = h
         .service
-        .create_run(h.repo.path().to_path_buf(), "Batch", Some("coord-a".into()))
+        .create_run(
+            h.repo.path().to_path_buf(),
+            "Batch",
+            Some("coord-a".into()),
+            None,
+        )
         .unwrap();
     assert_eq!(run.generation, 1);
     assert_eq!(
@@ -1011,4 +1016,119 @@ fn a_coordinator_asks_for_decisions_over_mcp() {
     let read = call(5, "read_decisions", json!({"task_id": task_id}));
     assert_eq!(read["structuredContent"][0]["status"], "pending");
     assert_eq!(read["structuredContent"][1]["kind"], "permission");
+}
+
+#[test]
+fn a_permission_cannot_run_files_agents_can_edit() {
+    let h = harness();
+    let task = h.task("D-4");
+    let repo = plain_path(h.repo.path());
+    let worktree = plain_path(&task.worktree);
+    let refused = [
+        format!("bash {repo}/.agent/backlog-delivery/issues/D-4/qa/run.sh"),
+        format!("bash {worktree}/scripts/install.sh"),
+        "bash qa/agentos-qa.sh".to_string(),
+        "python ./check.py".to_string(),
+        format!("node {}/tools/run.js", repo.replace('\\', "/")),
+    ];
+    for command in refused {
+        let error = h
+            .service
+            .request_decisions(&task.id, vec![permission(&command)], "coord")
+            .unwrap_err();
+        assert_eq!(error.category, "invalid_decision", "{command}");
+    }
+    h.service
+        .request_decisions(
+            &task.id,
+            vec![permission(
+                "agentos skills install team/reviewer --target codex",
+            )],
+            "coord",
+        )
+        .unwrap();
+}
+
+#[test]
+fn coordinators_read_what_the_user_configured() {
+    let h = harness();
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.qa_browser = true;
+    settings.qa_commands = vec!["agentos skills install".into()];
+    settings.qa_environment = "Windows, ámbito personal; Claude Code y Codex".into();
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "Lote", None, Some(true))
+        .unwrap();
+    let task = h
+        .service
+        .create_task(NewTask {
+            repo: h.repo.path().to_path_buf(),
+            distro: None,
+            key: "D-5".into(),
+            title: "x".into(),
+            base: None,
+            branch: None,
+            run_id: Some(run.id.clone()),
+        })
+        .unwrap();
+    let read = super::mcp::handle_message(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "read_settings", "arguments": {"task_id": task.id}}}),
+    )
+    .unwrap()["result"]["structuredContent"]
+        .clone();
+    assert_eq!(read["qa_browser"], true);
+    assert_eq!(read["qa_commands"][0], "agentos skills install");
+    assert_eq!(
+        read["qa_environment"],
+        "Windows, ámbito personal; Claude Code y Codex"
+    );
+    assert_eq!(read["run"]["qa_jira_comment"], true);
+
+    let changed = h.service.set_run_qa_jira_comment(&run.id, false).unwrap();
+    assert_eq!(changed.qa_jira_comment, Some(false));
+    let unset = h
+        .service
+        .create_run(
+            h.repo.path().to_path_buf(),
+            "Otro",
+            Some("coord".into()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(unset.qa_jira_comment, None);
+
+    let qa = h
+        .service
+        .dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "qa".into(),
+            agent: DeliveryAgent::Codex,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=codex-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+        })
+        .unwrap();
+    assert_eq!(
+        qa.qa_environment,
+        "Windows, ámbito personal; Claude Code y Codex"
+    );
+    h.wait(&qa.id);
+    let tests = h.dispatch(&task, "tests", "events=codex-ok");
+    assert!(tests.qa_environment.is_empty());
+    h.wait(&tests.id);
 }

@@ -548,6 +548,11 @@ impl DeliveryService {
             .filter_map(decisions::decision_note)
             .collect();
         let qa_browser = qa && settings.qa_browser;
+        let qa_environment = if qa {
+            settings.qa_environment.clone()
+        } else {
+            String::new()
+        };
         let attempt = store
             .task_jobs(&task.id)?
             .iter()
@@ -591,6 +596,7 @@ impl DeliveryService {
             allowed_commands,
             qa_browser,
             decisions: decision_notes,
+            qa_environment,
         };
         store.put_job(&job)?;
         store.record_event(

@@ -130,6 +130,7 @@ pub fn run() {
             delivery::commands::delivery_overview,
             delivery::commands::delivery_answer_decision,
             delivery::commands::delivery_accept_recommended,
+            delivery::commands::delivery_set_run_qa_jira_comment,
             delivery::commands::delivery_create_task,
             delivery::commands::delivery_remove_task,
             delivery::commands::delivery_update_task,

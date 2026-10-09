@@ -215,6 +215,7 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             PathBuf::from(text("repo")?),
             &text("title")?,
             Some(text("owner")?),
+            None,
         )?),
         "acquire_run" => to_json(&service.acquire_run(&text("run_id")?, &text("owner")?)?),
         "takeover_run" => to_json(&service.takeover_run(
@@ -341,6 +342,27 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             to_json(&service.request_decisions(&task_id, decisions, &text("owner")?)?)
         }
         "read_decisions" => to_json(&service.task_decisions(&text("task_id")?)?),
+        "read_settings" => {
+            let task = service.task(&text("task_id")?)?;
+            let settings = service.store()?.repo_settings(&task.repo)?;
+            let run = match task.run_id.as_deref() {
+                Some(run_id) => Some(service.run(run_id)?),
+                None => None,
+            };
+            Ok(json!({
+                "repo": task.repo,
+                "checks": settings.checks,
+                "qa_commands": settings.qa_commands,
+                "qa_browser": settings.qa_browser,
+                "qa_environment": settings.qa_environment,
+                "bootstrap": settings.bootstrap,
+                "run": run.map(|run| json!({
+                    "id": run.id,
+                    "title": run.title,
+                    "qa_jira_comment": run.qa_jira_comment,
+                })),
+            }))
+        }
         "complete_approval" => {
             let run_id = fence()?;
             let approval = service.approval(&text("approval_id")?)?;
@@ -439,8 +461,9 @@ fn tool_definitions() -> Value {
         { "name": "retry_job", "description": "Queue a new attempt of a finished job; the old attempt's late results become stale.", "inputSchema": fenced(json!({"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]})) },
         { "name": "request_approval", "description": "Ask the user to approve one delivery rung (commit, push, pr or jira) with the exact text. Tinto runs commit and push itself once approved.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "rung": {"type": "string", "enum": ["commit", "push", "pr", "jira"]}, "title": {"type": "string"}, "body": {"type": "string"}}, "required": ["task_id", "rung", "title"]})) },
         { "name": "read_approval", "description": "An approval's status and outcome.", "inputSchema": schema(json!({"approval_id": {"type": "string"}}), json!(["approval_id"])) },
-        { "name": "request_decisions", "description": "Ask the user what they must settle before a task's stages run; they answer in Tinto, and no stage can be dispatched on the task until every decision is answered. Write questions in plain language for the user and put paths, flags and formats in `detail`. Kinds: `choice` (2-4 options, each with a one-line consequence, at most one recommended), `text` (a user-facing text to approve exactly as shown, in `text`), `permission` (something outside the worktree, such as installing into the user's real client config; give `undo`, and `command` when QA needs to run it: once allowed it joins that task's QA commands). Answers are final and reach every later job's instructions.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "decisions": {"type": "array", "items": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}}, "required": ["kind", "question"]}}}, "required": ["task_id", "decisions"]})) },
+        { "name": "request_decisions", "description": "Ask the user what they must settle before a task's stages run; they answer in Tinto, and no stage can be dispatched on the task until every decision is answered. Write questions in plain language for the user and put paths, flags and formats in `detail`. Kinds: `choice` (2-4 options, each with a one-line consequence, at most one recommended), `text` (a user-facing text to approve exactly as shown, in `text`), `permission` (something outside the worktree, such as installing into the user's real client config; give `undo`, and `command` when QA needs to run it: once allowed it joins that task's QA commands). Answers are final and reach every later job's instructions. Only ask what is the user's call for this issue: product behaviour, user-facing texts, and side effects outside the worktree. Never ask harness configuration that read_settings already answers (QA browser, QA commands, QA environment, Jira policy). A permission's command must be the real command (for example `agentos skills install demo`), never a script inside the repo, its worktrees or `.agent`: agents can edit those after the user approves, so they are refused.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "decisions": {"type": "array", "items": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}}, "required": ["kind", "question"]}}}, "required": ["task_id", "decisions"]})) },
         { "name": "read_decisions", "description": "A task's decisions with their status, answer, who decided and when.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
+        { "name": "read_settings", "description": "What the user already configured in Tinto for a task: the repo's verification and QA commands, whether QA gets a browser, the QA environment (platforms, scope, clients), the bootstrap command, and the batch's policy on posting QA verdicts to Jira (null = not set). Read it before asking anything: never ask through decisions what is configured here. If something you need is empty or null, ask the user to set it in Tinto (Ajustes), not as a decision.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
         { "name": "complete_approval", "description": "Report how an approved PR or Jira step went after you ran it.", "inputSchema": fenced(json!({"properties": {"approval_id": {"type": "string"}, "success": {"type": "boolean"}, "outcome": {"type": "string"}}, "required": ["approval_id", "success"]})) }
     ])
 }

@@ -268,6 +268,13 @@ Comprobado en la app con Pumarejo sobre el repo de pruebas. Claude Code en WSL: 
 
 El detalle técnico va plegado. Mientras haya decisiones pendientes, la tarea aparece en "Te necesitan" con su contador, "Lanzar…" está desactivado con el motivo y `dispatch_job` responde `decisions_pending`. "Aceptar recomendadas" resuelve elecciones y textos, nunca permisos. Las respuestas son definitivas, quedan en un registro de la tarea (qué, quién y cuándo) y entran en las instrucciones de cada trabajo posterior. El comando de un permiso concedido se suma a los comandos de la QA de esa tarea. Comprobado en la app con Pumarejo y un coordinador de prueba: la API rechazó el despacho con tres decisiones pendientes; en la interfaz, aceptar las recomendadas dejó solo el permiso; al permitirlo se habilitó "Lanzar tests", y el coordinador leyó las tres respuestas.
 
+**Configuración del arnés fuera de las decisiones (2026-10-09).** En AGOS-455, 6 de las 15 decisiones eran configuración que no cambia de un issue a otro: si la QA lleva navegador, si su resultado se publica en Jira, en qué plataformas se prueba y tres permisos de QA. Ahora Tinto las guarda una vez:
+
+- Por repositorio, en Ajustes → "QA del repositorio": entorno de QA, comandos de QA y navegador.
+- Por lote: "Resultado de QA en Jira", que se elige al crearlo y se cambia en la lista. `null` mientras el usuario no lo decide, como en los lotes que crea un coordinador.
+
+El coordinador lo lee con `read_settings` y no lo pregunta; si falta algo, pide al usuario que lo configure en Tinto. Los trabajos de QA reciben el entorno en sus instrucciones. Además, `request_decisions` rechaza un permiso cuyo comando ejecute archivos que los agentes pueden editar: el repositorio, sus worktrees, `.agent` o un script con ruta relativa. En AGOS-455 los permisos pedían `bash …/.agent/…/qa/*.sh`, y el agente podía cambiar esos scripts después de que el usuario los aprobara.
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.

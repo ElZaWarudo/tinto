@@ -33,6 +33,7 @@ const client = vi.hoisted(() => ({
   completeDeliveryApproval: vi.fn(),
   answerDeliveryDecision: vi.fn(),
   acceptRecommendedDecisions: vi.fn(),
+  setDeliveryRunQaJiraComment: vi.fn(),
   createDeliveryRun: vi.fn(),
   takeoverDeliveryRun: vi.fn(),
   closeDeliveryRun: vi.fn(),
@@ -694,5 +695,72 @@ describe("DeliveryPanel", () => {
     await user.click(screen.getByRole("button", { name: "Nueva tarea" }));
     const dialog = screen.getByRole("dialog", { name: "Nueva tarea" });
     expect(within(dialog).getByRole("combobox", { name: "Lote" })).toHaveValue("r2");
+  });
+
+  it("keeps the batch's Jira policy and the repo's QA setup in Ajustes", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "coord",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            qa_jira_comment: null,
+          },
+        ],
+      }),
+    );
+    client.createDeliveryRun.mockResolvedValue({});
+    client.setDeliveryRunQaJiraComment.mockResolvedValue({});
+    client.setDeliveryRepoSettings.mockImplementation((_repo, settings) =>
+      Promise.resolve(settings),
+    );
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
+    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+
+    const policy = within(settings).getByRole("combobox", {
+      name: "Resultado de QA en Jira del lote Lote A",
+    });
+    expect(policy).toHaveValue("");
+    await user.selectOptions(policy, "yes");
+    await waitFor(() =>
+      expect(client.setDeliveryRunQaJiraComment).toHaveBeenCalledWith("r1", true),
+    );
+
+    await user.type(within(settings).getByPlaceholderText("Lote de octubre"), "Lote B");
+    await user.selectOptions(
+      within(settings).getByRole("combobox", {
+        name: /^Resultado de QA en Jira.*El coordinador lo lee/,
+      }),
+      "yes",
+    );
+    await user.click(within(settings).getByRole("button", { name: "Crear lote" }));
+    await waitFor(() =>
+      expect(client.createDeliveryRun).toHaveBeenCalledWith(REPO, "Lote B", true),
+    );
+
+    const qa = within(settings).getByRole("region", { name: "QA del repositorio" });
+    const save = await within(qa).findByRole("button", { name: /^Guardar la QA de/ });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.type(
+      within(qa).getByRole("textbox", { name: /Entorno de QA/ }),
+      "Windows, ámbito personal",
+    );
+    await user.click(within(qa).getByRole("checkbox", { name: "Navegador para la QA" }));
+    await user.click(save);
+    await waitFor(() =>
+      expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
+        REPO,
+        expect.objectContaining({ qa_environment: "Windows, ámbito personal", qa_browser: true }),
+      ),
+    );
+    expect(await within(qa).findByText(/^Guardado para/)).toBeInTheDocument();
   });
 });

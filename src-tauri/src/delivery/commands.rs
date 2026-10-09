@@ -268,6 +268,7 @@ pub fn delivery_set_repo_settings(
             .filter_map(|command| clean(Some(command)))
             .collect(),
         qa_browser: settings.qa_browser,
+        qa_environment: settings.qa_environment.trim().to_string(),
     };
     service
         .store()
@@ -361,9 +362,21 @@ pub fn delivery_create_run(
     service: State<'_, DeliveryService>,
     repo: PathBuf,
     title: String,
+    qa_jira_comment: Option<bool>,
 ) -> Result<DeliveryRun, CommandError> {
     service
-        .create_run(repo, &title, None)
+        .create_run(repo, &title, None, qa_jira_comment)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delivery_set_run_qa_jira_comment(
+    service: State<'_, DeliveryService>,
+    run_id: String,
+    post: bool,
+) -> Result<DeliveryRun, CommandError> {
+    service
+        .set_run_qa_jira_comment(&run_id, post)
         .map_err(CommandError::from)
 }
 

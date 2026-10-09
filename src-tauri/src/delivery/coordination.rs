@@ -33,6 +33,7 @@ impl DeliveryService {
         repo: std::path::PathBuf,
         title: &str,
         owner: Option<String>,
+        qa_jira_comment: Option<bool>,
     ) -> Result<DeliveryRun, DeliveryError> {
         let now = now_ms();
         let run = DeliveryRun {
@@ -44,6 +45,7 @@ impl DeliveryService {
             owner,
             created_at_ms: now,
             updated_at_ms: now,
+            qa_jira_comment,
         };
         let store = self.store()?;
         store.put_run(&run)?;
@@ -115,6 +117,27 @@ impl DeliveryService {
         run.owner = None;
         run.updated_at_ms = now_ms();
         self.save_run(&run, "run_released", owner)?;
+        Ok(run)
+    }
+
+    /// The user's choice on posting QA verdicts to Jira for this batch.
+    pub fn set_run_qa_jira_comment(
+        &self,
+        run_id: &str,
+        post: bool,
+    ) -> Result<DeliveryRun, DeliveryError> {
+        let mut run = self.run(run_id)?;
+        run.qa_jira_comment = Some(post);
+        run.updated_at_ms = now_ms();
+        self.save_run(
+            &run,
+            "run_policy",
+            if post {
+                "qa_jira_comment"
+            } else {
+                "no_qa_jira_comment"
+            },
+        )?;
         Ok(run)
     }
 

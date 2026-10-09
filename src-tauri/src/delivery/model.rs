@@ -155,6 +155,9 @@ pub struct DeliveryJob {
     /// job's instructions state them.
     #[serde(default)]
     pub decisions: Vec<String>,
+    /// QA jobs only: the repo's QA environment when the job was dispatched.
+    #[serde(default)]
+    pub qa_environment: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -296,6 +299,10 @@ pub struct DeliveryRun {
     pub owner: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+    /// The user's standing choice for the batch: post each QA verdict as a
+    /// comment on its Jira issue. `None` until the user sets it in Tinto.
+    #[serde(default)]
+    pub qa_jira_comment: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -327,6 +334,10 @@ pub struct DeliveryRepoSettings {
     /// Whether QA jobs get a browser.
     #[serde(default)]
     pub qa_browser: bool,
+    /// Where QA runs on this machine (platforms, scope, clients), in the
+    /// user's words. QA jobs get it; coordinators read it instead of asking.
+    #[serde(default)]
+    pub qa_environment: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

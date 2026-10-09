@@ -134,6 +134,12 @@ pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
             "This is the QA stage: you have network access and can read the main checkout at {} (for example the project's local QA configuration). Do not change it.",
             plain_path(&task.repo)
         ));
+        if !job.qa_environment.trim().is_empty() {
+            lines.push(format!(
+                "QA environment the user set for this repo (test there; anything beyond it is out of scope): {}",
+                job.qa_environment.trim()
+            ));
+        }
         if job.qa_browser {
             lines.push(format!(
                 "You have a headless browser with a fresh profile through the {BROWSER_SERVER} MCP tools. The screenshots it saves go to the job's folder, outside the worktree; name them in the result's checks."
@@ -950,6 +956,7 @@ mod tests {
             allowed_commands: Vec::new(),
             qa_browser: false,
             decisions: Vec::new(),
+            qa_environment: String::new(),
         }
     }
 

@@ -10,8 +10,10 @@
 
 use super::model::{
     DeliveryDecision, DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus,
+    DeliveryTask,
 };
 use super::service::DeliveryService;
+use super::tasks::plain_path;
 use super::{now_ms, DeliveryError};
 
 pub const ALLOWED: &str = "allowed";
@@ -72,6 +74,45 @@ fn validate(decision: &NewDecision) -> Result<(), DeliveryError> {
     Ok(())
 }
 
+const SCRIPT_EXTENSIONS: [&str; 11] = [
+    ".sh", ".bash", ".ps1", ".py", ".js", ".mjs", ".cjs", ".ts", ".cmd", ".bat", ".rb",
+];
+
+/// Whether a permission's command runs files agents can edit after the user
+/// approves it: anything in the repo, its worktrees or `.agent`, or a script
+/// given by a relative path (it resolves inside the worktree).
+fn runs_agent_files(command: &str, task: &DeliveryTask) -> bool {
+    // One spelling for Windows, WSL mounts and slashes.
+    let norm = |text: &str| {
+        let text = text.replace('\\', "/").to_lowercase();
+        match text.strip_prefix("/mnt/") {
+            Some(rest) if rest.as_bytes().get(1) == Some(&b'/') => {
+                format!("{}:{}", &rest[..1], &rest[1..])
+            }
+            _ => text,
+        }
+    };
+    let text = norm(command);
+    let owned = [
+        Some(norm(&plain_path(&task.repo))),
+        task.worktree.parent().map(|root| norm(&plain_path(root))),
+    ];
+    if text.contains(".agent/")
+        || owned
+            .iter()
+            .flatten()
+            .any(|path| text.contains(path.as_str()))
+    {
+        return true;
+    }
+    text.split_whitespace().any(|token| {
+        let token = token.trim_matches(|c| c == '"' || c == '\'');
+        let script = SCRIPT_EXTENSIONS.iter().any(|ext| token.ends_with(ext));
+        let absolute = token.starts_with('/') || token.as_bytes().get(1) == Some(&b':');
+        script && !absolute
+    })
+}
+
 /// How a job's instructions state an answered decision.
 pub fn decision_note(decision: &DeliveryDecision) -> Option<String> {
     let answer = decision.answer.as_deref()?;
@@ -110,6 +151,15 @@ impl DeliveryService {
         }
         for decision in &decisions {
             validate(decision)?;
+            if let Some(command) = decision.command.as_deref() {
+                if decision.kind == DeliveryDecisionKind::Permission
+                    && runs_agent_files(command, &task)
+                {
+                    return Err(invalid(
+                        "el comando de un permiso no puede ejecutar archivos que los agentes pueden editar (el repositorio, sus worktrees o .agent): pide el comando real",
+                    ));
+                }
+            }
         }
         let now = now_ms();
         let created: Vec<DeliveryDecision> = decisions

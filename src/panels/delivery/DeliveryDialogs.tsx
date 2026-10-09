@@ -1,7 +1,8 @@
 // Delivery forms, rendered as in-app modals (same look as the confirm
 // dialog, and reachable by UI automation).
 
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { getDeliveryRepoSettings, setDeliveryRepoSettings } from "../../delivery/client";
 import { useAccessibleDialog } from "../../workbench/useAccessibleDialog";
 import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import type {
@@ -480,6 +481,114 @@ export function ReleaseLeaseDialog({
   );
 }
 
+/** What QA can use in a repo, set once so coordinators read it instead of
+ *  asking on every task. */
+function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
+  const [repo, setRepo] = useState(repos[0]?.path ?? "");
+  const [loaded, setLoaded] = useState<DeliveryRepoSettings | null>(null);
+  const [browser, setBrowser] = useState(false);
+  const [commands, setCommands] = useState("");
+  const [environment, setEnvironment] = useState("");
+  const [status, setStatus] = useState("");
+  useEffect(() => {
+    if (!repo) return;
+    let active = true;
+    getDeliveryRepoSettings(repo).then(
+      (settings) => {
+        if (!active) return;
+        setLoaded(settings);
+        setBrowser(settings.qa_browser ?? false);
+        setCommands((settings.qa_commands ?? []).join("\n"));
+        setEnvironment(settings.qa_environment ?? "");
+        setStatus("");
+      },
+      () => active && setStatus("No se pudieron leer los ajustes de este repositorio."),
+    );
+    return () => {
+      active = false;
+    };
+  }, [repo]);
+  const label = repos.find((choice) => choice.path === repo)?.label ?? repo;
+  return (
+    <section className="delivery-qa-settings" aria-label="QA del repositorio">
+      <h3 className="delivery-dialog__subtitle">QA del repositorio</h3>
+      <p className="file-op-modal__body">
+        Lo que la QA puede usar en cada repositorio. Los coordinadores lo leen aquí y no lo
+        preguntan en cada tarea.
+      </p>
+      <Field label="Repositorio">
+        <select
+          aria-label="Repositorio de la QA"
+          value={repo}
+          onChange={(event) => setRepo(event.target.value)}
+        >
+          {repos.map((choice) => (
+            <option key={choice.path} value={choice.path}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field
+        label="Entorno de QA"
+        hint="Dónde se prueba en esta máquina: plataforma, ámbito, clientes. Por ejemplo: Windows, ámbito personal; Claude Code y Codex con mis sesiones."
+      >
+        <textarea
+          value={environment}
+          onChange={(event) => setEnvironment(event.target.value)}
+          rows={2}
+        />
+      </Field>
+      <Field
+        label="Comandos de QA"
+        hint="Uno por línea: el comando real, nunca un script que los agentes puedan editar. Pueden escribir fuera del worktree."
+      >
+        <textarea
+          value={commands}
+          onChange={(event) => setCommands(event.target.value)}
+          rows={2}
+          placeholder="agentos skills install"
+        />
+      </Field>
+      <label className="delivery-check">
+        <input
+          type="checkbox"
+          checked={browser}
+          onChange={(event) => setBrowser(event.target.checked)}
+        />
+        <span>Navegador para la QA</span>
+      </label>
+      <div className="delivery-actions">
+        <button
+          type="button"
+          className="file-op-modal__button"
+          disabled={!loaded}
+          onClick={() =>
+            loaded &&
+            setDeliveryRepoSettings(repo, {
+              ...loaded,
+              qa_browser: browser,
+              qa_commands: parseChecks(commands),
+              qa_environment: environment.trim(),
+            }).then(
+              (saved) => {
+                setLoaded(saved);
+                setStatus(`Guardado para ${label}.`);
+              },
+              () => setStatus("No se pudo guardar."),
+            )
+          }
+        >
+          Guardar la QA de {label}
+        </button>
+        <span className="delivery-field__hint" role="status">
+          {status}
+        </span>
+      </div>
+    </section>
+  );
+}
+
 const MASK = "••••••••";
 
 /** A setup snippet whose secret stays hidden; the button copies it whole. */
@@ -523,6 +632,7 @@ export function SettingsDialog({
   busy,
   onCapacity,
   onCreateRun,
+  onQaJiraComment,
   onTakeover,
   onClose,
   onCancel,
@@ -533,13 +643,15 @@ export function SettingsDialog({
   repos: RepoChoice[];
   busy: boolean;
   onCapacity: (capacity: number) => void;
-  onCreateRun: (repo: string, title: string) => void;
+  onCreateRun: (repo: string, title: string, qaJiraComment: boolean) => void;
+  onQaJiraComment: (run: DeliveryRun, post: boolean) => void;
   onTakeover: (run: DeliveryRun) => void;
   onClose: (run: DeliveryRun) => void;
   onCancel: () => void;
 }) {
   const [repo, setRepo] = useState(repos[0]?.path ?? "");
   const [title, setTitle] = useState("");
+  const [jiraComment, setJiraComment] = useState(false);
   // The token is a credential: the dialog shows it masked and only the copy
   // buttons carry it.
   const claude = (token: string) =>
@@ -584,6 +696,16 @@ export function SettingsDialog({
               <small>{run.owner ? `coordina ${run.owner}` : "sin coordinador"}</small>
             </span>
             <span className="delivery-run-list__actions">
+              <select
+                aria-label={`Resultado de QA en Jira del lote ${run.title || run.id}`}
+                value={run.qa_jira_comment == null ? "" : run.qa_jira_comment ? "yes" : "no"}
+                disabled={busy}
+                onChange={(event) => onQaJiraComment(run, event.target.value === "yes")}
+              >
+                {run.qa_jira_comment == null && <option value="">QA en Jira: sin decidir</option>}
+                <option value="yes">QA en Jira: comentar</option>
+                <option value="no">QA en Jira: no publicar</option>
+              </select>
               {run.owner && run.owner !== "user" && (
                 <button
                   type="button"
@@ -624,17 +746,31 @@ export function SettingsDialog({
           />
         </Field>
       </div>
+      <Field
+        label="Resultado de QA en Jira"
+        hint="El coordinador lo lee aquí y no lo pregunta en cada tarea."
+      >
+        <select
+          value={jiraComment ? "yes" : "no"}
+          onChange={(event) => setJiraComment(event.target.value === "yes")}
+        >
+          <option value="no">No publicar</option>
+          <option value="yes">Comentar en cada issue</option>
+        </select>
+      </Field>
       <button
         type="button"
         className="file-op-modal__button"
         disabled={busy || !repo || !title.trim()}
         onClick={() => {
-          onCreateRun(repo, title.trim());
+          onCreateRun(repo, title.trim(), jiraComment);
           setTitle("");
         }}
       >
         Crear lote
       </button>
+
+      <RepoQaSettings repos={repos} />
 
       <h3 className="delivery-dialog__subtitle">Conectar un coordinador</h3>
       <p className="file-op-modal__body">

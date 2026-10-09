@@ -28,6 +28,7 @@ import {
   retryDeliveryJob,
   setDeliveryCodexModel,
   setDeliveryRepoSettings,
+  setDeliveryRunQaJiraComment,
   takeoverDeliveryRun,
   undoDeliveryJob,
   updateDeliverySettings,
@@ -635,7 +636,12 @@ export function DeliveryPanel() {
           busy={busy}
           onCancel={() => setDialog(null)}
           onCapacity={(value) => void run(() => updateDeliverySettings(value))}
-          onCreateRun={(repo, title) => void run(() => createDeliveryRun(repo, title))}
+          onCreateRun={(repo, title, qaJiraComment) =>
+            void run(() => createDeliveryRun(repo, title, qaJiraComment))
+          }
+          onQaJiraComment={(target, post) =>
+            void run(() => setDeliveryRunQaJiraComment(target.id, post))
+          }
           onTakeover={(target) => void takeover(target)}
           onClose={(target) =>
             void (async () => {

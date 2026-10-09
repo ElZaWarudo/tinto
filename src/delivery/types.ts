@@ -157,6 +157,8 @@ export interface DeliveryRun {
   owner: string | null;
   created_at_ms: number;
   updated_at_ms: number;
+  /** Post QA verdicts as Jira comments; null until the user sets it. */
+  qa_jira_comment?: boolean | null;
 }
 
 export interface DeliverySettings {
@@ -173,6 +175,8 @@ export interface DeliveryRepoSettings {
   qa_commands?: string[];
   /** Whether QA jobs get a headless browser. */
   qa_browser?: boolean;
+  /** Where QA runs on this machine, in the user's words. */
+  qa_environment?: string;
 }
 
 export interface DeliveryCoordinatorEndpoint {
