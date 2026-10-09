@@ -291,6 +291,16 @@ pub fn worktree_state(
     })
 }
 
+/// Whether `worktree` is still a checkout git can use.
+pub fn is_worktree(place: Place<'_>, worktree: &Path) -> bool {
+    git_ok(place, worktree, &["rev-parse", "--is-inside-work-tree"])
+}
+
+/// Makes git forget worktrees whose folder is gone.
+pub fn prune_worktrees(place: Place<'_>, repo: &Path) {
+    let _ = git(place, repo, &["worktree", "prune"]);
+}
+
 /// Removes the checkout; the branch is kept.
 pub fn remove_worktree(
     place: Place<'_>,

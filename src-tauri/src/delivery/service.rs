@@ -374,7 +374,8 @@ impl DeliveryService {
         }
         let place = Place::of(task.distro.as_deref());
         // A removal that failed halfway (e.g. a folder in use on Windows)
-        // leaves the folder without its `.git` link: nothing left to keep.
+        // leaves the folder without its `.git` link, and a worktree deleted
+        // by hand leaves no folder at all: nothing left to keep.
         let present = match place {
             Place::Native => {
                 let folder = PathBuf::from(plain_path(&task.worktree));
@@ -384,8 +385,11 @@ impl DeliveryService {
                 }
                 linked
             }
-            Place::Wsl(_) => true,
+            Place::Wsl(_) => tasks::is_worktree(place, &task.worktree),
         };
+        if !present {
+            tasks::prune_worktrees(place, &task.repo);
+        }
         if present {
             if !force {
                 let state = tasks::worktree_state(place, &task.worktree, &task.base_commit)?;

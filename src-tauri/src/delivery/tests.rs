@@ -492,6 +492,23 @@ fn a_task_whose_removal_failed_halfway_can_be_removed() {
 }
 
 #[test]
+fn a_task_whose_worktree_was_deleted_by_hand_can_be_removed() {
+    let h = harness();
+    let task = h.task("K-8");
+    let folder = PathBuf::from(plain_path(&task.worktree));
+    std::fs::remove_dir_all(&folder).unwrap();
+    h.service.remove_task(&task.id, false).unwrap();
+    assert!(h.service.overview().unwrap().tasks.is_empty());
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(h.repo.path())
+        .args(["worktree", "list"])
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&listed.stdout).contains("K-8"));
+}
+
+#[test]
 fn a_task_key_is_unique_per_repository() {
     let h = harness();
     h.task("K-12");
