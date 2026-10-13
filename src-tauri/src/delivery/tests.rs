@@ -67,6 +67,7 @@ fn fake_launcher() -> Launcher {
                 stdin: String::new(),
                 provider_session_id: None,
                 wsl_job: None,
+                note: None,
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -88,6 +89,7 @@ fn fake_launcher() -> Launcher {
                 stdin: String::new(),
                 provider_session_id: None,
                 wsl_job: None,
+                note: None,
             })
         }
     })
@@ -168,6 +170,7 @@ impl Harness {
                 lease: None,
                 timeout_minutes: None,
                 reasoning: None,
+                platform: None,
             })
             .unwrap()
     }
@@ -275,6 +278,7 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
         lease: None,
         timeout_minutes: None,
         reasoning: None,
+        platform: None,
     };
     let claude = h
         .service
@@ -321,6 +325,7 @@ fn only_qa_jobs_get_the_qa_commands_and_the_browser() {
         lease: None,
         timeout_minutes: None,
         reasoning: None,
+        platform: None,
     };
     let review = h.service.dispatch(new_job("review")).unwrap();
     assert_eq!(review.allowed_commands, vec!["npm test".to_string()]);
@@ -838,6 +843,8 @@ fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDe
         text: String::new(),
         command: None,
         undo: String::new(),
+        scripts: Vec::new(),
+        read_dirs: Vec::new(),
     }
 }
 
@@ -850,6 +857,8 @@ fn permission(command: &str) -> super::decisions::NewDecision {
         text: String::new(),
         command: Some(command.into()),
         undo: "agentos skills uninstall demo".into(),
+        scripts: Vec::new(),
+        read_dirs: Vec::new(),
     }
 }
 
@@ -909,6 +918,7 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             lease: None,
             timeout_minutes: None,
             reasoning: None,
+            platform: None,
         })
         .unwrap_err();
     assert_eq!(blocked.category, "decisions_pending");
@@ -960,6 +970,7 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             lease: None,
             timeout_minutes: None,
             reasoning: None,
+            platform: None,
         })
         .unwrap();
     assert!(qa
@@ -1004,7 +1015,7 @@ fn a_coordinator_asks_for_decisions_over_mcp() {
                 {"label": "Sí", "consequence": "Instala en los dos", "recommended": true},
                 {"label": "No", "consequence": "Solo Claude"}
             ]},
-            {"kind": "permission", "question": "¿Escribir en ~/.claude?", "undo": "borrar la carpeta", "command": "agentos skills install"}
+            {"kind": "permission", "question": "¿Escribir en ~/.claude?", "undo": "borrar la carpeta", "command": "agentos skills install", "read_dirs": ["C:/Users/me/.claude/skills"]}
         ]}),
     );
     assert_eq!(
@@ -1018,6 +1029,33 @@ fn a_coordinator_asks_for_decisions_over_mcp() {
         json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "decisions": [{"kind": "vote", "question": "?"}]}),
     );
     assert_eq!(bad["isError"], true);
+    assert_eq!(
+        asked["structuredContent"][1]["read_dirs"],
+        json!(["C:/Users/me/.claude/skills"])
+    );
+    // One invalid item: nothing is created and the error names it.
+    let mixed = call(
+        6,
+        "request_decisions",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "decisions": [
+            {"kind": "text", "question": "Texto del aviso", "text": "Instalado"},
+            {"kind": "permission", "question": "¿Ejecutar el script?", "undo": "nada", "command": "bash qa/run.sh"}
+        ]}),
+    );
+    assert_eq!(mixed["isError"], true);
+    let reason = mixed["content"][0]["text"].as_str().unwrap();
+    assert!(reason.contains("#2 «¿Ejecutar el script?»"), "{reason}");
+    assert!(reason.contains("Las otras 1 son válidas"), "{reason}");
+    let platform = call(
+        7,
+        "dispatch_job",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "role": "qa", "agent": "claude", "prompt": "x", "platform": "mac"}),
+    );
+    assert_eq!(platform["isError"], true);
+    assert!(platform["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("plataforma desconocida"));
     let read = call(5, "read_decisions", json!({"task_id": task_id}));
     assert_eq!(read["structuredContent"][0]["status"], "pending");
     assert_eq!(read["structuredContent"][1]["kind"], "permission");
@@ -1029,9 +1067,10 @@ fn a_permission_cannot_run_files_agents_can_edit() {
     let task = h.task("D-4");
     let repo = plain_path(h.repo.path());
     let worktree = plain_path(&task.worktree);
+    let other_worktree = plain_path(&task.worktree.with_file_name("D-40"));
     let refused = [
         format!("bash {repo}/.agent/backlog-delivery/issues/D-4/qa/run.sh"),
-        format!("bash {worktree}/scripts/install.sh"),
+        format!("bash {other_worktree}/scripts/install.sh"),
         "bash qa/agentos-qa.sh".to_string(),
         "python ./check.py".to_string(),
         format!("node {}/tools/run.js", repo.replace('\\', "/")),
@@ -1043,15 +1082,211 @@ fn a_permission_cannot_run_files_agents_can_edit() {
             .unwrap_err();
         assert_eq!(error.category, "invalid_decision", "{command}");
     }
-    h.service
+    let asked = h
+        .service
         .request_decisions(
             &task.id,
-            vec![permission(
-                "agentos skills install team/reviewer --target codex",
-            )],
+            vec![
+                permission("agentos skills install team/reviewer --target codex"),
+                // The task's own code: allowed, for one candidate.
+                permission(&format!("node {worktree}/cli/index.js")),
+            ],
             "coord",
         )
         .unwrap();
+    assert!(!asked[0].runs_candidate);
+    assert!(asked[1].runs_candidate);
+
+    let mut outside = permission("agentos skills list");
+    outside.read_dirs = vec!["C:/".into()];
+    assert!(h
+        .service
+        .request_decisions(&task.id, vec![outside.clone()], "coord")
+        .is_err());
+    outside.read_dirs = vec!["skills".into()];
+    assert!(h
+        .service
+        .request_decisions(&task.id, vec![outside], "coord")
+        .is_err());
+}
+
+fn claude_qa(task: &DeliveryTask, prompt: &str) -> NewJob {
+    NewJob {
+        task_id: task.id.clone(),
+        role: "qa".into(),
+        agent: DeliveryAgent::Claude,
+        model: None,
+        access: DeliveryAccess::Workspace,
+        prompt: prompt.into(),
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+        reasoning: None,
+        platform: None,
+    }
+}
+
+fn qa_lease(h: &Harness) -> super::model::DeliveryLease {
+    h.service
+        .overview()
+        .unwrap()
+        .leases
+        .into_iter()
+        .find(|lease| lease.name == "qa")
+        .unwrap()
+}
+
+#[test]
+fn a_permission_freezes_its_scripts_and_holds_for_one_candidate() {
+    let h = harness();
+    let task = h.task("D-5");
+    let slashes = |path: &std::path::Path| plain_path(path).replace('\\', "/");
+    let qa_dir = h.repo.path().join(".agent").join("qa");
+    std::fs::create_dir_all(&qa_dir).unwrap();
+    let script = qa_dir.join("run.sh");
+    let approved = format!(
+        "WT={}\n. \"{}/.agent/env/qa.env\"\nexec node \"$WT/cli/index.js\" \"$@\"\n",
+        slashes(&task.worktree),
+        slashes(h.repo.path()),
+    );
+    std::fs::write(&script, &approved).unwrap();
+    let skills = tempfile::tempdir().unwrap();
+
+    let mut request = permission(&format!("bash {}", slashes(&script)));
+    request.scripts = vec![plain_path(&script)];
+    request.read_dirs = vec![plain_path(skills.path())];
+    let asked = h
+        .service
+        .request_decisions(&task.id, vec![request], "coord")
+        .unwrap()
+        .remove(0);
+    // What the user reads is what was frozen, with what it leaves unfrozen.
+    assert_eq!(asked.scripts[0].content, approved);
+    assert_eq!(asked.scripts[0].path, slashes(&script));
+    assert!(asked.runs_candidate);
+    assert_eq!(asked.unfrozen.len(), 1, "{:?}", asked.unfrozen);
+    assert!(asked.unfrozen[0].ends_with("/.agent/env/qa.env"));
+
+    // An agent rewrites the script after the user allows it.
+    let allowed = h
+        .service
+        .answer_decision(&asked.id, super::decisions::ALLOWED, "user")
+        .unwrap();
+    assert!(allowed.candidate.is_some());
+    std::fs::write(&script, "rm -rf ~\n").unwrap();
+
+    let qa = h
+        .service
+        .dispatch(claude_qa(&task, "events=claude-ok"))
+        .unwrap();
+    assert_eq!(qa.read_dirs, vec![plain_path(skills.path())]);
+    let qa = h.wait(&qa.id);
+    assert_eq!(qa.status, DeliveryJobStatus::Finished, "{:?}", qa.error);
+    assert!(qa.ran_on.is_some());
+    let copy = &qa.frozen_scripts[0];
+    assert_eq!(copy.original, slashes(&script));
+    assert_eq!(std::fs::read_to_string(&copy.copy).unwrap(), approved);
+    let prompt = super::adapters::job_prompt(
+        &qa,
+        &task,
+        &super::adapters::JobPaths::in_dir(PathBuf::from("jobs")),
+        false,
+    );
+    assert!(
+        prompt.contains(&format!(
+            "you can run only: bash {}.",
+            copy.copy.replace('\\', "/")
+        )),
+        "{prompt}"
+    );
+
+    // The task's code changes: the permission no longer covers it, and the
+    // job that never started leaves the QA resource free.
+    std::fs::write(task.worktree.join("cli.js"), "changed\n").unwrap();
+    let stale = h
+        .service
+        .dispatch(claude_qa(&task, "events=claude-ok"))
+        .unwrap();
+    let stale = h.wait(&stale.id);
+    assert_eq!(stale.status, DeliveryJobStatus::Failed);
+    assert!(stale.error.unwrap().contains("Vuelve a permitirlo"));
+    assert_eq!(qa_lease(&h).state, DeliveryLeaseState::Free);
+
+    // Only the user's renewal makes it valid for the new content.
+    let renewed = h.service.renew_permission(&asked.id, "user").unwrap();
+    assert_ne!(renewed.candidate, allowed.candidate);
+    let again = h
+        .service
+        .dispatch(claude_qa(&task, "events=claude-ok"))
+        .unwrap();
+    assert_eq!(h.wait(&again.id).status, DeliveryJobStatus::Finished);
+    let plain = h
+        .service
+        .request_decisions(&task.id, vec![permission("agentos skills list")], "coord")
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        h.service
+            .renew_permission(&plain.id, "user")
+            .unwrap_err()
+            .category,
+        "invalid_decision"
+    );
+}
+
+#[test]
+fn a_batch_with_an_invalid_decision_says_which_and_creates_none() {
+    let h = harness();
+    let task = h.task("D-6");
+    let mut no_undo = permission("agentos skills install");
+    no_undo.undo.clear();
+    no_undo.question = "¿Instalar sin deshacer?".into();
+    let unfrozen = permission(&format!(
+        "bash {}/.agent/qa/run.sh",
+        plain_path(h.repo.path())
+    ));
+    let error = h
+        .service
+        .request_decisions(
+            &task.id,
+            vec![choice("¿Codex también?", Some(0)), no_undo, unfrozen],
+            "coord",
+        )
+        .unwrap_err();
+    assert_eq!(error.category, "invalid_decision");
+    assert!(error.message.contains("no se creó ninguna decisión"));
+    assert!(error.message.contains("#2 «¿Instalar sin deshacer?»"));
+    assert!(error
+        .message
+        .contains("#3 «¿Instalar en tu ~/.claude real?»"));
+    assert!(error.message.contains("decláralo en `scripts`"));
+    assert!(error.message.contains("Las otras 1 son válidas"));
+    assert!(!error.message.contains("#1"));
+    assert!(h.service.task_decisions(&task.id).unwrap().is_empty());
+}
+
+#[test]
+fn cancelling_qa_quarantines_its_resource_only_if_it_acted() {
+    let h = harness();
+    let task = h.task("D-7");
+    // Cancelled before the agent ran anything: the resource is free.
+    let idle = h.dispatch(&task, "qa", "events=none sleep=30");
+    h.wait_status(&idle.id, DeliveryJobStatus::Started);
+    h.service.cancel(&idle.id).unwrap();
+    assert_eq!(h.wait(&idle.id).status, DeliveryJobStatus::Cancelled);
+    assert_eq!(qa_lease(&h).state, DeliveryLeaseState::Free);
+
+    // Cancelled after it ran commands: the user checks before releasing.
+    let busy = h.dispatch(&task, "qa", "events=codex-ok sleep=30");
+    h.wait_status(&busy.id, DeliveryJobStatus::Started);
+    std::thread::sleep(Duration::from_millis(1500));
+    h.service.cancel(&busy.id).unwrap();
+    assert_eq!(h.wait(&busy.id).status, DeliveryJobStatus::Cancelled);
+    let lease = qa_lease(&h);
+    assert_eq!(lease.state, DeliveryLeaseState::Quarantined);
+    let note = lease.note.unwrap();
+    assert!(note.contains("de D-7 se canceló"), "{note}");
+    assert!(note.contains("pulsa Liberar"), "{note}");
 }
 
 #[test]
@@ -1127,6 +1362,7 @@ fn coordinators_read_what_the_user_configured() {
             lease: None,
             timeout_minutes: None,
             reasoning: None,
+            platform: None,
         })
         .unwrap();
     assert_eq!(

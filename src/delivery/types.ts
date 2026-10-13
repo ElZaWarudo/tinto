@@ -84,7 +84,17 @@ export interface DeliveryJob {
   qa_browser?: boolean;
   /** The task's answered decisions as the job received them. */
   decisions?: string[];
+  /** Where a Claude job on a Windows repo was asked to run; Tinto chose when null. */
+  platform?: DeliveryPlatform | null;
+  /** Where the job ran ("Windows", "WSL · Ubuntu"…), once started. */
+  ran_on?: string | null;
+  /** QA jobs: folders outside the worktree the permissions let it read. */
+  read_dirs?: string[];
+  /** QA jobs: the approved scripts and the frozen copies it ran instead. */
+  frozen_scripts?: { original: string; copy: string }[];
 }
+
+export type DeliveryPlatform = "windows" | "wsl";
 
 export interface DeliveryLeaseWaiter {
   job_id: string;
@@ -141,6 +151,16 @@ export interface DeliveryDecision {
   command: string | null;
   /** `permission`: how to undo it. */
   undo: string;
+  /** `permission`: the scripts the command runs, frozen when it was asked. */
+  scripts?: { path: string; content: string }[];
+  /** `permission`: folders outside the worktree QA may read and list. */
+  read_dirs?: string[];
+  /** `permission`: it runs the task's code, so it holds for one candidate. */
+  runs_candidate?: boolean;
+  /** `permission`: agent-editable files its scripts name that are not frozen. */
+  unfrozen?: string[];
+  /** The worktree content (tree id) a `runs_candidate` permission was allowed for. */
+  candidate?: string | null;
   status: "pending" | "answered";
   /** The chosen option, the approved text, or "allowed"/"denied". */
   answer: string | null;

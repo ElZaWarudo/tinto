@@ -10,8 +10,8 @@ use tauri::{AppHandle, State};
 use super::coordination::NewApproval;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryDecision, DeliveryJob, DeliveryJobLog,
-    DeliveryLease, DeliveryOverview, DeliveryRepoSettings, DeliveryRun, DeliveryRung,
-    DeliverySettings, DeliveryTask,
+    DeliveryLease, DeliveryOverview, DeliveryPlatform, DeliveryRepoSettings, DeliveryRun,
+    DeliveryRung, DeliverySettings, DeliveryTask,
 };
 use super::service::{DeliveryService, NewJob, NewTask};
 use super::tasks::plain_path;
@@ -158,9 +158,11 @@ pub fn delivery_dispatch_job(
     lease: Option<String>,
     timeout_minutes: Option<u32>,
     reasoning: Option<String>,
+    platform: Option<DeliveryPlatform>,
 ) -> Result<DeliveryJob, CommandError> {
     service
         .dispatch(NewJob {
+            platform,
             task_id,
             role,
             agent,
@@ -338,15 +340,24 @@ pub fn delivery_complete_approval(
         .map_err(CommandError::from)
 }
 
+/// Allowing a permission that runs the task's code snapshots the worktree.
 #[tauri::command]
-pub fn delivery_answer_decision(
+pub async fn delivery_answer_decision(
     service: State<'_, DeliveryService>,
     decision_id: String,
     answer: String,
 ) -> Result<DeliveryDecision, CommandError> {
-    service
-        .answer_decision(&decision_id, &answer, "user")
-        .map_err(CommandError::from)
+    let service = service.inner().clone();
+    blocking(move || service.answer_decision(&decision_id, &answer, "user")).await
+}
+
+#[tauri::command]
+pub async fn delivery_renew_permission(
+    service: State<'_, DeliveryService>,
+    decision_id: String,
+) -> Result<DeliveryDecision, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.renew_permission(&decision_id, "user")).await
 }
 
 #[tauri::command]

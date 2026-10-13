@@ -3,7 +3,11 @@
 // Answers are final; changing one is a new contract version.
 
 import { useState, type ReactNode } from "react";
-import { acceptRecommendedDecisions, answerDeliveryDecision } from "../../delivery/client";
+import {
+  acceptRecommendedDecisions,
+  answerDeliveryDecision,
+  renewDeliveryPermission,
+} from "../../delivery/client";
 import type { DeliveryDecision } from "../../delivery/types";
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>;
@@ -101,6 +105,59 @@ function TextCard({
   );
 }
 
+/** Exactly what a permission lets QA do: the command, the folders it may
+ *  read and the frozen text of every script it runs. */
+function PermissionScope({ decision }: { decision: DeliveryDecision }) {
+  const scripts = decision.scripts ?? [];
+  const readDirs = decision.read_dirs ?? [];
+  const unfrozen = decision.unfrozen ?? [];
+  return (
+    <>
+      {decision.command && (
+        <p>
+          La QA podrá ejecutar <code>{decision.command}</code>, con cualquier argumento.
+        </p>
+      )}
+      {readDirs.length > 0 && (
+        <p>
+          La QA podrá leer y listar, sin modificar:{" "}
+          {readDirs.map((dir) => (
+            <code key={dir}>{dir} </code>
+          ))}
+        </p>
+      )}
+      {scripts.map((script) => (
+        <details key={script.path} className="delivery-decision__detail">
+          <summary>Script congelado: {script.path}</summary>
+          <pre>{script.content}</pre>
+        </details>
+      ))}
+      {scripts.length > 0 && (
+        <p className="delivery-muted">
+          Tinto copió {scripts.length === 1 ? "este script" : "estos scripts"} al pedirse el
+          permiso. La QA ejecuta esa copia, aunque el archivo cambie después.
+        </p>
+      )}
+      {unfrozen.length > 0 && (
+        <p className="delivery-tone--danger">
+          {scripts.length === 1 ? "El script usa" : "Los scripts usan"} archivos que los agentes
+          pueden cambiar y que no están congelados:{" "}
+          {unfrozen.map((path) => (
+            <code key={path}>{path} </code>
+          ))}
+        </p>
+      )}
+      {decision.runs_candidate && (
+        <p className="delivery-muted">
+          Ejecuta el código del worktree de la tarea. El permiso vale para el código tal como esté
+          cuando lo permitas: si cambia, la QA no arranca hasta que vuelvas a permitirlo. Los
+          archivos que git ignora (como node_modules) no se comprueban.
+        </p>
+      )}
+    </>
+  );
+}
+
 function PermissionCard({
   decision,
   busy,
@@ -113,11 +170,7 @@ function PermissionCard({
   return (
     <fieldset className="delivery-decision delivery-decision--permission">
       <legend>{decision.question}</legend>
-      {decision.command && (
-        <p>
-          La QA podrá ejecutar <code>{decision.command}</code>.
-        </p>
-      )}
+      <PermissionScope decision={decision} />
       <p className="delivery-muted">Cómo se deshace: {decision.undo}</p>
       <TechnicalDetail detail={decision.detail} />
       <div className="delivery-actions">
@@ -253,7 +306,15 @@ function LogRow({
 
 /** What was decided before the stages ran, folded by default: a summary
  *  line, then choices, approved texts and permissions apart. */
-export function DecisionLog({ decisions }: { decisions: DeliveryDecision[] }) {
+export function DecisionLog({
+  decisions,
+  busy,
+  run,
+}: {
+  decisions: DeliveryDecision[];
+  busy: boolean;
+  run: Run;
+}) {
   if (decisions.length === 0) return null;
   const choices = decisions.filter((decision) => decision.kind === "choice");
   const texts = decisions.filter((decision) => decision.kind === "text");
@@ -320,7 +381,26 @@ export function DecisionLog({ decisions }: { decisions: DeliveryDecision[] }) {
                     <strong className={allowed ? "delivery-tone--ok" : "delivery-tone--danger"}>
                       {allowed ? "✓ Permitido" : "✕ No permitido"}
                     </strong>
-                    {decision.command && <code>{decision.command}</code>}
+                    {allowed ? (
+                      <PermissionScope decision={decision} />
+                    ) : (
+                      decision.command && <code>{decision.command}</code>
+                    )}
+                    {allowed && decision.runs_candidate && (
+                      <span className="delivery-actions">
+                        <small className="delivery-muted">
+                          Permitido para el código {decision.candidate?.slice(0, 8)}.
+                        </small>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          title="Si el código de la tarea cambió desde que lo permitiste, la QA no arranca hasta que lo permitas de nuevo."
+                          onClick={() => void run(() => renewDeliveryPermission(decision.id))}
+                        >
+                          Volver a permitir para el código actual
+                        </button>
+                      </span>
+                    )}
                   </LogRow>
                 );
               })}

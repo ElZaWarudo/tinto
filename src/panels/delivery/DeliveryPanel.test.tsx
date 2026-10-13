@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { busStore } from "../../bus/store";
+import { setWindowsHostOverrideForTests } from "../../workbench/platform";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/actions";
 import type {
   DeliveryApproval,
@@ -32,6 +33,7 @@ const client = vi.hoisted(() => ({
   openDeliveryJobInAgents: vi.fn(),
   completeDeliveryApproval: vi.fn(),
   answerDeliveryDecision: vi.fn(),
+  renewDeliveryPermission: vi.fn(),
   acceptRecommendedDecisions: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
   createDeliveryRun: vi.fn(),
@@ -611,6 +613,99 @@ describe("DeliveryPanel", () => {
     const log = screen.getByRole("region", { name: "Decisiones" });
     expect(log).toHaveTextContent("¿Formato del aviso?");
     expect(log).toHaveTextContent("Corto");
+  });
+
+  it("shows exactly what a permission lets QA run and renews it for new code", async () => {
+    const user = userEvent.setup();
+    const permission = (over: Partial<DeliveryDecision>): DeliveryDecision => ({
+      id: "p1",
+      task_id: "t1",
+      kind: "permission",
+      question: "¿Probar la CLI del worktree?",
+      detail: "",
+      options: [],
+      text: "",
+      command: "bash C:/work/agentos/.agent/qa/run.sh",
+      undo: "borrar la carpeta temporal",
+      scripts: [{ path: "C:/work/agentos/.agent/qa/run.sh", content: "exec tsx cli/src/index.ts" }],
+      read_dirs: ["C:/Users/me/.claude/skills"],
+      runs_candidate: true,
+      unfrozen: ["C:/work/agentos/.agent/env/qa.env"],
+      candidate: null,
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+      ...over,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        decisions: [
+          permission({}),
+          permission({
+            id: "p2",
+            question: "¿Instalar en tu ~/.claude real?",
+            status: "answered",
+            answer: "allowed",
+            candidate: "0a1b2c3d4e5f",
+            decided_by: "user",
+            decided_at_ms: 2,
+          }),
+        ],
+      }),
+    );
+    client.renewDeliveryPermission.mockResolvedValue({});
+    renderPanel();
+    const pending = await screen.findByRole("region", { name: "Decisiones pendientes" });
+    expect(pending).toHaveTextContent("Script congelado: C:/work/agentos/.agent/qa/run.sh");
+    expect(pending).toHaveTextContent("exec tsx cli/src/index.ts");
+    expect(pending).toHaveTextContent("leer y listar, sin modificar: C:/Users/me/.claude/skills");
+    expect(pending).toHaveTextContent("no están congelados: C:/work/agentos/.agent/env/qa.env");
+    expect(pending).toHaveTextContent("Ejecuta el código del worktree de la tarea");
+
+    const log = screen.getByRole("region", { name: "Decisiones" });
+    expect(log).toHaveTextContent("Permitido para el código 0a1b2c3d.");
+    await user.click(
+      within(log).getByRole("button", { name: "Volver a permitir para el código actual" }),
+    );
+    await waitFor(() => expect(client.renewDeliveryPermission).toHaveBeenCalledWith("p2"));
+  });
+
+  it("lets the user choose where a Claude job runs and shows where each ran", async () => {
+    const user = userEvent.setup();
+    setWindowsHostOverrideForTests(true);
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ jobs: [job({ agent: "claude", ran_on: "WSL · Ubuntu-24.04" })] }),
+    );
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+    });
+    client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
+    renderPanel();
+    expect(await screen.findByText(/· en WSL · Ubuntu-24.04/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Otra etapa…" }));
+    const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
+    expect(within(dialog).queryByRole("combobox", { name: /Dónde se ejecuta/ })).toBeNull();
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "claude");
+    await user.selectOptions(
+      within(dialog).getByRole("combobox", { name: /Dónde se ejecuta/ }),
+      "windows",
+    );
+    await user.type(
+      within(dialog).getByPlaceholderText("Qué debe hacer esta etapa y cómo comprobarlo."),
+      "Run QA",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
+    await waitFor(() =>
+      expect(client.dispatchDeliveryJob).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "claude", platform: "windows" }),
+      ),
+    );
+    setWindowsHostOverrideForTests(null);
   });
 
   it("keeps showing a task after it leaves the needs-you group", async () => {

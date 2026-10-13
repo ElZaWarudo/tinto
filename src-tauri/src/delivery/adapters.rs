@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry, DeliveryTask,
+    DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry,
+    DeliveryPlatform, DeliveryTask,
 };
 use super::service::QA_ROLE;
 use super::tasks::{git, plain_path, Place};
@@ -98,6 +99,8 @@ pub struct JobLaunch {
     /// Set for jobs that run in WSL, where closing `wsl.exe` does not stop
     /// the Linux processes.
     pub wsl_job: Option<WslJob>,
+    /// Something about how the job runs that its stage should say.
+    pub note: Option<String>,
 }
 
 /// A job running in WSL. Every process it starts inherits
@@ -109,9 +112,57 @@ pub struct WslJob {
     pub job_id: String,
 }
 
+/// A Windows-side path as the job's agent names it: `/mnt/c/…` inside WSL,
+/// forward slashes otherwise (backslashes do not survive a shell).
+fn agent_path(path: &str, from_wsl: bool) -> String {
+    if from_wsl {
+        if let Ok(mounted) = wsl_path(Path::new(path)) {
+            return mounted;
+        }
+    }
+    path.replace('\\', "/")
+}
+
+/// The job's QA folder as its agent names it.
+fn qa_folder(paths: &JobPaths, from_wsl: bool) -> String {
+    agent_path(&plain_path(&paths.qa_output), from_wsl)
+}
+
+/// An absolute path as Claude Code's file rules spell it: `//c/Users/…` for
+/// `C:/Users/…`, `//home/…` for `/home/…`.
+fn claude_rule_path(path: &str) -> String {
+    match path.split_once(":/") {
+        Some((drive, rest)) if drive.len() == 1 => {
+            format!("//{}/{rest}", drive.to_ascii_lowercase())
+        }
+        _ => format!("/{path}"),
+    }
+}
+
+/// The commands a job may run, naming the frozen copies of the approved
+/// scripts instead of the originals.
+fn job_commands(job: &DeliveryJob, from_wsl: bool) -> Vec<String> {
+    job.allowed_commands
+        .iter()
+        .map(|command| {
+            job.frozen_scripts
+                .iter()
+                .fold(command.clone(), |command, script| {
+                    command.replace(&script.original, &agent_path(&script.copy, from_wsl))
+                })
+        })
+        .collect()
+}
+
 /// The instructions an agent job receives: Tinto's envelope around the
-/// user's or coordinator's assignment.
-pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
+/// user's or coordinator's assignment. `from_wsl` says whether it runs in
+/// WSL, which changes how it names Windows paths.
+pub fn job_prompt(
+    job: &DeliveryJob,
+    task: &DeliveryTask,
+    paths: &JobPaths,
+    from_wsl: bool,
+) -> String {
     let mut lines = vec![
         "You are running as a background job in Tinto Delivery mode.".to_string(),
         format!("Task: {} — {}", task.key, task.title),
@@ -134,6 +185,10 @@ pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
             "This is the QA stage: you have network access and can read the main checkout at {} (for example the project's local QA configuration). Do not change it.",
             plain_path(&task.repo)
         ));
+        lines.push(format!(
+            "Your QA folder is {}. It is the one place where you can create files: write your evidence and output files there and name them in the result's checks.",
+            qa_folder(paths, from_wsl)
+        ));
         if !job.qa_environment.trim().is_empty() {
             lines.push(format!(
                 "QA environment the user set for this repo (test there; anything beyond it is out of scope): {}",
@@ -146,15 +201,48 @@ pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
             ));
         }
     }
+    if !job.read_dirs.is_empty() {
+        let dirs: Vec<String> = job
+            .read_dirs
+            .iter()
+            .map(|dir| agent_path(dir, from_wsl))
+            .collect();
+        lines.push(format!(
+            "The user also lets you read and list these folders outside the worktree: {}.",
+            dirs.join("; ")
+        ));
+    }
+    if !job.frozen_scripts.is_empty() {
+        lines.push("The user approved these scripts as frozen copies. The originals may have changed since and must not be run: wherever the assignment names an original, run its copy.".to_string());
+        // A script two permissions share is copied once per permission, next
+        // to its siblings; the first copy is the one to name.
+        let mut listed: Vec<&str> = Vec::new();
+        for script in &job.frozen_scripts {
+            if !listed.contains(&script.original.as_str()) {
+                listed.push(&script.original);
+                lines.push(format!(
+                    "- {} → {}",
+                    script.original,
+                    agent_path(&script.copy, from_wsl)
+                ));
+            }
+        }
+    }
     if job.agent == DeliveryAgent::Claude && job.access == DeliveryAccess::Workspace {
-        if job.allowed_commands.is_empty() {
+        let commands = job_commands(job, from_wsl);
+        if commands.is_empty() {
             lines.push("You can run read-only shell commands only; list the checks you could not run in the result.".to_string());
         } else {
             lines.push(format!(
                 "Besides read-only shell commands, you can run only: {}. List any other check you could not run in the result.",
-                job.allowed_commands.join("; ")
+                commands.join("; ")
             ));
         }
+        lines.push(format!(
+            "Read-only git ({}) runs without asking from the working directory, or as `git -C {} …` with exactly that spelling of the path. Run one command per call, without pipes or `;`.",
+            GIT_READS.join(", "),
+            agent_path(&plain_path(&task.worktree), from_wsl)
+        ));
     }
     if !job.decisions.is_empty() {
         lines.push("Decisions the user made for this task (follow them):".to_string());
@@ -174,8 +262,8 @@ pub fn job_prompt(job: &DeliveryJob, task: &DeliveryTask) -> String {
     lines.join("\n")
 }
 
-/// Builds the command for a job. `claude_distro` is the WSL distro used when
-/// Claude Code is not installed natively.
+/// Builds the command for a job. `claude_distro` is the WSL distro a Claude
+/// job on a Windows repo runs in when it cannot or should not run on Windows.
 pub fn launch(
     job: &DeliveryJob,
     task: &DeliveryTask,
@@ -183,25 +271,104 @@ pub fn launch(
     claude_distro: Option<&str>,
 ) -> Result<JobLaunch, DeliveryError> {
     match job.agent {
-        DeliveryAgent::Codex => codex_launch(job, task, paths),
-        DeliveryAgent::Claude => claude_launch(job, task, paths, claude_distro),
+        DeliveryAgent::Codex => {
+            let native = match task.distro {
+                Some(_) => None,
+                None => Some(crate::agent_console::validation::resolve_agent_binary(
+                    "codex",
+                )?),
+            };
+            let unreadable = match (&native, job.access) {
+                (Some(codex), DeliveryAccess::Workspace) => codex_sandbox_misses(codex, job, task),
+                _ => None,
+            };
+            codex_launch(job, task, paths, native, unreadable.as_deref())
+        }
+        DeliveryAgent::Claude => {
+            let native = match (task.distro.as_deref(), job.platform) {
+                (Some(_), _) | (None, Some(DeliveryPlatform::Wsl)) => None,
+                (None, _) => claude_binary(),
+            };
+            claude_launch(job, task, paths, native, claude_distro)
+        }
         DeliveryAgent::Shell => shell_launch(job, task, paths),
     }
 }
 
+/// Claude Code on this machine: on PATH or, on Windows, the one the Claude
+/// desktop app installed.
+fn claude_binary() -> Option<PathBuf> {
+    let found = crate::agent_console::validation::resolve_agent_binary("claude").ok();
+    #[cfg(windows)]
+    let found = found.or_else(|| {
+        let appdata = std::env::var_os("APPDATA")?;
+        crate::agent_console::validation::claude_desktop_binary(Path::new(&appdata))
+    });
+    found
+}
+
+/// The programs of the repo's verification commands (`npm` for `npm test`).
+fn check_programs(job: &DeliveryJob) -> Vec<&str> {
+    let mut programs: Vec<&str> = Vec::new();
+    for command in &job.allowed_commands {
+        if let Some(program) = command.split_whitespace().next() {
+            if !programs.contains(&program) {
+                programs.push(program);
+            }
+        }
+    }
+    programs
+}
+
+/// The first verification program Tinto finds on PATH that Codex's Windows
+/// sandbox cannot: its "elevated" sandbox runs as another user, who cannot
+/// read folders that only grant the current user (for example a Node
+/// installed by nvm). The job then runs in Codex's unelevated sandbox.
+fn codex_sandbox_misses(codex: &Path, job: &DeliveryJob, task: &DeliveryTask) -> Option<String> {
+    #[cfg(windows)]
+    {
+        check_programs(job)
+            .into_iter()
+            .filter(|program| which::which(program).is_ok())
+            .find(|program| {
+                let mut command = std::process::Command::new(codex);
+                command
+                    .current_dir(plain_path(&task.worktree))
+                    .args(["sandbox", "--", "cmd", "/c", "where", program]);
+                crate::windows_process::output_with_timeout(
+                    &mut command,
+                    std::time::Duration::from_secs(30),
+                )
+                .is_ok_and(|output| !output.status.success())
+            })
+            .map(str::to_string)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (codex, job, task);
+        None
+    }
+}
+
+/// `native` is the Codex binary for a repo on this machine's filesystem;
+/// `unreadable`, the program its Windows sandbox cannot reach, if any.
 fn codex_launch(
     job: &DeliveryJob,
     task: &DeliveryTask,
     paths: &JobPaths,
+    native: Option<PathBuf>,
+    unreadable: Option<&str>,
 ) -> Result<JobLaunch, DeliveryError> {
     let sandbox = match job.access {
         DeliveryAccess::Workspace => "workspace-write",
         DeliveryAccess::Full => "danger-full-access",
     };
-    let prompt = job_prompt(job, task);
+    let prompt = job_prompt(job, task, paths, task.distro.is_some());
     match task.distro.as_deref() {
         None => {
-            let program = crate::agent_console::validation::resolve_agent_binary("codex")?;
+            let program = native.ok_or_else(|| {
+                DeliveryError::new("binary_not_found", "no se encontró Codex en este equipo")
+            })?;
             let mut args: Vec<String> = [
                 "exec",
                 "--json",
@@ -224,6 +391,12 @@ fn codex_launch(
                 args.extend(["-c".to_string(), codex_reasoning(effort)]);
             }
             args.extend(codex_qa_overrides(job, false, paths)?);
+            if unreadable.is_some() {
+                args.extend([
+                    "-c".to_string(),
+                    r#"windows.sandbox="unelevated""#.to_string(),
+                ]);
+            }
             args.push("-".to_string());
             Ok(JobLaunch {
                 program,
@@ -232,6 +405,9 @@ fn codex_launch(
                 stdin: prompt,
                 provider_session_id: None,
                 wsl_job: None,
+                note: unreadable.map(|program| {
+                    format!("sandbox de Codex sin elevar (el elevado no puede leer {program})")
+                }),
             })
         }
         Some(distro) => {
@@ -271,21 +447,26 @@ fn claude_launch(
     job: &DeliveryJob,
     task: &DeliveryTask,
     paths: &JobPaths,
+    native: Option<PathBuf>,
     claude_distro: Option<&str>,
 ) -> Result<JobLaunch, DeliveryError> {
+    if native.is_none() && task.distro.is_none() && job.platform == Some(DeliveryPlatform::Windows)
+    {
+        return Err(DeliveryError::new(
+            "binary_not_found",
+            "Claude Code no está instalado en Windows; instálalo o lanza el trabajo en WSL",
+        ));
+    }
     let mode = match (job.access, job.writes) {
         (DeliveryAccess::Full, _) => "bypassPermissions",
         (DeliveryAccess::Workspace, true) => "acceptEdits",
         // Without anyone to approve prompts, `default` denies edits.
         (DeliveryAccess::Workspace, false) => "default",
     };
-    let allowed = claude_allowed_tools(job);
+    let from_wsl = native.is_none();
+    let allowed = claude_allowed_tools(job, task, paths, from_wsl);
     let session_id = uuid::Uuid::new_v4().to_string();
-    let prompt = job_prompt(job, task);
-    let native = match task.distro {
-        None => crate::agent_console::validation::resolve_agent_binary("claude").ok(),
-        Some(_) => None,
-    };
+    let prompt = job_prompt(job, task, paths, from_wsl);
     if let Some(program) = native {
         let mut args: Vec<String> = [
             "-p",
@@ -326,6 +507,7 @@ fn claude_launch(
             stdin: prompt,
             provider_session_id: Some(session_id),
             wsl_job: None,
+            note: None,
         });
     }
     let (distro, cwd) = match task.distro.as_deref() {
@@ -398,20 +580,44 @@ fn claude_launch(
     wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)
 }
 
+/// Git commands that only read; a job may always run them on its worktree.
+const GIT_READS: [&str; 7] = [
+    "status",
+    "diff",
+    "log",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "branch --show-current",
+];
+
 /// Commands a Claude job without full access may run besides the read-only
 /// ones Claude Code already allows: the repo's verification commands (each
-/// with any arguments). The git ones are listed in case a version stops
-/// treating them as read-only.
-fn claude_allowed_tools(job: &DeliveryJob) -> Vec<String> {
+/// with any arguments) and read-only git, also as `git -C <worktree> …`,
+/// which Claude Code would otherwise ask about. A QA job may also write in
+/// its own QA folder, where its evidence goes.
+fn claude_allowed_tools(
+    job: &DeliveryJob,
+    task: &DeliveryTask,
+    paths: &JobPaths,
+    from_wsl: bool,
+) -> Vec<String> {
     if job.access == DeliveryAccess::Full {
         return Vec::new();
     }
-    let mut tools: Vec<String> = ["git status", "git diff", "git log"]
-        .into_iter()
-        .map(str::to_string)
-        .chain(job.allowed_commands.iter().cloned())
+    let worktree = agent_path(&plain_path(&task.worktree), from_wsl);
+    let mut tools: Vec<String> = GIT_READS
+        .iter()
+        .flat_map(|read| [format!("git {read}"), format!("git -C {worktree} {read}")])
+        .chain(job_commands(job, from_wsl))
         .map(|command| format!("Bash({command}:*)"))
         .collect();
+    if job.role == QA_ROLE {
+        tools.push(format!(
+            "Edit({}/**)",
+            claude_rule_path(&qa_folder(paths, from_wsl))
+        ));
+    }
     if job.qa_browser {
         tools.push(format!("mcp__{BROWSER_SERVER}"));
     }
@@ -453,9 +659,10 @@ fn codex_reasoning(effort: &str) -> String {
     format!("model_reasoning_effort={}", Value::from(effort))
 }
 
-/// A Claude QA job reads the main checkout and its own QA folder (to look at
-/// its screenshots) and, when enabled, gets the browser. Paths are as the
-/// agent sees them; `from_wsl` says whether it runs in WSL.
+/// A Claude QA job reads the main checkout, its own QA folder (to look at
+/// its screenshots) and the folders the user's permissions name and, when
+/// enabled, gets the browser. Paths are as the agent sees them; `from_wsl`
+/// says whether it runs in WSL.
 fn claude_qa_args(
     job: &DeliveryJob,
     main_checkout: &str,
@@ -466,11 +673,14 @@ fn claude_qa_args(
     if job.role != QA_ROLE {
         return Ok(Vec::new());
     }
+    std::fs::create_dir_all(&paths.qa_output).map_err(DeliveryError::io)?;
     let mut args = vec![
         "--add-dir".to_string(),
         main_checkout.to_string(),
         qa_output.to_string(),
     ];
+    // Folders the user's permissions name; a QA job cannot edit there.
+    args.extend(job.read_dirs.iter().map(|dir| agent_path(dir, from_wsl)));
     if job.qa_browser {
         let (command, server_args) = browser_server(from_wsl, paths)?;
         args.push("--mcp-config".to_string());
@@ -486,8 +696,9 @@ fn claude_qa_args(
     Ok(args)
 }
 
-/// `-c` overrides for a Codex QA job: network in the sandbox and, when
-/// enabled, the browser, pre-approved because `exec` has no one to ask.
+/// Arguments for a Codex QA job: its QA folder writable, network in the
+/// sandbox and, when enabled, the browser, pre-approved because `exec` has
+/// no one to ask.
 fn codex_qa_overrides(
     job: &DeliveryJob,
     from_wsl: bool,
@@ -516,9 +727,14 @@ fn codex_qa_overrides(
             key("default_tools_approval_mode")
         ));
     }
-    Ok(values
+    std::fs::create_dir_all(&paths.qa_output).map_err(DeliveryError::io)?;
+    Ok(["--add-dir".to_string(), qa_folder(paths, from_wsl)]
         .into_iter()
-        .flat_map(|value| ["-c".to_string(), value])
+        .chain(
+            values
+                .into_iter()
+                .flat_map(|value| ["-c".to_string(), value]),
+        )
         .collect())
 }
 
@@ -562,6 +778,7 @@ fn shell_launch(
         stdin: String::new(),
         provider_session_id: None,
         wsl_job: None,
+        note: None,
     })
 }
 
@@ -601,6 +818,7 @@ fn wsl_launch(
         stdin,
         provider_session_id,
         wsl_job: Some(wsl_job),
+        note: None,
     })
 }
 
@@ -811,6 +1029,46 @@ fn claude_tool_summary(block: &Value) -> String {
     }
 }
 
+/// Whether a job's output shows it did more than read. Its exclusive
+/// resource is then in an unknown state unless the job ends cleanly.
+pub fn acted(job: &DeliveryJob, events: &str) -> bool {
+    let slashes = |text: &str| text.replace('\\', "/");
+    if job.agent == DeliveryAgent::Shell {
+        return true;
+    }
+    events
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|value| match job.agent {
+            DeliveryAgent::Shell => true,
+            // Its sandbox lets it run anything inside the worktree.
+            DeliveryAgent::Codex => matches!(
+                value["item"]["type"].as_str(),
+                Some("command_execution" | "file_change" | "mcp_tool_call")
+            ),
+            DeliveryAgent::Claude => value["message"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|block| block["type"] == "tool_use")
+                .any(|block| {
+                    let name = block["name"].as_str().unwrap_or_default();
+                    let command = slashes(block["input"]["command"].as_str().unwrap_or_default());
+                    name.starts_with("mcp__")
+                        || matches!(name, "Write" | "Edit" | "NotebookEdit")
+                        || (name == "Bash"
+                            && (job.access == DeliveryAccess::Full
+                                || job.allowed_commands.iter().any(|allowed| {
+                                    command.trim_start().starts_with(&slashes(allowed))
+                                })
+                                || job
+                                    .frozen_scripts
+                                    .iter()
+                                    .any(|script| command.contains(&slashes(&script.copy)))))
+                }),
+        })
+}
+
 /// Reads the whole output once the process has exited.
 pub fn read_outcome(agent: DeliveryAgent, events: &str, result_file: Option<&str>) -> JobOutcome {
     let mut outcome = JobOutcome::default();
@@ -919,7 +1177,7 @@ fn provider_error_reason(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delivery::model::{DeliveryJobStatus, DeliveryResultState};
+    use crate::delivery::model::{DeliveryFrozenCopy, DeliveryJobStatus, DeliveryResultState};
 
     const CODEX_OK: &str = include_str!("fixtures/codex-ok.jsonl");
     const CODEX_FAILED: &str = include_str!("fixtures/codex-failed.jsonl");
@@ -979,6 +1237,10 @@ mod tests {
             decisions: Vec::new(),
             qa_environment: String::new(),
             reasoning: None,
+            platform: None,
+            ran_on: None,
+            read_dirs: Vec::new(),
+            frozen_scripts: Vec::new(),
         }
     }
 
@@ -1047,7 +1309,7 @@ mod tests {
         let paths = JobPaths::in_dir(PathBuf::from(
             r"C:\Users\me\AppData\Roaming\tinto\delivery\jobs\j1",
         ));
-        let launch = codex_launch(&job, &task, &paths).unwrap();
+        let launch = codex_launch(&job, &task, &paths, None, None).unwrap();
         assert_eq!(launch.program, PathBuf::from("wsl.exe"));
         let script = launch.args.last().unwrap();
         assert!(script.contains("-s workspace-write"), "{script}");
@@ -1069,7 +1331,7 @@ mod tests {
         let mut claude = sample_job(DeliveryAgent::Claude);
         claude.access = DeliveryAccess::Full;
         claude.writes = false;
-        let launch = claude_launch(&claude, &task, &paths, None).unwrap();
+        let launch = claude_launch(&claude, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(
             script.contains("--permission-mode bypassPermissions"),
@@ -1089,20 +1351,25 @@ mod tests {
         ));
         let mut job = sample_job(DeliveryAgent::Claude);
         job.allowed_commands = vec!["npm test".into(), "cargo test".into()];
-        let launch = claude_launch(&job, &task, &paths, None).unwrap();
+        let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(script.contains("--permission-mode acceptEdits"), "{script}");
         assert!(
-            script.ends_with(" --allowedTools 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(npm test:*)' 'Bash(cargo test:*)'"),
+            script.contains(" --allowedTools 'Bash(git status:*)' 'Bash(git -C /repo-wt/K-1 status:*)' 'Bash(git diff:*)'"),
+            "{script}"
+        );
+        assert!(
+            script.ends_with(" 'Bash(git -C /repo-wt/K-1 branch --show-current:*)' 'Bash(npm test:*)' 'Bash(cargo test:*)'"),
             "{script}"
         );
         assert!(launch
             .stdin
             .contains("you can run only: npm test; cargo test."));
+        assert!(launch.stdin.contains("`git -C /repo-wt/K-1 …`"));
 
         job.writes = false;
         job.allowed_commands.clear();
-        let launch = claude_launch(&job, &task, &paths, None).unwrap();
+        let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(script.contains("--permission-mode default"), "{script}");
         assert!(launch
@@ -1124,7 +1391,7 @@ mod tests {
         job.writes = false;
         job.qa_browser = true;
         job.allowed_commands = vec!["agentos skills install".into()];
-        let launch = claude_launch(&job, &task, &paths, None).unwrap();
+        let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(
             script.contains(&format!(" '--add-dir' '/home/me/repo' '{qa_output}'")),
@@ -1136,10 +1403,16 @@ mod tests {
         );
         assert!(script.contains(r#""args":["/c","node","#), "{script}");
         assert!(script.contains(r#""@playwright/mcp@0.0.82"]"#), "{script}");
+        // Read-only in the worktree, but its evidence goes in its QA folder.
         assert!(
-            script.ends_with(" 'Bash(agentos skills install:*)' 'mcp__playwright'"),
+            script.ends_with(&format!(
+                " 'Bash(agentos skills install:*)' 'Edit(/{qa_output}/**)' 'mcp__playwright'"
+            )),
             "{script}"
         );
+        assert!(launch
+            .stdin
+            .contains(&format!("Your QA folder is {qa_output}.")));
         assert!(paths.qa_output.is_dir());
         assert_eq!(
             std::fs::read_to_string(&paths.qa_browser_script).unwrap(),
@@ -1151,8 +1424,12 @@ mod tests {
         let mut codex = sample_job(DeliveryAgent::Codex);
         codex.role = QA_ROLE.into();
         codex.qa_browser = true;
-        let launch = codex_launch(&codex, &task, &paths).unwrap();
+        let launch = codex_launch(&codex, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
+        assert!(
+            script.contains(&format!(" '--add-dir' '{qa_output}' '-c'")),
+            "{script}"
+        );
         assert!(
             script.contains(" '-c' 'sandbox_workspace_write.network_access=true'"),
             "{script}"
@@ -1169,7 +1446,7 @@ mod tests {
         );
 
         codex.role = "review".into();
-        let launch = codex_launch(&codex, &task, &paths).unwrap();
+        let launch = codex_launch(&codex, &task, &paths, None, None).unwrap();
         assert!(!launch.args.last().unwrap().contains("network_access"));
         assert!(!launch.stdin.contains("QA stage"));
     }
@@ -1195,7 +1472,7 @@ mod tests {
         ));
         let mut codex = sample_job(DeliveryAgent::Codex);
         codex.reasoning = Some("medium".into());
-        let script = codex_launch(&codex, &task, &paths)
+        let script = codex_launch(&codex, &task, &paths, None, None)
             .unwrap()
             .args
             .pop()
@@ -1206,19 +1483,172 @@ mod tests {
         );
         let mut claude = sample_job(DeliveryAgent::Claude);
         claude.reasoning = Some("high".into());
-        let script = claude_launch(&claude, &task, &paths, None)
+        let script = claude_launch(&claude, &task, &paths, None, None)
             .unwrap()
             .args
             .pop()
             .unwrap();
         assert!(script.contains(" --effort 'high'"), "{script}");
         codex.reasoning = None;
-        let script = codex_launch(&codex, &task, &paths)
+        let script = codex_launch(&codex, &task, &paths, None, None)
             .unwrap()
             .args
             .pop()
             .unwrap();
         assert!(!script.contains("model_reasoning_effort"), "{script}");
+    }
+
+    fn windows_task() -> DeliveryTask {
+        let mut task = sample_task();
+        task.repo = PathBuf::from(r"C:\work\repo");
+        task.worktree = PathBuf::from(r"C:\work\repo-wt\K-1");
+        task
+    }
+
+    fn qa_job_with_permissions() -> DeliveryJob {
+        let mut job = sample_job(DeliveryAgent::Claude);
+        job.role = QA_ROLE.into();
+        job.writes = false;
+        job.allowed_commands = vec!["bash C:/work/repo/.agent/qa/run.sh".into()];
+        job.frozen_scripts = vec![DeliveryFrozenCopy {
+            original: "C:/work/repo/.agent/qa/run.sh".into(),
+            copy: r"C:\cfg\jobs\j1\frozen\1\run.sh".into(),
+        }];
+        job.read_dirs = vec![r"C:\Users\me\.claude\skills".into()];
+        job
+    }
+
+    #[test]
+    fn a_claude_job_on_a_windows_repo_runs_on_windows_when_it_can() {
+        let task = windows_task();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = JobPaths::in_dir(dir.path().join("j1"));
+        let claude = PathBuf::from(r"C:\apps\claude.exe");
+        let job = qa_job_with_permissions();
+        let launch =
+            claude_launch(&job, &task, &paths, Some(claude.clone()), Some("Ubuntu")).unwrap();
+        assert_eq!(launch.program, claude);
+        assert_eq!(launch.wsl_job, None);
+        assert_eq!(launch.cwd, Some(PathBuf::from(r"C:\work\repo-wt\K-1")));
+        // The folders a permission names follow the main checkout and the
+        // job's own QA folder.
+        let add_dir = launch
+            .args
+            .iter()
+            .position(|arg| arg == "--add-dir")
+            .unwrap();
+        assert_eq!(launch.args[add_dir + 1], r"C:\work\repo");
+        assert_eq!(launch.args[add_dir + 3], "C:/Users/me/.claude/skills");
+        // Read-only git on the worktree and the frozen copy, never the original.
+        let allowed = |tool: &str| launch.args.iter().any(|arg| arg == tool);
+        assert!(allowed("Bash(git -C C:/work/repo-wt/K-1 status:*)"));
+        assert!(allowed("Bash(git rev-parse:*)"));
+        assert!(allowed("Bash(bash C:/cfg/jobs/j1/frozen/1/run.sh:*)"));
+        assert_eq!(claude_rule_path("C:/cfg/jobs/j1/qa"), "//c/cfg/jobs/j1/qa");
+        assert_eq!(claude_rule_path("/home/me/qa"), "//home/me/qa");
+        assert!(allowed(&format!(
+            "Edit({}/**)",
+            claude_rule_path(&qa_folder(&paths, false))
+        )));
+        assert!(!launch
+            .args
+            .iter()
+            .any(|arg| arg.contains(".agent/qa/run.sh")));
+        assert!(launch
+            .stdin
+            .contains("- C:/work/repo/.agent/qa/run.sh → C:/cfg/jobs/j1/frozen/1/run.sh"));
+        assert!(launch
+            .stdin
+            .contains("you can run only: bash C:/cfg/jobs/j1/frozen/1/run.sh."));
+        assert!(launch.stdin.contains(
+            "read and list these folders outside the worktree: C:/Users/me/.claude/skills."
+        ));
+    }
+
+    #[test]
+    fn the_platform_of_a_claude_job_can_be_forced() {
+        let task = windows_task();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = JobPaths::in_dir(dir.path().join("j1"));
+        let mut job = qa_job_with_permissions();
+        // Not installed on Windows: WSL, unless the job asked for Windows.
+        let launch = claude_launch(&job, &task, &paths, None, Some("Ubuntu")).unwrap();
+        assert_eq!(launch.program, PathBuf::from("wsl.exe"));
+        assert_eq!(launch.wsl_job.as_ref().unwrap().distro, "Ubuntu");
+        let script = launch.args.last().unwrap();
+        assert!(
+            script.contains("'Bash(bash /mnt/c/cfg/jobs/j1/frozen/1/run.sh:*)'"),
+            "{script}"
+        );
+        assert!(
+            script.contains("'Bash(git -C /mnt/c/work/repo-wt/K-1 status:*)'"),
+            "{script}"
+        );
+        assert!(
+            script.contains(" '/mnt/c/Users/me/.claude/skills'"),
+            "{script}"
+        );
+        job.platform = Some(DeliveryPlatform::Windows);
+        let error = claude_launch(&job, &task, &paths, None, Some("Ubuntu")).unwrap_err();
+        assert_eq!(error.category, "binary_not_found");
+    }
+
+    #[test]
+    fn codex_leaves_its_elevated_sandbox_when_it_cannot_read_a_check_program() {
+        let task = windows_task();
+        let paths = JobPaths::in_dir(PathBuf::from(r"C:\cfg\jobs\j1"));
+        let mut job = sample_job(DeliveryAgent::Codex);
+        job.allowed_commands = vec![
+            "npm test".into(),
+            "npm run check-lint".into(),
+            "cargo test".into(),
+        ];
+        assert_eq!(check_programs(&job), ["npm", "cargo"]);
+        let codex = PathBuf::from(r"C:\apps\codex.exe");
+        let launch = codex_launch(&job, &task, &paths, Some(codex.clone()), Some("npm")).unwrap();
+        assert_eq!(launch.program, codex);
+        let end = &launch.args[launch.args.len() - 3..];
+        assert_eq!(end, ["-c", r#"windows.sandbox="unelevated""#, "-"]);
+        assert!(launch.note.as_deref().unwrap().contains("npm"));
+        let launch = codex_launch(&job, &task, &paths, Some(codex), None).unwrap();
+        assert!(!launch
+            .args
+            .iter()
+            .any(|arg| arg.contains("windows.sandbox")));
+        assert_eq!(launch.note, None);
+    }
+
+    #[test]
+    fn a_job_acted_when_it_did_more_than_read() {
+        let claude = |name: &str, command: &str| {
+            serde_json::json!({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": name, "input": {"command": command}}
+            ]}})
+            .to_string()
+        };
+        let job = qa_job_with_permissions();
+        let reads = [
+            claude("Read", ""),
+            claude("Bash", "git status --short"),
+            claude("Bash", "ls C:/Users/me/.claude/skills"),
+        ]
+        .join("\n");
+        assert!(!acted(&job, &reads));
+        assert!(!acted(&job, ""));
+        let ran_copy = claude("Bash", r"bash C:\cfg\jobs\j1\frozen\1\run.sh login");
+        assert!(acted(&job, &format!("{reads}\n{ran_copy}")));
+        assert!(acted(
+            &job,
+            &claude("mcp__playwright__browser_navigate", "")
+        ));
+
+        let codex = sample_job(DeliveryAgent::Codex);
+        assert!(!acted(
+            &codex,
+            r#"{"type":"thread.started","thread_id":"t"}"#
+        ));
+        assert!(acted(&codex, CODEX_OK));
+        assert!(acted(&sample_job(DeliveryAgent::Shell), ""));
     }
 
     #[test]

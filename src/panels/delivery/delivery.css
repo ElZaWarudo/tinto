@@ -535,6 +535,16 @@
 .delivery-decision-log__answer small {
   font-size: 11px;
 }
+/* What a permission covers reads as full-width lines under its verdict. */
+.delivery-decision-log__answer > p,
+.delivery-decision-log__answer > details {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+.delivery-decision-log .delivery-decision__detail summary::before {
+  content: none;
+}
 .delivery-decision-log__text {
   flex-basis: 100%;
   margin: 0;

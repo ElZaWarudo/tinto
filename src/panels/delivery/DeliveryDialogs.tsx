@@ -3,12 +3,14 @@
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { getDeliveryRepoSettings, setDeliveryRepoSettings } from "../../delivery/client";
+import { isWindowsHost } from "../../workbench/platform";
 import { useAccessibleDialog } from "../../workbench/useAccessibleDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import type {
   DeliveryAccess,
   DeliveryAgent,
   DeliveryCoordinatorEndpoint,
+  DeliveryPlatform,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryTask,
@@ -307,6 +309,8 @@ export interface DispatchValues {
   reasoning: string;
   access: DeliveryAccess;
   prompt: string;
+  /** Where a Claude job on a Windows repo runs; null lets Tinto choose. */
+  platform: DeliveryPlatform | null;
   /** Repo settings edited in the dialog, to save before queueing; null when untouched. */
   settings: Pick<DeliveryRepoSettings, "checks" | "qa_commands" | "qa_browser"> | null;
 }
@@ -352,6 +356,9 @@ export function DispatchDialog({
   const models = modelChoices(agent);
   const efforts = effortChoices(agent, model);
   const [access, setAccess] = useState<DeliveryAccess>("workspace");
+  const [platform, setPlatform] = useState<DeliveryPlatform | "">("");
+  // Only Claude Code has two places to run a Windows repo's jobs.
+  const choosesPlatform = agent === "claude" && task.distro === null && isWindowsHost();
   const [prompt, setPrompt] = useState(initialPrompt);
   const [checksText, setChecksText] = useState<string | null>(null);
   const [qaCommandsText, setQaCommandsText] = useState<string | null>(null);
@@ -379,6 +386,7 @@ export function DispatchDialog({
           reasoning,
           access,
           prompt,
+          platform: choosesPlatform && platform ? platform : null,
           settings:
             checksText === null && qaCommandsText === null && qaBrowser === null
               ? null
@@ -464,6 +472,21 @@ export function DispatchDialog({
           </select>
         </Field>
       </div>
+      {choosesPlatform && (
+        <Field
+          label="Dónde se ejecuta"
+          hint="Los comandos y las rutas del encargo deben ser de esa plataforma. En el historial, cada intento dice dónde se ejecutó."
+        >
+          <select
+            value={platform}
+            onChange={(event) => setPlatform(event.target.value as DeliveryPlatform | "")}
+          >
+            <option value="">Windows si Claude Code está instalado allí; si no, WSL</option>
+            <option value="windows">Windows</option>
+            <option value="wsl">WSL</option>
+          </select>
+        </Field>
+      )}
       {limitedClaude && (
         <Field
           label="Comandos que puede ejecutar"

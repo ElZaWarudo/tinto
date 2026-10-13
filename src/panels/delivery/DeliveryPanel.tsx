@@ -607,6 +607,7 @@ export function DeliveryPanel() {
                   reasoning: values.reasoning,
                   access: values.access,
                   prompt: values.prompt,
+                  platform: values.platform,
                 });
               });
               if (done) setDialog(null);
@@ -951,7 +952,11 @@ function TaskDetail({
         />
       )}
 
-      <DecisionLog decisions={taskDecisions.filter((decision) => decision.status === "answered")} />
+      <DecisionLog
+        decisions={taskDecisions.filter((decision) => decision.status === "answered")}
+        busy={busy}
+        run={run}
+      />
 
       <section className="delivery-section" aria-label="Historial">
         <h3>Historial</h3>
@@ -1286,7 +1291,8 @@ function JobRow({
   const outcome = attemptOutcome(job);
   const scope =
     (job.access === "full" ? " · acceso completo" : job.writes ? "" : " · solo lectura") +
-    (job.qa_browser ? " · navegador" : "");
+    (job.qa_browser ? " · navegador" : "") +
+    (job.ran_on ? ` · en ${job.ran_on}` : "");
   return (
     <li className="delivery-job">
       <button

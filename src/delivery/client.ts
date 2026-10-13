@@ -12,6 +12,7 @@ import type {
   DeliveryJobLog,
   DeliveryLease,
   DeliveryOverview,
+  DeliveryPlatform,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryRung,
@@ -66,6 +67,8 @@ export interface NewDeliveryJob {
   reasoning?: string | null;
   access: DeliveryAccess;
   prompt: string;
+  /** Claude jobs on a Windows repo: where it runs; Tinto chooses when null. */
+  platform?: DeliveryPlatform | null;
 }
 
 export const dispatchDeliveryJob = (job: NewDeliveryJob) =>
@@ -80,6 +83,7 @@ export const dispatchDeliveryJob = (job: NewDeliveryJob) =>
     lease: null,
     timeoutMinutes: null,
     reasoning: job.reasoning || null,
+    platform: job.platform ?? null,
   });
 
 export const cancelDeliveryJob = (jobId: string) =>
@@ -129,6 +133,10 @@ export const completeDeliveryApproval = (approvalId: string, success: boolean, o
 
 export const answerDeliveryDecision = (decisionId: string, answer: string) =>
   invoke<DeliveryDecision>("delivery_answer_decision", { decisionId, answer });
+
+/** Allows again, for the worktree as it is now, a permission that runs the task's code. */
+export const renewDeliveryPermission = (decisionId: string) =>
+  invoke<DeliveryDecision>("delivery_renew_permission", { decisionId });
 
 export const acceptRecommendedDecisions = (taskId: string) =>
   invoke<DeliveryDecision[]>("delivery_accept_recommended", { taskId });

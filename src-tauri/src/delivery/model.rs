@@ -72,6 +72,14 @@ pub enum DeliveryAccess {
     Full,
 }
 
+/// Where a Claude Code job on a Windows repository runs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryPlatform {
+    Windows,
+    Wsl,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryResultState {
@@ -144,8 +152,9 @@ pub struct DeliveryJob {
     pub result_note: Option<String>,
     pub undone_at_ms: Option<u64>,
     /// Shell commands a Claude job without full access may run, taken from
-    /// the repo's verification commands (and, for QA, its QA commands) when
-    /// the job was dispatched.
+    /// the repo's verification commands (and, for QA, its QA commands and
+    /// the user's permissions) when the job was dispatched. A Codex job gets
+    /// the verification commands: its sandbox must reach their programs.
     #[serde(default)]
     pub allowed_commands: Vec<String>,
     /// QA jobs only: a browser through Playwright's MCP server.
@@ -161,6 +170,36 @@ pub struct DeliveryJob {
     /// Reasoning effort passed to the CLI; its default when `None`.
     #[serde(default)]
     pub reasoning: Option<String>,
+    /// Where a Claude job on a Windows repo was asked to run. When `None`,
+    /// Windows if Claude Code is installed there, otherwise WSL.
+    #[serde(default)]
+    pub platform: Option<DeliveryPlatform>,
+    /// Where the job ran, as the stage shows it (`Windows`, `WSL · Ubuntu`).
+    #[serde(default)]
+    pub ran_on: Option<String>,
+    /// QA jobs only: folders outside the worktree the user's permissions
+    /// let the job read and list.
+    #[serde(default)]
+    pub read_dirs: Vec<String>,
+    /// QA jobs only: the frozen copies of the scripts the user approved,
+    /// written to the job's folder when it started.
+    #[serde(default)]
+    pub frozen_scripts: Vec<DeliveryFrozenCopy>,
+}
+
+/// A script as named in a permission and the frozen copy a job runs instead.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryFrozenCopy {
+    pub original: String,
+    pub copy: String,
+}
+
+/// A script a permission's command runs, as it was when the coordinator
+/// asked. Jobs run this text, whatever happens to the file afterwards.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryFrozenScript {
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -281,6 +320,23 @@ pub struct DeliveryDecision {
     /// `permission` only: how to undo its effect.
     #[serde(default)]
     pub undo: String,
+    /// `permission` only: the scripts the command runs, frozen.
+    #[serde(default)]
+    pub scripts: Vec<DeliveryFrozenScript>,
+    /// `permission` only: folders outside the worktree QA may read and list.
+    #[serde(default)]
+    pub read_dirs: Vec<String>,
+    /// `permission` only: the command or its scripts run code from the
+    /// task's worktree, so the permission holds for one candidate.
+    #[serde(default)]
+    pub runs_candidate: bool,
+    /// `permission` only: files agents can edit that the frozen scripts
+    /// name and Tinto did not freeze; the user is told before allowing.
+    #[serde(default)]
+    pub unfrozen: Vec<String>,
+    /// The worktree content (tree id) the user allowed `runs_candidate` for.
+    #[serde(default)]
+    pub candidate: Option<String>,
     pub status: DeliveryDecisionStatus,
     /// The chosen option's label, the approved text, or `allowed`/`denied`.
     pub answer: Option<String>,

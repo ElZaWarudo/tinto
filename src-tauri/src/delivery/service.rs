@@ -16,10 +16,10 @@ use std::time::{Duration, Instant};
 use super::adapters::{self, JobLaunch, JobOutcome, JobPaths};
 use super::decisions;
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint,
-    DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryJob, DeliveryJobLog, DeliveryJobStatus,
-    DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview, DeliveryResultState,
-    DeliverySettings, DeliveryTask,
+    DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
+    DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
+    DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview,
+    DeliveryPlatform, DeliveryResultState, DeliverySettings, DeliveryTask,
 };
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
@@ -98,6 +98,8 @@ pub struct NewJob {
     /// Reasoning effort (`low`, `medium`, `high`…); the CLI's default when
     /// `None`.
     pub reasoning: Option<String>,
+    /// Where a Claude job on a Windows repo runs; Tinto chooses when `None`.
+    pub platform: Option<DeliveryPlatform>,
 }
 
 /// How a job's process ended, before its result is evaluated.
@@ -359,6 +361,7 @@ impl DeliveryService {
                 lease: None,
                 timeout_minutes: None,
                 reasoning: None,
+                platform: None,
             })?;
         } else {
             self.notify();
@@ -541,24 +544,31 @@ impl DeliveryService {
                 ));
             }
         }
-        // Commands the user allowed for this task's QA, on top of the repo's.
-        let permitted = decisions.iter().filter_map(|decision| {
-            (decision.kind == DeliveryDecisionKind::Permission
-                && decision.answer.as_deref() == Some(decisions::ALLOWED))
-            .then(|| decision.command.clone())
-            .flatten()
-        });
+        // What the user allowed for this task's QA, on top of the repo's.
+        let permitted: Vec<_> = decisions
+            .iter()
+            .filter(|decision| qa && allowed_permission(decision))
+            .collect();
         let allowed_commands = match (request.agent, request.access) {
             (DeliveryAgent::Claude, DeliveryAccess::Workspace) => {
                 let mut commands = settings.checks;
                 if qa {
                     commands.extend(settings.qa_commands);
-                    commands.extend(permitted);
+                    commands.extend(permitted.iter().filter_map(|d| d.command.clone()));
                 }
                 commands
             }
+            // Codex's sandbox lets it run anything in the worktree; these
+            // say which programs that sandbox must be able to reach.
+            (DeliveryAgent::Codex, DeliveryAccess::Workspace) => settings.checks,
             _ => Vec::new(),
         };
+        let mut read_dirs: Vec<String> = Vec::new();
+        for dir in permitted.iter().flat_map(|decision| &decision.read_dirs) {
+            if !read_dirs.contains(dir) {
+                read_dirs.push(dir.clone());
+            }
+        }
         let decision_notes = decisions
             .iter()
             .filter_map(decisions::decision_note)
@@ -614,6 +624,10 @@ impl DeliveryService {
             decisions: decision_notes,
             qa_environment,
             reasoning,
+            platform: request.platform,
+            ran_on: None,
+            read_dirs,
+            frozen_scripts: Vec::new(),
         };
         store.put_job(&job)?;
         store.record_event(
@@ -697,6 +711,7 @@ impl DeliveryService {
             lease: job.lease,
             timeout_minutes: Some(job.timeout_minutes),
             reasoning: job.reasoning,
+            platform: job.platform,
         })
     }
 
@@ -919,7 +934,7 @@ impl DeliveryService {
     }
 
     fn run_job_inner(&self, job_id: &str) -> Result<(), DeliveryError> {
-        let job = self.job(job_id)?;
+        let mut job = self.job(job_id)?;
         let task = self.task(&job.task_id)?;
         let start = if job.agent == DeliveryAgent::Shell {
             None
@@ -939,6 +954,9 @@ impl DeliveryService {
         };
         let paths = (self.inner.paths_for)(&job.id)?;
         paths.prepare()?;
+        if job.role == QA_ROLE {
+            job.frozen_scripts = self.prepare_permissions(&task, &paths, start.as_ref())?;
+        }
         let launch = (self.inner.launcher)(&job, &task, &paths)?;
         let mut command = Command::new(&launch.program);
         command
@@ -974,6 +992,8 @@ impl DeliveryService {
             current.started_at_ms = Some(now_ms());
             current.pid = Some(child.id());
             current.provider_session_id = launch.provider_session_id.clone();
+            current.ran_on = Some(ran_on(&launch));
+            current.frozen_scripts = job.frozen_scripts.clone();
             current.start_candidate = start.as_ref().map(WorktreeSnapshot::candidate_id);
             store.put_job(&current)?;
             if let Some(start) = &start {
@@ -1095,10 +1115,60 @@ impl DeliveryService {
             exit_code: status.and_then(|status| status.code()),
             cancelled,
             timed_out,
-            touched: true,
+            // A job the user cancelled before it did more than read left
+            // its resource as it was.
+            touched: !cancelled || adapters::acted(&job, &events),
         };
         let stderr_text = std::fs::read_to_string(&paths.stderr).unwrap_or_default();
         self.finish(&job.id, ending, outcome, end, &stderr_text)
+    }
+
+    /// Before a QA job starts: refuses it when a permission that runs the
+    /// task's code was allowed for other worktree content, and writes the
+    /// scripts the user approved, as frozen, into the job's folder.
+    fn prepare_permissions(
+        &self,
+        task: &DeliveryTask,
+        paths: &JobPaths,
+        start: Option<&WorktreeSnapshot>,
+    ) -> Result<Vec<DeliveryFrozenCopy>, DeliveryError> {
+        let decisions = self.store()?.task_decisions(&task.id)?;
+        let mut copies = Vec::new();
+        for (index, decision) in decisions
+            .iter()
+            .filter(|decision| allowed_permission(decision))
+            .enumerate()
+        {
+            if let (true, Some(start)) = (decision.runs_candidate, start) {
+                if decision.candidate.as_deref() != Some(start.tree.as_str()) {
+                    return Err(DeliveryError::new(
+                        "permission_stale",
+                        format!(
+                            "El código de la tarea cambió desde que permitiste «{}». Vuelve a permitirlo en Decisiones y relanza la QA.",
+                            decision.question
+                        ),
+                    ));
+                }
+            }
+            let dir = paths.dir.join("frozen").join((index + 1).to_string());
+            for script in &decision.scripts {
+                let name = script.path.rsplit(['/', '\\']).next().unwrap_or_default();
+                let copy = dir.join(name);
+                std::fs::create_dir_all(&dir).map_err(DeliveryError::io)?;
+                std::fs::write(&copy, &script.content).map_err(DeliveryError::io)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755))
+                        .map_err(DeliveryError::io)?;
+                }
+                copies.push(DeliveryFrozenCopy {
+                    original: script.path.clone(),
+                    copy: plain_path(&copy),
+                });
+            }
+        }
+        Ok(copies)
     }
 
     fn record_session_id(&self, job_id: &str, session_id: String) {
@@ -1173,6 +1243,14 @@ impl DeliveryService {
                         .or(outcome.result_error.clone())
                         .or_else(|| Some("El agente no entregó un resultado.".to_string()));
                 }
+            }
+        }
+        if job.agent == DeliveryAgent::Claude {
+            if let Some(error) = job.error.as_mut().filter(|error| error.contains("/login")) {
+                error.push_str(&format!(
+                    " — Claude Code no tiene sesión iniciada en {}: iníciala allí con `claude auth login` o elige otra plataforma al lanzar.",
+                    job.ran_on.as_deref().unwrap_or("esta plataforma")
+                ));
             }
         }
         store.put_job(&job)?;
@@ -1353,13 +1431,43 @@ fn settle_lease(
             lease.note = None;
         } else {
             lease.state = DeliveryLeaseState::Quarantined;
+            let how = match job.status {
+                DeliveryJobStatus::Cancelled => "se canceló cuando ya había ejecutado comandos",
+                DeliveryJobStatus::Interrupted => "seguía en marcha cuando Tinto se cerró",
+                _ => "falló a medias",
+            };
+            let key = store
+                .task(&job.task_id)?
+                .map_or_else(|| job.task_id.clone(), |task| task.key);
             lease.note = Some(format!(
-                "El trabajo {} de {} terminó sin liberar el recurso. Comprueba el entorno antes de liberarlo.",
-                job.role, job.task_id
+                "El trabajo {} de {key} {how}, así que el entorno puede haber quedado a medio usar. Nadie más puede usarlo hasta que lo liberes: comprueba que no queden procesos ni datos de prueba suyos y pulsa Liberar.",
+                job.role
             ));
         }
     }
     store.put_lease(&lease)
+}
+
+fn allowed_permission(decision: &DeliveryDecision) -> bool {
+    decision.kind == DeliveryDecisionKind::Permission
+        && decision.answer.as_deref() == Some(decisions::ALLOWED)
+}
+
+/// Where a job ran, as its stage shows it.
+fn ran_on(launch: &JobLaunch) -> String {
+    let place = match &launch.wsl_job {
+        Some(wsl_job) => format!("WSL · {}", wsl_job.distro),
+        None => match std::env::consts::OS {
+            "windows" => "Windows",
+            "macos" => "macOS",
+            _ => "Linux",
+        }
+        .to_string(),
+    };
+    match &launch.note {
+        Some(note) => format!("{place} · {note}"),
+        None => place,
+    }
 }
 
 fn to_changes(snapshot: &WorktreeSnapshot) -> Vec<DeliveryChange> {
