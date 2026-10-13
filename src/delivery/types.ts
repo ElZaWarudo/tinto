@@ -9,7 +9,25 @@ export type DeliveryAccess = "workspace" | "full";
 export type DeliveryResultState = "accepted" | "stale" | "invalid";
 export type DeliveryLeaseState = "free" | "active" | "quarantined";
 export type DeliveryRung = "commit" | "push" | "pr" | "jira";
-export type DeliveryApprovalStatus = "pending" | "approved" | "rejected" | "executed" | "failed";
+export type DeliveryApprovalStatus =
+  /** `undone`: a commit step whose commits were taken back; it is pending again. */
+  "pending" | "approved" | "rejected" | "executed" | "failed" | "undone";
+
+/** One commit of a commit step's plan. */
+export interface DeliveryCommit {
+  /** The exact message: subject, then an optional body after a blank line. */
+  message: string;
+  /** The files it includes, relative to the worktree. */
+  paths: string[];
+}
+
+/** What the form to prepare a commit starts from. */
+export interface DeliveryCommitDraft {
+  /** Every file with uncommitted changes. */
+  files: string[];
+  /** Subjects of the branch's latest commits. */
+  recent: string[];
+}
 
 export interface DeliveryTask {
   id: string;
@@ -129,6 +147,12 @@ export interface DeliveryApproval {
   decided_at_ms: number | null;
   executed_at_ms: number | null;
   outcome: string | null;
+  /** `commit`: the commits to create, in order. */
+  commits?: DeliveryCommit[];
+  /** `commit`: changed files the plan leaves uncommitted on purpose. */
+  left_out?: string[];
+  /** `commit`: the commits Tinto created. */
+  created?: string[];
 }
 
 export type DeliveryDecisionKind = "choice" | "text" | "permission";

@@ -146,6 +146,8 @@ pub fn run() {
             delivery::commands::delivery_set_repo_settings,
             delivery::commands::delivery_release_lease,
             delivery::commands::delivery_request_approval,
+            delivery::commands::delivery_commit_draft,
+            delivery::commands::delivery_undo_commit,
             delivery::commands::delivery_decide_approval,
             delivery::commands::delivery_complete_approval,
             delivery::commands::delivery_create_run,

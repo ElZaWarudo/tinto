@@ -7,11 +7,11 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use super::coordination::NewApproval;
+use super::coordination::{DeliveryCommitDraft, NewApproval};
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryDecision, DeliveryJob, DeliveryJobLog,
-    DeliveryLease, DeliveryOverview, DeliveryPlatform, DeliveryRepoSettings, DeliveryRun,
-    DeliveryRung, DeliverySettings, DeliveryTask,
+    DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision, DeliveryJob,
+    DeliveryJobLog, DeliveryLease, DeliveryOverview, DeliveryPlatform, DeliveryRepoSettings,
+    DeliveryRun, DeliveryRung, DeliverySettings, DeliveryTask,
 };
 use super::service::{DeliveryService, NewJob, NewTask};
 use super::tasks::plain_path;
@@ -305,6 +305,8 @@ pub fn delivery_request_approval(
     rung: DeliveryRung,
     title: String,
     body: Option<String>,
+    commits: Option<Vec<DeliveryCommit>>,
+    leave_out: Option<Vec<String>>,
 ) -> Result<DeliveryApproval, CommandError> {
     service
         .request_approval(NewApproval {
@@ -313,8 +315,29 @@ pub fn delivery_request_approval(
             title,
             body: body.unwrap_or_default(),
             requested_by: "user".to_string(),
+            commits: commits.unwrap_or_default(),
+            leave_out: leave_out.unwrap_or_default(),
         })
         .map_err(CommandError::from)
+}
+
+/// The changed files and recent commit subjects a commit plan starts from.
+#[tauri::command]
+pub async fn delivery_commit_draft(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<DeliveryCommitDraft, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.commit_draft(&task_id)).await
+}
+
+#[tauri::command]
+pub async fn delivery_undo_commit(
+    service: State<'_, DeliveryService>,
+    approval_id: String,
+) -> Result<DeliveryApproval, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.undo_commit(&approval_id)).await
 }
 
 #[tauri::command]

@@ -596,6 +596,8 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         title: title.to_string(),
         body: String::new(),
         requested_by: "user".to_string(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
     };
 
     assert_eq!(
@@ -1611,4 +1613,398 @@ fn a_coordinator_runs_qa_with_full_access_only_when_the_user_allowed_it() {
     // Only QA: every other stage stays in its sandbox.
     assert_eq!(dispatch("review").access, DeliveryAccess::Workspace);
     assert_eq!(dispatch("implementation").access, DeliveryAccess::Workspace);
+}
+
+fn commit(message: &str, paths: &[&str]) -> super::model::DeliveryCommit {
+    super::model::DeliveryCommit {
+        message: message.to_string(),
+        paths: paths.iter().map(|path| path.to_string()).collect(),
+    }
+}
+
+fn commit_plan(
+    task: &DeliveryTask,
+    commits: Vec<super::model::DeliveryCommit>,
+    leave_out: &[&str],
+) -> NewApproval {
+    NewApproval {
+        task_id: task.id.clone(),
+        rung: DeliveryRung::Commit,
+        title: String::new(),
+        body: String::new(),
+        requested_by: "coord".to_string(),
+        commits,
+        leave_out: leave_out.iter().map(|path| path.to_string()).collect(),
+    }
+}
+
+/// Runs git in a task's worktree and returns its output.
+fn in_worktree(task: &DeliveryTask, args: &[&str]) -> String {
+    super::tasks::git(super::tasks::Place::Native, &task.worktree, args).unwrap()
+}
+
+fn changed(task: &DeliveryTask) -> Vec<String> {
+    super::tasks::changed_files(super::tasks::Place::Native, &task.worktree).unwrap()
+}
+
+fn write_files(task: &DeliveryTask, names: &[&str]) {
+    for name in names {
+        let file = task.worktree.join(name);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, format!("{name}\n")).unwrap();
+    }
+}
+
+#[test]
+fn a_commit_plan_is_refused_unless_every_changed_file_has_one_place() {
+    let h = harness();
+    let task = h.task("C-1");
+    write_files(&task, &["a.txt", "b.txt", "docs/c.md"]);
+    let draft = h.service.commit_draft(&task.id).unwrap();
+    assert_eq!(draft.files, ["a.txt", "b.txt", "docs/c.md"]);
+    assert_eq!(draft.recent, ["init"]);
+
+    let refused = |plan: NewApproval| {
+        let error = h.service.request_approval(plan).unwrap_err();
+        assert_eq!(error.category, "invalid_commit_plan", "{error}");
+        error.message
+    };
+    let all = ["a.txt", "b.txt", "docs/c.md"];
+    // A file that does not exist (or has no changes).
+    let message = refused(commit_plan(
+        &task,
+        vec![
+            commit("feat: a", &all),
+            commit("docs: x", &["docs/nope.md"]),
+        ],
+        &[],
+    ));
+    assert!(message.contains("docs/nope.md (el commit 2) no existe o no tiene cambios"));
+    // The same file in two commits, or in a commit and left out.
+    let message = refused(commit_plan(
+        &task,
+        vec![commit("feat: a", &all), commit("docs: c", &["docs/c.md"])],
+        &["a.txt"],
+    ));
+    assert!(message.contains("docs/c.md está en el commit 1 y en el commit 2"));
+    assert!(message.contains("a.txt está en los que se dejan fuera y en el commit 1"));
+    // A changed file nobody placed.
+    let message = refused(commit_plan(
+        &task,
+        vec![commit("feat: a", &["a.txt"])],
+        &["b.txt"],
+    ));
+    assert!(message.contains("sin asignar: docs/c.md"));
+    // A commit without message or without files.
+    let message = refused(commit_plan(
+        &task,
+        vec![commit("  ", &all), commit("docs: c", &[])],
+        &[],
+    ));
+    assert!(message.contains("el commit 1 no tiene mensaje"));
+    assert!(message.contains("el commit 2 no incluye archivos"));
+    assert!(h.service.overview().unwrap().approvals.is_empty());
+}
+
+#[test]
+fn a_commit_plan_creates_its_commits_in_order_and_can_be_undone() {
+    let h = harness();
+    let task = h.task("C-2");
+    let base = in_worktree(&task, &["rev-parse", "HEAD"]);
+    std::fs::remove_file(task.worktree.join("README.md")).unwrap();
+    write_files(
+        &task,
+        &["cli/a.ts", "cli/a.test.ts", "docs/c.md", "scratch.log"],
+    );
+    let body = "docs(cli): explain a - C-2\n\nWhy it changed.\nSecond line.";
+    let asked = h
+        .service
+        .request_approval(commit_plan(
+            &task,
+            vec![
+                commit("feat(cli): add a", &[r"cli\a.ts", "./README.md"]),
+                commit("test(cli): cover a", &["cli/a.test.ts"]),
+                commit(body, &["docs/c.md"]),
+            ],
+            &["scratch.log"],
+        ))
+        .unwrap();
+    // What the user approves: the whole plan, and who prepared it.
+    assert_eq!(asked.title, "3 commits");
+    assert_eq!(asked.requested_by, "coord");
+    assert_eq!(asked.commits[0].paths, ["cli/a.ts", "README.md"]);
+    assert_eq!(asked.left_out, ["scratch.log"]);
+
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(done.created.len(), 3);
+    assert_eq!(done.before.as_deref(), Some(base.as_str()));
+    assert!(done.outcome.as_deref().unwrap().starts_with("3 commits ("));
+    // Those commits, in that order, with those exact texts and files.
+    assert_eq!(
+        in_worktree(&task, &["log", "--format=%s", &format!("{base}..HEAD")]),
+        "docs(cli): explain a - C-2\ntest(cli): cover a\nfeat(cli): add a"
+    );
+    assert_eq!(in_worktree(&task, &["log", "-1", "--format=%B"]), body);
+    assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), done.created[2]);
+    let files = |commit: &str| in_worktree(&task, &["show", "--name-only", "--format=", commit]);
+    assert_eq!(files(&done.created[0]), "README.md\ncli/a.ts");
+    assert_eq!(files(&done.created[1]), "cli/a.test.ts");
+    // Nothing is left but what the plan left out on purpose.
+    assert_eq!(changed(&task), ["scratch.log"]);
+
+    // Undone: every change is back in the worktree and the step is open.
+    let undone = h.service.undo_commit(&asked.id).unwrap();
+    assert_eq!(undone.status, DeliveryApprovalStatus::Undone);
+    assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), base);
+    assert_eq!(
+        changed(&task),
+        [
+            "README.md",
+            "cli/a.test.ts",
+            "cli/a.ts",
+            "docs/c.md",
+            "scratch.log"
+        ]
+    );
+    assert!(!task.worktree.join("README.md").exists());
+    assert_eq!(
+        h.service.undo_commit(&asked.id).unwrap_err().category,
+        "undo_unavailable"
+    );
+    let again = h
+        .service
+        .request_approval(commit_plan(
+            &task,
+            vec![commit(
+                "feat: everything",
+                &[
+                    "README.md",
+                    "cli/a.test.ts",
+                    "cli/a.ts",
+                    "docs/c.md",
+                    "scratch.log",
+                ],
+            )],
+            &[],
+        ))
+        .unwrap();
+    assert_eq!(again.title, "feat: everything");
+}
+
+#[test]
+fn a_commit_plan_stops_at_the_commit_that_fails_and_says_how_the_branch_is_left() {
+    let h = harness();
+    let task = h.task("C-3");
+    let base = in_worktree(&task, &["rev-parse", "HEAD"]);
+    // The repository refuses some messages, as a commit-msg hook would.
+    let hook = h.repo.path().join(".git").join("hooks").join("commit-msg");
+    std::fs::write(&hook, "#!/bin/sh\nif grep -q WIP \"$1\"; then exit 1; fi\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    write_files(&task, &["a.txt", "b.txt", "c.txt"]);
+    let asked = h
+        .service
+        .request_approval(commit_plan(
+            &task,
+            vec![
+                commit("feat: a", &["a.txt"]),
+                commit("WIP b", &["b.txt"]),
+                commit("feat: c", &["c.txt"]),
+            ],
+            &[],
+        ))
+        .unwrap();
+    let failed = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(failed.status, DeliveryApprovalStatus::Failed);
+    let outcome = failed.outcome.unwrap();
+    assert!(
+        outcome.starts_with("El commit 2 de 3 («WIP b») falló"),
+        "{outcome}"
+    );
+    assert!(
+        outcome.contains("Los 1 anteriores quedaron hechos"),
+        "{outcome}"
+    );
+    // The first commit stands; the rest is in the worktree, nothing staged.
+    assert_eq!(failed.created.len(), 1);
+    assert_eq!(
+        in_worktree(&task, &["rev-parse", "HEAD"]),
+        failed.created[0]
+    );
+    assert_eq!(changed(&task), ["b.txt", "c.txt"]);
+    assert_eq!(in_worktree(&task, &["diff", "--cached", "--name-only"]), "");
+    // And the part that was done can be taken back too.
+    h.service.undo_commit(&asked.id).unwrap();
+    assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), base);
+    assert_eq!(changed(&task), ["a.txt", "b.txt", "c.txt"]);
+}
+
+#[test]
+fn a_commit_plan_is_not_run_if_the_worktree_changed_since_it_was_prepared() {
+    let h = harness();
+    let task = h.task("C-4");
+    let base = in_worktree(&task, &["rev-parse", "HEAD"]);
+    write_files(&task, &["a.txt"]);
+    let asked = h
+        .service
+        .request_approval(commit_plan(&task, vec![commit("feat: a", &["a.txt"])], &[]))
+        .unwrap();
+    write_files(&task, &["late.txt"]);
+    let failed = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(failed.status, DeliveryApprovalStatus::Failed);
+    let outcome = failed.outcome.unwrap();
+    assert!(outcome.starts_with("No se creó ningún commit"), "{outcome}");
+    assert!(outcome.contains("sin asignar: late.txt"), "{outcome}");
+    assert!(failed.created.is_empty());
+    assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), base);
+}
+
+#[test]
+fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
+    let h = harness();
+    let task = h.task("C-5");
+    write_files(&task, &["a.txt"]);
+    // A step recorded before plans existed: only "Commit <hash>".
+    let asked = h
+        .service
+        .request_approval(NewApproval {
+            task_id: task.id.clone(),
+            rung: DeliveryRung::Commit,
+            title: "C-5: add a".into(),
+            body: String::new(),
+            requested_by: "user".into(),
+            commits: Vec::new(),
+            leave_out: Vec::new(),
+        })
+        .unwrap();
+    let mut done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(
+        in_worktree(&task, &["log", "-1", "--format=%B"]),
+        "C-5: add a"
+    );
+    done.created.clear();
+    done.before = None;
+    h.service.store().unwrap().put_approval(&done).unwrap();
+    let latest = || h.service.approval(&asked.id).unwrap();
+    h.service.overview().unwrap();
+    assert_eq!(latest().status, DeliveryApprovalStatus::Executed);
+
+    // Someone takes the commit back by hand.
+    git(&task.worktree, &["reset", "-q", "--mixed", "HEAD~1"]);
+    let overview = h.service.overview().unwrap();
+    let step = overview
+        .approvals
+        .iter()
+        .find(|a| a.id == asked.id)
+        .unwrap();
+    assert_eq!(step.status, DeliveryApprovalStatus::Undone);
+    assert!(step
+        .outcome
+        .as_deref()
+        .unwrap()
+        .contains("ya no están en la rama"));
+    assert_eq!(changed(&task), ["a.txt"]);
+
+    // A commit rewritten outside (amend) is gone too, and nothing is pushed.
+    let asked = h
+        .service
+        .request_approval(commit_plan(&task, vec![commit("feat: a", &["a.txt"])], &[]))
+        .unwrap();
+    h.service.decide_approval(&asked.id, true, None).unwrap();
+    git(
+        &task.worktree,
+        &["commit", "-q", "--amend", "-m", "feat: a, reworded"],
+    );
+    let push = h
+        .service
+        .request_approval(NewApproval {
+            task_id: task.id.clone(),
+            rung: DeliveryRung::Push,
+            title: "Publish".into(),
+            body: String::new(),
+            requested_by: "user".into(),
+            commits: Vec::new(),
+            leave_out: Vec::new(),
+        })
+        .unwrap_err();
+    assert_eq!(push.category, "commit_missing");
+    assert_eq!(
+        h.service.approval(&asked.id).unwrap().status,
+        DeliveryApprovalStatus::Undone
+    );
+}
+
+#[test]
+fn a_coordinator_sends_a_commit_plan_over_mcp() {
+    let h = harness();
+    let call = |name: &str, arguments: serde_json::Value| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    let repo = plain_path(h.repo.path());
+    let run = call(
+        "create_run",
+        json!({"repo": repo, "title": "B", "owner": "coord"}),
+    );
+    let run_id = run["structuredContent"]["id"].as_str().unwrap().to_string();
+    let task = call(
+        "create_task",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "repo": repo, "key": "C-6", "title": "x"}),
+    );
+    let task_id = task["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let worktree = PathBuf::from(task["structuredContent"]["worktree"].as_str().unwrap());
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    std::fs::write(worktree.join("b.txt"), "b").unwrap();
+    let request = |commits: serde_json::Value| {
+        call(
+            "request_approval",
+            json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "rung": "commit", "commits": commits}),
+        )
+    };
+    // The same validation as in the view.
+    let bad = request(json!([{"message": "feat: a", "paths": ["a.txt", "nope.txt"]}]));
+    assert_eq!(bad["isError"], true);
+    let reason = bad["content"][0]["text"].as_str().unwrap();
+    assert!(
+        reason.contains("nope.txt (el commit 1) no existe"),
+        "{reason}"
+    );
+    assert!(reason.contains("sin asignar: b.txt"), "{reason}");
+    assert_eq!(request(json!([{"message": "feat: a"}]))["isError"], true);
+
+    let asked = request(json!([
+        {"message": "feat: a", "paths": ["a.txt"]},
+        {"message": "feat: b", "paths": ["b.txt"]}
+    ]));
+    let approval = &asked["structuredContent"];
+    assert_eq!(approval["requested_by"], "coord", "{asked}");
+    assert_eq!(approval["commits"][1]["message"], "feat: b");
+    let id = approval["id"].as_str().unwrap();
+    h.service.decide_approval(id, true, None).unwrap();
+    let read = call("read_approval", json!({"approval_id": id}));
+    assert_eq!(read["structuredContent"]["status"], "executed");
+    assert_eq!(
+        read["structuredContent"]["created"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }

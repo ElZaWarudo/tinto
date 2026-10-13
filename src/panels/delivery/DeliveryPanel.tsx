@@ -30,6 +30,7 @@ import {
   setDeliveryRepoSettings,
   setDeliveryRunQaJiraComment,
   takeoverDeliveryRun,
+  undoDeliveryCommit,
   undoDeliveryJob,
   updateDeliverySettings,
   updateDeliveryTask,
@@ -51,6 +52,7 @@ import {
   SettingsDialog,
   type RepoChoice,
 } from "./DeliveryDialogs";
+import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import {
   GROUPS,
@@ -941,7 +943,12 @@ function TaskDetail({
         )}
       </div>
 
-      {rung && requesting && (
+      <CommitStep approvals={approvals} busy={busy} run={run} />
+
+      {rung === "commit" && requesting && (
+        <CommitPlanForm task={task} busy={busy} run={run} onClose={() => setRequesting(false)} />
+      )}
+      {rung && rung !== "commit" && requesting && (
         <DeliveryRequest
           key={rung}
           task={task}
@@ -1100,9 +1107,71 @@ function rungStep(approval: DeliveryApproval | undefined): {
       };
     case "rejected":
       return { tone: "danger", icon: "x", label: "Rechazado" };
+    case "undone":
+      return {
+        tone: "todo",
+        icon: "ring",
+        label: "Deshecho",
+        title: approval.outcome ?? undefined,
+      };
     default:
       return { tone: "danger", icon: "x", label: "Falló", title: approval.outcome ?? undefined };
   }
+}
+
+/** Who prepared a request. One made in Tinto's own view may come from the
+ *  user or from whoever drives the view for them; the API names its caller. */
+function preparedBy(approval: DeliveryApproval): string {
+  return approval.requested_by === "user"
+    ? "preparado desde la interfaz de Tinto"
+    : `preparado por el coordinador ${approval.requested_by}`;
+}
+
+/** What happened to the task's last commit step when it is not simply
+ *  done, and the way to take back commits that are not pushed yet. */
+function CommitStep({
+  approvals,
+  busy,
+  run,
+}: {
+  approvals: DeliveryApproval[];
+  busy: boolean;
+  run: (action: () => Promise<unknown>) => Promise<boolean>;
+}) {
+  const commit = latestApproval(approvals, "commit");
+  if (!commit) return null;
+  const pushed = latestApproval(approvals, "push")?.status === "executed";
+  // Steps recorded before plans existed only have "Commit <hash>" as outcome.
+  const made =
+    commit.created?.length ||
+    (commit.status === "executed" && commit.outcome?.startsWith("Commit ") ? 1 : 0);
+  const undoable =
+    !pushed && made > 0 && (commit.status === "executed" || commit.status === "failed");
+  const notice = commit.status === "undone" || commit.status === "failed";
+  if (!undoable && !notice) return null;
+  return (
+    <div className="delivery-commit-step" role="group" aria-label="Paso de commit">
+      {notice && commit.outcome && <p className="delivery-job__note">{commit.outcome}</p>}
+      {undoable && (
+        <button
+          type="button"
+          disabled={busy}
+          title="Los cambios vuelven al worktree, sin confirmar; no se pierde nada."
+          onClick={() =>
+            void (async () => {
+              const ok = await confirm(
+                `La rama volverá a donde estaba antes de ${made === 1 ? "el commit" : `los ${made} commits`} y sus cambios quedarán en el worktree, sin confirmar. No se pierde nada.`,
+                { title: "Deshacer el commit", okLabel: "Deshacer" },
+              );
+              if (ok) await run(() => undoDeliveryCommit(commit.id));
+            })()
+          }
+        >
+          {made === 1 ? "Deshacer el commit" : `Deshacer los ${made} commits`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function ApprovalBanner({
@@ -1121,7 +1190,7 @@ function ApprovalBanner({
   const pending = approval.status === "pending";
   const consequence =
     approval.rung === "commit"
-      ? `Al aprobar, Tinto hace el commit en ${task.branch} con este texto exacto. No publica nada: el push se aprueba aparte.`
+      ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
       : approval.rung === "push"
         ? `Al aprobar, Tinto publica la rama ${task.branch}.`
         : approval.rung === "pr"
@@ -1133,15 +1202,17 @@ function ApprovalBanner({
         <Icon name="flag" />
         <strong>{pending ? `Aprobar ${name}` : `Registrar ${name}`}</strong>
         <span className="delivery-muted">
-          {pending
-            ? `pedido por ${approval.requested_by === "user" ? "ti" : approval.requested_by}`
-            : "aprobado; falta anotar el resultado"}
+          {pending ? preparedBy(approval) : "aprobado; falta anotar el resultado"}
         </span>
       </p>
-      <pre className="delivery-banner__text">
-        {approval.title}
-        {approval.body ? `\n\n${approval.body}` : ""}
-      </pre>
+      {approval.rung === "commit" ? (
+        <CommitPlanView approval={approval} />
+      ) : (
+        <pre className="delivery-banner__text">
+          {approval.title}
+          {approval.body ? `\n\n${approval.body}` : ""}
+        </pre>
+      )}
       {pending && <p className="delivery-muted">{consequence}</p>}
       {pending ? (
         <div className="delivery-actions">
@@ -1201,6 +1272,7 @@ function DeliveryRequest({
 }) {
   const named = task.title ? `${task.key}: ${task.title}` : task.key;
   const [title, setTitle] = useState(rung === "push" ? `Publicar ${task.branch}` : named);
+  // The commit step has its own form (CommitPlanForm).
   const [body, setBody] = useState("");
   const name = lower(rungLabel(rung));
   return (
@@ -1215,7 +1287,7 @@ function DeliveryRequest({
       }}
     >
       <label className="delivery-request__field">
-        <span>{rung === "commit" ? "Mensaje del commit" : "Texto exacto a aprobar"}</span>
+        <span>Texto exacto a aprobar</span>
         <input value={title} onChange={(event) => setTitle(event.target.value)} required />
       </label>
       <label className="delivery-request__field">

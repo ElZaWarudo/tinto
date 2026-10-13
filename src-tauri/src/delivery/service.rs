@@ -238,6 +238,10 @@ impl DeliveryService {
     }
 
     pub fn overview(&self) -> Result<DeliveryOverview, DeliveryError> {
+        // Never show a commit step as done when its commits are gone.
+        if let Err(error) = self.reconcile_commits() {
+            eprintln!("tinto: delivery could not check the commit steps: {error}");
+        }
         let store = self.store()?;
         let tasks = store.tasks()?;
         let live: HashSet<&str> = tasks.iter().map(|task| task.id.as_str()).collect();

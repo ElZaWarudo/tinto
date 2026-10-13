@@ -317,19 +317,101 @@ pub fn remove_worktree(
     git(place, repo, &args).map(|_| ())
 }
 
-pub fn commit_all(
+/// Every file with uncommitted changes (modified, deleted or new), relative
+/// to the worktree with `/`. A rename counts as a deletion and a new file,
+/// so each side can go to the commit it belongs to.
+pub fn changed_files(place: Place<'_>, worktree: &Path) -> Result<Vec<String>, DeliveryError> {
+    let args = [
+        "-c",
+        "status.renames=false",
+        "status",
+        "--porcelain",
+        "-z",
+        "--untracked-files=all",
+    ];
+    let output = git_command(place, worktree, &args)
+        .output()
+        .map_err(|error| {
+            DeliveryError::new("git_failed", format!("no se pudo ejecutar git: {error}"))
+        })?;
+    if !output.status.success() {
+        return Err(DeliveryError::new(
+            "git_failed",
+            format!(
+                "git status: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    // Each entry is `XY <path>` and ends with NUL.
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .split('\0')
+        .filter_map(|entry| entry.get(3..))
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+pub fn head(place: Place<'_>, worktree: &Path) -> Result<String, DeliveryError> {
+    git(place, worktree, &["rev-parse", "HEAD"])
+}
+
+/// Leaves nothing staged; the files keep their changes.
+pub fn unstage_all(place: Place<'_>, worktree: &Path) -> Result<(), DeliveryError> {
+    git(place, worktree, &["reset", "--quiet"]).map(|_| ())
+}
+
+/// Commits exactly `paths`, as they are now, with exactly `message`.
+/// Nothing else may be staged. Returns the new commit.
+pub fn commit_paths(
     place: Place<'_>,
     worktree: &Path,
-    subject: &str,
-    body: &str,
+    message: &str,
+    paths: &[String],
 ) -> Result<String, DeliveryError> {
-    git(place, worktree, &["add", "--all"])?;
-    let mut args = vec!["commit", "-m", subject];
-    if !body.trim().is_empty() {
-        args.extend(["-m", body]);
-    }
-    git(place, worktree, &args)?;
-    git(place, worktree, &["rev-parse", "--short", "HEAD"])
+    let mut add = vec!["add", "--all", "--"];
+    add.extend(paths.iter().map(String::as_str));
+    git(place, worktree, &add)?;
+    git(place, worktree, &["commit", "--quiet", "-m", message])?;
+    head(place, worktree)
+}
+
+/// Whether `commit` is still part of the branch checked out in `worktree`.
+pub fn on_branch(place: Place<'_>, worktree: &Path, commit: &str) -> bool {
+    git_ok(
+        place,
+        worktree,
+        &["merge-base", "--is-ancestor", commit, "HEAD"],
+    )
+}
+
+/// Whether some remote branch already has `commit`.
+pub fn published(place: Place<'_>, worktree: &Path, commit: &str) -> bool {
+    git(
+        place,
+        worktree,
+        &["branch", "--remotes", "--contains", commit],
+    )
+    .is_ok_and(|branches| !branches.is_empty())
+}
+
+/// Moves the branch back to `commit`; what the later commits changed stays
+/// in the worktree, uncommitted.
+pub fn uncommit_to(place: Place<'_>, worktree: &Path, commit: &str) -> Result<(), DeliveryError> {
+    git(place, worktree, &["reset", "--quiet", "--mixed", commit]).map(|_| ())
+}
+
+/// Subjects of the latest commits, newest first, to show the repo's
+/// convention.
+pub fn recent_subjects(place: Place<'_>, worktree: &Path, count: usize) -> Vec<String> {
+    let limit = format!("-{count}");
+    git(
+        place,
+        worktree,
+        &["log", &limit, "--no-merges", "--format=%s"],
+    )
+    .map(|log| log.lines().map(str::to_string).collect())
+    .unwrap_or_default()
 }
 
 pub fn push_branch(
@@ -471,7 +553,20 @@ mod tests {
         let state = worktree_state(Place::Native, &worktree, &base).unwrap();
         assert!(state.dirty);
         assert_eq!(state.unpublished, 0);
-        commit_all(Place::Native, &worktree, "Add new", "").unwrap();
+        assert_eq!(
+            changed_files(Place::Native, &worktree).unwrap(),
+            ["new.txt"]
+        );
+        let commit = commit_paths(
+            Place::Native,
+            &worktree,
+            "Add new",
+            &["new.txt".to_string()],
+        )
+        .unwrap();
+        assert!(on_branch(Place::Native, &worktree, &commit));
+        assert!(!published(Place::Native, &worktree, &commit));
+        assert_eq!(recent_subjects(Place::Native, &worktree, 1), ["Add new"]);
         let state = worktree_state(Place::Native, &worktree, &base).unwrap();
         assert!(!state.dirty);
         assert_eq!(state.unpublished, 1);

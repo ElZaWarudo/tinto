@@ -18,6 +18,8 @@ const client = vi.hoisted(() => ({
   dispatchDeliveryJob: vi.fn(),
   decideDeliveryApproval: vi.fn(),
   requestDeliveryApproval: vi.fn(),
+  getDeliveryCommitDraft: vi.fn(),
+  undoDeliveryCommit: vi.fn(),
   undoDeliveryJob: vi.fn(),
   cancelDeliveryJob: vi.fn(),
   retryDeliveryJob: vi.fn(),
@@ -348,7 +350,7 @@ describe("DeliveryPanel", () => {
     renderPanel();
     const group = await screen.findByRole("group", { name: "Aprobación commit" });
     expect(within(group).getByText(/Parser now rejects empty input\./)).toBeInTheDocument();
-    expect(within(group).getByText(/pedido por/)).toHaveTextContent("coord");
+    expect(within(group).getByText(/preparado por/)).toHaveTextContent("el coordinador coord");
     expect(within(group).getByText(/No publica nada/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 tarea te necesita" })).toBeInTheDocument();
     expect(
@@ -356,6 +358,125 @@ describe("DeliveryPanel", () => {
     ).toBeInTheDocument();
     await user.click(within(group).getByRole("button", { name: "Aprobar y hacer commit" }));
     await waitFor(() => expect(client.decideDeliveryApproval).toHaveBeenCalledWith("a1", true));
+  });
+
+  const commitStep = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
+    id: "a1",
+    task_id: "t1",
+    rung: "commit",
+    title: "2 commits",
+    body: "",
+    status: "pending",
+    requested_by: "user",
+    requested_at_ms: 1,
+    decided_at_ms: null,
+    executed_at_ms: null,
+    outcome: null,
+    commits: [
+      { message: "feat(cli): add a", paths: ["cli/a.ts"] },
+      { message: "test(cli): cover a\n\nWhy.", paths: ["cli/a.test.ts"] },
+    ],
+    left_out: ["scratch.log"],
+    created: [],
+    ...over,
+  });
+
+  it("shows the whole commit plan and who prepared it", async () => {
+    client.getDeliveryOverview.mockResolvedValue(overview({ approvals: [commitStep({})] }));
+    renderPanel();
+    const group = await screen.findByRole("group", { name: "Aprobación commit" });
+    expect(group).toHaveTextContent("preparado desde la interfaz de Tinto");
+    const plan = within(group).getByRole("list", { name: "Plan de commits" });
+    expect(plan).toHaveTextContent("feat(cli): add a");
+    expect(plan).toHaveTextContent("Why.");
+    expect(within(plan).getByRole("list", { name: "Archivos del commit 2" })).toHaveTextContent(
+      "cli/a.test.ts",
+    );
+    expect(within(plan).getByRole("list", { name: "Archivos que quedan fuera" })).toHaveTextContent(
+      "scratch.log",
+    );
+    expect(group).toHaveTextContent("estos commits, en este orden,");
+  });
+
+  it("prepares a plan of several commits without imposing a message", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryCommitDraft.mockResolvedValue({
+      files: ["cli/a.ts", "cli/a.test.ts", "scratch.log"],
+      recent: ["feat(cli): previous - AGOS-1"],
+    });
+    client.requestDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Preparar commit…" }));
+    const form = await screen.findByRole("form", { name: "Pedir aprobación de commit" });
+    expect(form).toHaveTextContent("feat(cli): previous - AGOS-1");
+    const first = within(form).getByRole("textbox", { name: /Mensaje del commit 1/ });
+    expect(first).toHaveValue("");
+    expect(within(form).getByRole("button", { name: "Pedir aprobación" })).toBeDisabled();
+    await user.type(first, "feat(cli): add a");
+    await user.click(within(form).getByRole("button", { name: "Añadir otro commit" }));
+    await user.type(
+      within(form).getByRole("textbox", { name: /Mensaje del commit 2/ }),
+      "test(cli): cover a",
+    );
+    await user.selectOptions(
+      within(form).getByRole("combobox", { name: "Destino de cli/a.test.ts" }),
+      "Commit 2",
+    );
+    await user.selectOptions(
+      within(form).getByRole("combobox", { name: "Destino de scratch.log" }),
+      "Dejar sin commit",
+    );
+    expect(form).toHaveTextContent("Quedarán sin confirmar: scratch.log.");
+    await user.click(within(form).getByRole("button", { name: "Pedir aprobación" }));
+    await waitFor(() =>
+      expect(client.requestDeliveryApproval).toHaveBeenCalledWith("t1", "commit", "", "", {
+        commits: [
+          { message: "feat(cli): add a", paths: ["cli/a.ts"] },
+          { message: "test(cli): cover a", paths: ["cli/a.test.ts"] },
+        ],
+        leaveOut: ["scratch.log"],
+      }),
+    );
+  });
+
+  it("undoes an unpushed commit step, and asks for the commit again when it is gone", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [
+          commitStep({ status: "executed", created: ["1111111", "2222222"], outcome: "2 commits" }),
+        ],
+      }),
+    );
+    client.undoDeliveryCommit.mockResolvedValue({});
+    const view = renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Deshacer los 2 commits" }));
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining("No se pierde nada"),
+      expect.objectContaining({ title: "Deshacer el commit" }),
+    );
+    await waitFor(() => expect(client.undoDeliveryCommit).toHaveBeenCalledWith("a1"));
+    view.unmount();
+
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [
+          commitStep({
+            status: "undone",
+            created: ["1111111"],
+            outcome: "Los commits que hizo Tinto (1111111) ya no están en la rama.",
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByRole("button", { name: "Preparar commit…" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preparar push…" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Paso de commit" })).toHaveTextContent(
+      "ya no están en la rama",
+    );
+    expect(screen.queryByRole("button", { name: /Deshacer (el|los)/ })).toBeNull();
   });
 
   it("undoes the latest job after confirming", async () => {

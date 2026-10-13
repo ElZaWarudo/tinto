@@ -6,6 +6,8 @@ import type {
   DeliveryAccess,
   DeliveryAgent,
   DeliveryApproval,
+  DeliveryCommit,
+  DeliveryCommitDraft,
   DeliveryConversation,
   DeliveryDecision,
   DeliveryJob,
@@ -119,7 +121,24 @@ export const requestDeliveryApproval = (
   rung: DeliveryRung,
   title: string,
   body: string,
-) => invoke<DeliveryApproval>("delivery_request_approval", { taskId, rung, title, body });
+  plan?: { commits: DeliveryCommit[]; leaveOut: string[] },
+) =>
+  invoke<DeliveryApproval>("delivery_request_approval", {
+    taskId,
+    rung,
+    title,
+    body,
+    commits: plan?.commits ?? null,
+    leaveOut: plan?.leaveOut ?? null,
+  });
+
+/** The changed files and recent commit subjects a commit plan starts from. */
+export const getDeliveryCommitDraft = (taskId: string) =>
+  invoke<DeliveryCommitDraft>("delivery_commit_draft", { taskId });
+
+/** Takes back the commits of an unpushed commit step; the changes stay in the worktree. */
+export const undoDeliveryCommit = (approvalId: string) =>
+  invoke<DeliveryApproval>("delivery_undo_commit", { approvalId });
 
 export const decideDeliveryApproval = (approvalId: string, approve: boolean, note?: string) =>
   invoke<DeliveryApproval>("delivery_decide_approval", {

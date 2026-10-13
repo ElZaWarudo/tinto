@@ -257,6 +257,18 @@ pub enum DeliveryApprovalStatus {
     Rejected,
     Executed,
     Failed,
+    /// A commit step whose commits were taken back, by the user in Tinto or
+    /// outside it (reset, amend, rebase). The step is pending again.
+    Undone,
+}
+
+/// One commit of a commit step's plan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryCommit {
+    /// The exact message: subject, then an optional body after a blank line.
+    pub message: String,
+    /// The files it includes, relative to the worktree, with `/`.
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -274,6 +286,18 @@ pub struct DeliveryApproval {
     pub decided_at_ms: Option<u64>,
     pub executed_at_ms: Option<u64>,
     pub outcome: Option<String>,
+    /// `commit` only: the commits to create, in order.
+    #[serde(default)]
+    pub commits: Vec<DeliveryCommit>,
+    /// `commit` only: changed files the plan leaves uncommitted on purpose.
+    #[serde(default)]
+    pub left_out: Vec<String>,
+    /// `commit` only: the commits Tinto created, in order.
+    #[serde(default)]
+    pub created: Vec<String>,
+    /// `commit` only: where the branch was before them, to undo the step.
+    #[serde(default)]
+    pub before: Option<String>,
 }
 
 /// What a decision asks of the user before work starts.

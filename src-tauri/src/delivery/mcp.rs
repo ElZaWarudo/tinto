@@ -18,8 +18,8 @@ use serde_json::{json, Value};
 use super::coordination::NewApproval;
 use super::decisions::NewDecision;
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryCoordinatorEndpoint, DeliveryDecisionKind,
-    DeliveryDecisionOption, DeliveryPlatform, DeliveryRung,
+    DeliveryAccess, DeliveryAgent, DeliveryCommit, DeliveryCoordinatorEndpoint,
+    DeliveryDecisionKind, DeliveryDecisionOption, DeliveryPlatform, DeliveryRung,
 };
 use super::service::{DeliveryService, NewJob, NewTask, QA_ROLE};
 use super::DeliveryError;
@@ -346,12 +346,40 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
                     ))
                 }
             };
+            let list = |key: &str| -> Result<Vec<Value>, DeliveryError> {
+                match args.get(key) {
+                    None | Some(Value::Null) => Ok(Vec::new()),
+                    Some(Value::Array(items)) => Ok(items.clone()),
+                    Some(_) => Err(DeliveryError::new(
+                        "invalid_arguments",
+                        format!("{key} debe ser una lista"),
+                    )),
+                }
+            };
+            let commits = list("commits")?
+                .into_iter()
+                .map(|commit| {
+                    serde_json::from_value::<DeliveryCommit>(commit).map_err(|_| {
+                        DeliveryError::new(
+                            "invalid_arguments",
+                            "commits: cada commit necesita message y paths",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let leave_out = list("leave_out")?
+                .iter()
+                .filter_map(|path| path.as_str().map(str::to_string))
+                .collect();
             to_json(&service.request_approval(NewApproval {
                 task_id,
                 rung,
-                title: text("title")?,
+                // A commit plan carries its own texts.
+                title: optional("title").unwrap_or_default(),
                 body: optional("body").unwrap_or_default(),
                 requested_by: text("owner")?,
+                commits,
+                leave_out,
             })?)
         }
         "read_approval" => to_json(&service.approval(&text("approval_id")?)?),
@@ -492,8 +520,8 @@ fn tool_definitions() -> Value {
         { "name": "job_log", "description": "Readable log of a job from a raw line onwards.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "from_line": {"type": "integer"}}), json!(["job_id"])) },
         { "name": "cancel_job", "description": "Cancel a queued or running job.", "inputSchema": fenced(json!({"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]})) },
         { "name": "retry_job", "description": "Queue a new attempt of a finished job; the old attempt's late results become stale.", "inputSchema": fenced(json!({"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]})) },
-        { "name": "request_approval", "description": "Ask the user to approve one delivery rung (commit, push, pr or jira) with the exact text. Tinto runs commit and push itself once approved.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "rung": {"type": "string", "enum": ["commit", "push", "pr", "jira"]}, "title": {"type": "string"}, "body": {"type": "string"}}, "required": ["task_id", "rung", "title"]})) },
-        { "name": "read_approval", "description": "An approval's status and outcome.", "inputSchema": schema(json!({"approval_id": {"type": "string"}}), json!(["approval_id"])) },
+        { "name": "request_approval", "description": "Ask the user to approve one delivery rung (commit, push, pr or jira) with the exact text. Tinto runs commit and push itself once approved. For `commit`, send a plan in `commits`: one or more commits in order, each with its exact `message` (subject, then an optional body after a blank line; follow the repository's own convention as its recent history shows it, and add no trailers the repository does not use) and the `paths` it includes, relative to the worktree. Split the change into the atomic commits the repository expects. Every file with uncommitted changes must be in exactly one commit or in `leave_out`; a path that does not exist or has no changes, a path in two commits and an unassigned file are refused, naming each. The user sees the whole plan; when they approve, Tinto creates the commits as written, stops at the first that fails, and reports the hashes in the approval's `created`. Without `commits`, `title` and `body` make one commit with every change. The user can undo an unpushed commit step in Tinto, and Tinto marks it `undone` if its commits leave the branch (reset, amend, rebase): the commit must then be requested again before the push. For push, pr and jira give the exact text in `title` (and `body`).", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "rung": {"type": "string", "enum": ["commit", "push", "pr", "jira"]}, "title": {"type": "string"}, "body": {"type": "string"}, "commits": {"type": "array", "items": {"type": "object", "properties": {"message": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}}}, "required": ["message", "paths"]}}, "leave_out": {"type": "array", "items": {"type": "string"}}}, "required": ["task_id", "rung"]})) },
+        { "name": "read_approval", "description": "An approval's status (pending, approved, rejected, executed, failed or undone) and outcome; for a commit step, also its plan and the commits created.", "inputSchema": schema(json!({"approval_id": {"type": "string"}}), json!(["approval_id"])) },
         { "name": "request_decisions", "description": "Ask the user what they must settle before a task's stages run; they answer in Tinto, and no stage can be dispatched on the task until every decision is answered. Write questions in plain language for the user and put paths, flags and formats in `detail`. Kinds: `choice` (2-4 options, each with a one-line consequence, at most one recommended), `text` (a user-facing text to approve exactly as shown, in `text`), `permission` (something outside the worktree, such as installing into the user's real client config; give `undo`; `command` when QA needs to run it: once allowed it joins that task's QA commands, with any arguments; `read_dirs` for folders outside the worktree QA must read or list; `write_dirs` for folders outside the worktree its commands must write in, which become the only writable places besides the job's QA folder (Tinto creates the ones that do not exist); and `clients`, `claude` and/or `codex`, when the command starts the user's real client, so the folder that client must write to start joins `write_dirs` and the user sees it). Each created permission comes back with `warnings`: reasons it will not work as asked when QA runs with Codex on this machine, found by trying the command's program in Codex's sandbox (for example, Git Bash cannot start in its unelevated sandbox, and a Codex started from a Codex QA job cannot start at all). Read them before the user answers: change the command (a Node script instead of bash) or plan that QA with Claude Code. Answers are final and reach every later job's instructions. The batch is all or nothing: if any item is invalid none is created, and the error names each invalid item. Only ask what is the user's call for this issue: product behaviour, user-facing texts, and side effects outside the worktree. Never ask harness configuration that read_settings already answers (QA browser, QA commands, QA environment, Jira policy). What a permission lets QA run cannot change after the user allows it. A command may name files agents can edit (the repo, its worktrees, `.agent`) only in two ways. (1) Helper scripts: list every script the command runs in `scripts` (absolute paths, including scripts they call from their own folder); Tinto freezes their text when you ask, shows it to the user, and QA runs those copies from one folder (Tinto tells the QA job where; scripts must find their siblings through their own location). Files a frozen script names in the repo or `.agent` are not frozen: the user is warned, so keep them to data. (2) The task's own code, such as the CLI under test: name it by its path inside the task's worktree, in the command or in a frozen script. The permission then holds for the worktree content at the moment the user allows it; if the code changes afterwards the QA job fails with `permission_stale` until the user allows it again in Tinto, so ask when the candidate is ready for QA. Anything else that is agent-editable, and scripts by relative path, are refused.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "decisions": {"type": "array", "items": decision_item}}, "required": ["task_id", "decisions"]})) },
         { "name": "read_decisions", "description": "A task's decisions with their status, answer, who decided and when. For permissions: the frozen `scripts`, `read_dirs`, `write_dirs`, `clients`, `warnings`, whether it `runs_candidate` and the worktree content it was allowed for.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
         { "name": "read_settings", "description": "What the user already configured in Tinto for a task: the repo's verification and QA commands, whether QA gets a browser, the QA environment (platforms, scope, clients), the bootstrap command, and the batch's policy on posting QA verdicts to Jira (null = not set). Read it before asking anything: never ask through decisions what is configured here. If something you need is empty or null, ask the user to set it in Tinto (Ajustes), not as a decision.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
