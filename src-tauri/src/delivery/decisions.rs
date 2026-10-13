@@ -36,6 +36,49 @@ pub struct NewDecision {
     pub scripts: Vec<String>,
     /// `permission`: folders outside the worktree QA may read and list.
     pub read_dirs: Vec<String>,
+    /// `permission`: folders outside the worktree QA may write in.
+    pub write_dirs: Vec<String>,
+    /// `permission`: the user's real clients (`claude`, `codex`) the command
+    /// starts; each one's own folder joins `write_dirs`.
+    pub clients: Vec<String>,
+    /// `permission`: the task's QA runs with full access once allowed.
+    pub full_access: bool,
+}
+
+/// Where a client of the user keeps its state, which it must be able to
+/// write to start.
+pub(super) fn client_home(client: &str) -> Option<std::path::PathBuf> {
+    let (variable, folder) = match client {
+        "claude" => ("CLAUDE_CONFIG_DIR", ".claude"),
+        "codex" => ("CODEX_HOME", ".codex"),
+        _ => return None,
+    };
+    std::env::var_os(variable)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| crate::runtime_paths::user_home_dir().map(|home| home.join(folder)))
+}
+
+/// Whether `inner` is `outer` or inside it; both normalized.
+fn within(inner: &str, outer: &str) -> bool {
+    let outer = outer.trim_end_matches('/');
+    inner == outer || inner.starts_with(&format!("{outer}/"))
+}
+
+/// A folder a permission names has to be one concrete folder.
+fn concrete_dir(field: &str, dir: &str) -> Result<(), DeliveryError> {
+    let dir = norm(dir.trim());
+    let inside = dir
+        .trim_end_matches('/')
+        .split('/')
+        .skip(1)
+        .any(|part| !part.is_empty());
+    if !is_absolute(&dir) || !inside {
+        return Err(invalid(format!(
+            "{field}: {dir} debe ser la ruta absoluta de una carpeta concreta"
+        )));
+    }
+    Ok(())
 }
 
 fn invalid(message: impl Into<String>) -> DeliveryError {
@@ -78,17 +121,30 @@ fn validate(decision: &NewDecision) -> Result<(), DeliveryError> {
                 return Err(invalid("un permiso necesita decir cómo se deshace"));
             }
             for dir in &decision.read_dirs {
-                let dir = norm(dir.trim());
-                let inside = dir
-                    .trim_end_matches('/')
-                    .split('/')
-                    .skip(1)
-                    .any(|part| !part.is_empty());
-                if !is_absolute(&dir) || !inside {
+                concrete_dir("read_dirs", dir)?;
+            }
+            let home = crate::runtime_paths::user_home_dir().map(|home| norm(&plain_path(&home)));
+            for dir in &decision.write_dirs {
+                concrete_dir("write_dirs", dir)?;
+                // The whole home (or more) is not "a folder outside the
+                // worktree": it would make everything of the user writable.
+                if home
+                    .as_deref()
+                    .is_some_and(|home| within(home, &norm(dir.trim())))
+                {
                     return Err(invalid(format!(
-                        "read_dirs: {dir} debe ser la ruta absoluta de una carpeta concreta"
+                        "write_dirs: {dir} abarca toda la carpeta del usuario; nombra las carpetas concretas donde hay que escribir"
                     )));
                 }
+            }
+            if let Some(unknown) = decision
+                .clients
+                .iter()
+                .find(|client| client_home(client).is_none())
+            {
+                return Err(invalid(format!(
+                    "clients: cliente desconocido «{unknown}» (claude o codex)"
+                )));
             }
         }
     }
@@ -132,6 +188,8 @@ struct Frozen {
     scripts: Vec<DeliveryFrozenScript>,
     runs_candidate: bool,
     unfrozen: Vec<String>,
+    /// The declared folders plus the folder of each declared client.
+    write_dirs: Vec<String>,
 }
 
 /// Reads a script where the task lives (a WSL repo's files are reached
@@ -166,6 +224,30 @@ fn freeze(decision: &NewDecision, task: &DeliveryTask) -> Result<Frozen, Deliver
     let mut frozen = Frozen::default();
     if decision.kind != DeliveryDecisionKind::Permission {
         return Ok(frozen);
+    }
+    if !decision.clients.is_empty() && task.distro.is_some() {
+        return Err(invalid(
+            "clients: en un repositorio de WSL declara las carpetas del cliente en write_dirs",
+        ));
+    }
+    let client_homes = decision
+        .clients
+        .iter()
+        .filter_map(|client| client_home(client))
+        .map(|home| plain_path(&home));
+    for dir in decision
+        .write_dirs
+        .iter()
+        .map(|dir| dir.trim().to_string())
+        .chain(client_homes)
+    {
+        if !frozen
+            .write_dirs
+            .iter()
+            .any(|seen| norm(seen) == norm(&dir))
+        {
+            frozen.write_dirs.push(dir);
+        }
     }
     let worktree = norm(&plain_path(&task.worktree));
     let editable_roots = [
@@ -269,6 +351,15 @@ pub fn decision_note(decision: &DeliveryDecision) -> Option<String> {
             if let Some(command) = decision.command.as_deref() {
                 note.push_str(&format!(" (command: {command})"));
             }
+            if decision.full_access {
+                note.push_str(" (QA with full access)");
+            }
+            if !decision.write_dirs.is_empty() {
+                note.push_str(&format!(
+                    " (may write in: {})",
+                    decision.write_dirs.join(", ")
+                ));
+            }
             if !decision.read_dirs.is_empty() {
                 note.push_str(&format!(
                     " (read and list: {})",
@@ -320,11 +411,17 @@ impl DeliveryService {
                 refused.join("; ")
             )));
         }
+        let checks = self.store()?.repo_settings(&task.repo)?.checks;
         let now = now_ms();
         let created: Vec<DeliveryDecision> = decisions
             .into_iter()
             .zip(frozen)
             .map(|(decision, frozen)| DeliveryDecision {
+                warnings: self.permission_warnings(&task, &decision, &frozen.write_dirs, &checks),
+                write_dirs: frozen.write_dirs,
+                clients: decision.clients.clone(),
+                full_access: decision.kind == DeliveryDecisionKind::Permission
+                    && decision.full_access,
                 scripts: frozen.scripts,
                 read_dirs: decision
                     .read_dirs
@@ -368,6 +465,53 @@ impl DeliveryService {
         drop(store);
         self.notify();
         Ok(created)
+    }
+
+    /// What would stop an allowed permission from working when QA runs with
+    /// Codex, found now so nobody learns it from a blocked QA job.
+    fn permission_warnings(
+        &self,
+        task: &DeliveryTask,
+        decision: &NewDecision,
+        write_dirs: &[String],
+        checks: &[String],
+    ) -> Vec<String> {
+        let mut warnings = Vec::new();
+        // Full access has no sandbox to be stopped by.
+        if decision.kind != DeliveryDecisionKind::Permission || decision.full_access {
+            return warnings;
+        }
+        if let Some(command) = decision.command.as_ref() {
+            // The sandbox is chosen for everything the job needs, so the
+            // command is tried together with the repo's verification commands.
+            let commands: Vec<String> = checks.iter().chain([command]).cloned().collect();
+            let own = super::adapters::command_programs(std::slice::from_ref(command));
+            let plan = self.sandbox_plan(task, &super::adapters::command_programs(&commands));
+            warnings.extend(
+                plan.obstacles
+                    .into_iter()
+                    .filter(|obstacle| {
+                        own.iter()
+                            .any(|program| obstacle.contains(program.as_str()))
+                    })
+                    .map(|obstacle| format!("Con Codex como agente de QA: {obstacle}.")),
+            );
+        }
+        // Checked on Windows: Codex keeps its own folder out of reach of its
+        // sandbox even when it is declared writable.
+        if cfg!(windows) && task.distro.is_none() {
+            let codex_home = client_home("codex").map(|home| norm(&plain_path(&home)));
+            if let Some(dir) = write_dirs.iter().find(|dir| {
+                codex_home
+                    .as_deref()
+                    .is_some_and(|home| within(home, &norm(dir)) || within(&norm(dir), home))
+            }) {
+                warnings.push(format!(
+                    "Con Codex como agente de QA: {dir} no será escribible, porque Codex protege su propia carpeta de su sandbox; un Codex lanzado desde esa QA no puede arrancar. Para llamar al Codex real, la QA tiene que correr con Claude Code."
+                ));
+            }
+        }
+        warnings
     }
 
     pub fn task_decisions(&self, task_id: &str) -> Result<Vec<DeliveryDecision>, DeliveryError> {

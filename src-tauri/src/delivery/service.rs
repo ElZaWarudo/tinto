@@ -35,6 +35,10 @@ pub type Launcher = Arc<
         + Sync,
 >;
 pub type PathsFor = Arc<dyn Fn(&str) -> Result<JobPaths, DeliveryError> + Send + Sync>;
+/// Says how Codex's sandbox has to run for a task's job to start the given
+/// programs, and which of them cannot run at all.
+pub type SandboxPlanner =
+    Arc<dyn Fn(&DeliveryTask, &[String]) -> adapters::SandboxPlan + Send + Sync>;
 
 const CODEX_MODEL_SETTING: &str = "codex_model";
 /// Written next to a WSL job's files so a restart can stop what is left.
@@ -68,6 +72,7 @@ pub(super) struct Inner {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     notify: Mutex<Option<Notify>>,
     pub(super) coordinator: Mutex<Option<DeliveryCoordinatorEndpoint>>,
+    sandbox_planner: Mutex<SandboxPlanner>,
     launcher: Launcher,
     paths_for: PathsFor,
     checkpoint_config: CheckpointConfig,
@@ -120,12 +125,34 @@ impl DeliveryService {
             let distro = claude_distro.get_or_init(adapters::default_wsl_distro);
             adapters::launch(job, task, paths, distro.as_deref())
         });
-        Self::with_parts(
+        let service = Self::with_parts(
             DeliveryStore::open_default()?,
             launcher,
             Arc::new(JobPaths::for_job),
             CheckpointConfig::default(),
-        )
+        )?;
+        service.set_sandbox_planner(Arc::new(adapters::codex_sandbox_plan));
+        Ok(service)
+    }
+
+    pub fn set_sandbox_planner(&self, planner: SandboxPlanner) {
+        if let Ok(mut slot) = self.inner.sandbox_planner.lock() {
+            *slot = planner;
+        }
+    }
+
+    pub(super) fn sandbox_plan(
+        &self,
+        task: &DeliveryTask,
+        programs: &[String],
+    ) -> adapters::SandboxPlan {
+        let planner = self
+            .inner
+            .sandbox_planner
+            .lock()
+            .ok()
+            .map(|slot| slot.clone());
+        planner.map_or_else(Default::default, |planner| planner(task, programs))
     }
 
     pub fn with_parts(
@@ -140,6 +167,8 @@ impl DeliveryService {
                 cancels: Mutex::new(HashMap::new()),
                 notify: Mutex::new(None),
                 coordinator: Mutex::new(None),
+                // Nothing is probed unless the real planner is set.
+                sandbox_planner: Mutex::new(Arc::new(|_, _| adapters::SandboxPlan::default())),
                 launcher,
                 paths_for,
                 checkpoint_config,
@@ -549,8 +578,11 @@ impl DeliveryService {
             .iter()
             .filter(|decision| qa && allowed_permission(decision))
             .collect();
+        // A Claude job may run these and nothing else. Codex's sandbox lets
+        // it run anything, so for it they say which programs that sandbox
+        // must be able to start.
         let allowed_commands = match (request.agent, request.access) {
-            (DeliveryAgent::Claude, DeliveryAccess::Workspace) => {
+            (DeliveryAgent::Claude | DeliveryAgent::Codex, DeliveryAccess::Workspace) => {
                 let mut commands = settings.checks;
                 if qa {
                     commands.extend(settings.qa_commands);
@@ -558,11 +590,14 @@ impl DeliveryService {
                 }
                 commands
             }
-            // Codex's sandbox lets it run anything in the worktree; these
-            // say which programs that sandbox must be able to reach.
-            (DeliveryAgent::Codex, DeliveryAccess::Workspace) => settings.checks,
             _ => Vec::new(),
         };
+        let mut write_dirs: Vec<String> = Vec::new();
+        for dir in permitted.iter().flat_map(|decision| &decision.write_dirs) {
+            if !write_dirs.contains(dir) {
+                write_dirs.push(dir.clone());
+            }
+        }
         let mut read_dirs: Vec<String> = Vec::new();
         for dir in permitted.iter().flat_map(|decision| &decision.read_dirs) {
             if !read_dirs.contains(dir) {
@@ -627,6 +662,7 @@ impl DeliveryService {
             platform: request.platform,
             ran_on: None,
             read_dirs,
+            write_dirs,
             frozen_scripts: Vec::new(),
         };
         store.put_job(&job)?;
@@ -956,6 +992,17 @@ impl DeliveryService {
         paths.prepare()?;
         if job.role == QA_ROLE {
             job.frozen_scripts = self.prepare_permissions(&task, &paths, start.as_ref())?;
+            // A sandbox cannot create the folder it is given as writable.
+            if task.distro.is_none() {
+                for dir in &job.write_dirs {
+                    std::fs::create_dir_all(dir).map_err(|error| {
+                        DeliveryError::new(
+                            "write_dir_unavailable",
+                            format!("no se pudo preparar la carpeta de escritura {dir}: {error}"),
+                        )
+                    })?;
+                }
+            }
         }
         let launch = (self.inner.launcher)(&job, &task, &paths)?;
         let mut command = Command::new(&launch.program);
@@ -1446,6 +1493,19 @@ fn settle_lease(
         }
     }
     store.put_lease(&lease)
+}
+
+impl DeliveryService {
+    /// Whether the user allowed this task's QA to run with full access.
+    /// Coordinators cannot choose full access; only this lets their QA job
+    /// have it.
+    pub fn qa_full_access(&self, task_id: &str) -> Result<bool, DeliveryError> {
+        Ok(self
+            .store()?
+            .task_decisions(task_id)?
+            .iter()
+            .any(|decision| decision.full_access && allowed_permission(decision)))
+    }
 }
 
 fn allowed_permission(decision: &DeliveryDecision) -> bool {

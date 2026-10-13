@@ -288,6 +288,17 @@ describe("attemptOutcome", () => {
     ).toEqual({ tone: "attention", label: "2 hallazgos" });
     expect(attemptOutcome(job({ status: "queued", lease: "qa" })).label).toBe("Esperando QA");
   });
+
+  it("says whether the sandbox or the environment blocked a stage", () => {
+    const blocked = (blocked_by?: string) => {
+      const base = job().result!;
+      return attemptOutcome(job({ result: { ...base, status: "blocked", blocked_by } })).label;
+    };
+    expect(blocked("sandbox")).toBe("Bloqueado por el sandbox");
+    expect(blocked("environment")).toBe("Bloqueado por el entorno");
+    expect(blocked("none")).toBe("Bloqueado");
+    expect(blocked()).toBe("Bloqueado");
+  });
 });
 
 describe("lastHandoff", () => {

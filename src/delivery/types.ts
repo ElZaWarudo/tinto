@@ -41,6 +41,8 @@ export interface DeliveryJobResult {
   checks: DeliveryCheck[];
   findings: string[];
   handoff: string;
+  /** What stopped the job: its own sandbox or rules, something outside, or nothing. */
+  blocked_by?: "none" | "environment" | "sandbox" | string;
 }
 
 export interface DeliveryChange {
@@ -90,6 +92,8 @@ export interface DeliveryJob {
   ran_on?: string | null;
   /** QA jobs: folders outside the worktree the permissions let it read. */
   read_dirs?: string[];
+  /** QA jobs: folders outside the worktree the permissions let it write in. */
+  write_dirs?: string[];
   /** QA jobs: the approved scripts and the frozen copies it ran instead. */
   frozen_scripts?: { original: string; copy: string }[];
 }
@@ -155,6 +159,14 @@ export interface DeliveryDecision {
   scripts?: { path: string; content: string }[];
   /** `permission`: folders outside the worktree QA may read and list. */
   read_dirs?: string[];
+  /** `permission`: folders outside the worktree QA may write in. */
+  write_dirs?: string[];
+  /** `permission`: the user's real clients ("claude", "codex") the command starts. */
+  clients?: string[];
+  /** `permission`: once allowed, the coordinator's QA on this task runs with full access. */
+  full_access?: boolean;
+  /** `permission`: why it may not work as asked, found when it was requested. */
+  warnings?: string[];
   /** `permission`: it runs the task's code, so it holds for one candidate. */
   runs_candidate?: boolean;
   /** `permission`: agent-editable files its scripts name that are not frozen. */

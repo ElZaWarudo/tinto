@@ -109,6 +109,11 @@ pub struct DeliveryJobResult {
     pub findings: Vec<String>,
     #[serde(default)]
     pub handoff: String,
+    /// What stopped the job, if anything: `sandbox` (its sandbox or
+    /// permission rules refused something a decision allows),
+    /// `environment` (something outside them failed) or `none`.
+    #[serde(default)]
+    pub blocked_by: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +186,10 @@ pub struct DeliveryJob {
     /// let the job read and list.
     #[serde(default)]
     pub read_dirs: Vec<String>,
+    /// QA jobs only: folders outside the worktree the user's permissions
+    /// let the job write in.
+    #[serde(default)]
+    pub write_dirs: Vec<String>,
     /// QA jobs only: the frozen copies of the scripts the user approved,
     /// written to the job's folder when it started.
     #[serde(default)]
@@ -326,6 +335,24 @@ pub struct DeliveryDecision {
     /// `permission` only: folders outside the worktree QA may read and list.
     #[serde(default)]
     pub read_dirs: Vec<String>,
+    /// `permission` only: folders outside the worktree QA may write in,
+    /// the folders of `clients` included.
+    #[serde(default)]
+    pub write_dirs: Vec<String>,
+    /// `permission` only: the user's real clients (`claude`, `codex`) the
+    /// command starts; each needs to write in its own folder.
+    #[serde(default)]
+    pub clients: Vec<String>,
+    /// `permission` only: once allowed, the QA jobs a coordinator
+    /// dispatches on this task run with full access (no sandbox, no
+    /// command limits). The exception for QA that a sandbox cannot run.
+    #[serde(default)]
+    pub full_access: bool,
+    /// `permission` only: why it may not work as asked (for example a
+    /// program that cannot start in Codex's sandbox), found when it was
+    /// asked and shown to the coordinator and the user.
+    #[serde(default)]
+    pub warnings: Vec<String>,
     /// `permission` only: the command or its scripts run code from the
     /// task's worktree, so the permission holds for one candidate.
     #[serde(default)]

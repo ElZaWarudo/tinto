@@ -845,6 +845,9 @@ fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDe
         undo: String::new(),
         scripts: Vec::new(),
         read_dirs: Vec::new(),
+        write_dirs: Vec::new(),
+        clients: Vec::new(),
+        full_access: false,
     }
 }
 
@@ -859,6 +862,9 @@ fn permission(command: &str) -> super::decisions::NewDecision {
         undo: "agentos skills uninstall demo".into(),
         scripts: Vec::new(),
         read_dirs: Vec::new(),
+        write_dirs: Vec::new(),
+        clients: Vec::new(),
+        full_access: false,
     }
 }
 
@@ -1191,6 +1197,7 @@ fn a_permission_freezes_its_scripts_and_holds_for_one_candidate() {
         &task,
         &super::adapters::JobPaths::in_dir(PathBuf::from("jobs")),
         false,
+        &[],
     );
     assert!(
         prompt.contains(&format!(
@@ -1373,4 +1380,235 @@ fn coordinators_read_what_the_user_configured() {
     let tests = h.dispatch(&task, "tests", "events=codex-ok");
     assert!(tests.qa_environment.is_empty());
     h.wait(&tests.id);
+}
+
+#[test]
+fn a_permission_names_the_folders_qa_may_write_in() {
+    let h = harness();
+    let task = h.task("D-8");
+    let home = crate::runtime_paths::user_home_dir().unwrap();
+
+    // The whole home, a drive and a relative path are not "a folder".
+    for refused in [
+        plain_path(&home),
+        plain_path(home.parent().unwrap()),
+        "C:/".to_string(),
+        "skills".to_string(),
+    ] {
+        let mut request = permission("agentos skills install demo");
+        request.write_dirs = vec![refused.clone()];
+        let error = h
+            .service
+            .request_decisions(&task.id, vec![request], "coord")
+            .unwrap_err();
+        assert!(error.message.contains("write_dirs"), "{refused}: {error}");
+    }
+    let mut unknown = permission("agentos skills install demo");
+    unknown.clients = vec!["cursor".into()];
+    let error = h
+        .service
+        .request_decisions(&task.id, vec![unknown], "coord")
+        .unwrap_err();
+    assert!(error.message.contains("cliente desconocido «cursor»"));
+
+    // A concrete folder, which does not exist yet.
+    let outside = tempfile::tempdir().unwrap();
+    let skills = plain_path(&outside.path().join("skills"));
+    let mut request = permission("agentos skills install demo");
+    request.write_dirs = vec![skills.clone()];
+    let asked = h
+        .service
+        .request_decisions(&task.id, vec![request], "coord")
+        .unwrap()
+        .remove(0);
+    assert_eq!(asked.write_dirs, vec![skills.clone()]);
+    assert!(asked.warnings.is_empty());
+    h.service
+        .answer_decision(&asked.id, super::decisions::ALLOWED, "user")
+        .unwrap();
+
+    // Other stages never get it; the QA job does, with Codex too, and the
+    // folder is there when it starts.
+    let tests = h.dispatch(&task, "tests", "events=codex-ok");
+    assert!(tests.write_dirs.is_empty());
+    assert!(tests.decisions[0].contains(&format!("(may write in: {skills})")));
+    h.wait(&tests.id);
+    assert!(!std::path::Path::new(&skills).exists());
+    let qa = h.dispatch(&task, "qa", "events=codex-ok");
+    assert_eq!(qa.write_dirs, vec![skills.clone()]);
+    assert_eq!(qa.allowed_commands, vec!["agentos skills install demo"]);
+    assert_eq!(h.wait(&qa.id).status, DeliveryJobStatus::Finished);
+    assert!(std::path::Path::new(&skills).is_dir());
+}
+
+#[test]
+fn a_permission_to_start_a_real_client_shows_what_the_client_writes() {
+    let h = harness();
+    let task = h.task("D-9");
+    let folder = |client: &str| plain_path(&super::decisions::client_home(client).unwrap());
+    let mut request = permission("node C:/qa/client-skills.mjs");
+    request.clients = vec!["claude".into(), "codex".into()];
+    let asked = h
+        .service
+        .request_decisions(&task.id, vec![request], "coord")
+        .unwrap()
+        .remove(0);
+    assert_eq!(asked.clients, ["claude", "codex"]);
+    assert_eq!(asked.write_dirs, [folder("claude"), folder("codex")]);
+    // Codex keeps its own folder from its sandbox: said now, not in QA.
+    #[cfg(windows)]
+    {
+        assert_eq!(asked.warnings.len(), 1, "{:?}", asked.warnings);
+        assert!(asked.warnings[0].contains(&folder("codex")));
+        assert!(asked.warnings[0].contains("no puede arrancar"));
+    }
+
+    let mut only_claude = permission("node C:/qa/client-skills.mjs");
+    only_claude.clients = vec!["claude".into()];
+    let asked = h
+        .service
+        .request_decisions(&task.id, vec![only_claude], "coord")
+        .unwrap()
+        .remove(0);
+    assert_eq!(asked.write_dirs, [folder("claude")]);
+    assert!(asked.warnings.is_empty());
+}
+
+#[test]
+fn a_permission_is_warned_when_its_command_cannot_start_in_the_codex_sandbox() {
+    let h = harness();
+    let task = h.task("D-10");
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.checks = vec!["npm test".into()];
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    // A machine where bash starts in no Codex sandbox.
+    let tried = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
+    let record = tried.clone();
+    h.service.set_sandbox_planner(Arc::new(move |_task, programs| {
+        record.lock().unwrap().push(programs.to_vec());
+        super::adapters::SandboxPlan {
+            unelevated: true,
+            note: None,
+            obstacles: programs
+                .iter()
+                .filter(|program| *program == "bash")
+                .map(|program| format!("{program} no puede ejecutarse en ningún sandbox de Codex en este equipo"))
+                .collect(),
+        }
+    }));
+    let asked = h
+        .service
+        .request_decisions(
+            &task.id,
+            vec![
+                permission("bash C:/qa/run.sh"),
+                permission("node C:/qa/run.mjs"),
+                choice("¿Codex también?", Some(0)),
+            ],
+            "coord",
+        )
+        .unwrap();
+    assert_eq!(
+        asked[0].warnings,
+        ["Con Codex como agente de QA: bash no puede ejecutarse en ningún sandbox de Codex en este equipo."]
+    );
+    assert!(asked[1].warnings.is_empty());
+    assert!(asked[2].warnings.is_empty());
+    // Each command is tried with the repo's checks, as the QA job will run.
+    assert_eq!(*tried.lock().unwrap(), [["npm", "bash"], ["npm", "node"]]);
+}
+
+#[test]
+fn a_coordinator_runs_qa_with_full_access_only_when_the_user_allowed_it() {
+    let h = harness();
+    // A machine whose Codex sandbox cannot start bash.
+    h.service
+        .set_sandbox_planner(Arc::new(|_task, _programs| super::adapters::SandboxPlan {
+            obstacles: vec!["bash no puede ejecutarse".into()],
+            ..Default::default()
+        }));
+    let call = |name: &str, arguments: serde_json::Value| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    let repo = plain_path(h.repo.path());
+    let run = call(
+        "create_run",
+        json!({"repo": repo, "title": "B", "owner": "coord"}),
+    );
+    let run_id = run["structuredContent"]["id"].as_str().unwrap().to_string();
+    let fenced = |extra: serde_json::Value| {
+        let mut arguments = json!({"run_id": run_id, "owner": "coord", "generation": 1});
+        for (key, value) in extra.as_object().unwrap() {
+            arguments[key] = value.clone();
+        }
+        arguments
+    };
+    let task = call(
+        "create_task",
+        fenced(json!({"repo": repo, "key": "D-11", "title": "x"})),
+    );
+    let task_id = task["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dispatch = |role: &str| {
+        let job = call(
+            "dispatch_job",
+            fenced(
+                json!({"task_id": task_id, "role": role, "agent": "codex", "prompt": "events=codex-ok"}),
+            ),
+        );
+        let id = job["structuredContent"]["id"].as_str().unwrap().to_string();
+        h.wait(&id)
+    };
+
+    // Asking is not having: while the user has not answered nothing runs,
+    // and a refusal leaves QA with workspace access.
+    let ask = || {
+        let asked = call(
+            "request_decisions",
+            fenced(json!({"task_id": task_id, "decisions": [{
+                "kind": "permission", "question": "¿QA con acceso completo?",
+                "undo": "nada que deshacer", "command": "bash C:/qa/run.sh login", "full_access": true
+            }]})),
+        );
+        let decision = &asked["structuredContent"][0];
+        assert_eq!(decision["full_access"], true, "{asked}");
+        // No sandbox, so nothing to warn about the command.
+        assert_eq!(decision["warnings"], json!([]));
+        decision["id"].as_str().unwrap().to_string()
+    };
+    let refused = ask();
+    h.service
+        .answer_decision(&refused, super::decisions::DENIED, "user")
+        .unwrap();
+    assert_eq!(dispatch("qa").access, DeliveryAccess::Workspace);
+
+    let allowed = ask();
+    h.service
+        .answer_decision(&allowed, super::decisions::ALLOWED, "user")
+        .unwrap();
+    let qa = dispatch(" QA ");
+    assert_eq!(qa.access, DeliveryAccess::Full);
+    assert!(qa
+        .decisions
+        .iter()
+        .any(|note| note.contains("(QA with full access)")));
+    // Only QA: every other stage stays in its sandbox.
+    assert_eq!(dispatch("review").access, DeliveryAccess::Workspace);
+    assert_eq!(dispatch("implementation").access, DeliveryAccess::Workspace);
 }

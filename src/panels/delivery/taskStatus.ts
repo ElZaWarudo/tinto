@@ -141,7 +141,12 @@ export function attemptOutcome(job: DeliveryJob): { tone: Tone; label: string } 
   const result = job.result;
   if (!result) return { tone: "idle", label: "Terminado" };
   if (result.status === "pass") return { tone: "ok", label: "Sin hallazgos" };
-  if (result.status === "blocked") return { tone: "danger", label: "Bloqueado" };
+  if (result.status === "blocked") {
+    const by = { sandbox: " por el sandbox", environment: " por el entorno" }[
+      result.blocked_by ?? ""
+    ];
+    return { tone: "danger", label: `Bloqueado${by ?? ""}` };
+  }
   if (result.status === "findings") {
     const count = result.findings.length;
     return {

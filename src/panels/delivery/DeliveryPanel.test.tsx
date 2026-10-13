@@ -631,6 +631,10 @@ describe("DeliveryPanel", () => {
       read_dirs: ["C:/Users/me/.claude/skills"],
       runs_candidate: true,
       unfrozen: ["C:/work/agentos/.agent/env/qa.env"],
+      write_dirs: ["C:/Users/me/.agents/skills", "C:/Users/me/.codex"],
+      clients: ["codex"],
+      full_access: true,
+      warnings: ["Con Codex como agente de QA: bash no puede ejecutarse."],
       candidate: null,
       status: "pending",
       answer: null,
@@ -664,6 +668,15 @@ describe("DeliveryPanel", () => {
     expect(pending).toHaveTextContent("leer y listar, sin modificar: C:/Users/me/.claude/skills");
     expect(pending).toHaveTextContent("no están congelados: C:/work/agentos/.agent/env/qa.env");
     expect(pending).toHaveTextContent("Ejecuta el código del worktree de la tarea");
+    expect(pending).toHaveTextContent(
+      "escribir y borrar en estas carpetas fuera del worktree, y en ninguna otra: C:/Users/me/.agents/skills C:/Users/me/.codex",
+    );
+    expect(pending).toHaveTextContent("arranca tu cliente real Codex, con tu sesión");
+    expect(pending).toHaveTextContent("Acceso completo para la QA de esta tarea.");
+    expect(pending).toHaveTextContent("correrá sin sandbox");
+    expect(pending).toHaveTextContent(
+      "Aviso: Con Codex como agente de QA: bash no puede ejecutarse.",
+    );
 
     const log = screen.getByRole("region", { name: "Decisiones" });
     expect(log).toHaveTextContent("Permitido para el código 0a1b2c3d.");

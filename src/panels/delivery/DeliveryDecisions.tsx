@@ -110,6 +110,11 @@ function TextCard({
 function PermissionScope({ decision }: { decision: DeliveryDecision }) {
   const scripts = decision.scripts ?? [];
   const readDirs = decision.read_dirs ?? [];
+  const writeDirs = decision.write_dirs ?? [];
+  const clients = (decision.clients ?? []).map((client) =>
+    client === "claude" ? "Claude Code" : client === "codex" ? "Codex" : client,
+  );
+  const warnings = decision.warnings ?? [];
   const unfrozen = decision.unfrozen ?? [];
   return (
     <>
@@ -118,6 +123,36 @@ function PermissionScope({ decision }: { decision: DeliveryDecision }) {
           La QA podrá ejecutar <code>{decision.command}</code>, con cualquier argumento.
         </p>
       )}
+      {decision.full_access && (
+        <p className="delivery-tone--danger">
+          <strong>Acceso completo para la QA de esta tarea.</strong> Si lo permites, la QA que lance
+          el coordinador correrá sin sandbox: podrá ejecutar cualquier comando y leer, modificar o
+          borrar archivos fuera del worktree con tu usuario, sin pedir aprobación. Lo que sigue
+          describe lo que dice que hará, no un límite. Las demás etapas siguen con su acceso normal.
+        </p>
+      )}
+      {clients.length > 0 && (
+        <p>
+          Ese comando arranca {clients.length === 1 ? "tu cliente real" : "tus clientes reales"}{" "}
+          <strong>{clients.join(" y ")}</strong>, con tu sesión; para arrancar{" "}
+          {clients.length === 1 ? "necesita" : "necesitan"} escribir en su propia carpeta, incluida
+          abajo.
+        </p>
+      )}
+      {writeDirs.length > 0 && (
+        <p>
+          La QA podrá <strong>escribir y borrar</strong> en estas carpetas fuera del worktree, y en
+          ninguna otra:{" "}
+          {writeDirs.map((dir) => (
+            <code key={dir}>{dir} </code>
+          ))}
+        </p>
+      )}
+      {warnings.map((warning) => (
+        <p key={warning} className="delivery-tone--danger">
+          Aviso: {warning}
+        </p>
+      ))}
       {readDirs.length > 0 && (
         <p>
           La QA podrá leer y listar, sin modificar:{" "}

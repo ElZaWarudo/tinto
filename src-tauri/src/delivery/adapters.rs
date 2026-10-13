@@ -41,9 +41,10 @@ pub const RESULT_SCHEMA: &str = r#"{
       }
     },
     "findings": { "type": "array", "items": { "type": "string" } },
-    "handoff": { "type": "string" }
+    "handoff": { "type": "string" },
+    "blocked_by": { "type": "string", "enum": ["none", "environment", "sandbox"] }
   },
-  "required": ["status", "summary", "changed_paths", "checks", "findings", "handoff"],
+  "required": ["status", "summary", "changed_paths", "checks", "findings", "handoff", "blocked_by"],
   "additionalProperties": false
 }"#;
 
@@ -162,6 +163,7 @@ pub fn job_prompt(
     task: &DeliveryTask,
     paths: &JobPaths,
     from_wsl: bool,
+    obstacles: &[String],
 ) -> String {
     let mut lines = vec![
         "You are running as a background job in Tinto Delivery mode.".to_string(),
@@ -212,6 +214,23 @@ pub fn job_prompt(
             dirs.join("; ")
         ));
     }
+    if !job.write_dirs.is_empty() {
+        let dirs: Vec<String> = job
+            .write_dirs
+            .iter()
+            .map(|dir| agent_path(dir, from_wsl))
+            .collect();
+        lines.push(format!(
+            "The user lets the commands they approved write in these folders outside the worktree, and nowhere else: {}.",
+            dirs.join("; ")
+        ));
+    }
+    if !obstacles.is_empty() {
+        lines.push(format!(
+            "Known limits of your sandbox on this machine: {}. Do not work around them: report what depends on them as blocked by the sandbox.",
+            obstacles.join("; ")
+        ));
+    }
     if !job.frozen_scripts.is_empty() {
         lines.push("The user approved these scripts as frozen copies. The originals may have changed since and must not be run: wherever the assignment names an original, run its copy.".to_string());
         // A script two permissions share is copied once per permission, next
@@ -256,6 +275,10 @@ pub fn job_prompt(
         "Finish with the structured result: status (pass, findings or blocked), summary, changed_paths, checks you ran with their results, findings, and handoff notes for the next stage."
             .to_string(),
     );
+    lines.push(
+        "Set blocked_by to say what stopped you, if anything: `sandbox` when your own sandbox or permission rules refused something a decision above allows (name the command and the exact error in findings), `environment` when something outside them failed (a service down, a missing tool, a login), `none` otherwise."
+            .to_string(),
+    );
     lines.push(String::new());
     lines.push("Assignment:".to_string());
     lines.push(job.prompt.trim().to_string());
@@ -278,11 +301,13 @@ pub fn launch(
                     "codex",
                 )?),
             };
-            let unreadable = match (&native, job.access) {
-                (Some(codex), DeliveryAccess::Workspace) => codex_sandbox_misses(codex, job, task),
-                _ => None,
+            let plan = match (&native, job.access) {
+                (Some(_), DeliveryAccess::Workspace) => {
+                    codex_sandbox_plan(task, &command_programs(&job.allowed_commands))
+                }
+                _ => SandboxPlan::default(),
             };
-            codex_launch(job, task, paths, native, unreadable.as_deref())
+            codex_launch(job, task, paths, native, &plan)
         }
         DeliveryAgent::Claude => {
             let native = match (task.distro.as_deref(), job.platform) {
@@ -307,63 +332,154 @@ fn claude_binary() -> Option<PathBuf> {
     found
 }
 
-/// The programs of the repo's verification commands (`npm` for `npm test`).
-fn check_programs(job: &DeliveryJob) -> Vec<&str> {
-    let mut programs: Vec<&str> = Vec::new();
-    for command in &job.allowed_commands {
-        if let Some(program) = command.split_whitespace().next() {
-            if !programs.contains(&program) {
-                programs.push(program);
+/// The programs that commands start (`npm` for `npm test`), a quoted path
+/// included, each once.
+pub fn command_programs(commands: &[String]) -> Vec<String> {
+    let mut programs: Vec<String> = Vec::new();
+    for command in commands {
+        let command = command.trim();
+        let program = match command.strip_prefix('"') {
+            Some(rest) => rest.split('"').next(),
+            None => command.split_whitespace().next(),
+        };
+        if let Some(program) = program.filter(|program| !program.is_empty()) {
+            if !programs.iter().any(|seen| seen == program) {
+                programs.push(program.to_string());
             }
         }
     }
     programs
 }
 
-/// The first verification program Tinto finds on PATH that Codex's Windows
-/// sandbox cannot: its "elevated" sandbox runs as another user, who cannot
-/// read folders that only grant the current user (for example a Node
-/// installed by nvm). The job then runs in Codex's unelevated sandbox.
-fn codex_sandbox_misses(codex: &Path, job: &DeliveryJob, task: &DeliveryTask) -> Option<String> {
-    #[cfg(windows)]
-    {
-        check_programs(job)
-            .into_iter()
-            .filter(|program| which::which(program).is_ok())
-            .find(|program| {
-                let mut command = std::process::Command::new(codex);
-                command
-                    .current_dir(plain_path(&task.worktree))
-                    .args(["sandbox", "--", "cmd", "/c", "where", program]);
-                crate::windows_process::output_with_timeout(
-                    &mut command,
-                    std::time::Duration::from_secs(30),
-                )
-                .is_ok_and(|output| !output.status.success())
-            })
-            .map(str::to_string)
+/// How a Codex job's Windows sandbox has to run for the programs it needs.
+/// Codex has two: the configured one (by default "elevated", which runs as
+/// another user and cannot read folders that only grant the current user,
+/// such as a Node installed by nvm) and the unelevated one (the current
+/// user with a restricted token, in which Git Bash cannot start).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SandboxPlan {
+    /// Run in the unelevated sandbox instead of the configured one.
+    pub unelevated: bool,
+    /// Why, for the job's stage.
+    pub note: Option<String>,
+    /// What cannot run in the chosen sandbox, in the user's words.
+    pub obstacles: Vec<String>,
+}
+
+/// Chooses the sandbox from the programs that failed to start in each one.
+fn sandbox_plan_from(configured: &[String], unelevated: &[String]) -> SandboxPlan {
+    if configured.is_empty() {
+        return SandboxPlan::default();
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (codex, job, task);
-        None
+    let use_unelevated = unelevated.len() < configured.len();
+    let (failed, other, other_name) = if use_unelevated {
+        (unelevated, configured, "configurado (elevado)")
+    } else {
+        (configured, unelevated, "sin elevar")
+    };
+    let obstacles = failed
+        .iter()
+        .map(|program| {
+            let only_other: Vec<&str> = other
+                .iter()
+                .filter(|other| !failed.contains(other))
+                .map(String::as_str)
+                .collect();
+            if other.contains(program) {
+                format!("{program} no puede ejecutarse en ningún sandbox de Codex en este equipo")
+            } else {
+                format!(
+                    "{program} solo puede ejecutarse en el sandbox {other_name} de Codex, que aquí no sirve porque en él no funciona {}",
+                    only_other.join(", ")
+                )
+            }
+        })
+        .collect();
+    SandboxPlan {
+        unelevated: use_unelevated,
+        note: use_unelevated.then(|| {
+            format!(
+                "sandbox de Codex sin elevar (el configurado no puede ejecutar {})",
+                configured.join(", ")
+            )
+        }),
+        obstacles,
     }
 }
 
+/// Tries each program Tinto can find on PATH in both of Codex's Windows
+/// sandboxes, from the task's worktree, and plans from what fails.
+pub fn codex_sandbox_plan(task: &DeliveryTask, programs: &[String]) -> SandboxPlan {
+    #[cfg(windows)]
+    {
+        let Ok(codex) = crate::agent_console::validation::resolve_agent_binary("codex") else {
+            return SandboxPlan::default();
+        };
+        if task.distro.is_some() {
+            return SandboxPlan::default();
+        }
+        let programs: Vec<&String> = programs
+            .iter()
+            .filter(|program| which::which(program).is_ok())
+            .collect();
+        let fails = |unelevated: bool| -> Vec<String> {
+            programs
+                .iter()
+                .filter(|program| {
+                    let mut command = std::process::Command::new(&codex);
+                    command
+                        .current_dir(plain_path(&task.worktree))
+                        .arg("sandbox");
+                    if unelevated {
+                        command.args(["-c", UNELEVATED_SANDBOX]);
+                    }
+                    command.arg("--");
+                    // A shell has to start; anything else only has to be found.
+                    let name = program.rsplit(['/', '\\']).next().unwrap_or_default();
+                    if matches!(name, "bash" | "sh" | "bash.exe" | "sh.exe") {
+                        command.args([program.as_str(), "-c", "exit 0"]);
+                    } else {
+                        command.args(["cmd", "/c", "where", program.as_str()]);
+                    }
+                    crate::windows_process::output_with_timeout(
+                        &mut command,
+                        std::time::Duration::from_secs(30),
+                    )
+                    .is_ok_and(|output| !output.status.success())
+                })
+                .map(|program| program.to_string())
+                .collect()
+        };
+        let configured = fails(false);
+        if configured.is_empty() {
+            return SandboxPlan::default();
+        }
+        sandbox_plan_from(&configured, &fails(true))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (task, programs);
+        SandboxPlan::default()
+    }
+}
+
+/// The `-c` override that selects Codex's unelevated Windows sandbox.
+const UNELEVATED_SANDBOX: &str = r#"windows.sandbox="unelevated""#;
+
 /// `native` is the Codex binary for a repo on this machine's filesystem;
-/// `unreadable`, the program its Windows sandbox cannot reach, if any.
+/// `plan`, how its Windows sandbox has to run.
 fn codex_launch(
     job: &DeliveryJob,
     task: &DeliveryTask,
     paths: &JobPaths,
     native: Option<PathBuf>,
-    unreadable: Option<&str>,
+    plan: &SandboxPlan,
 ) -> Result<JobLaunch, DeliveryError> {
     let sandbox = match job.access {
         DeliveryAccess::Workspace => "workspace-write",
         DeliveryAccess::Full => "danger-full-access",
     };
-    let prompt = job_prompt(job, task, paths, task.distro.is_some());
+    let prompt = job_prompt(job, task, paths, task.distro.is_some(), &plan.obstacles);
     match task.distro.as_deref() {
         None => {
             let program = native.ok_or_else(|| {
@@ -391,11 +507,8 @@ fn codex_launch(
                 args.extend(["-c".to_string(), codex_reasoning(effort)]);
             }
             args.extend(codex_qa_overrides(job, false, paths)?);
-            if unreadable.is_some() {
-                args.extend([
-                    "-c".to_string(),
-                    r#"windows.sandbox="unelevated""#.to_string(),
-                ]);
+            if plan.unelevated {
+                args.extend(["-c".to_string(), UNELEVATED_SANDBOX.to_string()]);
             }
             args.push("-".to_string());
             Ok(JobLaunch {
@@ -405,9 +518,7 @@ fn codex_launch(
                 stdin: prompt,
                 provider_session_id: None,
                 wsl_job: None,
-                note: unreadable.map(|program| {
-                    format!("sandbox de Codex sin elevar (el elevado no puede leer {program})")
-                }),
+                note: plan.note.clone(),
             })
         }
         Some(distro) => {
@@ -466,7 +577,7 @@ fn claude_launch(
     let from_wsl = native.is_none();
     let allowed = claude_allowed_tools(job, task, paths, from_wsl);
     let session_id = uuid::Uuid::new_v4().to_string();
-    let prompt = job_prompt(job, task, paths, from_wsl);
+    let prompt = job_prompt(job, task, paths, from_wsl, &[]);
     if let Some(program) = native {
         let mut args: Vec<String> = [
             "-p",
@@ -613,10 +724,10 @@ fn claude_allowed_tools(
         .map(|command| format!("Bash({command}:*)"))
         .collect();
     if job.role == QA_ROLE {
-        tools.push(format!(
-            "Edit({}/**)",
-            claude_rule_path(&qa_folder(paths, from_wsl))
-        ));
+        let writable = [qa_folder(paths, from_wsl)]
+            .into_iter()
+            .chain(job.write_dirs.iter().map(|dir| agent_path(dir, from_wsl)));
+        tools.extend(writable.map(|dir| format!("Edit({}/**)", claude_rule_path(&dir))));
     }
     if job.qa_browser {
         tools.push(format!("mcp__{BROWSER_SERVER}"));
@@ -679,8 +790,10 @@ fn claude_qa_args(
         main_checkout.to_string(),
         qa_output.to_string(),
     ];
-    // Folders the user's permissions name; a QA job cannot edit there.
-    args.extend(job.read_dirs.iter().map(|dir| agent_path(dir, from_wsl)));
+    // Folders the user's permissions name; a QA job can edit only where
+    // its allowed tools say so.
+    let named = job.read_dirs.iter().chain(&job.write_dirs);
+    args.extend(named.map(|dir| agent_path(dir, from_wsl)));
     if job.qa_browser {
         let (command, server_args) = browser_server(from_wsl, paths)?;
         args.push("--mcp-config".to_string());
@@ -728,8 +841,13 @@ fn codex_qa_overrides(
         ));
     }
     std::fs::create_dir_all(&paths.qa_output).map_err(DeliveryError::io)?;
-    Ok(["--add-dir".to_string(), qa_folder(paths, from_wsl)]
+    // Besides its QA folder, only the folders the user's permissions name
+    // become writable roots of the sandbox.
+    let writable = [qa_folder(paths, from_wsl)]
         .into_iter()
+        .chain(job.write_dirs.iter().map(|dir| agent_path(dir, from_wsl)));
+    Ok(writable
+        .flat_map(|dir| ["--add-dir".to_string(), dir])
         .chain(
             values
                 .into_iter()
@@ -1240,6 +1358,7 @@ mod tests {
             platform: None,
             ran_on: None,
             read_dirs: Vec::new(),
+            write_dirs: Vec::new(),
             frozen_scripts: Vec::new(),
         }
     }
@@ -1309,7 +1428,7 @@ mod tests {
         let paths = JobPaths::in_dir(PathBuf::from(
             r"C:\Users\me\AppData\Roaming\tinto\delivery\jobs\j1",
         ));
-        let launch = codex_launch(&job, &task, &paths, None, None).unwrap();
+        let launch = codex_launch(&job, &task, &paths, None, &SandboxPlan::default()).unwrap();
         assert_eq!(launch.program, PathBuf::from("wsl.exe"));
         let script = launch.args.last().unwrap();
         assert!(script.contains("-s workspace-write"), "{script}");
@@ -1424,7 +1543,7 @@ mod tests {
         let mut codex = sample_job(DeliveryAgent::Codex);
         codex.role = QA_ROLE.into();
         codex.qa_browser = true;
-        let launch = codex_launch(&codex, &task, &paths, None, None).unwrap();
+        let launch = codex_launch(&codex, &task, &paths, None, &SandboxPlan::default()).unwrap();
         let script = launch.args.last().unwrap();
         assert!(
             script.contains(&format!(" '--add-dir' '{qa_output}' '-c'")),
@@ -1446,7 +1565,7 @@ mod tests {
         );
 
         codex.role = "review".into();
-        let launch = codex_launch(&codex, &task, &paths, None, None).unwrap();
+        let launch = codex_launch(&codex, &task, &paths, None, &SandboxPlan::default()).unwrap();
         assert!(!launch.args.last().unwrap().contains("network_access"));
         assert!(!launch.stdin.contains("QA stage"));
     }
@@ -1472,7 +1591,7 @@ mod tests {
         ));
         let mut codex = sample_job(DeliveryAgent::Codex);
         codex.reasoning = Some("medium".into());
-        let script = codex_launch(&codex, &task, &paths, None, None)
+        let script = codex_launch(&codex, &task, &paths, None, &SandboxPlan::default())
             .unwrap()
             .args
             .pop()
@@ -1490,7 +1609,7 @@ mod tests {
             .unwrap();
         assert!(script.contains(" --effort 'high'"), "{script}");
         codex.reasoning = None;
-        let script = codex_launch(&codex, &task, &paths, None, None)
+        let script = codex_launch(&codex, &task, &paths, None, &SandboxPlan::default())
             .unwrap()
             .args
             .pop()
@@ -1603,19 +1722,139 @@ mod tests {
             "npm run check-lint".into(),
             "cargo test".into(),
         ];
-        assert_eq!(check_programs(&job), ["npm", "cargo"]);
+        job.allowed_commands
+            .push(r#""C:/Program Files/Git/bin/bash.exe" run.sh"#.into());
+        assert_eq!(
+            command_programs(&job.allowed_commands),
+            ["npm", "cargo", "C:/Program Files/Git/bin/bash.exe"]
+        );
         let codex = PathBuf::from(r"C:\apps\codex.exe");
-        let launch = codex_launch(&job, &task, &paths, Some(codex.clone()), Some("npm")).unwrap();
+        let failed = |programs: &[&str]| -> Vec<String> {
+            programs.iter().map(|program| program.to_string()).collect()
+        };
+
+        // Everything starts in the configured sandbox: nothing changes.
+        assert_eq!(
+            sandbox_plan_from(&[], &failed(&["bash"])),
+            SandboxPlan::default()
+        );
+        // Only the unelevated one can read npm: the job moves there.
+        let plan = sandbox_plan_from(&failed(&["npm"]), &[]);
+        assert!(plan.unelevated && plan.obstacles.is_empty());
+        let launch = codex_launch(&job, &task, &paths, Some(codex.clone()), &plan).unwrap();
         assert_eq!(launch.program, codex);
         let end = &launch.args[launch.args.len() - 3..];
         assert_eq!(end, ["-c", r#"windows.sandbox="unelevated""#, "-"]);
         assert!(launch.note.as_deref().unwrap().contains("npm"));
-        let launch = codex_launch(&job, &task, &paths, Some(codex), None).unwrap();
+        assert!(!launch.stdin.contains("Known limits"));
+
+        // No sandbox starts both: the one that fails less, and the job is
+        // told what it cannot run instead of finding out by trying.
+        let plan = sandbox_plan_from(&failed(&["npm", "node"]), &failed(&["bash"]));
+        assert!(plan.unelevated);
+        assert_eq!(plan.obstacles.len(), 1);
+        assert!(
+            plan.obstacles[0].starts_with("bash solo puede ejecutarse en el sandbox configurado")
+        );
+        assert!(plan.obstacles[0].ends_with("no funciona npm, node"));
+        let launch = codex_launch(&job, &task, &paths, Some(codex.clone()), &plan).unwrap();
+        assert!(launch
+            .stdin
+            .contains("Known limits of your sandbox on this machine: bash solo"));
+        let plan = sandbox_plan_from(&failed(&["npm", "bash"]), &failed(&["bash"]));
+        assert_eq!(
+            plan.obstacles,
+            ["bash no puede ejecutarse en ningún sandbox de Codex en este equipo"]
+        );
+
+        let launch =
+            codex_launch(&job, &task, &paths, Some(codex), &SandboxPlan::default()).unwrap();
         assert!(!launch
             .args
             .iter()
             .any(|arg| arg.contains("windows.sandbox")));
         assert_eq!(launch.note, None);
+    }
+
+    #[test]
+    fn folders_a_permission_makes_writable_reach_both_agents_and_nothing_else_does() {
+        let task = windows_task();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = JobPaths::in_dir(dir.path().join("j1"));
+        let qa = qa_folder(&paths, false);
+        let mut job = qa_job_with_permissions();
+        job.write_dirs = vec![r"C:\Users\me\.agents\skills".into()];
+
+        // Codex: its QA folder and the named folder are the only extra
+        // writable roots of the sandbox.
+        let mut codex = job.clone();
+        codex.agent = DeliveryAgent::Codex;
+        let launch = codex_launch(
+            &codex,
+            &task,
+            &paths,
+            Some(PathBuf::from("codex.exe")),
+            &SandboxPlan::default(),
+        )
+        .unwrap();
+        let roots: Vec<&String> = launch
+            .args
+            .iter()
+            .zip(launch.args.iter().skip(1))
+            .filter(|(flag, _)| *flag == "--add-dir")
+            .map(|(_, dir)| dir)
+            .collect();
+        assert_eq!(roots, [&qa, "C:/Users/me/.agents/skills"]);
+        // A folder only readable is never a writable root.
+        assert!(!launch.args.iter().any(|arg| arg.contains(".claude/skills")));
+        assert!(launch
+            .stdin
+            .contains("write in these folders outside the worktree, and nowhere else: C:/Users/me/.agents/skills."));
+
+        // Claude Code: it may edit there, and only there besides its QA folder.
+        let launch =
+            claude_launch(&job, &task, &paths, Some(PathBuf::from("claude.exe")), None).unwrap();
+        let edits: Vec<&String> = launch
+            .args
+            .iter()
+            .filter(|arg| arg.starts_with("Edit("))
+            .collect();
+        assert_eq!(
+            edits,
+            [
+                &format!("Edit({}/**)", claude_rule_path(&qa)),
+                "Edit(//c/Users/me/.agents/skills/**)"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_result_says_what_blocked_the_job() {
+        let schema: Value = serde_json::from_str(RESULT_SCHEMA).unwrap();
+        assert_eq!(
+            schema["properties"]["blocked_by"]["enum"],
+            serde_json::json!(["none", "environment", "sandbox"])
+        );
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("blocked_by")));
+        let result = parse_result(&serde_json::json!({
+            "status": "blocked", "summary": "bash did not start", "blocked_by": "sandbox"
+        }))
+        .unwrap();
+        assert_eq!(result.blocked_by, "sandbox");
+        // Results from before the field existed still read.
+        let old = parse_result(&serde_json::json!({"status": "pass", "summary": "ok"})).unwrap();
+        assert_eq!(old.blocked_by, "");
+        let prompt = job_prompt(
+            &sample_job(DeliveryAgent::Codex),
+            &sample_task(),
+            &JobPaths::in_dir(PathBuf::from("jobs")),
+            false,
+            &[],
+        );
+        assert!(prompt.contains("Set blocked_by"));
     }
 
     #[test]
