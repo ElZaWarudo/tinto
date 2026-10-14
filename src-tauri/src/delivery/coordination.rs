@@ -170,6 +170,7 @@ pub(super) fn found_step(
         before: None,
         tip: None,
         notice: None,
+        corrections: Vec::new(),
     }
 }
 
@@ -460,6 +461,7 @@ impl DeliveryService {
             before: None,
             tip: None,
             notice: None,
+            corrections: Vec::new(),
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.clone(),
             rung: request.rung,
@@ -604,6 +606,56 @@ impl DeliveryService {
         if let Some((task, found)) = opened {
             self.adopt_pr(&task, &found)?;
             approval = self.approval(&approval.id)?;
+        }
+        Ok(approval)
+    }
+
+    /// The user corrects the result of a done step Tinto cannot check (PR,
+    /// merge, Jira). The previous result is kept with the correction, and a
+    /// PR step corrected with a PR's URL links that PR.
+    pub fn correct_approval(
+        &self,
+        approval_id: &str,
+        outcome: &str,
+        reason: &str,
+    ) -> Result<DeliveryApproval, DeliveryError> {
+        let mut approval = self.approval(approval_id)?;
+        let refuse = |message: &str| Err(DeliveryError::new("invalid_correction", message));
+        if reason.trim().is_empty() {
+            return refuse("di por qué se corrige el resultado");
+        }
+        if outcome.trim().is_empty() {
+            return refuse("el resultado corregido no puede quedar vacío");
+        }
+        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push) {
+            return refuse(
+                "el commit y el push los comprueba Tinto con git; no se corrigen a mano",
+            );
+        }
+        if !approval.status.was_done() {
+            return refuse("solo se corrige el resultado de un paso hecho");
+        }
+        approval.corrections.push(super::model::DeliveryCorrection {
+            previous: approval.outcome.take(),
+            outcome: outcome.trim().to_string(),
+            reason: reason.trim().to_string(),
+            at_ms: now_ms(),
+        });
+        approval.outcome = Some(outcome.trim().to_string());
+        let linked = match approval.rung {
+            DeliveryRung::Pr => super::prs::parse_pr_url(outcome),
+            _ => None,
+        };
+        if linked.is_some() {
+            // The user's word on which PR it is.
+            approval.status = DeliveryApprovalStatus::Executed;
+            approval.notice = None;
+        }
+        self.save_approval(&approval, "approval_corrected")?;
+        if let Some(pr) = linked {
+            if self.task_pr(&approval.task_id)?.map(|linked| linked.url) != Some(pr.url.clone()) {
+                self.link_pr(&approval.task_id, &pr)?;
+            }
         }
         Ok(approval)
     }

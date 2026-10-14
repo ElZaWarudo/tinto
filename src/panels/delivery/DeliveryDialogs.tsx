@@ -633,6 +633,82 @@ export function ReleaseLeaseDialog({
   );
 }
 
+/** A done delivery step whose result the user can correct. */
+export interface CorrectableStep {
+  id: string;
+  label: string;
+  outcome: string;
+}
+
+/** Corrects by hand the result of a step Tinto cannot check, saying why. */
+export function CorrectResultDialog({
+  steps,
+  initial,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  steps: CorrectableStep[];
+  initial: string;
+  busy: boolean;
+  onSubmit: (approvalId: string, outcome: string, reason: string) => void;
+  onCancel: () => void;
+}) {
+  const [id, setId] = useState(initial);
+  const step = steps.find((candidate) => candidate.id === id) ?? steps[0];
+  const [outcome, setOutcome] = useState(step?.outcome ?? "");
+  const [reason, setReason] = useState("");
+  return (
+    <FormDialog
+      title="Corregir resultado"
+      submitLabel="Guardar corrección"
+      busy={busy}
+      onCancel={onCancel}
+      onSubmit={() => {
+        if (step && outcome.trim() && reason.trim()) onSubmit(step.id, outcome, reason);
+      }}
+    >
+      <p className="file-op-modal__body">
+        El resultado anterior se conserva en el historial del paso, con su fecha.
+      </p>
+      {steps.length > 1 && (
+        <Field label="Paso">
+          <select
+            value={step?.id}
+            onChange={(event) => {
+              setId(event.target.value);
+              setOutcome(steps.find((s) => s.id === event.target.value)?.outcome ?? "");
+            }}
+          >
+            {steps.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label="Resultado">
+        <textarea
+          value={outcome}
+          onChange={(event) => setOutcome(event.target.value)}
+          rows={3}
+          required
+        />
+      </Field>
+      <Field label="Por qué se corrige">
+        <textarea
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          rows={2}
+          required
+          autoFocus
+        />
+      </Field>
+    </FormDialog>
+  );
+}
+
 /** One stage's agent in Ajustes: not fixed, or an agent with its model and reasoning. */
 function StageAgentRow({
   label,

@@ -169,6 +169,10 @@ export const decideDeliveryApproval = (approvalId: string, approve: boolean, not
 export const completeDeliveryApproval = (approvalId: string, success: boolean, outcome: string) =>
   invoke<DeliveryApproval>("delivery_complete_approval", { approvalId, success, outcome });
 
+/** Corrects a done step's result by hand; the previous one is kept. */
+export const correctDeliveryApproval = (approvalId: string, outcome: string, reason: string) =>
+  invoke<DeliveryApproval>("delivery_correct_approval", { approvalId, outcome, reason });
+
 export const answerDeliveryDecision = (decisionId: string, answer: string) =>
   invoke<DeliveryDecision>("delivery_answer_decision", { decisionId, answer });
 

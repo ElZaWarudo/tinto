@@ -2554,3 +2554,64 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         DeliveryApprovalStatus::Executed
     );
 }
+
+#[test]
+fn a_corrected_result_keeps_the_previous_one_needs_a_reason_and_links_the_pr() {
+    let h = harness();
+    let task = h.task("P-8");
+    put_step(&h, &task, "a-push", "push", "executed", "Publicado");
+    put_step(&h, &task, "a-pr", "pr", "executed", "PR abierto");
+    put_step(
+        &h,
+        &task,
+        "a-jira",
+        "jira",
+        "executed",
+        "Movida a In Review",
+    );
+
+    let refused = |id: &str, reason: &str| {
+        h.service
+            .correct_approval(id, "https://github.com/o/r/pull/279", reason)
+            .unwrap_err()
+            .category
+    };
+    assert_eq!(refused("a-pr", "  "), "invalid_correction");
+    assert_eq!(refused("a-push", "otra rama"), "invalid_correction");
+
+    let corrected = h
+        .service
+        .correct_approval(
+            "a-pr",
+            "https://github.com/o/r/pull/279",
+            "La URL estaba en el paso Jira",
+        )
+        .unwrap();
+    assert_eq!(
+        corrected.outcome.as_deref(),
+        Some("https://github.com/o/r/pull/279")
+    );
+    assert_eq!(corrected.corrections.len(), 1);
+    assert_eq!(
+        corrected.corrections[0].previous.as_deref(),
+        Some("PR abierto")
+    );
+    assert_eq!(
+        corrected.corrections[0].reason,
+        "La URL estaba en el paso Jira"
+    );
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 279);
+
+    let jira = h
+        .service
+        .correct_approval(
+            "a-jira",
+            "Movida a In Review y comentada",
+            "Faltaba el comentario",
+        )
+        .unwrap();
+    assert_eq!(
+        jira.corrections[0].previous.as_deref(),
+        Some("Movida a In Review")
+    );
+}

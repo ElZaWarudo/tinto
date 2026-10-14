@@ -158,6 +158,16 @@ export interface DeliveryApproval {
   created?: string[];
   /** What Tinto noticed checking the step against git and GitHub. */
   notice?: string | null;
+  /** The user's corrections of `outcome`, oldest first; `outcome` is the latest. */
+  corrections?: DeliveryCorrection[];
+}
+
+/** A result the user corrected by hand, keeping the one it replaced. */
+export interface DeliveryCorrection {
+  previous: string | null;
+  outcome: string;
+  reason: string;
+  at_ms: number;
 }
 
 export type DeliveryDecisionKind = "choice" | "text" | "permission";

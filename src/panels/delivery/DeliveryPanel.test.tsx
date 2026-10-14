@@ -41,6 +41,7 @@ const client = vi.hoisted(() => ({
   refreshDeliveryPr: vi.fn(() => Promise.resolve(null)),
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  correctDeliveryApproval: vi.fn(),
   markDeliveryPrSeen: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
   createDeliveryRun: vi.fn(),
@@ -1299,6 +1300,75 @@ describe("DeliveryPanel", () => {
         "push",
         "Publicar delivery/agos-501",
         "",
+      ),
+    );
+  });
+
+  it("corrects a step's result with a reason and keeps the previous one", async () => {
+    const user = userEvent.setup();
+    const step = (rung: "commit" | "push" | "pr", over: Partial<DeliveryApproval> = {}) => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "ok",
+      ...over,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [
+          step("commit"),
+          step("push"),
+          step("pr", {
+            outcome: "https://github.com/acme/agentos/pull/279",
+            corrections: [
+              {
+                previous: "PR abierto",
+                outcome: "https://github.com/acme/agentos/pull/279",
+                reason: "Faltaba la URL",
+                at_ms: 5,
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+    client.correctDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    const results = await screen.findByRole("region", { name: "Resultados de la entrega" });
+    const pr = within(results).getByRole("listitem", { name: "PR" });
+    expect(within(pr).getByText("PR abierto")).toBeInTheDocument();
+    expect(within(pr).getByText(/Por qué: Faltaba la URL/)).toBeInTheDocument();
+    // Commit and push are checked against git: no correction for them.
+    expect(
+      within(within(results).getByRole("listitem", { name: "Push" })).queryByRole("button"),
+    ).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Más acciones de la tarea" }));
+    await user.click(screen.getByRole("menuitem", { name: "Corregir resultado…" }));
+    const dialog = screen.getByRole("dialog", { name: "Corregir resultado" });
+    const outcome = within(dialog).getByRole("textbox", { name: "Resultado" });
+    expect(outcome).toHaveValue("https://github.com/acme/agentos/pull/279");
+    await user.clear(outcome);
+    await user.type(outcome, "https://github.com/acme/agentos/pull/280");
+    await user.click(within(dialog).getByRole("button", { name: "Guardar corrección" }));
+    expect(client.correctDeliveryApproval).not.toHaveBeenCalled();
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Por qué se corrige" }),
+      "Era otro PR",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Guardar corrección" }));
+    await waitFor(() =>
+      expect(client.correctDeliveryApproval).toHaveBeenCalledWith(
+        "pr",
+        "https://github.com/acme/agentos/pull/280",
+        "Era otro PR",
       ),
     );
   });

@@ -13,6 +13,7 @@ import {
   checkDeliveryTask,
   closeDeliveryRun,
   completeDeliveryApproval,
+  correctDeliveryApproval,
   createDeliveryRun,
   createDeliveryTask,
   decideDeliveryApproval,
@@ -51,9 +52,11 @@ import type {
 } from "../../delivery/types";
 import {
   DispatchDialog,
+  CorrectResultDialog,
   NewTaskDialog,
   ReleaseLeaseDialog,
   SettingsDialog,
+  type CorrectableStep,
   type RepoChoice,
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
@@ -732,6 +735,9 @@ function TaskDetail({
   );
   const rung = openApprovals.length === 0 ? nextRung(approvals) : null;
   const [requesting, setRequesting] = useState(false);
+  // The approval whose result is being corrected.
+  const [correcting, setCorrecting] = useState<string | null>(null);
+  const correctable = correctableSteps(approvals);
   const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
   // Opening the task checks its steps against GitHub: the PR is found by its
   // branch if needed and read, unless it was read moments ago.
@@ -857,6 +863,22 @@ function TaskDetail({
                 }}
               >
                 Nueva versión del contrato… <small>v{task.contract_version}</small>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={busy || correctable.length === 0}
+                title={
+                  correctable.length === 0
+                    ? "Aún no hay un PR, merge o Jira hecho que corregir."
+                    : undefined
+                }
+                onClick={() => {
+                  close();
+                  setCorrecting(correctable[0].id);
+                }}
+              >
+                Corregir resultado…
               </button>
               <hr />
               <button
@@ -1006,6 +1028,21 @@ function TaskDetail({
       )}
 
       {pr && <PrSection pr={pr} busy={busy} run={run} />}
+
+      <DeliveryResults approvals={approvals} busy={busy} onCorrect={setCorrecting} />
+      {correcting && (
+        <CorrectResultDialog
+          steps={correctable}
+          initial={correcting}
+          busy={busy}
+          onCancel={() => setCorrecting(null)}
+          onSubmit={(approvalId, outcome, reason) =>
+            void run(() => correctDeliveryApproval(approvalId, outcome, reason)).then((ok) => {
+              if (ok) setCorrecting(null);
+            })
+          }
+        />
+      )}
 
       <DecisionLog
         taskId={task.id}
@@ -1260,6 +1297,89 @@ function StepChecks({
         </p>
       ))}
     </div>
+  );
+}
+
+function when(ms: number | null | undefined): string {
+  return ms ? new Date(ms).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "";
+}
+
+const isDone = (approval: DeliveryApproval | undefined): approval is DeliveryApproval =>
+  approval?.status === "executed" || approval?.status === "drifted";
+
+/** Done steps whose result Tinto cannot check against git: the user's to
+ *  correct. Commit and push are checked, so they are not here. */
+function correctableSteps(approvals: DeliveryApproval[]): CorrectableStep[] {
+  return RUNGS.filter(({ rung }) => rung !== "commit" && rung !== "push").flatMap(
+    ({ rung, label }) => {
+      const approval = latestApproval(approvals, rung);
+      return isDone(approval) ? [{ id: approval.id, label, outcome: approval.outcome ?? "" }] : [];
+    },
+  );
+}
+
+/** Each done step's result, with the corrections the user made and when. */
+function DeliveryResults({
+  approvals,
+  busy,
+  onCorrect,
+}: {
+  approvals: DeliveryApproval[];
+  busy: boolean;
+  onCorrect: (approvalId: string) => void;
+}) {
+  const done = RUNGS.flatMap(({ rung, label }) => {
+    const approval = latestApproval(approvals, rung);
+    return isDone(approval) ? [{ rung, label, approval }] : [];
+  });
+  if (done.length === 0) return null;
+  return (
+    <section className="delivery-section" aria-label="Resultados de la entrega">
+      <h3>Resultados de la entrega</h3>
+      <ul className="delivery-results">
+        {done.map(({ rung, label, approval }) => {
+          const corrections = approval.corrections ?? [];
+          // Oldest first: what was recorded, then each correction.
+          const history = [
+            {
+              text: corrections[0]?.previous ?? approval.outcome ?? "—",
+              at: approval.executed_at_ms,
+              reason: null as string | null,
+            },
+            ...corrections.map((c) => ({ text: c.outcome, at: c.at_ms, reason: c.reason })),
+          ];
+          return (
+            <li key={rung} aria-label={label}>
+              <strong>{label}</strong>
+              <ol className="delivery-results__history">
+                {history.map((entry, index) => (
+                  <li
+                    key={index}
+                    className={index < history.length - 1 ? "delivery-muted" : undefined}
+                  >
+                    <span>{entry.text}</span>{" "}
+                    <small className="delivery-muted">
+                      {index === 0 ? when(entry.at) : `Corregido el ${when(entry.at)}`}
+                      {entry.reason && ` · Por qué: ${entry.reason}`}
+                    </small>
+                  </li>
+                ))}
+              </ol>
+              {rung !== "commit" && rung !== "push" && (
+                <button
+                  type="button"
+                  className="delivery-link-button"
+                  disabled={busy}
+                  onClick={() => onCorrect(approval.id)}
+                >
+                  Corregir resultado…
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

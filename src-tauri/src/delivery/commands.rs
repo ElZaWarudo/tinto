@@ -381,6 +381,20 @@ pub fn delivery_complete_approval(
         .map_err(CommandError::from)
 }
 
+/// The user corrects a done step's result, saying why. Not on MCP: the
+/// correction is the user's, not the coordinator's.
+#[tauri::command]
+pub fn delivery_correct_approval(
+    service: State<'_, DeliveryService>,
+    approval_id: String,
+    outcome: String,
+    reason: String,
+) -> Result<DeliveryApproval, CommandError> {
+    service
+        .correct_approval(&approval_id, &outcome, &reason)
+        .map_err(CommandError::from)
+}
+
 /// Allowing a permission that runs the task's code snapshots the worktree.
 #[tauri::command]
 pub async fn delivery_answer_decision(

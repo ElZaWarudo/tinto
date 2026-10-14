@@ -323,6 +323,20 @@ pub struct DeliveryApproval {
     /// such as a recorded PR URL that is not the branch's PR.
     #[serde(default)]
     pub notice: Option<String>,
+    /// The user's corrections of `outcome`, oldest first. `outcome` is the
+    /// latest; each correction keeps the text it replaced.
+    #[serde(default)]
+    pub corrections: Vec<DeliveryCorrection>,
+}
+
+/// A result the user corrected by hand, for what Tinto cannot check.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryCorrection {
+    /// The result before this correction.
+    pub previous: Option<String>,
+    pub outcome: String,
+    pub reason: String,
+    pub at_ms: u64,
 }
 
 /// What a decision asks of the user before work starts.
