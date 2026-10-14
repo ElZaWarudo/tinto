@@ -75,6 +75,7 @@ pub(super) struct Inner {
     pub(super) coordinator: Mutex<Option<DeliveryCoordinatorEndpoint>>,
     sandbox_planner: Mutex<SandboxPlanner>,
     pub(super) github: Mutex<Arc<dyn GitHub>>,
+    pub(super) jira: Mutex<Arc<dyn super::jira::Jira>>,
     launcher: Launcher,
     paths_for: PathsFor,
     checkpoint_config: CheckpointConfig,
@@ -173,6 +174,7 @@ impl DeliveryService {
                 sandbox_planner: Mutex::new(Arc::new(|_, _| adapters::SandboxPlan::default())),
                 // Nothing reaches GitHub unless the app sets `gh`.
                 github: Mutex::new(Arc::new(prs::Offline)),
+                jira: Mutex::new(Arc::new(super::jira::JiraHttp)),
                 launcher,
                 paths_for,
                 checkpoint_config,

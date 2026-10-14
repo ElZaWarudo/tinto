@@ -9,9 +9,10 @@ use tauri::{AppHandle, State};
 
 use super::coordination::{DeliveryCommitDraft, NewApproval};
 use super::model::{
-    DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision, DeliveryJob,
-    DeliveryJobLog, DeliveryLease, DeliveryOverview, DeliveryPlatform, DeliveryRepoSettings,
-    DeliveryRun, DeliveryRung, DeliverySettings, DeliveryStageAgent, DeliveryTask,
+    DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision,
+    DeliveryJiraSettings, DeliveryJob, DeliveryJobLog, DeliveryLease, DeliveryOverview,
+    DeliveryPlatform, DeliveryRepoSettings, DeliveryRun, DeliveryRung, DeliverySettings,
+    DeliveryStageAgent, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{DeliveryService, NewJob, NewTask};
@@ -239,10 +240,34 @@ pub fn delivery_repo_settings(
     service: State<'_, DeliveryService>,
     repo: PathBuf,
 ) -> Result<DeliveryRepoSettings, CommandError> {
+    let store = service.store()?;
+    let mut settings = store.repo_settings(&repo)?;
+    if let Some(jira) = settings.jira.as_mut() {
+        jira.has_token = store.jira_token(&repo)?.is_some();
+    }
+    Ok(settings)
+}
+
+/// Saves the repo's Jira token apart from its settings; empty forgets it.
+#[tauri::command]
+pub fn delivery_set_jira_token(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+    token: String,
+) -> Result<(), CommandError> {
     service
-        .store()
-        .and_then(|store| store.repo_settings(&repo))
+        .set_jira_token(&repo, &token)
         .map_err(CommandError::from)
+}
+
+/// "Comprobar Jira": the name of the token's owner, as Jira sees it.
+#[tauri::command]
+pub async fn delivery_check_jira(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+) -> Result<String, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.check_jira(&repo)).await
 }
 
 #[tauri::command]
@@ -287,6 +312,21 @@ pub fn delivery_set_repo_settings(
                 (role.trim().to_ascii_lowercase(), stage)
             })
             .collect(),
+        jira: match settings.jira {
+            Some(jira) if !jira.host.trim().is_empty() => {
+                let statuses = |list: Vec<String>| -> Vec<String> {
+                    list.into_iter().filter_map(|s| clean(Some(s))).collect()
+                };
+                Some(DeliveryJiraSettings {
+                    host: super::jira::clean_host(&jira.host)?,
+                    project: jira.project.trim().to_ascii_uppercase(),
+                    after_pr: statuses(jira.after_pr),
+                    after_merge: statuses(jira.after_merge),
+                    has_token: false,
+                })
+            }
+            _ => None,
+        },
     };
     service
         .store()
@@ -325,6 +365,7 @@ pub fn delivery_request_approval(
     leave_out: Option<Vec<String>>,
     merge_method: Option<String>,
     stage: Option<String>,
+    jira_statuses: Option<Vec<String>>,
 ) -> Result<DeliveryApproval, CommandError> {
     service
         .request_approval(NewApproval {
@@ -337,6 +378,7 @@ pub fn delivery_request_approval(
             leave_out: leave_out.unwrap_or_default(),
             merge_method,
             stage,
+            jira_statuses: jira_statuses.unwrap_or_default(),
         })
         .map_err(CommandError::from)
 }

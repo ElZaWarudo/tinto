@@ -81,6 +81,7 @@ import {
   nextRole,
   latestStep,
   nextStep,
+  parseStatuses,
   prSummary,
   rolesOf,
   stepKey,
@@ -1483,7 +1484,9 @@ function ApprovalBanner({
           ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después lo registras aquí; si no pegas su URL, Tinto busca el PR de la rama. Desde entonces Tinto lo sigue en GitHub y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar."
           : approval.rung === "merge"
             ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
-            : "Al aprobar, el coordinador hace estas operaciones en Jira. Después registras aquí qué se hizo.";
+            : approval.jira_statuses?.length
+              ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
+              : "Al aprobar, el coordinador hace estas operaciones en Jira. Después registras aquí qué se hizo.";
   return (
     <div className="delivery-banner" role="group" aria-label={`Aprobación ${approval.rung}`}>
       <p className="delivery-banner__title">
@@ -1581,7 +1584,12 @@ function ApprovalBanner({
           />
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || (approval.rung === "jira" && !outcome.trim())}
+            title={
+              approval.rung === "jira" && !outcome.trim()
+                ? "Escribe qué se hizo en Jira: transiciones y estado final."
+                : undefined
+            }
             onClick={() => void run(() => completeDeliveryApproval(approval.id, true, outcome))}
           >
             Marcar como hecho
@@ -1644,6 +1652,25 @@ function DeliveryRequest({
     // Proposed once, when the form opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // A Jira step Tinto runs itself when the repo's Jira is set in Tinto.
+  const [jiraByTinto, setJiraByTinto] = useState(false);
+  const [statuses, setStatuses] = useState("");
+  useEffect(() => {
+    if (rung !== "jira") return;
+    let live = true;
+    getDeliveryRepoSettings(task.repo).then(
+      (settings) => {
+        const jira = settings.jira;
+        if (!live || !jira?.has_token) return;
+        setJiraByTinto(true);
+        setStatuses((step.stage === "after_merge" ? jira.after_merge : jira.after_pr).join(", "));
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [rung, step.stage, task.repo]);
   return (
     <form
       className="delivery-request"
@@ -1662,6 +1689,7 @@ function DeliveryRequest({
                   undefined,
                   undefined,
                   step.stage,
+                  jiraByTinto ? parseStatuses(statuses) : undefined,
                 )
               : requestDeliveryApproval(task.id, rung, title, body),
         ).then((ok) => {
@@ -1702,10 +1730,30 @@ function DeliveryRequest({
           required
         />
       </label>
+      {jiraByTinto && (
+        <label className="delivery-request__field">
+          <span>Estados de {task.key} en Jira, en orden</span>
+          <input
+            value={statuses}
+            onChange={(event) => setStatuses(event.target.value)}
+            placeholder="En ejecución, In Review"
+            required
+          />
+        </label>
+      )}
       <label className="delivery-request__field">
-        <span>{rung === "jira" ? "Operaciones exactas en Jira" : "Detalle (opcional)"}</span>
+        <span>
+          {rung === "jira" && !jiraByTinto ? "Operaciones exactas en Jira" : "Detalle (opcional)"}
+        </span>
         <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={3} />
       </label>
+      {jiraByTinto && (
+        <p className="delivery-muted">
+          Al aprobarlo, Tinto
+          {step.stage === "after_pr" ? " enlaza el PR en la issue y la" : " la"} lleva por estos
+          estados en Jira, y comprueba el estado final.
+        </p>
+      )}
       <div className="delivery-actions">
         <button type="submit" className="delivery-button--primary" disabled={busy}>
           Pedir aprobación

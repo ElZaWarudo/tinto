@@ -114,6 +114,13 @@ export const getDeliveryRepoSettings = (repo: string) =>
 export const setDeliveryRepoSettings = (repo: string, settings: DeliveryRepoSettings) =>
   invoke<DeliveryRepoSettings>("delivery_set_repo_settings", { repo, settings });
 
+/** Saves the repo's Jira token apart from its settings; empty forgets it. */
+export const setDeliveryJiraToken = (repo: string, token: string) =>
+  invoke<void>("delivery_set_jira_token", { repo, token });
+
+/** "Comprobar Jira": the token owner's name, as Jira sees it. */
+export const checkDeliveryJira = (repo: string) => invoke<string>("delivery_check_jira", { repo });
+
 export const releaseDeliveryLease = (name: string, note: string) =>
   invoke<DeliveryLease>("delivery_release_lease", { name, note });
 
@@ -126,6 +133,8 @@ export const requestDeliveryApproval = (
   mergeMethod?: string,
   /** `jira` only: after_pr or after_merge; the next one missing when omitted. */
   stage?: string,
+  /** `jira` only: statuses for Tinto to walk the issue through; the repo's when omitted. */
+  jiraStatuses?: string[],
 ) =>
   invoke<DeliveryApproval>("delivery_request_approval", {
     taskId,
@@ -136,6 +145,7 @@ export const requestDeliveryApproval = (
     leaveOut: plan?.leaveOut ?? null,
     mergeMethod: mergeMethod ?? null,
     stage: stage ?? null,
+    jiraStatuses: jiraStatuses ?? null,
   });
 
 /** Reads the task's PR from GitHub, unless it was read moments ago. */

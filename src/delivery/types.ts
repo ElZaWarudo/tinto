@@ -146,6 +146,8 @@ export interface DeliveryApproval {
   stage?: "after_pr" | "after_merge" | null;
   /** `pr` only: who the user chose to review it; Tinto asks them on GitHub. */
   reviewers?: string[];
+  /** `jira` only: statuses Tinto walks the issue through; empty when the coordinator does it. */
+  jira_statuses?: string[];
   reviewers_requested?: boolean;
   title: string;
   body: string;
@@ -257,6 +259,19 @@ export interface DeliveryRepoSettings {
   qa_environment?: string;
   /** The agent each stage runs with, by role, fixed by the user. */
   stages?: Record<string, DeliveryStageAgent>;
+  /** The repo's Jira, for Tinto to run the Jira steps; the token is kept apart. */
+  jira?: DeliveryJiraSettings | null;
+}
+
+export interface DeliveryJiraSettings {
+  host: string;
+  project: string;
+  /** Statuses the issue goes through once the PR is open, in order. */
+  after_pr: string[];
+  /** Statuses once the PR is merged. */
+  after_merge: string[];
+  /** Whether a token is saved (read only). */
+  has_token?: boolean;
 }
 
 /** Who runs a stage; the CLI's defaults where null. */

@@ -2,10 +2,16 @@
 // dialog, and reachable by UI automation).
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { getDeliveryRepoSettings, setDeliveryRepoSettings } from "../../delivery/client";
+import {
+  checkDeliveryJira,
+  getDeliveryRepoSettings,
+  setDeliveryJiraToken,
+  setDeliveryRepoSettings,
+} from "../../delivery/client";
 import { isWindowsHost } from "../../workbench/platform";
 import { useAccessibleDialog } from "../../workbench/useAccessibleDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
+import { parseStatuses } from "./taskStatus";
 import type {
   DeliveryAccess,
   DeliveryAgent,
@@ -788,6 +794,12 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
   const [commands, setCommands] = useState("");
   const [environment, setEnvironment] = useState("");
   const [stages, setStages] = useState<Record<string, DeliveryStageAgent>>({});
+  const [jiraHost, setJiraHost] = useState("");
+  const [jiraProject, setJiraProject] = useState("");
+  const [jiraToken, setJiraToken] = useState("");
+  const [afterPr, setAfterPr] = useState("");
+  const [afterMerge, setAfterMerge] = useState("");
+  const [jiraCheck, setJiraCheck] = useState("");
   const [status, setStatus] = useState("");
   useEffect(() => {
     if (!repo) return;
@@ -800,6 +812,12 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         setCommands((settings.qa_commands ?? []).join("\n"));
         setEnvironment(settings.qa_environment ?? "");
         setStages(settings.stages ?? {});
+        setJiraHost(settings.jira?.host ?? "");
+        setJiraProject(settings.jira?.project ?? "");
+        setAfterPr((settings.jira?.after_pr ?? []).join(", "));
+        setAfterMerge((settings.jira?.after_merge ?? []).join(", "));
+        setJiraToken("");
+        setJiraCheck("");
         setStatus("");
       },
       () => active && setStatus("No se pudieron leer los ajustes de este repositorio."),
@@ -858,6 +876,62 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         />
         <span>Navegador para la QA</span>
       </label>
+      <h3 className="delivery-dialog__subtitle">Jira</h3>
+      <p className="file-op-modal__body">
+        Con Jira configurado, Tinto hace los pasos Jira al aprobarlos: enlaza el PR, lleva la issue
+        por estos estados y comprueba el estado final. Sin él, los hace el coordinador.
+      </p>
+      <Field label="Host de Jira" hint="Por ejemplo: https://jira.example.com">
+        <input value={jiraHost} onChange={(event) => setJiraHost(event.target.value)} />
+      </Field>
+      <Field label="Proyecto">
+        <input value={jiraProject} onChange={(event) => setJiraProject(event.target.value)} />
+      </Field>
+      <Field
+        label="Token de Jira"
+        hint={
+          loaded?.jira?.has_token
+            ? "Hay un token guardado. Escribe otro solo para cambiarlo."
+            : "Un token de acceso personal. Se guarda aparte y no se muestra."
+        }
+      >
+        <input
+          type="password"
+          autoComplete="off"
+          value={jiraToken}
+          onChange={(event) => setJiraToken(event.target.value)}
+          placeholder={loaded?.jira?.has_token ? MASK : ""}
+        />
+      </Field>
+      <Field
+        label="Estados al abrir el PR"
+        hint="En orden, separados por comas: En ejecución, In Review"
+      >
+        <input value={afterPr} onChange={(event) => setAfterPr(event.target.value)} />
+      </Field>
+      <Field label="Estados al fusionar el PR" hint="Por ejemplo: Cerrada">
+        <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
+      </Field>
+      <div className="delivery-actions">
+        <button
+          type="button"
+          className="file-op-modal__button"
+          disabled={!loaded?.jira?.has_token}
+          title={loaded?.jira?.has_token ? undefined : "Guarda antes el host y el token."}
+          onClick={() => {
+            setJiraCheck("Comprobando…");
+            checkDeliveryJira(repo).then(
+              (name) => setJiraCheck(`Conectado como ${name}.`),
+              (cause) => setJiraCheck(`No se pudo: ${String(cause?.message ?? cause)}`),
+            );
+          }}
+        >
+          Comprobar Jira
+        </button>
+        <span className="delivery-field__hint" role="status">
+          {jiraCheck}
+        </span>
+      </div>
       <h3 className="delivery-dialog__subtitle">Agente de cada etapa</h3>
       <p className="file-op-modal__body">
         Con qué agente, modelo y razonamiento corre cada etapa en este repositorio. El diálogo de
@@ -890,13 +964,24 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
               qa_commands: parseChecks(commands),
               qa_environment: environment.trim(),
               stages,
-            }).then(
-              (saved) => {
-                setLoaded(saved);
+              jira: jiraHost.trim()
+                ? {
+                    host: jiraHost.trim(),
+                    project: jiraProject.trim(),
+                    after_pr: parseStatuses(afterPr),
+                    after_merge: parseStatuses(afterMerge),
+                  }
+                : null,
+            })
+              .then(async (saved) => {
+                // The token goes apart and only when typed: empty keeps it.
+                if (jiraToken.trim()) await setDeliveryJiraToken(repo, jiraToken);
+                setJiraToken("");
+                setLoaded(await getDeliveryRepoSettings(repo));
                 setStatus(`Guardado para ${label}.`);
-              },
-              () => setStatus("No se pudo guardar."),
-            )
+                return saved;
+              })
+              .catch((cause) => setStatus(`No se pudo guardar: ${String(cause?.message ?? cause)}`))
           }
         >
           Guardar los ajustes de {label}

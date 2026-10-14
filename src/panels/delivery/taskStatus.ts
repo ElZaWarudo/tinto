@@ -455,3 +455,11 @@ export function prSummary(pr: DeliveryPr): { tone: Tone; icon: StatusIcon; label
   if (approved) return { tone: "ok", icon: "check", label: "Aprobado" };
   return { tone: "waiting", icon: "clock", label: "En revisión" };
 }
+
+/** "En ejecución, In Review" (or with → between them) → the statuses in order. */
+export function parseStatuses(text: string): string[] {
+  return text
+    .split(/[,→\n]/)
+    .map((status) => status.trim())
+    .filter(Boolean);
+}

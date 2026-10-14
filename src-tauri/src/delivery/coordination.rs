@@ -36,6 +36,9 @@ pub struct NewApproval {
     /// `jira` only: `after_pr` or `after_merge`; the next one missing when
     /// `None`.
     pub stage: Option<String>,
+    /// `jira` only: the statuses to walk the issue through; the repo's
+    /// defaults for the stage when empty.
+    pub jira_statuses: Vec<String>,
     /// `commit` only: changed files the plan leaves uncommitted on purpose.
     pub leave_out: Vec<String>,
 }
@@ -173,6 +176,7 @@ pub(super) fn found_step(
         outcome: Some(outcome),
         merge_method: None,
         stage: None,
+        jira_statuses: Vec::new(),
         reviewers: Vec::new(),
         reviewers_requested: false,
         commits: Vec::new(),
@@ -446,6 +450,34 @@ impl DeliveryService {
             DeliveryRung::Jira => Some(self.jira_stage(&task.id, request.stage.as_deref())?),
             _ => None,
         };
+        // With the repo's Jira set in Tinto, Tinto runs the step: the
+        // statuses asked, else the repo's for this moment.
+        let mut jira_statuses: Vec<String> = Vec::new();
+        if request.rung == DeliveryRung::Jira && self.jira_site(&task.repo)?.is_some() {
+            jira_statuses = request
+                .jira_statuses
+                .iter()
+                .map(|status| status.trim().to_string())
+                .filter(|status| !status.is_empty())
+                .collect();
+            if jira_statuses.is_empty() {
+                let jira = self
+                    .store()?
+                    .repo_settings(&task.repo)?
+                    .jira
+                    .unwrap_or_default();
+                jira_statuses = match stage.as_deref() {
+                    Some(JIRA_AFTER_MERGE) => jira.after_merge,
+                    _ => jira.after_pr,
+                };
+            }
+            if jira_statuses.is_empty() {
+                return Err(DeliveryError::new(
+                    "invalid_approval",
+                    "di a qué estados pasa la issue (o fíjalos en Ajustes → Jira del repositorio)",
+                ));
+            }
+        }
         {
             let store = self.store()?;
             let open = store.approvals()?.into_iter().any(|approval| {
@@ -527,6 +559,7 @@ impl DeliveryService {
                 .merge_method
                 .filter(|_| request.rung == DeliveryRung::Merge),
             stage,
+            jira_statuses,
             reviewers: Vec::new(),
             reviewers_requested: false,
             commits,
@@ -590,6 +623,20 @@ impl DeliveryService {
             return Ok(approval);
         }
         approval.status = DeliveryApprovalStatus::Approved;
+        if approval.rung == DeliveryRung::Jira && !approval.jira_statuses.is_empty() {
+            let executed = self.run_jira_step(&approval);
+            approval.executed_at_ms = Some(now_ms());
+            match executed {
+                Ok(outcome) => {
+                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.outcome = Some(outcome);
+                }
+                Err(error) => {
+                    approval.status = DeliveryApprovalStatus::Failed;
+                    approval.outcome = Some(error.message);
+                }
+            }
+        }
         if approval.rung == DeliveryRung::Merge {
             let executed = self.merge_pr(&approval);
             approval.executed_at_ms = Some(now_ms());
@@ -652,6 +699,13 @@ impl DeliveryService {
             return Err(DeliveryError::new(
                 "approval_not_approved",
                 "solo se informa el resultado de un paso aprobado",
+            ));
+        }
+        // A Jira step done by hand says what was done in Jira.
+        if success && approval.rung == DeliveryRung::Jira && outcome.trim().is_empty() {
+            return Err(DeliveryError::new(
+                "invalid_outcome",
+                "di qué se hizo en Jira (transiciones y estado final)",
             ));
         }
         // A PR step is never done without a PR Tinto can follow: the one
@@ -978,6 +1032,29 @@ impl DeliveryService {
             Some(message) => Err(DeliveryError::new("pr_not_ready", message)),
             None => Ok(()),
         }
+    }
+
+    /// Runs a Jira step on the task's issue: links its PR once it is open
+    /// and walks the issue through the step's statuses, verifying the last.
+    fn run_jira_step(&self, approval: &DeliveryApproval) -> Result<String, DeliveryError> {
+        let task = self.task(&approval.task_id)?;
+        let site = self.jira_site(&task.repo)?.ok_or_else(|| {
+            DeliveryError::new(
+                "jira_not_configured",
+                "el Jira de este repositorio ya no tiene host o token en Tinto",
+            )
+        })?;
+        let pr = match approval.stage.as_deref() {
+            Some(JIRA_AFTER_PR) => self.task_pr(&task.id)?,
+            _ => None,
+        };
+        super::jira::run_step(
+            &*self.jira_client(),
+            &site,
+            &task.key,
+            pr.as_ref().map(|pr| (pr.url.as_str(), pr.number)),
+            &approval.jira_statuses,
+        )
     }
 
     /// Merges the task's PR on GitHub and deletes its branch there.

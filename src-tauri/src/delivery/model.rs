@@ -308,6 +308,11 @@ pub struct DeliveryApproval {
     /// goes to review) or `after_merge` (the issue is closed).
     #[serde(default)]
     pub stage: Option<String>,
+    /// `jira` only: the statuses Tinto walks the issue through, in order,
+    /// when the repo's Jira is set in Tinto. Empty: the coordinator does the
+    /// step and reports it.
+    #[serde(default)]
+    pub jira_statuses: Vec<String>,
     /// `pr` only: the GitHub logins the user chose to review it. Tinto asks
     /// them on GitHub once the PR is linked.
     #[serde(default)]
@@ -503,6 +508,29 @@ pub struct DeliveryRepoSettings {
     /// agent get it.
     #[serde(default)]
     pub stages: BTreeMap<String, DeliveryStageAgent>,
+    /// The repo's Jira, for Tinto to run the Jira steps itself. Its token
+    /// is stored apart and never returned.
+    #[serde(default)]
+    pub jira: Option<DeliveryJiraSettings>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryJiraSettings {
+    /// `https://jira.example.com`.
+    pub host: String,
+    /// The project key, such as `AGOS`.
+    #[serde(default)]
+    pub project: String,
+    /// The statuses the issue goes through once the PR is open, in order
+    /// (e.g. `En ejecución`, `In Review`).
+    #[serde(default)]
+    pub after_pr: Vec<String>,
+    /// The statuses once the PR is merged (e.g. `Cerrada`).
+    #[serde(default)]
+    pub after_merge: Vec<String>,
+    /// Whether a token is saved. Tinto fills it when it reads the settings.
+    #[serde(default)]
+    pub has_token: bool,
 }
 
 /// Who runs a stage: the agent, its model and its reasoning effort.

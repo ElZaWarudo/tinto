@@ -601,6 +601,7 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         leave_out: Vec::new(),
         merge_method: None,
         stage: None,
+        jira_statuses: Vec::new(),
     };
 
     assert_eq!(
@@ -1701,6 +1702,7 @@ fn commit_plan(
         leave_out: leave_out.iter().map(|path| path.to_string()).collect(),
         merge_method: None,
         stage: None,
+        jira_statuses: Vec::new(),
     }
 }
 
@@ -1952,6 +1954,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             leave_out: Vec::new(),
             merge_method: None,
             stage: None,
+            jira_statuses: Vec::new(),
         })
         .unwrap();
     let mut done = h.service.decide_approval(&asked.id, true, None).unwrap();
@@ -2005,6 +2008,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             leave_out: Vec::new(),
             merge_method: None,
             stage: None,
+            jira_statuses: Vec::new(),
         })
         .unwrap_err();
     assert_eq!(push.category, "commit_missing");
@@ -2254,6 +2258,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         leave_out: Vec::new(),
         merge_method: method.map(str::to_string),
         stage: None,
+        jira_statuses: Vec::new(),
     };
     assert_eq!(
         h.service
@@ -2519,6 +2524,7 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         leave_out: Vec::new(),
         merge_method: None,
         stage: None,
+        jira_statuses: Vec::new(),
     };
     let commit = h
         .service
@@ -2667,6 +2673,7 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
         leave_out: Vec::new(),
         merge_method: None,
         stage: stage.map(str::to_string),
+        jira_statuses: Vec::new(),
     };
     let next = h.service.request_approval(jira(None)).unwrap();
     assert_eq!(
@@ -2796,6 +2803,7 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
         leave_out: Vec::new(),
         merge_method: Some("merge".into()),
         stage: None,
+        jira_statuses: Vec::new(),
     };
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
     let refused = h.service.request_approval(merge()).unwrap_err();
@@ -2817,4 +2825,182 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
         vec!["ana".to_string()]
     );
     h.service.request_approval(merge()).unwrap();
+}
+
+/// Jira with one issue, its workflow, and a log of the writes.
+struct FakeJira {
+    status: std::sync::Mutex<String>,
+    /// (from, transition id, transition name, to)
+    workflow: Vec<(&'static str, &'static str, &'static str, &'static str)>,
+    writes: std::sync::Mutex<Vec<String>>,
+}
+
+impl super::jira::Jira for FakeJira {
+    fn call(
+        &self,
+        site: &super::jira::JiraSite,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, super::DeliveryError> {
+        assert_eq!(site.host, "https://jira.test");
+        assert_eq!(site.token, "secret");
+        let mut status = self.status.lock().unwrap();
+        match (method, path) {
+            ("GET", "/rest/api/2/issue/AGOS-455?fields=status") => {
+                Ok(json!({"fields": {"status": {"name": *status}}}))
+            }
+            ("GET", "/rest/api/2/issue/AGOS-455/transitions") => Ok(json!({
+                "transitions": self.workflow.iter()
+                    .filter(|(from, ..)| *from == status.as_str())
+                    .map(|(_, id, name, to)| json!({"id": id, "name": name, "to": {"name": to}}))
+                    .collect::<Vec<_>>()
+            })),
+            ("POST", "/rest/api/2/issue/AGOS-455/transitions") => {
+                let id = body.unwrap()["transition"]["id"].as_str().unwrap();
+                let (_, _, _, to) = self
+                    .workflow
+                    .iter()
+                    .find(|(from, tid, ..)| *from == status.as_str() && *tid == id)
+                    .unwrap();
+                *status = to.to_string();
+                self.writes.lock().unwrap().push(format!("transition {id}"));
+                Ok(serde_json::Value::Null)
+            }
+            ("POST", "/rest/api/2/issue/AGOS-455/remotelink") => {
+                self.writes.lock().unwrap().push(format!(
+                    "link {}",
+                    body.unwrap()["globalId"].as_str().unwrap()
+                ));
+                Ok(json!({"id": 1}))
+            }
+            other => panic!("unexpected Jira call {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
+    let h = harness();
+    let task = h.task("AGOS-455");
+    let jira = Arc::new(FakeJira {
+        status: std::sync::Mutex::new("Por hacer".into()),
+        workflow: vec![
+            ("Por hacer", "11", "Start Work", "En ejecución"),
+            ("En ejecución", "151", "Submit for Review", "In Review"),
+            ("In Review", "161", "Close", "Cerrada"),
+        ],
+        writes: std::sync::Mutex::new(Vec::new()),
+    });
+    h.service.set_jira(jira.clone());
+    let jira_step = |stage: &str, statuses: Vec<String>| NewApproval {
+        task_id: task.id.clone(),
+        rung: DeliveryRung::Jira,
+        title: "AGOS-455".into(),
+        body: String::new(),
+        requested_by: "user".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        merge_method: None,
+        stage: Some(stage.into()),
+        jira_statuses: statuses,
+    };
+
+    // Without Jira in Tinto the coordinator does it, and must say what it did.
+    let manual = h
+        .service
+        .request_approval(jira_step("after_pr", Vec::new()))
+        .unwrap();
+    assert!(manual.jira_statuses.is_empty());
+    let manual = h.service.decide_approval(&manual.id, true, None).unwrap();
+    assert_eq!(manual.status, DeliveryApprovalStatus::Approved);
+    assert_eq!(
+        h.service
+            .complete_approval(&manual.id, true, " ")
+            .unwrap_err()
+            .category,
+        "invalid_outcome"
+    );
+    h.service
+        .complete_approval(&manual.id, false, "aún no")
+        .unwrap();
+
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.jira = Some(super::model::DeliveryJiraSettings {
+        host: "https://jira.test".into(),
+        project: "AGOS".into(),
+        after_pr: vec!["En ejecución".into(), "In Review".into()],
+        after_merge: vec!["Cerrada".into()],
+        has_token: false,
+    });
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    h.service.set_jira_token(h.repo.path(), "secret").unwrap();
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/279").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+
+    let review = h
+        .service
+        .request_approval(jira_step("after_pr", Vec::new()))
+        .unwrap();
+    assert_eq!(
+        review.jira_statuses,
+        vec!["En ejecución", "In Review"],
+        "the repo's"
+    );
+    let review = h.service.decide_approval(&review.id, true, None).unwrap();
+    assert_eq!(
+        review.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        review.outcome
+    );
+    assert_eq!(
+        review.outcome.as_deref(),
+        Some("Enlace al PR #279. Por hacer → En ejecución (Start Work). En ejecución → In Review (Submit for Review). Estado verificado en AGOS-455: In Review")
+    );
+
+    // A status the workflow cannot reach from here fails, saying so.
+    let wrong = h
+        .service
+        .request_approval(jira_step("after_merge", vec!["Hecha".into()]))
+        .unwrap();
+    let wrong = h.service.decide_approval(&wrong.id, true, None).unwrap();
+    assert_eq!(wrong.status, DeliveryApprovalStatus::Failed);
+    let reason = wrong.outcome.unwrap();
+    assert!(
+        reason.contains("Desde «In Review» no hay transición a «Hecha» (se puede ir a: Cerrada)"),
+        "{reason}"
+    );
+    assert!(reason.contains("No se hizo nada en Jira"), "{reason}");
+
+    let close = h
+        .service
+        .request_approval(jira_step("after_merge", Vec::new()))
+        .unwrap();
+    let close = h.service.decide_approval(&close.id, true, None).unwrap();
+    assert_eq!(
+        close.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        close.outcome
+    );
+    assert_eq!(*jira.status.lock().unwrap(), "Cerrada");
+    assert_eq!(
+        jira.writes.lock().unwrap().as_slice(),
+        [
+            "link github-pr=https://github.com/o/r/pull/279",
+            "transition 11",
+            "transition 151",
+            "transition 161"
+        ]
+    );
 }

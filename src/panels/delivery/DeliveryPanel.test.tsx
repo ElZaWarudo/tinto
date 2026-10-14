@@ -1505,6 +1505,61 @@ describe("DeliveryPanel", () => {
     expect(client.getDeliveryPrReviewers).toHaveBeenCalledWith("t1");
   });
 
+  it("asks the closing Jira step with the repo's statuses when Tinto runs Jira", async () => {
+    const user = userEvent.setup();
+    const done = (rung: DeliveryApproval["rung"]) => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "hecho",
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [done("commit"), done("push"), done("pr"), done("jira"), done("merge")],
+      }),
+    );
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      jira: {
+        host: "https://jira.example.com",
+        project: "AGOS",
+        after_pr: ["En ejecución", "In Review"],
+        after_merge: ["Cerrada"],
+        has_token: true,
+      },
+    });
+    client.requestDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Preparar Jira (merge)…" }));
+    const form = screen.getByRole("form", { name: "Pedir aprobación de Jira (merge)" });
+    const statuses = await within(form).findByRole("textbox", {
+      name: "Estados de AGOS-501 en Jira, en orden",
+    });
+    expect(statuses).toHaveValue("Cerrada");
+    await user.click(within(form).getByRole("button", { name: "Pedir aprobación" }));
+    await waitFor(() =>
+      expect(client.requestDeliveryApproval).toHaveBeenCalledWith(
+        "t1",
+        "jira",
+        "AGOS-501: Fix the thing",
+        "",
+        undefined,
+        undefined,
+        "after_merge",
+        ["Cerrada"],
+      ),
+    );
+  });
+
   it("follows the task's PR and merges it through its own step", async () => {
     const user = userEvent.setup();
     const pr = {

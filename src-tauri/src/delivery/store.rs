@@ -134,6 +134,18 @@ impl DeliveryStore {
         Ok(())
     }
 
+    /// The repo's Jira token, kept out of its settings so it never reaches
+    /// the view or a coordinator.
+    pub fn jira_token(&self, repo: &Path) -> Result<Option<String>, DeliveryError> {
+        Ok(self
+            .setting::<String>(&format!("jira_token:{}", path_key(repo)))?
+            .filter(|token| !token.is_empty()))
+    }
+
+    pub fn set_jira_token(&self, repo: &Path, token: &str) -> Result<(), DeliveryError> {
+        self.set_setting(&format!("jira_token:{}", path_key(repo)), &token)
+    }
+
     // ---- runs ----
 
     pub fn put_run(&self, run: &DeliveryRun) -> Result<(), DeliveryError> {

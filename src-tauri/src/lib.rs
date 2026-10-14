@@ -150,6 +150,8 @@ pub fn run() {
             delivery::commands::delivery_set_codex_model,
             delivery::commands::delivery_repo_settings,
             delivery::commands::delivery_set_repo_settings,
+            delivery::commands::delivery_set_jira_token,
+            delivery::commands::delivery_check_jira,
             delivery::commands::delivery_release_lease,
             delivery::commands::delivery_request_approval,
             delivery::commands::delivery_commit_draft,
