@@ -139,6 +139,14 @@ export const requestDeliveryApproval = (
 export const refreshDeliveryPr = (taskId: string) =>
   invoke<DeliveryPr | null>("delivery_refresh_pr", { taskId });
 
+/** What opening a task checks: its PR is linked (found by its branch) and read. */
+export const checkDeliveryTask = (taskId: string) =>
+  invoke<DeliveryPr | null>("delivery_check_task", { taskId });
+
+/** Links the PR GitHub has for the task's branch. */
+export const findDeliveryPr = (taskId: string) =>
+  invoke<DeliveryPr | null>("delivery_find_pr", { taskId });
+
 /** What is new on the task's PR stops being new. */
 export const markDeliveryPrSeen = (taskId: string) =>
   invoke<DeliveryPr | null>("delivery_pr_seen", { taskId });

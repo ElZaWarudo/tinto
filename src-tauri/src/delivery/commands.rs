@@ -434,6 +434,27 @@ pub fn delivery_refresh_pr(
         .map_err(CommandError::from)
 }
 
+/// What opening a task checks: its PR is linked (found by its branch when
+/// the PR step has no URL) and recently read.
+#[tauri::command]
+pub async fn delivery_check_task(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Option<DeliveryPr>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.check_task(&task_id)).await
+}
+
+/// "Buscar el PR de la rama": links the PR GitHub has for the task's branch.
+#[tauri::command]
+pub async fn delivery_find_pr(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Option<DeliveryPr>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.find_task_pr(&task_id)).await
+}
+
 #[tauri::command]
 pub fn delivery_pr_seen(
     service: State<'_, DeliveryService>,

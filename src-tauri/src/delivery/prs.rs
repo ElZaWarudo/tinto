@@ -1,6 +1,9 @@
 //! Following a task's pull request on GitHub after its PR step.
 //!
-//! - Marking the PR step done with a GitHub URL links the PR to the task.
+//! - Marking the PR step done links the PR to the task: the one GitHub has
+//!   for the task's branch, else the URL the step recorded. A task pushed
+//!   without a linked PR looks for its branch's PR at startup and when it
+//!   is opened.
 //! - GitHub cannot push to a desktop app without a webhook (which needs
 //!   admin rights on the repo and a public relay), so Tinto reads the user's
 //!   notifications feed: one conditional request per interval GitHub sets,
@@ -16,8 +19,19 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::coordination::found_step;
+use super::model::{DeliveryApprovalStatus, DeliveryRung, DeliveryTask};
 use super::service::DeliveryService;
+use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
+
+/// Marking the PR step done needs a PR Tinto can follow.
+pub fn no_branch_pr(branch: &str) -> DeliveryError {
+    DeliveryError::new(
+        "pr_not_found",
+        format!("No encuentro un PR de la rama {branch}. Pega su URL"),
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrRef {
@@ -48,6 +62,31 @@ pub fn parse_pr_url(text: &str) -> Option<PrRef> {
         number,
         url: format!("https://github.com/{owner}/{repo}/pull/{number}"),
     })
+}
+
+/// `owner/name` of a GitHub remote: `https://github.com/o/r(.git)`,
+/// `git@github.com:o/r(.git)` or `ssh://git@github.com/o/r(.git)`.
+pub fn github_repo(remote: &str) -> Option<String> {
+    let (_, path) = remote.trim().split_once("github.com")?;
+    let path = path.trim_start_matches([':', '/']).trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (!owner.is_empty() && !name.is_empty() && parts.next().is_none())
+        .then(|| format!("{owner}/{name}"))
+}
+
+/// The branch's PR in a `gh pr list --json number,url,state` answer: the
+/// open one, else the most recent.
+pub fn pick_branch_pr(list: &Value) -> Option<PrRef> {
+    let prs = list.as_array()?;
+    let newest = |state: Option<&str>| {
+        prs.iter()
+            .filter(|pr| state.is_none_or(|state| pr["state"].as_str() == Some(state)))
+            .max_by_key(|pr| pr["number"].as_u64())
+    };
+    let chosen = newest(Some("OPEN")).or_else(|| newest(None))?;
+    parse_pr_url(chosen["url"].as_str()?)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -218,6 +257,9 @@ pub enum Feed {
 pub trait GitHub: Send + Sync {
     fn pr(&self, url: &str) -> Result<Value, DeliveryError>;
     fn me(&self) -> Result<String, DeliveryError>;
+    /// `gh pr list --json` of every PR, in any state, whose head is
+    /// `branch` in `repo` (`owner/name`).
+    fn branch_prs(&self, repo: &str, branch: &str) -> Result<Value, DeliveryError>;
     fn feed(&self, etag: Option<&str>) -> Result<Feed, DeliveryError>;
     /// Merges the PR and deletes its branch on GitHub. `subject` and `body`
     /// are the merge commit's message (`rebase` has none).
@@ -242,6 +284,9 @@ impl GitHub for Offline {
     }
     fn me(&self) -> Result<String, DeliveryError> {
         self.pr("").map(|_| String::new())
+    }
+    fn branch_prs(&self, _repo: &str, _branch: &str) -> Result<Value, DeliveryError> {
+        self.pr("")
     }
     fn feed(&self, _etag: Option<&str>) -> Result<Feed, DeliveryError> {
         self.pr("").map(|_| Feed::NotModified { poll_seconds: 60 })
@@ -306,6 +351,21 @@ impl GitHub for GhCli {
             .as_str()
             .unwrap_or_default()
             .to_string())
+    }
+
+    fn branch_prs(&self, repo: &str, branch: &str) -> Result<Value, DeliveryError> {
+        Self::json(&[
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--json",
+            "number,url,state,headRefOid",
+        ])
     }
 
     fn merge(
@@ -538,32 +598,124 @@ impl DeliveryService {
         Duration::from_secs(poll.max(30))
     }
 
-    /// Links the PRs of PR steps marked done before Tinto followed PRs.
+    /// Links a PR to every task that has none and can have one.
     pub fn link_recorded_prs(&self) -> Result<usize, DeliveryError> {
-        let (tasks, approvals, linked) = {
-            let store = self.store()?;
-            (store.tasks()?, store.approvals()?, store.prs()?)
-        };
+        let tasks = self.store()?.tasks()?;
         let mut count = 0;
         for task in tasks {
-            if linked.iter().any(|pr| pr.task_id == task.id) {
-                continue;
-            }
-            let recorded = approvals
-                .iter()
-                .rev()
-                .filter(|approval| approval.task_id == task.id)
-                .filter(|approval| approval.rung == super::model::DeliveryRung::Pr)
-                .filter(|approval| {
-                    approval.status == super::model::DeliveryApprovalStatus::Executed
-                })
-                .find_map(|approval| parse_pr_url(approval.outcome.as_deref()?));
-            if let Some(pr) = recorded {
-                self.link_pr(&task.id, &pr)?;
+            if self.task_pr(&task.id)?.is_none() && self.ensure_pr_linked(&task)?.is_some() {
                 count += 1;
             }
         }
         Ok(count)
+    }
+
+    /// The task's PR, linking it first when none is: once the branch is
+    /// pushed, the PR GitHub has for it; else the URL its PR step recorded.
+    pub(super) fn ensure_pr_linked(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Option<DeliveryPr>, DeliveryError> {
+        if let Some(pr) = self.task_pr(&task.id)? {
+            return Ok(Some(pr));
+        }
+        let pushed = self
+            .latest_approval(&task.id, DeliveryRung::Push)?
+            .is_some_and(|push| push.status == DeliveryApprovalStatus::Executed);
+        // GitHub out of reach finds nothing; the recorded URL still counts.
+        if let Some(found) = pushed
+            .then(|| self.find_branch_pr(task).ok().flatten())
+            .flatten()
+        {
+            self.adopt_pr(task, &found)?;
+            return self.task_pr(&task.id);
+        }
+        let recorded = self
+            .latest_approval(&task.id, DeliveryRung::Pr)?
+            .filter(|step| step.status == DeliveryApprovalStatus::Executed)
+            .and_then(|step| parse_pr_url(step.outcome.as_deref()?));
+        match recorded {
+            Some(pr) => self.link_pr(&task.id, &pr).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// The PR GitHub has for the task's branch: the open one, else the most
+    /// recent. `None` when there is none or `origin` is not on GitHub.
+    pub(super) fn find_branch_pr(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Option<PrRef>, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let Some(repo) = tasks::origin_url(place, &task.repo)
+            .as_deref()
+            .and_then(github_repo)
+        else {
+            return Ok(None);
+        };
+        Ok(pick_branch_pr(
+            &self.github().branch_prs(&repo, &task.branch)?,
+        ))
+    }
+
+    /// Links `found` and brings the PR step in line: a step done with
+    /// another URL keeps its text and gets a notice, an approved one is
+    /// completed, and a PR opened outside Tinto becomes a step found on
+    /// GitHub. A request still waiting for the user is left to them.
+    pub(super) fn adopt_pr(&self, task: &DeliveryTask, found: &PrRef) -> Result<(), DeliveryError> {
+        if self.task_pr(&task.id)?.map(|pr| pr.url).as_ref() != Some(&found.url) {
+            self.link_pr(&task.id, found)?;
+        }
+        let latest = self.latest_approval(&task.id, DeliveryRung::Pr)?;
+        let mut step = match latest.clone() {
+            Some(step) if step.status == DeliveryApprovalStatus::Pending => return Ok(()),
+            Some(step) if step.status == DeliveryApprovalStatus::Executed => step,
+            Some(mut step) if step.status == DeliveryApprovalStatus::Approved => {
+                step.status = DeliveryApprovalStatus::Executed;
+                step.executed_at_ms = Some(now_ms());
+                step.outcome = Some(found.url.clone());
+                step
+            }
+            _ => found_step(
+                &task.id,
+                DeliveryRung::Pr,
+                format!("PR #{}", found.number),
+                format!(
+                    "PR #{} encontrado en GitHub por su rama: {}",
+                    found.number, found.url
+                ),
+            ),
+        };
+        let recorded = step.outcome.as_deref().and_then(parse_pr_url);
+        step.notice = recorded
+            .filter(|recorded| recorded.url != found.url)
+            .map(|_| "La URL anotada no es el PR de esta rama".to_string());
+        if latest.as_ref() != Some(&step) {
+            self.save_approval(&step, "pr_found")?;
+        }
+        Ok(())
+    }
+
+    /// "Buscar el PR de la rama": links the PR GitHub has for it.
+    pub fn find_task_pr(&self, task_id: &str) -> Result<Option<DeliveryPr>, DeliveryError> {
+        let task = self.task(task_id)?;
+        let found = self
+            .find_branch_pr(&task)?
+            .ok_or_else(|| no_branch_pr(&task.branch))?;
+        self.adopt_pr(&task, &found)?;
+        self.refresh_pr(task_id, Duration::ZERO)
+    }
+
+    /// What opening a task checks: its PR is linked and recently read.
+    pub fn check_task(&self, task_id: &str) -> Result<Option<DeliveryPr>, DeliveryError> {
+        let task = self.task(task_id)?;
+        if let Err(error) = self.ensure_pr_linked(&task) {
+            eprintln!(
+                "tinto: delivery could not look for {}'s PR: {error}",
+                task.key
+            );
+        }
+        self.refresh_pr(task_id, Duration::from_secs(30))
     }
 
     /// Follows the linked PRs for as long as the app runs.
@@ -592,6 +744,25 @@ fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn finds_the_github_repo_and_the_branchs_pr() {
+        for remote in [
+            "https://github.com/o/r.git",
+            "https://github.com/o/r",
+            "git@github.com:o/r.git",
+            "ssh://git@github.com/o/r.git",
+        ] {
+            assert_eq!(github_repo(remote).as_deref(), Some("o/r"), "{remote}");
+        }
+        assert!(github_repo("https://gitlab.com/o/r.git").is_none());
+        let pr = |number: u64, state: &str| json!({"number": number, "url": format!("https://github.com/o/r/pull/{number}"), "state": state});
+        let pick = |list: Value| pick_branch_pr(&list).map(|pr| pr.number);
+        assert_eq!(pick(json!([pr(4, "MERGED")])), Some(4));
+        assert_eq!(pick(json!([pr(4, "CLOSED"), pr(2, "OPEN")])), Some(2));
+        assert_eq!(pick(json!([pr(4, "CLOSED"), pr(6, "MERGED")])), Some(6));
+        assert_eq!(pick(json!([])), None);
+    }
 
     #[test]
     fn finds_the_pr_in_a_text() {

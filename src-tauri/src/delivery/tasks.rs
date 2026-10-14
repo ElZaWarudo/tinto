@@ -414,6 +414,13 @@ pub fn recent_subjects(place: Place<'_>, worktree: &Path, count: usize) -> Vec<S
     .unwrap_or_default()
 }
 
+/// `origin`'s URL as configured, before any `insteadOf` rewriting.
+pub fn origin_url(place: Place<'_>, repo: &Path) -> Option<String> {
+    git(place, repo, &["config", "--get", "remote.origin.url"])
+        .ok()
+        .filter(|url| !url.is_empty())
+}
+
 pub fn push_branch(
     place: Place<'_>,
     worktree: &Path,

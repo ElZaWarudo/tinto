@@ -130,6 +130,8 @@ pub fn run() {
             delivery::commands::delivery_overview,
             delivery::commands::delivery_refresh_pr,
             delivery::commands::delivery_pr_seen,
+            delivery::commands::delivery_check_task,
+            delivery::commands::delivery_find_pr,
             delivery::commands::delivery_answer_decision,
             delivery::commands::delivery_renew_permissions,
             delivery::commands::delivery_withdraw_decision,

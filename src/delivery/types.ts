@@ -155,6 +155,8 @@ export interface DeliveryApproval {
   left_out?: string[];
   /** `commit`: the commits Tinto created. */
   created?: string[];
+  /** What Tinto noticed checking the step against git and GitHub. */
+  notice?: string | null;
 }
 
 export type DeliveryDecisionKind = "choice" | "text" | "permission";

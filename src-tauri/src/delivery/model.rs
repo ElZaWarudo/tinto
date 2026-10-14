@@ -283,7 +283,8 @@ pub struct DeliveryApproval {
     pub title: String,
     pub body: String,
     pub status: DeliveryApprovalStatus,
-    /// `user` or the coordinator's owner id.
+    /// `user`, the coordinator's owner id, or `github` for a step done
+    /// outside Tinto that Tinto found on GitHub.
     pub requested_by: String,
     pub requested_at_ms: u64,
     pub decided_at_ms: Option<u64>,
@@ -304,6 +305,10 @@ pub struct DeliveryApproval {
     /// `commit` only: where the branch was before them, to undo the step.
     #[serde(default)]
     pub before: Option<String>,
+    /// What Tinto noticed when it checked the step against git and GitHub,
+    /// such as a recorded PR URL that is not the branch's PR.
+    #[serde(default)]
+    pub notice: Option<String>,
 }
 
 /// What a decision asks of the user before work starts.

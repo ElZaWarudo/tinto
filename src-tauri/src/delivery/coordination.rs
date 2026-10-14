@@ -143,7 +143,50 @@ fn created_commits(approval: &DeliveryApproval) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A step done outside Tinto that Tinto found on GitHub.
+pub(super) fn found_step(
+    task_id: &str,
+    rung: DeliveryRung,
+    title: String,
+    outcome: String,
+) -> DeliveryApproval {
+    let now = now_ms();
+    DeliveryApproval {
+        id: uuid::Uuid::new_v4().to_string(),
+        task_id: task_id.to_string(),
+        rung,
+        title,
+        body: String::new(),
+        status: DeliveryApprovalStatus::Executed,
+        requested_by: "github".to_string(),
+        requested_at_ms: now,
+        decided_at_ms: None,
+        executed_at_ms: Some(now),
+        outcome: Some(outcome),
+        merge_method: None,
+        commits: Vec::new(),
+        left_out: Vec::new(),
+        created: Vec::new(),
+        before: None,
+        notice: None,
+    }
+}
+
 impl DeliveryService {
+    /// The task's latest step of `rung`, whatever its status.
+    pub(super) fn latest_approval(
+        &self,
+        task_id: &str,
+        rung: DeliveryRung,
+    ) -> Result<Option<DeliveryApproval>, DeliveryError> {
+        Ok(self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .rev()
+            .find(|approval| approval.task_id == task_id && approval.rung == rung))
+    }
+
     // ---- runs ----
 
     pub fn create_run(
@@ -406,6 +449,7 @@ impl DeliveryService {
             left_out,
             created: Vec::new(),
             before: None,
+            notice: None,
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.clone(),
             rung: request.rung,
@@ -517,12 +561,18 @@ impl DeliveryService {
                 "solo se informa el resultado de un paso aprobado",
             ));
         }
-        // A PR recorded without its link cannot be found from the task.
-        if success && approval.rung == DeliveryRung::Pr && !outcome.contains("://") {
-            return Err(DeliveryError::new(
-                "invalid_outcome",
-                "el resultado de un PR abierto debe incluir su URL",
-            ));
+        // A PR step is never done without a PR Tinto can follow: the one
+        // GitHub has for the branch wins over the URL in the outcome.
+        let mut opened = None;
+        if success && approval.rung == DeliveryRung::Pr {
+            let task = self.task(&approval.task_id)?;
+            let found = self
+                .find_branch_pr(&task)
+                .ok()
+                .flatten()
+                .or_else(|| super::prs::parse_pr_url(outcome))
+                .ok_or_else(|| super::prs::no_branch_pr(&task.branch))?;
+            opened = Some((task, found));
         }
         approval.status = if success {
             DeliveryApprovalStatus::Executed
@@ -530,12 +580,13 @@ impl DeliveryService {
             DeliveryApprovalStatus::Failed
         };
         approval.executed_at_ms = Some(now_ms());
-        approval.outcome = Some(outcome.trim().to_string()).filter(|text| !text.is_empty());
+        approval.outcome = Some(outcome.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .or_else(|| opened.as_ref().map(|(_, found)| found.url.clone()));
         self.save_approval(&approval, "approval_completed")?;
-        if success && approval.rung == DeliveryRung::Pr {
-            if let Some(pr) = super::prs::parse_pr_url(outcome) {
-                self.link_pr(&approval.task_id, &pr)?;
-            }
+        if let Some((task, found)) = opened {
+            self.adopt_pr(&task, &found)?;
+            approval = self.approval(&approval.id)?;
         }
         Ok(approval)
     }
@@ -676,13 +727,13 @@ impl DeliveryService {
                 "elige cómo fusionar: squash, merge o rebase",
             ));
         }
+        self.ensure_pr_linked(task)?;
         let pr = self
             .refresh_pr(&task.id, std::time::Duration::from_secs(30))?
             .ok_or_else(|| {
-                DeliveryError::new(
-                    "pr_missing",
-                    "la tarea no tiene un PR de GitHub: marca antes el PR como hecho con su URL",
-                )
+                let mut error = super::prs::no_branch_pr(&task.branch);
+                error.category = "pr_missing".to_string();
+                error
             })?;
         let blocker = if pr.state != "open" {
             Some(format!(
@@ -722,7 +773,11 @@ impl DeliveryService {
         ))
     }
 
-    fn save_approval(&self, approval: &DeliveryApproval, event: &str) -> Result<(), DeliveryError> {
+    pub(super) fn save_approval(
+        &self,
+        approval: &DeliveryApproval,
+        event: &str,
+    ) -> Result<(), DeliveryError> {
         let store = self.store()?;
         store.put_approval(approval)?;
         store.record_event(

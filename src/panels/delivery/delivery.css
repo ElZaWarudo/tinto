@@ -1129,3 +1129,14 @@
   align-items: center;
   gap: 8px;
 }
+.delivery-step-checks {
+  display: grid;
+  gap: 4px;
+}
+.delivery-step-checks p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}

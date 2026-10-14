@@ -10,12 +10,14 @@ import { confirm } from "../../workbench/confirmDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import {
   cancelDeliveryJob,
+  checkDeliveryTask,
   closeDeliveryRun,
   completeDeliveryApproval,
   createDeliveryRun,
   createDeliveryTask,
   decideDeliveryApproval,
   dispatchDeliveryJob,
+  findDeliveryPr,
   getDeliveryJobLog,
   getDeliveryOverview,
   getDeliveryRepoSettings,
@@ -731,6 +733,11 @@ function TaskDetail({
   const rung = openApprovals.length === 0 ? nextRung(approvals) : null;
   const [requesting, setRequesting] = useState(false);
   const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+  // Opening the task checks its steps against GitHub: the PR is found by its
+  // branch if needed and read, unless it was read moments ago.
+  useEffect(() => {
+    void checkDeliveryTask(task.id).catch(() => {});
+  }, [task.id]);
   const taskDecisions = (overview.decisions ?? []).filter(
     (decision) => decision.task_id === task.id,
   );
@@ -978,6 +985,8 @@ function TaskDetail({
         )}
       </div>
 
+      <StepChecks task={task} approvals={approvals} pr={pr} busy={busy} run={run} />
+
       <CommitStep approvals={approvals} busy={busy} run={run} />
 
       {rung === "commit" && requesting && (
@@ -1112,9 +1121,18 @@ function StageTrack({
         <ol aria-labelledby="delivery-track-rungs">
           {RUNGS.map(({ rung, label }) => {
             const live = rung === "pr" && pr ? prSummary(pr) : null;
+            const approval = latestApproval(approvals, rung);
+            const unlinked = rung === "pr" && !pr && approval?.status === "executed";
             const step = live
               ? { ...live, title: `${pr?.repo}#${pr?.number}` }
-              : rungStep(latestApproval(approvals, rung));
+              : unlinked
+                ? {
+                    tone: "attention" as const,
+                    icon: "alert" as const,
+                    label: "Hecho · sin PR vinculado",
+                    title: approval.outcome ?? undefined,
+                  }
+                : rungStep(approval);
             return (
               <li key={rung} className={`delivery-node delivery-node--${step.tone}`}>
                 <div title={step.title}>
@@ -1172,6 +1190,57 @@ function preparedBy(approval: DeliveryApproval): string {
   return approval.requested_by === "user"
     ? "preparado desde la interfaz de Tinto"
     : `preparado por el coordinador ${approval.requested_by}`;
+}
+
+/** What Tinto found when it checked the delivery steps against git and
+ *  GitHub, with the way to put each one right. */
+function StepChecks({
+  task,
+  approvals,
+  pr,
+  busy,
+  run,
+}: {
+  task: DeliveryTask;
+  approvals: DeliveryApproval[];
+  pr: DeliveryPr | undefined;
+  busy: boolean;
+  run: (action: () => Promise<unknown>) => Promise<boolean>;
+}) {
+  type Check = {
+    rung: DeliveryRung;
+    text: string;
+    action: { label: string; run: () => Promise<unknown> } | null;
+  };
+  const checks = RUNGS.flatMap(({ rung, label }): Check[] => {
+    const approval = latestApproval(approvals, rung);
+    if (!approval) return [];
+    if (rung === "pr" && approval.status === "executed" && !pr) {
+      return [
+        {
+          rung,
+          text: "PR: el paso está hecho, pero la tarea no tiene un PR vinculado.",
+          action: { label: "Buscar el PR de la rama", run: () => findDeliveryPr(task.id) },
+        },
+      ];
+    }
+    return approval.notice ? [{ rung, text: `${label}: ${approval.notice}`, action: null }] : [];
+  });
+  if (checks.length === 0) return null;
+  return (
+    <div className="delivery-step-checks" role="group" aria-label="Comprobaciones de la entrega">
+      {checks.map(({ rung, text, action }) => (
+        <p key={rung}>
+          <span className="delivery-job__note">{text}</span>
+          {action && (
+            <button type="button" disabled={busy} onClick={() => void run(action.run)}>
+              {action.label}
+            </button>
+          )}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 /** What happened to the task's last commit step when it is not simply
@@ -1235,15 +1304,13 @@ function ApprovalBanner({
   const [outcome, setOutcome] = useState("");
   const name = lower(rungLabel(approval.rung));
   const pending = approval.status === "pending";
-  // A PR recorded without its link cannot be found from the task.
-  const needsUrl = approval.rung === "pr" && !/https?:\/\/\S+/.test(outcome);
   const consequence =
     approval.rung === "commit"
       ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
       : approval.rung === "push"
         ? `Al aprobar, Tinto publica la rama ${task.branch}.`
         : approval.rung === "pr"
-          ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después registras aquí su URL. Desde entonces Tinto lo sigue en GitHub."
+          ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después lo registras aquí; si no pegas su URL, Tinto busca el PR de la rama. Desde entonces Tinto lo sigue en GitHub."
           : approval.rung === "merge"
             ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
             : "Al aprobar, el coordinador hace estas operaciones en Jira. Después registras aquí qué se hizo.";
@@ -1293,14 +1360,17 @@ function ApprovalBanner({
         <div className="delivery-actions">
           <input
             aria-label="Resultado del paso"
-            placeholder={approval.rung === "pr" ? "URL del PR" : "Qué se hizo"}
+            placeholder={
+              approval.rung === "pr"
+                ? "URL del PR (si no, Tinto lo busca por la rama)"
+                : "Qué se hizo"
+            }
             value={outcome}
             onChange={(event) => setOutcome(event.target.value)}
           />
           <button
             type="button"
-            disabled={busy || needsUrl}
-            title={needsUrl ? "Pega la URL del PR para registrarlo." : undefined}
+            disabled={busy}
             onClick={() => void run(() => completeDeliveryApproval(approval.id, true, outcome))}
           >
             Marcar como hecho

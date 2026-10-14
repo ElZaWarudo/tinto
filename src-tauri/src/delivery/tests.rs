@@ -655,7 +655,7 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
     assert_eq!(pr.status, DeliveryApprovalStatus::Approved);
     let pr = h
         .service
-        .complete_approval(&pr.id, true, "https://example.test/pr/1")
+        .complete_approval(&pr.id, true, "https://github.com/o/r/pull/1")
         .unwrap();
     assert_eq!(pr.status, DeliveryApprovalStatus::Executed);
 
@@ -2081,6 +2081,20 @@ struct FakeGitHub {
     feed_calls: std::sync::atomic::AtomicUsize,
     mentioned: Vec<String>,
     merged: std::sync::Mutex<Vec<String>>,
+    /// What `gh pr list --head <branch>` answers, for any branch.
+    branch_prs: std::sync::Mutex<serde_json::Value>,
+}
+
+impl FakeGitHub {
+    fn new(snapshot: serde_json::Value, branch_prs: serde_json::Value) -> Arc<Self> {
+        Arc::new(Self {
+            snapshot: std::sync::Mutex::new(snapshot),
+            feed_calls: std::sync::atomic::AtomicUsize::new(0),
+            mentioned: Vec::new(),
+            merged: std::sync::Mutex::new(Vec::new()),
+            branch_prs: std::sync::Mutex::new(branch_prs),
+        })
+    }
 }
 
 impl super::prs::GitHub for FakeGitHub {
@@ -2089,6 +2103,14 @@ impl super::prs::GitHub for FakeGitHub {
     }
     fn me(&self) -> Result<String, super::DeliveryError> {
         Ok("me".into())
+    }
+    fn branch_prs(
+        &self,
+        repo: &str,
+        _branch: &str,
+    ) -> Result<serde_json::Value, super::DeliveryError> {
+        assert_eq!(repo, "o/r", "the repo comes from origin's URL");
+        Ok(self.branch_prs.lock().unwrap().clone())
     }
     fn merge(
         &self,
@@ -2130,6 +2152,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: vec!["o/r#5".into()],
         merged: std::sync::Mutex::new(Vec::new()),
+        branch_prs: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
 
@@ -2199,6 +2222,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: Vec::new(),
         merged: std::sync::Mutex::new(Vec::new()),
+        branch_prs: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
     let merge = |method: Option<&str>| NewApproval {
@@ -2275,4 +2299,111 @@ fn pr_steps_done_before_following_are_linked_when_the_watch_starts() {
     assert_eq!(h.service.link_recorded_prs().unwrap(), 1);
     assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 9);
     assert_eq!(h.service.link_recorded_prs().unwrap(), 0, "linked once");
+}
+
+/// A delivery step as an older Tinto (or the coordinator) left it.
+fn put_step(h: &Harness, task: &DeliveryTask, id: &str, rung: &str, status: &str, outcome: &str) {
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": id, "task_id": task.id, "rung": rung, "title": rung, "body": "",
+        "status": status, "requested_by": "coord", "requested_at_ms": 1,
+        "decided_at_ms": 2, "executed_at_ms": 3, "outcome": outcome
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+}
+
+/// `origin` on GitHub as `o/r`.
+fn github_origin(h: &Harness) {
+    git(
+        h.repo.path(),
+        &["remote", "add", "origin", "https://github.com/o/r.git"],
+    );
+}
+
+fn open_pr(number: u64, state: &str) -> serde_json::Value {
+    json!({"number": number, "url": format!("https://github.com/o/r/pull/{number}"), "state": state, "headRefOid": "abc"})
+}
+
+#[test]
+fn a_pushed_task_without_a_pr_url_finds_its_pr_by_branch_at_startup() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("AGOS-455");
+    put_step(&h, &task, "a-push", "push", "executed", "Publicado");
+    put_step(&h, &task, "a-pr", "pr", "executed", "PR abierto y aprobado");
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN"}),
+        json!([
+            open_pr(270, "CLOSED"),
+            open_pr(279, "OPEN"),
+            open_pr(281, "CLOSED")
+        ]),
+    );
+    h.service.set_github(github);
+
+    assert_eq!(h.service.link_recorded_prs().unwrap(), 1);
+    let pr = h.service.task_pr(&task.id).unwrap().unwrap();
+    assert_eq!(
+        pr.number, 279,
+        "the open PR wins over more recent closed ones"
+    );
+    let step = h.service.approval("a-pr").unwrap();
+    assert_eq!(step.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(step.notice, None);
+}
+
+#[test]
+fn the_pr_step_is_done_only_with_a_pr_tinto_can_follow() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("P-4");
+    let github = FakeGitHub::new(json!({"state": "OPEN"}), json!([]));
+    h.service.set_github(github.clone());
+    put_step(&h, &task, "a-pr", "pr", "approved", "");
+
+    let error = h
+        .service
+        .complete_approval("a-pr", true, "abierto")
+        .unwrap_err();
+    assert_eq!(
+        error.message,
+        format!("No encuentro un PR de la rama {}. Pega su URL", task.branch)
+    );
+    assert!(h.service.task_pr(&task.id).unwrap().is_none());
+
+    // Without a URL, the branch's PR is accepted.
+    *github.branch_prs.lock().unwrap() = json!([open_pr(12, "OPEN")]);
+    let done = h.service.complete_approval("a-pr", true, "").unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(
+        done.outcome.as_deref(),
+        Some("https://github.com/o/r/pull/12")
+    );
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 12);
+}
+
+#[test]
+fn the_branchs_pr_wins_over_a_different_recorded_url() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("P-5");
+    h.service.set_github(FakeGitHub::new(
+        json!({"state": "OPEN"}),
+        json!([open_pr(7, "OPEN")]),
+    ));
+    put_step(&h, &task, "a-pr", "pr", "approved", "");
+    let done = h
+        .service
+        .complete_approval("a-pr", true, "https://github.com/o/r/pull/3")
+        .unwrap();
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 7);
+    assert_eq!(
+        done.notice.as_deref(),
+        Some("La URL anotada no es el PR de esta rama")
+    );
+    assert_eq!(
+        done.outcome.as_deref(),
+        Some("https://github.com/o/r/pull/3"),
+        "what was recorded is kept"
+    );
 }

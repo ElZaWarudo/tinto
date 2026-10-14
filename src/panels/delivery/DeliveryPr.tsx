@@ -2,7 +2,6 @@
 // what is new since the user last looked. GitHub content stays on GitHub;
 // only counts and authors are shown here.
 
-import { useEffect } from "react";
 import { markDeliveryPrSeen, refreshDeliveryPr } from "../../delivery/client";
 import type { DeliveryPr } from "../../delivery/types";
 import { prSummary } from "./taskStatus";
@@ -33,10 +32,6 @@ const DECISION: Record<string, string> = {
 };
 
 export function PrSection({ pr, busy, run }: { pr: DeliveryPr; busy: boolean; run: Run }) {
-  // Opening the task reads the PR (Tinto skips it if it was read moments ago).
-  useEffect(() => {
-    void refreshDeliveryPr(pr.task_id).catch(() => {});
-  }, [pr.task_id]);
   const summary = prSummary(pr);
   const fresh = news(pr);
   const { passing, failing, pending } = pr.checks;

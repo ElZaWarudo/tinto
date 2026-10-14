@@ -39,6 +39,8 @@ const client = vi.hoisted(() => ({
   withdrawDeliveryDecision: vi.fn(),
   acceptRecommendedDecisions: vi.fn(),
   refreshDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
+  findDeliveryPr: vi.fn(() => Promise.resolve(null)),
   markDeliveryPrSeen: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
   createDeliveryRun: vi.fn(),
@@ -1171,7 +1173,7 @@ describe("DeliveryPanel", () => {
     expect(client.setDeliveryRepoSettings).not.toHaveBeenCalled();
   });
 
-  it("says a task is delivered and records a PR only with its link", async () => {
+  it("says a task is delivered and records a PR with or without its link", async () => {
     const user = userEvent.setup();
     const approval = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
       id: "a1",
@@ -1202,9 +1204,8 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
     const done = within(banner).getByRole("button", { name: "Marcar como hecho" });
     const outcome = within(banner).getByRole("textbox", { name: "Resultado del paso" });
-    await user.type(outcome, "abierto");
-    expect(done).toBeDisabled();
-    await user.clear(outcome);
+    // Without a URL Tinto looks for the branch's PR; with one it checks it.
+    expect(done).toBeEnabled();
     await user.type(outcome, "https://github.com/acme/agentos/pull/279");
     client.getDeliveryOverview.mockResolvedValue(
       upTo([
@@ -1224,6 +1225,31 @@ describe("DeliveryPanel", () => {
     );
     // The coordinator never moved its label; the delivery still shows.
     expect(await screen.findByText("Estado: Entregada")).toBeInTheDocument();
+  });
+
+  it("warns of a PR step done without a linked PR and looks for the branch's PR", async () => {
+    const user = userEvent.setup();
+    const executed = (rung: "commit" | "push" | "pr") => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "hecho",
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ approvals: [executed("commit"), executed("push"), executed("pr")] }),
+    );
+    renderPanel();
+    expect(await screen.findByText("Hecho · sin PR vinculado")).toBeInTheDocument();
+    const checks = screen.getByRole("group", { name: "Comprobaciones de la entrega" });
+    await user.click(within(checks).getByRole("button", { name: "Buscar el PR de la rama" }));
+    await waitFor(() => expect(client.findDeliveryPr).toHaveBeenCalledWith("t1"));
   });
 
   it("follows the task's PR and merges it through its own step", async () => {
@@ -1274,7 +1300,7 @@ describe("DeliveryPanel", () => {
     expect(within(section).getByRole("status")).toHaveTextContent(
       "1 revisión nueva y 2 comentarios nuevos de ana, luis",
     );
-    await waitFor(() => expect(client.refreshDeliveryPr).toHaveBeenCalledWith("t1"));
+    await waitFor(() => expect(client.checkDeliveryTask).toHaveBeenCalledWith("t1"));
     await user.click(within(section).getByRole("button", { name: "Marcar como visto" }));
     await waitFor(() => expect(client.markDeliveryPrSeen).toHaveBeenCalledWith("t1"));
     expect(
