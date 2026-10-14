@@ -1252,6 +1252,57 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.findDeliveryPr).toHaveBeenCalledWith("t1"));
   });
 
+  it("says when a push no longer matches the remote and asks for it again", async () => {
+    const user = userEvent.setup();
+    const step = (rung: "commit" | "push", over: Partial<DeliveryApproval> = {}) => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "ok",
+      ...over,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [],
+        approvals: [
+          step("commit"),
+          step("push", { status: "drifted", notice: "La rama remota ya no existe" }),
+        ],
+      }),
+    );
+    client.requestDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    expect(await screen.findByText("Ya no coincide")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Te necesitan" })).getByText(
+        "Push: ya no coincide",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("group", { name: "Comprobaciones de la entrega" })).getByText(
+        "Push: ya no coincide. La rama remota ya no existe.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Volver a pedir el push…" }));
+    const form = screen.getByRole("form", { name: "Pedir aprobación de push" });
+    await user.click(within(form).getByRole("button", { name: "Pedir aprobación" }));
+    await waitFor(() =>
+      expect(client.requestDeliveryApproval).toHaveBeenCalledWith(
+        "t1",
+        "push",
+        "Publicar delivery/agos-501",
+        "",
+      ),
+    );
+  });
+
   it("follows the task's PR and merges it through its own step", async () => {
     const user = userEvent.setup();
     const pr = {

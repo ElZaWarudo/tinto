@@ -970,7 +970,9 @@ function TaskDetail({
         </Menu>
         {rung && !requesting && (
           <button type="button" onClick={() => setRequesting(true)}>
-            Preparar {lower(rungLabel(rung))}…
+            {latestApproval(approvals, rung)?.status === "drifted"
+              ? `Volver a pedir el ${lower(rungLabel(rung))}…`
+              : `Preparar ${lower(rungLabel(rung))}…`}
           </button>
         )}
         {blocked && (
@@ -1179,6 +1181,13 @@ function rungStep(approval: DeliveryApproval | undefined): {
         label: "Deshecho",
         title: approval.outcome ?? undefined,
       };
+    case "drifted":
+      return {
+        tone: "attention",
+        icon: "alert",
+        label: "Ya no coincide",
+        title: approval.notice ?? undefined,
+      };
     default:
       return { tone: "danger", icon: "x", label: "Falló", title: approval.outcome ?? undefined };
   }
@@ -1224,7 +1233,18 @@ function StepChecks({
         },
       ];
     }
-    return approval.notice ? [{ rung, text: `${label}: ${approval.notice}`, action: null }] : [];
+    if (!approval.notice) return [];
+    const drifted = approval.status === "drifted";
+    return [
+      {
+        rung,
+        text: `${label}: ${drifted ? "ya no coincide. " : ""}${approval.notice}.`,
+        action:
+          drifted && rung === "pr"
+            ? { label: "Buscar otro PR de la rama", run: () => findDeliveryPr(task.id) }
+            : null,
+      },
+    ];
   });
   if (checks.length === 0) return null;
   return (

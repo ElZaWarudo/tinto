@@ -2407,3 +2407,150 @@ fn the_branchs_pr_wins_over_a_different_recorded_url() {
         "what was recorded is kept"
     );
 }
+
+#[test]
+fn a_pr_merged_outside_tinto_makes_the_merge_step_done_and_a_closed_one_drifts() {
+    let h = harness();
+    let task = h.task("P-6");
+    put_step(
+        &h,
+        &task,
+        "a-pr",
+        "pr",
+        "executed",
+        "https://github.com/o/r/pull/8",
+    );
+    let github = FakeGitHub::new(
+        json!({"state": "CLOSED", "mergedBy": null, "mergedAt": "", "mergeCommit": null}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    h.service.link_recorded_prs().unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let step = h.service.approval("a-pr").unwrap();
+    assert_eq!(step.status, DeliveryApprovalStatus::Drifted);
+    assert_eq!(
+        step.notice.as_deref(),
+        Some("El PR #8 se cerró sin fusionar")
+    );
+
+    *github.snapshot.lock().unwrap() = json!({
+        "state": "MERGED", "mergedBy": {"login": "ana"},
+        "mergedAt": "2026-10-14T09:30:00Z", "mergeCommit": {"oid": "1a2b3c4d5e6f"}
+    });
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let step = h.service.approval("a-pr").unwrap();
+    assert_eq!(
+        step.status,
+        DeliveryApprovalStatus::Executed,
+        "it matches again"
+    );
+    assert_eq!(step.notice, None);
+    let merge = h
+        .service
+        .latest_approval(&task.id, DeliveryRung::Merge)
+        .unwrap()
+        .unwrap();
+    assert_eq!(merge.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(merge.requested_by, "github");
+    assert_eq!(
+        merge.outcome.as_deref(),
+        Some("Fusionado en GitHub por ana el 2026-10-14 (commit 1a2b3c4)")
+    );
+    // Read again: nothing new is recorded, and no merge is offered.
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let merges = h
+        .service
+        .overview()
+        .unwrap()
+        .approvals
+        .into_iter()
+        .filter(|approval| approval.rung == DeliveryRung::Merge)
+        .count();
+    assert_eq!(merges, 1);
+    let read = super::mcp::handle_message(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "read_pr", "arguments": {"task_id": task.id}}}),
+    )
+    .unwrap()["result"]["structuredContent"]
+        .clone();
+    assert_eq!(read["merged_by"], "ana");
+}
+
+#[test]
+fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
+    let h = harness();
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        h.repo.path(),
+        &["remote", "add", "origin", &plain_path(remote.path())],
+    );
+    let task = h.task("P-7");
+    let worktree = PathBuf::from(plain_path(&task.worktree));
+    std::fs::write(worktree.join("feature.txt"), "x").unwrap();
+    let request = |rung, title: &str| NewApproval {
+        task_id: task.id.clone(),
+        rung,
+        title: title.to_string(),
+        body: String::new(),
+        requested_by: "user".to_string(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        merge_method: None,
+    };
+    let commit = h
+        .service
+        .request_approval(request(DeliveryRung::Commit, "Add feature"))
+        .unwrap();
+    h.service.decide_approval(&commit.id, true, None).unwrap();
+    let push = h
+        .service
+        .request_approval(request(DeliveryRung::Push, "Publish"))
+        .unwrap();
+    let push = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(push.status, DeliveryApprovalStatus::Executed);
+    assert!(push.tip.is_some());
+    h.service.check_task(&task.id).unwrap();
+    assert_eq!(
+        h.service.approval(&push.id).unwrap().status,
+        DeliveryApprovalStatus::Executed
+    );
+
+    let branch = format!("refs/heads/{}", task.branch);
+    git(remote.path(), &["update-ref", "-d", &branch]);
+    h.service.check_task(&task.id).unwrap();
+    let drifted = h.service.approval(&push.id).unwrap();
+    assert_eq!(drifted.status, DeliveryApprovalStatus::Drifted);
+    assert_eq!(
+        drifted.notice.as_deref(),
+        Some("La rama remota ya no existe")
+    );
+
+    git(remote.path(), &["update-ref", &branch, &task.base_commit]);
+    h.service.check_task(&task.id).unwrap();
+    let drifted = h.service.approval(&push.id).unwrap();
+    assert_eq!(drifted.status, DeliveryApprovalStatus::Drifted);
+    assert_eq!(
+        drifted.notice.as_deref(),
+        Some("La rama remota cambió fuera de Tinto")
+    );
+
+    // "Volver a pedir el push": nothing new to publish, and it is allowed.
+    let again = h
+        .service
+        .request_approval(request(DeliveryRung::Push, "Publish again"))
+        .unwrap();
+    let again = h.service.decide_approval(&again.id, true, None).unwrap();
+    assert_eq!(
+        again.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        again.outcome
+    );
+    h.service.check_task(&task.id).unwrap();
+    assert_eq!(
+        h.service.approval(&again.id).unwrap().status,
+        DeliveryApprovalStatus::Executed
+    );
+}

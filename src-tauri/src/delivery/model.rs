@@ -263,6 +263,17 @@ pub enum DeliveryApprovalStatus {
     /// A commit step whose commits were taken back, by the user in Tinto or
     /// outside it (reset, amend, rebase). The step is pending again.
     Undone,
+    /// A done step that git or GitHub no longer bear out: the remote branch
+    /// is gone or moved, or the PR was closed. `notice` says what changed;
+    /// it counts as done again if what it recorded holds again.
+    Drifted,
+}
+
+impl DeliveryApprovalStatus {
+    /// Done, whether or not it still matches what git and GitHub show.
+    pub fn was_done(self) -> bool {
+        matches!(self, Self::Executed | Self::Drifted)
+    }
 }
 
 /// One commit of a commit step's plan.
@@ -305,6 +316,9 @@ pub struct DeliveryApproval {
     /// `commit` only: where the branch was before them, to undo the step.
     #[serde(default)]
     pub before: Option<String>,
+    /// `push` only: the commit the remote branch ended at once published.
+    #[serde(default)]
+    pub tip: Option<String>,
     /// What Tinto noticed when it checked the step against git and GitHub,
     /// such as a recorded PR URL that is not the branch's PR.
     #[serde(default)]

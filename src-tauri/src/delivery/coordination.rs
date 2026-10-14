@@ -168,6 +168,7 @@ pub(super) fn found_step(
         left_out: Vec::new(),
         created: Vec::new(),
         before: None,
+        tip: None,
         notice: None,
     }
 }
@@ -391,7 +392,15 @@ impl DeliveryService {
                 ));
             }
         }
-        rung_prerequisites(&task, request.rung)?;
+        // A push that no longer matches the remote can be asked again with
+        // nothing new to publish: publishing again is how it is put right.
+        let republish = request.rung == DeliveryRung::Push
+            && self
+                .latest_approval(&task.id, DeliveryRung::Push)?
+                .is_some_and(|push| push.status == DeliveryApprovalStatus::Drifted);
+        if !republish {
+            rung_prerequisites(&task, request.rung)?;
+        }
         let mut title = request.title.trim().to_string();
         let mut body = request.body;
         let mut commits = Vec::new();
@@ -449,6 +458,7 @@ impl DeliveryService {
             left_out,
             created: Vec::new(),
             before: None,
+            tip: None,
             notice: None,
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.clone(),
@@ -527,8 +537,10 @@ impl DeliveryService {
                     "commit_missing",
                     "No se publicó: los commits que hizo Tinto ya no están en la rama. Vuelve a preparar el commit.",
                 )),
-                _ => tasks::push_branch(place, &task.worktree, &task.branch)
-                    .map(|upstream| format!("Publicado en {upstream}")),
+                _ => tasks::push_branch(place, &task.worktree, &task.branch).map(|upstream| {
+                    approval.tip = tasks::head(place, &task.worktree).ok();
+                    format!("Publicado en {upstream}")
+                }),
             };
             approval.executed_at_ms = Some(now_ms());
             match executed {
@@ -543,6 +555,11 @@ impl DeliveryService {
             }
         }
         self.save_approval(&approval, "approval_approved")?;
+        // Read only once the step is saved as done, so the read does not
+        // take Tinto's own merge for one made outside it.
+        if approval.rung == DeliveryRung::Merge {
+            let _ = self.refresh_pr(&approval.task_id, std::time::Duration::ZERO);
+        }
         Ok(approval)
     }
 
@@ -688,6 +705,75 @@ impl DeliveryService {
         Ok(true)
     }
 
+    /// Checks a done push against the remote branch: it must still exist and
+    /// end where Tinto published it. Once the PR is merged GitHub deletes the
+    /// branch, so nothing is checked; a remote that cannot be read says
+    /// nothing either.
+    pub(super) fn check_push(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        let Some(push) = self
+            .latest_approval(&task.id, DeliveryRung::Push)?
+            .filter(|push| push.status.was_done())
+        else {
+            return Ok(());
+        };
+        let merged = self
+            .latest_approval(&task.id, DeliveryRung::Merge)?
+            .is_some_and(|merge| merge.status == DeliveryApprovalStatus::Executed)
+            || self
+                .task_pr(&task.id)?
+                .is_some_and(|pr| pr.state == "merged");
+        if merged {
+            return self.set_drift(push, None);
+        }
+        let place = Place::of(task.distro.as_deref());
+        let Ok(remote) = tasks::remote_tip(place, &task.repo, &task.branch) else {
+            return Ok(());
+        };
+        // Pushes from before Tinto kept the tip: the last one git saw.
+        let tracking = format!("refs/remotes/origin/{}", task.branch);
+        let published = push
+            .tip
+            .clone()
+            .or_else(|| tasks::git(place, &task.repo, &["rev-parse", &tracking]).ok());
+        let drift = match remote {
+            None => Some("La rama remota ya no existe"),
+            Some(tip) if published.is_some_and(|published| published != tip) => {
+                Some("La rama remota cambió fuera de Tinto")
+            }
+            Some(_) => None,
+        };
+        self.set_drift(push, drift.map(str::to_string))
+    }
+
+    /// Marks a done step as no longer matching git or GitHub, with why, or
+    /// as done again once what it recorded holds again.
+    pub(super) fn set_drift(
+        &self,
+        mut step: DeliveryApproval,
+        drift: Option<String>,
+    ) -> Result<(), DeliveryError> {
+        let before = step.clone();
+        match drift {
+            Some(why) => {
+                step.status = DeliveryApprovalStatus::Drifted;
+                step.notice = Some(why);
+            }
+            None if step.status == DeliveryApprovalStatus::Drifted => {
+                step.status = DeliveryApprovalStatus::Executed;
+                step.notice = None;
+            }
+            None => {}
+        }
+        if step == before {
+            return Ok(());
+        }
+        let event = match step.status {
+            DeliveryApprovalStatus::Drifted => "step_drifted",
+            _ => "step_matches",
+        };
+        self.save_approval(&step, event)
+    }
+
     /// Runs [`Self::commits_lost`] on every task that has a commit step done
     /// and its push still ahead, so the view never offers to push commits
     /// that are gone.
@@ -763,7 +849,6 @@ impl DeliveryService {
         let method = approval.merge_method.as_deref().unwrap_or("squash");
         self.github_client()
             .merge(&pr.url, method, &approval.title, &approval.body)?;
-        let _ = self.refresh_pr(&approval.task_id, std::time::Duration::ZERO);
         Ok(format!(
             "PR #{} fusionado ({method}) y rama {} borrada en GitHub",
             pr.number,

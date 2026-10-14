@@ -120,6 +120,14 @@ pub struct DeliveryPr {
     pub seen_until: Option<String>,
     pub checked_at_ms: Option<u64>,
     pub error: Option<String>,
+    /// Once merged: who merged it, when (GitHub timestamp) and the merge
+    /// commit, when GitHub gives them.
+    #[serde(default)]
+    pub merged_by: Option<String>,
+    #[serde(default)]
+    pub merged_at: Option<String>,
+    #[serde(default)]
+    pub merge_commit: Option<String>,
 }
 
 impl DeliveryPr {
@@ -141,6 +149,9 @@ impl DeliveryPr {
             seen_until: None,
             checked_at_ms: None,
             error: None,
+            merged_by: None,
+            merged_at: None,
+            merge_commit: None,
         }
     }
 
@@ -151,7 +162,7 @@ impl DeliveryPr {
 
 /// `gh pr view --json` fields Tinto reads.
 pub const PR_FIELDS: &str =
-    "state,isDraft,mergeable,reviewDecision,statusCheckRollup,reviews,comments";
+    "state,isDraft,mergeable,reviewDecision,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit";
 
 fn check_state(check: &Value) -> &'static str {
     // Check runs carry status + conclusion; commit statuses carry state.
@@ -181,6 +192,15 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         _ => "open",
     }
     .to_string();
+    let text = |value: &Value| {
+        value
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    pr.merged_by = text(&snapshot["mergedBy"]["login"]);
+    pr.merged_at = text(&snapshot["mergedAt"]);
+    pr.merge_commit = text(&snapshot["mergeCommit"]["oid"]);
     pr.draft = snapshot["isDraft"].as_bool().unwrap_or(false);
     pr.conflicts = snapshot["mergeable"].as_str() == Some("CONFLICTING");
     pr.review_decision = snapshot["reviewDecision"]
@@ -529,7 +549,57 @@ impl DeliveryService {
         if pr_changed(&before, &pr) {
             self.notify();
         }
+        self.check_pr_steps(&pr)?;
         Ok(Some(pr))
+    }
+
+    /// Checks the PR and merge steps against the PR as GitHub last showed
+    /// it: a PR closed without merging (or gone) no longer bears out the PR
+    /// step, and a PR merged outside Tinto makes the merge step done.
+    pub(super) fn check_pr_steps(&self, pr: &DeliveryPr) -> Result<(), DeliveryError> {
+        let step = self
+            .latest_approval(&pr.task_id, DeliveryRung::Pr)?
+            .filter(|step| step.status.was_done());
+        if let Some(step) = step {
+            let gone = pr
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("Could not resolve"));
+            let drift = if pr.state == "closed" {
+                Some(format!("El PR #{} se cerró sin fusionar", pr.number))
+            } else if gone {
+                Some(format!("El PR #{} ya no existe en GitHub", pr.number))
+            } else {
+                None
+            };
+            self.set_drift(step, drift)?;
+        }
+        if pr.state != "merged" {
+            return Ok(());
+        }
+        let merge = self.latest_approval(&pr.task_id, DeliveryRung::Merge)?;
+        let step = match merge {
+            Some(merge) if merge.status == DeliveryApprovalStatus::Executed => return Ok(()),
+            // A merge the user was about to approve happened on GitHub.
+            Some(mut merge)
+                if matches!(
+                    merge.status,
+                    DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                ) =>
+            {
+                merge.status = DeliveryApprovalStatus::Executed;
+                merge.executed_at_ms = Some(now_ms());
+                merge.outcome = Some(merged_outside(pr));
+                merge
+            }
+            _ => found_step(
+                &pr.task_id,
+                DeliveryRung::Merge,
+                format!("PR #{}", pr.number),
+                merged_outside(pr),
+            ),
+        };
+        self.save_approval(&step, "merge_found")
     }
 
     fn github_login(&self, github: &dyn GitHub) -> Result<String, DeliveryError> {
@@ -621,7 +691,7 @@ impl DeliveryService {
         }
         let pushed = self
             .latest_approval(&task.id, DeliveryRung::Push)?
-            .is_some_and(|push| push.status == DeliveryApprovalStatus::Executed);
+            .is_some_and(|push| push.status.was_done());
         // GitHub out of reach finds nothing; the recorded URL still counts.
         if let Some(found) = pushed
             .then(|| self.find_branch_pr(task).ok().flatten())
@@ -669,7 +739,11 @@ impl DeliveryService {
         let latest = self.latest_approval(&task.id, DeliveryRung::Pr)?;
         let mut step = match latest.clone() {
             Some(step) if step.status == DeliveryApprovalStatus::Pending => return Ok(()),
-            Some(step) if step.status == DeliveryApprovalStatus::Executed => step,
+            Some(mut step) if step.status.was_done() => {
+                // Another PR of the branch puts right a drift on the old one.
+                step.status = DeliveryApprovalStatus::Executed;
+                step
+            }
             Some(mut step) if step.status == DeliveryApprovalStatus::Approved => {
                 step.status = DeliveryApprovalStatus::Executed;
                 step.executed_at_ms = Some(now_ms());
@@ -706,7 +780,8 @@ impl DeliveryService {
         self.refresh_pr(task_id, Duration::ZERO)
     }
 
-    /// What opening a task checks: its PR is linked and recently read.
+    /// What opening a task checks: its PR is linked and recently read, and
+    /// its push, PR and merge steps still match git and GitHub.
     pub fn check_task(&self, task_id: &str) -> Result<Option<DeliveryPr>, DeliveryError> {
         let task = self.task(task_id)?;
         if let Err(error) = self.ensure_pr_linked(&task) {
@@ -715,14 +790,35 @@ impl DeliveryService {
                 task.key
             );
         }
-        self.refresh_pr(task_id, Duration::from_secs(30))
+        let pr = self.refresh_pr(task_id, Duration::from_secs(30))?;
+        if let Some(pr) = &pr {
+            // A PR read moments ago is not read again, but still checked.
+            self.check_pr_steps(pr)?;
+        }
+        self.check_push(&task)?;
+        Ok(pr)
+    }
+
+    /// Startup: every task gets its PR if it can, and its steps are checked
+    /// against git and GitHub as last seen. Open PRs are read by the watch.
+    fn check_tasks(&self) -> Result<(), DeliveryError> {
+        self.link_recorded_prs()?;
+        for task in self.store()?.tasks()? {
+            if let Some(pr) = self.task_pr(&task.id)? {
+                self.check_pr_steps(&pr)?;
+            }
+            self.check_push(&task)?;
+        }
+        Ok(())
     }
 
     /// Follows the linked PRs for as long as the app runs.
     pub fn start_pr_watch(&self) {
         let service = self.clone();
         std::thread::spawn(move || {
-            let _ = service.link_recorded_prs();
+            if let Err(error) = service.check_tasks() {
+                eprintln!("tinto: delivery could not check the tasks' steps: {error}");
+            }
             let mut etag = None;
             loop {
                 let wait = service.watch_prs_once(&mut etag);
@@ -730,6 +826,22 @@ impl DeliveryService {
             }
         });
     }
+}
+
+/// "Fusionado en GitHub por ana el 2026-10-14 (commit 1a2b3c4)", with what
+/// GitHub gave.
+fn merged_outside(pr: &DeliveryPr) -> String {
+    let mut text = "Fusionado en GitHub".to_string();
+    if let Some(by) = &pr.merged_by {
+        text.push_str(&format!(" por {by}"));
+    }
+    if let Some(at) = &pr.merged_at {
+        text.push_str(&format!(" el {}", at.get(..10).unwrap_or(at)));
+    }
+    if let Some(commit) = &pr.merge_commit {
+        text.push_str(&format!(" (commit {})", commit.get(..7).unwrap_or(commit)));
+    }
+    text
 }
 
 fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {

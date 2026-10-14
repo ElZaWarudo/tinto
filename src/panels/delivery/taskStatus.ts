@@ -280,6 +280,18 @@ export function taskStatus(
       label: `Registrar ${lower(rungLabel(approved.rung))}`,
     };
   }
+  const drifted = approvals.find(
+    (approval) =>
+      approval.status === "drifted" && latestApproval(approvals, approval.rung) === approval,
+  );
+  if (drifted) {
+    return {
+      group: "attention",
+      tone: "attention",
+      icon: "alert",
+      label: `${rungLabel(drifted.rung)}: ya no coincide`,
+    };
+  }
   const quarantined = overview.leases.find(
     (lease) => lease.state === "quarantined" && lease.holder_task_id === task.id,
   );

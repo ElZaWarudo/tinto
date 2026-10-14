@@ -10,8 +10,9 @@ export type DeliveryResultState = "accepted" | "stale" | "invalid";
 export type DeliveryLeaseState = "free" | "active" | "quarantined";
 export type DeliveryRung = "commit" | "push" | "pr" | "merge" | "jira";
 export type DeliveryApprovalStatus =
-  /** `undone`: a commit step whose commits were taken back; it is pending again. */
-  "pending" | "approved" | "rejected" | "executed" | "failed" | "undone";
+  /** `undone`: a commit step whose commits were taken back; it is pending again.
+   *  `drifted`: a done step git or GitHub no longer bear out; `notice` says why. */
+  "pending" | "approved" | "rejected" | "executed" | "failed" | "undone" | "drifted";
 
 /** One commit of a commit step's plan. */
 export interface DeliveryCommit {
@@ -306,4 +307,8 @@ export interface DeliveryPr {
   seen_until: string | null;
   checked_at_ms: number | null;
   error: string | null;
+  /** Once merged, when GitHub gives them. */
+  merged_by?: string | null;
+  merged_at?: string | null;
+  merge_commit?: string | null;
 }

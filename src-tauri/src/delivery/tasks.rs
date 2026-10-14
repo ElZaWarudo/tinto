@@ -421,6 +421,18 @@ pub fn origin_url(place: Place<'_>, repo: &Path) -> Option<String> {
         .filter(|url| !url.is_empty())
 }
 
+/// Where `origin`'s `branch` ends now, or `None` when it has no such
+/// branch. Fails when the remote cannot be read.
+pub fn remote_tip(
+    place: Place<'_>,
+    repo: &Path,
+    branch: &str,
+) -> Result<Option<String>, DeliveryError> {
+    let head = format!("refs/heads/{branch}");
+    let listed = git(place, repo, &["ls-remote", "origin", &head])?;
+    Ok(listed.split_whitespace().next().map(str::to_string))
+}
+
 pub fn push_branch(
     place: Place<'_>,
     worktree: &Path,
