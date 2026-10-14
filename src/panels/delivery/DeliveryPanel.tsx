@@ -19,6 +19,7 @@ import {
   decideDeliveryApproval,
   dispatchDeliveryJob,
   findDeliveryPr,
+  getDeliveryMergeMethod,
   getDeliveryJobLog,
   getDeliveryOverview,
   getDeliveryRepoSettings,
@@ -1007,7 +1008,9 @@ function TaskDetail({
         )}
         {!next && !hasOpenJob && !needsYou && (
           <span className="delivery-muted">
-            {step ? "Todas las etapas pasaron. Lo siguiente es la entrega." : "Tarea entregada."}
+            {step
+              ? `Todas las etapas pasaron. Lo siguiente es ${nextStepName(step)}.`
+              : "Tarea entregada."}
           </span>
         )}
       </div>
@@ -1024,6 +1027,7 @@ function TaskDetail({
           key={stepKey(step)}
           task={task}
           step={step}
+          pr={pr}
           busy={busy}
           run={run}
           onClose={() => setRequesting(false)}
@@ -1302,6 +1306,11 @@ function StepChecks({
   );
 }
 
+/** "el merge", "el PR", "Jira (merge)": the step as a sentence names it. */
+function nextStepName(step: DeliveryStep): string {
+  return step.rung === "jira" ? step.label : `el ${lower(step.label)}`;
+}
+
 function when(ms: number | null | undefined): string {
   return ms ? new Date(ms).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "";
 }
@@ -1526,24 +1535,55 @@ function ApprovalBanner({
 function DeliveryRequest({
   task,
   step,
+  pr,
   busy,
   run,
   onClose,
 }: {
   task: DeliveryTask;
   step: DeliveryStep;
+  /** The followed PR, for GitHub's own merge commit message. */
+  pr: DeliveryPr | undefined;
   busy: boolean;
   run: (action: () => Promise<unknown>) => Promise<boolean>;
   onClose: () => void;
 }) {
   const named = task.title ? `${task.key}: ${task.title}` : task.key;
   const { rung } = step;
+  // With a merge commit, GitHub's own message; otherwise the task's name.
+  const mergeTitle = (method: string) =>
+    method === "merge" && pr
+      ? `Merge pull request #${pr.number} from ${pr.repo.split("/")[0]}/${task.branch}`
+      : named;
   const [title, setTitle] = useState(rung === "push" ? `Publicar ${task.branch}` : named);
   // The commit step has its own form (CommitPlanForm).
   const [body, setBody] = useState("");
   const [method, setMethod] = useState("squash");
+  // Once the user picks a method or writes the message, the defaults stop.
+  const methodEdited = useRef(false);
+  const titleEdited = useRef(false);
   const merge = rung === "merge";
   const name = lower(step.label);
+  const chooseMethod = (next: string) => {
+    setMethod(next);
+    if (!titleEdited.current) setTitle(mergeTitle(next));
+  };
+  // The method the base branch's latest PRs were merged with.
+  useEffect(() => {
+    if (!merge) return;
+    let live = true;
+    getDeliveryMergeMethod(task.id).then(
+      (proposed) => {
+        if (live && !methodEdited.current) chooseMethod(proposed);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+    // Proposed once, when the form opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <form
       className="delivery-request"
@@ -1572,7 +1612,13 @@ function DeliveryRequest({
       {merge && (
         <label className="delivery-request__field">
           <span>Cómo fusionar</span>
-          <select value={method} onChange={(event) => setMethod(event.target.value)}>
+          <select
+            value={method}
+            onChange={(event) => {
+              methodEdited.current = true;
+              chooseMethod(event.target.value);
+            }}
+          >
             <option value="squash">Squash: un solo commit</option>
             <option value="merge">Merge commit</option>
             <option value="rebase">Rebase</option>
@@ -1587,7 +1633,14 @@ function DeliveryRequest({
               : "Mensaje del commit de fusión"
             : "Texto exacto a aprobar"}
         </span>
-        <input value={title} onChange={(event) => setTitle(event.target.value)} required />
+        <input
+          value={title}
+          onChange={(event) => {
+            titleEdited.current = true;
+            setTitle(event.target.value);
+          }}
+          required
+        />
       </label>
       <label className="delivery-request__field">
         <span>{rung === "jira" ? "Operaciones exactas en Jira" : "Detalle (opcional)"}</span>

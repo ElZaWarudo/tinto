@@ -154,6 +154,10 @@ export const findDeliveryPr = (taskId: string) =>
 export const markDeliveryPrSeen = (taskId: string) =>
   invoke<DeliveryPr | null>("delivery_pr_seen", { taskId });
 
+/** The merge method the base branch's history shows: "merge" or "squash". */
+export const getDeliveryMergeMethod = (taskId: string) =>
+  invoke<string>("delivery_merge_method", { taskId });
+
 /** The changed files and recent commit subjects a commit plan starts from. */
 export const getDeliveryCommitDraft = (taskId: string) =>
   invoke<DeliveryCommitDraft>("delivery_commit_draft", { taskId });

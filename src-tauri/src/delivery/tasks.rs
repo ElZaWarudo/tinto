@@ -414,6 +414,54 @@ pub fn recent_subjects(place: Place<'_>, worktree: &Path, count: usize) -> Vec<S
     .unwrap_or_default()
 }
 
+/// How PRs reach `base` lately, to propose the same: `merge` when most of
+/// its latest PR merges are GitHub merge commits ("Merge pull request
+/// #…"), else `squash` (the commits GitHub squashes end in "(#123)").
+/// Reads `origin/<base>` when there is one, as the local branch may lag.
+pub fn base_merge_method(place: Place<'_>, repo: &Path, base: &str) -> &'static str {
+    let remote = format!("origin/{base}");
+    let log = |reference: &str| {
+        git(
+            place,
+            repo,
+            &[
+                "log",
+                "--first-parent",
+                "-50",
+                "--format=%s",
+                reference,
+                "--",
+            ],
+        )
+    };
+    let subjects = log(&remote).or_else(|_| log(base)).unwrap_or_default();
+    let squashed = |subject: &str| {
+        subject
+            .strip_suffix(')')
+            .and_then(|rest| rest.rsplit_once("(#"))
+            .is_some_and(|(_, number)| {
+                !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
+            })
+    };
+    let latest: Vec<bool> = subjects
+        .lines()
+        .filter_map(|subject| {
+            if subject.starts_with("Merge pull request #") {
+                Some(true)
+            } else {
+                squashed(subject).then_some(false)
+            }
+        })
+        .take(5)
+        .collect();
+    let merges = latest.iter().filter(|merge| **merge).count();
+    if merges * 2 > latest.len() {
+        "merge"
+    } else {
+        "squash"
+    }
+}
+
 /// `origin`'s URL as configured, before any `insteadOf` rewriting.
 pub fn origin_url(place: Place<'_>, repo: &Path) -> Option<String> {
     git(place, repo, &["config", "--get", "remote.origin.url"])

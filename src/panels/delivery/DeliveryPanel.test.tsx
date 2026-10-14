@@ -41,6 +41,7 @@ const client = vi.hoisted(() => ({
   refreshDeliveryPr: vi.fn(() => Promise.resolve(null)),
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
   correctDeliveryApproval: vi.fn(),
   markDeliveryPrSeen: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
@@ -1406,6 +1407,65 @@ describe("DeliveryPanel", () => {
         "Era otro PR",
       ),
     );
+  });
+
+  it("names the next step and proposes the base's merge method with GitHub's message", async () => {
+    const user = userEvent.setup();
+    const done = (rung: DeliveryApproval["rung"]) => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: rung === "pr" ? "https://github.com/o/r/pull/5" : "hecho",
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: ["tests", "implementation", "review", "qa"].map((role, index) =>
+          job({ id: `j${index}`, role }),
+        ),
+        approvals: [done("commit"), done("push"), done("pr"), done("jira")],
+        prs: [
+          {
+            task_id: "t1",
+            url: "https://github.com/o/r/pull/5",
+            repo: "o/r",
+            number: 5,
+            state: "open",
+            draft: false,
+            conflicts: false,
+            review_decision: "approved",
+            checks: { passing: 3, failing: 0, pending: 0 },
+            new_reviews: 0,
+            new_comments: 0,
+            new_authors: [],
+            latest_activity: null,
+            seen_until: null,
+            checked_at_ms: 1,
+            error: null,
+          },
+        ],
+      }),
+    );
+    client.getDeliveryMergeMethod.mockResolvedValueOnce("merge");
+    renderPanel();
+    expect(
+      await screen.findByText("Todas las etapas pasaron. Lo siguiente es el merge."),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Preparar merge…" }));
+    const form = screen.getByRole("form", { name: "Pedir aprobación de merge" });
+    await waitFor(() =>
+      expect(within(form).getByRole("combobox", { name: "Cómo fusionar" })).toHaveValue("merge"),
+    );
+    expect(within(form).getByRole("textbox", { name: "Mensaje del commit de fusión" })).toHaveValue(
+      "Merge pull request #5 from o/delivery/agos-501",
+    );
+    expect(client.getDeliveryMergeMethod).toHaveBeenCalledWith("t1");
   });
 
   it("follows the task's PR and merges it through its own step", async () => {

@@ -152,6 +152,7 @@ pub fn run() {
             delivery::commands::delivery_release_lease,
             delivery::commands::delivery_request_approval,
             delivery::commands::delivery_commit_draft,
+            delivery::commands::delivery_merge_method,
             delivery::commands::delivery_undo_commit,
             delivery::commands::delivery_decide_approval,
             delivery::commands::delivery_complete_approval,

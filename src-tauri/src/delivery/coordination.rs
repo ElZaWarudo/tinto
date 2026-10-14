@@ -730,6 +730,14 @@ impl DeliveryService {
         Ok(approval)
     }
 
+    /// The merge method to propose: the one the base branch's history
+    /// shows for its latest PRs.
+    pub fn merge_method(&self, task_id: &str) -> Result<String, DeliveryError> {
+        let task = self.task(task_id)?;
+        let place = Place::of(task.distro.as_deref());
+        Ok(tasks::base_merge_method(place, &task.repo, &task.base_ref).to_string())
+    }
+
     /// What the form to prepare a task's commit starts from.
     pub fn commit_draft(&self, task_id: &str) -> Result<DeliveryCommitDraft, DeliveryError> {
         let task = self.task(task_id)?;

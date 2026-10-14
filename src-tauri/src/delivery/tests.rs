@@ -2671,3 +2671,27 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
         "invalid_approval"
     );
 }
+
+#[test]
+fn the_merge_method_proposed_follows_how_the_base_merges_its_prs() {
+    let h = harness();
+    let squashed = h.task("M-1");
+    assert_eq!(h.service.merge_method(&squashed.id).unwrap(), "squash");
+
+    let repo = h.repo.path();
+    for number in 1..=2 {
+        let branch = format!("feature-{number}");
+        git(repo, &["checkout", "-q", "-b", &branch, "main"]);
+        std::fs::write(repo.join(format!("f{number}.txt")), "x").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "feat: x"]);
+        git(repo, &["checkout", "-q", "main"]);
+        let message = format!("Merge pull request #{number} from o/{branch}");
+        git(repo, &["merge", "-q", "--no-ff", "-m", &message, &branch]);
+    }
+    std::fs::write(repo.join("g.txt"), "x").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "fix: y (#3)"]);
+    let merged = h.task("M-2");
+    assert_eq!(h.service.merge_method(&merged.id).unwrap(), "merge");
+}

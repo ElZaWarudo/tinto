@@ -341,6 +341,16 @@ pub fn delivery_request_approval(
         .map_err(CommandError::from)
 }
 
+/// The merge method the base branch's history shows: `merge` or `squash`.
+#[tauri::command]
+pub async fn delivery_merge_method(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<String, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.merge_method(&task_id)).await
+}
+
 /// The changed files and recent commit subjects a commit plan starts from.
 #[tauri::command]
 pub async fn delivery_commit_draft(
