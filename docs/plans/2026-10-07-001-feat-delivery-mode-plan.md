@@ -300,6 +300,12 @@ Comprobado contra GitHub con el PR de AGOS-455 (`AIRInstitute/agentos#279`): se 
 
 Cubierto con tests del motor (cliente de GitHub simulado y remotos git reales) y de la vista. Queda por comprobar en la app con AGOS-455: PR #279 vinculado, aprobado y en verde, "Jira (PR)" hecho, merge listo con "Merge commit" por defecto, "Jira (merge)" pendiente y sin "Entregada".
 
+**Revisores, Jira desde Tinto y archivo (2026-10-14).** En la prueba con AGOS-455, el "Jira (merge)" se preparó sin operaciones, se aprobó y se marcó hecho con el resultado vacío. Nadie tocó Jira y la issue siguió en revisión.
+
+- **Revisores.** Al aprobar el paso PR se eligen sus revisores entre los usuarios asignables del repositorio en GitHub (sin el propio usuario); hace falta al menos uno. Tinto los pide con `gh pr edit --add-reviewer` en cuanto el PR queda vinculado, y lo reintenta si falló. El merge se rechaza mientras el PR no tenga una revisión aprobada: la decisión de GitHub si el repo exige revisiones, y si no, alguien cuya última revisión aprueba (`approved_by` en `read_pr`).
+- **Jira desde Tinto.** Ajustes → Jira, por repositorio: host, proyecto, los estados tras el PR (p. ej. En ejecución, In Review) y tras el merge (p. ej. Cerrada) y un token de acceso personal. El token se guarda aparte de los ajustes y no llega a la vista ni a `read_settings`; "Comprobar Jira" dice de quién es. Con Jira configurado, aprobar un paso Jira hace que Tinto enlace el PR (tras el PR), lleve la issue por los estados del paso con las transiciones que ofrece Jira y compruebe el estado final. Si un estado no se alcanza, el paso falla diciendo dónde está la issue, adónde puede ir y qué se hizo antes. Sin Jira configurado, lo sigue haciendo el coordinador y registrarlo exige decir qué se hizo.
+- **Archivar.** Una tarea entregada se archiva desde ⋯ o bajo los botones: se borran su worktree y su rama local, porque todo está en GitHub, y sale de la lista conservando su registro. "Archivadas…" la encuentra por clave de issue o número de PR y "Desarchivar" la recupera con su worktree, desde la rama local o, si ya no existe, desde `pull/<n>/head` en GitHub, que se conserva aunque se borre la rama.
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.
