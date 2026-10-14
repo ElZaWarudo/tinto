@@ -6,6 +6,7 @@ import type {
   DeliveryApproval,
   DeliveryJob,
   DeliveryOverview,
+  DeliveryPr,
   DeliveryRung,
   DeliveryTask,
 } from "../../delivery/types";
@@ -21,6 +22,7 @@ export const RUNGS: { rung: DeliveryRung; label: string }[] = [
   { rung: "commit", label: "Commit" },
   { rung: "push", label: "Push" },
   { rung: "pr", label: "PR" },
+  { rung: "merge", label: "Merge" },
   { rung: "jira", label: "Jira" },
 ];
 
@@ -344,6 +346,21 @@ export function taskStatus(
   if (latestApproval(approvals, "jira")?.status === "executed") {
     return { group: "idle", tone: "ok", icon: "check", label: "Entregada" };
   }
+  const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+  if (pr) {
+    const summary = prSummary(pr);
+    if (pr.state === "merged") {
+      return { group: "idle", tone: "idle", icon: "ring", label: "PR fusionado · siguiente: Jira" };
+    }
+    const needsYou = summary.tone === "attention" || summary.tone === "danger";
+    const ready = summary.label === "Aprobado";
+    return {
+      group: needsYou ? "attention" : ready ? "idle" : "waiting",
+      tone: summary.tone,
+      icon: summary.icon,
+      label: ready ? "PR aprobado · siguiente: merge" : `PR: ${lower(summary.label)}`,
+    };
+  }
   const role = nextRole(jobs);
   if (role) {
     return {
@@ -360,4 +377,28 @@ export function taskStatus(
     icon: "ring",
     label: rung ? `Siguiente: ${lower(rungLabel(rung))}` : "Sin actividad",
   };
+}
+
+/** One line for the state of a followed PR, from most to least urgent. */
+export function prSummary(pr: DeliveryPr): { tone: Tone; icon: StatusIcon; label: string } {
+  if (pr.state === "merged") return { tone: "ok", icon: "check", label: "Fusionado" };
+  if (pr.state === "closed") return { tone: "danger", icon: "x", label: "Cerrado sin fusionar" };
+  if (pr.state === "unknown") return { tone: "waiting", icon: "clock", label: "Leyendo GitHub" };
+  const fresh = pr.new_reviews + pr.new_comments;
+  if (fresh > 0) {
+    return {
+      tone: "attention",
+      icon: "flag",
+      label: fresh === 1 ? "1 novedad" : `${fresh} novedades`,
+    };
+  }
+  if (pr.checks.failing > 0) return { tone: "danger", icon: "x", label: "Checks fallando" };
+  if (pr.conflicts) return { tone: "attention", icon: "alert", label: "Conflictos" };
+  if (pr.review_decision === "changes_requested") {
+    return { tone: "attention", icon: "alert", label: "Cambios pedidos" };
+  }
+  if (pr.checks.pending > 0) return { tone: "waiting", icon: "clock", label: "Checks en curso" };
+  if (pr.draft) return { tone: "waiting", icon: "clock", label: "Borrador" };
+  if (pr.review_decision === "approved") return { tone: "ok", icon: "check", label: "Aprobado" };
+  return { tone: "waiting", icon: "clock", label: "En revisión" };
 }

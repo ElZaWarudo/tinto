@@ -21,6 +21,7 @@ use super::model::{
     DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview,
     DeliveryPlatform, DeliveryResultState, DeliverySettings, DeliveryTask,
 };
+use super::prs::{self, GitHub};
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
 use super::{now_ms, DeliveryError};
@@ -73,6 +74,7 @@ pub(super) struct Inner {
     notify: Mutex<Option<Notify>>,
     pub(super) coordinator: Mutex<Option<DeliveryCoordinatorEndpoint>>,
     sandbox_planner: Mutex<SandboxPlanner>,
+    pub(super) github: Mutex<Arc<dyn GitHub>>,
     launcher: Launcher,
     paths_for: PathsFor,
     checkpoint_config: CheckpointConfig,
@@ -169,6 +171,8 @@ impl DeliveryService {
                 coordinator: Mutex::new(None),
                 // Nothing is probed unless the real planner is set.
                 sandbox_planner: Mutex::new(Arc::new(|_, _| adapters::SandboxPlan::default())),
+                // Nothing reaches GitHub unless the app sets `gh`.
+                github: Mutex::new(Arc::new(prs::Offline)),
                 launcher,
                 paths_for,
                 checkpoint_config,
@@ -260,11 +264,17 @@ impl DeliveryService {
             .into_iter()
             .filter(|decision| live.contains(decision.task_id.as_str()))
             .collect();
+        let prs = store
+            .prs()?
+            .into_iter()
+            .filter(|pr| live.contains(pr.task_id.as_str()))
+            .collect();
         Ok(DeliveryOverview {
             runs: store.runs()?,
             jobs,
             approvals,
             decisions,
+            prs,
             leases: store.leases()?,
             settings: store.settings()?,
             coordinator: self
@@ -678,6 +688,10 @@ impl DeliveryService {
             &job.role,
         )?;
         drop(store);
+        if job.agent != DeliveryAgent::Shell {
+            // A stage on the task is the round that answers the PR's news.
+            let _ = self.mark_pr_seen(&job.task_id);
+        }
         self.tick();
         Ok(job)
     }

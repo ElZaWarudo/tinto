@@ -31,6 +31,8 @@ pub struct NewApproval {
     /// `commit` only: the commits to create, in order. When empty, one
     /// commit with every change and `title` (plus `body`) as its message.
     pub commits: Vec<DeliveryCommit>,
+    /// `merge` only: `squash`, `merge` or `rebase`.
+    pub merge_method: Option<String>,
     /// `commit` only: changed files the plan leaves uncommitted on purpose.
     pub leave_out: Vec<String>,
 }
@@ -391,9 +393,15 @@ impl DeliveryService {
                     "los commits que hizo Tinto ya no están en la rama; hay que volver a preparar el commit",
                 ));
             }
+            DeliveryRung::Merge => {
+                self.merge_prerequisites(&task, request.merge_method.as_deref())?
+            }
             _ => {}
         }
         let approval = DeliveryApproval {
+            merge_method: request
+                .merge_method
+                .filter(|_| request.rung == DeliveryRung::Merge),
             commits,
             left_out,
             created: Vec::new(),
@@ -452,6 +460,20 @@ impl DeliveryService {
             return Ok(approval);
         }
         approval.status = DeliveryApprovalStatus::Approved;
+        if approval.rung == DeliveryRung::Merge {
+            let executed = self.merge_pr(&approval);
+            approval.executed_at_ms = Some(now_ms());
+            match executed {
+                Ok(outcome) => {
+                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.outcome = Some(outcome);
+                }
+                Err(error) => {
+                    approval.status = DeliveryApprovalStatus::Failed;
+                    approval.outcome = Some(error.message);
+                }
+            }
+        }
         if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push) {
             let task = self.task(&approval.task_id)?;
             let place = Place::of(task.distro.as_deref());
@@ -510,6 +532,11 @@ impl DeliveryService {
         approval.executed_at_ms = Some(now_ms());
         approval.outcome = Some(outcome.trim().to_string()).filter(|text| !text.is_empty());
         self.save_approval(&approval, "approval_completed")?;
+        if success && approval.rung == DeliveryRung::Pr {
+            if let Some(pr) = super::prs::parse_pr_url(outcome) {
+                self.link_pr(&approval.task_id, &pr)?;
+            }
+        }
         Ok(approval)
     }
 
@@ -634,6 +661,65 @@ impl DeliveryService {
             }
         }
         Ok(())
+    }
+
+    /// A merge needs the followed PR open, without conflicts and with its
+    /// checks finished and green. GitHub still enforces its own rules.
+    fn merge_prerequisites(
+        &self,
+        task: &DeliveryTask,
+        method: Option<&str>,
+    ) -> Result<(), DeliveryError> {
+        if !matches!(method, Some("squash" | "merge" | "rebase")) {
+            return Err(DeliveryError::new(
+                "invalid_approval",
+                "elige cómo fusionar: squash, merge o rebase",
+            ));
+        }
+        let pr = self
+            .refresh_pr(&task.id, std::time::Duration::from_secs(30))?
+            .ok_or_else(|| {
+                DeliveryError::new(
+                    "pr_missing",
+                    "la tarea no tiene un PR de GitHub: marca antes el PR como hecho con su URL",
+                )
+            })?;
+        let blocker = if pr.state != "open" {
+            Some(format!(
+                "el PR #{} no está abierto ({})",
+                pr.number, pr.state
+            ))
+        } else if pr.conflicts {
+            Some(format!("el PR #{} tiene conflictos con su base", pr.number))
+        } else if pr.checks.failing > 0 {
+            Some(format!("el PR #{} tiene checks fallando", pr.number))
+        } else if pr.checks.pending > 0 {
+            Some(format!("el PR #{} tiene checks en curso", pr.number))
+        } else {
+            None
+        };
+        match blocker {
+            Some(message) => Err(DeliveryError::new("pr_not_ready", message)),
+            None => Ok(()),
+        }
+    }
+
+    /// Merges the task's PR on GitHub and deletes its branch there.
+    fn merge_pr(&self, approval: &DeliveryApproval) -> Result<String, DeliveryError> {
+        let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
+            DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
+        })?;
+        let method = approval.merge_method.as_deref().unwrap_or("squash");
+        self.github_client()
+            .merge(&pr.url, method, &approval.title, &approval.body)?;
+        let _ = self.refresh_pr(&approval.task_id, std::time::Duration::ZERO);
+        Ok(format!(
+            "PR #{} fusionado ({method}) y rama {} borrada en GitHub",
+            pr.number,
+            self.task(&approval.task_id)
+                .map(|task| task.branch)
+                .unwrap_or_default()
+        ))
     }
 
     fn save_approval(&self, approval: &DeliveryApproval, event: &str) -> Result<(), DeliveryError> {
@@ -761,7 +847,8 @@ fn rung_prerequisites(task: &DeliveryTask, rung: DeliveryRung) -> Result<(), Del
                 ));
             }
         }
-        DeliveryRung::Jira => {}
+        // Checked against the followed PR, which needs the service.
+        DeliveryRung::Merge | DeliveryRung::Jira => {}
     }
     Ok(())
 }

@@ -247,6 +247,8 @@ pub enum DeliveryRung {
     Commit,
     Push,
     Pr,
+    /// Merge the PR on GitHub and delete its branch there.
+    Merge,
     Jira,
 }
 
@@ -287,6 +289,9 @@ pub struct DeliveryApproval {
     pub decided_at_ms: Option<u64>,
     pub executed_at_ms: Option<u64>,
     pub outcome: Option<String>,
+    /// `merge` only: `squash`, `merge` or `rebase`.
+    #[serde(default)]
+    pub merge_method: Option<String>,
     /// `commit` only: the commits to create, in order.
     #[serde(default)]
     pub commits: Vec<DeliveryCommit>,
@@ -481,6 +486,8 @@ pub struct DeliveryOverview {
     pub leases: Vec<DeliveryLease>,
     pub approvals: Vec<DeliveryApproval>,
     pub decisions: Vec<DeliveryDecision>,
+    /// The tasks' pull requests Tinto follows.
+    pub prs: Vec<super::prs::DeliveryPr>,
     pub settings: DeliverySettings,
     pub coordinator: Option<DeliveryCoordinatorEndpoint>,
 }

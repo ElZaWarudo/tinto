@@ -3,6 +3,7 @@ import type {
   DeliveryApproval,
   DeliveryJob,
   DeliveryOverview,
+  DeliveryPr,
   DeliveryTask,
 } from "../../delivery/types";
 import {
@@ -12,6 +13,7 @@ import {
   lastHandoff,
   latestOfRole,
   nextRole,
+  prSummary,
   taskStatus,
 } from "./taskStatus";
 
@@ -225,6 +227,59 @@ describe("pending decisions", () => {
     expect(status({ decisions: [{ ...pending, status: "answered", answer: "x" }] }).label).toBe(
       "Siguiente: tests",
     );
+  });
+});
+
+describe("a followed PR", () => {
+  const pr = (over: Partial<DeliveryPr> = {}): DeliveryPr => ({
+    ...{
+      task_id: "t1",
+      url: "https://github.com/o/r/pull/5",
+      repo: "o/r",
+      number: 5,
+      state: "open",
+      draft: false,
+      conflicts: false,
+      review_decision: "review_required",
+      checks: { passing: 2, failing: 0, pending: 0 },
+      new_reviews: 0,
+      new_comments: 0,
+      new_authors: [],
+      latest_activity: null,
+      seen_until: null,
+      checked_at_ms: 1,
+      error: null,
+    },
+    ...over,
+  });
+  const withPr = (over: Partial<DeliveryPr>) =>
+    status({ prs: [pr(over)], approvals: [approval({ rung: "pr", status: "executed" })] });
+
+  it("brings the task back when the PR needs the user", () => {
+    expect(withPr({ new_reviews: 1, new_comments: 1, new_authors: ["ana"] })).toEqual({
+      group: "attention",
+      tone: "attention",
+      icon: "flag",
+      label: "PR: 2 novedades",
+    });
+    expect(withPr({ checks: { passing: 1, failing: 1, pending: 0 } }).label).toBe(
+      "PR: checks fallando",
+    );
+    expect(withPr({ conflicts: true }).group).toBe("attention");
+    expect(withPr({ review_decision: "changes_requested" }).label).toBe("PR: cambios pedidos");
+  });
+
+  it("waits while others review it, and offers the merge once approved", () => {
+    expect(withPr({})).toMatchObject({ group: "waiting", label: "PR: en revisión" });
+    expect(withPr({ checks: { passing: 1, failing: 0, pending: 2 } }).label).toBe(
+      "PR: checks en curso",
+    );
+    expect(withPr({ review_decision: "approved" })).toMatchObject({
+      group: "idle",
+      label: "PR aprobado · siguiente: merge",
+    });
+    expect(withPr({ state: "merged" }).label).toBe("PR fusionado · siguiente: Jira");
+    expect(prSummary(pr({ state: "closed" })).label).toBe("Cerrado sin fusionar");
   });
 });
 

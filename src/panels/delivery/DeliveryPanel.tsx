@@ -40,6 +40,7 @@ import type {
   DeliveryJob,
   DeliveryJobLog,
   DeliveryOverview,
+  DeliveryPr,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryRung,
@@ -55,6 +56,7 @@ import {
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { DecisionLog, PendingDecisions } from "./DeliveryDecisions";
+import { PrSection } from "./DeliveryPr";
 import {
   GROUPS,
   RUNGS,
@@ -71,6 +73,7 @@ import {
   lower,
   nextRole,
   nextRung,
+  prSummary,
   rolesOf,
   rungLabel,
   stageLabel,
@@ -727,6 +730,7 @@ function TaskDetail({
   );
   const rung = openApprovals.length === 0 ? nextRung(approvals) : null;
   const [requesting, setRequesting] = useState(false);
+  const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
   const taskDecisions = (overview.decisions ?? []).filter(
     (decision) => decision.task_id === task.id,
   );
@@ -916,7 +920,7 @@ function TaskDetail({
         </div>
       )}
 
-      <StageTrack jobs={jobs} approvals={approvals} next={next} onFocus={focusStage} />
+      <StageTrack jobs={jobs} approvals={approvals} pr={pr} next={next} onFocus={focusStage} />
 
       <div className="delivery-actions">
         {next && !broken && (
@@ -990,6 +994,8 @@ function TaskDetail({
         />
       )}
 
+      {pr && <PrSection pr={pr} busy={busy} run={run} />}
+
       <DecisionLog
         taskId={task.id}
         candidate={candidate}
@@ -1048,11 +1054,14 @@ function brokenVerb(job: DeliveryJob): string {
 function StageTrack({
   jobs,
   approvals,
+  pr,
   next,
   onFocus,
 }: {
   jobs: DeliveryJob[];
   approvals: DeliveryApproval[];
+  /** The PR step shows the followed PR's live state once it exists. */
+  pr: DeliveryPr | undefined;
   next: string | null;
   onFocus: (job: DeliveryJob) => void;
 }) {
@@ -1102,7 +1111,10 @@ function StageTrack({
         <h3 id="delivery-track-rungs">Entrega</h3>
         <ol aria-labelledby="delivery-track-rungs">
           {RUNGS.map(({ rung, label }) => {
-            const step = rungStep(latestApproval(approvals, rung));
+            const live = rung === "pr" && pr ? prSummary(pr) : null;
+            const step = live
+              ? { ...live, title: `${pr?.repo}#${pr?.number}` }
+              : rungStep(latestApproval(approvals, rung));
             return (
               <li key={rung} className={`delivery-node delivery-node--${step.tone}`}>
                 <div title={step.title}>
@@ -1231,8 +1243,10 @@ function ApprovalBanner({
       : approval.rung === "push"
         ? `Al aprobar, Tinto publica la rama ${task.branch}.`
         : approval.rung === "pr"
-          ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después registras aquí su URL."
-          : "Al aprobar, el coordinador hace estas operaciones en Jira. Después registras aquí qué se hizo.";
+          ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después registras aquí su URL. Desde entonces Tinto lo sigue en GitHub."
+          : approval.rung === "merge"
+            ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
+            : "Al aprobar, el coordinador hace estas operaciones en Jira. Después registras aquí qué se hizo.";
   return (
     <div className="delivery-banner" role="group" aria-label={`Aprobación ${approval.rung}`}>
       <p className="delivery-banner__title">
@@ -1263,7 +1277,9 @@ function ApprovalBanner({
               ? "Aprobar y hacer commit"
               : approval.rung === "push"
                 ? "Aprobar y publicar"
-                : "Aprobar"}
+                : approval.rung === "merge"
+                  ? "Aprobar y fusionar"
+                  : "Aprobar"}
           </button>
           <button
             type="button"
@@ -1312,6 +1328,8 @@ function DeliveryRequest({
   const [title, setTitle] = useState(rung === "push" ? `Publicar ${task.branch}` : named);
   // The commit step has its own form (CommitPlanForm).
   const [body, setBody] = useState("");
+  const [method, setMethod] = useState("squash");
+  const merge = rung === "merge";
   const name = lower(rungLabel(rung));
   return (
     <form
@@ -1319,13 +1337,33 @@ function DeliveryRequest({
       aria-label={`Pedir aprobación de ${name}`}
       onSubmit={(event) => {
         event.preventDefault();
-        void run(() => requestDeliveryApproval(task.id, rung, title, body)).then((ok) => {
+        void run(() =>
+          merge
+            ? requestDeliveryApproval(task.id, rung, title, body, undefined, method)
+            : requestDeliveryApproval(task.id, rung, title, body),
+        ).then((ok) => {
           if (ok) onClose();
         });
       }}
     >
+      {merge && (
+        <label className="delivery-request__field">
+          <span>Cómo fusionar</span>
+          <select value={method} onChange={(event) => setMethod(event.target.value)}>
+            <option value="squash">Squash: un solo commit</option>
+            <option value="merge">Merge commit</option>
+            <option value="rebase">Rebase</option>
+          </select>
+        </label>
+      )}
       <label className="delivery-request__field">
-        <span>Texto exacto a aprobar</span>
+        <span>
+          {merge
+            ? method === "rebase"
+              ? "Descripción (rebase no crea un commit propio)"
+              : "Mensaje del commit de fusión"
+            : "Texto exacto a aprobar"}
+        </span>
         <input value={title} onChange={(event) => setTitle(event.target.value)} required />
       </label>
       <label className="delivery-request__field">

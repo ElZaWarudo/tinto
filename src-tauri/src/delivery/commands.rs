@@ -13,6 +13,7 @@ use super::model::{
     DeliveryJobLog, DeliveryLease, DeliveryOverview, DeliveryPlatform, DeliveryRepoSettings,
     DeliveryRun, DeliveryRung, DeliverySettings, DeliveryStageAgent, DeliveryTask,
 };
+use super::prs::DeliveryPr;
 use super::service::{DeliveryService, NewJob, NewTask};
 use super::tasks::plain_path;
 use super::DeliveryError;
@@ -311,6 +312,8 @@ pub fn delivery_release_lease(
         .map_err(CommandError::from)
 }
 
+// Tauri passes each field the view sends as its own argument.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn delivery_request_approval(
     service: State<'_, DeliveryService>,
@@ -320,6 +323,7 @@ pub fn delivery_request_approval(
     body: Option<String>,
     commits: Option<Vec<DeliveryCommit>>,
     leave_out: Option<Vec<String>>,
+    merge_method: Option<String>,
 ) -> Result<DeliveryApproval, CommandError> {
     service
         .request_approval(NewApproval {
@@ -330,6 +334,7 @@ pub fn delivery_request_approval(
             requested_by: "user".to_string(),
             commits: commits.unwrap_or_default(),
             leave_out: leave_out.unwrap_or_default(),
+            merge_method,
         })
         .map_err(CommandError::from)
 }
@@ -416,6 +421,25 @@ pub fn delivery_accept_recommended(
     service
         .accept_recommended(&task_id, "user")
         .map_err(CommandError::from)
+}
+
+/// Reads the task's PR now, unless it was read in the last 30 seconds.
+#[tauri::command]
+pub fn delivery_refresh_pr(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Option<DeliveryPr>, CommandError> {
+    service
+        .refresh_pr(&task_id, std::time::Duration::from_secs(30))
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delivery_pr_seen(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Option<DeliveryPr>, CommandError> {
+    service.mark_pr_seen(&task_id).map_err(CommandError::from)
 }
 
 #[tauri::command]

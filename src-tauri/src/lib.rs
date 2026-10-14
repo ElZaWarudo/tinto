@@ -128,6 +128,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             delivery::commands::delivery_overview,
+            delivery::commands::delivery_refresh_pr,
+            delivery::commands::delivery_pr_seen,
             delivery::commands::delivery_answer_decision,
             delivery::commands::delivery_renew_permissions,
             delivery::commands::delivery_withdraw_decision,
@@ -256,6 +258,8 @@ pub fn run() {
                 if let Err(error) = delivery::mcp::start(delivery_for_setup.clone()) {
                     eprintln!("tinto: el API de coordinador de Delivery no arrancó: {error}");
                 }
+                delivery_for_setup.set_github(std::sync::Arc::new(delivery::prs::GhCli));
+                delivery_for_setup.start_pr_watch();
                 delivery_for_setup.tick();
             }
             #[cfg(feature = "e2e-wdio")]

@@ -11,6 +11,7 @@ use super::model::{
     DeliveryApproval, DeliveryDecision, DeliveryJob, DeliveryLease, DeliveryRepoSettings,
     DeliveryRun, DeliverySettings, DeliveryTask,
 };
+use super::prs::DeliveryPr;
 use super::tasks::plain_path;
 use super::DeliveryError;
 use crate::agent_console::checkpoint::WorktreeSnapshot;
@@ -66,6 +67,7 @@ impl DeliveryStore {
             CREATE TABLE IF NOT EXISTS decisions (
               id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS prs (task_id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events (
               seq INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
               task_id TEXT, job_id TEXT, detail TEXT NOT NULL
@@ -267,6 +269,25 @@ impl DeliveryStore {
 
     pub fn approvals(&self) -> Result<Vec<DeliveryApproval>, DeliveryError> {
         self.all("SELECT data FROM approvals ORDER BY rowid", [])
+    }
+
+    // ---- pull requests ----
+
+    pub fn put_pr(&self, pr: &DeliveryPr) -> Result<(), DeliveryError> {
+        self.conn.execute(
+            "INSERT INTO prs (task_id, data) VALUES (?1, ?2)
+             ON CONFLICT(task_id) DO UPDATE SET data = excluded.data",
+            params![pr.task_id, encode(pr)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn pr(&self, task_id: &str) -> Result<Option<DeliveryPr>, DeliveryError> {
+        self.one("SELECT data FROM prs WHERE task_id = ?1", task_id)
+    }
+
+    pub fn prs(&self) -> Result<Vec<DeliveryPr>, DeliveryError> {
+        self.all("SELECT data FROM prs ORDER BY rowid", [])
     }
 
     // ---- decisions ----

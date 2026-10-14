@@ -275,6 +275,15 @@ El detalle técnico va plegado. Mientras haya decisiones pendientes, la tarea ap
 
 El coordinador lo lee con `read_settings` y no lo pregunta; si falta algo, pide al usuario que lo configure en Tinto. Los trabajos de QA reciben el entorno en sus instrucciones. Además, `request_decisions` rechaza un permiso cuyo comando ejecute archivos que los agentes pueden editar: el repositorio, sus worktrees, `.agent` o un script con ruta relativa. En AGOS-455 los permisos pedían `bash …/.agent/…/qa/*.sh`, y el agente podía cambiar esos scripts después de que el usuario los aprobara.
 
+**Seguimiento del PR y merge (2026-10-14).** Al marcar hecho el peldaño PR con su URL, Tinto vincula el PR a la tarea. Al arrancar, también vincula los PR de peldaños que ya estaban hechos.
+
+- **Cómo lo sigue.** GitHub no puede avisar a una app de escritorio sin un webhook, que exige permisos de administrador en el repositorio y un relay público. Tinto lee el feed de notificaciones del usuario con `gh`: una petición condicional por el intervalo que marca GitHub (60 s), que sale gratis cuando no hay cambios (304) y solo mientras haya algún PR abierto. Un PR se lee entero cuando el feed lo menciona, mientras sus checks siguen en curso o cuando alguien lo abre en Tinto.
+- **Qué muestra.** La tarea vuelve a "Te necesitan" con novedades (revisiones y comentarios de otros desde la última vez), checks fallando, conflictos o cambios pedidos. Si no, espera ("PR: en revisión") o queda lista ("PR aprobado · siguiente: merge"). El peldaño PR del recorrido muestra el estado vivo, y la sección "Pull request" enseña enlace, revisión, checks y novedades, con "Marcar como visto". Lanzar una etapa en la tarea también las marca como vistas. Las notificaciones de escritorio salen solas, porque son estados de "Te necesitan".
+- **Coordinador.** Lo lee con `read_pr`, que sustituye a `review_watch.py` dentro de Tinto.
+- **Merge.** Nuevo peldaño entre PR y Jira. Tras aprobarlo, Tinto fusiona el PR en GitHub con el método elegido (squash, merge o rebase) y el mensaje exacto, y borra allí la rama. La rama local sigue hasta que se elimina la tarea. Se rechaza si el PR no está abierto, tiene conflictos o sus checks fallan o siguen en curso.
+
+Comprobado contra GitHub con el PR de AGOS-455 (`AIRInstitute/agentos#279`): se lee abierto, aprobado y con 3 checks en verde, y la segunda petición al feed responde 304.
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.

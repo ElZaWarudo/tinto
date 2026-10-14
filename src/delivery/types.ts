@@ -8,7 +8,7 @@ export type DeliveryAgent = "codex" | "claude" | "shell";
 export type DeliveryAccess = "workspace" | "full";
 export type DeliveryResultState = "accepted" | "stale" | "invalid";
 export type DeliveryLeaseState = "free" | "active" | "quarantined";
-export type DeliveryRung = "commit" | "push" | "pr" | "jira";
+export type DeliveryRung = "commit" | "push" | "pr" | "merge" | "jira";
 export type DeliveryApprovalStatus =
   /** `undone`: a commit step whose commits were taken back; it is pending again. */
   "pending" | "approved" | "rejected" | "executed" | "failed" | "undone";
@@ -139,6 +139,8 @@ export interface DeliveryApproval {
   id: string;
   task_id: string;
   rung: DeliveryRung;
+  /** `merge` only: squash, merge or rebase. */
+  merge_method?: string | null;
   title: string;
   body: string;
   status: DeliveryApprovalStatus;
@@ -258,6 +260,8 @@ export interface DeliveryOverview {
   leases: DeliveryLease[];
   approvals: DeliveryApproval[];
   decisions: DeliveryDecision[];
+  /** The tasks' pull requests Tinto follows. */
+  prs?: DeliveryPr[];
   settings: DeliverySettings;
   coordinator: DeliveryCoordinatorEndpoint | null;
 }
@@ -277,4 +281,27 @@ export interface DeliveryConversation {
   session_id: string;
   repo: string;
   agent_type: string;
+}
+
+/** A task's pull request as Tinto follows it on GitHub. */
+export interface DeliveryPr {
+  task_id: string;
+  url: string;
+  repo: string;
+  number: number;
+  /** open, merged, closed, or unknown until the first read. */
+  state: string;
+  draft: boolean;
+  conflicts: boolean;
+  /** approved, changes_requested, review_required or none. */
+  review_decision: string | null;
+  checks: { passing: number; failing: number; pending: number };
+  /** Reviews and comments by others since the user last saw the PR. */
+  new_reviews: number;
+  new_comments: number;
+  new_authors: string[];
+  latest_activity: string | null;
+  seen_until: string | null;
+  checked_at_ms: number | null;
+  error: string | null;
 }

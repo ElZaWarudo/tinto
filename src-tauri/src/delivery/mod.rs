@@ -12,6 +12,7 @@ pub mod coordination;
 pub mod decisions;
 pub mod mcp;
 pub mod model;
+pub mod prs;
 pub mod service;
 pub mod store;
 pub mod tasks;

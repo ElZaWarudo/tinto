@@ -599,6 +599,7 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         requested_by: "user".to_string(),
         commits: Vec::new(),
         leave_out: Vec::new(),
+        merge_method: None,
     };
 
     assert_eq!(
@@ -1697,6 +1698,7 @@ fn commit_plan(
         requested_by: "coord".to_string(),
         commits,
         leave_out: leave_out.iter().map(|path| path.to_string()).collect(),
+        merge_method: None,
     }
 }
 
@@ -1946,6 +1948,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             requested_by: "user".into(),
             commits: Vec::new(),
             leave_out: Vec::new(),
+            merge_method: None,
         })
         .unwrap();
     let mut done = h.service.decide_approval(&asked.id, true, None).unwrap();
@@ -1997,6 +2000,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             requested_by: "user".into(),
             commits: Vec::new(),
             leave_out: Vec::new(),
+            merge_method: None,
         })
         .unwrap_err();
     assert_eq!(push.category, "commit_missing");
@@ -2069,4 +2073,206 @@ fn a_coordinator_sends_a_commit_plan_over_mcp() {
             .len(),
         2
     );
+}
+
+/// GitHub as the PR watch sees it, with a counter of feed requests.
+struct FakeGitHub {
+    snapshot: std::sync::Mutex<serde_json::Value>,
+    feed_calls: std::sync::atomic::AtomicUsize,
+    mentioned: Vec<String>,
+    merged: std::sync::Mutex<Vec<String>>,
+}
+
+impl super::prs::GitHub for FakeGitHub {
+    fn pr(&self, _url: &str) -> Result<serde_json::Value, super::DeliveryError> {
+        Ok(self.snapshot.lock().unwrap().clone())
+    }
+    fn me(&self) -> Result<String, super::DeliveryError> {
+        Ok("me".into())
+    }
+    fn merge(
+        &self,
+        url: &str,
+        method: &str,
+        subject: &str,
+        _body: &str,
+    ) -> Result<(), super::DeliveryError> {
+        self.merged
+            .lock()
+            .unwrap()
+            .push(format!("{url} {method} {subject}"));
+        let mut snapshot = self.snapshot.lock().unwrap();
+        snapshot["state"] = json!("MERGED");
+        Ok(())
+    }
+    fn feed(&self, _etag: Option<&str>) -> Result<super::prs::Feed, super::DeliveryError> {
+        self.feed_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(super::prs::Feed::Changed {
+            etag: Some("e1".into()),
+            poll_seconds: 60,
+            prs: self.mentioned.clone(),
+        })
+    }
+}
+
+#[test]
+fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
+    let h = harness();
+    let task = h.task("P-1");
+    let review = |login: &str, at: &str| json!({"author": {"login": login}, "state": "COMMENTED", "submittedAt": at});
+    let github = std::sync::Arc::new(FakeGitHub {
+        snapshot: std::sync::Mutex::new(json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "reviews": [review("bot", "2026-10-14T08:00:00Z")], "comments": []
+        })),
+        feed_calls: std::sync::atomic::AtomicUsize::new(0),
+        mentioned: vec!["o/r#5".into()],
+        merged: std::sync::Mutex::new(Vec::new()),
+    });
+    h.service.set_github(github.clone());
+
+    // Nothing linked: the watch asks GitHub nothing.
+    let mut etag = None;
+    h.service.watch_prs_once(&mut etag);
+    assert_eq!(
+        github.feed_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/5").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    let pr = h
+        .service
+        .refresh_pr(&task.id, Duration::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(pr.state, "open");
+    assert_eq!(
+        pr.new_reviews, 0,
+        "what was there before linking is not news"
+    );
+
+    *github.snapshot.lock().unwrap() = json!({
+        "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "CHANGES_REQUESTED",
+        "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+        "reviews": [review("bot", "2026-10-14T08:00:00Z"), review("ana", "2026-10-14T09:00:00Z")],
+        "comments": [{"author": {"login": "me"}, "createdAt": "2026-10-14T09:05:00Z"}]
+    });
+    // The feed mentions the PR: it is read again.
+    h.service.watch_prs_once(&mut etag);
+    assert_eq!(etag.as_deref(), Some("e1"));
+    let pr = h.service.task_pr(&task.id).unwrap().unwrap();
+    assert_eq!((pr.new_reviews, pr.new_comments), (1, 0));
+    assert_eq!(pr.new_authors, vec!["ana".to_string()]);
+    assert_eq!(pr.checks.failing, 1);
+    assert_eq!(h.service.overview().unwrap().prs.len(), 1);
+
+    // A stage on the task is the round that answers it.
+    let job = h.dispatch(&task, "implementation", "events=codex-ok");
+    let pr = h.service.task_pr(&task.id).unwrap().unwrap();
+    assert_eq!(pr.new_reviews, 0);
+    assert_eq!(pr.seen_until.as_deref(), Some("2026-10-14T09:00:00Z"));
+    h.wait(&job.id);
+
+    let read = super::mcp::handle_message(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "read_pr", "arguments": {"task_id": task.id}}}),
+    )
+    .unwrap()["result"]["structuredContent"]
+        .clone();
+    assert_eq!(read["review_decision"], "changes_requested");
+    assert_eq!(read["number"], 5);
+}
+
+#[test]
+fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
+    let h = harness();
+    let task = h.task("P-2");
+    let github = std::sync::Arc::new(FakeGitHub {
+        snapshot: std::sync::Mutex::new(json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+            "reviews": [], "comments": []
+        })),
+        feed_calls: std::sync::atomic::AtomicUsize::new(0),
+        mentioned: Vec::new(),
+        merged: std::sync::Mutex::new(Vec::new()),
+    });
+    h.service.set_github(github.clone());
+    let merge = |method: Option<&str>| NewApproval {
+        task_id: task.id.clone(),
+        rung: DeliveryRung::Merge,
+        title: "P-2: paginar (#5)".into(),
+        body: String::new(),
+        requested_by: "user".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        merge_method: method.map(str::to_string),
+    };
+    assert_eq!(
+        h.service
+            .request_approval(merge(Some("squash")))
+            .unwrap_err()
+            .category,
+        "pr_missing"
+    );
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/5").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        h.service
+            .request_approval(merge(None))
+            .unwrap_err()
+            .category,
+        "invalid_approval"
+    );
+    assert_eq!(
+        h.service
+            .request_approval(merge(Some("squash")))
+            .unwrap_err()
+            .category,
+        "pr_not_ready",
+        "failing checks block the merge"
+    );
+
+    github.snapshot.lock().unwrap()["statusCheckRollup"] =
+        json!([{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]);
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let asked = h.service.request_approval(merge(Some("squash"))).unwrap();
+    assert_eq!(asked.merge_method.as_deref(), Some("squash"));
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert!(done.outcome.unwrap().contains("fusionado (squash)"));
+    assert_eq!(
+        github.merged.lock().unwrap().as_slice(),
+        ["https://github.com/o/r/pull/5 squash P-2: paginar (#5)".to_string()]
+    );
+    assert_eq!(
+        h.service.task_pr(&task.id).unwrap().unwrap().state,
+        "merged"
+    );
+}
+
+#[test]
+fn pr_steps_done_before_following_are_linked_when_the_watch_starts() {
+    let h = harness();
+    let task = h.task("P-3");
+    let approval: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": "a-pr", "task_id": task.id, "rung": "pr", "title": "PR", "body": "",
+        "status": "executed", "requested_by": "coord", "requested_at_ms": 1,
+        "decided_at_ms": 2, "executed_at_ms": 3,
+        "outcome": "PR abierto: https://github.com/o/r/pull/9."
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&approval).unwrap();
+    assert_eq!(h.service.link_recorded_prs().unwrap(), 1);
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 9);
+    assert_eq!(h.service.link_recorded_prs().unwrap(), 0, "linked once");
 }

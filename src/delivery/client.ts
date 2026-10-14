@@ -10,6 +10,7 @@ import type {
   DeliveryCommitDraft,
   DeliveryConversation,
   DeliveryDecision,
+  DeliveryPr,
   DeliveryJob,
   DeliveryJobLog,
   DeliveryLease,
@@ -122,6 +123,7 @@ export const requestDeliveryApproval = (
   title: string,
   body: string,
   plan?: { commits: DeliveryCommit[]; leaveOut: string[] },
+  mergeMethod?: string,
 ) =>
   invoke<DeliveryApproval>("delivery_request_approval", {
     taskId,
@@ -130,7 +132,16 @@ export const requestDeliveryApproval = (
     body,
     commits: plan?.commits ?? null,
     leaveOut: plan?.leaveOut ?? null,
+    mergeMethod: mergeMethod ?? null,
   });
+
+/** Reads the task's PR from GitHub, unless it was read moments ago. */
+export const refreshDeliveryPr = (taskId: string) =>
+  invoke<DeliveryPr | null>("delivery_refresh_pr", { taskId });
+
+/** What is new on the task's PR stops being new. */
+export const markDeliveryPrSeen = (taskId: string) =>
+  invoke<DeliveryPr | null>("delivery_pr_seen", { taskId });
 
 /** The changed files and recent commit subjects a commit plan starts from. */
 export const getDeliveryCommitDraft = (taskId: string) =>

@@ -38,6 +38,8 @@ const client = vi.hoisted(() => ({
   renewDeliveryPermissions: vi.fn(),
   withdrawDeliveryDecision: vi.fn(),
   acceptRecommendedDecisions: vi.fn(),
+  refreshDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  markDeliveryPrSeen: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
   createDeliveryRun: vi.fn(),
   takeoverDeliveryRun: vi.fn(),
@@ -1222,5 +1224,79 @@ describe("DeliveryPanel", () => {
     );
     // The coordinator never moved its label; the delivery still shows.
     expect(await screen.findByText("Estado: Entregada")).toBeInTheDocument();
+  });
+
+  it("follows the task's PR and merges it through its own step", async () => {
+    const user = userEvent.setup();
+    const pr = {
+      task_id: "t1",
+      url: "https://github.com/o/r/pull/5",
+      repo: "o/r",
+      number: 5,
+      state: "open",
+      draft: false,
+      conflicts: false,
+      review_decision: "approved",
+      checks: { passing: 2, failing: 0, pending: 0 },
+      new_reviews: 1,
+      new_comments: 2,
+      new_authors: ["ana", "luis"],
+      latest_activity: null,
+      seen_until: null,
+      checked_at_ms: 1,
+      error: null,
+    };
+    const executed = (rung: "commit" | "push" | "pr") => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: rung === "pr" ? "https://github.com/o/r/pull/5" : "ok",
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ prs: [pr], approvals: [executed("commit"), executed("push"), executed("pr")] }),
+    );
+    client.markDeliveryPrSeen.mockResolvedValue(null);
+    client.requestDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+
+    const section = await screen.findByRole("region", { name: "Pull request" });
+    expect(within(section).getByRole("link", { name: "o/r#5" })).toHaveAttribute(
+      "href",
+      "https://github.com/o/r/pull/5",
+    );
+    expect(within(section).getByRole("status")).toHaveTextContent(
+      "1 revisión nueva y 2 comentarios nuevos de ana, luis",
+    );
+    await waitFor(() => expect(client.refreshDeliveryPr).toHaveBeenCalledWith("t1"));
+    await user.click(within(section).getByRole("button", { name: "Marcar como visto" }));
+    await waitFor(() => expect(client.markDeliveryPrSeen).toHaveBeenCalledWith("t1"));
+    expect(
+      within(screen.getByRole("region", { name: "Te necesitan" })).getByText("PR: 3 novedades"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Preparar merge…" }));
+    const form = screen.getByRole("form", { name: "Pedir aprobación de merge" });
+    await user.selectOptions(
+      within(form).getByRole("combobox", { name: "Cómo fusionar" }),
+      "rebase",
+    );
+    await user.click(within(form).getByRole("button", { name: "Pedir aprobación" }));
+    await waitFor(() =>
+      expect(client.requestDeliveryApproval).toHaveBeenCalledWith(
+        "t1",
+        "merge",
+        "AGOS-501: Fix the thing",
+        "",
+        undefined,
+        "rebase",
+      ),
+    );
   });
 });
