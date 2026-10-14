@@ -20,6 +20,7 @@ import {
   dispatchDeliveryJob,
   findDeliveryPr,
   getDeliveryMergeMethod,
+  getDeliveryPrReviewers,
   getDeliveryJobLog,
   getDeliveryOverview,
   getDeliveryRepoSettings,
@@ -1455,13 +1456,31 @@ function ApprovalBanner({
   const [outcome, setOutcome] = useState("");
   const name = lower(stepOf(approval).label);
   const pending = approval.status === "pending";
+  const choosesReviewers = pending && approval.rung === "pr";
+  const [reviewers, setReviewers] = useState<string[]>(approval.reviewers ?? []);
+  // The repo's people who can review, or why they could not be read.
+  const [candidates, setCandidates] = useState<string[] | null>(null);
+  const [candidatesError, setCandidatesError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!choosesReviewers) return;
+    let live = true;
+    getDeliveryPrReviewers(task.id).then(
+      (logins) => live && setCandidates(logins),
+      (cause) => live && setCandidatesError(errorText(cause)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [choosesReviewers, task.id]);
+  // Without a reviewer nobody can approve the PR, and it cannot be merged.
+  const needsReviewer = choosesReviewers && (candidates?.length ?? 0) > 0 && reviewers.length === 0;
   const consequence =
     approval.rung === "commit"
       ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
       : approval.rung === "push"
         ? `Al aprobar, Tinto publica la rama ${task.branch}.`
         : approval.rung === "pr"
-          ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después lo registras aquí; si no pegas su URL, Tinto busca el PR de la rama. Desde entonces Tinto lo sigue en GitHub."
+          ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después lo registras aquí; si no pegas su URL, Tinto busca el PR de la rama. Desde entonces Tinto lo sigue en GitHub y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar."
           : approval.rung === "merge"
             ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
             : "Al aprobar, el coordinador hace estas operaciones en Jira. Después registras aquí qué se hizo.";
@@ -1482,14 +1501,55 @@ function ApprovalBanner({
           {approval.body ? `\n\n${approval.body}` : ""}
         </pre>
       )}
+      {choosesReviewers && (
+        <fieldset className="delivery-reviewers">
+          <legend>Revisores</legend>
+          {candidates === null && !candidatesError && (
+            <p className="delivery-muted">Leyendo quién puede revisar en GitHub…</p>
+          )}
+          {candidatesError && (
+            <p className="delivery-job__note">
+              No se pudo leer quién puede revisar: {candidatesError}. Pídelo en GitHub.
+            </p>
+          )}
+          {candidates?.length === 0 && (
+            <p className="delivery-job__note">
+              El repositorio no tiene a nadie más que pueda revisar.
+            </p>
+          )}
+          {candidates?.map((login) => (
+            <label key={login}>
+              <input
+                type="checkbox"
+                checked={reviewers.includes(login)}
+                onChange={(event) =>
+                  setReviewers(
+                    event.target.checked
+                      ? [...reviewers, login]
+                      : reviewers.filter((chosen) => chosen !== login),
+                  )
+                }
+              />
+              {login}
+            </label>
+          ))}
+        </fieldset>
+      )}
       {pending && <p className="delivery-muted">{consequence}</p>}
       {pending ? (
         <div className="delivery-actions">
           <button
             type="button"
             className="delivery-button--primary"
-            disabled={busy}
-            onClick={() => void run(() => decideDeliveryApproval(approval.id, true))}
+            disabled={busy || needsReviewer}
+            title={needsReviewer ? "Elige al menos un revisor." : undefined}
+            onClick={() =>
+              void run(() =>
+                choosesReviewers
+                  ? decideDeliveryApproval(approval.id, true, undefined, reviewers)
+                  : decideDeliveryApproval(approval.id, true),
+              )
+            }
           >
             {approval.rung === "commit"
               ? "Aprobar y hacer commit"

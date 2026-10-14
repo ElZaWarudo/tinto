@@ -173,6 +173,8 @@ pub(super) fn found_step(
         outcome: Some(outcome),
         merge_method: None,
         stage: None,
+        reviewers: Vec::new(),
+        reviewers_requested: false,
         commits: Vec::new(),
         left_out: Vec::new(),
         created: Vec::new(),
@@ -525,6 +527,8 @@ impl DeliveryService {
                 .merge_method
                 .filter(|_| request.rung == DeliveryRung::Merge),
             stage,
+            reviewers: Vec::new(),
+            reviewers_requested: false,
             commits,
             left_out,
             created: Vec::new(),
@@ -955,6 +959,11 @@ impl DeliveryService {
             Some(format!(
                 "el PR #{} no está abierto ({})",
                 pr.number, pr.state
+            ))
+        } else if !pr.is_approved() {
+            Some(format!(
+                "el PR #{} no tiene una revisión aprobada",
+                pr.number
             ))
         } else if pr.conflicts {
             Some(format!("el PR #{} tiene conflictos con su base", pr.number))

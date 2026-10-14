@@ -1156,3 +1156,23 @@
 .delivery-results__history span {
   overflow-wrap: anywhere;
 }
+.delivery-reviewers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+}
+.delivery-reviewers legend {
+  padding: 0 4px;
+  font-size: 12px;
+}
+.delivery-reviewers label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.delivery-reviewers p {
+  margin: 0;
+}

@@ -166,12 +166,23 @@ export const getDeliveryCommitDraft = (taskId: string) =>
 export const undoDeliveryCommit = (approvalId: string) =>
   invoke<DeliveryApproval>("delivery_undo_commit", { approvalId });
 
-export const decideDeliveryApproval = (approvalId: string, approve: boolean, note?: string) =>
+/** `reviewers`: for a PR step, who the user chose to review it. */
+export const decideDeliveryApproval = (
+  approvalId: string,
+  approve: boolean,
+  note?: string,
+  reviewers?: string[],
+) =>
   invoke<DeliveryApproval>("delivery_decide_approval", {
     approvalId,
     approve,
     note: note ?? null,
+    reviewers: reviewers ?? null,
   });
+
+/** Who can review the task's PR: the repo's assignable people, without the user. */
+export const getDeliveryPrReviewers = (taskId: string) =>
+  invoke<string[]>("delivery_pr_reviewers", { taskId });
 
 export const completeDeliveryApproval = (approvalId: string, success: boolean, outcome: string) =>
   invoke<DeliveryApproval>("delivery_complete_approval", { approvalId, success, outcome });

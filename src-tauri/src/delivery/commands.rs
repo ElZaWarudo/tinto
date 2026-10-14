@@ -376,9 +376,27 @@ pub async fn delivery_decide_approval(
     approval_id: String,
     approve: bool,
     note: Option<String>,
+    // A PR step: who the user chose to review it.
+    reviewers: Option<Vec<String>>,
 ) -> Result<DeliveryApproval, CommandError> {
     let service = service.inner().clone();
-    blocking(move || service.decide_approval(&approval_id, approve, note)).await
+    blocking(move || {
+        if let Some(reviewers) = reviewers.filter(|_| approve) {
+            service.set_pr_reviewers(&approval_id, reviewers)?;
+        }
+        service.decide_approval(&approval_id, approve, note)
+    })
+    .await
+}
+
+/// Who can review the task's PR: the repo's assignable people on GitHub.
+#[tauri::command]
+pub async fn delivery_pr_reviewers(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Vec<String>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.pr_reviewers(&task_id)).await
 }
 
 #[tauri::command]

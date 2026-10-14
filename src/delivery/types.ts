@@ -144,6 +144,9 @@ export interface DeliveryApproval {
   merge_method?: string | null;
   /** `jira` only: after_pr (the PR is open) or after_merge (it is merged). */
   stage?: "after_pr" | "after_merge" | null;
+  /** `pr` only: who the user chose to review it; Tinto asks them on GitHub. */
+  reviewers?: string[];
+  reviewers_requested?: boolean;
   title: string;
   body: string;
   status: DeliveryApprovalStatus;
@@ -323,4 +326,6 @@ export interface DeliveryPr {
   merged_by?: string | null;
   merged_at?: string | null;
   merge_commit?: string | null;
+  /** Reviewers whose latest review approves it. */
+  approved_by?: string[];
 }

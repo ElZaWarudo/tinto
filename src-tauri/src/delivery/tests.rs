@@ -2085,6 +2085,8 @@ struct FakeGitHub {
     feed_calls: std::sync::atomic::AtomicUsize,
     mentioned: Vec<String>,
     merged: std::sync::Mutex<Vec<String>>,
+    /// `<url> <logins>` of every review request.
+    reviews: std::sync::Mutex<Vec<String>>,
     /// What `gh pr list --head <branch>` answers, for any branch.
     branch_prs: std::sync::Mutex<serde_json::Value>,
 }
@@ -2096,6 +2098,7 @@ impl FakeGitHub {
             feed_calls: std::sync::atomic::AtomicUsize::new(0),
             mentioned: Vec::new(),
             merged: std::sync::Mutex::new(Vec::new()),
+            reviews: std::sync::Mutex::new(Vec::new()),
             branch_prs: std::sync::Mutex::new(branch_prs),
         })
     }
@@ -2115,6 +2118,16 @@ impl super::prs::GitHub for FakeGitHub {
     ) -> Result<serde_json::Value, super::DeliveryError> {
         assert_eq!(repo, "o/r", "the repo comes from origin's URL");
         Ok(self.branch_prs.lock().unwrap().clone())
+    }
+    fn assignees(&self, _repo: &str) -> Result<Vec<String>, super::DeliveryError> {
+        Ok(vec!["me".into(), "Luis".into(), "ana".into()])
+    }
+    fn request_reviewers(&self, url: &str, logins: &[String]) -> Result<(), super::DeliveryError> {
+        self.reviews
+            .lock()
+            .unwrap()
+            .push(format!("{url} {}", logins.join(",")));
+        Ok(())
     }
     fn merge(
         &self,
@@ -2156,6 +2169,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: vec!["o/r#5".into()],
         merged: std::sync::Mutex::new(Vec::new()),
+        reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
@@ -2226,6 +2240,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         feed_calls: std::sync::atomic::AtomicUsize::new(0),
         mentioned: Vec::new(),
         merged: std::sync::Mutex::new(Vec::new()),
+        reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
@@ -2734,4 +2749,72 @@ fn the_startup_check_of_every_task_finishes() {
         .expect("the startup check hung")
         .unwrap();
     assert!(h.service.task_pr(&task.id).unwrap().is_some());
+}
+
+#[test]
+fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_approval() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("P-11");
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "",
+               "statusCheckRollup": [], "reviews": [
+                   {"author": {"login": "ana"}, "state": "COMMENTED", "submittedAt": "2026-10-14T08:00:00Z"}
+               ], "comments": []}),
+        json!([open_pr(40, "OPEN")]),
+    );
+    h.service.set_github(github.clone());
+    assert_eq!(
+        h.service.pr_reviewers(&task.id).unwrap(),
+        vec!["ana".to_string(), "Luis".to_string()],
+        "the user is not offered as their own reviewer"
+    );
+
+    put_step(&h, &task, "a-pr", "pr", "pending", "");
+    h.service
+        .set_pr_reviewers("a-pr", vec!["@ana".into(), " Luis ".into()])
+        .unwrap();
+    h.service.decide_approval("a-pr", true, None).unwrap();
+    let done = h.service.complete_approval("a-pr", true, "").unwrap();
+    assert!(done.reviewers_requested);
+    assert_eq!(
+        github.reviews.lock().unwrap().as_slice(),
+        ["https://github.com/o/r/pull/40 ana,Luis".to_string()]
+    );
+    assert!(h
+        .service
+        .set_pr_reviewers("a-pr", vec!["ana".into()])
+        .is_err());
+
+    let merge = || NewApproval {
+        task_id: task.id.clone(),
+        rung: DeliveryRung::Merge,
+        title: "Merge".into(),
+        body: String::new(),
+        requested_by: "user".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        merge_method: Some("merge".into()),
+        stage: None,
+    };
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let refused = h.service.request_approval(merge()).unwrap_err();
+    assert_eq!(refused.category, "pr_not_ready");
+    assert!(
+        refused.message.contains("no tiene una revisión aprobada"),
+        "{}",
+        refused.message
+    );
+
+    // A repo without required reviews: one approval is enough.
+    github.snapshot.lock().unwrap()["reviews"] = json!([
+        {"author": {"login": "ana"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-14T08:00:00Z"},
+        {"author": {"login": "ana"}, "state": "APPROVED", "submittedAt": "2026-10-14T09:00:00Z"}
+    ]);
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        h.service.task_pr(&task.id).unwrap().unwrap().approved_by,
+        vec!["ana".to_string()]
+    );
+    h.service.request_approval(merge()).unwrap();
 }

@@ -308,6 +308,13 @@ pub struct DeliveryApproval {
     /// goes to review) or `after_merge` (the issue is closed).
     #[serde(default)]
     pub stage: Option<String>,
+    /// `pr` only: the GitHub logins the user chose to review it. Tinto asks
+    /// them on GitHub once the PR is linked.
+    #[serde(default)]
+    pub reviewers: Vec<String>,
+    /// `pr` only: whether Tinto already asked `reviewers` on GitHub.
+    #[serde(default)]
+    pub reviewers_requested: bool,
     /// `commit` only: the commits to create, in order.
     #[serde(default)]
     pub commits: Vec<DeliveryCommit>,

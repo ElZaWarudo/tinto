@@ -20,10 +20,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::coordination::found_step;
-use super::model::{DeliveryApprovalStatus, DeliveryRung, DeliveryTask};
+use super::model::{DeliveryApproval, DeliveryApprovalStatus, DeliveryRung, DeliveryTask};
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
+
+/// How a PR step's notice starts when its reviewers could not be asked.
+const REVIEW_NOT_ASKED: &str = "No se pudo pedir la revisión a";
+
+/// `owner/name` of the task's `origin`, when it is on GitHub.
+fn task_github_repo(task: &DeliveryTask) -> Option<String> {
+    let place = Place::of(task.distro.as_deref());
+    tasks::origin_url(place, &task.repo)
+        .as_deref()
+        .and_then(github_repo)
+}
 
 /// Marking the PR step done needs a PR Tinto can follow.
 pub fn no_branch_pr(branch: &str) -> DeliveryError {
@@ -128,6 +139,9 @@ pub struct DeliveryPr {
     pub merged_at: Option<String>,
     #[serde(default)]
     pub merge_commit: Option<String>,
+    /// Who approved it: reviewers whose latest review is an approval.
+    #[serde(default)]
+    pub approved_by: Vec<String>,
 }
 
 impl DeliveryPr {
@@ -152,11 +166,21 @@ impl DeliveryPr {
             merged_by: None,
             merged_at: None,
             merge_commit: None,
+            approved_by: Vec::new(),
         }
     }
 
     pub fn is_open(&self) -> bool {
         self.state == "open" || self.state == "unknown"
+    }
+
+    /// Reviewed and approved: GitHub's decision when the repo requires
+    /// reviews, else at least one approval and no changes requested.
+    pub fn is_approved(&self) -> bool {
+        match self.review_decision.as_deref() {
+            Some(decision) => decision == "approved",
+            None => !self.approved_by.is_empty(),
+        }
     }
 }
 
@@ -221,6 +245,32 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
     }
     pr.checks = checks;
 
+    // Each reviewer's latest verdict; comments alone are not one.
+    let mut verdicts: Vec<(&str, &str, &str)> = snapshot["reviews"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|review| {
+            let state = review["state"].as_str()?;
+            matches!(state, "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED").then_some((
+                review["author"]["login"].as_str()?,
+                review["submittedAt"].as_str().unwrap_or_default(),
+                state,
+            ))
+        })
+        .collect();
+    verdicts.sort_by_key(|(author, time, _)| (*author, *time));
+    let mut approved_by: Vec<String> = Vec::new();
+    for (index, (author, _, state)) in verdicts.iter().enumerate() {
+        let latest = verdicts
+            .get(index + 1)
+            .is_none_or(|(next, _, _)| next != author);
+        if latest && *state == "APPROVED" {
+            approved_by.push(author.to_string());
+        }
+    }
+    pr.approved_by = approved_by;
+
     // (time, author, is_review) of everything others did on the PR.
     let mut activity: Vec<(String, String, bool)> = Vec::new();
     for (key, time_key, review) in [
@@ -280,6 +330,11 @@ pub trait GitHub: Send + Sync {
     /// `gh pr list --json` of every PR, in any state, whose head is
     /// `branch` in `repo` (`owner/name`).
     fn branch_prs(&self, repo: &str, branch: &str) -> Result<Value, DeliveryError>;
+    /// Logins that can be assigned in `repo` (`owner/name`): the people who
+    /// can review its PRs.
+    fn assignees(&self, repo: &str) -> Result<Vec<String>, DeliveryError>;
+    /// Asks `logins` to review the PR.
+    fn request_reviewers(&self, url: &str, logins: &[String]) -> Result<(), DeliveryError>;
     fn feed(&self, etag: Option<&str>) -> Result<Feed, DeliveryError>;
     /// Merges the PR and deletes its branch on GitHub. `subject` and `body`
     /// are the merge commit's message (`rebase` has none).
@@ -307,6 +362,12 @@ impl GitHub for Offline {
     }
     fn branch_prs(&self, _repo: &str, _branch: &str) -> Result<Value, DeliveryError> {
         self.pr("")
+    }
+    fn assignees(&self, _repo: &str) -> Result<Vec<String>, DeliveryError> {
+        self.pr("").map(|_| Vec::new())
+    }
+    fn request_reviewers(&self, _url: &str, _logins: &[String]) -> Result<(), DeliveryError> {
+        self.pr("").map(|_| ())
     }
     fn feed(&self, _etag: Option<&str>) -> Result<Feed, DeliveryError> {
         self.pr("").map(|_| Feed::NotModified { poll_seconds: 60 })
@@ -386,6 +447,35 @@ impl GitHub for GhCli {
             "--json",
             "number,url,state,headRefOid",
         ])
+    }
+
+    fn assignees(&self, repo: &str) -> Result<Vec<String>, DeliveryError> {
+        let path = format!("repos/{repo}/assignees");
+        let output = Self::run(&["api", "--paginate", &path, "--jq", ".[].login"])?;
+        if !output.status.success() {
+            return Err(DeliveryError::new(
+                "github_failed",
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|login| !login.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
+    fn request_reviewers(&self, url: &str, logins: &[String]) -> Result<(), DeliveryError> {
+        let logins = logins.join(",");
+        let output = Self::run(&["pr", "edit", url, "--add-reviewer", &logins])?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(DeliveryError::new(
+            "github_failed",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
     }
 
     fn merge(
@@ -721,16 +811,85 @@ impl DeliveryService {
         &self,
         task: &DeliveryTask,
     ) -> Result<Option<PrRef>, DeliveryError> {
-        let place = Place::of(task.distro.as_deref());
-        let Some(repo) = tasks::origin_url(place, &task.repo)
-            .as_deref()
-            .and_then(github_repo)
-        else {
+        let Some(repo) = task_github_repo(task) else {
             return Ok(None);
         };
         Ok(pick_branch_pr(
             &self.github().branch_prs(&repo, &task.branch)?,
         ))
+    }
+
+    /// Who can review the task's PR: the repo's assignable people, without
+    /// the user, who cannot review their own PR.
+    pub fn pr_reviewers(&self, task_id: &str) -> Result<Vec<String>, DeliveryError> {
+        let task = self.task(task_id)?;
+        let repo = task_github_repo(&task).ok_or_else(|| {
+            DeliveryError::new("github_unavailable", "el remoto origin no está en GitHub")
+        })?;
+        let github = self.github();
+        let me = self.github_login(&*github).unwrap_or_default();
+        let mut logins = github.assignees(&repo)?;
+        logins.retain(|login| !login.eq_ignore_ascii_case(&me));
+        logins.sort_by_key(|login| login.to_ascii_lowercase());
+        Ok(logins)
+    }
+
+    /// The reviewers the user chose for a PR step before approving it.
+    pub fn set_pr_reviewers(
+        &self,
+        approval_id: &str,
+        reviewers: Vec<String>,
+    ) -> Result<DeliveryApproval, DeliveryError> {
+        let mut approval = self.approval(approval_id)?;
+        if approval.rung != DeliveryRung::Pr || approval.status != DeliveryApprovalStatus::Pending {
+            return Err(DeliveryError::new(
+                "invalid_approval",
+                "los revisores se eligen al aprobar el paso PR",
+            ));
+        }
+        approval.reviewers = reviewers
+            .iter()
+            .map(|login| login.trim().trim_start_matches('@').to_string())
+            .filter(|login| !login.is_empty())
+            .collect();
+        self.save_approval(&approval, "pr_reviewers")?;
+        Ok(approval)
+    }
+
+    /// Asks the PR step's reviewers on GitHub once its PR is linked, once.
+    /// A failure stays in the step's notice and is retried when the task is
+    /// checked again.
+    pub(super) fn request_pr_reviewers(&self, task_id: &str) -> Result<(), DeliveryError> {
+        let Some(mut step) = self
+            .latest_approval(task_id, DeliveryRung::Pr)?
+            .filter(|step| step.status.was_done())
+            .filter(|step| !step.reviewers.is_empty() && !step.reviewers_requested)
+        else {
+            return Ok(());
+        };
+        let Some(pr) = self.task_pr(task_id)? else {
+            return Ok(());
+        };
+        match self.github().request_reviewers(&pr.url, &step.reviewers) {
+            Ok(()) => {
+                step.reviewers_requested = true;
+                if step
+                    .notice
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with(REVIEW_NOT_ASKED))
+                {
+                    step.notice = None;
+                }
+            }
+            Err(error) => {
+                step.notice = Some(format!(
+                    "{REVIEW_NOT_ASKED} {}: {}",
+                    step.reviewers.join(", "),
+                    error.message
+                ));
+            }
+        }
+        self.save_approval(&step, "pr_reviewers_requested")
     }
 
     /// Links `found` and brings the PR step in line: a step done with
@@ -772,7 +931,7 @@ impl DeliveryService {
         if latest.as_ref() != Some(&step) {
             self.save_approval(&step, "pr_found")?;
         }
-        Ok(())
+        self.request_pr_reviewers(&task.id)
     }
 
     /// "Buscar el PR de la rama": links the PR GitHub has for it.
@@ -795,6 +954,7 @@ impl DeliveryService {
                 task.key
             );
         }
+        self.request_pr_reviewers(task_id)?;
         let pr = self.refresh_pr(task_id, Duration::from_secs(30))?;
         if let Some(pr) = &pr {
             // A PR read moments ago is not read again, but still checked.

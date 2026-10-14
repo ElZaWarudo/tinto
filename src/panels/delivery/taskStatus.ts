@@ -449,6 +449,9 @@ export function prSummary(pr: DeliveryPr): { tone: Tone; icon: StatusIcon; label
   }
   if (pr.checks.pending > 0) return { tone: "waiting", icon: "clock", label: "Checks en curso" };
   if (pr.draft) return { tone: "waiting", icon: "clock", label: "Borrador" };
-  if (pr.review_decision === "approved") return { tone: "ok", icon: "check", label: "Aprobado" };
+  // Without required reviews GitHub gives no decision; an approval still counts.
+  const approved =
+    pr.review_decision === "approved" || (!pr.review_decision && (pr.approved_by?.length ?? 0) > 0);
+  if (approved) return { tone: "ok", icon: "check", label: "Aprobado" };
   return { tone: "waiting", icon: "clock", label: "En revisión" };
 }

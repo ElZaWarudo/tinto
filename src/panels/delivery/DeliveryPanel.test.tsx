@@ -42,6 +42,7 @@ const client = vi.hoisted(() => ({
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
+  getDeliveryPrReviewers: vi.fn((): Promise<string[]> => Promise.resolve([])),
   correctDeliveryApproval: vi.fn(),
   markDeliveryPrSeen: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
@@ -1466,6 +1467,42 @@ describe("DeliveryPanel", () => {
       "Merge pull request #5 from o/delivery/agos-501",
     );
     expect(client.getDeliveryMergeMethod).toHaveBeenCalledWith("t1");
+  });
+
+  it("approves the PR step only with a reviewer chosen from GitHub's list", async () => {
+    const user = userEvent.setup();
+    const step = (rung: DeliveryApproval["rung"], status: DeliveryApproval["status"]) => ({
+      id: rung,
+      task_id: "t1",
+      rung,
+      title: rung === "pr" ? "AGOS-501: Fix the thing" : rung,
+      body: "",
+      status,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [step("commit", "executed"), step("push", "executed"), step("pr", "pending")],
+      }),
+    );
+    client.getDeliveryPrReviewers.mockResolvedValueOnce(["ana", "luis"]);
+    client.decideDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Aprobación pr" });
+    const reviewers = within(banner).getByRole("group", { name: "Revisores" });
+    const approve = within(banner).getByRole("button", { name: "Aprobar" });
+    await within(reviewers).findByRole("checkbox", { name: "ana" });
+    expect(approve).toBeDisabled();
+    await user.click(within(reviewers).getByRole("checkbox", { name: "luis" }));
+    await user.click(approve);
+    await waitFor(() =>
+      expect(client.decideDeliveryApproval).toHaveBeenCalledWith("pr", true, undefined, ["luis"]),
+    );
+    expect(client.getDeliveryPrReviewers).toHaveBeenCalledWith("t1");
   });
 
   it("follows the task's PR and merges it through its own step", async () => {

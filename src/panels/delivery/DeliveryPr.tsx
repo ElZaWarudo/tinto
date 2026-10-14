@@ -52,7 +52,11 @@ export function PrSection({ pr, busy, run }: { pr: DeliveryPr; busy: boolean; ru
           <ul className="delivery-pr__facts">
             <li>
               Revisión:{" "}
-              <strong>{DECISION[pr.review_decision ?? ""] ?? "Sin revisión requerida"}</strong>
+              <strong>
+                {DECISION[pr.review_decision ?? ""] ??
+                  (pr.approved_by?.length ? "Aprobado" : "Sin revisión aprobada")}
+              </strong>
+              {pr.approved_by?.length ? ` por ${pr.approved_by.join(", ")}` : ""}
             </li>
             <li>
               Checks:{" "}
