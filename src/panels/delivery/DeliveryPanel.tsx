@@ -46,7 +46,6 @@ import type {
   DeliveryPr,
   DeliveryRepoSettings,
   DeliveryRun,
-  DeliveryRung,
   DeliveryStageAgent,
   DeliveryTask,
 } from "../../delivery/types";
@@ -64,11 +63,12 @@ import { DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PrSection } from "./DeliveryPr";
 import {
   GROUPS,
-  RUNGS,
+  STEPS,
   TASK_STATE_LABEL,
   attemptOutcome,
   batchName,
   isBroken,
+  isDelivered,
   isOpen,
   isSuperseded,
   jobsOf,
@@ -77,10 +77,13 @@ import {
   latestOfRole,
   lower,
   nextRole,
-  nextRung,
+  latestStep,
+  nextStep,
   prSummary,
   rolesOf,
-  rungLabel,
+  stepKey,
+  stepOf,
+  type DeliveryStep,
   stageLabel,
   taskStatus,
   type StatusIcon,
@@ -733,7 +736,7 @@ function TaskDetail({
   const openApprovals = approvals.filter(
     (approval) => approval.status === "pending" || approval.status === "approved",
   );
-  const rung = openApprovals.length === 0 ? nextRung(approvals) : null;
+  const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
   // The approval whose result is being corrected.
   const [correcting, setCorrecting] = useState<string | null>(null);
@@ -751,7 +754,7 @@ function TaskDetail({
   const blocked = pendingDecisions.length > 0;
   const needsYou = blocked || openApprovals.length > 0 || broken !== null;
   // The coordinator's label stops at the stages; the delivery is Tinto's to know.
-  const delivered = latestApproval(approvals, "jira")?.status === "executed";
+  const delivered = isDelivered(approvals);
   const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
   // The task's code as its latest stage found or left it.
   const withCode = newestFirst.find((job) => job.end_candidate ?? job.start_candidate);
@@ -990,11 +993,11 @@ function TaskDetail({
             ))
           }
         </Menu>
-        {rung && !requesting && (
+        {step && !requesting && (
           <button type="button" onClick={() => setRequesting(true)}>
-            {latestApproval(approvals, rung)?.status === "drifted"
-              ? `Volver a pedir el ${lower(rungLabel(rung))}…`
-              : `Preparar ${lower(rungLabel(rung))}…`}
+            {latestStep(approvals, step)?.status === "drifted"
+              ? `Volver a pedir el ${lower(step.label)}…`
+              : `Preparar ${lower(step.label)}…`}
           </button>
         )}
         {blocked && (
@@ -1004,7 +1007,7 @@ function TaskDetail({
         )}
         {!next && !hasOpenJob && !needsYou && (
           <span className="delivery-muted">
-            {rung ? "Todas las etapas pasaron. Lo siguiente es la entrega." : "Tarea entregada."}
+            {step ? "Todas las etapas pasaron. Lo siguiente es la entrega." : "Tarea entregada."}
           </span>
         )}
       </div>
@@ -1013,14 +1016,14 @@ function TaskDetail({
 
       <CommitStep approvals={approvals} busy={busy} run={run} />
 
-      {rung === "commit" && requesting && (
+      {step?.rung === "commit" && requesting && (
         <CommitPlanForm task={task} busy={busy} run={run} onClose={() => setRequesting(false)} />
       )}
-      {rung && rung !== "commit" && requesting && (
+      {step && step.rung !== "commit" && requesting && (
         <DeliveryRequest
-          key={rung}
+          key={stepKey(step)}
           task={task}
-          rung={rung}
+          step={step}
           busy={busy}
           run={run}
           onClose={() => setRequesting(false)}
@@ -1158,9 +1161,10 @@ function StageTrack({
       <div className="delivery-track__part delivery-track__part--rungs">
         <h3 id="delivery-track-rungs">Entrega</h3>
         <ol aria-labelledby="delivery-track-rungs">
-          {RUNGS.map(({ rung, label }) => {
+          {STEPS.map((ladder) => {
+            const { rung, label } = ladder;
             const live = rung === "pr" && pr ? prSummary(pr) : null;
-            const approval = latestApproval(approvals, rung);
+            const approval = latestStep(approvals, ladder);
             const unlinked = rung === "pr" && !pr && approval?.status === "executed";
             const step = live
               ? { ...live, title: `${pr?.repo}#${pr?.number}` }
@@ -1173,7 +1177,7 @@ function StageTrack({
                   }
                 : rungStep(approval);
             return (
-              <li key={rung} className={`delivery-node delivery-node--${step.tone}`}>
+              <li key={stepKey(ladder)} className={`delivery-node delivery-node--${step.tone}`}>
                 <div title={step.title}>
                   <span className="delivery-node__name">
                     <StatusMark icon={step.icon} />
@@ -1254,17 +1258,16 @@ function StepChecks({
   run: (action: () => Promise<unknown>) => Promise<boolean>;
 }) {
   type Check = {
-    rung: DeliveryRung;
     text: string;
     action: { label: string; run: () => Promise<unknown> } | null;
   };
-  const checks = RUNGS.flatMap(({ rung, label }): Check[] => {
-    const approval = latestApproval(approvals, rung);
+  const checks = STEPS.flatMap((step): Check[] => {
+    const { rung, label } = step;
+    const approval = latestStep(approvals, step);
     if (!approval) return [];
     if (rung === "pr" && approval.status === "executed" && !pr) {
       return [
         {
-          rung,
           text: "PR: el paso está hecho, pero la tarea no tiene un PR vinculado.",
           action: { label: "Buscar el PR de la rama", run: () => findDeliveryPr(task.id) },
         },
@@ -1274,7 +1277,6 @@ function StepChecks({
     const drifted = approval.status === "drifted";
     return [
       {
-        rung,
         text: `${label}: ${drifted ? "ya no coincide. " : ""}${approval.notice}.`,
         action:
           drifted && rung === "pr"
@@ -1286,8 +1288,8 @@ function StepChecks({
   if (checks.length === 0) return null;
   return (
     <div className="delivery-step-checks" role="group" aria-label="Comprobaciones de la entrega">
-      {checks.map(({ rung, text, action }) => (
-        <p key={rung}>
+      {checks.map(({ text, action }) => (
+        <p key={text}>
           <span className="delivery-job__note">{text}</span>
           {action && (
             <button type="button" disabled={busy} onClick={() => void run(action.run)}>
@@ -1310,12 +1312,12 @@ const isDone = (approval: DeliveryApproval | undefined): approval is DeliveryApp
 /** Done steps whose result Tinto cannot check against git: the user's to
  *  correct. Commit and push are checked, so they are not here. */
 function correctableSteps(approvals: DeliveryApproval[]): CorrectableStep[] {
-  return RUNGS.filter(({ rung }) => rung !== "commit" && rung !== "push").flatMap(
-    ({ rung, label }) => {
-      const approval = latestApproval(approvals, rung);
-      return isDone(approval) ? [{ id: approval.id, label, outcome: approval.outcome ?? "" }] : [];
-    },
-  );
+  return STEPS.filter(({ rung }) => rung !== "commit" && rung !== "push").flatMap((step) => {
+    const approval = latestStep(approvals, step);
+    return isDone(approval)
+      ? [{ id: approval.id, label: step.label, outcome: approval.outcome ?? "" }]
+      : [];
+  });
 }
 
 /** Each done step's result, with the corrections the user made and when. */
@@ -1328,16 +1330,16 @@ function DeliveryResults({
   busy: boolean;
   onCorrect: (approvalId: string) => void;
 }) {
-  const done = RUNGS.flatMap(({ rung, label }) => {
-    const approval = latestApproval(approvals, rung);
-    return isDone(approval) ? [{ rung, label, approval }] : [];
+  const done = STEPS.flatMap((step) => {
+    const approval = latestStep(approvals, step);
+    return isDone(approval) ? [{ step, approval }] : [];
   });
   if (done.length === 0) return null;
   return (
     <section className="delivery-section" aria-label="Resultados de la entrega">
       <h3>Resultados de la entrega</h3>
       <ul className="delivery-results">
-        {done.map(({ rung, label, approval }) => {
+        {done.map(({ step: { rung, label, stage }, approval }) => {
           const corrections = approval.corrections ?? [];
           // Oldest first: what was recorded, then each correction.
           const history = [
@@ -1349,7 +1351,7 @@ function DeliveryResults({
             ...corrections.map((c) => ({ text: c.outcome, at: c.at_ms, reason: c.reason })),
           ];
           return (
-            <li key={rung} aria-label={label}>
+            <li key={stage ?? rung} aria-label={label}>
               <strong>{label}</strong>
               <ol className="delivery-results__history">
                 {history.map((entry, index) => (
@@ -1442,7 +1444,7 @@ function ApprovalBanner({
   run: (action: () => Promise<unknown>) => Promise<boolean>;
 }) {
   const [outcome, setOutcome] = useState("");
-  const name = lower(rungLabel(approval.rung));
+  const name = lower(stepOf(approval).label);
   const pending = approval.status === "pending";
   const consequence =
     approval.rung === "commit"
@@ -1523,24 +1525,25 @@ function ApprovalBanner({
 
 function DeliveryRequest({
   task,
-  rung,
+  step,
   busy,
   run,
   onClose,
 }: {
   task: DeliveryTask;
-  rung: DeliveryRung;
+  step: DeliveryStep;
   busy: boolean;
   run: (action: () => Promise<unknown>) => Promise<boolean>;
   onClose: () => void;
 }) {
   const named = task.title ? `${task.key}: ${task.title}` : task.key;
+  const { rung } = step;
   const [title, setTitle] = useState(rung === "push" ? `Publicar ${task.branch}` : named);
   // The commit step has its own form (CommitPlanForm).
   const [body, setBody] = useState("");
   const [method, setMethod] = useState("squash");
   const merge = rung === "merge";
-  const name = lower(rungLabel(rung));
+  const name = lower(step.label);
   return (
     <form
       className="delivery-request"
@@ -1550,7 +1553,17 @@ function DeliveryRequest({
         void run(() =>
           merge
             ? requestDeliveryApproval(task.id, rung, title, body, undefined, method)
-            : requestDeliveryApproval(task.id, rung, title, body),
+            : step.stage
+              ? requestDeliveryApproval(
+                  task.id,
+                  rung,
+                  title,
+                  body,
+                  undefined,
+                  undefined,
+                  step.stage,
+                )
+              : requestDeliveryApproval(task.id, rung, title, body),
         ).then((ok) => {
           if (ok) onClose();
         });

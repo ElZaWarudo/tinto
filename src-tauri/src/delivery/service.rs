@@ -179,6 +179,7 @@ impl DeliveryService {
             }),
         };
         service.reconcile()?;
+        service.stage_legacy_jira()?;
         Ok(service)
     }
 

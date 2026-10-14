@@ -304,6 +304,10 @@ pub struct DeliveryApproval {
     /// `merge` only: `squash`, `merge` or `rebase`.
     #[serde(default)]
     pub merge_method: Option<String>,
+    /// `jira` only: when it happens, `after_pr` (the PR is open, the issue
+    /// goes to review) or `after_merge` (the issue is closed).
+    #[serde(default)]
+    pub stage: Option<String>,
     /// `commit` only: the commits to create, in order.
     #[serde(default)]
     pub commits: Vec<DeliveryCommit>,

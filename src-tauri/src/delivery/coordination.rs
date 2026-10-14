@@ -33,6 +33,9 @@ pub struct NewApproval {
     pub commits: Vec<DeliveryCommit>,
     /// `merge` only: `squash`, `merge` or `rebase`.
     pub merge_method: Option<String>,
+    /// `jira` only: `after_pr` or `after_merge`; the next one missing when
+    /// `None`.
+    pub stage: Option<String>,
     /// `commit` only: changed files the plan leaves uncommitted on purpose.
     pub leave_out: Vec<String>,
 }
@@ -143,6 +146,11 @@ fn created_commits(approval: &DeliveryApproval) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The Jira step when the PR is open (the issue goes to review).
+pub const JIRA_AFTER_PR: &str = "after_pr";
+/// The Jira step once the PR is merged (the issue is closed).
+pub const JIRA_AFTER_MERGE: &str = "after_merge";
+
 /// A step done outside Tinto that Tinto found on GitHub.
 pub(super) fn found_step(
     task_id: &str,
@@ -164,6 +172,7 @@ pub(super) fn found_step(
         executed_at_ms: Some(now),
         outcome: Some(outcome),
         merge_method: None,
+        stage: None,
         commits: Vec::new(),
         left_out: Vec::new(),
         created: Vec::new(),
@@ -187,6 +196,61 @@ impl DeliveryService {
             .into_iter()
             .rev()
             .find(|approval| approval.task_id == task_id && approval.rung == rung))
+    }
+
+    /// The Jira step a request is for: the one asked, else the next one the
+    /// task has not done (`after_pr`, then `after_merge`).
+    fn jira_stage(&self, task_id: &str, asked: Option<&str>) -> Result<String, DeliveryError> {
+        if let Some(asked) = asked {
+            return match asked {
+                JIRA_AFTER_PR | JIRA_AFTER_MERGE => Ok(asked.to_string()),
+                other => Err(DeliveryError::new(
+                    "invalid_approval",
+                    format!("momento de Jira desconocido: {other} (after_pr o after_merge)"),
+                )),
+            };
+        }
+        let done_after_pr = self.store()?.approvals()?.iter().any(|approval| {
+            approval.task_id == task_id
+                && approval.rung == DeliveryRung::Jira
+                && approval.stage.as_deref() == Some(JIRA_AFTER_PR)
+                && approval.status == DeliveryApprovalStatus::Executed
+        });
+        Ok(if done_after_pr {
+            JIRA_AFTER_MERGE
+        } else {
+            JIRA_AFTER_PR
+        }
+        .to_string())
+    }
+
+    /// Jira steps from when a task had a single one get their moment: done
+    /// before the merge, it was the PR's (AGOS-455 moved the issue to review
+    /// before merge existed); after it, the merge's.
+    pub(super) fn stage_legacy_jira(&self) -> Result<(), DeliveryError> {
+        let approvals = self.store()?.approvals()?;
+        for mut jira in approvals.iter().cloned() {
+            if jira.rung != DeliveryRung::Jira || jira.stage.is_some() {
+                continue;
+            }
+            let at = jira.executed_at_ms.unwrap_or(jira.requested_at_ms);
+            let merged_before = approvals.iter().any(|merge| {
+                merge.task_id == jira.task_id
+                    && merge.rung == DeliveryRung::Merge
+                    && merge.status == DeliveryApprovalStatus::Executed
+                    && merge.executed_at_ms.is_some_and(|merged| merged <= at)
+            });
+            jira.stage = Some(
+                if merged_before {
+                    JIRA_AFTER_MERGE
+                } else {
+                    JIRA_AFTER_PR
+                }
+                .to_string(),
+            );
+            self.store()?.put_approval(&jira)?;
+        }
+        Ok(())
     }
 
     // ---- runs ----
@@ -376,11 +440,16 @@ impl DeliveryService {
                 "la aprobación necesita el texto exacto (título o mensaje)",
             ));
         }
+        let stage = match request.rung {
+            DeliveryRung::Jira => Some(self.jira_stage(&task.id, request.stage.as_deref())?),
+            _ => None,
+        };
         {
             let store = self.store()?;
             let open = store.approvals()?.into_iter().any(|approval| {
                 approval.task_id == task.id
                     && approval.rung == request.rung
+                    && approval.stage == stage
                     && matches!(
                         approval.status,
                         DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
@@ -455,6 +524,7 @@ impl DeliveryService {
             merge_method: request
                 .merge_method
                 .filter(|_| request.rung == DeliveryRung::Merge),
+            stage,
             commits,
             left_out,
             created: Vec::new(),

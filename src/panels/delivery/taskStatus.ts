@@ -18,13 +18,43 @@ export const STAGES = [
   { role: "qa", label: "QA", verb: "En QA" },
 ];
 
-export const RUNGS: { rung: DeliveryRung; label: string }[] = [
+export type JiraStage = "after_pr" | "after_merge";
+
+/** One step of the delivery ladder. Jira comes twice: once the PR is open
+ *  (the issue goes to review) and once it is merged (the issue is closed). */
+export interface DeliveryStep {
+  rung: DeliveryRung;
+  stage?: JiraStage;
+  label: string;
+}
+
+export const STEPS: DeliveryStep[] = [
   { rung: "commit", label: "Commit" },
   { rung: "push", label: "Push" },
   { rung: "pr", label: "PR" },
+  { rung: "jira", stage: "after_pr", label: "Jira (PR)" },
   { rung: "merge", label: "Merge" },
-  { rung: "jira", label: "Jira" },
+  { rung: "jira", stage: "after_merge", label: "Jira (merge)" },
 ];
+
+function isStep(approval: DeliveryApproval, step: DeliveryStep): boolean {
+  return (
+    approval.rung === step.rung &&
+    (step.stage === undefined || (approval.stage ?? "after_pr") === step.stage)
+  );
+}
+
+/** The ladder step an approval is for. */
+export function stepOf(approval: DeliveryApproval): DeliveryStep {
+  return (
+    STEPS.find((step) => isStep(approval, step)) ?? { rung: approval.rung, label: approval.rung }
+  );
+}
+
+/** A key that tells the two Jira steps apart. */
+export function stepKey(step: DeliveryStep): string {
+  return step.stage ? `${step.rung}-${step.stage}` : step.rung;
+}
 
 /** Task states the coordinator sets, in flow order. */
 export const TASK_STATE_LABEL: Record<string, string> = {
@@ -63,13 +93,9 @@ export function stageLabel(role: string): string {
   return STAGES.find((stage) => stage.role === role)?.label ?? role;
 }
 
-export function rungLabel(rung: string): string {
-  return RUNGS.find((item) => item.rung === rung)?.label ?? rung;
-}
-
-/** "Implementación" → "implementación", but keep "QA", "PR" and "Jira" as written. */
+/** "Implementación" → "implementación", but keep "QA", "PR" and "Jira…" as written. */
 export function lower(label: string): string {
-  return label === label.toUpperCase() || label === "Jira" ? label : label.toLowerCase();
+  return label === label.toUpperCase() || label.startsWith("Jira") ? label : label.toLowerCase();
 }
 
 export function isOpen(job: DeliveryJob): boolean {
@@ -224,11 +250,22 @@ export function latestApproval(
   return [...approvals].reverse().find((approval) => approval.rung === rung);
 }
 
-/** First rung not yet executed; null once Jira is done. */
-export function nextRung(approvals: DeliveryApproval[]): DeliveryRung | null {
-  return (
-    RUNGS.find(({ rung }) => latestApproval(approvals, rung)?.status !== "executed")?.rung ?? null
-  );
+/** The latest approval for a ladder step (each Jira step on its own). */
+export function latestStep(
+  approvals: DeliveryApproval[],
+  step: DeliveryStep,
+): DeliveryApproval | undefined {
+  return [...approvals].reverse().find((approval) => isStep(approval, step));
+}
+
+/** Delivered once every step is done: commit, push, PR, merge and both Jira. */
+export function isDelivered(approvals: DeliveryApproval[]): boolean {
+  return nextStep(approvals) === null;
+}
+
+/** First step not done; null once every step is. */
+export function nextStep(approvals: DeliveryApproval[]): DeliveryStep | null {
+  return STEPS.find((step) => latestStep(approvals, step)?.status !== "executed") ?? null;
 }
 
 function clock(job: DeliveryJob, now: number): string {
@@ -268,7 +305,7 @@ export function taskStatus(
       group: "attention",
       tone: "attention",
       icon: "flag",
-      label: `Aprobar ${lower(rungLabel(pending.rung))}`,
+      label: `Aprobar ${lower(stepOf(pending).label)}`,
     };
   }
   const approved = approvals.find((approval) => approval.status === "approved");
@@ -277,19 +314,19 @@ export function taskStatus(
       group: "attention",
       tone: "attention",
       icon: "flag",
-      label: `Registrar ${lower(rungLabel(approved.rung))}`,
+      label: `Registrar ${lower(stepOf(approved).label)}`,
     };
   }
   const drifted = approvals.find(
     (approval) =>
-      approval.status === "drifted" && latestApproval(approvals, approval.rung) === approval,
+      approval.status === "drifted" && latestStep(approvals, stepOf(approval)) === approval,
   );
   if (drifted) {
     return {
       group: "attention",
       tone: "attention",
       icon: "alert",
-      label: `${rungLabel(drifted.rung)}: ya no coincide`,
+      label: `${stepOf(drifted).label}: ya no coincide`,
     };
   }
   const quarantined = overview.leases.find(
@@ -355,14 +392,16 @@ export function taskStatus(
     };
   }
 
-  if (latestApproval(approvals, "jira")?.status === "executed") {
+  if (isDelivered(approvals)) {
     return { group: "idle", tone: "ok", icon: "check", label: "Entregada" };
   }
+  const next = nextStep(approvals);
   const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
   if (pr) {
     const summary = prSummary(pr);
+    const then = next ? ` · siguiente: ${lower(next.label)}` : "";
     if (pr.state === "merged") {
-      return { group: "idle", tone: "idle", icon: "ring", label: "PR fusionado · siguiente: Jira" };
+      return { group: "idle", tone: "idle", icon: "ring", label: `PR fusionado${then}` };
     }
     const needsYou = summary.tone === "attention" || summary.tone === "danger";
     const ready = summary.label === "Aprobado";
@@ -370,7 +409,7 @@ export function taskStatus(
       group: needsYou ? "attention" : ready ? "idle" : "waiting",
       tone: summary.tone,
       icon: summary.icon,
-      label: ready ? "PR aprobado · siguiente: merge" : `PR: ${lower(summary.label)}`,
+      label: ready ? `PR aprobado${then}` : `PR: ${lower(summary.label)}`,
     };
   }
   const role = nextRole(jobs);
@@ -382,12 +421,11 @@ export function taskStatus(
       label: `Siguiente: ${lower(stageLabel(role))}`,
     };
   }
-  const rung = nextRung(approvals);
   return {
     group: "idle",
     tone: "idle",
     icon: "ring",
-    label: rung ? `Siguiente: ${lower(rungLabel(rung))}` : "Sin actividad",
+    label: next ? `Siguiente: ${lower(next.label)}` : "Sin actividad",
   };
 }
 

@@ -142,6 +142,8 @@ export interface DeliveryApproval {
   rung: DeliveryRung;
   /** `merge` only: squash, merge or rebase. */
   merge_method?: string | null;
+  /** `jira` only: after_pr (the PR is open) or after_merge (it is merged). */
+  stage?: "after_pr" | "after_merge" | null;
   title: string;
   body: string;
   status: DeliveryApprovalStatus;

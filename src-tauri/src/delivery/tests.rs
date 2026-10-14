@@ -600,6 +600,7 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         commits: Vec::new(),
         leave_out: Vec::new(),
         merge_method: None,
+        stage: None,
     };
 
     assert_eq!(
@@ -1699,6 +1700,7 @@ fn commit_plan(
         commits,
         leave_out: leave_out.iter().map(|path| path.to_string()).collect(),
         merge_method: None,
+        stage: None,
     }
 }
 
@@ -1949,6 +1951,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             commits: Vec::new(),
             leave_out: Vec::new(),
             merge_method: None,
+            stage: None,
         })
         .unwrap();
     let mut done = h.service.decide_approval(&asked.id, true, None).unwrap();
@@ -2001,6 +2004,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             commits: Vec::new(),
             leave_out: Vec::new(),
             merge_method: None,
+            stage: None,
         })
         .unwrap_err();
     assert_eq!(push.category, "commit_missing");
@@ -2234,6 +2238,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         commits: Vec::new(),
         leave_out: Vec::new(),
         merge_method: method.map(str::to_string),
+        stage: None,
     };
     assert_eq!(
         h.service
@@ -2498,6 +2503,7 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         commits: Vec::new(),
         leave_out: Vec::new(),
         merge_method: None,
+        stage: None,
     };
     let commit = h
         .service
@@ -2613,5 +2619,55 @@ fn a_corrected_result_keeps_the_previous_one_needs_a_reason_and_links_the_pr() {
     assert_eq!(
         jira.corrections[0].previous.as_deref(),
         Some("Movida a In Review")
+    );
+}
+
+#[test]
+fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() {
+    let h = harness();
+    let task = h.task("AGOS-455");
+    // One Jira step done before merge existed, as AGOS-455 has.
+    put_step(
+        &h,
+        &task,
+        "a-pr",
+        "pr",
+        "executed",
+        "https://github.com/o/r/pull/279",
+    );
+    put_step(&h, &task, "a-jira", "jira", "executed", "In Review");
+    h.service.stage_legacy_jira().unwrap();
+    assert_eq!(
+        h.service.approval("a-jira").unwrap().stage.as_deref(),
+        Some("after_pr")
+    );
+
+    let jira = |stage: Option<&str>| NewApproval {
+        task_id: task.id.clone(),
+        rung: DeliveryRung::Jira,
+        title: "Cerrar AGOS-455".into(),
+        body: String::new(),
+        requested_by: "user".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        merge_method: None,
+        stage: stage.map(str::to_string),
+    };
+    let next = h.service.request_approval(jira(None)).unwrap();
+    assert_eq!(
+        next.stage.as_deref(),
+        Some("after_merge"),
+        "the one missing"
+    );
+    assert_eq!(
+        h.service.request_approval(jira(None)).unwrap_err().category,
+        "approval_exists"
+    );
+    assert_eq!(
+        h.service
+            .request_approval(jira(Some("later")))
+            .unwrap_err()
+            .category,
+        "invalid_approval"
     );
 }

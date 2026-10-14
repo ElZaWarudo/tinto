@@ -13,6 +13,7 @@ import {
   lastHandoff,
   latestOfRole,
   nextRole,
+  nextStep,
   prSummary,
   taskStatus,
 } from "./taskStatus";
@@ -121,8 +122,10 @@ describe("taskStatus", () => {
 
   it("asks to record an approved PR or Jira step", () => {
     expect(status({ approvals: [approval({ rung: "jira", status: "approved" })] }).label).toBe(
-      "Registrar Jira",
+      "Registrar Jira (PR)",
     );
+    const closing = approval({ rung: "jira", stage: "after_merge", status: "approved" });
+    expect(status({ approvals: [closing] }).label).toBe("Registrar Jira (merge)");
   });
 
   it("flags a QA lease this task left quarantined", () => {
@@ -193,7 +196,13 @@ describe("taskStatus", () => {
 
   it("names the next stage when idle, and says when it was delivered", () => {
     expect(status({ jobs: [job()] }).label).toBe("Siguiente: implementación");
-    expect(status({ approvals: [approval({ rung: "jira", status: "executed" })] }).label).toBe(
+    const done = (rung: DeliveryApproval["rung"], stage?: "after_pr" | "after_merge") =>
+      approval({ id: `${rung}-${stage}`, rung, stage, status: "executed" });
+    const upToMerge = [done("commit"), done("push"), done("pr"), done("jira"), done("merge")];
+    // The PR's Jira step alone is not the delivery.
+    expect(status({ approvals: upToMerge }).label).not.toBe("Entregada");
+    expect(nextStep(upToMerge)?.label).toBe("Jira (merge)");
+    expect(status({ approvals: [...upToMerge, done("jira", "after_merge")] }).label).toBe(
       "Entregada",
     );
   });
@@ -252,8 +261,12 @@ describe("a followed PR", () => {
     },
     ...over,
   });
-  const withPr = (over: Partial<DeliveryPr>) =>
-    status({ prs: [pr(over)], approvals: [approval({ rung: "pr", status: "executed" })] });
+  // Done up to the PR and its Jira step: the merge is next.
+  const upToJira = (["commit", "push", "pr", "jira"] as const).map((rung) =>
+    approval({ id: rung, rung, status: "executed" }),
+  );
+  const withPr = (over: Partial<DeliveryPr>, approvals = upToJira) =>
+    status({ prs: [pr(over)], approvals });
 
   it("brings the task back when the PR needs the user", () => {
     expect(withPr({ new_reviews: 1, new_comments: 1, new_authors: ["ana"] })).toEqual({
@@ -278,7 +291,14 @@ describe("a followed PR", () => {
       group: "idle",
       label: "PR aprobado · siguiente: merge",
     });
-    expect(withPr({ state: "merged" }).label).toBe("PR fusionado · siguiente: Jira");
+    const merged = [...upToJira, approval({ id: "m", rung: "merge", status: "executed" })];
+    expect(withPr({ state: "merged" }, merged).label).toBe(
+      "PR fusionado · siguiente: Jira (merge)",
+    );
+    // Without the PR's Jira step, that one comes before the merge.
+    expect(withPr({ review_decision: "approved" }, upToJira.slice(0, 3)).label).toBe(
+      "PR aprobado · siguiente: Jira (PR)",
+    );
     expect(prSummary(pr({ state: "closed" })).label).toBe("Cerrado sin fusionar");
   });
 });

@@ -324,6 +324,7 @@ pub fn delivery_request_approval(
     commits: Option<Vec<DeliveryCommit>>,
     leave_out: Option<Vec<String>>,
     merge_method: Option<String>,
+    stage: Option<String>,
 ) -> Result<DeliveryApproval, CommandError> {
     service
         .request_approval(NewApproval {
@@ -335,6 +336,7 @@ pub fn delivery_request_approval(
             commits: commits.unwrap_or_default(),
             leave_out: leave_out.unwrap_or_default(),
             merge_method,
+            stage,
         })
         .map_err(CommandError::from)
 }

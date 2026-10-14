@@ -1174,7 +1174,7 @@ describe("DeliveryPanel", () => {
     expect(client.setDeliveryRepoSettings).not.toHaveBeenCalled();
   });
 
-  it("says a task is delivered and records a PR with or without its link", async () => {
+  it("records a PR with or without its link, and the delivery goes on", async () => {
     const user = userEvent.setup();
     const approval = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
       id: "a1",
@@ -1208,14 +1208,13 @@ describe("DeliveryPanel", () => {
     // Without a URL Tinto looks for the branch's PR; with one it checks it.
     expect(done).toBeEnabled();
     await user.type(outcome, "https://github.com/acme/agentos/pull/279");
-    client.getDeliveryOverview.mockResolvedValue(
-      upTo([
-        approval({}),
-        approval({ id: "a2", rung: "push" }),
-        approval({ id: "a3", rung: "pr" }),
-        approval({ id: "a4", rung: "jira" }),
-      ]),
-    );
+    const upToPrJira = [
+      approval({}),
+      approval({ id: "a2", rung: "push" }),
+      approval({ id: "a3", rung: "pr" }),
+      approval({ id: "a4", rung: "jira", stage: "after_pr" }),
+    ];
+    client.getDeliveryOverview.mockResolvedValue(upTo(upToPrJira));
     await user.click(done);
     await waitFor(() =>
       expect(client.completeDeliveryApproval).toHaveBeenCalledWith(
@@ -1224,6 +1223,42 @@ describe("DeliveryPanel", () => {
         "https://github.com/acme/agentos/pull/279",
       ),
     );
+    // The PR's Jira step is not the delivery: the merge and its Jira step are left.
+    const ladder = await screen.findByRole("list", { name: "Entrega" });
+    expect(within(ladder).getByText("Jira (PR)")).toBeInTheDocument();
+    expect(within(ladder).getByText("Jira (merge)")).toBeInTheDocument();
+    expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
+  });
+
+  it("says a task is delivered only once both Jira steps are done", async () => {
+    const done = (id: string, rung: DeliveryApproval["rung"], stage?: "after_merge") => ({
+      id,
+      task_id: "t1",
+      rung,
+      stage,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "hecho",
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          done("a1", "commit"),
+          done("a2", "push"),
+          done("a3", "pr"),
+          done("a4", "jira"),
+          done("a5", "merge"),
+          done("a6", "jira", "after_merge"),
+        ],
+      }),
+    );
+    renderPanel();
     // The coordinator never moved its label; the delivery still shows.
     expect(await screen.findByText("Estado: Entregada")).toBeInTheDocument();
   });
@@ -1393,7 +1428,7 @@ describe("DeliveryPanel", () => {
       checked_at_ms: 1,
       error: null,
     };
-    const executed = (rung: "commit" | "push" | "pr") => ({
+    const executed = (rung: "commit" | "push" | "pr" | "jira") => ({
       id: rung,
       task_id: "t1",
       rung,
@@ -1407,7 +1442,10 @@ describe("DeliveryPanel", () => {
       outcome: rung === "pr" ? "https://github.com/o/r/pull/5" : "ok",
     });
     client.getDeliveryOverview.mockResolvedValue(
-      overview({ prs: [pr], approvals: [executed("commit"), executed("push"), executed("pr")] }),
+      overview({
+        prs: [pr],
+        approvals: [executed("commit"), executed("push"), executed("pr"), executed("jira")],
+      }),
     );
     client.markDeliveryPrSeen.mockResolvedValue(null);
     client.requestDeliveryApproval.mockResolvedValue({});

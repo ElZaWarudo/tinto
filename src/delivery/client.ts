@@ -124,6 +124,8 @@ export const requestDeliveryApproval = (
   body: string,
   plan?: { commits: DeliveryCommit[]; leaveOut: string[] },
   mergeMethod?: string,
+  /** `jira` only: after_pr or after_merge; the next one missing when omitted. */
+  stage?: string,
 ) =>
   invoke<DeliveryApproval>("delivery_request_approval", {
     taskId,
@@ -133,6 +135,7 @@ export const requestDeliveryApproval = (
     commits: plan?.commits ?? null,
     leaveOut: plan?.leaveOut ?? null,
     mergeMethod: mergeMethod ?? null,
+    stage: stage ?? null,
   });
 
 /** Reads the task's PR from GitHub, unless it was read moments ago. */
