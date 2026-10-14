@@ -46,6 +46,8 @@ export interface DeliveryTask {
   created_at_ms: number;
   updated_at_ms: number;
   removed_at_ms?: number | null;
+  /** A delivered task put away; it can be brought back. */
+  archived_at_ms?: number | null;
 }
 
 export interface DeliveryCheck {
@@ -343,4 +345,11 @@ export interface DeliveryPr {
   merge_commit?: string | null;
   /** Reviewers whose latest review approves it. */
   approved_by?: string[];
+}
+
+/** An archived task as a search finds it. */
+export interface DeliveryArchivedTask {
+  task: DeliveryTask;
+  pr_number: number | null;
+  pr_url: string | null;
 }

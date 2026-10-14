@@ -259,6 +259,151 @@ impl DeliveryService {
         Ok(())
     }
 
+    /// Every delivery step done: commit, push, PR, merge and both Jira.
+    pub(super) fn delivered(&self, task_id: &str) -> Result<bool, DeliveryError> {
+        let approvals: Vec<DeliveryApproval> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|approval| approval.task_id == task_id)
+            .collect();
+        let done = |rung: DeliveryRung, stage: Option<&str>| {
+            approvals
+                .iter()
+                .rev()
+                .find(|approval| {
+                    approval.rung == rung && (stage.is_none() || approval.stage.as_deref() == stage)
+                })
+                .is_some_and(|approval| approval.status == DeliveryApprovalStatus::Executed)
+        };
+        Ok(done(DeliveryRung::Commit, None)
+            && done(DeliveryRung::Push, None)
+            && done(DeliveryRung::Pr, None)
+            && done(DeliveryRung::Merge, None)
+            && done(DeliveryRung::Jira, Some(JIRA_AFTER_PR))
+            && done(DeliveryRung::Jira, Some(JIRA_AFTER_MERGE)))
+    }
+
+    /// Archives a delivered task: its worktree and local branch go (what it
+    /// produced is on GitHub) and it leaves the list. Its record stays, so
+    /// it can be found by issue or PR and brought back.
+    pub fn archive_task(&self, task_id: &str) -> Result<(), DeliveryError> {
+        let task = self.task(task_id)?;
+        if !self.delivered(task_id)? {
+            return Err(DeliveryError::new(
+                "task_not_delivered",
+                "solo se archiva una tarea entregada: con el merge y los dos pasos Jira hechos",
+            ));
+        }
+        self.remove_task(task_id, true)?;
+        // Merged on GitHub: a local branch left behind only gets in the way.
+        let place = Place::of(task.distro.as_deref());
+        let _ = tasks::git(place, &task.repo, &["branch", "-D", &task.branch]);
+        let store = self.store()?;
+        let mut task = store
+            .task(task_id)?
+            .ok_or_else(|| DeliveryError::not_found("la tarea", task_id))?;
+        let now = now_ms();
+        task.archived_at_ms = Some(now);
+        task.updated_at_ms = now;
+        store.put_task(&task)?;
+        store.record_event(now, "task_archived", Some(task_id), None, &task.key)?;
+        drop(store);
+        self.notify();
+        Ok(())
+    }
+
+    /// Archived tasks whose issue key contains `query`, or whose PR number
+    /// or URL is `query` (`#279` or `279`); all of them when it is empty.
+    /// Newest first.
+    pub fn archived_tasks(
+        &self,
+        query: &str,
+    ) -> Result<Vec<super::model::DeliveryArchivedTask>, DeliveryError> {
+        let query = query.trim().trim_start_matches('#').to_ascii_lowercase();
+        let store = self.store()?;
+        let mut found = Vec::new();
+        for task in store.removed_tasks()?.into_iter().rev() {
+            if task.archived_at_ms.is_none() {
+                continue;
+            }
+            let pr = store.pr(&task.id)?;
+            let matches = query.is_empty()
+                || task.key.to_ascii_lowercase().contains(&query)
+                || pr.as_ref().is_some_and(|pr| {
+                    pr.number.to_string() == query || pr.url.to_ascii_lowercase() == query
+                });
+            if matches {
+                found.push(super::model::DeliveryArchivedTask {
+                    pr_number: pr.as_ref().map(|pr| pr.number),
+                    pr_url: pr.map(|pr| pr.url),
+                    task,
+                });
+            }
+        }
+        Ok(found)
+    }
+
+    /// Brings an archived task back with its worktree: from its local
+    /// branch, else from its PR on GitHub (`pull/<n>/head`, kept after the
+    /// branch is deleted), else from the remote branch.
+    pub fn unarchive_task(&self, task_id: &str) -> Result<DeliveryTask, DeliveryError> {
+        let mut task = self
+            .store()?
+            .task(task_id)?
+            .filter(|task| task.archived_at_ms.is_some())
+            .ok_or_else(|| DeliveryError::not_found("la tarea archivada", task_id))?;
+        let active = self.store()?.tasks()?.into_iter().any(|other| {
+            other.key == task.key && tasks::plain_path(&other.repo) == tasks::plain_path(&task.repo)
+        });
+        if active {
+            return Err(DeliveryError::new(
+                "task_exists",
+                format!("ya hay una tarea {} activa en el repositorio", task.key),
+            ));
+        }
+        let place = Place::of(task.distro.as_deref());
+        let reference = format!("refs/heads/{}", task.branch);
+        let local = tasks::git(
+            place,
+            &task.repo,
+            &["rev-parse", "--verify", "--quiet", &reference],
+        );
+        if local.is_err() {
+            let from = match self.task_pr(&task.id)? {
+                Some(pr) => format!("pull/{}/head", pr.number),
+                None => reference.clone(),
+            };
+            let spec = format!("{from}:{reference}");
+            tasks::git(place, &task.repo, &["fetch", "origin", &spec]).map_err(|error| {
+                DeliveryError::new(
+                    "unarchive_failed",
+                    format!(
+                        "no se pudo traer la rama {} de GitHub ({from}): {}",
+                        task.branch, error.message
+                    ),
+                )
+            })?;
+        }
+        tasks::create_worktree(
+            place,
+            &task.repo,
+            &task.worktree,
+            &task.branch,
+            &task.base_commit,
+        )?;
+        let now = now_ms();
+        task.removed_at_ms = None;
+        task.archived_at_ms = None;
+        task.updated_at_ms = now;
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(now, "task_unarchived", Some(&task.id), None, &task.key)?;
+        drop(store);
+        self.notify();
+        Ok(task)
+    }
+
     // ---- runs ----
 
     pub fn create_run(

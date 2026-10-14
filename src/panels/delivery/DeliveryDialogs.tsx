@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   checkDeliveryJira,
+  getArchivedDeliveryTasks,
   getDeliveryRepoSettings,
   setDeliveryJiraToken,
   setDeliveryRepoSettings,
@@ -15,6 +16,7 @@ import { parseStatuses } from "./taskStatus";
 import type {
   DeliveryAccess,
   DeliveryAgent,
+  DeliveryArchivedTask,
   DeliveryCoordinatorEndpoint,
   DeliveryPlatform,
   DeliveryRepoSettings,
@@ -635,6 +637,74 @@ export function ReleaseLeaseDialog({
           autoFocus
         />
       </Field>
+    </FormDialog>
+  );
+}
+
+/** Finds archived tasks by issue key or PR number and brings one back. */
+export function ArchivedTasksDialog({
+  busy,
+  onUnarchive,
+  onCancel,
+}: {
+  busy: boolean;
+  onUnarchive: (taskId: string) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<DeliveryArchivedTask[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const search = (text: string) =>
+    getArchivedDeliveryTasks(text).then(
+      (tasks) => {
+        setFound(tasks);
+        setError(null);
+      },
+      (cause) => setError(String(cause?.message ?? cause)),
+    );
+  useEffect(() => {
+    void search("");
+  }, []);
+  return (
+    <FormDialog
+      title="Tareas archivadas"
+      submitLabel="Buscar"
+      busy={busy}
+      onCancel={onCancel}
+      onSubmit={() => void search(query)}
+    >
+      <Field label="Issue o número de PR" hint="Por ejemplo: AGOS-455 o #279">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} autoFocus />
+      </Field>
+      {error && <p className="delivery-tone--danger">{error}</p>}
+      {found?.length === 0 && <p className="file-op-modal__body">No hay ninguna archivada así.</p>}
+      {found && found.length > 0 && (
+        <ul className="delivery-archived" aria-label="Archivadas encontradas">
+          {found.map(({ task, pr_number, pr_url }) => (
+            <li key={task.id} aria-label={task.key}>
+              <span>
+                <strong>{task.key}</strong> {task.title}
+                {pr_number !== null && (
+                  <>
+                    {" · "}
+                    <a href={pr_url ?? undefined} target="_blank" rel="noreferrer">
+                      PR #{pr_number}
+                    </a>
+                  </>
+                )}
+              </span>
+              <button
+                type="button"
+                className="file-op-modal__button"
+                disabled={busy}
+                onClick={() => onUnarchive(task.id)}
+              >
+                Desarchivar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </FormDialog>
   );
 }

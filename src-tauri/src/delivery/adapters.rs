@@ -1330,6 +1330,7 @@ mod tests {
             created_at_ms: 1,
             updated_at_ms: 1,
             removed_at_ms: None,
+            archived_at_ms: None,
         }
     }
 

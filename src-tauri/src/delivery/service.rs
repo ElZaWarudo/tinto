@@ -386,6 +386,7 @@ impl DeliveryService {
             created_at_ms: now,
             updated_at_ms: now,
             removed_at_ms: None,
+            archived_at_ms: None,
         };
         {
             let store = self.store()?;

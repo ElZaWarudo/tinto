@@ -248,6 +248,35 @@ pub fn delivery_repo_settings(
     Ok(settings)
 }
 
+/// Archives a delivered task: its worktree and local branch go.
+#[tauri::command]
+pub async fn delivery_archive_task(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<(), CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.archive_task(&task_id)).await
+}
+
+/// Archived tasks by issue key or PR number.
+#[tauri::command]
+pub fn delivery_archived_tasks(
+    service: State<'_, DeliveryService>,
+    query: String,
+) -> Result<Vec<super::model::DeliveryArchivedTask>, CommandError> {
+    service.archived_tasks(&query).map_err(CommandError::from)
+}
+
+/// Brings an archived task back, with its worktree.
+#[tauri::command]
+pub async fn delivery_unarchive_task(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<DeliveryTask, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.unarchive_task(&task_id)).await
+}
+
 /// Saves the repo's Jira token apart from its settings; empty forgets it.
 #[tauri::command]
 pub fn delivery_set_jira_token(

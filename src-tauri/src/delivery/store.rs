@@ -194,6 +194,14 @@ impl DeliveryStore {
         )
     }
 
+    /// Tasks whose worktree was removed (archived ones among them).
+    pub fn removed_tasks(&self) -> Result<Vec<DeliveryTask>, DeliveryError> {
+        self.all(
+            "SELECT data FROM tasks WHERE removed = 1 ORDER BY rowid",
+            [],
+        )
+    }
+
     // ---- jobs ----
 
     pub fn put_job(&self, job: &DeliveryJob) -> Result<(), DeliveryError> {

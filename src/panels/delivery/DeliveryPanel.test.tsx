@@ -44,6 +44,9 @@ const client = vi.hoisted(() => ({
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
   getDeliveryPrReviewers: vi.fn((): Promise<string[]> => Promise.resolve([])),
   correctDeliveryApproval: vi.fn(),
+  archiveDeliveryTask: vi.fn(),
+  getArchivedDeliveryTasks: vi.fn(),
+  unarchiveDeliveryTask: vi.fn(),
   markDeliveryPrSeen: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
   createDeliveryRun: vi.fn(),
@@ -1558,6 +1561,59 @@ describe("DeliveryPanel", () => {
         ["Cerrada"],
       ),
     );
+  });
+
+  it("archives a delivered task and brings one back by its PR number", async () => {
+    const user = userEvent.setup();
+    const done = (id: string, rung: DeliveryApproval["rung"], stage?: "after_merge") => ({
+      id,
+      task_id: "t1",
+      rung,
+      stage,
+      title: rung,
+      body: "",
+      status: "executed" as const,
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "hecho",
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [],
+        approvals: [
+          done("a1", "commit"),
+          done("a2", "push"),
+          done("a3", "pr"),
+          done("a4", "jira"),
+          done("a5", "merge"),
+          done("a6", "jira", "after_merge"),
+        ],
+      }),
+    );
+    client.archiveDeliveryTask.mockResolvedValue(undefined);
+    client.getArchivedDeliveryTasks.mockResolvedValue([
+      {
+        task: task({ id: "t9", key: "AGOS-455", title: "Skills" }),
+        pr_number: 279,
+        pr_url: "https://github.com/o/r/pull/279",
+      },
+    ]);
+    client.unarchiveDeliveryTask.mockResolvedValue(task({ id: "t9", key: "AGOS-455" }));
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Archivar tarea…" }));
+    await waitFor(() => expect(client.archiveDeliveryTask).toHaveBeenCalledWith("t1"));
+
+    await user.click(screen.getByRole("button", { name: "Archivadas…" }));
+    const dialog = screen.getByRole("dialog", { name: "Tareas archivadas" });
+    await user.type(within(dialog).getByRole("textbox", { name: /Issue o número de PR/ }), "#279");
+    await user.click(within(dialog).getByRole("button", { name: "Buscar" }));
+    await waitFor(() => expect(client.getArchivedDeliveryTasks).toHaveBeenCalledWith("#279"));
+    const found = await within(dialog).findByRole("listitem", { name: "AGOS-455" });
+    expect(within(found).getByRole("link", { name: "PR #279" })).toBeInTheDocument();
+    await user.click(within(found).getByRole("button", { name: "Desarchivar" }));
+    await waitFor(() => expect(client.unarchiveDeliveryTask).toHaveBeenCalledWith("t9"));
   });
 
   it("follows the task's PR and merges it through its own step", async () => {

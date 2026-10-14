@@ -6,6 +6,7 @@ import type {
   DeliveryAccess,
   DeliveryAgent,
   DeliveryApproval,
+  DeliveryArchivedTask,
   DeliveryCommit,
   DeliveryCommitDraft,
   DeliveryConversation,
@@ -50,6 +51,18 @@ export const createDeliveryTask = (task: NewDeliveryTask) =>
 
 export const removeDeliveryTask = (taskId: string, force: boolean) =>
   invoke<void>("delivery_remove_task", { taskId, force });
+
+/** Archives a delivered task: its worktree and local branch go. */
+export const archiveDeliveryTask = (taskId: string) =>
+  invoke<void>("delivery_archive_task", { taskId });
+
+/** Archived tasks by issue key or PR number ("#279" or "279"); all when empty. */
+export const getArchivedDeliveryTasks = (query: string) =>
+  invoke<DeliveryArchivedTask[]>("delivery_archived_tasks", { query });
+
+/** Brings an archived task back, with its worktree. */
+export const unarchiveDeliveryTask = (taskId: string) =>
+  invoke<DeliveryTask>("delivery_unarchive_task", { taskId });
 
 export const updateDeliveryTask = (
   taskId: string,

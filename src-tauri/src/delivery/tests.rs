@@ -3004,3 +3004,83 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         ]
     );
 }
+
+#[test]
+fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr() {
+    let h = harness();
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        h.repo.path(),
+        &["remote", "add", "origin", &plain_path(remote.path())],
+    );
+    let task = h.task("P-12");
+    let worktree = PathBuf::from(plain_path(&task.worktree));
+    std::fs::write(worktree.join("feature.txt"), "x").unwrap();
+    git(&worktree, &["add", "."]);
+    git(&worktree, &["commit", "-q", "-m", "feat: x"]);
+    let head = super::tasks::head(super::tasks::Place::Native, &task.worktree).unwrap();
+    // GitHub keeps the PR's head after its branch is deleted on merge.
+    git(
+        &worktree,
+        &["push", "-q", "origin", "HEAD:refs/pull/5/head"],
+    );
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/5").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+
+    assert_eq!(
+        h.service.archive_task(&task.id).unwrap_err().category,
+        "task_not_delivered"
+    );
+    for (id, rung, stage) in [
+        ("a1", "commit", None),
+        ("a2", "push", None),
+        ("a3", "pr", None),
+        ("a4", "jira", Some("after_pr")),
+        ("a5", "merge", None),
+        ("a6", "jira", Some("after_merge")),
+    ] {
+        let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+            "id": id, "task_id": task.id, "rung": rung, "stage": stage, "title": rung,
+            "body": "", "status": "executed", "requested_by": "user", "requested_at_ms": 1,
+            "decided_at_ms": 2, "executed_at_ms": 3, "outcome": "hecho"
+        }))
+        .unwrap();
+        h.service.store().unwrap().put_approval(&step).unwrap();
+    }
+    h.service.archive_task(&task.id).unwrap();
+    assert!(!worktree.exists(), "the worktree goes");
+    let branch = format!("refs/heads/{}", task.branch);
+    assert!(
+        super::tasks::git(
+            super::tasks::Place::Native,
+            h.repo.path(),
+            &["rev-parse", "--verify", "--quiet", &branch]
+        )
+        .is_err(),
+        "and the local branch"
+    );
+    assert!(h.service.overview().unwrap().tasks.is_empty());
+
+    let found = |query: &str| {
+        h.service
+            .archived_tasks(query)
+            .unwrap()
+            .into_iter()
+            .map(|archived| archived.task.key)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(found("#5"), vec!["P-12"]);
+    assert_eq!(found("p-12"), vec!["P-12"]);
+    assert!(found("6").is_empty());
+
+    let back = h.service.unarchive_task(&task.id).unwrap();
+    assert_eq!(back.archived_at_ms, None);
+    assert_eq!(
+        super::tasks::head(super::tasks::Place::Native, &task.worktree).unwrap(),
+        head,
+        "the worktree is back at the PR's head"
+    );
+    assert_eq!(h.service.overview().unwrap().tasks.len(), 1);
+    assert!(found("").is_empty());
+}

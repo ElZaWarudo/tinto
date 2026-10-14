@@ -27,6 +27,18 @@ pub struct DeliveryTask {
     pub updated_at_ms: u64,
     #[serde(default)]
     pub removed_at_ms: Option<u64>,
+    /// A delivered task put away: its worktree and local branch are gone
+    /// (all of it is on GitHub) and it can be brought back.
+    #[serde(default)]
+    pub archived_at_ms: Option<u64>,
+}
+
+/// An archived task as a search finds it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryArchivedTask {
+    pub task: DeliveryTask,
+    pub pr_number: Option<u64>,
+    pub pr_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

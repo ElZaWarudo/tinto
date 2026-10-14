@@ -9,6 +9,7 @@ import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import {
+  archiveDeliveryTask,
   cancelDeliveryJob,
   checkDeliveryTask,
   closeDeliveryRun,
@@ -36,6 +37,7 @@ import {
   setDeliveryRunQaJiraComment,
   takeoverDeliveryRun,
   undoDeliveryCommit,
+  unarchiveDeliveryTask,
   undoDeliveryJob,
   updateDeliverySettings,
   updateDeliveryTask,
@@ -53,6 +55,7 @@ import type {
 } from "../../delivery/types";
 import {
   DispatchDialog,
+  ArchivedTasksDialog,
   CorrectResultDialog,
   NewTaskDialog,
   ReleaseLeaseDialog,
@@ -100,6 +103,7 @@ type Dialog =
   | { kind: "dispatch"; task: DeliveryTask; role: string; prompt: string; source: string | null }
   | { kind: "release"; name: string; note: string | null }
   | { kind: "settings" }
+  | { kind: "archived" }
   | null;
 
 type IconName = Exclude<StatusIcon, "live"> | "more" | "down" | "right" | "gear" | "play";
@@ -441,6 +445,9 @@ export function DeliveryPanel() {
             )}
           </span>
         )}
+        <button type="button" onClick={() => setDialog({ kind: "archived" })}>
+          Archivadas…
+        </button>
         <button
           type="button"
           className="delivery-icon-button"
@@ -669,6 +676,19 @@ export function DeliveryPanel() {
           }
         />
       )}
+      {dialog?.kind === "archived" && (
+        <ArchivedTasksDialog
+          busy={busy}
+          onCancel={() => setDialog(null)}
+          onUnarchive={(taskId) =>
+            void run(async () => {
+              const task = await unarchiveDeliveryTask(taskId);
+              setDialog(null);
+              setSelectedTaskId(task.id);
+            })
+          }
+        />
+      )}
       {dialog?.kind === "settings" && (
         <SettingsDialog
           capacity={capacity}
@@ -815,6 +835,15 @@ function TaskDetail({
     if (removed) onRemoved();
   };
 
+  const archive = async () => {
+    const ok = await confirm(
+      `Se borran el worktree ${task.worktree} y la rama local ${task.branch}: todo está en GitHub. La tarea sale de la lista y puedes recuperarla en "Archivadas…" por ${task.key} o por el número de su PR.`,
+      { title: "Archivar tarea", okLabel: "Archivar" },
+    );
+    if (!ok) return;
+    if (await run(() => archiveDeliveryTask(task.id))) onRemoved();
+  };
+
   const bumpContract = async () => {
     const version = task.contract_version + 1;
     const ok = await confirm(
@@ -885,6 +914,18 @@ function TaskDetail({
                 }}
               >
                 Corregir resultado…
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={busy || !delivered || hasOpenJob}
+                title={delivered ? undefined : "Se archiva una vez entregada."}
+                onClick={() => {
+                  close();
+                  void archive();
+                }}
+              >
+                Archivar tarea…
               </button>
               <hr />
               <button
@@ -1014,6 +1055,11 @@ function TaskDetail({
               ? `Todas las etapas pasaron. Lo siguiente es ${nextStepName(step)}.`
               : "Tarea entregada."}
           </span>
+        )}
+        {delivered && !hasOpenJob && (
+          <button type="button" disabled={busy} onClick={() => void archive()}>
+            Archivar tarea…
+          </button>
         )}
       </div>
 

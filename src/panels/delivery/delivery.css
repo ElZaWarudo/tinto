@@ -1176,3 +1176,17 @@
 .delivery-reviewers p {
   margin: 0;
 }
+.delivery-archived {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.delivery-archived li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
