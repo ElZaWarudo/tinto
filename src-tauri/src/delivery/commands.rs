@@ -11,7 +11,7 @@ use super::coordination::{DeliveryCommitDraft, NewApproval};
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision, DeliveryJob,
     DeliveryJobLog, DeliveryLease, DeliveryOverview, DeliveryPlatform, DeliveryRepoSettings,
-    DeliveryRun, DeliveryRung, DeliverySettings, DeliveryTask,
+    DeliveryRun, DeliveryRung, DeliverySettings, DeliveryStageAgent, DeliveryTask,
 };
 use super::service::{DeliveryService, NewJob, NewTask};
 use super::tasks::plain_path;
@@ -273,6 +273,19 @@ pub fn delivery_set_repo_settings(
             .collect(),
         qa_browser: settings.qa_browser,
         qa_environment: settings.qa_environment.trim().to_string(),
+        stages: settings
+            .stages
+            .into_iter()
+            .filter(|(_, stage)| stage.agent != DeliveryAgent::Shell)
+            .map(|(role, stage)| {
+                let stage = DeliveryStageAgent {
+                    agent: stage.agent,
+                    model: clean(stage.model),
+                    reasoning: clean(stage.reasoning),
+                };
+                (role.trim().to_ascii_lowercase(), stage)
+            })
+            .collect(),
     };
     service
         .store()
@@ -374,13 +387,25 @@ pub async fn delivery_answer_decision(
     blocking(move || service.answer_decision(&decision_id, &answer, "user")).await
 }
 
+/// Allows again, for the worktree as it is now, every permission of the
+/// task that runs its code.
 #[tauri::command]
-pub async fn delivery_renew_permission(
+pub async fn delivery_renew_permissions(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Vec<DeliveryDecision>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.renew_permissions(&task_id, "user")).await
+}
+
+#[tauri::command]
+pub fn delivery_withdraw_decision(
     service: State<'_, DeliveryService>,
     decision_id: String,
-) -> Result<DeliveryDecision, CommandError> {
-    let service = service.inner().clone();
-    blocking(move || service.renew_permission(&decision_id, "user")).await
+) -> Result<(), CommandError> {
+    service
+        .withdraw_decision(&decision_id)
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]

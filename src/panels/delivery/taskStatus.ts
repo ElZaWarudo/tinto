@@ -97,6 +97,25 @@ export function isPassed(job: DeliveryJob): boolean {
   return job.status === "finished" && isCurrent(job) && job.result?.status === "pass";
 }
 
+function stageOrder(role: string): number {
+  return STAGES.findIndex((stage) => stage.role === role);
+}
+
+/**
+ * A result left behind by later work on an earlier stage: new tests after the
+ * implementation, or new code after its review or QA. `jobs` are the task's,
+ * oldest first.
+ */
+export function isSuperseded(job: DeliveryJob, jobs: DeliveryJob[]): boolean {
+  const order = stageOrder(job.role);
+  const at = jobs.findIndex((other) => other.id === job.id);
+  if (order < 1 || at < 0) return false;
+  return jobs.slice(at + 1).some((later) => {
+    const laterOrder = stageOrder(later.role);
+    return laterOrder >= 0 && laterOrder < order && !later.undone_at_ms && later.changes.length > 0;
+  });
+}
+
 /** The task's jobs, oldest first (the overview keeps them in creation order). */
 export function jobsOf(overview: DeliveryOverview, taskId: string): DeliveryJob[] {
   return overview.jobs.filter((job) => job.task_id === taskId);
@@ -122,8 +141,12 @@ export function rolesOf(jobs: DeliveryJob[]): string[] {
   return roles;
 }
 
-/** One outcome per attempt: the strongest fact about it. */
-export function attemptOutcome(job: DeliveryJob): { tone: Tone; label: string } {
+/** One outcome per attempt: the strongest fact about it. With the task's
+ *  `jobs`, a pass that later work left behind says so. */
+export function attemptOutcome(
+  job: DeliveryJob,
+  jobs: DeliveryJob[] = [],
+): { tone: Tone; label: string } {
   if (job.status === "queued") {
     return {
       tone: "waiting",
@@ -140,7 +163,11 @@ export function attemptOutcome(job: DeliveryJob): { tone: Tone; label: string } 
   if (job.undone_at_ms) return { tone: "idle", label: "Deshecho" };
   const result = job.result;
   if (!result) return { tone: "idle", label: "Terminado" };
-  if (result.status === "pass") return { tone: "ok", label: "Sin hallazgos" };
+  if (result.status === "pass") {
+    return isSuperseded(job, jobs)
+      ? { tone: "idle", label: "Superado" }
+      : { tone: "ok", label: "Sin hallazgos" };
+  }
   if (result.status === "blocked") {
     const by = { sandbox: " por el sandbox", environment: " por el entorno" }[
       result.blocked_by ?? ""
@@ -159,7 +186,8 @@ export function attemptOutcome(job: DeliveryJob): { tone: Tone; label: string } 
 
 /**
  * The stage to run next: retry a broken one, go back to implementation after
- * findings, else the first built-in stage without a passing attempt.
+ * findings, else the first built-in stage without a passing attempt that
+ * still stands.
  */
 export function nextRole(jobs: DeliveryJob[]): string | null {
   const agentJobs = jobs.filter((job) => job.agent !== "shell" && isLive(job));
@@ -172,7 +200,9 @@ export function nextRole(jobs: DeliveryJob[]): string | null {
   }
   for (const stage of STAGES) {
     const job = latestOfRole(agentJobs, stage.role);
-    if (!job || !isPassed(job)) return job && isOpen(job) ? null : stage.role;
+    if (!job || !isPassed(job) || isSuperseded(job, agentJobs)) {
+      return job && isOpen(job) ? null : stage.role;
+    }
   }
   return null;
 }

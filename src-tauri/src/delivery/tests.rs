@@ -13,7 +13,8 @@ use super::coordination::NewApproval;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryDecisionKind,
     DeliveryDecisionOption, DeliveryJob, DeliveryJobStatus, DeliveryLeaseState,
-    DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings, DeliveryTask,
+    DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings, DeliveryStageAgent,
+    DeliveryTask,
 };
 use super::service::{DeliveryService, Launcher, NewJob, NewTask};
 use super::store::DeliveryStore;
@@ -791,6 +792,34 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
         waited["result"]["structuredContent"]["job"]["result_state"], "accepted",
         "{waited}"
     );
+    // Without an agent, the stage runs with what the user fixed for it.
+    let review = json!({"name": "dispatch_job", "arguments": {"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "role": "review", "prompt": "events=codex-ok"}});
+    let unset = call(9, "tools/call", review.clone());
+    assert_eq!(unset["result"]["isError"], true, "{unset}");
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.stages.insert(
+        "review".into(),
+        DeliveryStageAgent {
+            agent: DeliveryAgent::Codex,
+            model: Some("gpt-6-sol".into()),
+            reasoning: Some("high".into()),
+        },
+    );
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let fixed = call(10, "tools/call", review)["result"]["structuredContent"].clone();
+    assert_eq!(fixed["agent"], "codex", "{fixed}");
+    assert_eq!(fixed["model"], "gpt-6-sol");
+    assert_eq!(fixed["reasoning"], "high");
+    h.wait(fixed["id"].as_str().unwrap());
     let unknown = call(8, "nope", json!({}));
     assert_eq!(unknown["error"]["code"], -32601);
 }
@@ -1222,25 +1251,58 @@ fn a_permission_freezes_its_scripts_and_holds_for_one_candidate() {
     assert_eq!(qa_lease(&h).state, DeliveryLeaseState::Free);
 
     // Only the user's renewal makes it valid for the new content.
-    let renewed = h.service.renew_permission(&asked.id, "user").unwrap();
-    assert_ne!(renewed.candidate, allowed.candidate);
+    let renewed = h.service.renew_permissions(&task.id, "user").unwrap();
+    assert_eq!(renewed.len(), 1);
+    assert_ne!(renewed[0].candidate, allowed.candidate);
     let again = h
         .service
         .dispatch(claude_qa(&task, "events=claude-ok"))
         .unwrap();
     assert_eq!(h.wait(&again.id).status, DeliveryJobStatus::Finished);
-    let plain = h
-        .service
-        .request_decisions(&task.id, vec![permission("agentos skills list")], "coord")
-        .unwrap()
-        .remove(0);
+    // The job that never started still says which code it found, so the
+    // view can tell the permission no longer covers it.
+    assert!(stale.start_candidate.is_some());
+    let other = h.task("D-5b");
     assert_eq!(
         h.service
-            .renew_permission(&plain.id, "user")
+            .renew_permissions(&other.id, "user")
             .unwrap_err()
             .category,
         "invalid_decision"
     );
+}
+
+#[test]
+fn a_pending_decision_can_be_withdrawn_and_an_answered_one_cannot() {
+    let h = harness();
+    let task = h.task("D-7");
+    let asked = h
+        .service
+        .request_decisions(
+            &task.id,
+            vec![
+                permission("agentos skills list"),
+                permission("agentos skills install"),
+            ],
+            "coord",
+        )
+        .unwrap();
+    h.service.withdraw_decision(&asked[0].id).unwrap();
+    assert_eq!(h.service.task_decisions(&task.id).unwrap().len(), 1);
+    h.service
+        .answer_decision(&asked[1].id, super::decisions::ALLOWED, "user")
+        .unwrap();
+    assert_eq!(
+        h.service
+            .withdraw_decision(&asked[1].id)
+            .unwrap_err()
+            .category,
+        "decision_answered"
+    );
+    // Nothing is pending any more: stages can run.
+    h.service
+        .dispatch(claude_qa(&task, "events=claude-ok"))
+        .unwrap();
 }
 
 #[test]

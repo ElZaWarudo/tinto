@@ -3,6 +3,7 @@
 //! evolves on its own (`src/delivery/types.ts` mirrors these types).
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -448,6 +449,22 @@ pub struct DeliveryRepoSettings {
     /// user's words. QA jobs get it; coordinators read it instead of asking.
     #[serde(default)]
     pub qa_environment: String,
+    /// The agent each stage (`tests`, `review`…) runs with, fixed by the
+    /// user. The launch dialog starts from it and coordinators that name no
+    /// agent get it.
+    #[serde(default)]
+    pub stages: BTreeMap<String, DeliveryStageAgent>,
+}
+
+/// Who runs a stage: the agent, its model and its reasoning effort.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryStageAgent {
+    pub agent: DeliveryAgent,
+    /// The CLI's default when `None`.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

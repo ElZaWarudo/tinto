@@ -35,7 +35,8 @@ const client = vi.hoisted(() => ({
   openDeliveryJobInAgents: vi.fn(),
   completeDeliveryApproval: vi.fn(),
   answerDeliveryDecision: vi.fn(),
-  renewDeliveryPermission: vi.fn(),
+  renewDeliveryPermissions: vi.fn(),
+  withdrawDeliveryDecision: vi.fn(),
   acceptRecommendedDecisions: vi.fn(),
   setDeliveryRunQaJiraComment: vi.fn(),
   createDeliveryRun: vi.fn(),
@@ -219,6 +220,7 @@ describe("DeliveryPanel", () => {
     ).toBeInTheDocument();
     await user.selectOptions(within(dialog).getByRole("combobox", { name: "Acceso" }), "full");
     await user.type(instructions, " Make it pass");
+    expect(within(dialog).queryByText(/Tomado de/)).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
     await waitFor(() => expect(client.dispatchDeliveryJob).toHaveBeenCalled());
     expect(confirmMock).toHaveBeenCalledWith(
@@ -269,6 +271,7 @@ describe("DeliveryPanel", () => {
       checks: ["npm test", "npm run lint"],
       qa_commands: [],
       qa_browser: false,
+      stages: { implementation: { agent: "claude", model: null, reasoning: "medium" } },
     });
     expect(confirmMock).not.toHaveBeenCalled();
   });
@@ -781,7 +784,8 @@ describe("DeliveryPanel", () => {
         ],
       }),
     );
-    client.renewDeliveryPermission.mockResolvedValue({});
+    client.renewDeliveryPermissions.mockResolvedValue([]);
+    client.withdrawDeliveryDecision.mockResolvedValue(undefined);
     renderPanel();
     const pending = await screen.findByRole("region", { name: "Decisiones pendientes" });
     expect(pending).toHaveTextContent("Script congelado: C:/work/agentos/.agent/qa/run.sh");
@@ -800,11 +804,57 @@ describe("DeliveryPanel", () => {
     );
 
     const log = screen.getByRole("region", { name: "Decisiones" });
-    expect(log).toHaveTextContent("Permitido para el código 0a1b2c3d.");
+    expect(log).toHaveTextContent("Permitido para el código 0a1b2c3d, que ya cambió.");
+    expect(log).toHaveTextContent("El código cambió desde que permitiste 1 permiso");
     await user.click(
       within(log).getByRole("button", { name: "Volver a permitir para el código actual" }),
     );
-    await waitFor(() => expect(client.renewDeliveryPermission).toHaveBeenCalledWith("p2"));
+    await waitFor(() => expect(client.renewDeliveryPermissions).toHaveBeenCalledWith("t1"));
+
+    // A question that stopped making sense is taken back, after confirming.
+    await user.click(
+      within(pending).getByRole("button", {
+        name: "Retirar la decisión «¿Probar la CLI del worktree?»",
+      }),
+    );
+    await waitFor(() => expect(client.withdrawDeliveryDecision).toHaveBeenCalledWith("p1"));
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining("se retira sin respuesta"),
+      expect.objectContaining({ title: "Retirar la decisión" }),
+    );
+  });
+
+  it("does not ask to renew a permission allowed for the current code", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        decisions: [
+          {
+            id: "p2",
+            task_id: "t1",
+            kind: "permission",
+            question: "¿Probar la CLI del worktree?",
+            detail: "",
+            options: [],
+            text: "",
+            command: "node C:/work/agentos-wt/AGOS-501/cli.js",
+            undo: "nada",
+            runs_candidate: true,
+            // The tree the task's latest stage left (the job's end candidate).
+            candidate: "222222222",
+            status: "answered",
+            answer: "allowed",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_by: "user",
+            decided_at_ms: 2,
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const log = await screen.findByRole("region", { name: "Decisiones" });
+    expect(log).toHaveTextContent("Permitido para el código 22222222, el actual.");
+    expect(within(log).queryByRole("button", { name: /Volver a permitir/ })).toBeNull();
   });
 
   it("lets the user choose where a Claude job runs and shows where each ran", async () => {
@@ -823,6 +873,8 @@ describe("DeliveryPanel", () => {
     expect(await screen.findByText(/· en WSL · Ubuntu-24.04/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Otra etapa…" }));
     const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
+    expect(within(dialog).getByRole("combobox", { name: "Agente" })).toHaveValue("claude");
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "codex");
     expect(within(dialog).queryByRole("combobox", { name: /Dónde se ejecuta/ })).toBeNull();
     await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "claude");
     await user.selectOptions(
@@ -975,19 +1027,33 @@ describe("DeliveryPanel", () => {
       expect(client.createDeliveryRun).toHaveBeenCalledWith(REPO, "Lote B", true),
     );
 
-    const qa = within(settings).getByRole("region", { name: "QA del repositorio" });
-    const save = await within(qa).findByRole("button", { name: /^Guardar la QA de/ });
+    const qa = within(settings).getByRole("region", { name: "Ajustes del repositorio" });
+    const save = await within(qa).findByRole("button", { name: /^Guardar los ajustes de/ });
     await waitFor(() => expect(save).toBeEnabled());
     await user.type(
       within(qa).getByRole("textbox", { name: /Entorno de QA/ }),
       "Windows, ámbito personal",
     );
     await user.click(within(qa).getByRole("checkbox", { name: "Navegador para la QA" }));
+    // Each stage's agent is fixed here too.
+    expect(within(qa).queryByRole("combobox", { name: "Modelo de Revisión" })).toBeNull();
+    await user.selectOptions(
+      within(qa).getByRole("combobox", { name: "Agente de Revisión" }),
+      "claude",
+    );
+    await user.selectOptions(
+      within(qa).getByRole("combobox", { name: "Modelo de Revisión" }),
+      "opus",
+    );
     await user.click(save);
     await waitFor(() =>
       expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
         REPO,
-        expect.objectContaining({ qa_environment: "Windows, ámbito personal", qa_browser: true }),
+        expect.objectContaining({
+          qa_environment: "Windows, ámbito personal",
+          qa_browser: true,
+          stages: { review: { agent: "claude", model: "opus", reasoning: "medium" } },
+        }),
       ),
     );
     expect(await within(qa).findByText(/^Guardado para/)).toBeInTheDocument();
@@ -1025,7 +1091,7 @@ describe("DeliveryPanel", () => {
         ],
       }),
     );
-    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [] }));
     client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Otra etapa…" }));
@@ -1060,6 +1126,101 @@ describe("DeliveryPanel", () => {
         expect.objectContaining({ agent: "codex", model: "gpt-6.1-sol", reasoning: "medium" }),
       ),
     );
+    // The stage keeps what it was launched with.
+    expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
+      REPO,
+      expect.objectContaining({
+        stages: { tests: { agent: "codex", model: "gpt-6.1-sol", reasoning: "medium" } },
+      }),
+    );
     localStorage.removeItem("tinto.agents.lastRuntimeCatalog");
+  });
+
+  it("starts each stage from its own agent, else from the task's last one", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ jobs: [job({ agent: "claude", model: "sonnet", reasoning: "high" })] }),
+    );
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      stages: { review: { agent: "claude", model: "opus", reasoning: "xhigh" } },
+    });
+    client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
+    renderPanel();
+    expect(await screen.findByText(/Claude Code · sonnet · /)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Lanzar implementación" }));
+    const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
+    const model = within(dialog).getByRole("combobox", { name: "Modelo" });
+    // Implementation has no agent of its own: the one the task last ran with.
+    await waitFor(() => expect(model).toHaveValue("sonnet"));
+    expect(within(dialog).getByRole("combobox", { name: "Razonamiento" })).toHaveValue("high");
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: /Etapa/ }), "review");
+    expect(model).toHaveValue("opus");
+    expect(within(dialog).getByRole("combobox", { name: "Razonamiento" })).toHaveValue("xhigh");
+    await user.click(within(dialog).getByRole("button", { name: "Poner en cola" }));
+    await waitFor(() =>
+      expect(client.dispatchDeliveryJob).toHaveBeenCalledWith(
+        expect.objectContaining({ role: "review", agent: "claude", model: "opus" }),
+      ),
+    );
+    // Nothing changed for the stage, so nothing is saved.
+    expect(client.setDeliveryRepoSettings).not.toHaveBeenCalled();
+  });
+
+  it("says a task is delivered and records a PR only with its link", async () => {
+    const user = userEvent.setup();
+    const approval = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
+      id: "a1",
+      task_id: "t1",
+      rung: "commit",
+      title: "x",
+      body: "",
+      status: "executed",
+      requested_by: "user",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "hecho",
+      ...over,
+    });
+    const upTo = (rungs: DeliveryApproval[]) =>
+      overview({ tasks: [task({ state: "intake" })], approvals: rungs });
+    client.getDeliveryOverview.mockResolvedValue(
+      upTo([
+        approval({}),
+        approval({ id: "a2", rung: "push" }),
+        approval({ id: "a3", rung: "pr", status: "approved", outcome: null }),
+      ]),
+    );
+    client.completeDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Aprobación pr" });
+    expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
+    const done = within(banner).getByRole("button", { name: "Marcar como hecho" });
+    const outcome = within(banner).getByRole("textbox", { name: "Resultado del paso" });
+    await user.type(outcome, "abierto");
+    expect(done).toBeDisabled();
+    await user.clear(outcome);
+    await user.type(outcome, "https://github.com/acme/agentos/pull/279");
+    client.getDeliveryOverview.mockResolvedValue(
+      upTo([
+        approval({}),
+        approval({ id: "a2", rung: "push" }),
+        approval({ id: "a3", rung: "pr" }),
+        approval({ id: "a4", rung: "jira" }),
+      ]),
+    );
+    await user.click(done);
+    await waitFor(() =>
+      expect(client.completeDeliveryApproval).toHaveBeenCalledWith(
+        "a3",
+        true,
+        "https://github.com/acme/agentos/pull/279",
+      ),
+    );
+    // The coordinator never moved its label; the delivery still shows.
+    expect(await screen.findByText("Estado: Entregada")).toBeInTheDocument();
   });
 });

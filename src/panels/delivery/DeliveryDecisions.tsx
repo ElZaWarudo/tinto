@@ -6,8 +6,10 @@ import { useState, type ReactNode } from "react";
 import {
   acceptRecommendedDecisions,
   answerDeliveryDecision,
-  renewDeliveryPermission,
+  renewDeliveryPermissions,
+  withdrawDeliveryDecision,
 } from "../../delivery/client";
+import { confirm } from "../../workbench/confirmDialog";
 import type { DeliveryDecision } from "../../delivery/types";
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>;
@@ -26,6 +28,37 @@ function TechnicalDetail({ detail }: { detail: string }) {
       <summary>Ver detalle técnico</summary>
       <pre>{detail}</pre>
     </details>
+  );
+}
+
+/** Takes back a question that stopped making sense, so it stops blocking the task. */
+function WithdrawButton({
+  decision,
+  busy,
+  run,
+}: {
+  decision: DeliveryDecision;
+  busy: boolean;
+  run: Run;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      aria-label={`Retirar la decisión «${decision.question}»`}
+      title="Si ya no tiene sentido. Se quita sin respuesta y deja de bloquear las etapas."
+      onClick={() =>
+        void (async () => {
+          const ok = await confirm(
+            `«${decision.question}» se retira sin respuesta y deja de bloquear las etapas. Si vuelve a hacer falta, hay que pedirla otra vez.`,
+            { title: "Retirar la decisión", okLabel: "Retirar" },
+          );
+          if (ok) await run(() => withdrawDeliveryDecision(decision.id));
+        })()
+      }
+    >
+      Retirar
+    </button>
   );
 }
 
@@ -69,6 +102,7 @@ function ChoiceCard({
         >
           Decidir
         </button>
+        <WithdrawButton decision={decision} busy={busy} run={run} />
       </div>
     </fieldset>
   );
@@ -100,6 +134,7 @@ function TextCard({
         >
           {text === decision.text ? "Aprobar texto" : "Aprobar texto editado"}
         </button>
+        <WithdrawButton decision={decision} busy={busy} run={run} />
       </div>
     </fieldset>
   );
@@ -223,6 +258,7 @@ function PermissionCard({
         >
           No permitir
         </button>
+        <WithdrawButton decision={decision} busy={busy} run={run} />
       </div>
     </fieldset>
   );
@@ -342,11 +378,16 @@ function LogRow({
 /** What was decided before the stages ran, folded by default: a summary
  *  line, then choices, approved texts and permissions apart. */
 export function DecisionLog({
+  taskId,
   decisions,
+  candidate,
   busy,
   run,
 }: {
+  taskId: string;
   decisions: DeliveryDecision[];
+  /** The task's code (tree id) as its latest stage saw it; null when unknown. */
+  candidate: string | null;
   busy: boolean;
   run: Run;
 }) {
@@ -355,6 +396,11 @@ export function DecisionLog({
   const texts = decisions.filter((decision) => decision.kind === "text");
   const permissions = decisions.filter((decision) => decision.kind === "permission");
   const by = byLine(decisions);
+  // Permissions that run the task's code and were allowed for other code.
+  const outdated = permissions.filter(
+    (decision) =>
+      decision.runs_candidate && decision.answer === ALLOWED && decision.candidate !== candidate,
+  );
   const counts = [
     choices.length > 0 && plural(choices.length, "elección", "elecciones"),
     texts.length > 0 && plural(texts.length, "texto", "textos"),
@@ -408,6 +454,23 @@ export function DecisionLog({
         {permissions.length > 0 && (
           <>
             <h4 className="delivery-decisions__group">Permisos</h4>
+            {outdated.length > 0 && (
+              <p className="delivery-actions">
+                <span className="delivery-tone--attention">
+                  {outdated.length === 1
+                    ? "El código cambió desde que permitiste 1 permiso que lo ejecuta"
+                    : `El código cambió desde que permitiste ${outdated.length} permisos que lo ejecutan`}
+                  : la QA no arranca hasta que vuelvas a permitirlos.
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void run(() => renewDeliveryPermissions(taskId))}
+                >
+                  Volver a permitir para el código actual
+                </button>
+              </p>
+            )}
             <ul>
               {permissions.map((decision) => {
                 const allowed = decision.answer === ALLOWED;
@@ -422,19 +485,10 @@ export function DecisionLog({
                       decision.command && <code>{decision.command}</code>
                     )}
                     {allowed && decision.runs_candidate && (
-                      <span className="delivery-actions">
-                        <small className="delivery-muted">
-                          Permitido para el código {decision.candidate?.slice(0, 8)}.
-                        </small>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          title="Si el código de la tarea cambió desde que lo permitiste, la QA no arranca hasta que lo permitas de nuevo."
-                          onClick={() => void run(() => renewDeliveryPermission(decision.id))}
-                        >
-                          Volver a permitir para el código actual
-                        </button>
-                      </span>
+                      <small className="delivery-muted">
+                        Permitido para el código {decision.candidate?.slice(0, 8)}
+                        {outdated.includes(decision) ? ", que ya cambió." : ", el actual."}
+                      </small>
                     )}
                   </LogRow>
                 );

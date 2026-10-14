@@ -13,6 +13,7 @@ import type {
   DeliveryPlatform,
   DeliveryRepoSettings,
   DeliveryRun,
+  DeliveryStageAgent,
   DeliveryTask,
 } from "../../delivery/types";
 
@@ -302,6 +303,32 @@ function effortChoices(
   };
 }
 
+/** Who runs a stage, as the selectors hold it ("" is the CLI's default). */
+interface AgentChoice {
+  agent: DeliveryAgent;
+  model: string;
+  reasoning: string;
+}
+
+/** What the selectors show for a stage's agent: its own model and reasoning
+ *  where this machine offers them, the preferred ones otherwise. */
+function agentChoice(from: DeliveryStageAgent | null | undefined): AgentChoice {
+  const agent = from?.agent === "claude" ? "claude" : "codex";
+  const models = modelChoices(agent);
+  const wanted = from?.agent === agent ? (from.model ?? "") : null;
+  const model = models.choices.some((choice) => choice.value === wanted)
+    ? (wanted as string)
+    : models.preferred;
+  return withModel({ agent, model, reasoning: from?.reasoning ?? "" }, model);
+}
+
+/** The choice with another model, on a reasoning level that model supports. */
+function withModel(choice: AgentChoice, model: string): AgentChoice {
+  const efforts = effortChoices(choice.agent, model);
+  const keeps = efforts.choices.some((effort) => effort.value === choice.reasoning);
+  return { ...choice, model, reasoning: keeps ? choice.reasoning : efforts.preferred };
+}
+
 export interface DispatchValues {
   role: string;
   agent: DeliveryAgent;
@@ -325,6 +352,7 @@ function parseChecks(text: string): string[] {
 export function DispatchDialog({
   task,
   settings,
+  lastAgent,
   initialRole,
   initialPrompt,
   promptSource,
@@ -333,8 +361,10 @@ export function DispatchDialog({
   onCancel,
 }: {
   task: DeliveryTask;
-  /** The repo's settings (checks and QA tools), once loaded. */
+  /** The repo's settings (checks, QA tools and each stage's agent), once loaded. */
   settings: DeliveryRepoSettings | null;
+  /** Who ran the task's latest stage: where a stage with no agent of its own starts. */
+  lastAgent: DeliveryStageAgent | null;
   /** The stage to preselect, usually the task's next one. */
   initialRole: string;
   /** Instructions to start from, usually the previous stage's handoff. */
@@ -348,11 +378,12 @@ export function DispatchDialog({
   const builtIn = DELIVERY_ROLES.some((choice) => choice.value === initialRole);
   const [role, setRole] = useState<string>(builtIn ? initialRole : "custom");
   const [customRole, setCustomRole] = useState(builtIn ? "" : initialRole);
-  const [agent, setAgent] = useState<DeliveryAgent>("codex");
-  const [model, setModel] = useState(() => modelChoices("codex").preferred);
-  const [reasoning, setReasoning] = useState(
-    () => effortChoices("codex", modelChoices("codex").preferred).preferred,
-  );
+  // What the user picked here; until then, the stage's own agent.
+  const [picked, setPicked] = useState<AgentChoice | null>(null);
+  const stages = settings?.stages ?? {};
+  const stageKey = (role === "custom" ? customRole : role).trim().toLowerCase();
+  const choice = picked ?? agentChoice(stages[stageKey] ?? lastAgent);
+  const { agent, model, reasoning } = choice;
   const models = modelChoices(agent);
   const efforts = effortChoices(agent, model);
   const [access, setAccess] = useState<DeliveryAccess>("workspace");
@@ -400,7 +431,13 @@ export function DispatchDialog({
     >
       <div className="delivery-field-row">
         <Field label="Etapa" hint={roleHint}>
-          <select value={role} onChange={(event) => setRole(event.target.value)}>
+          <select
+            value={role}
+            onChange={(event) => {
+              setRole(event.target.value);
+              if (stages[event.target.value]) setPicked(null);
+            }}
+          >
             {DELIVERY_ROLES.map((choice) => (
               <option key={choice.value} value={choice.value}>
                 {choice.label}
@@ -421,13 +458,15 @@ export function DispatchDialog({
         <Field label="Agente">
           <select
             value={agent}
-            onChange={(event) => {
-              const next = event.target.value as DeliveryAgent;
-              const nextModel = modelChoices(next).preferred;
-              setAgent(next);
-              setModel(nextModel);
-              setReasoning(effortChoices(next, nextModel).preferred);
-            }}
+            onChange={(event) =>
+              setPicked(
+                agentChoice({
+                  agent: event.target.value as DeliveryAgent,
+                  model: null,
+                  reasoning: null,
+                }),
+              )
+            }
           >
             <option value="codex">Codex</option>
             <option value="claude">Claude Code</option>
@@ -438,26 +477,23 @@ export function DispatchDialog({
         <Field label="Modelo">
           <select
             value={model}
-            onChange={(event) => {
-              setModel(event.target.value);
-              const next = effortChoices(agent, event.target.value);
-              if (!next.choices.some((choice) => choice.value === reasoning)) {
-                setReasoning(next.preferred);
-              }
-            }}
+            onChange={(event) => setPicked(withModel(choice, event.target.value))}
           >
-            {models.choices.map((choice) => (
-              <option key={choice.value} value={choice.value}>
-                {choice.label}
+            {models.choices.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
         </Field>
         <Field label="Razonamiento">
-          <select value={reasoning} onChange={(event) => setReasoning(event.target.value)}>
-            {efforts.choices.map((choice) => (
-              <option key={choice.value} value={choice.value}>
-                {choice.label}
+          <select
+            value={reasoning}
+            onChange={(event) => setPicked({ ...choice, reasoning: event.target.value })}
+          >
+            {efforts.choices.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
@@ -472,6 +508,10 @@ export function DispatchDialog({
           </select>
         </Field>
       </div>
+      <p className="delivery-field__hint">
+        Tinto recuerda el agente, el modelo y el razonamiento de cada etapa para este repositorio, y
+        los coordinadores los usan. También se fijan en Ajustes.
+      </p>
       {choosesPlatform && (
         <Field
           label="Dónde se ejecuta"
@@ -533,7 +573,7 @@ export function DispatchDialog({
       <Field
         label="Instrucciones"
         hint={
-          promptSource
+          promptSource && prompt === initialPrompt
             ? `Tomado de ${promptSource}. Puedes editarlo. Tinto añade la tarea, el worktree, la etapa y el formato del resultado.`
             : "Tinto añade la tarea, el worktree, la etapa y el formato del resultado."
         }
@@ -593,14 +633,85 @@ export function ReleaseLeaseDialog({
   );
 }
 
-/** What QA can use in a repo, set once so coordinators read it instead of
- *  asking on every task. */
+/** One stage's agent in Ajustes: not fixed, or an agent with its model and reasoning. */
+function StageAgentRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: DeliveryStageAgent | undefined;
+  onChange: (next: DeliveryStageAgent | null) => void;
+}) {
+  const shown = value ? agentChoice(value) : null;
+  const set = (next: AgentChoice) =>
+    onChange({ agent: next.agent, model: next.model || null, reasoning: next.reasoning || null });
+  return (
+    <div className="delivery-field-row">
+      <Field label={label}>
+        <select
+          aria-label={`Agente de ${label}`}
+          value={shown?.agent ?? ""}
+          onChange={(event) =>
+            event.target.value
+              ? set(
+                  agentChoice({
+                    agent: event.target.value as DeliveryAgent,
+                    model: null,
+                    reasoning: null,
+                  }),
+                )
+              : onChange(null)
+          }
+        >
+          <option value="">Sin fijar</option>
+          <option value="codex">Codex</option>
+          <option value="claude">Claude Code</option>
+        </select>
+      </Field>
+      {shown && (
+        <>
+          <Field label="Modelo">
+            <select
+              aria-label={`Modelo de ${label}`}
+              value={shown.model}
+              onChange={(event) => set(withModel(shown, event.target.value))}
+            >
+              {modelChoices(shown.agent).choices.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Razonamiento">
+            <select
+              aria-label={`Razonamiento de ${label}`}
+              value={shown.reasoning}
+              onChange={(event) => set({ ...shown, reasoning: event.target.value })}
+            >
+              {effortChoices(shown.agent, shown.model).choices.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** What QA can use in a repo and who runs each stage, set once so
+ *  coordinators read it instead of asking on every task. */
 function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
   const [repo, setRepo] = useState(repos[0]?.path ?? "");
   const [loaded, setLoaded] = useState<DeliveryRepoSettings | null>(null);
   const [browser, setBrowser] = useState(false);
   const [commands, setCommands] = useState("");
   const [environment, setEnvironment] = useState("");
+  const [stages, setStages] = useState<Record<string, DeliveryStageAgent>>({});
   const [status, setStatus] = useState("");
   useEffect(() => {
     if (!repo) return;
@@ -612,6 +723,7 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         setBrowser(settings.qa_browser ?? false);
         setCommands((settings.qa_commands ?? []).join("\n"));
         setEnvironment(settings.qa_environment ?? "");
+        setStages(settings.stages ?? {});
         setStatus("");
       },
       () => active && setStatus("No se pudieron leer los ajustes de este repositorio."),
@@ -622,11 +734,11 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
   }, [repo]);
   const label = repos.find((choice) => choice.path === repo)?.label ?? repo;
   return (
-    <section className="delivery-qa-settings" aria-label="QA del repositorio">
+    <section className="delivery-qa-settings" aria-label="Ajustes del repositorio">
       <h3 className="delivery-dialog__subtitle">QA del repositorio</h3>
       <p className="file-op-modal__body">
-        Lo que la QA puede usar en cada repositorio. Los coordinadores lo leen aquí y no lo
-        preguntan en cada tarea.
+        Lo que la QA puede usar en cada repositorio y quién corre cada etapa. Los coordinadores lo
+        leen aquí y no lo preguntan en cada tarea.
       </p>
       <Field label="Repositorio">
         <select
@@ -670,6 +782,25 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         />
         <span>Navegador para la QA</span>
       </label>
+      <h3 className="delivery-dialog__subtitle">Agente de cada etapa</h3>
+      <p className="file-op-modal__body">
+        Con qué agente, modelo y razonamiento corre cada etapa en este repositorio. El diálogo de
+        lanzar etapa parte de aquí y los coordinadores lo usan en lugar de elegir ellos.
+      </p>
+      {DELIVERY_ROLES.map((stage) => (
+        <StageAgentRow
+          key={stage.value}
+          label={stage.label}
+          value={stages[stage.value]}
+          onChange={(next) =>
+            setStages((current) => {
+              const rest = { ...current };
+              delete rest[stage.value];
+              return next ? { ...rest, [stage.value]: next } : rest;
+            })
+          }
+        />
+      ))}
       <div className="delivery-actions">
         <button
           type="button"
@@ -682,6 +813,7 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
               qa_browser: browser,
               qa_commands: parseChecks(commands),
               qa_environment: environment.trim(),
+              stages,
             }).then(
               (saved) => {
                 setLoaded(saved);
@@ -691,7 +823,7 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
             )
           }
         >
-          Guardar la QA de {label}
+          Guardar los ajustes de {label}
         </button>
         <span className="delivery-field__hint" role="status">
           {status}

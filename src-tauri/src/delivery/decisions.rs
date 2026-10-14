@@ -548,42 +548,73 @@ impl DeliveryService {
             return Err(invalid("la respuesta no corresponde a esta decisión"));
         }
         if decision.runs_candidate && answer == ALLOWED {
-            decision.candidate = Some(self.worktree_content(&decision)?);
+            decision.candidate = Some(self.worktree_content(&decision.task_id)?);
         }
         decision.status = DeliveryDecisionStatus::Answered;
         decision.answer = Some(answer.to_string());
         self.record_answer(decision, decided_by, "decision_answered")
     }
 
-    /// The user allows again a permission that runs the task's code, for the
-    /// worktree as it is now (it had changed since they allowed it).
-    pub fn renew_permission(
-        &self,
-        decision_id: &str,
-        decided_by: &str,
-    ) -> Result<DeliveryDecision, DeliveryError> {
-        let mut decision = self
-            .store()?
+    /// Takes back a question nobody answered: it stopped making sense, and
+    /// while pending it would keep every stage of the task from starting.
+    pub fn withdraw_decision(&self, decision_id: &str) -> Result<(), DeliveryError> {
+        let store = self.store()?;
+        let decision = store
             .decision(decision_id)?
             .ok_or_else(|| DeliveryError::not_found("la decisión", decision_id))?;
-        if !decision.runs_candidate || decision.answer.as_deref() != Some(ALLOWED) {
-            return Err(invalid(
-                "solo se renueva un permiso permitido que ejecuta el código de la tarea",
+        if decision.status != DeliveryDecisionStatus::Pending {
+            return Err(DeliveryError::new(
+                "decision_answered",
+                "esta decisión ya tiene respuesta y no se puede retirar",
             ));
         }
-        decision.candidate = Some(self.worktree_content(&decision)?);
-        self.record_answer(decision, decided_by, "permission_renewed")
+        store.delete_decision(&decision.id)?;
+        store.record_event(
+            now_ms(),
+            "decision_withdrawn",
+            Some(&decision.task_id),
+            None,
+            &decision.question,
+        )?;
+        drop(store);
+        self.notify();
+        Ok(())
+    }
+
+    /// The user allows again, for the worktree as it is now, every allowed
+    /// permission of the task that runs its code (it changed since).
+    pub fn renew_permissions(
+        &self,
+        task_id: &str,
+        decided_by: &str,
+    ) -> Result<Vec<DeliveryDecision>, DeliveryError> {
+        let renewable: Vec<DeliveryDecision> = self
+            .task_decisions(task_id)?
+            .into_iter()
+            .filter(|decision| {
+                decision.runs_candidate && decision.answer.as_deref() == Some(ALLOWED)
+            })
+            .collect();
+        if renewable.is_empty() {
+            return Err(invalid(
+                "la tarea no tiene permisos permitidos que ejecuten su código",
+            ));
+        }
+        let content = self.worktree_content(task_id)?;
+        renewable
+            .into_iter()
+            .map(|mut decision| {
+                decision.candidate = Some(content.clone());
+                self.record_answer(decision, decided_by, "permission_renewed")
+            })
+            .collect()
     }
 
     /// The tree id of the task's worktree as it is now.
-    fn worktree_content(&self, decision: &DeliveryDecision) -> Result<String, DeliveryError> {
-        let task = self.task(&decision.task_id)?;
+    fn worktree_content(&self, task_id: &str) -> Result<String, DeliveryError> {
+        let task = self.task(task_id)?;
         Ok(self
-            .snapshot(
-                &task,
-                &format!("decision-{}-{}", decision.id, now_ms()),
-                None,
-            )?
+            .snapshot(&task, &format!("decision-{}-{}", task.id, now_ms()), None)?
             .tree)
     }
 

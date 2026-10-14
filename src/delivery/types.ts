@@ -235,6 +235,15 @@ export interface DeliveryRepoSettings {
   qa_browser?: boolean;
   /** Where QA runs on this machine, in the user's words. */
   qa_environment?: string;
+  /** The agent each stage runs with, by role, fixed by the user. */
+  stages?: Record<string, DeliveryStageAgent>;
+}
+
+/** Who runs a stage; the CLI's defaults where null. */
+export interface DeliveryStageAgent {
+  agent: DeliveryAgent;
+  model: string | null;
+  reasoning: string | null;
 }
 
 export interface DeliveryCoordinatorEndpoint {

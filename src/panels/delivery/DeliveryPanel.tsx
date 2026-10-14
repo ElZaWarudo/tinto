@@ -43,6 +43,7 @@ import type {
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryRung,
+  DeliveryStageAgent,
   DeliveryTask,
 } from "../../delivery/types";
 import {
@@ -62,6 +63,7 @@ import {
   batchName,
   isBroken,
   isOpen,
+  isSuperseded,
   jobsOf,
   lastHandoff,
   latestApproval,
@@ -228,6 +230,12 @@ function files(count: number): string {
 
 function agentName(agent: string): string {
   return agent === "codex" ? "Codex" : agent === "claude" ? "Claude Code" : "Shell";
+}
+
+/** Who ran the task's latest stage, for one with no agent of its own to start from. */
+function lastStageAgent(jobs: DeliveryJob[], taskId: string): DeliveryStageAgent | null {
+  const last = [...jobs].reverse().find((job) => job.task_id === taskId && job.agent !== "shell");
+  return last ? { agent: last.agent, model: last.model, reasoning: last.reasoning ?? null } : null;
 }
 
 export function DeliveryPanel() {
@@ -575,6 +583,7 @@ export function DeliveryPanel() {
         <DispatchDialog
           task={dialog.task}
           settings={repoSettings}
+          lastAgent={lastStageAgent(jobs, dialog.task.id)}
           initialRole={dialog.role}
           initialPrompt={dialog.prompt}
           promptSource={dialog.source}
@@ -594,11 +603,26 @@ export function DeliveryPanel() {
                 if (!ok) return;
               }
               const done = await run(async () => {
-                if (values.settings) {
-                  const current = await getDeliveryRepoSettings(dialog.task.repo);
+                // The stage keeps the agent it was launched with.
+                const stage = values.role.toLowerCase();
+                const current = await getDeliveryRepoSettings(dialog.task.repo);
+                const fixed = current.stages?.[stage];
+                const same =
+                  fixed?.agent === values.agent &&
+                  (fixed.model ?? "") === values.model &&
+                  (fixed.reasoning ?? "") === values.reasoning;
+                if (values.settings || !same) {
                   await setDeliveryRepoSettings(dialog.task.repo, {
                     ...current,
                     ...values.settings,
+                    stages: {
+                      ...current.stages,
+                      [stage]: {
+                        agent: values.agent,
+                        model: values.model || null,
+                        reasoning: values.reasoning || null,
+                      },
+                    },
                   });
                 }
                 return dispatchDeliveryJob({
@@ -709,7 +733,12 @@ function TaskDetail({
   const pendingDecisions = taskDecisions.filter((decision) => decision.status === "pending");
   const blocked = pendingDecisions.length > 0;
   const needsYou = blocked || openApprovals.length > 0 || broken !== null;
-  const stateLabel = TASK_STATE_LABEL[task.state] ?? task.state;
+  // The coordinator's label stops at the stages; the delivery is Tinto's to know.
+  const delivered = latestApproval(approvals, "jira")?.status === "executed";
+  const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
+  // The task's code as its latest stage found or left it.
+  const withCode = newestFirst.find((job) => job.end_candidate ?? job.start_candidate);
+  const candidate = (withCode?.end_candidate ?? withCode?.start_candidate)?.split(":")[1] ?? null;
 
   const dispatch = (role: string, withHandoff: boolean) => {
     const use = withHandoff && handoff !== null;
@@ -789,7 +818,9 @@ function TaskDetail({
               {shortCommit(task.base_commit)})
             </span>
             {taskRun && <span>{batchName(taskRun.title || taskRun.id)}</span>}
-            <span title="Lo fija quien coordina la tarea">Estado: {stateLabel}</span>
+            <span title={delivered ? undefined : "Lo fija quien coordina la tarea"}>
+              Estado: {stateLabel}
+            </span>
           </p>
         </div>
         <Menu label="Más acciones de la tarea" trigger={<Icon name="more" />}>
@@ -960,6 +991,8 @@ function TaskDetail({
       )}
 
       <DecisionLog
+        taskId={task.id}
+        candidate={candidate}
         decisions={taskDecisions.filter((decision) => decision.status === "answered")}
         busy={busy}
         run={run}
@@ -980,10 +1013,12 @@ function TaskDetail({
                 id={`delivery-stage-${task.id}-${role}`}
                 current={current}
                 older={older}
+                jobs={jobs}
                 renderJob={(job) => (
                   <JobRow
                     key={job.id}
                     job={job}
+                    jobs={jobs}
                     now={now}
                     busy={busy}
                     expanded={expandedJobId === job.id}
@@ -1029,7 +1064,7 @@ function StageTrack({
           {rolesOf(jobs).map((role) => {
             const job = latestOfRole(jobs, role);
             const outcome = job
-              ? attemptOutcome(job)
+              ? attemptOutcome(job, jobs)
               : { tone: "todo" as const, label: role === next ? "Siguiente" : "—" };
             const tone = outcome.tone;
             const content = (
@@ -1188,6 +1223,8 @@ function ApprovalBanner({
   const [outcome, setOutcome] = useState("");
   const name = lower(rungLabel(approval.rung));
   const pending = approval.status === "pending";
+  // A PR recorded without its link cannot be found from the task.
+  const needsUrl = approval.rung === "pr" && !/https?:\/\/\S+/.test(outcome);
   const consequence =
     approval.rung === "commit"
       ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
@@ -1246,7 +1283,8 @@ function ApprovalBanner({
           />
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || needsUrl}
+            title={needsUrl ? "Pega la URL del PR para registrarlo." : undefined}
             onClick={() => void run(() => completeDeliveryApproval(approval.id, true, outcome))}
           >
             Marcar como hecho
@@ -1310,11 +1348,14 @@ function StageHistory({
   id,
   current,
   older,
+  jobs,
   renderJob,
 }: {
   id: string;
   current: DeliveryJob;
   older: DeliveryJob[];
+  /** Every job of the task, oldest first. */
+  jobs: DeliveryJob[];
   renderJob: (job: DeliveryJob) => ReactNode;
 }) {
   const [showOlder, setShowOlder] = useState(false);
@@ -1329,7 +1370,7 @@ function StageHistory({
             <Icon name={showOlder ? "down" : "right"} />
             {older.length === 1 ? "1 intento anterior" : `${older.length} intentos anteriores`}
             <span className="delivery-muted">
-              · {older.map((job) => lower(attemptOutcome(job).label)).join(", ")}
+              · {older.map((job) => lower(attemptOutcome(job, jobs).label)).join(", ")}
             </span>
           </button>
           {showOlder && <ul>{older.map(renderJob)}</ul>}
@@ -1341,6 +1382,7 @@ function StageHistory({
 
 function JobRow({
   job,
+  jobs,
   now,
   busy,
   expanded,
@@ -1351,6 +1393,8 @@ function JobRow({
   onContinue,
 }: {
   job: DeliveryJob;
+  /** Every job of the task, oldest first. */
+  jobs: DeliveryJob[];
   now: number;
   busy: boolean;
   expanded: boolean;
@@ -1360,7 +1404,7 @@ function JobRow({
   onUndo: () => void;
   onContinue: () => void;
 }) {
-  const outcome = attemptOutcome(job);
+  const outcome = attemptOutcome(job, jobs);
   const scope =
     (job.access === "full" ? " · acceso completo" : job.writes ? "" : " · solo lectura") +
     (job.qa_browser ? " · navegador" : "") +
@@ -1379,7 +1423,7 @@ function JobRow({
         </span>
         <span className="delivery-job__agent">
           {agentName(job.agent)}
-          {job.model ? ` · ${job.model}` : ""}
+          {job.agent === "shell" ? "" : ` · ${job.model ?? "modelo predeterminado"}`}
           {job.reasoning ? ` · ${codexReasoningLabel(job.reasoning).toLowerCase()}` : ""}
           {scope}
         </span>
@@ -1396,6 +1440,12 @@ function JobRow({
         <div className="delivery-job__detail">
           {job.error && <p className="delivery-job__error">{job.error}</p>}
           {job.result_note && <p className="delivery-job__note">{job.result_note}</p>}
+          {isSuperseded(job, jobs) && (
+            <p className="delivery-job__note">
+              Una etapa anterior cambió el código después de este resultado, así que ya no cuenta:
+              hay que repetir esta etapa.
+            </p>
+          )}
           {job.result && (
             <div className="delivery-result">
               <p>{job.result.summary}</p>

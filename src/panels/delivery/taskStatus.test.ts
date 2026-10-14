@@ -8,6 +8,7 @@ import type {
 import {
   attemptOutcome,
   batchName,
+  isSuperseded,
   lastHandoff,
   latestOfRole,
   nextRole,
@@ -265,6 +266,29 @@ describe("nextRole", () => {
         job({ role: "qa" }),
       ]),
     ).toBeNull();
+  });
+});
+
+describe("results left behind by later work", () => {
+  const changed = [{ path: "src/app.ts", kind: "modified" }];
+
+  it("asks for the implementation again after the tests are redone", () => {
+    const implementation = job({ role: "implementation" });
+    const jobs = [job({ changes: changed }), implementation, job({ attempt: 2, changes: changed })];
+    expect(nextRole(jobs)).toBe("implementation");
+    expect(attemptOutcome(implementation, jobs).label).toBe("Superado");
+    // The tests themselves stand, and so does a result nothing came after.
+    expect(attemptOutcome(jobs[2], jobs).label).toBe("Sin hallazgos");
+    expect(isSuperseded(jobs[0], jobs)).toBe(false);
+  });
+
+  it("asks for the review again after new code, unless that code was undone", () => {
+    const review = job({ role: "review" });
+    const fix = job({ role: "implementation", attempt: 2, changes: changed });
+    const before = [job(), job({ role: "implementation", result_state: "stale" }), review];
+    expect(nextRole([...before, fix])).toBe("review");
+    expect(nextRole([...before, { ...fix, undone_at_ms: 5 }])).toBe("implementation");
+    expect(isSuperseded(review, [...before, { ...fix, undone_at_ms: 5 }])).toBe(false);
   });
 });
 

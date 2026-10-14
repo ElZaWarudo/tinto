@@ -48,6 +48,7 @@ import { busStore, useBusState } from "./bus/store";
 import type { WorkbenchConfig } from "./bus/contract";
 import { GlanceMode } from "./qol/GlanceMode";
 import { NotificationWatcher } from "./qol/notifications";
+import { DeliveryNotificationWatcher } from "./panels/delivery/DeliveryNotifications";
 import { useQualityState } from "./qol/state";
 import { installZoomKeybindings, zoomStore } from "./qol/zoom";
 import { installShortcuts } from "./qol/shortcuts";
@@ -285,6 +286,7 @@ function NativeApp() {
     <WorkspaceActionsContext.Provider value={actions}>
       <div className="app-shell">
         <NotificationWatcher />
+        <DeliveryNotificationWatcher />
         <MenuBar />
         {connectionErrors.length > 0 && (
           <div

@@ -256,16 +256,32 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             let run_id = fence()?;
             let task_id = text("task_id")?;
             task_in_run(&run_id, &task_id)?;
-            let agent = match text("agent")?.as_str() {
-                "codex" => DeliveryAgent::Codex,
-                "claude" => DeliveryAgent::Claude,
-                other => {
+            let role = text("role")?;
+            // What the user fixed for this stage in Tinto fills what the
+            // call leaves out.
+            let repo = service.task(&task_id)?.repo;
+            let stage = service
+                .store()?
+                .repo_settings(&repo)?
+                .stages
+                .remove(&role.trim().to_ascii_lowercase());
+            let agent = match optional("agent").as_deref() {
+                Some("codex") => DeliveryAgent::Codex,
+                Some("claude") => DeliveryAgent::Claude,
+                Some(other) => {
                     return Err(DeliveryError::new(
                         "invalid_arguments",
                         format!("agente desconocido: {other} (codex o claude)"),
                     ))
                 }
+                None => stage.as_ref().map(|stage| stage.agent).ok_or_else(|| {
+                    DeliveryError::new(
+                        "invalid_arguments",
+                        "falta agent: el usuario no fijó en Tinto un agente para esta etapa",
+                    )
+                })?,
             };
+            let stage = stage.filter(|stage| stage.agent == agent);
             let platform = match optional("platform").as_deref() {
                 None => None,
                 Some("windows") => Some(DeliveryPlatform::Windows),
@@ -277,7 +293,6 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
                     ))
                 }
             };
-            let role = text("role")?;
             // Full access is the user's to give: only for QA, and only once
             // they allowed it for this task.
             let qa = role.trim().eq_ignore_ascii_case(QA_ROLE);
@@ -285,19 +300,23 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
                 true => DeliveryAccess::Full,
                 false => DeliveryAccess::Workspace,
             };
-            to_json(&service.dispatch(NewJob {
-                task_id,
-                role,
-                platform,
-                agent,
-                model: optional("model"),
-                access,
-                prompt: text("prompt")?,
-                writes: args["writes"].as_bool(),
-                lease: optional("lease"),
-                timeout_minutes: args["timeout_minutes"].as_u64().map(|value| value as u32),
-                reasoning: optional("reasoning"),
-            })?)
+            to_json(
+                &service.dispatch(NewJob {
+                    task_id,
+                    role,
+                    platform,
+                    agent,
+                    model: optional("model")
+                        .or_else(|| stage.as_ref().and_then(|stage| stage.model.clone())),
+                    access,
+                    prompt: text("prompt")?,
+                    writes: args["writes"].as_bool(),
+                    lease: optional("lease"),
+                    timeout_minutes: args["timeout_minutes"].as_u64().map(|value| value as u32),
+                    reasoning: optional("reasoning")
+                        .or_else(|| stage.as_ref().and_then(|stage| stage.reasoning.clone())),
+                })?,
+            )
         }
         "cancel_job" | "retry_job" => {
             let run_id = fence()?;
@@ -391,6 +410,17 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             to_json(&service.request_decisions(&task_id, decisions, &text("owner")?)?)
         }
         "read_decisions" => to_json(&service.task_decisions(&text("task_id")?)?),
+        "withdraw_decision" => {
+            let run_id = fence()?;
+            let decision_id = text("decision_id")?;
+            let decision = service
+                .store()?
+                .decision(&decision_id)?
+                .ok_or_else(|| DeliveryError::not_found("la decisión", &decision_id))?;
+            task_in_run(&run_id, &decision.task_id)?;
+            service.withdraw_decision(&decision_id)?;
+            Ok(json!({ "withdrawn": decision_id }))
+        }
         "read_settings" => {
             let task = service.task(&text("task_id")?)?;
             let settings = service.store()?.repo_settings(&task.repo)?;
@@ -405,6 +435,7 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
                 "qa_browser": settings.qa_browser,
                 "qa_environment": settings.qa_environment,
                 "bootstrap": settings.bootstrap,
+                "stages": settings.stages,
                 "run": run.map(|run| json!({
                     "id": run.id,
                     "title": run.title,
@@ -514,7 +545,7 @@ fn tool_definitions() -> Value {
         { "name": "release_run", "description": "Release the run lock when you stop.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "generation": {"type": "integer"}}), json!(["run_id", "owner", "generation"])) },
         { "name": "create_task", "description": "Create a task: its own worktree and branch from a verified base.", "inputSchema": fenced(json!({"properties": {"repo": {"type": "string"}, "distro": {"type": "string"}, "key": {"type": "string"}, "title": {"type": "string"}, "base": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "key", "title"]})) },
         { "name": "set_task_state", "description": "Set a task's stage label and/or raise its contract version (older results become stale).", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "state": {"type": "string"}, "contract_version": {"type": "integer"}}, "required": ["task_id"]})) },
-        { "name": "dispatch_job", "description": "Queue a background agent job in a task's worktree. Its result's `blocked_by` says what stopped it: `sandbox` (the job's sandbox or permission rules refused something a decision allows), `environment` (something outside them failed) or `none`. Roles: tests, implementation, review (read-only), qa (read-only, holds the qa resource). Claude jobs without full access can run read-only commands (read-only git on the worktree included) plus the repo's verification commands set in Tinto; anything else is denied. On a Windows repository a Claude job runs on Windows when Claude Code is installed there, otherwise in WSL; `platform` forces one, and the job's `ran_on` says where it ran. You cannot choose a job's access: jobs run with workspace access, except QA on a task whose user allowed a `full_access` permission (see request_decisions), which runs with full access and says so in `access`. The job ends with a structured result.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "role": {"type": "string"}, "agent": {"type": "string", "enum": ["codex", "claude"]}, "platform": {"type": "string", "enum": ["windows", "wsl"], "description": "Claude jobs on a Windows repository only: where it runs. Omit it unless the user asked for one."}, "prompt": {"type": "string"}, "model": {"type": "string", "description": "Model id. When omitted, Codex jobs use the default of the account's model catalog as last seen by Tinto (falling back to the CLI's configured model) and Claude jobs use the CLI's default."}, "reasoning": {"type": "string", "description": "Reasoning effort: minimal, low, medium, high or xhigh for Codex; low, medium, high, xhigh or max for Claude Code. The CLI's default when omitted."}, "writes": {"type": "boolean"}, "lease": {"type": "string"}, "timeout_minutes": {"type": "integer"}}, "required": ["task_id", "role", "agent", "prompt"]})) },
+        { "name": "dispatch_job", "description": "Queue a background agent job in a task's worktree. Its result's `blocked_by` says what stopped it: `sandbox` (the job's sandbox or permission rules refused something a decision allows), `environment` (something outside them failed) or `none`. Roles: tests, implementation, review (read-only), qa (read-only, holds the qa resource). Claude jobs without full access can run read-only commands (read-only git on the worktree included) plus the repo's verification commands set in Tinto; anything else is denied. On a Windows repository a Claude job runs on Windows when Claude Code is installed there, otherwise in WSL; `platform` forces one, and the job's `ran_on` says where it ran. You cannot choose a job's access: jobs run with workspace access, except QA on a task whose user allowed a `full_access` permission (see request_decisions), which runs with full access and says so in `access`. The job ends with a structured result.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "role": {"type": "string"}, "agent": {"type": "string", "enum": ["codex", "claude"], "description": "Omit it to use the agent, model and reasoning the user fixed for this stage in Tinto (read_settings `stages`); required when the stage has none."}, "platform": {"type": "string", "enum": ["windows", "wsl"], "description": "Claude jobs on a Windows repository only: where it runs. Omit it unless the user asked for one."}, "prompt": {"type": "string"}, "model": {"type": "string", "description": "Model id. When omitted, the model the user fixed for the stage (if the agent is the fixed one); otherwise Codex jobs use the default of the account's model catalog as last seen by Tinto (falling back to the CLI's configured model) and Claude jobs use the CLI's default."}, "reasoning": {"type": "string", "description": "Reasoning effort: minimal, low, medium, high or xhigh for Codex; low, medium, high, xhigh or max for Claude Code. When omitted, what the user fixed for the stage, else the CLI's default."}, "writes": {"type": "boolean"}, "lease": {"type": "string"}, "timeout_minutes": {"type": "integer"}}, "required": ["task_id", "role", "prompt"]})) },
         { "name": "wait_job", "description": "Wait until a job ends (or the timeout passes) and return it.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "timeout_seconds": {"type": "integer"}}), json!(["job_id"])) },
         { "name": "read_job", "description": "A job with its status, result, result state, candidates and changed files.", "inputSchema": schema(json!({"job_id": {"type": "string"}}), json!(["job_id"])) },
         { "name": "job_log", "description": "Readable log of a job from a raw line onwards.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "from_line": {"type": "integer"}}), json!(["job_id"])) },
@@ -524,7 +555,8 @@ fn tool_definitions() -> Value {
         { "name": "read_approval", "description": "An approval's status (pending, approved, rejected, executed, failed or undone) and outcome; for a commit step, also its plan and the commits created.", "inputSchema": schema(json!({"approval_id": {"type": "string"}}), json!(["approval_id"])) },
         { "name": "request_decisions", "description": "Ask the user what they must settle before a task's stages run; they answer in Tinto, and no stage can be dispatched on the task until every decision is answered. Write questions in plain language for the user and put paths, flags and formats in `detail`. Kinds: `choice` (2-4 options, each with a one-line consequence, at most one recommended), `text` (a user-facing text to approve exactly as shown, in `text`), `permission` (something outside the worktree, such as installing into the user's real client config; give `undo`; `command` when QA needs to run it: once allowed it joins that task's QA commands, with any arguments; `read_dirs` for folders outside the worktree QA must read or list; `write_dirs` for folders outside the worktree its commands must write in, which become the only writable places besides the job's QA folder (Tinto creates the ones that do not exist); and `clients`, `claude` and/or `codex`, when the command starts the user's real client, so the folder that client must write to start joins `write_dirs` and the user sees it). Each created permission comes back with `warnings`: reasons it will not work as asked when QA runs with Codex on this machine, found by trying the command's program in Codex's sandbox (for example, Git Bash cannot start in its unelevated sandbox, and a Codex started from a Codex QA job cannot start at all). Read them before the user answers: change the command (a Node script instead of bash) or plan that QA with Claude Code. Answers are final and reach every later job's instructions. The batch is all or nothing: if any item is invalid none is created, and the error names each invalid item. Only ask what is the user's call for this issue: product behaviour, user-facing texts, and side effects outside the worktree. Never ask harness configuration that read_settings already answers (QA browser, QA commands, QA environment, Jira policy). What a permission lets QA run cannot change after the user allows it. A command may name files agents can edit (the repo, its worktrees, `.agent`) only in two ways. (1) Helper scripts: list every script the command runs in `scripts` (absolute paths, including scripts they call from their own folder); Tinto freezes their text when you ask, shows it to the user, and QA runs those copies from one folder (Tinto tells the QA job where; scripts must find their siblings through their own location). Files a frozen script names in the repo or `.agent` are not frozen: the user is warned, so keep them to data. (2) The task's own code, such as the CLI under test: name it by its path inside the task's worktree, in the command or in a frozen script. The permission then holds for the worktree content at the moment the user allows it; if the code changes afterwards the QA job fails with `permission_stale` until the user allows it again in Tinto, so ask when the candidate is ready for QA. Anything else that is agent-editable, and scripts by relative path, are refused.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "decisions": {"type": "array", "items": decision_item}}, "required": ["task_id", "decisions"]})) },
         { "name": "read_decisions", "description": "A task's decisions with their status, answer, who decided and when. For permissions: the frozen `scripts`, `read_dirs`, `write_dirs`, `clients`, `warnings`, whether it `runs_candidate` and the worktree content it was allowed for.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
-        { "name": "read_settings", "description": "What the user already configured in Tinto for a task: the repo's verification and QA commands, whether QA gets a browser, the QA environment (platforms, scope, clients), the bootstrap command, and the batch's policy on posting QA verdicts to Jira (null = not set). Read it before asking anything: never ask through decisions what is configured here. If something you need is empty or null, ask the user to set it in Tinto (Ajustes), not as a decision.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
-        { "name": "complete_approval", "description": "Report how an approved PR or Jira step went after you ran it.", "inputSchema": fenced(json!({"properties": {"approval_id": {"type": "string"}, "success": {"type": "boolean"}, "outcome": {"type": "string"}}, "required": ["approval_id", "success"]})) }
+        { "name": "withdraw_decision", "description": "Take back a pending decision that no longer makes sense (it would otherwise block every stage of its task). Answered decisions cannot be withdrawn.", "inputSchema": fenced(json!({"properties": {"decision_id": {"type": "string"}}, "required": ["decision_id"]})) },
+        { "name": "read_settings", "description": "What the user already configured in Tinto for a task: the repo's verification and QA commands, whether QA gets a browser, the QA environment (platforms, scope, clients), the bootstrap command, the agent, model and reasoning fixed per stage (`stages`, by role; dispatch_job uses them when you omit `agent`, so do not choose models yourself), and the batch's policy on posting QA verdicts to Jira (null = not set). Read it before asking anything: never ask through decisions what is configured here. If something you need is empty or null, ask the user to set it in Tinto (Ajustes), not as a decision.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
+        { "name": "complete_approval", "description": "Report how an approved PR or Jira step went after you ran it. For a PR that was opened, `outcome` must include its URL.", "inputSchema": fenced(json!({"properties": {"approval_id": {"type": "string"}, "success": {"type": "boolean"}, "outcome": {"type": "string"}}, "required": ["approval_id", "success"]})) }
     ])
 }

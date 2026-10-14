@@ -284,6 +284,12 @@ impl DeliveryStore {
         self.one("SELECT data FROM decisions WHERE id = ?1", id)
     }
 
+    pub fn delete_decision(&self, id: &str) -> Result<(), DeliveryError> {
+        self.conn
+            .execute("DELETE FROM decisions WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     pub fn decisions(&self) -> Result<Vec<DeliveryDecision>, DeliveryError> {
         self.all("SELECT data FROM decisions ORDER BY rowid", [])
     }

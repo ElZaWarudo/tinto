@@ -992,6 +992,12 @@ impl DeliveryService {
                     })?,
             )
         };
+        // Recorded before anything can refuse the job, so a job that never
+        // starts still says which code it found.
+        if let Some(start) = &start {
+            job.start_candidate = Some(start.candidate_id());
+            self.store()?.put_job(&job)?;
+        }
         let paths = (self.inner.paths_for)(&job.id)?;
         paths.prepare()?;
         if job.role == QA_ROLE {

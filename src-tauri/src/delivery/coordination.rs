@@ -495,6 +495,13 @@ impl DeliveryService {
                 "solo se informa el resultado de un paso aprobado",
             ));
         }
+        // A PR recorded without its link cannot be found from the task.
+        if success && approval.rung == DeliveryRung::Pr && !outcome.contains("://") {
+            return Err(DeliveryError::new(
+                "invalid_outcome",
+                "el resultado de un PR abierto debe incluir su URL",
+            ));
+        }
         approval.status = if success {
             DeliveryApprovalStatus::Executed
         } else {

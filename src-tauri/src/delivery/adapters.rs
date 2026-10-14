@@ -181,6 +181,12 @@ pub fn job_prompt(
     ];
     if !job.writes {
         lines.push("This job is read-only: do not modify, create or delete files.".to_string());
+        if job.role != QA_ROLE {
+            lines.push(format!(
+                "You can read the main checkout at {} (for example the task's contract under .agent). Do not change it.",
+                agent_path(&plain_path(&task.repo), from_wsl)
+            ));
+        }
     }
     if job.role == QA_ROLE {
         lines.push(format!(
@@ -782,7 +788,13 @@ fn claude_qa_args(
     paths: &JobPaths,
 ) -> Result<Vec<String>, DeliveryError> {
     if job.role != QA_ROLE {
-        return Ok(Vec::new());
+        // A read-only stage (review) reads the main checkout too: that is
+        // where the contract it reviews against lives. Its permission mode
+        // lets it edit nothing there.
+        return Ok(match job.writes {
+            true => Vec::new(),
+            false => vec!["--add-dir".to_string(), main_checkout.to_string()],
+        });
     }
     std::fs::create_dir_all(&paths.qa_output).map_err(DeliveryError::io)?;
     let mut args = vec![
@@ -1485,12 +1497,17 @@ mod tests {
             .stdin
             .contains("you can run only: npm test; cargo test."));
         assert!(launch.stdin.contains("`git -C /repo-wt/K-1 …`"));
+        // A stage that writes cannot reach the main checkout.
+        assert!(!script.contains("--add-dir"), "{script}");
 
         job.writes = false;
         job.allowed_commands.clear();
         let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(script.contains("--permission-mode default"), "{script}");
+        // A read-only stage reads the main checkout, where the contract is.
+        assert!(script.contains(" '--add-dir' '/repo'"), "{script}");
+        assert!(launch.stdin.contains("read the main checkout at /repo "));
         assert!(launch
             .stdin
             .contains("You can run read-only shell commands only"));

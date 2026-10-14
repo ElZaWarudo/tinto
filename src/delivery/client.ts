@@ -153,9 +153,13 @@ export const completeDeliveryApproval = (approvalId: string, success: boolean, o
 export const answerDeliveryDecision = (decisionId: string, answer: string) =>
   invoke<DeliveryDecision>("delivery_answer_decision", { decisionId, answer });
 
-/** Allows again, for the worktree as it is now, a permission that runs the task's code. */
-export const renewDeliveryPermission = (decisionId: string) =>
-  invoke<DeliveryDecision>("delivery_renew_permission", { decisionId });
+/** Allows again, for the worktree as it is now, the task's permissions that run its code. */
+export const renewDeliveryPermissions = (taskId: string) =>
+  invoke<DeliveryDecision[]>("delivery_renew_permissions", { taskId });
+
+/** Takes back a decision nobody answered yet. */
+export const withdrawDeliveryDecision = (decisionId: string) =>
+  invoke<void>("delivery_withdraw_decision", { decisionId });
 
 export const acceptRecommendedDecisions = (taskId: string) =>
   invoke<DeliveryDecision[]>("delivery_accept_recommended", { taskId });
