@@ -689,9 +689,14 @@ impl DeliveryService {
         if let Some(pr) = self.task_pr(&task.id)? {
             return Ok(Some(pr));
         }
-        let pushed = self
-            .latest_approval(&task.id, DeliveryRung::Push)?
-            .is_some_and(|push| push.status.was_done());
+        // A PR step done also means the branch was pushed, even by hand.
+        let pushed = [DeliveryRung::Push, DeliveryRung::Pr]
+            .into_iter()
+            .map(|rung| self.latest_approval(&task.id, rung))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .any(|step| step.status.was_done());
         // GitHub out of reach finds nothing; the recorded URL still counts.
         if let Some(found) = pushed
             .then(|| self.find_branch_pr(task).ok().flatten())

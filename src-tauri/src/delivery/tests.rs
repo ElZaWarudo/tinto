@@ -2695,3 +2695,17 @@ fn the_merge_method_proposed_follows_how_the_base_merges_its_prs() {
     let merged = h.task("M-2");
     assert_eq!(h.service.merge_method(&merged.id).unwrap(), "merge");
 }
+
+#[test]
+fn a_pr_step_done_without_a_push_in_tinto_still_finds_the_branchs_pr() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("P-9");
+    put_step(&h, &task, "a-pr", "pr", "executed", "PR abierto");
+    h.service.set_github(FakeGitHub::new(
+        json!({"state": "OPEN"}),
+        json!([open_pr(31, "OPEN")]),
+    ));
+    let pr = h.service.check_task(&task.id).unwrap().unwrap();
+    assert_eq!(pr.number, 31);
+}
