@@ -806,9 +806,12 @@ impl DeliveryService {
 
     /// Startup: every task gets its PR if it can, and its steps are checked
     /// against git and GitHub as last seen. Open PRs are read by the watch.
-    fn check_tasks(&self) -> Result<(), DeliveryError> {
+    pub(super) fn check_tasks(&self) -> Result<(), DeliveryError> {
         self.link_recorded_prs()?;
-        for task in self.store()?.tasks()? {
+        // Bound first: a guard in the `for` expression would hold the store
+        // for the whole loop, and the checks inside lock it again.
+        let tasks = self.store()?.tasks()?;
+        for task in tasks {
             if let Some(pr) = self.task_pr(&task.id)? {
                 self.check_pr_steps(&pr)?;
             }

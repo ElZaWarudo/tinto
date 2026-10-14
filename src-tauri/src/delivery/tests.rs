@@ -2709,3 +2709,29 @@ fn a_pr_step_done_without_a_push_in_tinto_still_finds_the_branchs_pr() {
     let pr = h.service.check_task(&task.id).unwrap().unwrap();
     assert_eq!(pr.number, 31);
 }
+
+#[test]
+fn the_startup_check_of_every_task_finishes() {
+    let h = harness();
+    let task = h.task("P-10");
+    put_step(&h, &task, "a-push", "push", "executed", "Publicado");
+    put_step(
+        &h,
+        &task,
+        "a-pr",
+        "pr",
+        "executed",
+        "https://github.com/o/r/pull/4",
+    );
+    h.service
+        .set_github(FakeGitHub::new(json!({"state": "MERGED"}), json!([])));
+    let service = h.service.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(service.check_tasks()).unwrap());
+    // A store lock held across the loop used to hang Tinto at startup.
+    finished
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the startup check hung")
+        .unwrap();
+    assert!(h.service.task_pr(&task.id).unwrap().is_some());
+}
