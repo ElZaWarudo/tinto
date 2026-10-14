@@ -284,6 +284,22 @@ El coordinador lo lee con `read_settings` y no lo pregunta; si falta algo, pide 
 
 Comprobado contra GitHub con el PR de AGOS-455 (`AIRInstitute/agentos#279`): se lee abierto, aprobado y con 3 checks en verde, y la segunda petición al feed responde 304.
 
+**Recuperación ante pérdidas (2026-10-14).** En AGOS-455 el peldaño PR se marcó hecho sin URL en "Qué se hizo". La tarea quedó sin PR vinculado, sin sección "Pull request" y con "Preparar merge…" rechazado, y nada en la interfaz lo arreglaba. La URL estaba en el resultado del peldaño Jira, que no se leía. Tinto daba por cierto lo anotado una vez. Ahora lo anotado es una suposición y lo cierto está en git y en GitHub: Tinto contrasta cada peldaño con lo que puede ver, y lo que no puede ver se corrige a mano dejando rastro.
+
+- **El PR se encuentra por la rama.** Si una tarea con el push (o el PR) hecho no tiene PR vinculado, Tinto pide a GitHub el de su rama: `gh pr list --repo <repo de origin> --head <rama> --state all`. Vincula el abierto o, si no hay ninguno, el más reciente. Busca al arrancar, al abrir la tarea y al marcar hecho el peldaño PR. Si la URL anotada es otra, gana el PR de la rama y el peldaño avisa: "La URL anotada no es el PR de esta rama". Marcar el PR sin URL se acepta si Tinto lo encuentra y, si no, se rechaza con "No encuentro un PR de la rama <rama>. Pega su URL". Un PR abierto fuera de Tinto queda como peldaño PR encontrado en GitHub. Un peldaño PR hecho sin PR vinculado ya solo puede venir de antes y se ve como "Hecho · sin PR vinculado", con "Buscar el PR de la rama".
+- **Cada peldaño se contrasta.** Al arrancar, al abrir una tarea y tras cada lectura del PR del seguimiento, sin peticiones a GitHub aparte de las que ya había:
+  - Commit: los commits deshechos fuera de Tinto ya lo dejaban en `undone`.
+  - Push: la rama remota tiene que existir y acabar donde Tinto la publicó (`git ls-remote`; el push guarda ahora esa punta). Si no, "La rama remota ya no existe" o "La rama remota cambió fuera de Tinto", y se puede volver a pedir aunque no haya nada nuevo que publicar. Tras el merge no se comprueba, porque GitHub borra la rama.
+  - PR: un PR cerrado sin fusionar o desaparecido lo dice, con "Buscar otro PR de la rama".
+  - Merge: un PR fusionado fuera de Tinto deja el peldaño merge hecho con origen GitHub, "Fusionado en GitHub por <login> el <fecha>" y el commit de merge si GitHub lo da. Ya no se ofrece "Preparar merge…".
+- **Estado nuevo `drifted`** ("Ya no coincide"), distinto de `failed` y de `undone`. Su `notice` dice qué cambió, y el peldaño vuelve a contar como hecho si lo anotado vuelve a ser cierto. La tarea aparece en "Te necesitan". El coordinador lo lee en `read_approval`, `read_pr` y `delivery_overview`.
+- **Corregir resultado.** En el menú ⋯ y en cada peldaño hecho de PR, merge o Jira, "Corregir resultado…" abre el resultado actual con un motivo obligatorio. La corrección se guarda junto al resultado que sustituye, y "Resultados de la entrega" muestra ambos con su fecha. Un PR corregido con su URL se vincula. Commit y push no se corrigen a mano porque los contrasta git. No hay herramienta MCP: la corrección es del usuario.
+- **Jira dos veces.** El equipo pasa la incidencia a In Review al abrir el PR y la cierra al fusionarlo. Cada aprobación de Jira lleva su momento (`after_pr` o `after_merge`; `stage` en `request_approval`, por defecto el siguiente que falte) y el recorrido muestra "Jira (PR)" después de PR y "Jira (merge)" después de merge. Al arrancar, un Jira de antes cuenta como "Jira (PR)" si se hizo antes del merge.
+- **Entregada** solo con commit, push, PR, merge y los dos Jira hechos, en la tarea y en la lista. Bajo los botones se nombra el peldaño siguiente ("Lo siguiente es el merge").
+- **Método de merge por defecto** según el historial de la rama base: `merge` si sus últimos PR entraron como "Merge pull request #…", y `squash` si no. Con `merge`, el mensaje empieza como el de GitHub: "Merge pull request #<n> from <owner>/<rama>".
+
+Cubierto con tests del motor (cliente de GitHub simulado y remotos git reales) y de la vista. Queda por comprobar en la app con AGOS-455: PR #279 vinculado, aprobado y en verde, "Jira (PR)" hecho, merge listo con "Merge commit" por defecto, "Jira (merge)" pendiente y sin "Entregada".
+
 Límites conocidos:
 
 - Si el worktree se abrió como pestaña de repo, la pestaña sigue abierta después de eliminar la tarea.
