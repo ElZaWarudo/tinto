@@ -115,7 +115,6 @@ describe("passive signal contract types", () => {
       error: null,
       metrics: { changed_files: 1, lines_added: 3, lines_removed: 1 },
       gitleaks_configured: false,
-      agents_md_configured: false,
       secret_scan_status: { state: "findings", engine: "gitleaks" },
       signals: [
         {
@@ -398,7 +397,6 @@ import {
   installGitleaks,
   installRepoGitleaks,
   fetchRepo,
-  createRepoAgentsMdConfig,
   createRepoGitleaksConfig,
   listAgentJournalSessions,
   listAgentSessions,
@@ -790,9 +788,6 @@ describe("RDM-008 client wrappers", () => {
 
     void createRepoGitleaksConfig("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("create_repo_gitleaks_config", { repo: "/r/api" });
-
-    void createRepoAgentsMdConfig("/r/api");
-    expect(invokeMock).toHaveBeenCalledWith("create_repo_agents_md_config", { repo: "/r/api" });
 
     void getRepoFetchPreview("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("get_repo_fetch_preview", { repo: "/r/api" });

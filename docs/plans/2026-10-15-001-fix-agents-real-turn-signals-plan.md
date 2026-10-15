@@ -156,6 +156,15 @@ Comprobado en WSL (2.1.285): un trabajo sin interfaz como los de Delivery (`clau
 
 **Test scenarios:** ninguna referencia a `TINTO_TURN_DONE_MARKER` ni a `tinto-turn-done`; la configuración del repo ya no ofrece AGENTS.md.
 
+**Hecho (2026-10-15).** Salió todo lo de KTD8:
+
+- **Marcador:** la constante, la variable de entorno en Windows y en el script de WSL, y su detección en la salida de las terminales y en el respaldo de ACP, que ahora reenvía cada lectura tal cual. También el filtro que lo ocultaba en la conversación.
+- **Sección de `AGENTS.md`:** el escritor, el comando `create_repo_agents_md_config`, la opción "AGENTS.md" en la configuración del repo, el campo `agents_md_configured` del estado del repo y la petición `CreateAgentsMdConfig` del ayudante de WSL. Tinto ya no la envía, y un ayudante viejo sigue entendiendo las demás.
+- **`/init` de Tinto:** el comando de Tinto escribía esa sección; ahora `/init` llega al agente, que tiene el suyo.
+- **Este repo:** el bloque salió de su `AGENTS.md`.
+
+Se queda la señal estructurada `turn_done` de los fotogramas de Codex, que no es el marcador sino el fin de turno del proveedor.
+
 # Risks
 
 - **Versiones de Claude Code.** Los hooks cambian entre versiones; U0 fija la versión comprobada y KTD6 cubre el caso en que no lleguen.

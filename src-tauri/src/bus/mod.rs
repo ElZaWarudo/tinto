@@ -89,7 +89,6 @@ pub(crate) struct RecalcOutcome {
     pub subscribed_diffs: Option<Vec<crate::git::FileDiff>>,
     pub metrics: RepoMetrics,
     pub gitleaks_configured: bool,
-    pub agents_md_configured: bool,
     pub signals: Vec<PassiveSignal>,
     pub secret_findings: Option<Vec<SecretFinding>>,
     pub secret_scan_status: Option<SecretScanStatus>,
@@ -106,7 +105,6 @@ pub(crate) struct RepoLiveState {
     revision: u64,
     metrics: RepoMetrics,
     gitleaks_configured: bool,
-    agents_md_configured: bool,
     signals: Vec<PassiveSignal>,
     secret_findings: Vec<SecretFinding>,
     secret_scan_status: SecretScanStatus,
@@ -128,7 +126,6 @@ impl RepoLiveState {
             error: self.error.clone(),
             metrics: self.metrics.clone(),
             gitleaks_configured: self.gitleaks_configured,
-            agents_md_configured: self.agents_md_configured,
             signals: self.signals.clone(),
             secret_findings: self.secret_findings.clone(),
             secret_scan_status: self.secret_scan_status.clone(),
@@ -152,7 +149,6 @@ impl RepoLiveState {
         self.error = None;
         self.metrics = outcome.metrics.clone();
         self.gitleaks_configured = outcome.gitleaks_configured;
-        self.agents_md_configured = outcome.agents_md_configured;
         self.signals = outcome.signals.clone();
         if let Some(secret_findings) = &outcome.secret_findings {
             self.secret_findings = secret_findings.clone();
@@ -196,7 +192,6 @@ impl RepoLiveState {
             || self.head != delta.head
             || self.error != delta.error
             || self.gitleaks_configured != delta.gitleaks_configured
-            || self.agents_md_configured != delta.agents_md_configured
             || (analysis_included
                 && (self.metrics != delta.metrics
                     || self.signals != delta.signals
@@ -211,7 +206,6 @@ impl RepoLiveState {
         self.last_activity_ms = delta.last_activity_ms;
         self.error = delta.error.clone();
         self.gitleaks_configured = delta.gitleaks_configured;
-        self.agents_md_configured = delta.agents_md_configured;
         if analysis_included {
             self.metrics = delta.metrics.clone();
             self.signals = delta.signals.clone();
@@ -1574,7 +1568,6 @@ fn empty_wsl_error_delta(
         }),
         metrics: RepoMetrics::default(),
         gitleaks_configured: false,
-        agents_md_configured: false,
         signals: Vec::new(),
         secret_findings: Vec::new(),
         secret_scan_status: SecretScanStatus::default(),
@@ -1776,7 +1769,6 @@ pub(crate) fn recalc_blocking(
     let secret_findings = secret_scan.as_ref().map(|result| result.findings.clone());
     let secret_scan_status = secret_scan.map(|result| result.status);
     let gitleaks_configured = secret_scan::has_repo_gitleaks_config(repo);
-    let agents_md_configured = commands::has_repo_agents_md_config(repo);
     let (metrics, signals) = if needs_analysis {
         metrics_and_signals(
             &status,
@@ -1818,7 +1810,6 @@ pub(crate) fn recalc_blocking(
         subscribed_diffs,
         metrics,
         gitleaks_configured,
-        agents_md_configured,
         signals,
         secret_findings,
         secret_scan_status,
@@ -1967,7 +1958,6 @@ mod tests {
             error: None,
             metrics: RepoMetrics::default(),
             gitleaks_configured: true,
-            agents_md_configured: true,
             signals: Vec::new(),
             secret_findings: Vec::new(),
             secret_scan_status: SecretScanStatus::default(),
@@ -1985,7 +1975,6 @@ mod tests {
         );
         assert_eq!(state.status.modified, vec![PathBuf::from("src/main.rs")]);
         assert!(state.gitleaks_configured);
-        assert!(state.agents_md_configured);
 
         // A transient WSL transport failure keeps the last good snapshot.
         let timeout = empty_wsl_error_delta(
@@ -2022,7 +2011,6 @@ mod tests {
             subscribed_diffs: None,
             metrics: RepoMetrics::default(),
             gitleaks_configured: false,
-            agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Some(Vec::new()),
             secret_scan_status: Some(SecretScanStatus::default()),
@@ -2062,7 +2050,6 @@ mod tests {
             subscribed_diffs: None,
             metrics: RepoMetrics::default(),
             gitleaks_configured: false,
-            agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Some(Vec::new()),
             secret_scan_status: Some(SecretScanStatus::default()),

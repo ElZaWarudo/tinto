@@ -307,7 +307,6 @@ function repoDelta(overrides: Partial<RepoDelta> = {}): RepoDelta {
     error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
-    agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
     subscribed_diffs: null,
     ...overrides,
@@ -1088,20 +1087,6 @@ describe("TerminalPanel", () => {
           },
           {
             session_id: "sess-1",
-            id: "activity-3",
-            kind: "activity",
-            text: "Ejecutando Write-Output $env:TINTO_TURN_DONE_MARKER",
-            timestamp_ms: 14,
-          },
-          {
-            session_id: "sess-1",
-            id: "output-3",
-            kind: "command_output",
-            text: "turn-done-marker",
-            timestamp_ms: 15,
-          },
-          {
-            session_id: "sess-1",
             id: "agent-1",
             kind: "agent_message",
             text: "Listo:\n- uno\n- dos",
@@ -1125,8 +1110,6 @@ describe("TerminalPanel", () => {
     expect(
       within(commands[1]).getByText("$ErrorActionPreference='Stop' …", { selector: "code" }),
     ).toBeInTheDocument();
-    expect(within(conversation).queryByText(/TINTO_TURN_DONE_MARKER/)).not.toBeInTheDocument();
-    expect(within(conversation).queryByText("turn-done-marker")).not.toBeInTheDocument();
     expect(within(conversation).getAllByRole("listitem")).toHaveLength(2);
   });
 
@@ -2036,7 +2019,6 @@ describe("TerminalPanel", () => {
       "/comments",
       "/compact",
       "/status",
-      "/init",
       "/fork",
       "/mcp",
       "/mascot",
@@ -2292,26 +2274,6 @@ describe("TerminalPanel", () => {
 
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
   }, 10_000);
-
-  it("runs init through the host command backend from the palette", async () => {
-    const user = userEvent.setup();
-    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
-    runAgentHostCommandMock.mockResolvedValueOnce({
-      command: "init",
-      status: "completed",
-      message: "AGENTS.md is configured for this repo.",
-    });
-    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
-
-    const composer = await screen.findByLabelText("Mensaje para Codex");
-    await user.type(composer, "/init");
-    await user.type(composer, "{Enter}");
-
-    await waitFor(() =>
-      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "init", undefined),
-    );
-    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-  });
 
   it("runs review through the host command backend", async () => {
     const user = userEvent.setup();

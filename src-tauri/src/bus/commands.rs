@@ -44,21 +44,6 @@ paths = [
 ]
 "#;
 
-const AGENTS_MD_START: &str = "<!-- tinto-iade:start -->";
-const AGENTS_MD_END: &str = "<!-- tinto-iade:end -->";
-pub(crate) const AGENTS_MD_SECTION: &str = r#"<!-- tinto-iade:start -->
-## Tinto IADE
-
-Tinto is an IADE (Integrated Agentic Development Environment). When a turn is complete, notify the Tinto host so Agent Lens can close the turn and update checkpoints accurately.
-
-At the end of each turn, run:
-
-```sh
-printf '%s\n' "$TINTO_TURN_DONE_MARKER"
-```
-<!-- tinto-iade:end -->
-"#;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RepoFetchPreview {
     pub remote: String,
@@ -166,36 +151,6 @@ pub async fn create_repo_gitleaks_config(
                 match wsl_request(
                     resolved.distro,
                     AgentRequest::CreateGitleaksConfig {
-                        protocol_version: PROTOCOL_VERSION,
-                        repo: resolved.path,
-                        allowed_repos: resolved.wsl_repos,
-                    },
-                )? {
-                    AgentResponse::Unit => Ok(()),
-                    response => Err(unexpected_wsl_response(response)),
-                }
-            })
-            .await
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn create_repo_agents_md_config(
-    bus: State<'_, BusHandle>,
-    repo: PathBuf,
-) -> Result<(), CommandError> {
-    let resolved = resolve_read_repo(&bus, &repo).await?;
-    match resolved.source {
-        RepoSource::Local => {
-            let repo_abs = resolved.path;
-            blocking(move || write_repo_agents_md_config(&repo_abs)).await
-        }
-        RepoSource::Wsl => {
-            blocking(move || {
-                match wsl_request(
-                    resolved.distro,
-                    AgentRequest::CreateAgentsMdConfig {
                         protocol_version: PROTOCOL_VERSION,
                         repo: resolved.path,
                         allowed_repos: resolved.wsl_repos,
@@ -510,40 +465,6 @@ pub(crate) fn write_repo_gitleaks_config(repo: &Path) -> Result<(), CommandError
     }
     let target = repo.join(".gitleaks.toml");
     fs::write(&target, GITLEAKS_TEMPLATE).map_err(map_gitleaks_write_error)
-}
-
-pub(crate) fn has_repo_agents_md_config(repo: &Path) -> bool {
-    fs::read_to_string(repo.join("AGENTS.md"))
-        .map(|content| content.contains(AGENTS_MD_START) && content.contains(AGENTS_MD_END))
-        .unwrap_or(false)
-}
-
-pub(crate) fn write_repo_agents_md_config(repo: &Path) -> Result<(), CommandError> {
-    let target = repo.join("AGENTS.md");
-    let existing = fs::read_to_string(&target).unwrap_or_default();
-    let next = if let (Some(start), Some(end)) =
-        (existing.find(AGENTS_MD_START), existing.find(AGENTS_MD_END))
-    {
-        let section_end = end + AGENTS_MD_END.len();
-        format!(
-            "{}{}{}",
-            &existing[..start],
-            AGENTS_MD_SECTION,
-            &existing[section_end..]
-        )
-    } else if existing.trim().is_empty() {
-        AGENTS_MD_SECTION.to_string()
-    } else {
-        format!("{}\n\n{}", existing.trim_end(), AGENTS_MD_SECTION)
-    };
-    fs::write(&target, next).map_err(map_agents_md_write_error)
-}
-
-fn map_agents_md_write_error(error: io::Error) -> CommandError {
-    CommandError::new(
-        "agents-md-write-failed",
-        format!("no se pudo crear AGENTS.md: {error}"),
-    )
 }
 
 fn map_gitleaks_write_error(error: io::Error) -> CommandError {
@@ -1229,35 +1150,6 @@ mod tests {
             fc.content,
             STANDARD.encode(vec![b'a'; MEDIA_CONTENT_MAX_BYTES])
         );
-    }
-
-    #[test]
-    fn agents_md_config_writer_creates_iade_section() {
-        let repo = tempfile::tempdir().unwrap();
-
-        write_repo_agents_md_config(repo.path()).unwrap();
-
-        let content = std::fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
-        assert!(content.contains("Integrated Agentic Development Environment"));
-        assert!(content.contains("TINTO_TURN_DONE_MARKER"));
-        assert!(has_repo_agents_md_config(repo.path()));
-    }
-
-    #[test]
-    fn agents_md_config_writer_replaces_existing_tinto_section() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::write(
-            repo.path().join("AGENTS.md"),
-            "Project instructions\n\n<!-- tinto-iade:start -->\nold\n<!-- tinto-iade:end -->\n",
-        )
-        .unwrap();
-
-        write_repo_agents_md_config(repo.path()).unwrap();
-
-        let content = std::fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
-        assert!(content.starts_with("Project instructions"));
-        assert!(!content.contains("\nold\n"));
-        assert_eq!(content.matches("<!-- tinto-iade:start -->").count(), 1);
     }
 
     #[test]

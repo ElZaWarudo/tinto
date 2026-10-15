@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createRepoAgentsMdConfig, createRepoGitleaksConfig } from "../bus/client";
+import { createRepoGitleaksConfig } from "../bus/client";
 import type { SecretScanStatus } from "../bus/contract";
 import { SecretScanIndicator } from "./SecretScanIndicator";
 
@@ -84,13 +84,11 @@ function RepoConfigItem({
 export function RepoConfigSection({
   repo,
   gitleaksConfigured,
-  agentsMdConfigured,
   secretScanStatus,
   secretFindings,
 }: {
   repo: string;
   gitleaksConfigured: boolean;
-  agentsMdConfigured: boolean;
   secretScanStatus: SecretScanStatus;
   secretFindings: number;
 }) {
@@ -106,13 +104,6 @@ export function RepoConfigSection({
         configured={gitleaksConfigured}
         configureLabel="Configurar"
         onConfigure={() => createRepoGitleaksConfig(repo)}
-      />
-      <RepoConfigItem
-        key={`agents-md-${repo}`}
-        title="AGENTS.md"
-        configured={agentsMdConfigured}
-        configureLabel="Configurar"
-        onConfigure={() => createRepoAgentsMdConfig(repo)}
       />
     </section>
   );

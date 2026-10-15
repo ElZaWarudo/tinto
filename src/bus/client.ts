@@ -221,8 +221,6 @@ export const installRepoGitleaks = (repo: string) =>
   invoke<GitleaksInstallResult>("install_repo_gitleaks", { repo });
 export const createRepoGitleaksConfig = (repo: string) =>
   invoke("create_repo_gitleaks_config", { repo });
-export const createRepoAgentsMdConfig = (repo: string) =>
-  invoke("create_repo_agents_md_config", { repo });
 export const getRepoFetchPreview = (repo: string) =>
   invoke<RepoFetchPreview>("get_repo_fetch_preview", { repo });
 export const fetchRepo = (

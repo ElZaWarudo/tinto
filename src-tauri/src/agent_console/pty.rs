@@ -20,8 +20,6 @@ use crate::{
     wsl_agent::shell_env::agent_console_script,
 };
 
-pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTurnAttachment {
     pub path: PathBuf,
@@ -913,7 +911,6 @@ fn apply_terminal_env(command: &mut CommandBuilder) {
         "TINTO_IADE_NAME",
         "Integrated Agentic Development Environment",
     );
-    command.env("TINTO_TURN_DONE_MARKER", TINTO_TURN_DONE_MARKER);
 }
 
 fn spawn_error(message: String) -> AgentConsoleError {
@@ -1051,10 +1048,6 @@ mod tests {
             command.get_env("TINTO_IADE_NAME"),
             Some(OsStr::new("Integrated Agentic Development Environment"))
         );
-        assert_eq!(
-            command.get_env("TINTO_TURN_DONE_MARKER"),
-            Some(OsStr::new(TINTO_TURN_DONE_MARKER))
-        );
     }
 
     #[test]
@@ -1130,10 +1123,6 @@ mod tests {
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
         assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new("truecolor")));
         assert_eq!(command.get_env("TINTO_IADE"), Some(OsStr::new("1")));
-        assert_eq!(
-            command.get_env("TINTO_TURN_DONE_MARKER"),
-            Some(OsStr::new(TINTO_TURN_DONE_MARKER))
-        );
     }
 
     #[test]

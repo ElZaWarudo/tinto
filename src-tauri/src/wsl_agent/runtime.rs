@@ -14,7 +14,7 @@ use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
     fetch_repo_local, file_content_from_bytes, gitleaks_setup_status, list_repo_tree_capped,
     read_file_content_bounded, read_media_content_bounded, repo_fetch_preview, validate_media_path,
-    write_repo_agents_md_config, write_repo_gitleaks_config,
+    write_repo_gitleaks_config,
 };
 use crate::bus::contract::{
     GitleaksInstallResult, RepoDelta, RepoErrorClass, RepoErrorState, RepoMetrics,
@@ -281,14 +281,6 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             ..
         } => with_allowed_repo(&repo, &allowed_repos, || {
             write_repo_gitleaks_config(&repo)?;
-            Ok(AgentResponse::Unit)
-        }),
-        AgentRequest::CreateAgentsMdConfig {
-            repo,
-            allowed_repos,
-            ..
-        } => with_allowed_repo(&repo, &allowed_repos, || {
-            write_repo_agents_md_config(&repo)?;
             Ok(AgentResponse::Unit)
         }),
         AgentRequest::AgentBinaryAvailable { agent_type, .. } => {
@@ -843,7 +835,6 @@ pub(crate) fn repo_delta(
             error: None,
             metrics: outcome.metrics,
             gitleaks_configured: outcome.gitleaks_configured,
-            agents_md_configured: outcome.agents_md_configured,
             signals: outcome.signals,
             secret_findings: outcome.secret_findings.unwrap_or_default(),
             secret_scan_status: outcome.secret_scan_status.unwrap_or_default(),
@@ -859,7 +850,6 @@ pub(crate) fn repo_delta(
             error: Some(agent_repo_error(git_error_state(&error))),
             metrics: RepoMetrics::default(),
             gitleaks_configured: false,
-            agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Vec::new(),
             secret_scan_status: Default::default(),

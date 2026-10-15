@@ -586,7 +586,6 @@ export interface RepoDelta {
   error: RepoErrorState | null;
   metrics: RepoMetrics;
   gitleaks_configured: boolean;
-  agents_md_configured: boolean;
   signals?: PassiveSignal[]; // RDM-011 additive
   secret_findings?: SecretFinding[]; // additive
   secret_scan_status: SecretScanStatus;

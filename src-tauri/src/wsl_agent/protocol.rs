@@ -207,11 +207,6 @@ pub enum AgentRequest {
         repo: PathBuf,
         allowed_repos: Vec<PathBuf>,
     },
-    CreateAgentsMdConfig {
-        protocol_version: u16,
-        repo: PathBuf,
-        allowed_repos: Vec<PathBuf>,
-    },
     AgentBinaryAvailable {
         protocol_version: u16,
         agent_type: String,
@@ -611,9 +606,6 @@ impl AgentRequest {
                 protocol_version, ..
             }
             | Self::CreateGitleaksConfig {
-                protocol_version, ..
-            }
-            | Self::CreateAgentsMdConfig {
                 protocol_version, ..
             }
             | Self::AgentBinaryAvailable {

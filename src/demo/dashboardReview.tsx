@@ -58,7 +58,6 @@ function repoDelta(repo: string, changes: string[], offset: number): RepoDelta {
     secret_findings: [],
     subscribed_diffs: null,
     gitleaks_configured: true,
-    agents_md_configured: true,
     secret_scan_status:
       offset === 1
         ? {

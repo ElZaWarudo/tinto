@@ -21,7 +21,7 @@ use super::{
         execute_install, preflight_install, recipe_for, AgentInstallRegistry, PreparedInstall,
     },
     journal::AgentJournal,
-    pty::{AgentTurnAttachment, TINTO_TURN_DONE_MARKER},
+    pty::AgentTurnAttachment,
     validate_permission_mode,
     validation::{resolve_agent_binary, validate_agent_type},
     AgentConsoleError, AgentSessionRegistry,
@@ -29,7 +29,6 @@ use super::{
 #[cfg(any(target_os = "windows", test))]
 use crate::bus::contract::McpDefinition;
 use crate::bus::{
-    commands::write_repo_agents_md_config,
     contract::{
         AgentCliUpdateOutcome, AgentCliUpdateStatus, AgentHostCommandResult,
         AgentHostCommandStatus, AgentInstallOutcome, AgentInstallOutcomeKind, AgentInstallPreview,
@@ -1662,20 +1661,6 @@ pub async fn run_agent_host_command(
             review_summary: None,
             review_findings: None,
         },
-        "init" => {
-            create_agents_md_for_session(&bus, &session).await?;
-            refresh_and_emit_sessions(&app);
-            AgentHostCommandResult {
-                command: normalized.clone(),
-                status: AgentHostCommandStatus::Completed,
-                message: "AGENTS.md is configured for this repo.".to_string(),
-                session_id: None,
-                repo: None,
-                agent_type: None,
-                review_summary: None,
-                review_findings: None,
-            }
-        }
         "goal" | "objective" => run_goal_host_command(&app, &registry, &session, argument)?,
         "plan" | "plan-mode" => {
             run_plan_mode_host_command(&app, &registry, &session, &normalized, argument)?
@@ -1905,45 +1890,6 @@ fn wsl_agent_binary_available(distro: &str, agent_type: String) -> Result<bool, 
             "respuesta inesperada del agente WSL",
         )),
         Err(error) => Err(CommandError::new(error.safe_category(), error.message)),
-    }
-}
-
-async fn create_agents_md_for_session(
-    bus: &BusHandle,
-    session: &AgentSession,
-) -> Result<(), CommandError> {
-    let resolved = ensure_known_agent_repo(bus, &session.repo).await?;
-    match resolved.source {
-        RepoSource::Local => {
-            let repo = resolved.path;
-            tokio::task::spawn_blocking(move || write_repo_agents_md_config(&repo))
-                .await
-                .map_err(|_| CommandError::new("internal", "AGENTS.md task failed"))?
-                .map_err(|error| CommandError::new(error.category, error.message))
-        }
-        RepoSource::Wsl => {
-            let distro = resolved
-                .distro
-                .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
-            match request_wsl_agent(
-                &distro,
-                &AgentRequest::CreateAgentsMdConfig {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                },
-            ) {
-                Ok(AgentResponse::Unit) => Ok(()),
-                Ok(AgentResponse::Error { category, message }) => {
-                    Err(CommandError::new(category, message))
-                }
-                Ok(_) => Err(CommandError::new(
-                    "malformed_response",
-                    "respuesta inesperada del agente WSL",
-                )),
-                Err(error) => Err(CommandError::new(error.safe_category(), error.message)),
-            }
-        }
     }
 }
 
@@ -3674,13 +3620,7 @@ fn spawn_output_reader(
                 Ok(read) => {
                     let timestamp_ms = now_ms();
                     last_output_at.store(timestamp_ms, Ordering::Relaxed);
-                    let explicit_turn_done = emit_output_without_turn_done_marker(
-                        &app,
-                        &session_id,
-                        &buffer[..read],
-                        timestamp_ms,
-                    );
-                    if explicit_turn_done {
+                    if emit_output(&app, &session_id, &buffer[..read], timestamp_ms) {
                         if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
                             if let Ok(mut registry) = registry.lock() {
                                 let _ =
@@ -3698,28 +3638,13 @@ fn spawn_output_reader(
     });
 }
 
-fn emit_output_without_turn_done_marker(
-    app: &AppHandle,
-    session_id: &str,
-    output: &[u8],
-    timestamp_ms: u64,
-) -> bool {
-    if let Some(frame) = parse_timeline_frame(output) {
-        let turn_done = frame.turn_done && frame.thread_id.is_none();
-        emit_output_chunk(app, session_id, output, timestamp_ms);
-        return turn_done;
-    }
-    let marker = TINTO_TURN_DONE_MARKER.as_bytes();
-    let mut cursor = 0;
-    let mut explicit_turn_done = false;
-    while let Some(offset) = find_bytes(&output[cursor..], marker) {
-        let marker_start = cursor + offset;
-        emit_output_chunk(app, session_id, &output[cursor..marker_start], timestamp_ms);
-        cursor = marker_start + marker.len();
-        explicit_turn_done = true;
-    }
-    emit_output_chunk(app, session_id, &output[cursor..], timestamp_ms);
-    explicit_turn_done
+/// Emits a read of the agent's output; true when it is a frame that ends
+/// the root thread's turn.
+fn emit_output(app: &AppHandle, session_id: &str, output: &[u8], timestamp_ms: u64) -> bool {
+    let turn_done = parse_timeline_frame(output)
+        .is_some_and(|frame| frame.turn_done && frame.thread_id.is_none());
+    emit_output_chunk(app, session_id, output, timestamp_ms);
+    turn_done
 }
 
 fn emit_output_chunk(app: &AppHandle, session_id: &str, chunk: &[u8], timestamp_ms: u64) {
@@ -3939,15 +3864,6 @@ fn strip_ansi(text: &str) -> String {
         output.push(ch);
     }
     output
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 fn spawn_output_quiet_monitor(
@@ -4432,8 +4348,7 @@ mod tests {
     #[test]
     fn encoded_timeline_frame_preserves_provider_control_literals_as_text() {
         let text = format!(
-            "{} {}",
-            TINTO_TURN_DONE_MARKER,
+            "before {} after",
             String::from_utf8_lossy(TIMELINE_FRAME_PREFIX)
         );
         let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
@@ -4451,8 +4366,8 @@ mod tests {
         assert_eq!(parsed.text, text);
         let payload = frame.strip_prefix(TIMELINE_FRAME_PREFIX).unwrap();
         assert!(!payload
-            .windows(TINTO_TURN_DONE_MARKER.len())
-            .any(|window| window == TINTO_TURN_DONE_MARKER.as_bytes()));
+            .windows(TIMELINE_FRAME_PREFIX.len())
+            .any(|window| window == TIMELINE_FRAME_PREFIX));
     }
 
     #[test]

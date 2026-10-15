@@ -97,7 +97,6 @@ function makeDelta(repo: string, revision = 1): RepoDelta {
     error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
-    agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
   };
 }

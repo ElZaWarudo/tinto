@@ -313,7 +313,6 @@ function RepoOverview({ repo }: { repo: string }) {
       <RepoConfigSection
         repo={repo}
         gitleaksConfigured={delta.gitleaks_configured !== false}
-        agentsMdConfigured={delta.agents_md_configured === true}
         secretScanStatus={delta.secret_scan_status}
         secretFindings={delta.secret_findings?.length ?? 0}
       />

@@ -270,7 +270,6 @@ type AgentComposerHostCommand =
   | "feedback"
   | "fork"
   | "goal"
-  | "init"
   | "mcp"
   | "mascot"
   | "personality"
@@ -331,14 +330,6 @@ const CODEX_HOST_COMMANDS: Array<{
     label: "Estado",
     description: "Mostrar el ID del chat, estado, uso y runtime",
     aliases: ["estado"],
-    scope: "Tinto",
-  },
-  {
-    id: "init",
-    command: "init",
-    label: "Inicializar",
-    description: "Crear o actualizar AGENTS.md para Tinto",
-    aliases: ["initialize", "inicializar"],
     scope: "Tinto",
   },
   {
@@ -8605,12 +8596,7 @@ function appendTimelineText(turn: AgentTurnView, item: AgentSessionTimelineItem,
 
 function visibleTurnEvents(events: AgentTurnEventView[]): AgentTurnEventView[] {
   const visible: AgentTurnEventView[] = [];
-  let hidingMarkerOutput = false;
   events.forEach((event, index) => {
-    if (event.kind === "command_output" && hidingMarkerOutput) return;
-    const command = event.kind === "activity" ? activityCommandText(event.text) : null;
-    hidingMarkerOutput = command !== null && isTurnDoneMarkerCommand(command);
-    if (hidingMarkerOutput) return;
     const progress = event.kind === "activity" || event.kind === "agent_progress";
     if (progress && isGenericActivityText(event.text)) return;
     if (
@@ -8695,12 +8681,6 @@ function activityCommandText(text: string): string | null {
   const match = activityDisplayText(text.trim()).match(/^Ejecutando\s+([\s\S]+)$/i);
   if (!match) return null;
   return unquoteShellWord(match[1].trim());
-}
-
-function isTurnDoneMarkerCommand(command: string): boolean {
-  return /^(?:Write-Output|printf\s+'%s\\n'|echo)\s+"?\$(?:env:)?\{?TINTO_TURN_DONE_MARKER\}?"?\s*;?$/i.test(
-    command.trim(),
-  );
 }
 
 /** Unquotes a value that is entirely one POSIX shell word, e.g. 'a'"'"'b' -> a'b. */
