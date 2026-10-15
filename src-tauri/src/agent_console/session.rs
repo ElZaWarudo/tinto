@@ -276,7 +276,7 @@ impl AgentSessionRecord {
         }
         let process = self.running_process_mut()?;
         let result = process.write_turn(&text, &runtime_attachments, options);
-        if result.is_ok() && process.reports_turns() {
+        if result.is_ok() && process.turn_starts_on_send() {
             self.open_turn(now_ms());
         }
         result
@@ -344,6 +344,12 @@ impl AgentSessionRecord {
         };
         self.running_process_mut()?
             .steer_turn(text, &runtime_attachments)
+    }
+
+    pub fn hook_events_path(&self) -> Option<PathBuf> {
+        self.process
+            .as_ref()
+            .and_then(|process| process.hook_events_path())
     }
 
     pub fn supports_subagents(&self) -> bool {

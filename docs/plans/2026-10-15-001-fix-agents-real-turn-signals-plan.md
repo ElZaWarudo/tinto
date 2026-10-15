@@ -122,6 +122,10 @@ No incluye: ACP dentro de WSL para Kimi/OpenCode (con eso ganarían turnos, pero
 
 **Test scenarios:** cada evento produce la transición esperada; `UserPromptSubmit` con un turno abierto cierra el anterior como interrumpido; `SubagentStop` no cambia nada; una línea parcial o corrupta se ignora sin perder las siguientes; sin `SessionStart` la sesión sigue en `none`.
 
+**Hecho (2026-10-15).** `agent_console/claude_hooks.rs` crea el archivo de eventos en `<config de Tinto>/agent-hooks/<uuid>.jsonl`, que se borra con la sesión. También arma el `--settings` y traduce las líneas en `TurnStarted` y `TurnCompleted`. `PtyHandle` lo añade al lanzar Claude, en Windows y en WSL. Da turnos (`reports_turns`) desde el primer hook, que llega tras el diálogo de confianza, y los lee en `drain_events`. Enviar un turno no abre ninguno (`turn_starts_on_send` es falso): lo abre `UserPromptSubmit`, así un comando local como `/help` no deja un turno colgado. Interrumpir desde Tinto escribe Esc y cierra el turno en la siguiente lectura. El monitor de salida de cada sesión vigila además el tamaño del archivo y refresca la vista cuando crece, porque `Stop` e `idle_prompt` pueden llegar sin salida alrededor. `tinto.exe --agent-hook <archivo>` lee el JSON por stdin y lo añade compactado en una línea.
+
+Comprobado con la CLI real en WSL (2.1.285): Claude, lanzado con esos hooks contra el `tinto.exe` de desarrollo por `/mnt/c/…`, dejó una línea por evento. Fueron `SessionStart`, el `UserPromptSubmit` y el `Stop` del primer mensaje, el `UserPromptSubmit` del mensaje interrumpido con Esc (sin `Stop`) y el par del siguiente, que según los tests cierra el interrumpido antes de abrir el nuevo. Falta comprobarlo dentro de la app y en Windows nativo.
+
 ## U3 — Reanudar Claude
 
 **Requirements:** R4, KTD5. **Dependencies:** U2.
