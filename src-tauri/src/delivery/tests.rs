@@ -3188,3 +3188,78 @@ fn the_coordinators_own_calls_do_not_block_and_the_user_can_change_them() {
     );
     assert!(h.service.change_decision(&own.id, "Quizá").is_err());
 }
+
+#[test]
+fn a_coordinator_accepts_the_recommended_decisions_but_never_a_permission() {
+    let h = harness();
+    let call = |name: &str, arguments: serde_json::Value| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    let repo = plain_path(h.repo.path());
+    let run = call(
+        "create_run",
+        json!({"repo": repo, "title": "B", "owner": "coord"}),
+    );
+    let run_id = run["structuredContent"]["id"].as_str().unwrap().to_string();
+    let task = call(
+        "create_task",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "repo": repo, "key": "D-4", "title": "x"}),
+    );
+    let task_id = task["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let fenced = |extra: serde_json::Value| {
+        let mut args =
+            json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        args
+    };
+    call(
+        "request_decisions",
+        fenced(json!({"decisions": [
+            {"kind": "choice", "question": "¿Aviso?", "options": [
+                {"label": "Sí", "consequence": "a", "recommended": true},
+                {"label": "No", "consequence": "b"}]},
+            {"kind": "choice", "question": "¿Sin recomendación?", "options": [
+                {"label": "A", "consequence": "a"}, {"label": "B", "consequence": "b"}]},
+            {"kind": "text", "question": "Mensaje", "text": "Hecho."},
+            {"kind": "permission", "question": "¿Instalar?", "undo": "desinstalar", "command": "agentos skills install"}
+        ]})),
+    );
+    let accepted = call("accept_recommended", fenced(json!({})));
+    let accepted = accepted["structuredContent"]["result"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        accepted.len(),
+        2,
+        "the choice with a recommendation and the text"
+    );
+    assert!(accepted
+        .iter()
+        .all(|decision| decision["decided_by"] == "coord"));
+    let pending: Vec<String> = h
+        .service
+        .task_decisions(&task_id)
+        .unwrap()
+        .into_iter()
+        .filter(|decision| decision.status == super::model::DeliveryDecisionStatus::Pending)
+        .map(|decision| decision.question)
+        .collect();
+    assert_eq!(pending, vec!["¿Sin recomendación?", "¿Instalar?"]);
+    // A replaced coordinator cannot do it.
+    let stale = call(
+        "accept_recommended",
+        json!({"run_id": run_id, "owner": "other", "generation": 1, "task_id": task_id}),
+    );
+    assert_eq!(stale["isError"], true);
+}
