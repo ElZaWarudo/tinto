@@ -426,6 +426,28 @@ fn capacity_and_one_job_per_task_are_respected() {
 }
 
 #[test]
+fn waiting_on_a_batch_returns_the_first_job_that_ends() {
+    let h = harness();
+    h.service
+        .update_settings(DeliverySettings { capacity: 2 })
+        .unwrap();
+    let slow = h.dispatch(&h.task("K-50"), "tests", "sleep=30");
+    let fast = h.dispatch(&h.task("K-51"), "tests", "events=codex-ok");
+    let waited = super::mcp::handle_message(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "wait_job", "arguments": {"job_ids": [slow.id, fast.id], "timeout_seconds": 60}}}),
+    )
+    .unwrap()["result"]["structuredContent"]
+        .clone();
+    assert_eq!(waited["done"], true, "{waited}");
+    assert_eq!(waited["job"]["id"], fast.id.as_str());
+    assert_eq!(waited["ended"].as_array().unwrap().len(), 1);
+    assert_eq!(waited["open"], json!([slow.id]));
+    h.service.cancel(&slow.id).unwrap();
+    h.wait(&slow.id);
+}
+
+#[test]
 fn the_qa_resource_is_exclusive_fifo_and_quarantined_after_a_crash() {
     let h = harness();
     let a = h.task("K-7");
