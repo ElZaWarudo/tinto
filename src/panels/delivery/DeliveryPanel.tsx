@@ -64,7 +64,7 @@ import {
   type RepoChoice,
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
-import { DecisionLog, PendingDecisions } from "./DeliveryDecisions";
+import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PrSection } from "./DeliveryPr";
 import {
   GROUPS,
@@ -1101,10 +1101,18 @@ function TaskDetail({
         />
       )}
 
+      <CoordinatorDecisions
+        decisions={taskDecisions.filter((decision) => decision.blocking === false)}
+        busy={busy}
+        run={run}
+      />
+
       <DecisionLog
         taskId={task.id}
         candidate={candidate}
-        decisions={taskDecisions.filter((decision) => decision.status === "answered")}
+        decisions={taskDecisions.filter(
+          (decision) => decision.status === "answered" && decision.blocking !== false,
+        )}
         busy={busy}
         run={run}
       />

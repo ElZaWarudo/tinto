@@ -6,6 +6,7 @@ import { useState, type ReactNode } from "react";
 import {
   acceptRecommendedDecisions,
   answerDeliveryDecision,
+  changeDeliveryDecision,
   renewDeliveryPermissions,
   withdrawDeliveryDecision,
 } from "../../delivery/client";
@@ -372,6 +373,124 @@ function LogRow({
         )}
       </span>
     </li>
+  );
+}
+
+/** One call the coordinator made on its own, with the way to change it. */
+function CoordinatorDecision({
+  decision,
+  busy,
+  run,
+}: {
+  decision: DeliveryDecision;
+  busy: boolean;
+  run: Run;
+}) {
+  const [changing, setChanging] = useState(false);
+  const [answer, setAnswer] = useState(decision.answer ?? "");
+  const changed = decision.decided_by === "user";
+  return (
+    <li className="delivery-coordinator-decision">
+      <span className="delivery-decision-log__question">{decision.question}</span>
+      {!changing ? (
+        <span className="delivery-decision-log__answer">
+          {decision.kind === "text" ? (
+            <pre className="delivery-decision-log__text">{decision.answer}</pre>
+          ) : (
+            <strong>{decision.answer}</strong>
+          )}
+          {changed && <span className="delivery-badge delivery-badge--muted">cambiado por ti</span>}
+          <button
+            type="button"
+            className="delivery-link-button"
+            disabled={busy}
+            aria-label={`Cambiar «${decision.question}»`}
+            onClick={() => setChanging(true)}
+          >
+            Cambiar
+          </button>
+        </span>
+      ) : (
+        <span className="delivery-decision-log__answer">
+          {decision.kind === "choice" ? (
+            decision.options.map((option) => (
+              <label key={option.label} className="delivery-decision__option">
+                <input
+                  type="radio"
+                  name={`change-${decision.id}`}
+                  checked={answer === option.label}
+                  onChange={() => setAnswer(option.label)}
+                />
+                <span>
+                  <span className="delivery-decision__label">{option.label}</span>
+                  {option.consequence && <small>{option.consequence}</small>}
+                </span>
+              </label>
+            ))
+          ) : (
+            <textarea
+              aria-label="Texto"
+              value={answer}
+              onChange={(event) => setAnswer(event.target.value)}
+              rows={2}
+            />
+          )}
+          <span className="delivery-actions">
+            <button
+              type="button"
+              disabled={busy || !answer.trim() || answer === decision.answer}
+              onClick={() =>
+                void run(() => changeDeliveryDecision(decision.id, answer)).then((ok) => {
+                  if (ok) setChanging(false);
+                })
+              }
+            >
+              Guardar
+            </button>
+            <button type="button" onClick={() => setChanging(false)}>
+              Cancelar
+            </button>
+          </span>
+        </span>
+      )}
+      <TechnicalDetail detail={decision.detail} />
+    </li>
+  );
+}
+
+/** What the coordinator settled on its own: it does not hold the stages,
+ *  and any of it can be changed; later stages get the new answer. */
+export function CoordinatorDecisions({
+  decisions,
+  busy,
+  run,
+}: {
+  decisions: DeliveryDecision[];
+  busy: boolean;
+  run: Run;
+}) {
+  if (decisions.length === 0) return null;
+  return (
+    <section className="delivery-section" aria-label="Decidido por el coordinador">
+      <details className="delivery-decision-log">
+        <summary>
+          <h3>Decidido por el coordinador</h3>
+          <span className="delivery-muted">
+            {plural(decisions.length, "decisión", "decisiones")} · no frenan las etapas; revísalas
+            cuando quieras
+          </span>
+        </summary>
+        <p className="delivery-muted">
+          Si cambias una, las etapas que se lancen después siguen tu respuesta. Lo ya hecho no se
+          rehace solo.
+        </p>
+        <ul>
+          {decisions.map((decision) => (
+            <CoordinatorDecision key={decision.id} decision={decision} busy={busy} run={run} />
+          ))}
+        </ul>
+      </details>
+    </section>
   );
 }
 

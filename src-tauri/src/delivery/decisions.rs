@@ -43,6 +43,10 @@ pub struct NewDecision {
     pub clients: Vec<String>,
     /// `permission`: the task's QA runs with full access once allowed.
     pub full_access: bool,
+    /// Whether the stages wait for the user's answer. Not blocking: the
+    /// coordinator settles it with its recommendation, and the user can
+    /// change it later. Permissions are always blocking.
+    pub blocking: bool,
 }
 
 /// Where a client of the user keeps its state, which it must be able to
@@ -88,6 +92,23 @@ fn invalid(message: impl Into<String>) -> DeliveryError {
 fn validate(decision: &NewDecision) -> Result<(), DeliveryError> {
     if decision.question.trim().is_empty() {
         return Err(invalid("cada decisión necesita una pregunta"));
+    }
+    if !decision.blocking {
+        match decision.kind {
+            DeliveryDecisionKind::Permission => {
+                return Err(invalid(
+                    "un permiso siempre lo decide el usuario: no puede ser blocking: false",
+                ))
+            }
+            DeliveryDecisionKind::Choice
+                if !decision.options.iter().any(|option| option.recommended) =>
+            {
+                return Err(invalid(
+                    "una elección que decide el coordinador (blocking: false) necesita su opción recomendada",
+                ))
+            }
+            _ => {}
+        }
     }
     match decision.kind {
         DeliveryDecisionKind::Choice => {
@@ -436,19 +457,34 @@ impl DeliveryService {
                 kind: decision.kind,
                 question: decision.question.trim().to_string(),
                 detail: decision.detail.trim().to_string(),
-                options: decision.options,
                 text: decision.text.trim().to_string(),
                 command: decision
                     .command
                     .map(|command| command.trim().to_string())
                     .filter(|command| !command.is_empty()),
                 undo: decision.undo.trim().to_string(),
-                status: DeliveryDecisionStatus::Pending,
-                answer: None,
+                // The coordinator's own call is settled now, with its
+                // recommendation; the user's waits for them.
+                status: if decision.blocking {
+                    DeliveryDecisionStatus::Pending
+                } else {
+                    DeliveryDecisionStatus::Answered
+                },
+                answer: (!decision.blocking).then(|| match decision.kind {
+                    DeliveryDecisionKind::Choice => decision
+                        .options
+                        .iter()
+                        .find(|option| option.recommended)
+                        .map(|option| option.label.clone())
+                        .unwrap_or_default(),
+                    _ => decision.text.trim().to_string(),
+                }),
+                decided_by: (!decision.blocking).then(|| requested_by.to_string()),
+                decided_at_ms: (!decision.blocking).then_some(now),
+                blocking: decision.blocking,
+                options: decision.options,
                 requested_by: requested_by.to_string(),
                 requested_at_ms: now,
-                decided_by: None,
-                decided_at_ms: None,
             })
             .collect();
         let store = self.store()?;
@@ -553,6 +589,38 @@ impl DeliveryService {
         decision.status = DeliveryDecisionStatus::Answered;
         decision.answer = Some(answer.to_string());
         self.record_answer(decision, decided_by, "decision_answered")
+    }
+
+    /// The user changes what the coordinator decided on its own. It applies
+    /// to the stages dispatched from now on; the coordinator reads it in
+    /// read_decisions (decided by `user`).
+    pub fn change_decision(
+        &self,
+        decision_id: &str,
+        answer: &str,
+    ) -> Result<DeliveryDecision, DeliveryError> {
+        let mut decision = self
+            .store()?
+            .decision(decision_id)?
+            .ok_or_else(|| DeliveryError::not_found("la decisión", decision_id))?;
+        if decision.blocking {
+            return Err(DeliveryError::new(
+                "decision_answered",
+                "esta decisión es tuya y ya tiene respuesta; para cambiarla, sube la versión del contrato y pide otra",
+            ));
+        }
+        let answer = answer.trim();
+        let valid = match decision.kind {
+            DeliveryDecisionKind::Choice => {
+                decision.options.iter().any(|option| option.label == answer)
+            }
+            _ => !answer.is_empty(),
+        };
+        if !valid {
+            return Err(invalid("la respuesta no corresponde a esta decisión"));
+        }
+        decision.answer = Some(answer.to_string());
+        self.record_answer(decision, "user", "decision_changed")
     }
 
     /// Takes back a question nobody answered: it stopped making sense, and

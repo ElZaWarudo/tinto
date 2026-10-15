@@ -35,6 +35,7 @@ const client = vi.hoisted(() => ({
   openDeliveryJobInAgents: vi.fn(),
   completeDeliveryApproval: vi.fn(),
   answerDeliveryDecision: vi.fn(),
+  changeDeliveryDecision: vi.fn(),
   renewDeliveryPermissions: vi.fn(),
   withdrawDeliveryDecision: vi.fn(),
   acceptRecommendedDecisions: vi.fn(),
@@ -1636,6 +1637,45 @@ describe("DeliveryPanel", () => {
     );
     expect(await navigator.clipboard.readText()).toBe(
       'claude mcp add tinto-delivery -- "C:/Users/me/AppData/Local/tinto/tinto.exe" --delivery-mcp-proxy http://127.0.0.1:47920/mcp secret',
+    );
+  });
+
+  it("shows the coordinator's own calls apart, without blocking, and lets the user change one", async () => {
+    const user = userEvent.setup();
+    const own: DeliveryDecision = {
+      id: "d9",
+      task_id: "t1",
+      kind: "choice",
+      question: "¿Formato del manifiesto?",
+      detail: "",
+      options: [
+        { label: "Mantener y añadir copias", consequence: "Los scripts siguen", recommended: true },
+        { label: "Formato nuevo", consequence: "Rompe scripts", recommended: false },
+      ],
+      text: "",
+      command: null,
+      undo: "",
+      blocking: false,
+      status: "answered",
+      answer: "Mantener y añadir copias",
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: "coord",
+      decided_at_ms: 2,
+    };
+    client.getDeliveryOverview.mockResolvedValue(overview({ decisions: [own] }));
+    client.changeDeliveryDecision.mockResolvedValue({});
+    renderPanel();
+    const section = await screen.findByRole("region", { name: "Decidido por el coordinador" });
+    expect(screen.queryByRole("region", { name: "Te necesitan" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Lanzar implementación/ })).toBeEnabled();
+    await user.click(
+      within(section).getByRole("button", { name: "Cambiar «¿Formato del manifiesto?»" }),
+    );
+    await user.click(within(section).getByRole("radio", { name: /Formato nuevo/ }));
+    await user.click(within(section).getByRole("button", { name: "Guardar" }));
+    await waitFor(() =>
+      expect(client.changeDeliveryDecision).toHaveBeenCalledWith("d9", "Formato nuevo"),
     );
   });
 

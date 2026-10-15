@@ -892,6 +892,7 @@ fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDe
         write_dirs: Vec::new(),
         clients: Vec::new(),
         full_access: false,
+        blocking: true,
     }
 }
 
@@ -909,6 +910,7 @@ fn permission(command: &str) -> super::decisions::NewDecision {
         write_dirs: Vec::new(),
         clients: Vec::new(),
         full_access: false,
+        blocking: true,
     }
 }
 
@@ -3131,4 +3133,58 @@ fn every_tool_result_is_an_object_for_mcp_clients() {
     assert_eq!(call("read_decisions"), json!({"result": []}));
     assert_eq!(call("read_pr"), json!({"result": null}));
     assert!(call("read_settings")["repo"].is_string());
+}
+
+#[test]
+fn the_coordinators_own_calls_do_not_block_and_the_user_can_change_them() {
+    let h = harness();
+    let task = h.task("D-9");
+    let mut own = choice("¿Formato del manifiesto?", Some(0));
+    own.blocking = false;
+    let mut no_recommendation = choice("¿Formato?", None);
+    no_recommendation.blocking = false;
+    let mut permission = permission("agentos skills install");
+    permission.blocking = false;
+    for refused in [no_recommendation, permission] {
+        assert_eq!(
+            h.service
+                .request_decisions(&task.id, vec![refused], "coord")
+                .unwrap_err()
+                .category,
+            "invalid_decision"
+        );
+    }
+    let asked = h
+        .service
+        .request_decisions(
+            &task.id,
+            vec![own, choice("¿Mostrar el aviso?", Some(1))],
+            "coord",
+        )
+        .unwrap();
+    let (own, users) = (&asked[0], &asked[1]);
+    assert_eq!(own.status, super::model::DeliveryDecisionStatus::Answered);
+    assert_eq!(own.answer.as_deref(), Some("Sí"), "its recommendation");
+    assert_eq!(own.decided_by.as_deref(), Some("coord"));
+    assert_eq!(users.status, super::model::DeliveryDecisionStatus::Pending);
+
+    // Only the user's question holds the stages.
+    h.service.answer_decision(&users.id, "No", "user").unwrap();
+    let job = h.dispatch(&task, "tests", "events=codex-ok");
+    h.wait(&job.id);
+
+    let changed = h.service.change_decision(&own.id, "No").unwrap();
+    assert_eq!(
+        (changed.answer.as_deref(), changed.decided_by.as_deref()),
+        (Some("No"), Some("user"))
+    );
+    assert_eq!(
+        h.service
+            .change_decision(&users.id, "Sí")
+            .unwrap_err()
+            .category,
+        "decision_answered",
+        "the user's own answers stay final"
+    );
+    assert!(h.service.change_decision(&own.id, "Quizá").is_err());
 }

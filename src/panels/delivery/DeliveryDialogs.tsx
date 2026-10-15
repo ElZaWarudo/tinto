@@ -863,6 +863,9 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
   const [browser, setBrowser] = useState(false);
   const [commands, setCommands] = useState("");
   const [environment, setEnvironment] = useState("");
+  const [verification, setVerification] = useState("");
+  // "yes", "no", or "" while the user has not set it.
+  const [paidCalls, setPaidCalls] = useState("");
   const [stages, setStages] = useState<Record<string, DeliveryStageAgent>>({});
   const [jiraHost, setJiraHost] = useState("");
   const [jiraProject, setJiraProject] = useState("");
@@ -881,6 +884,14 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         setBrowser(settings.qa_browser ?? false);
         setCommands((settings.qa_commands ?? []).join("\n"));
         setEnvironment(settings.qa_environment ?? "");
+        setVerification(settings.verification ?? "");
+        setPaidCalls(
+          settings.paid_model_calls === true
+            ? "yes"
+            : settings.paid_model_calls === false
+              ? "no"
+              : "",
+        );
         setStages(settings.stages ?? {});
         setJiraHost(settings.jira?.host ?? "");
         setJiraProject(settings.jira?.project ?? "");
@@ -946,6 +957,24 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         />
         <span>Navegador para la QA</span>
       </label>
+      <Field
+        label="Cómo se verifica"
+        hint="Además de las etapas: pruebas de punta a punta, QA en navegador cuando hay interfaz, en qué entorno… Los coordinadores lo leen y no lo preguntan en cada issue."
+      >
+        <textarea
+          value={verification}
+          onChange={(event) => setVerification(event.target.value)}
+          rows={2}
+          placeholder="Tests automáticos y una prueba de punta a punta en el stack local; QA en navegador solo si cambia la interfaz."
+        />
+      </Field>
+      <Field label="Llamadas de pago a modelos en la QA">
+        <select value={paidCalls} onChange={(event) => setPaidCalls(event.target.value)}>
+          <option value="">Sin fijar (el coordinador pregunta)</option>
+          <option value="yes">Permitidas, con un modelo barato</option>
+          <option value="no">No permitidas</option>
+        </select>
+      </Field>
       <h3 className="delivery-dialog__subtitle">Jira</h3>
       <p className="file-op-modal__body">
         Con Jira configurado, Tinto hace los pasos Jira al aprobarlos: enlaza el PR, lleva la issue
@@ -1033,6 +1062,8 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
               qa_browser: browser,
               qa_commands: parseChecks(commands),
               qa_environment: environment.trim(),
+              verification: verification.trim(),
+              paid_model_calls: paidCalls === "" ? null : paidCalls === "yes",
               stages,
               jira: jiraHost.trim()
                 ? {

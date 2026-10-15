@@ -214,6 +214,10 @@ export const completeDeliveryApproval = (approvalId: string, success: boolean, o
 export const correctDeliveryApproval = (approvalId: string, outcome: string, reason: string) =>
   invoke<DeliveryApproval>("delivery_correct_approval", { approvalId, outcome, reason });
 
+/** Changes what the coordinator decided on its own. */
+export const changeDeliveryDecision = (decisionId: string, answer: string) =>
+  invoke<DeliveryDecision>("delivery_change_decision", { decisionId, answer });
+
 export const answerDeliveryDecision = (decisionId: string, answer: string) =>
   invoke<DeliveryDecision>("delivery_answer_decision", { decisionId, answer });
 

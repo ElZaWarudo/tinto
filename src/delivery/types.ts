@@ -221,6 +221,8 @@ export interface DeliveryDecision {
   unfrozen?: string[];
   /** The worktree content (tree id) a `runs_candidate` permission was allowed for. */
   candidate?: string | null;
+  /** False: the coordinator's own call, answered with its recommendation; the user may change it. */
+  blocking?: boolean;
   status: "pending" | "answered";
   /** The chosen option, the approved text, or "allowed"/"denied". */
   answer: string | null;
@@ -260,6 +262,10 @@ export interface DeliveryRepoSettings {
   qa_browser?: boolean;
   /** Where QA runs on this machine, in the user's words. */
   qa_environment?: string;
+  /** How changes are verified beyond the stages, in the user's words. */
+  verification?: string;
+  /** Whether QA may make paid model calls; null until set. */
+  paid_model_calls?: boolean | null;
   /** The agent each stage runs with, by role, fixed by the user. */
   stages?: Record<string, DeliveryStageAgent>;
   /** The repo's Jira, for Tinto to run the Jira steps; the token is kept apart. */

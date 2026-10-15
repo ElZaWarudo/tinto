@@ -455,6 +455,12 @@ pub struct DeliveryDecision {
     /// The worktree content (tree id) the user allowed `runs_candidate` for.
     #[serde(default)]
     pub candidate: Option<String>,
+    /// Whether the stages wait for the user. A decision that is not
+    /// blocking is the coordinator's own call on something with a clear
+    /// recommendation: it is answered when asked, with that recommendation,
+    /// and the user can change it at any time.
+    #[serde(default = "blocking_by_default")]
+    pub blocking: bool,
     pub status: DeliveryDecisionStatus,
     /// The chosen option's label, the approved text, or `allowed`/`denied`.
     pub answer: Option<String>,
@@ -532,6 +538,14 @@ pub struct DeliveryRepoSettings {
     /// is stored apart and never returned.
     #[serde(default)]
     pub jira: Option<DeliveryJiraSettings>,
+    /// How changes in this repo are verified beyond the stages, in the
+    /// user's words (end-to-end runs, browser QA when there is a UI…).
+    /// Coordinators read it instead of asking on every issue.
+    #[serde(default)]
+    pub verification: String,
+    /// Whether QA may make paid model calls. `None` until the user sets it.
+    #[serde(default)]
+    pub paid_model_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -603,4 +617,9 @@ pub struct DeliveryJobLog {
     /// Raw lines read so far; pass it back as `from_line` to continue.
     pub next_line: usize,
     pub stderr_tail: String,
+}
+
+/// Decisions from before `blocking` existed were all the user's.
+fn blocking_by_default() -> bool {
+    true
 }
