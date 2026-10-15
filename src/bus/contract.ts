@@ -174,7 +174,7 @@ export interface AgentSessionChangeLog {
   changes: AgentSessionChange[];
 }
 
-export type AgentSessionTurnStatus = "waiting" | "working" | "settling";
+export type AgentSessionTurnStatus = "waiting" | "working";
 
 export interface AgentSessionTurnCheckpoint {
   id: string;

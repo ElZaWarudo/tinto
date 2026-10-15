@@ -375,7 +375,6 @@ pub struct AgentSessionChangeLog {
 pub enum AgentSessionTurnStatus {
     Waiting,
     Working,
-    Settling,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

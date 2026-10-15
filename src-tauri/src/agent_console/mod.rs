@@ -532,7 +532,6 @@ impl AgentSessionRegistry {
         let now = now_ms();
         for session in self.sessions.values_mut() {
             session.refresh_status()?;
-            session.refresh_turn_checkpoints(now, false)?;
             session.enforce_lifetime(now, self.limits.max_lifetime_ms)?;
         }
         Ok(())
@@ -956,19 +955,6 @@ impl AgentSessionRegistry {
             &saved.id,
             &self.checkpoint_config,
         )
-    }
-
-    pub fn record_session_output(
-        &mut self,
-        session_id: &str,
-        timestamp_ms: u64,
-    ) -> Result<(), AgentConsoleError> {
-        let session = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
-        session.record_output_activity(timestamp_ms);
-        Ok(())
     }
 
     pub fn record_session_timeline_item(
@@ -1395,6 +1381,10 @@ mod tests {
             Ok(())
         }
 
+        fn reports_turns(&self) -> bool {
+            true
+        }
+
         fn supports_turn_interrupt(&self) -> bool {
             self.supports_controls
         }
@@ -1658,7 +1648,7 @@ mod tests {
 
         registry.compact_session_context(&id).unwrap();
         registry
-            .write_session_input(&id, b"working\r", None)
+            .write_session_turn(&id, "working", &[], None)
             .unwrap();
         registry.interrupt_session_turn(&id).unwrap();
 
@@ -1826,6 +1816,7 @@ dirty
                 attachments: Vec::new(),
             })
             .unwrap();
+        registry.write_session_turn(&id, "edit", &[], None).unwrap();
         std::fs::write(
             repo.path().join("value.ts"),
             "42
@@ -1927,6 +1918,9 @@ dirty
                 timestamp_ms: 10,
                 attachments: Vec::new(),
             })
+            .unwrap();
+        registry
+            .write_session_turn(&id, "modify the temp repo", &[], None)
             .unwrap();
         std::fs::write(repo.path().join("base.txt"), "after\n").unwrap();
         std::fs::write(repo.path().join("created.txt"), "new\n").unwrap();

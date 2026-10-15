@@ -286,7 +286,7 @@ describe("agent session contract types", () => {
         snapshot_files: [],
       },
       change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 1760000000001 }],
-      turn_status: "settling",
+      turn_status: "working",
       turn_checkpoints: [
         {
           id: "sess-1:turn-1",
@@ -330,7 +330,7 @@ describe("agent session contract types", () => {
     expect(session.error?.category).toBe("spawn_failed");
     expect(session.checkpoint?.checkpoint_type).toBe("git_ref");
     expect(session.change_log?.[0].kind).toBe("modified");
-    expect(session.turn_status).toBe("settling");
+    expect(session.turn_status).toBe("working");
     expect(session.turn_checkpoints?.[0].changes[0].path).toBe("src/a.ts");
     expect(session.turn_checkpoints?.[0].restore_checkpoint?.git_hash).toBe("def456");
     expect(session.personality?.name).toBe("precise");

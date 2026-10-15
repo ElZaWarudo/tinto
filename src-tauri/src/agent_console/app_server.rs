@@ -622,6 +622,10 @@ impl AgentProcess for CodexAppServerHandle {
         )
     }
 
+    fn reports_turns(&self) -> bool {
+        true
+    }
+
     fn supports_turn_interrupt(&self) -> bool {
         true
     }
@@ -1398,7 +1402,7 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 }
             }
             if is_root_thread {
-                let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
+                let _ = context.event_tx.send(AgentProcessEvent::TurnStarted {
                     timestamp_ms: now_ms(),
                 });
             } else if let Some(thread_id) = target_thread_id {
@@ -1418,13 +1422,6 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                         used_tokens,
                         model_context_window,
                     });
-            }
-        }
-        "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
-            if is_root_thread {
-                let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
-                    timestamp_ms: now_ms(),
-                });
             }
         }
         "item/commandExecution/requestApproval"
@@ -3809,7 +3806,7 @@ mod tests {
     }
 
     #[test]
-    fn fs_changed_emits_structured_activity_event() {
+    fn only_the_root_turn_start_starts_a_turn() {
         let (tx, _rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let context = dummy_context(tx, event_tx);
@@ -3817,10 +3814,15 @@ mod tests {
             &json!({"method":"fs/changed","params":{"watchId":"w","changedPaths":["/tmp/a"]}}),
             &context,
         );
+        assert!(event_rx.try_recv().is_err());
 
+        handle_server_message(
+            &json!({"method":"turn/started","params":{"threadId":"t","turn":{"id":"turn-1"}}}),
+            &context,
+        );
         assert!(matches!(
             event_rx.recv().unwrap(),
-            AgentProcessEvent::FileActivity { .. }
+            AgentProcessEvent::TurnStarted { .. }
         ));
     }
 

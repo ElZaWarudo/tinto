@@ -3666,15 +3666,6 @@ fn spawn_output_reader(
                 Ok(read) => {
                     let timestamp_ms = now_ms();
                     last_output_at.store(timestamp_ms, Ordering::Relaxed);
-                    let child_output = parse_timeline_frame(&buffer[..read])
-                        .is_some_and(|frame| frame.thread_id.is_some());
-                    if !child_output {
-                        if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
-                            if let Ok(mut registry) = registry.lock() {
-                                let _ = registry.record_session_output(&session_id, timestamp_ms);
-                            }
-                        }
-                    }
                     let explicit_turn_done = emit_output_without_turn_done_marker(
                         &app,
                         &session_id,

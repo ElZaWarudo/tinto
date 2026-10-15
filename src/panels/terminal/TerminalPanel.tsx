@@ -552,7 +552,7 @@ function provisionalResumedSession(
 interface AgentProcessView {
   label: string;
   phase: string;
-  tone: "starting" | "thinking" | "settling";
+  tone: "starting" | "thinking";
 }
 
 interface AgentReviewResponseView {
@@ -5249,9 +5249,6 @@ function agentProcessState(
     return { label: `${name} se está preparando`, phase: "INICIANDO", tone: "starting" };
   }
   if (session.status !== "running") return null;
-  if (session.turn_status === "settling") {
-    return { label: `${name} está revisando cambios`, phase: "VERIFICANDO", tone: "settling" };
-  }
   if (session.turn_status === "working") {
     const activity = latestAgentActivity(timeline);
     if (activity) return null;
@@ -7955,7 +7952,7 @@ function agentActivitySummary(
       tone: "done",
     };
   }
-  if (session.turn_status === "working" || session.turn_status === "settling") {
+  if (session.turn_status === "working") {
     return {
       title: "Agent está trabajando",
       detail: `${turnState}. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
@@ -8852,8 +8849,6 @@ function turnStatusLabel(status: string): string {
   switch (status) {
     case "working":
       return "Trabajando";
-    case "settling":
-      return "Finalizando";
     default:
       return "En espera";
   }

@@ -923,19 +923,19 @@ describe("TerminalPanel", () => {
 
   it("shows distinct live process states without exposing private reasoning", async () => {
     listAgentSessionsMock.mockResolvedValueOnce([
-      sessionFixture({ turn_status: "settling", output_bytes_per_second: 42 }),
+      sessionFixture({ turn_status: "working", output_bytes_per_second: 42 }),
     ]);
 
     const { unmount } = render(
       <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
     );
 
-    const settling = await screen.findByRole("status", {
-      name: "Codex está revisando cambios",
+    const working = await screen.findByRole("status", {
+      name: "Codex está trabajando",
     });
-    expect(settling).toHaveTextContent("VERIFICANDO");
-    expect(screen.getByTitle(/Estado: Finalizando/)).toHaveTextContent("Finalizando");
-    expect(settling.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
+    expect(working).toHaveTextContent("EN CURSO");
+    expect(screen.getByTitle(/Estado: Trabajando/)).toHaveTextContent("Trabajando");
+    expect(working.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
     unmount();
 
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture({ turn_status: "waiting" })]);

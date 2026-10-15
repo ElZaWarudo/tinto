@@ -1803,6 +1803,13 @@ impl AgentProcess for AcpProcessSupervisor {
         self.shared.lock().ok().map(|shared| shared.runtime.clone())
     }
 
+    fn reports_turns(&self) -> bool {
+        // The terminal fallback has no turn signal.
+        self.shared
+            .lock()
+            .is_ok_and(|shared| shared.runtime.mode == Some(AgentSessionAcpMode::Acp))
+    }
+
     fn acp_permissions(&self) -> Vec<AgentSessionAcpPermission> {
         self.shared
             .lock()
@@ -2795,6 +2802,14 @@ fn run_ready_acp(
                             .map_err(core_to_console_error)
                     })
                     .and_then(|frame| runtime.write_frame(&frame));
+                if result.is_ok() {
+                    let _ = try_send_process_event(
+                        event_tx,
+                        AgentProcessEvent::TurnStarted {
+                            timestamp_ms: now_ms(),
+                        },
+                    );
+                }
                 let fatal = result.as_ref().is_err_and(is_fatal_acp_write_error);
                 let _ = reply.send(result.clone());
                 if fatal {
@@ -4016,13 +4031,13 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::sync_channel(1);
         try_send_process_event(
             &event_tx,
-            AgentProcessEvent::FileActivity { timestamp_ms: 1 },
+            AgentProcessEvent::TurnStarted { timestamp_ms: 1 },
         )
         .unwrap();
         assert_eq!(
             try_send_process_event(
                 &event_tx,
-                AgentProcessEvent::FileActivity { timestamp_ms: 2 },
+                AgentProcessEvent::TurnStarted { timestamp_ms: 2 },
             )
             .unwrap_err()
             .category,

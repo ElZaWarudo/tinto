@@ -86,6 +86,11 @@ pub trait AgentProcess: Send {
             "este runtime no admite intervenir en el turno activo",
         ))
     }
+    /// Whether the provider says when its turns start and end. Without it a
+    /// session has no turns: Tinto does not guess them from the output.
+    fn reports_turns(&self) -> bool {
+        false
+    }
     fn supports_turn_interrupt(&self) -> bool {
         false
     }
@@ -257,7 +262,7 @@ pub trait AgentProcess: Send {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProcessEvent {
-    FileActivity {
+    TurnStarted {
         timestamp_ms: u64,
     },
     TurnCompleted {
