@@ -1069,7 +1069,10 @@ fn a_coordinator_asks_for_decisions_over_mcp() {
         ]}),
     );
     assert_eq!(
-        asked["structuredContent"].as_array().unwrap().len(),
+        asked["structuredContent"]["result"]
+            .as_array()
+            .unwrap()
+            .len(),
         2,
         "{asked}"
     );
@@ -1080,7 +1083,7 @@ fn a_coordinator_asks_for_decisions_over_mcp() {
     );
     assert_eq!(bad["isError"], true);
     assert_eq!(
-        asked["structuredContent"][1]["read_dirs"],
+        asked["structuredContent"]["result"][1]["read_dirs"],
         json!(["C:/Users/me/.claude/skills"])
     );
     // One invalid item: nothing is created and the error names it.
@@ -1107,8 +1110,8 @@ fn a_coordinator_asks_for_decisions_over_mcp() {
         .unwrap()
         .contains("plataforma desconocida"));
     let read = call(5, "read_decisions", json!({"task_id": task_id}));
-    assert_eq!(read["structuredContent"][0]["status"], "pending");
-    assert_eq!(read["structuredContent"][1]["kind"], "permission");
+    assert_eq!(read["structuredContent"]["result"][0]["status"], "pending");
+    assert_eq!(read["structuredContent"]["result"][1]["kind"], "permission");
 }
 
 #[test]
@@ -1663,7 +1666,7 @@ fn a_coordinator_runs_qa_with_full_access_only_when_the_user_allowed_it() {
                 "undo": "nada que deshacer", "command": "bash C:/qa/run.sh login", "full_access": true
             }]})),
         );
-        let decision = &asked["structuredContent"][0];
+        let decision = &asked["structuredContent"]["result"][0];
         assert_eq!(decision["full_access"], true, "{asked}");
         // No sandbox, so nothing to warn about the command.
         assert_eq!(decision["warnings"], json!([]));
@@ -3110,4 +3113,22 @@ fn automatic_capacity_runs_one_agent_per_active_task() {
     }
     let overview = h.service.overview().unwrap();
     assert_eq!((overview.settings.capacity, overview.capacity), (0, 4));
+}
+
+#[test]
+fn every_tool_result_is_an_object_for_mcp_clients() {
+    let h = harness();
+    let task = h.task("S-1");
+    let call = |name: &str| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": {"task_id": task.id}}}),
+        )
+        .unwrap()["result"]["structuredContent"]
+            .clone()
+    };
+    // A list and a null go under `result`; objects stay as they are.
+    assert_eq!(call("read_decisions"), json!({"result": []}));
+    assert_eq!(call("read_pr"), json!({"result": null}));
+    assert!(call("read_settings")["repo"].is_string());
 }

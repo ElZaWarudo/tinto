@@ -143,7 +143,7 @@ pub fn handle_message(service: &DeliveryService, message: &Value) -> Option<Valu
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "tinto-delivery", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat."
+            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are."
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
@@ -166,10 +166,20 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
 
 fn call_tool(service: &DeliveryService, name: &str, args: &Value) -> Value {
     match run_tool(service, name, args) {
-        Ok(value) => json!({
-            "content": [{ "type": "text", "text": serde_json::to_string_pretty(&value).unwrap_or_default() }],
-            "structuredContent": value,
-        }),
+        Ok(value) => {
+            // MCP clients refuse structured content that is not an object:
+            // a list (read_decisions) or null (read_pr without a PR) goes
+            // under `result`. The text keeps the value as it is.
+            let structured = if value.is_object() {
+                value.clone()
+            } else {
+                json!({ "result": value })
+            };
+            json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&value).unwrap_or_default() }],
+                "structuredContent": structured,
+            })
+        }
         Err(error) => json!({
             "content": [{ "type": "text", "text": format!("{}: {}", error.category, error.message) }],
             "isError": true,
