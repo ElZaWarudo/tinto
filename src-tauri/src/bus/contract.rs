@@ -583,6 +583,10 @@ pub struct AgentSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<AgentSessionContextUsage>,
     pub turn_interrupt_supported: bool,
+    /// The provider says when its turns start and end. Without it the
+    /// session is a plain terminal: no turns, no queue.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reports_turns: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1270,6 +1274,7 @@ mod tests {
                 model_context_window: 128_000,
             }),
             turn_interrupt_supported: true,
+            reports_turns: true,
             reverted_at_ms: None,
             restored_to_turn_index: None,
             active_sessions: 1,

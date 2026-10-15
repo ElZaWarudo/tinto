@@ -6049,7 +6049,7 @@ function AgentLens({
       >
         <div>
           <span title={agentLensTurnStateValueTitle(session.turn_status ?? "waiting")}>
-            {turnStatusLabel(session.turn_status ?? "waiting")}
+            {sessionTurnLabel(session)}
           </span>
           <small title={agentLensTurnStateMetricTitle(session.turn_status ?? "waiting")}>
             Estado del turno
@@ -7961,6 +7961,15 @@ function agentActivitySummary(
       tone: "working",
     };
   }
+  if (!hasTurns(session)) {
+    return {
+      title: "Terminal sin turnos",
+      detail: `Lo que envíes llega directo al agente; los cambios se deshacen por sesión. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
+      checkpoint,
+      throughput,
+      tone: "idle",
+    };
+  }
   return {
     title: "Listo para el siguiente turno",
     detail: `${turnState}. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
@@ -8880,8 +8889,17 @@ function sessionStatusLabel(status: string): string {
   }
 }
 
+/** A running session whose provider reports no turns behaves as a terminal. */
+function hasTurns(session: AgentSession): boolean {
+  return session.status !== "running" || session.reports_turns === true;
+}
+
+function sessionTurnLabel(session: AgentSession): string {
+  return hasTurns(session) ? turnStatusLabel(session.turn_status ?? "waiting") : "Sin turnos";
+}
+
 function sessionCompletionLabel(session: AgentSession): string {
-  if (session.status === "running") return turnStatusLabel(session.turn_status ?? "waiting");
+  if (session.status === "running") return sessionTurnLabel(session);
   if (session.status !== "completed") return sessionStatusLabel(session.status);
   return session.checkpoint
     ? "Turno completado · punto de control listo"

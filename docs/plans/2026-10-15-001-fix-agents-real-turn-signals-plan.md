@@ -146,6 +146,8 @@ Comprobado en WSL (2.1.285): un trabajo sin interfaz como los de Delivery (`clau
 
 **Test scenarios:** el compositor no encola con fuente `none`; el estado no muestra "Trabajando"; restaurar a una sesión sigue funcionando.
 
+**Hecho (2026-10-15).** Casi todo el comportamiento ya venía de U1. Una sesión sin turnos queda siempre en `waiting`, así que el compositor envía directo y sin cola, "Trabajando" no aparece y el reintento ACP, que pide el turno en espera, está siempre disponible. Lo que faltaba era decirlo. El contrato de la sesión lleva `reports_turns`, que es verdadero mientras corre y el proceso da turnos; se omite si es falso. La vista muestra una sesión en marcha sin turnos como "Terminal sin turnos" ("Lo que envíes llega directo al agente; los cambios se deshacen por sesión"), y su estado como "Sin turnos" en lugar de "En espera". Deshacer por sesión es la reversión que ya existía.
+
 ## U5 — Retirar el marcador
 
 **Requirements:** R7, KTD8. **Dependencies:** U2, U4.

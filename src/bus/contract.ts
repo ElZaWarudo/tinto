@@ -312,6 +312,8 @@ export interface AgentSession {
   context_summary?: AgentSessionContextSummary | null;
   context_usage?: AgentSessionContextUsage | null;
   turn_interrupt_supported: boolean;
+  /** The provider says when its turns start and end; without it, a plain terminal. */
+  reports_turns?: boolean;
   reverted_at_ms?: number | null;
   restored_to_turn_index?: number | null;
   active_sessions: number;

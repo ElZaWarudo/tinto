@@ -218,6 +218,7 @@ function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
     change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
     turn_status: "waiting",
     turn_interrupt_supported: true,
+    reports_turns: true,
     turn_checkpoints: [],
     reverted_at_ms: null,
     restored_to_turn_index: null,
@@ -919,6 +920,22 @@ describe("TerminalPanel", () => {
 
     expect(await screen.findByTitle(/Estado: Archivada/)).toHaveTextContent("Archivada");
     expect(screen.getByText("En espera")).toBeInTheDocument();
+  });
+
+  it("shows a session whose provider reports no turns as a terminal", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ agent_type: "claude", reports_turns: false }),
+    ]);
+
+    render(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "claude" })} />,
+    );
+
+    expect(await screen.findByTitle(/Estado: Sin turnos/)).toHaveTextContent("Sin turnos");
+    expect(screen.getByLabelText("Actividad de Agent")).toHaveTextContent("Terminal sin turnos");
+    expect(screen.getByLabelText("Actividad de Agent")).not.toHaveTextContent(
+      "Listo para el siguiente turno",
+    );
   });
 
   it("shows distinct live process states without exposing private reasoning", async () => {

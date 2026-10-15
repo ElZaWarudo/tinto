@@ -1271,6 +1271,11 @@ impl AgentSessionRecord {
                     .process
                     .as_ref()
                     .is_some_and(|process| process.supports_turn_interrupt()),
+            reports_turns: self.status == AgentSessionStatus::Running
+                && self
+                    .process
+                    .as_ref()
+                    .is_some_and(|process| process.reports_turns()),
             reverted_at_ms: self.reverted_at_ms,
             restored_to_turn_index: self.restored_to_turn_index,
             active_sessions,
@@ -2963,6 +2968,7 @@ mod tests {
                 AgentSessionTurnStatus::Waiting
             };
             assert_eq!(session.to_contract().turn_status, expected);
+            assert_eq!(session.to_contract().reports_turns, reports_turns);
         }
     }
 
