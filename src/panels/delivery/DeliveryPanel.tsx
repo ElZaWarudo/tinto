@@ -348,7 +348,9 @@ export function DeliveryPanel() {
   const jobs = overview?.jobs ?? [];
   const running = jobs.filter((job) => job.status === "pending" || job.status === "started");
   const queued = jobs.filter((job) => job.status === "queued");
-  const capacity = overview?.settings.capacity ?? 3;
+  // The setting, and the agents it allows now (automatic: one per active task).
+  const capacitySetting = overview?.settings.capacity ?? 0;
+  const capacity = overview?.capacity ?? Math.max(1, capacitySetting);
   const qa = overview?.leases.find((lease) => lease.name === "qa");
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
   const activeRuns = (overview?.runs ?? []).filter((candidate) => candidate.status === "active");
@@ -691,7 +693,7 @@ export function DeliveryPanel() {
       )}
       {dialog?.kind === "settings" && (
         <SettingsDialog
-          capacity={capacity}
+          capacity={capacitySetting}
           endpoint={overview?.coordinator ?? null}
           runs={overview?.runs ?? []}
           repos={repos}

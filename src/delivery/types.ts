@@ -244,6 +244,7 @@ export interface DeliveryRun {
 }
 
 export interface DeliverySettings {
+  /** Agents running at once; 0 is automatic: one per active task, up to 8. */
   capacity: number;
 }
 
@@ -300,6 +301,8 @@ export interface DeliveryOverview {
   /** The tasks' pull requests Tinto follows. */
   prs?: DeliveryPr[];
   settings: DeliverySettings;
+  /** Agents that may run now: the setting, or one per active task. */
+  capacity?: number;
   coordinator: DeliveryCoordinatorEndpoint | null;
 }
 

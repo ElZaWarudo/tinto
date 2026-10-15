@@ -279,6 +279,7 @@ impl DeliveryService {
             decisions,
             prs,
             leases: store.leases()?,
+            capacity: store.settings()?.effective_capacity(tasks.len()),
             settings: store.settings()?,
             coordinator: self
                 .inner
@@ -295,7 +296,7 @@ impl DeliveryService {
         settings: DeliverySettings,
     ) -> Result<DeliverySettings, DeliveryError> {
         let settings = DeliverySettings {
-            capacity: settings.capacity.clamp(1, 8),
+            capacity: settings.capacity.min(super::model::MAX_CAPACITY),
         };
         self.store()?.set_settings(&settings)?;
         self.tick();
@@ -915,7 +916,7 @@ impl DeliveryService {
 
     fn select_jobs(&self) -> Result<Vec<String>, DeliveryError> {
         let store = self.store()?;
-        let capacity = store.settings()?.capacity as usize;
+        let capacity = store.settings()?.effective_capacity(store.tasks()?.len()) as usize;
         let jobs = store.jobs()?;
         let mut running = jobs.iter().filter(|job| job.status.is_active()).count();
         let mut busy: HashSet<String> = jobs

@@ -1149,13 +1149,14 @@ export function SettingsDialog({
     <FormDialog title="Ajustes de Delivery" wide onCancel={onCancel}>
       <Field
         label="Agentes en paralelo"
-        hint="Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
+        hint="Automático: uno por cada tarea activa (cada issue), hasta 8. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
       >
         <select
           value={capacity}
           disabled={busy}
           onChange={(event) => onCapacity(Number(event.target.value))}
         >
+          <option value={0}>Automático: uno por issue</option>
           {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
             <option key={value} value={value}>
               {value}

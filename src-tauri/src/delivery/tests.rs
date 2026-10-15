@@ -3094,3 +3094,20 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
     assert_eq!(h.service.overview().unwrap().tasks.len(), 1);
     assert!(found("").is_empty());
 }
+
+#[test]
+fn automatic_capacity_runs_one_agent_per_active_task() {
+    let automatic = DeliverySettings { capacity: 0 };
+    assert_eq!(automatic.effective_capacity(0), 1);
+    assert_eq!(automatic.effective_capacity(5), 5);
+    assert_eq!(automatic.effective_capacity(12), 8);
+    assert_eq!(DeliverySettings { capacity: 2 }.effective_capacity(5), 2);
+
+    let h = harness();
+    h.service.update_settings(automatic).unwrap();
+    for key in ["C-1", "C-2", "C-3", "C-4"] {
+        h.task(key);
+    }
+    let overview = h.service.overview().unwrap();
+    assert_eq!((overview.settings.capacity, overview.capacity), (0, 4));
+}

@@ -482,14 +482,22 @@ pub struct DeliveryRun {
     pub qa_jira_comment: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliverySettings {
+    /// Agents running at once. 0 is automatic: one per active task (each
+    /// issue), up to [`MAX_CAPACITY`].
     pub capacity: u32,
 }
 
-impl Default for DeliverySettings {
-    fn default() -> Self {
-        Self { capacity: 3 }
+pub const MAX_CAPACITY: u32 = 8;
+
+impl DeliverySettings {
+    /// How many agents may run now, given the active tasks.
+    pub fn effective_capacity(&self, active_tasks: usize) -> u32 {
+        match self.capacity {
+            0 => (active_tasks as u32).clamp(1, MAX_CAPACITY),
+            fixed => fixed.min(MAX_CAPACITY),
+        }
     }
 }
 
@@ -577,6 +585,8 @@ pub struct DeliveryOverview {
     /// The tasks' pull requests Tinto follows.
     pub prs: Vec<super::prs::DeliveryPr>,
     pub settings: DeliverySettings,
+    /// Agents that may run now: the setting, or one per active task.
+    pub capacity: u32,
     pub coordinator: Option<DeliveryCoordinatorEndpoint>,
 }
 
