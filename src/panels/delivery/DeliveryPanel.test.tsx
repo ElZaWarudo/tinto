@@ -1635,7 +1635,7 @@ describe("DeliveryPanel", () => {
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
     );
     expect(await navigator.clipboard.readText()).toBe(
-      'claude mcp add tinto-delivery -- "C:\\Users\\me\\AppData\\Local\\tinto\\tinto.exe" --delivery-mcp-proxy http://127.0.0.1:47920/mcp secret',
+      'claude mcp add tinto-delivery -- "C:/Users/me/AppData/Local/tinto/tinto.exe" --delivery-mcp-proxy http://127.0.0.1:47920/mcp secret',
     );
   });
 

@@ -1132,11 +1132,13 @@ export function SettingsDialog({
   // Through tinto.exe as a stdio server, which opens Tinto when it is
   // closed; over HTTP only when the executable is unknown.
   const command = endpoint?.command;
+  // Claude Code starts the server through a shell that drops backslashes.
+  const claudeCommand = command?.replace(/\\/g, "/");
   const claude = (token: string) =>
     !endpoint
       ? ""
       : command
-        ? `claude mcp add tinto-delivery -- "${command}" --delivery-mcp-proxy ${endpoint.url} ${token}`
+        ? `claude mcp add tinto-delivery -- "${claudeCommand}" --delivery-mcp-proxy ${endpoint.url} ${token}`
         : `claude mcp add --transport http tinto-delivery ${endpoint.url} --header "Authorization: Bearer ${token}"`;
   const codex = (token: string) =>
     !endpoint
