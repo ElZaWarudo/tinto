@@ -1129,14 +1129,21 @@ export function SettingsDialog({
   const [jiraComment, setJiraComment] = useState(false);
   // The token is a credential: the dialog shows it masked and only the copy
   // buttons carry it.
+  // Through tinto.exe as a stdio server, which opens Tinto when it is
+  // closed; over HTTP only when the executable is unknown.
+  const command = endpoint?.command;
   const claude = (token: string) =>
-    endpoint
-      ? `claude mcp add --transport http tinto-delivery ${endpoint.url} --header "Authorization: Bearer ${token}"`
-      : "";
+    !endpoint
+      ? ""
+      : command
+        ? `claude mcp add tinto-delivery -- "${command}" --delivery-mcp-proxy ${endpoint.url} ${token}`
+        : `claude mcp add --transport http tinto-delivery ${endpoint.url} --header "Authorization: Bearer ${token}"`;
   const codex = (token: string) =>
-    endpoint
-      ? `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`
-      : "";
+    !endpoint
+      ? ""
+      : command
+        ? `[mcp_servers.tinto-delivery]\ncommand = '${command}'\nargs = ["--delivery-mcp-proxy", "${endpoint.url}", "${token}"]`
+        : `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`;
   const activeRuns = runs.filter((run) => run.status === "active");
   return (
     <FormDialog title="Ajustes de Delivery" wide onCancel={onCancel}>
@@ -1257,7 +1264,8 @@ export function SettingsDialog({
           <p className="file-op-modal__body">
             Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
             herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
-            fuera de Tinto.
+            fuera de Tinto: arrancan tinto.exe como servidor MCP, que abre Tinto si está cerrado. No
+            hace falta abrirlo de otra forma.
           </p>
           <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
           <CopySnippet

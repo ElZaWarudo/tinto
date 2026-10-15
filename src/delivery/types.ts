@@ -286,6 +286,8 @@ export interface DeliveryStageAgent {
 export interface DeliveryCoordinatorEndpoint {
   url: string;
   token: string;
+  /** tinto.exe, for agents outside Tinto to run as a stdio MCP server that opens Tinto. */
+  command?: string | null;
 }
 
 export interface DeliveryOverview {

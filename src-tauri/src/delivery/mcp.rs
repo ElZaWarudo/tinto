@@ -52,6 +52,9 @@ pub fn start(service: DeliveryService) -> Result<DeliveryCoordinatorEndpoint, De
     let endpoint = DeliveryCoordinatorEndpoint {
         url: format!("http://127.0.0.1:{port}/mcp"),
         token: token.clone(),
+        command: std::env::current_exe()
+            .ok()
+            .map(|exe| super::tasks::plain_path(&exe)),
     };
     if let Ok(mut slot) = service.inner.coordinator.lock() {
         *slot = Some(endpoint.clone());

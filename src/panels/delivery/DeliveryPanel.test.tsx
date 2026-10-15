@@ -1616,6 +1616,29 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.unarchiveDeliveryTask).toHaveBeenCalledWith("t9"));
   });
 
+  it("gives outside agents tinto.exe as their MCP server, which opens Tinto", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        coordinator: {
+          url: "http://127.0.0.1:47920/mcp",
+          token: "secret",
+          command: "C:\\Users\\me\\AppData\\Local\\tinto\\tinto.exe",
+        },
+      }),
+    );
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
+    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    expect(settings).not.toHaveTextContent("secret");
+    await user.click(
+      within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
+    );
+    expect(await navigator.clipboard.readText()).toBe(
+      'claude mcp add tinto-delivery -- "C:\\Users\\me\\AppData\\Local\\tinto\\tinto.exe" --delivery-mcp-proxy http://127.0.0.1:47920/mcp secret',
+    );
+  });
+
   it("follows the task's PR and merges it through its own step", async () => {
     const user = userEvent.setup();
     const pr = {

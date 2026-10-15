@@ -560,6 +560,10 @@ pub struct DeliveryStageAgent {
 pub struct DeliveryCoordinatorEndpoint {
     pub url: String,
     pub token: String,
+    /// This executable, for agents outside Tinto to run as a stdio MCP
+    /// server that opens Tinto when it is closed.
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

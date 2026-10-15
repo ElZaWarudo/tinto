@@ -133,19 +133,31 @@ pub fn proxy_stdio(url: &str, token: &str) -> i32 {
     };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
+    let mut opened = false;
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
-        let reply = client
-            .post(url)
-            .bearer_auth(token)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .body(line.clone())
-            .send()
-            .and_then(|response| response.text());
+        let send = || {
+            client
+                .post(url)
+                .bearer_auth(token)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .body(line.clone())
+                .send()
+        };
+        let mut sent = send();
+        // Nobody listening: Tinto is closed. Open it, once, and wait for its
+        // server, so an agent never has to start Tinto some other way.
+        if sent.as_ref().is_err_and(reqwest::Error::is_connect) && !opened {
+            opened = true;
+            if open_tinto() && wait_for_server(url, std::time::Duration::from_secs(60)) {
+                sent = send();
+            }
+        }
+        let reply = sent.and_then(|response| response.text());
         let answer = match reply {
             Ok(body) => body,
             Err(error) => proxy_error(&line, &error.to_string()),
@@ -158,6 +170,60 @@ pub fn proxy_stdio(url: &str, token: &str) -> i32 {
         }
     }
     0
+}
+
+/// Starts this same executable as the Tinto app, detached from the agent
+/// that runs the proxy, so closing the agent does not close Tinto.
+fn open_tinto() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut command = std::process::Command::new(exe);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        // Out of the agent's job object when it allows it, else within it.
+        command.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB);
+        if command.spawn().is_ok() {
+            return true;
+        }
+        command.creation_flags(flags);
+    }
+    command.spawn().is_ok()
+}
+
+/// Whether something accepts connections at `url`'s host and port before
+/// `limit` runs out.
+fn wait_for_server(url: &str, limit: std::time::Duration) -> bool {
+    let address = url
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let Ok(mut addresses) = std::net::ToSocketAddrs::to_socket_addrs(&address) else {
+        return false;
+    };
+    let Some(address) = addresses.next() else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        let step = std::time::Duration::from_millis(500);
+        if std::net::TcpStream::connect_timeout(&address, step).is_ok() {
+            return true;
+        }
+        std::thread::sleep(step);
+    }
+    false
 }
 
 /// A JSON-RPC error for a request Tinto could not be reached for; nothing
@@ -241,6 +307,19 @@ mod tests {
             let (_, toml_value) = value.split_once('=').unwrap();
             toml::from_str::<toml::Table>(&format!("v = {toml_value}")).unwrap();
         }
+    }
+
+    #[test]
+    fn the_proxy_waits_for_a_server_that_listens() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}/mcp");
+        assert!(wait_for_server(&url, std::time::Duration::from_secs(5)));
+        drop(listener);
+        assert!(!wait_for_server(
+            &url,
+            std::time::Duration::from_millis(600)
+        ));
     }
 
     #[test]
