@@ -984,7 +984,7 @@ function TaskDetail({
             >
               Reintentar
             </button>
-            {broken.agent === "codex" && broken.provider_session_id && (
+            {broken.agent !== "shell" && broken.provider_session_id && (
               <button type="button" disabled={busy} onClick={() => void onContinueJob(broken)}>
                 Continuar en Agents
               </button>
@@ -2043,7 +2043,7 @@ function JobRow({
                 Deshacer estos cambios
               </button>
             )}
-            {!isOpen(job) && job.agent === "codex" && job.provider_session_id && (
+            {!isOpen(job) && job.agent !== "shell" && job.provider_session_id && (
               <button type="button" disabled={busy} onClick={onContinue}>
                 Continuar en Agents
               </button>

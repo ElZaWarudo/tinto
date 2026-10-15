@@ -134,6 +134,10 @@ Comprobado con la CLI real en WSL (2.1.285): Claude, lanzado con esos hooks cont
 
 **Test scenarios:** argumentos de lanzamiento y de reanudación en Windows y WSL; `/clear` actualiza el id guardado; el journal guarda el id.
 
+**Hecho (2026-10-15), con un cambio respecto a KTD5.** Tinto no fija el id con `--session-id`, sino que lo toma de los hooks. Cada evento lleva su `session_id`, y el id que se guarda es el de la última conversación que recibió un mensaje (`UserPromptSubmit`). Así una sesión que no pasó del diálogo de confianza no deja un id sin conversación detrás, y tras `/clear` el id nuevo solo cuenta cuando esa conversación tiene algo. Al reanudar, el id de partida es el reanudado. `PtyHandle` lo expone como `provider_session_id`, y el journal ya lo guarda. `PortablePtyFactory::resume_agent` y `resume_wsl_agent` lanzan Claude con `--resume <id>` y los hooks. Delivery muestra "Continuar en Agents" también en trabajos de Claude. El backend lo rechaza, con su motivo, si el trabajo corrió en WSL sobre un repo de Windows, porque Agents ejecuta el agente de ese repo en Windows y Claude guarda sus conversaciones donde corrió. Si la conversación ya no existe, Claude lo dice en su terminal; no hay vuelta automática al resumen de contexto.
+
+Comprobado en WSL (2.1.285): un trabajo sin interfaz como los de Delivery (`claude -p --session-id`) se reanudó en interactivo con `--resume` y los hooks contra el `tinto.exe` de desarrollo. Llegó `SessionStart` (`source: resume`) con el mismo id, Claude recordó su respuesta anterior y el turno nuevo dejó su `UserPromptSubmit` y su `Stop`. Una carpeta nueva pide el diálogo de confianza también al reanudar. Falta probarlo dentro de la app.
+
 ## U4 — Sesiones sin turnos
 
 **Requirements:** R5, KTD7. **Dependencies:** U1.

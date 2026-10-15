@@ -47,17 +47,22 @@ pub struct ClaudeHooks {
     active: bool,
     prompt_open: bool,
     interrupted: bool,
+    /// The conversation to resume: the resumed one, then the last one that
+    /// took a prompt (`/clear` starts another, empty until its first).
+    session_id: Option<String>,
 }
 
 impl ClaudeHooks {
-    pub fn create() -> Result<Self, AgentConsoleError> {
+    pub fn create(resumed: Option<&str>) -> Result<Self, AgentConsoleError> {
         let dir = crate::runtime_paths::tinto_config_dir()
             .ok_or_else(|| hooks_error("no hay carpeta de configuración de Tinto"))?
             .join("agent-hooks");
         fs::create_dir_all(&dir).map_err(|error| hooks_error(error.to_string()))?;
         let path = dir.join(format!("{}.jsonl", uuid::Uuid::new_v4().simple()));
         fs::File::create(&path).map_err(|error| hooks_error(error.to_string()))?;
-        Ok(Self::at(path))
+        let mut hooks = Self::at(path);
+        hooks.session_id = resumed.map(str::to_owned);
+        Ok(hooks)
     }
 
     fn at(path: PathBuf) -> Self {
@@ -67,6 +72,7 @@ impl ClaudeHooks {
             active: false,
             prompt_open: false,
             interrupted: false,
+            session_id: None,
         }
     }
 
@@ -76,6 +82,10 @@ impl ClaudeHooks {
 
     pub fn active(&self) -> bool {
         self.active
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
     }
 
     /// The `--settings` value: each hook runs `command --agent-hook <file>`
@@ -138,6 +148,9 @@ impl ClaudeHooks {
         self.active = true;
         match hook.get("hook_event_name").and_then(Value::as_str) {
             Some("UserPromptSubmit") => {
+                if let Some(session_id) = hook.get("session_id").and_then(Value::as_str) {
+                    self.session_id = Some(session_id.to_owned());
+                }
                 // A prompt still open was interrupted.
                 let mut events = self.end_prompt();
                 self.prompt_open = true;
@@ -255,6 +268,33 @@ mod tests {
         assert_eq!(kinds(&hooks.drain()), ["completed"]);
         hooks.mark_interrupted();
         assert!(hooks.drain().is_empty());
+    }
+
+    #[test]
+    fn the_conversation_to_resume_is_the_last_one_that_took_a_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hooks = hooks_in(&dir);
+        hooks.session_id = Some("resumed".into());
+        append(
+            &hooks,
+            "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"resumed\",\"source\":\"resume\"}\n",
+        );
+        hooks.drain();
+        assert_eq!(hooks.session_id(), Some("resumed"));
+
+        // After /clear the new conversation is empty until its first prompt.
+        append(
+            &hooks,
+            "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"cleared\",\"source\":\"clear\"}\n",
+        );
+        hooks.drain();
+        assert_eq!(hooks.session_id(), Some("resumed"));
+        append(
+            &hooks,
+            "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"cleared\"}\n",
+        );
+        hooks.drain();
+        assert_eq!(hooks.session_id(), Some("cleared"));
     }
 
     #[test]

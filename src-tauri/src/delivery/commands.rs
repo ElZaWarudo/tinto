@@ -676,7 +676,7 @@ pub async fn delivery_open_task_in_agents(
     })
 }
 
-/// Continues a finished Codex job as a conversation in Agents.
+/// Continues a finished Codex or Claude Code job as a conversation in Agents.
 #[tauri::command]
 pub async fn delivery_open_job_in_agents(
     app: AppHandle,
@@ -687,25 +687,42 @@ pub async fn delivery_open_job_in_agents(
     job_id: String,
 ) -> Result<DeliveryConversation, CommandError> {
     let job = service.job(&job_id).map_err(CommandError::from)?;
-    if job.agent != DeliveryAgent::Codex {
-        return Err(CommandError::new(
-            "resume_unsupported",
-            "Agents solo puede continuar trabajos de Codex",
-        ));
-    }
+    let agent_type = match job.agent {
+        DeliveryAgent::Codex => "codex",
+        DeliveryAgent::Claude => "claude",
+        DeliveryAgent::Shell => {
+            return Err(CommandError::new(
+                "resume_unsupported",
+                "Agents solo puede continuar trabajos de Codex o Claude Code",
+            ))
+        }
+    };
     if job.status.is_open() {
         return Err(CommandError::new(
             "job_open",
             "espera a que el trabajo termine",
         ));
     }
-    let thread = job.provider_session_id.clone().ok_or_else(|| {
+    let conversation = job.provider_session_id.clone().ok_or_else(|| {
         CommandError::new(
             "resume_unavailable",
-            "el trabajo no registró su hilo de Codex",
+            "el trabajo no registró su conversación",
         )
     })?;
     let task = service.task(&job.task_id).map_err(CommandError::from)?;
+    // Agents runs a Windows repo's agent on Windows; Claude keeps its
+    // conversations where it ran.
+    if task.distro.is_none()
+        && job
+            .ran_on
+            .as_deref()
+            .is_some_and(|on| on.starts_with("WSL"))
+    {
+        return Err(CommandError::new(
+            "resume_unsupported",
+            "este trabajo de Claude Code corrió en WSL sobre un repositorio de Windows; Agents solo puede continuarlo en Windows",
+        ));
+    }
     let (session_id, repo) = crate::agent_console::commands::open_worktree_conversation(
         &app,
         &bus,
@@ -714,13 +731,13 @@ pub async fn delivery_open_job_in_agents(
         &task.worktree,
         task.distro.as_deref(),
         &task.key,
-        "codex",
-        Some(&thread),
+        agent_type,
+        Some(&conversation),
     )
     .await?;
     Ok(DeliveryConversation {
         session_id,
         repo,
-        agent_type: "codex".to_string(),
+        agent_type: agent_type.to_string(),
     })
 }
