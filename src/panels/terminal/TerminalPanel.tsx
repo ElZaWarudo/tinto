@@ -270,7 +270,6 @@ type AgentComposerHostCommand =
   | "feedback"
   | "fork"
   | "goal"
-  | "init"
   | "mcp"
   | "mascot"
   | "personality"
@@ -331,14 +330,6 @@ const CODEX_HOST_COMMANDS: Array<{
     label: "Estado",
     description: "Mostrar el ID del chat, estado, uso y runtime",
     aliases: ["estado"],
-    scope: "Tinto",
-  },
-  {
-    id: "init",
-    command: "init",
-    label: "Inicializar",
-    description: "Crear o actualizar AGENTS.md para Tinto",
-    aliases: ["initialize", "inicializar"],
     scope: "Tinto",
   },
   {
@@ -552,7 +543,7 @@ function provisionalResumedSession(
 interface AgentProcessView {
   label: string;
   phase: string;
-  tone: "starting" | "thinking" | "settling";
+  tone: "starting" | "thinking";
 }
 
 interface AgentReviewResponseView {
@@ -5249,9 +5240,6 @@ function agentProcessState(
     return { label: `${name} se está preparando`, phase: "INICIANDO", tone: "starting" };
   }
   if (session.status !== "running") return null;
-  if (session.turn_status === "settling") {
-    return { label: `${name} está revisando cambios`, phase: "VERIFICANDO", tone: "settling" };
-  }
   if (session.turn_status === "working") {
     const activity = latestAgentActivity(timeline);
     if (activity) return null;
@@ -6052,7 +6040,7 @@ function AgentLens({
       >
         <div>
           <span title={agentLensTurnStateValueTitle(session.turn_status ?? "waiting")}>
-            {turnStatusLabel(session.turn_status ?? "waiting")}
+            {sessionTurnLabel(session)}
           </span>
           <small title={agentLensTurnStateMetricTitle(session.turn_status ?? "waiting")}>
             Estado del turno
@@ -7955,13 +7943,22 @@ function agentActivitySummary(
       tone: "done",
     };
   }
-  if (session.turn_status === "working" || session.turn_status === "settling") {
+  if (session.turn_status === "working") {
     return {
       title: "Agent está trabajando",
       detail: `${turnState}. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
       checkpoint,
       throughput,
       tone: "working",
+    };
+  }
+  if (!hasTurns(session)) {
+    return {
+      title: "Terminal sin turnos",
+      detail: `Lo que envíes llega directo al agente; los cambios se deshacen por sesión. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
+      checkpoint,
+      throughput,
+      tone: "idle",
     };
   }
   return {
@@ -8599,12 +8596,7 @@ function appendTimelineText(turn: AgentTurnView, item: AgentSessionTimelineItem,
 
 function visibleTurnEvents(events: AgentTurnEventView[]): AgentTurnEventView[] {
   const visible: AgentTurnEventView[] = [];
-  let hidingMarkerOutput = false;
   events.forEach((event, index) => {
-    if (event.kind === "command_output" && hidingMarkerOutput) return;
-    const command = event.kind === "activity" ? activityCommandText(event.text) : null;
-    hidingMarkerOutput = command !== null && isTurnDoneMarkerCommand(command);
-    if (hidingMarkerOutput) return;
     const progress = event.kind === "activity" || event.kind === "agent_progress";
     if (progress && isGenericActivityText(event.text)) return;
     if (
@@ -8689,12 +8681,6 @@ function activityCommandText(text: string): string | null {
   const match = activityDisplayText(text.trim()).match(/^Ejecutando\s+([\s\S]+)$/i);
   if (!match) return null;
   return unquoteShellWord(match[1].trim());
-}
-
-function isTurnDoneMarkerCommand(command: string): boolean {
-  return /^(?:Write-Output|printf\s+'%s\\n'|echo)\s+"?\$(?:env:)?\{?TINTO_TURN_DONE_MARKER\}?"?\s*;?$/i.test(
-    command.trim(),
-  );
 }
 
 /** Unquotes a value that is entirely one POSIX shell word, e.g. 'a'"'"'b' -> a'b. */
@@ -8852,8 +8838,6 @@ function turnStatusLabel(status: string): string {
   switch (status) {
     case "working":
       return "Trabajando";
-    case "settling":
-      return "Finalizando";
     default:
       return "En espera";
   }
@@ -8885,8 +8869,17 @@ function sessionStatusLabel(status: string): string {
   }
 }
 
+/** A running session whose provider reports no turns behaves as a terminal. */
+function hasTurns(session: AgentSession): boolean {
+  return session.status !== "running" || session.reports_turns === true;
+}
+
+function sessionTurnLabel(session: AgentSession): string {
+  return hasTurns(session) ? turnStatusLabel(session.turn_status ?? "waiting") : "Sin turnos";
+}
+
 function sessionCompletionLabel(session: AgentSession): string {
-  if (session.status === "running") return turnStatusLabel(session.turn_status ?? "waiting");
+  if (session.status === "running") return sessionTurnLabel(session);
   if (session.status !== "completed") return sessionStatusLabel(session.status);
   return session.checkpoint
     ? "Turno completado · punto de control listo"

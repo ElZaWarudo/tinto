@@ -769,7 +769,6 @@ fn request_is_retry_safe(request: &AgentRequest) -> bool {
             | AgentRequest::GitReviewSummary { .. }
             | AgentRequest::GitleaksSetupStatus { .. }
             | AgentRequest::CreateGitleaksConfig { .. }
-            | AgentRequest::CreateAgentsMdConfig { .. }
             | AgentRequest::AgentBinaryAvailable { .. }
             | AgentRequest::AgentCheckpointScan { .. }
     )
@@ -1492,11 +1491,6 @@ mod tests {
             allowed_repos: vec!["/home/me/repo".into()],
             sources: vec!["old.txt".into()],
         };
-        let idempotent_agents_md = AgentRequest::CreateAgentsMdConfig {
-            protocol_version: PROTOCOL_VERSION,
-            repo: "/home/me/repo".into(),
-            allowed_repos: vec!["/home/me/repo".into()],
-        };
         let mutating_checkpoint = AgentRequest::AgentCheckpointCreate {
             protocol_version: PROTOCOL_VERSION,
             repo: "/home/me/repo".into(),
@@ -1531,7 +1525,6 @@ mod tests {
 
         assert!(request_is_retry_safe(&read_only));
         assert!(request_is_retry_safe(&availability));
-        assert!(request_is_retry_safe(&idempotent_agents_md));
         assert!(!request_is_retry_safe(&mutating_delete));
         assert!(!request_is_retry_safe(&mutating_checkpoint));
         assert!(!request_is_retry_safe(&mutating_checkpoint_file));

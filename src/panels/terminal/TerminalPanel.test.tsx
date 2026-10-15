@@ -218,6 +218,7 @@ function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
     change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
     turn_status: "waiting",
     turn_interrupt_supported: true,
+    reports_turns: true,
     turn_checkpoints: [],
     reverted_at_ms: null,
     restored_to_turn_index: null,
@@ -306,7 +307,6 @@ function repoDelta(overrides: Partial<RepoDelta> = {}): RepoDelta {
     error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
-    agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
     subscribed_diffs: null,
     ...overrides,
@@ -921,21 +921,37 @@ describe("TerminalPanel", () => {
     expect(screen.getByText("En espera")).toBeInTheDocument();
   });
 
+  it("shows a session whose provider reports no turns as a terminal", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ agent_type: "claude", reports_turns: false }),
+    ]);
+
+    render(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "claude" })} />,
+    );
+
+    expect(await screen.findByTitle(/Estado: Sin turnos/)).toHaveTextContent("Sin turnos");
+    expect(screen.getByLabelText("Actividad de Agent")).toHaveTextContent("Terminal sin turnos");
+    expect(screen.getByLabelText("Actividad de Agent")).not.toHaveTextContent(
+      "Listo para el siguiente turno",
+    );
+  });
+
   it("shows distinct live process states without exposing private reasoning", async () => {
     listAgentSessionsMock.mockResolvedValueOnce([
-      sessionFixture({ turn_status: "settling", output_bytes_per_second: 42 }),
+      sessionFixture({ turn_status: "working", output_bytes_per_second: 42 }),
     ]);
 
     const { unmount } = render(
       <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
     );
 
-    const settling = await screen.findByRole("status", {
-      name: "Codex está revisando cambios",
+    const working = await screen.findByRole("status", {
+      name: "Codex está trabajando",
     });
-    expect(settling).toHaveTextContent("VERIFICANDO");
-    expect(screen.getByTitle(/Estado: Finalizando/)).toHaveTextContent("Finalizando");
-    expect(settling.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
+    expect(working).toHaveTextContent("EN CURSO");
+    expect(screen.getByTitle(/Estado: Trabajando/)).toHaveTextContent("Trabajando");
+    expect(working.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
     unmount();
 
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture({ turn_status: "waiting" })]);
@@ -1071,20 +1087,6 @@ describe("TerminalPanel", () => {
           },
           {
             session_id: "sess-1",
-            id: "activity-3",
-            kind: "activity",
-            text: "Ejecutando Write-Output $env:TINTO_TURN_DONE_MARKER",
-            timestamp_ms: 14,
-          },
-          {
-            session_id: "sess-1",
-            id: "output-3",
-            kind: "command_output",
-            text: "turn-done-marker",
-            timestamp_ms: 15,
-          },
-          {
-            session_id: "sess-1",
             id: "agent-1",
             kind: "agent_message",
             text: "Listo:\n- uno\n- dos",
@@ -1108,8 +1110,6 @@ describe("TerminalPanel", () => {
     expect(
       within(commands[1]).getByText("$ErrorActionPreference='Stop' …", { selector: "code" }),
     ).toBeInTheDocument();
-    expect(within(conversation).queryByText(/TINTO_TURN_DONE_MARKER/)).not.toBeInTheDocument();
-    expect(within(conversation).queryByText("turn-done-marker")).not.toBeInTheDocument();
     expect(within(conversation).getAllByRole("listitem")).toHaveLength(2);
   });
 
@@ -2019,7 +2019,6 @@ describe("TerminalPanel", () => {
       "/comments",
       "/compact",
       "/status",
-      "/init",
       "/fork",
       "/mcp",
       "/mascot",
@@ -2275,26 +2274,6 @@ describe("TerminalPanel", () => {
 
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
   }, 10_000);
-
-  it("runs init through the host command backend from the palette", async () => {
-    const user = userEvent.setup();
-    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
-    runAgentHostCommandMock.mockResolvedValueOnce({
-      command: "init",
-      status: "completed",
-      message: "AGENTS.md is configured for this repo.",
-    });
-    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
-
-    const composer = await screen.findByLabelText("Mensaje para Codex");
-    await user.type(composer, "/init");
-    await user.type(composer, "{Enter}");
-
-    await waitFor(() =>
-      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "init", undefined),
-    );
-    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-  });
 
   it("runs review through the host command backend", async () => {
     const user = userEvent.setup();

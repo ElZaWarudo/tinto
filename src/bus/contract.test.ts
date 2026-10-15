@@ -115,7 +115,6 @@ describe("passive signal contract types", () => {
       error: null,
       metrics: { changed_files: 1, lines_added: 3, lines_removed: 1 },
       gitleaks_configured: false,
-      agents_md_configured: false,
       secret_scan_status: { state: "findings", engine: "gitleaks" },
       signals: [
         {
@@ -286,7 +285,7 @@ describe("agent session contract types", () => {
         snapshot_files: [],
       },
       change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 1760000000001 }],
-      turn_status: "settling",
+      turn_status: "working",
       turn_checkpoints: [
         {
           id: "sess-1:turn-1",
@@ -330,7 +329,7 @@ describe("agent session contract types", () => {
     expect(session.error?.category).toBe("spawn_failed");
     expect(session.checkpoint?.checkpoint_type).toBe("git_ref");
     expect(session.change_log?.[0].kind).toBe("modified");
-    expect(session.turn_status).toBe("settling");
+    expect(session.turn_status).toBe("working");
     expect(session.turn_checkpoints?.[0].changes[0].path).toBe("src/a.ts");
     expect(session.turn_checkpoints?.[0].restore_checkpoint?.git_hash).toBe("def456");
     expect(session.personality?.name).toBe("precise");
@@ -398,7 +397,6 @@ import {
   installGitleaks,
   installRepoGitleaks,
   fetchRepo,
-  createRepoAgentsMdConfig,
   createRepoGitleaksConfig,
   listAgentJournalSessions,
   listAgentSessions,
@@ -790,9 +788,6 @@ describe("RDM-008 client wrappers", () => {
 
     void createRepoGitleaksConfig("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("create_repo_gitleaks_config", { repo: "/r/api" });
-
-    void createRepoAgentsMdConfig("/r/api");
-    expect(invokeMock).toHaveBeenCalledWith("create_repo_agents_md_config", { repo: "/r/api" });
 
     void getRepoFetchPreview("/r/api");
     expect(invokeMock).toHaveBeenCalledWith("get_repo_fetch_preview", { repo: "/r/api" });
