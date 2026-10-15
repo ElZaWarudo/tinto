@@ -65,6 +65,7 @@ import {
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
+import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
 import {
   GROUPS,
@@ -85,6 +86,7 @@ import {
   latestStep,
   nextStep,
   parseStatuses,
+  pendingSettingsProposals,
   prSummary,
   rolesOf,
   stepKey,
@@ -951,6 +953,12 @@ function TaskDetail({
       {blocked && (
         <PendingDecisions taskId={task.id} decisions={pendingDecisions} busy={busy} run={run} />
       )}
+
+      <PendingSettingsProposals
+        proposals={pendingSettingsProposals(overview, task)}
+        busy={busy}
+        run={run}
+      />
 
       {openApprovals.map((approval) => (
         <ApprovalBanner key={approval.id} task={task} approval={approval} busy={busy} run={run} />

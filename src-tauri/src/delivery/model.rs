@@ -470,6 +470,54 @@ pub struct DeliveryDecision {
     pub decided_at_ms: Option<u64>,
 }
 
+/// Changes to a repo's settings. A list is added to or removed from; a
+/// value given replaces the current one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliverySettingsChanges {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks_add: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks_remove: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub qa_commands_add: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_browser: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverySettingsProposalStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+/// Changes to a repo's settings a coordinator asks for. Nothing changes
+/// until the user approves it in Tinto, in whole or in part.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliverySettingsProposal {
+    pub id: String,
+    pub repo: PathBuf,
+    /// The task it was asked for.
+    pub task_id: String,
+    pub run_id: String,
+    /// One plain line, for the user.
+    pub reason: String,
+    pub changes: DeliverySettingsChanges,
+    pub status: DeliverySettingsProposalStatus,
+    /// What the user approved: all of `changes` or a part.
+    #[serde(default)]
+    pub approved: Option<DeliverySettingsChanges>,
+    pub requested_by: String,
+    pub requested_at_ms: u64,
+    pub decided_by: Option<String>,
+    pub decided_at_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryRun {
     pub id: String,
@@ -596,6 +644,9 @@ pub struct DeliveryOverview {
     pub leases: Vec<DeliveryLease>,
     pub approvals: Vec<DeliveryApproval>,
     pub decisions: Vec<DeliveryDecision>,
+    /// Settings changes coordinators asked for and the user has not decided.
+    #[serde(default)]
+    pub settings_proposals: Vec<DeliverySettingsProposal>,
     /// The tasks' pull requests Tinto follows.
     pub prs: Vec<super::prs::DeliveryPr>,
     pub settings: DeliverySettings,

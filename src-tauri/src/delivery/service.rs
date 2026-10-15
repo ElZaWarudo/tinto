@@ -19,7 +19,8 @@ use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
     DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview,
-    DeliveryPlatform, DeliveryResultState, DeliverySettings, DeliveryTask,
+    DeliveryPlatform, DeliveryResultState, DeliverySettings, DeliverySettingsProposalStatus,
+    DeliveryTask,
 };
 use super::prs::{self, GitHub};
 use super::store::DeliveryStore;
@@ -267,6 +268,11 @@ impl DeliveryService {
             .into_iter()
             .filter(|decision| live.contains(decision.task_id.as_str()))
             .collect();
+        let settings_proposals = store
+            .settings_proposals()?
+            .into_iter()
+            .filter(|proposal| proposal.status == DeliverySettingsProposalStatus::Pending)
+            .collect();
         let prs = store
             .prs()?
             .into_iter()
@@ -277,6 +283,7 @@ impl DeliveryService {
             jobs,
             approvals,
             decisions,
+            settings_proposals,
             prs,
             leases: store.leases()?,
             capacity: store.settings()?.effective_capacity(tasks.len()),

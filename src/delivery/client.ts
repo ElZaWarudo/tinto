@@ -21,6 +21,8 @@ import type {
   DeliveryRun,
   DeliveryRung,
   DeliverySettings,
+  DeliverySettingsChanges,
+  DeliverySettingsProposal,
   DeliveryTask,
 } from "./types";
 
@@ -217,6 +219,19 @@ export const correctDeliveryApproval = (approvalId: string, outcome: string, rea
 /** Changes what the coordinator decided on its own. */
 export const changeDeliveryDecision = (decisionId: string, answer: string) =>
   invoke<DeliveryDecision>("delivery_change_decision", { decisionId, answer });
+
+/** Approves a settings proposal, or the part of it in `accepted`. */
+export const approveDeliverySettingsProposal = (
+  proposalId: string,
+  accepted: DeliverySettingsChanges,
+) =>
+  invoke<DeliverySettingsProposal>("delivery_approve_settings_proposal", {
+    proposalId,
+    accepted,
+  });
+
+export const rejectDeliverySettingsProposal = (proposalId: string) =>
+  invoke<DeliverySettingsProposal>("delivery_reject_settings_proposal", { proposalId });
 
 export const answerDeliveryDecision = (decisionId: string, answer: string) =>
   invoke<DeliveryDecision>("delivery_answer_decision", { decisionId, answer });

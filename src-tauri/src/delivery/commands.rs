@@ -12,7 +12,7 @@ use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision,
     DeliveryJiraSettings, DeliveryJob, DeliveryJobLog, DeliveryLease, DeliveryOverview,
     DeliveryPlatform, DeliveryRepoSettings, DeliveryRun, DeliveryRung, DeliverySettings,
-    DeliveryStageAgent, DeliveryTask,
+    DeliverySettingsChanges, DeliverySettingsProposal, DeliveryStageAgent, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{DeliveryService, NewJob, NewTask};
@@ -507,6 +507,29 @@ pub async fn delivery_answer_decision(
 ) -> Result<DeliveryDecision, CommandError> {
     let service = service.inner().clone();
     blocking(move || service.answer_decision(&decision_id, &answer, "user")).await
+}
+
+/// The user approves a coordinator's settings proposal, or the part of it
+/// in `accepted`.
+#[tauri::command]
+pub fn delivery_approve_settings_proposal(
+    service: State<'_, DeliveryService>,
+    proposal_id: String,
+    accepted: DeliverySettingsChanges,
+) -> Result<DeliverySettingsProposal, CommandError> {
+    service
+        .approve_settings_proposal(&proposal_id, accepted, "user")
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delivery_reject_settings_proposal(
+    service: State<'_, DeliveryService>,
+    proposal_id: String,
+) -> Result<DeliverySettingsProposal, CommandError> {
+    service
+        .reject_settings_proposal(&proposal_id, "user")
+        .map_err(CommandError::from)
 }
 
 /// The user changes what the coordinator decided on its own.

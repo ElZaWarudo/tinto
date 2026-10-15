@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod model;
 pub mod prs;
 pub mod service;
+pub mod settings_proposals;
 pub mod store;
 pub mod tasks;
 #[cfg(test)]

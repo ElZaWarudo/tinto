@@ -13,8 +13,8 @@ use super::coordination::NewApproval;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryDecisionKind,
     DeliveryDecisionOption, DeliveryJob, DeliveryJobStatus, DeliveryLeaseState,
-    DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings, DeliveryStageAgent,
-    DeliveryTask,
+    DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings,
+    DeliverySettingsChanges, DeliverySettingsProposalStatus, DeliveryStageAgent, DeliveryTask,
 };
 use super::service::{DeliveryService, Launcher, NewJob, NewTask};
 use super::store::DeliveryStore;
@@ -3284,4 +3284,171 @@ fn a_coordinator_accepts_the_recommended_decisions_but_never_a_permission() {
         json!({"run_id": run_id, "owner": "other", "generation": 1, "task_id": task_id}),
     );
     assert_eq!(stale["isError"], true);
+}
+
+#[test]
+fn a_coordinator_proposes_settings_and_the_next_job_runs_what_the_user_approved() {
+    let h = harness();
+    let call = |id: u64, name: &str, arguments: serde_json::Value| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    let repo = plain_path(h.repo.path());
+    let run = call(
+        1,
+        "create_run",
+        json!({"repo": repo, "title": "B", "owner": "coord"}),
+    );
+    let run_id = run["structuredContent"]["id"].as_str().unwrap().to_string();
+    let task = call(
+        2,
+        "create_task",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "repo": repo, "key": "AGOS-474", "title": "x"}),
+    );
+    let task_id = task["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let commands = [
+        "npm --prefix services/memories test",
+        "npm --prefix services/workflows test",
+        "npm --prefix services/session-executor test",
+        "npm --prefix services/rag test",
+        "npm --prefix api-gateway test",
+        "npm --prefix frontend test",
+        "npm --prefix frontend run preflight",
+    ];
+    let reason = "AGOS-474 necesita correr los tests de los servicios y del frontend";
+
+    // A replaced coordinator cannot propose.
+    let stale = call(
+        3,
+        "propose_settings",
+        json!({"run_id": run_id, "owner": "coord", "generation": 0, "task_id": task_id, "reason": reason, "checks_add": commands}),
+    );
+    assert_eq!(stale["isError"], true, "{stale}");
+    assert!(stale.to_string().contains("fenced"), "{stale}");
+
+    // An invalid item refuses the whole proposal and is named.
+    let bad = call(
+        4,
+        "propose_settings",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id, "reason": reason, "checks_add": ["npm --prefix frontend test", "bash scripts/qa.sh"]}),
+    );
+    assert_eq!(bad["isError"], true, "{bad}");
+    assert!(bad.to_string().contains("scripts/qa.sh"), "{bad}");
+
+    let proposed = call(
+        5,
+        "propose_settings",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "repo": repo, "reason": reason, "checks_add": commands}),
+    );
+    let proposal = &proposed["structuredContent"];
+    assert_eq!(proposal["status"], "pending", "{proposed}");
+    assert_eq!(proposal["task_id"], task_id.as_str());
+    let proposal_id = proposal["id"].as_str().unwrap().to_string();
+    assert_eq!(h.service.overview().unwrap().settings_proposals.len(), 1);
+    let before = call(6, "read_settings", json!({"task_id": task_id}));
+    assert_eq!(
+        before["structuredContent"]["proposals"]["pending"][0]["id"],
+        proposal_id.as_str()
+    );
+    assert_eq!(
+        before["structuredContent"]["checks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    // The user approves all but one.
+    let accepted = DeliverySettingsChanges {
+        checks_add: commands[..6].iter().map(|item| item.to_string()).collect(),
+        ..Default::default()
+    };
+    h.service
+        .approve_settings_proposal(&proposal_id, accepted.clone(), "user")
+        .unwrap();
+    let again = h
+        .service
+        .approve_settings_proposal(&proposal_id, accepted, "user")
+        .unwrap_err();
+    assert_eq!(again.category, "settings_proposal_decided");
+    assert!(h.service.overview().unwrap().settings_proposals.is_empty());
+
+    let after = call(7, "read_settings", json!({"task_id": task_id}));
+    let settings = &after["structuredContent"];
+    assert_eq!(settings["checks"].as_array().unwrap().len(), 6, "{after}");
+    let recent = &settings["proposals"]["recent"][0];
+    assert_eq!(recent["status"], "approved");
+    assert_eq!(recent["decided_by"], "user");
+    assert_eq!(
+        recent["approved"]["checks_add"].as_array().unwrap().len(),
+        6
+    );
+
+    let job = h
+        .service
+        .dispatch(NewJob {
+            task_id: task_id.clone(),
+            role: "tests".into(),
+            agent: DeliveryAgent::Claude,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=claude-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+        })
+        .unwrap();
+    assert!(job
+        .allowed_commands
+        .contains(&"npm --prefix services/memories test".to_string()));
+    assert!(!job
+        .allowed_commands
+        .contains(&"npm --prefix frontend run preflight".to_string()));
+    h.wait(&job.id);
+}
+
+#[test]
+fn the_user_can_reject_a_settings_proposal() {
+    let h = harness();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", Some("coord".into()), None)
+        .unwrap();
+    let mut task = h.task("K-1");
+    task.run_id = Some(run.id.clone());
+    let proposal = h
+        .service
+        .propose_settings(
+            &run.id,
+            &task,
+            DeliverySettingsChanges {
+                qa_browser: Some(true),
+                ..Default::default()
+            },
+            "La QA necesita navegador",
+            "coord",
+        )
+        .unwrap();
+    let rejected = h
+        .service
+        .reject_settings_proposal(&proposal.id, "user")
+        .unwrap();
+    assert_eq!(rejected.status, DeliverySettingsProposalStatus::Rejected);
+    assert!(
+        !h.service
+            .store()
+            .unwrap()
+            .repo_settings(h.repo.path())
+            .unwrap()
+            .qa_browser
+    );
 }

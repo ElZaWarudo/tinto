@@ -9,7 +9,7 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use super::model::{
     DeliveryApproval, DeliveryDecision, DeliveryJob, DeliveryLease, DeliveryRepoSettings,
-    DeliveryRun, DeliverySettings, DeliveryTask,
+    DeliveryRun, DeliverySettings, DeliverySettingsProposal, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::tasks::plain_path;
@@ -68,6 +68,9 @@ impl DeliveryStore {
               id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS prs (task_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS settings_proposals (
+              id TEXT PRIMARY KEY, repo TEXT NOT NULL, data TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS events (
               seq INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
               task_id TEXT, job_id TEXT, detail TEXT NOT NULL
@@ -339,6 +342,41 @@ impl DeliveryStore {
         self.all(
             "SELECT data FROM decisions WHERE task_id = ?1 ORDER BY rowid",
             [task_id],
+        )
+    }
+
+    // ---- settings proposals ----
+
+    pub fn put_settings_proposal(
+        &self,
+        proposal: &DeliverySettingsProposal,
+    ) -> Result<(), DeliveryError> {
+        self.conn.execute(
+            "INSERT INTO settings_proposals (id, repo, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+            params![proposal.id, path_key(&proposal.repo), encode(proposal)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn settings_proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<DeliverySettingsProposal>, DeliveryError> {
+        self.one("SELECT data FROM settings_proposals WHERE id = ?1", id)
+    }
+
+    pub fn settings_proposals(&self) -> Result<Vec<DeliverySettingsProposal>, DeliveryError> {
+        self.all("SELECT data FROM settings_proposals ORDER BY rowid", [])
+    }
+
+    pub fn repo_settings_proposals(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<DeliverySettingsProposal>, DeliveryError> {
+        self.all(
+            "SELECT data FROM settings_proposals WHERE repo = ?1 ORDER BY rowid",
+            [path_key(repo)],
         )
     }
 

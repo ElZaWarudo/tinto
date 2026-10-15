@@ -297,6 +297,34 @@ export interface DeliveryCoordinatorEndpoint {
   command?: string | null;
 }
 
+/** Changes to a repo's settings: lists add or remove, values replace. */
+export interface DeliverySettingsChanges {
+  checks_add?: string[];
+  checks_remove?: string[];
+  qa_commands_add?: string[];
+  bootstrap?: string | null;
+  qa_browser?: boolean | null;
+  verification?: string | null;
+}
+
+/** Settings changes a coordinator asks for; nothing changes until the user approves. */
+export interface DeliverySettingsProposal {
+  id: string;
+  repo: string;
+  task_id: string;
+  run_id: string;
+  /** One plain line, for the user. */
+  reason: string;
+  changes: DeliverySettingsChanges;
+  status: "pending" | "approved" | "rejected";
+  /** What the user approved: all of `changes` or a part. */
+  approved: DeliverySettingsChanges | null;
+  requested_by: string;
+  requested_at_ms: number;
+  decided_by: string | null;
+  decided_at_ms: number | null;
+}
+
 export interface DeliveryOverview {
   runs: DeliveryRun[];
   tasks: DeliveryTask[];
@@ -304,6 +332,8 @@ export interface DeliveryOverview {
   leases: DeliveryLease[];
   approvals: DeliveryApproval[];
   decisions: DeliveryDecision[];
+  /** Settings changes coordinators asked for, waiting for the user. */
+  settings_proposals?: DeliverySettingsProposal[];
   /** The tasks' pull requests Tinto follows. */
   prs?: DeliveryPr[];
   settings: DeliverySettings;

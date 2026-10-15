@@ -39,6 +39,8 @@ const client = vi.hoisted(() => ({
   renewDeliveryPermissions: vi.fn(),
   withdrawDeliveryDecision: vi.fn(),
   acceptRecommendedDecisions: vi.fn(),
+  approveDeliverySettingsProposal: vi.fn(),
+  rejectDeliverySettingsProposal: vi.fn(),
   refreshDeliveryPr: vi.fn(() => Promise.resolve(null)),
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
@@ -748,6 +750,67 @@ describe("DeliveryPanel", () => {
     const log = screen.getByRole("region", { name: "Decisiones" });
     expect(log).toHaveTextContent("¿Formato del aviso?");
     expect(log).toHaveTextContent("Corto");
+  });
+
+  it("shows a settings proposal as a diff and approves only what stays checked", async () => {
+    const user = userEvent.setup();
+    const checks = [
+      "npm --prefix services/memories test",
+      "npm --prefix frontend test",
+      "npm --prefix frontend run preflight",
+    ];
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      checks: ["npm --prefix cli test", "npm --prefix cli run build"],
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        settings_proposals: [
+          {
+            id: "p1",
+            repo: REPO,
+            task_id: "t1",
+            run_id: "r1",
+            reason: "AGOS-474 necesita correr los tests de memories y del frontend",
+            changes: { checks_add: checks, checks_remove: ["npm --prefix cli run build"] },
+            status: "pending",
+            approved: null,
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_by: null,
+            decided_at_ms: null,
+          },
+        ],
+      }),
+    );
+    client.approveDeliverySettingsProposal.mockResolvedValue({});
+    renderPanel();
+
+    const card = await screen.findByRole("region", { name: "Cambios de ajustes por aprobar" });
+    expect(card).toHaveTextContent("AGOS-474 necesita correr los tests de memories y del frontend");
+    expect(card).toHaveTextContent("Lo pide coord");
+    expect(
+      within(screen.getByRole("region", { name: "Te necesitan" })).getByText(
+        "Aprobar cambio de ajustes",
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(card).toHaveTextContent("antes 2 · después 4"));
+    expect(within(card).getByText("npm --prefix cli test")).toBeInTheDocument();
+
+    await user.click(
+      within(card).getByRole("checkbox", { name: "Añadir npm --prefix frontend run preflight" }),
+    );
+    expect(card).toHaveTextContent("antes 2 · después 3");
+    await user.click(within(card).getByRole("button", { name: "Aprobar 3 de 4" }));
+    await waitFor(() =>
+      expect(client.approveDeliverySettingsProposal).toHaveBeenCalledWith("p1", {
+        checks_add: checks.slice(0, 2),
+        checks_remove: ["npm --prefix cli run build"],
+        qa_commands_add: [],
+      }),
+    );
   });
 
   it("shows exactly what a permission lets QA run and renews it for new code", async () => {

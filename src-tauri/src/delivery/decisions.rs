@@ -172,13 +172,13 @@ fn validate(decision: &NewDecision) -> Result<(), DeliveryError> {
     Ok(())
 }
 
-const SCRIPT_EXTENSIONS: [&str; 11] = [
+pub(super) const SCRIPT_EXTENSIONS: [&str; 11] = [
     ".sh", ".bash", ".ps1", ".py", ".js", ".mjs", ".cjs", ".ts", ".cmd", ".bat", ".rb",
 ];
 const MAX_SCRIPT_BYTES: u64 = 256 * 1024;
 
 /// One spelling for Windows, WSL mounts and slashes.
-fn norm(text: &str) -> String {
+pub(super) fn norm(text: &str) -> String {
     let text = text.replace('\\', "/").to_lowercase();
     match text.strip_prefix("/mnt/") {
         Some(rest) if rest.as_bytes().get(1) == Some(&b'/') => {
@@ -188,13 +188,13 @@ fn norm(text: &str) -> String {
     }
 }
 
-fn is_absolute(path: &str) -> bool {
+pub(super) fn is_absolute(path: &str) -> bool {
     path.starts_with('/') || path.as_bytes().get(1) == Some(&b':')
 }
 
 /// Whether `text` names `path` or something inside it (not a sibling whose
 /// name merely starts the same, like `repo-wt` for `repo`).
-fn names(text: &str, path: &str) -> bool {
+pub(super) fn names(text: &str, path: &str) -> bool {
     text.match_indices(path).any(|(at, _)| {
         !text
             .as_bytes()

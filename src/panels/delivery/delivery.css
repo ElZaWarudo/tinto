@@ -1190,3 +1190,48 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+/* ---------- Settings proposals ---------- */
+.delivery-settings-diff {
+  display: grid;
+  gap: 4px;
+}
+.delivery-settings-diff__title {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.delivery-settings-diff ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+.delivery-settings-diff li {
+  display: grid;
+  grid-template-columns: 16px 12px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+.delivery-settings-diff li code {
+  overflow-wrap: anywhere;
+}
+.delivery-settings-diff__kept {
+  color: var(--fg-muted);
+}
+.delivery-settings-diff__added > span {
+  color: var(--added);
+}
+.delivery-settings-diff__removed > span,
+.delivery-settings-diff__removed code {
+  color: var(--danger);
+}
+.delivery-settings-diff__removed code {
+  text-decoration: line-through;
+}
+.delivery-settings-diff__value {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}

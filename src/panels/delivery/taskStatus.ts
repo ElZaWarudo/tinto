@@ -8,6 +8,7 @@ import type {
   DeliveryOverview,
   DeliveryPr,
   DeliveryRung,
+  DeliverySettingsProposal,
   DeliveryTask,
 } from "../../delivery/types";
 
@@ -284,6 +285,16 @@ export function pendingDecisions(overview: DeliveryOverview, taskId: string): nu
   ).length;
 }
 
+/** The settings changes waiting for the user on the task's repo. */
+export function pendingSettingsProposals(
+  overview: DeliveryOverview,
+  task: DeliveryTask,
+): DeliverySettingsProposal[] {
+  return (overview.settings_proposals ?? []).filter(
+    (proposal) => proposal.repo === task.repo && proposal.status === "pending",
+  );
+}
+
 export function taskStatus(
   task: DeliveryTask,
   overview: DeliveryOverview,
@@ -296,6 +307,14 @@ export function taskStatus(
       tone: "attention",
       icon: "flag",
       label: decisions === 1 ? "1 decisión pendiente" : `${decisions} decisiones pendientes`,
+    };
+  }
+  if (pendingSettingsProposals(overview, task).length > 0) {
+    return {
+      group: "attention",
+      tone: "attention",
+      icon: "flag",
+      label: "Aprobar cambio de ajustes",
     };
   }
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);

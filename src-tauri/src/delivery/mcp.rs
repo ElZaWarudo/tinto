@@ -20,6 +20,7 @@ use super::decisions::NewDecision;
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryCommit, DeliveryCoordinatorEndpoint,
     DeliveryDecisionKind, DeliveryDecisionOption, DeliveryPlatform, DeliveryRung,
+    DeliverySettingsChanges, DeliverySettingsProposalStatus,
 };
 use super::service::{DeliveryService, NewJob, NewTask, QA_ROLE};
 use super::DeliveryError;
@@ -476,9 +477,50 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             task_in_run(&run_id, &task_id)?;
             to_json(&service.accept_recommended(&task_id, &text("owner")?)?)
         }
+        "propose_settings" => {
+            let run_id = fence()?;
+            let task = match optional("task_id") {
+                Some(task_id) => {
+                    task_in_run(&run_id, &task_id)?;
+                    service.task(&task_id)?
+                }
+                None => {
+                    let repo = super::decisions::norm(&text("repo")?);
+                    service
+                        .store()?
+                        .tasks()?
+                        .into_iter()
+                        .find(|task| {
+                            task.run_id.as_deref() == Some(run_id.as_str())
+                                && super::decisions::norm(&super::tasks::plain_path(&task.repo))
+                                    == repo
+                        })
+                        .ok_or_else(|| {
+                            DeliveryError::new(
+                                "task_not_in_run",
+                                "ninguna tarea de esta ejecución es de ese repositorio",
+                            )
+                        })?
+                }
+            };
+            let changes: DeliverySettingsChanges = serde_json::from_value(args.clone())
+                .map_err(|error| DeliveryError::new("invalid_arguments", error.to_string()))?;
+            to_json(&service.propose_settings(
+                &run_id,
+                &task,
+                changes,
+                &text("reason")?,
+                &text("owner")?,
+            )?)
+        }
         "read_settings" => {
             let task = service.task(&text("task_id")?)?;
             let settings = service.store()?.repo_settings(&task.repo)?;
+            let (pending, decided): (Vec<_>, Vec<_>) = service
+                .repo_settings_proposals(&task.repo)?
+                .into_iter()
+                .partition(|proposal| proposal.status == DeliverySettingsProposalStatus::Pending);
+            let recent: Vec<_> = decided.into_iter().rev().take(5).collect();
             let run = match task.run_id.as_deref() {
                 Some(run_id) => Some(service.run(run_id)?),
                 None => None,
@@ -505,6 +547,7 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
                     "title": run.title,
                     "qa_jira_comment": run.qa_jira_comment,
                 })),
+                "proposals": { "pending": pending, "recent": recent },
             }))
         }
         "complete_approval" => {
@@ -603,7 +646,7 @@ fn tool_definitions() -> Value {
     // Apart from the list: one `json!` this deep exceeds the macro's recursion limit.
     let decision_item = json!({"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}, "scripts": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of the scripts the command runs; frozen and shown to the user."}, "read_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of folders outside the worktree QA may read and list."}, "write_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of concrete folders outside the worktree QA's commands may write in. Never the user's whole home."}, "clients": {"type": "array", "items": {"type": "string", "enum": ["claude", "codex"]}, "description": "permission: the user's real clients the command starts."}, "blocking": {"type": "boolean", "description": "Default true: the stages wait for the user. false: your own call, answered at once with the recommended option (or the text), changeable by the user later. Never false for a permission."}, "full_access": {"type": "boolean", "description": "permission: ask the user to let this task's QA run with full access (no sandbox, any command, writes anywhere). An exception for QA that cannot run in a sandbox, for example when it must start the user's real Codex; say in the question why nothing narrower works and what QA will do. Once allowed, the QA jobs you dispatch on this task run with full access; other roles never do."}}, "required": ["kind", "question"]});
     json!([
-        { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions and the followed PRs.", "inputSchema": schema(json!({}), json!([])) },
+        { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs.", "inputSchema": schema(json!({}), json!([])) },
         { "name": "create_run", "description": "Start a run you coordinate. Returns its id and generation 1.", "inputSchema": schema(json!({"repo": {"type": "string"}, "title": {"type": "string"}, "owner": {"type": "string"}}), json!(["repo", "title", "owner"])) },
         { "name": "acquire_run", "description": "Take a run nobody coordinates, or confirm you hold it.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}}), json!(["run_id", "owner"])) },
         { "name": "takeover_run", "description": "Replace a coordinator that stopped. Only after the user confirmed it stopped.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "expect_generation": {"type": "integer"}, "reason": {"type": "string"}}), json!(["run_id", "owner", "expect_generation", "reason"])) },
@@ -623,7 +666,8 @@ fn tool_definitions() -> Value {
         { "name": "read_decisions", "description": "A task's decisions with their status, answer, who decided and when. For permissions: the frozen `scripts`, `read_dirs`, `write_dirs`, `clients`, `warnings`, whether it `runs_candidate` and the worktree content it was allowed for.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
         { "name": "withdraw_decision", "description": "Take back a pending decision that no longer makes sense (it would otherwise block every stage of its task). Answered decisions cannot be withdrawn.", "inputSchema": fenced(json!({"properties": {"decision_id": {"type": "string"}}, "required": ["decision_id"]})) },
         { "name": "accept_recommended", "description": "Settle every pending decision of the task that has a recommendation, as the user's \"Aceptar recomendadas\" does: each choice with its recommended option and each text as proposed. They are recorded as decided by you (`owner`) and stop holding the stages; the user still sees them in Tinto. Choices without a recommendation and permissions stay pending for the user. Returns the decisions it answered.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}}, "required": ["task_id"]})) },
-        { "name": "read_settings", "description": "What the user already configured in Tinto for a task: the repo's verification and QA commands, whether QA gets a browser, the QA environment (platforms, scope, clients), the bootstrap command, the agent, model and reasoning fixed per stage (`stages`, by role; dispatch_job uses them when you omit `agent`, so do not choose models yourself), and how changes are verified beyond the stages (`verification`, in the user's words) and whether QA may make paid model calls (`paid_model_calls`, null = not set), the repo's Jira without its token, and the batch's policy on posting QA verdicts to Jira (null = not set). Read it before asking anything: never ask through decisions what is configured here. If something you need is empty or null, ask the user to set it in Tinto (Ajustes), not as a decision.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
+        { "name": "read_settings", "description": "What the user already configured in Tinto for a task: the repo's verification and QA commands, whether QA gets a browser, the QA environment (platforms, scope, clients), the bootstrap command, the agent, model and reasoning fixed per stage (`stages`, by role; dispatch_job uses them when you omit `agent`, so do not choose models yourself), and how changes are verified beyond the stages (`verification`, in the user's words) and whether QA may make paid model calls (`paid_model_calls`, null = not set), the repo's Jira without its token, and the batch's policy on posting QA verdicts to Jira (null = not set), and the settings proposals for the repo (`proposals`: `pending`, and the last decided in `recent`, with what the user `approved`). Read it before asking anything: never ask through decisions what is configured here. If a command, the bootstrap, the QA browser or how changes are verified is missing, propose it with propose_settings and the user approves it in Tinto; anything else that is empty or null, ask the user to set it in Tinto (Ajustes). Never ask settings as a decision.", "inputSchema": schema(json!({"task_id": {"type": "string"}}), json!(["task_id"])) },
+        { "name": "propose_settings", "description": "Propose changes to the repo's settings in Tinto when the work needs something they lack, such as the verification commands a task's tests must run: `checks` are also the only commands Claude jobs without full access may run besides read-only ones, so a job that needs another one ends blocked. The user approves or rejects the proposal in Tinto, possibly in part; nothing changes until then, and jobs already dispatched keep what they had (dispatch again after approval). Give `task_id` (or the `repo` of a task in your run), the changes and `reason`: one plain line for the user saying why (e.g. which issues need which tests). `checks_add`, `checks_remove` and `qa_commands_add` add to or remove from the lists; `bootstrap`, `qa_browser` and `verification` replace the value. Refused as a whole, naming each invalid item, when a command is empty, repeated or already there, runs something agents can edit (the repo or its worktrees by absolute path, `.agent`, a script by relative path: ask those as a permission with `scripts` so Tinto freezes them) or names a path outside the repo. Returns the proposal with its `id` and `status` (pending); read_settings shows how it was decided.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "repo": {"type": "string"}, "reason": {"type": "string"}, "checks_add": {"type": "array", "items": {"type": "string"}}, "checks_remove": {"type": "array", "items": {"type": "string"}}, "qa_commands_add": {"type": "array", "items": {"type": "string"}}, "bootstrap": {"type": "string"}, "qa_browser": {"type": "boolean"}, "verification": {"type": "string"}}, "required": ["reason"]})) },
         { "name": "complete_approval", "description": "Report how an approved PR or Jira step went after you ran it. For a PR that was opened, Tinto links the PR GitHub has for the task's branch (it wins over a different URL in `outcome`, and the step gets a `notice`), else the GitHub PR URL in `outcome`; with neither, the report is refused.", "inputSchema": fenced(json!({"properties": {"approval_id": {"type": "string"}, "success": {"type": "boolean"}, "outcome": {"type": "string"}}, "required": ["approval_id", "success"]})) }
     ])
 }
