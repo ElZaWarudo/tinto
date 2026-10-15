@@ -288,7 +288,7 @@ impl DeliveryService {
     /// produced is on GitHub) and it leaves the list. Its record stays, so
     /// it can be found by issue or PR and brought back.
     pub fn archive_task(&self, task_id: &str) -> Result<(), DeliveryError> {
-        let task = self.task(task_id)?;
+        self.task(task_id)?;
         if !self.delivered(task_id)? {
             return Err(DeliveryError::new(
                 "task_not_delivered",
@@ -296,9 +296,6 @@ impl DeliveryService {
             ));
         }
         self.remove_task(task_id, true)?;
-        // Merged on GitHub: a local branch left behind only gets in the way.
-        let place = Place::of(task.distro.as_deref());
-        let _ = tasks::git(place, &task.repo, &["branch", "-D", &task.branch]);
         let store = self.store()?;
         let mut task = store
             .task(task_id)?

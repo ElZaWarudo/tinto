@@ -423,8 +423,9 @@ impl DeliveryService {
             .ok_or_else(|| DeliveryError::not_found("la tarea", task_id))
     }
 
-    /// Removes the worktree (the branch is kept). Refuses when there is work
-    /// that would be lost, unless `force`.
+    /// Removes the worktree and the local branch. Refuses when there is work
+    /// that would be lost (uncommitted changes or unpublished commits),
+    /// unless `force`.
     pub fn remove_task(&self, task_id: &str, force: bool) -> Result<(), DeliveryError> {
         let task = self.task(task_id)?;
         if self
@@ -475,6 +476,9 @@ impl DeliveryService {
             }
             tasks::remove_worktree(place, &task.repo, &task.worktree, force)?;
         }
+        // Published work is on the remote; what was not, the user chose to
+        // drop (`force`). A branch git keeps checked out elsewhere stays.
+        let _ = tasks::git(place, &task.repo, &["branch", "-D", &task.branch]);
         let store = self.store()?;
         let now = now_ms();
         let mut task = task;

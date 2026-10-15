@@ -525,6 +525,16 @@ fn removing_a_task_protects_unsaved_work() {
     assert!(worktree.exists());
     h.service.remove_task(&task.id, true).unwrap();
     assert!(!worktree.exists());
+    let branch = format!("refs/heads/{}", task.branch);
+    assert!(
+        super::tasks::git(
+            super::tasks::Place::Native,
+            h.repo.path(),
+            &["rev-parse", "--verify", "--quiet", &branch]
+        )
+        .is_err(),
+        "the local branch goes with the worktree"
+    );
     assert!(h.service.overview().unwrap().tasks.is_empty());
     // The same key can be started again once the task is gone.
     h.task("K-11");

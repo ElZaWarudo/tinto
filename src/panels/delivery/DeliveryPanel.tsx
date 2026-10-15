@@ -811,7 +811,7 @@ function TaskDetail({
 
   const remove = async () => {
     const ok = await confirm(
-      `Se eliminará el worktree ${task.worktree}. La rama ${task.branch} se conserva.`,
+      `Se eliminarán el worktree ${task.worktree} y la rama local ${task.branch}. Lo publicado sigue en GitHub.`,
       { title: "Eliminar tarea", kind: "warning", okLabel: "Eliminar" },
     );
     if (!ok) return;
@@ -825,7 +825,7 @@ function TaskDetail({
             : "";
         if (category !== "task_unsaved") throw cause;
         const force = await confirm(
-          `${errorText(cause)}. Si eliminas el worktree, esos cambios se pierden; los commits siguen en la rama ${task.branch}.`,
+          `${errorText(cause)}. Si eliminas la tarea, se pierden con el worktree y la rama local ${task.branch}.`,
           { title: "Hay trabajo sin guardar", kind: "warning", okLabel: "Eliminar igualmente" },
         );
         if (!force) return;
