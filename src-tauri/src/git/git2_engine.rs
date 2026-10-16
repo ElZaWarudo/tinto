@@ -667,7 +667,7 @@ mod tests {
             .diff_against(&base)
             .unwrap()
             .into_iter()
-            .find(|diff| diff.path == PathBuf::from("nuevo.txt"))
+            .find(|diff| diff.path == Path::new("nuevo.txt"))
             .unwrap();
         assert_eq!(nuevo.hunks[0].lines[0].content, "tres");
     }

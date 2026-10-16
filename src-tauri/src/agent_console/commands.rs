@@ -175,10 +175,6 @@ fn start_resolved_agent_session(
     Ok(started.id)
 }
 
-/// Opens an Agents conversation in a Delivery worktree. The worktree joins
-/// the active workbench (as session forks do) so the usual repo views work,
-/// then a session starts there, or resumes the given provider thread.
-#[allow(clippy::too_many_arguments)]
 /// The worktree as a repo of the active workbench, added under `alias` when
 /// it is not one yet.
 pub(crate) async fn ensure_worktree_repo(
@@ -225,6 +221,10 @@ pub(crate) async fn ensure_worktree_repo(
     ensure_known_agent_repo(bus, worktree).await
 }
 
+/// Opens an Agents conversation in a Delivery worktree. The worktree joins
+/// the active workbench (as session forks do) so the usual repo views work,
+/// then a session starts there, or resumes the given provider thread.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_worktree_conversation(
     app: &AppHandle,
     bus: &BusHandle,
