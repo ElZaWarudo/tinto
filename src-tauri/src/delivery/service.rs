@@ -875,7 +875,14 @@ impl DeliveryService {
         })
     }
 
-    pub fn release_lease(&self, name: &str, note: &str) -> Result<DeliveryLease, DeliveryError> {
+    /// Frees a quarantined resource. `released_by` names who checked the
+    /// environment: the user, or a coordinator past its run's brainstorm.
+    pub fn release_lease(
+        &self,
+        name: &str,
+        note: &str,
+        released_by: &str,
+    ) -> Result<DeliveryLease, DeliveryError> {
         let store = self.store()?;
         let mut lease = store
             .lease(name)?
@@ -895,7 +902,7 @@ impl DeliveryService {
         lease.holder_task_id = None;
         lease.acquired_at_ms = None;
         lease.generation += 1;
-        lease.note = Some(format!("Liberado por el usuario: {}", note.trim()));
+        lease.note = Some(format!("Liberado por {released_by}: {}", note.trim()));
         store.put_lease(&lease)?;
         store.record_event(now_ms(), "lease_released", None, None, name)?;
         drop(store);
@@ -1219,7 +1226,20 @@ impl DeliveryService {
         paths: &JobPaths,
         start: Option<&WorktreeSnapshot>,
     ) -> Result<Vec<DeliveryFrozenCopy>, DeliveryError> {
-        let decisions = self.store()?.task_decisions(&task.id)?;
+        let mut decisions = self.store()?.task_decisions(&task.id)?;
+        // Past the brainstorm permissions are allowed by `auto`, so they are
+        // allowed again for the code QA is about to run.
+        if let Some(start) = start.filter(|_| self.unattended(task).unwrap_or(false)) {
+            for decision in decisions.iter_mut().filter(|decision| {
+                allowed_permission(decision)
+                    && decision.runs_candidate
+                    && decision.candidate.as_deref() != Some(start.tree.as_str())
+            }) {
+                let mut renewed = decision.clone();
+                renewed.candidate = Some(start.tree.clone());
+                *decision = self.record_answer(renewed, decisions::AUTO, "permission_renewed")?;
+            }
+        }
         let mut copies = Vec::new();
         for (index, decision) in decisions
             .iter()

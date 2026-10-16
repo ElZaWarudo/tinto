@@ -379,7 +379,7 @@ pub fn delivery_release_lease(
         ));
     }
     service
-        .release_lease(&name, &note)
+        .release_lease(&name, &note, "el usuario")
         .map_err(CommandError::from)
 }
 

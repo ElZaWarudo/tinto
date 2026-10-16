@@ -10,7 +10,8 @@
 //! - Once the coordinator ends a run's brainstorm, its decisions settle as
 //!   they are asked: choices with their recommendation, texts as proposed,
 //!   and permissions allowed. A choice without a recommendation is refused,
-//!   so nothing waits for the user.
+//!   so nothing waits for the user. A permission that runs the task's code
+//!   is allowed again, by `auto`, for the code each QA job starts with.
 //! - What a permission lets QA run cannot change after the user allows it:
 //!   scripts agents can edit are frozen when the coordinator asks (the user
 //!   reads that text and jobs run that text), and a command that runs the
@@ -733,7 +734,7 @@ impl DeliveryService {
             .tree)
     }
 
-    fn record_answer(
+    pub(super) fn record_answer(
         &self,
         mut decision: DeliveryDecision,
         decided_by: &str,

@@ -476,7 +476,7 @@ fn the_qa_resource_is_exclusive_fifo_and_quarantined_after_a_crash() {
 
     let released = h
         .service
-        .release_lease("qa", "browser closed, data restored")
+        .release_lease("qa", "browser closed, data restored", "el usuario")
         .unwrap();
     assert_eq!(released.state, DeliveryLeaseState::Free);
     let waiting = h.wait(&waiting.id);
@@ -1310,6 +1310,74 @@ fn a_permission_freezes_its_scripts_and_holds_for_one_candidate() {
             .category,
         "invalid_decision"
     );
+}
+
+#[test]
+fn past_the_brainstorm_qa_neither_waits_on_a_stale_permission_nor_on_a_quarantine() {
+    let h = harness();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", Some("coord".into()), None)
+        .unwrap();
+    let task = h
+        .service
+        .create_task(NewTask {
+            repo: h.repo.path().to_path_buf(),
+            distro: None,
+            key: "D-8".into(),
+            title: "x".into(),
+            base: None,
+            branch: None,
+            run_id: Some(run.id.clone()),
+        })
+        .unwrap();
+    let release = |note: &str| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "release_lease", "arguments": {"run_id": run.id, "owner": "coord", "generation": 1, "name": "qa", "note": note}}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+
+    // A QA job of the run crashes and leaves the resource quarantined;
+    // during the brainstorm only the user may free it.
+    let crashing = h.dispatch(&task, "qa", "events=none exit=3");
+    h.wait(&crashing.id);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(qa_lease(&h).state, DeliveryLeaseState::Quarantined);
+    assert_eq!(release("limpio")["isError"], true);
+
+    h.service.end_brainstorm(&run.id).unwrap();
+    assert_eq!(release(" ")["isError"], true, "it says what it checked");
+    let released = release("sin procesos ni datos de prueba");
+    assert_eq!(released["structuredContent"]["state"], "free", "{released}");
+    assert!(released["structuredContent"]["note"]
+        .as_str()
+        .unwrap()
+        .starts_with("Liberado por el coordinador coord"));
+
+    // A permission that runs the task's code is allowed again for the code
+    // QA finds, instead of failing it as stale.
+    let cli = plain_path(&task.worktree.join("cli.js")).replace('\\', "/");
+    std::fs::write(task.worktree.join("cli.js"), "v1\n").unwrap();
+    let allowed = h
+        .service
+        .request_decisions(&task.id, vec![permission(&format!("node {cli}"))], "coord")
+        .unwrap()
+        .remove(0);
+    assert!(allowed.runs_candidate);
+    assert_eq!(allowed.decided_by.as_deref(), Some(super::decisions::AUTO));
+    std::fs::write(task.worktree.join("cli.js"), "v2\n").unwrap();
+    let qa = h
+        .service
+        .dispatch(claude_qa(&task, "events=claude-ok"))
+        .unwrap();
+    let qa = h.wait(&qa.id);
+    assert_eq!(qa.status, DeliveryJobStatus::Finished, "{:?}", qa.error);
+    let renewed = h.service.task_decisions(&task.id).unwrap().remove(0);
+    assert_ne!(renewed.candidate, allowed.candidate);
+    assert_eq!(renewed.decided_by.as_deref(), Some(super::decisions::AUTO));
 }
 
 #[test]
