@@ -390,6 +390,46 @@ describe("nextRole", () => {
     expect(nextRole([job({ result_state: "stale" })])).toBe("tests");
   });
 
+  it("suggests nothing while any stage runs, and counts answered findings as done", () => {
+    const tests = job({
+      result: { ...job().result!, status: "findings", findings: ["a", "b"] },
+    });
+    const implemented = job({ role: "implementation" });
+    const reviewing = job({ role: "review", status: "started", ended_at_ms: null });
+    // The review runs: no stage is offered, not even the tests with findings.
+    expect(nextRole([tests, implemented, reviewing])).toBeNull();
+    // Once the implementation passed, the tests' findings are answered.
+    expect(nextRole([tests, implemented, job({ role: "review" })])).toBe("qa");
+    expect(attemptOutcome(tests, [tests, implemented])).toEqual({
+      tone: "idle",
+      label: "2 hallazgos · atendidos",
+    });
+    expect(attemptOutcome(tests, [tests]).tone).toBe("attention");
+  });
+
+  it("offers no stage once the task was committed after its last one", () => {
+    const tests = job({
+      result: { ...job().result!, status: "findings", findings: ["a"] },
+    });
+    const reviewed = job({ role: "review", ended_at_ms: 61_000 });
+    const committed = approval({ status: "executed", executed_at_ms: 90_000 });
+    expect(nextRole([tests, job({ role: "implementation" }), reviewed], [committed])).toBeNull();
+    // The sidebar names the delivery step instead (here, the push).
+    expect(
+      status({
+        jobs: [tests, job({ role: "implementation" }), reviewed],
+        approvals: [committed],
+      }).label,
+    ).toBe("Siguiente: push");
+    // New work after the commit brings the stages back.
+    const later = job({
+      role: "implementation",
+      ended_at_ms: 120_000,
+      changes: [{ path: "src/app.ts", kind: "modified" }],
+    });
+    expect(nextRole([tests, reviewed, later], [committed])).toBe("review");
+  });
+
   it("suggests nothing while the next stage runs or once every stage passed", () => {
     expect(nextRole([job(), job({ role: "implementation", status: "started" })])).toBeNull();
     expect(

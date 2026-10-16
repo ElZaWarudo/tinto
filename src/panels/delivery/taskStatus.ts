@@ -225,10 +225,11 @@ export function attemptOutcome(
   }
   if (result.status === "findings") {
     const count = result.findings.length;
-    return {
-      tone: "attention",
-      label: count === 1 ? "1 hallazgo" : count > 1 ? `${count} hallazgos` : "Con hallazgos",
-    };
+    const label = count === 1 ? "1 hallazgo" : count > 1 ? `${count} hallazgos` : "Con hallazgos";
+    // Once a later stage answered them they are history, not a warning.
+    return isAnswered(job, jobs)
+      ? { tone: "idle", label: `${label} · atendidos` }
+      : { tone: "attention", label };
   }
   return { tone: "idle", label: result.status };
 }
@@ -238,11 +239,23 @@ export function attemptOutcome(
  * findings, else the first built-in stage without a passing attempt that
  * still stands.
  */
-export function nextRole(jobs: DeliveryJob[]): string | null {
+export function nextRole(jobs: DeliveryJob[], approvals: DeliveryApproval[] = []): string | null {
   // A paused stage holds the task until it is resumed or cancelled.
   if (pausedJob(jobs)) return null;
   const agentJobs = jobs.filter((job) => job.agent !== "shell" && isLive(job));
+  // While one of its stages runs or waits its turn, the task's next stage
+  // is that one's to decide.
+  if (agentJobs.some(isOpen)) return null;
   const latest = agentJobs[agentJobs.length - 1];
+  // Committed after its last stage: the task is in delivery, and what comes
+  // next is a delivery step, not another stage.
+  const delivering = approvals.some(
+    (approval) =>
+      approval.rung === "commit" &&
+      approval.status === "executed" &&
+      (approval.executed_at_ms ?? 0) > (latest?.ended_at_ms ?? 0),
+  );
+  if (delivering) return null;
   if (latest && !isOpen(latest)) {
     if (isBroken(latest)) return latest.role;
     if (latest.status === "finished" && latest.result?.status === "findings") {
@@ -251,11 +264,26 @@ export function nextRole(jobs: DeliveryJob[]): string | null {
   }
   for (const stage of STAGES) {
     const job = latestOfRole(agentJobs, stage.role);
-    if (!job || !isPassed(job) || isSuperseded(job, agentJobs)) {
-      return job && isOpen(job) ? null : stage.role;
+    if (!job || !(isPassed(job) || isAnswered(job, agentJobs)) || isSuperseded(job, agentJobs)) {
+      return stage.role;
     }
   }
   return null;
+}
+
+/** Findings a later stage answered: one after it passed (the tests' failing
+ *  cases, made to pass by the implementation). */
+export function isAnswered(job: DeliveryJob, jobs: DeliveryJob[]): boolean {
+  return (
+    job.status === "finished" &&
+    job.result?.status === "findings" &&
+    jobs.some(
+      (later) =>
+        later.created_at_ms > job.created_at_ms &&
+        stageOrder(later.role) > stageOrder(job.role) &&
+        isPassed(later),
+    )
+  );
 }
 
 /** The latest accepted handoff, offered as the next stage's instructions. */
@@ -480,7 +508,7 @@ export function taskStatus(
       label: ready ? `PR aprobado${then}` : `PR: ${lower(summary.label)}`,
     };
   }
-  const role = nextRole(jobs);
+  const role = nextRole(jobs, approvals);
   if (role) {
     return {
       group: "idle",
