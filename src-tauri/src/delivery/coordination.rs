@@ -424,6 +424,7 @@ impl DeliveryService {
             updated_at_ms: now,
             qa_jira_comment,
             unattended: false,
+            paused: false,
         };
         let store = self.store()?;
         store.put_run(&run)?;
@@ -495,6 +496,21 @@ impl DeliveryService {
         run.owner = None;
         run.updated_at_ms = now_ms();
         self.save_run(&run, "run_released", owner)?;
+        Ok(run)
+    }
+
+    /// The user pauses or resumes the batch: while paused its queued jobs
+    /// wait; the running ones go on, and each can be paused on its own.
+    pub fn set_run_paused(&self, run_id: &str, paused: bool) -> Result<DeliveryRun, DeliveryError> {
+        let mut run = self.run(run_id)?;
+        run.paused = paused;
+        run.updated_at_ms = now_ms();
+        self.save_run(
+            &run,
+            "run_policy",
+            if paused { "paused" } else { "resumed" },
+        )?;
+        self.tick();
         Ok(run)
     }
 

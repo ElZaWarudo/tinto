@@ -103,6 +103,21 @@ export function isOpen(job: DeliveryJob): boolean {
   return job.status === "queued" || job.status === "pending" || job.status === "started";
 }
 
+/** The paused job no later job resumes: it holds its task. */
+export function pausedJob(jobs: DeliveryJob[]): DeliveryJob | undefined {
+  return jobs.find(
+    (job) => job.status === "paused" && !jobs.some((other) => other.resumes === job.id),
+  );
+}
+
+/** How long the agent has been quiet, once it is long enough to say. */
+export function quietFor(job: DeliveryJob, now: number): string | null {
+  const since = job.activity_at_ms ?? job.started_at_ms;
+  if (job.status !== "started" || !since) return null;
+  const minutes = Math.floor((now - since) / 60_000);
+  return minutes >= 5 ? `sin actividad hace ${minutes} min` : null;
+}
+
 /** A job that ended without a usable result. */
 export function isBroken(job: DeliveryJob): boolean {
   return (
@@ -184,6 +199,11 @@ export function attemptOutcome(
   }
   if (job.status === "pending") return { tone: "live", label: "Iniciando" };
   if (job.status === "started") return { tone: "live", label: "En marcha" };
+  if (job.status === "paused") {
+    return jobs.some((other) => other.resumes === job.id)
+      ? { tone: "idle", label: "Pausado · reanudado" }
+      : { tone: "waiting", label: "En pausa" };
+  }
   if (job.status === "cancelled") return { tone: "idle", label: "Cancelado" };
   if (job.status === "interrupted") return { tone: "danger", label: "Interrumpido" };
   if (job.status === "failed") return { tone: "danger", label: "Falló" };
@@ -219,6 +239,8 @@ export function attemptOutcome(
  * still stands.
  */
 export function nextRole(jobs: DeliveryJob[]): string | null {
+  // A paused stage holds the task until it is resumed or cancelled.
+  if (pausedJob(jobs)) return null;
   const agentJobs = jobs.filter((job) => job.agent !== "shell" && isLive(job));
   const latest = agentJobs[agentJobs.length - 1];
   if (latest && !isOpen(latest)) {
@@ -346,15 +368,29 @@ export function taskStatus(
     const verb =
       STAGES.find((stage) => stage.role === running.role)?.verb ?? stageLabel(running.role);
     const time = clock(running, now);
+    const quiet = quietFor(running, now);
     return {
       group: "running",
       tone: "live",
       icon: "live",
-      label: time ? `${verb} · ${time}` : verb,
+      label: [verb, time, quiet].filter(Boolean).join(" · "),
+    };
+  }
+  const paused = pausedJob(jobs);
+  if (paused) {
+    return {
+      group: "waiting",
+      tone: "waiting",
+      icon: "clock",
+      label: `${stageLabel(paused.role)} en pausa`,
     };
   }
   const queued = jobs.find((job) => job.status === "queued");
   if (queued) {
+    const run = overview.runs.find((candidate) => candidate.id === task.run_id);
+    if (run?.paused) {
+      return { group: "waiting", tone: "waiting", icon: "clock", label: "Lote en pausa" };
+    }
     const lease = overview.leases.find((candidate) =>
       candidate.queue.some((waiter) => waiter.job_id === queued.id),
     );

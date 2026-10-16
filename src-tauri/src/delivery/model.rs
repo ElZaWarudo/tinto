@@ -54,6 +54,9 @@ pub enum DeliveryJobStatus {
     Cancelled,
     /// Tinto stopped while the job was running.
     Interrupted,
+    /// The user stopped it to continue later in the same agent session; it
+    /// holds its task (and its exclusive resource) until resumed or cancelled.
+    Paused,
 }
 
 impl DeliveryJobStatus {
@@ -212,6 +215,39 @@ pub struct DeliveryJob {
     /// written to the job's folder when it started.
     #[serde(default)]
     pub frozen_scripts: Vec<DeliveryFrozenCopy>,
+    /// The paused job this one continues, in the same agent session.
+    #[serde(default)]
+    pub resumes: Option<String>,
+    /// What the agent did last, as its log says it, and when: the view
+    /// shows it while the job runs and tells when it has gone quiet.
+    #[serde(default)]
+    pub activity: Option<String>,
+    #[serde(default)]
+    pub activity_at_ms: Option<u64>,
+    /// The agent's own task list, as it last wrote it.
+    #[serde(default)]
+    pub plan: Vec<DeliveryPlanItem>,
+    /// What the job used, once the agent reports it.
+    #[serde(default)]
+    pub usage: Option<DeliveryUsage>,
+}
+
+/// One item of an agent's task list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryPlanItem {
+    pub text: String,
+    /// `pending`, `in_progress` or `completed`.
+    pub status: String,
+}
+
+/// Tokens a job used and, when the agent says it, what they cost.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryUsage {
+    pub input_tokens: u64,
+    pub cached_tokens: u64,
+    pub output_tokens: u64,
+    /// Millionths of a dollar (Claude Code reports the cost; Codex does not).
+    pub cost_micro_usd: Option<u64>,
 }
 
 /// A script as named in a permission and the frozen copy a job runs instead.
@@ -545,6 +581,9 @@ pub struct DeliveryRun {
     /// which still waits for the user.
     #[serde(default)]
     pub unattended: bool,
+    /// The user paused the batch: its queued jobs wait, the running ones go on.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

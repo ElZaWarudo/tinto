@@ -1139,6 +1139,7 @@ export function SettingsDialog({
   onCapacity,
   onCreateRun,
   onQaJiraComment,
+  onPause,
   onTakeover,
   onClose,
   onCancel,
@@ -1151,6 +1152,7 @@ export function SettingsDialog({
   onCapacity: (capacity: number) => void;
   onCreateRun: (repo: string, title: string, qaJiraComment: boolean) => void;
   onQaJiraComment: (run: DeliveryRun, post: boolean) => void;
+  onPause: (run: DeliveryRun, paused: boolean) => void;
   onTakeover: (run: DeliveryRun) => void;
   onClose: (run: DeliveryRun) => void;
   onCancel: () => void;
@@ -1238,6 +1240,14 @@ export function SettingsDialog({
                   Brainstorm
                 </span>
               )}
+              <button
+                type="button"
+                aria-label={`${run.paused ? "Reanudar" : "Pausar"} el lote ${run.title || run.id}`}
+                disabled={busy}
+                onClick={() => onPause(run, !run.paused)}
+              >
+                {run.paused ? "Reanudar" : "Pausar"}
+              </button>
               {run.owner && run.owner !== "user" && (
                 <button
                   type="button"

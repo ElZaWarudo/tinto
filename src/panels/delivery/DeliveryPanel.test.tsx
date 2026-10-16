@@ -14,6 +14,9 @@ import type {
 
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
+  pauseDeliveryJob: vi.fn(),
+  resumeDeliveryJob: vi.fn(),
+  setDeliveryRunPaused: vi.fn(),
   createDeliveryTask: vi.fn(),
   dispatchDeliveryJob: vi.fn(),
   decideDeliveryApproval: vi.fn(),
@@ -198,6 +201,77 @@ describe("DeliveryPanel", () => {
     expect(within(changes).getByText("−")).toBeInTheDocument();
     expect(screen.getByText("11111111 → 22222222")).toBeInTheDocument();
     expect(screen.getByText("Implement the parser change.")).toBeInTheDocument();
+  });
+
+  it("shows what a running agent does, its plan and use, and pauses it", async () => {
+    const user = userEvent.setup();
+    const started = Date.now() - 60_000;
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({
+            status: "started",
+            started_at_ms: started,
+            ended_at_ms: null,
+            result: null,
+            activity: "npm test -- parser",
+            activity_at_ms: Date.now() - 5_000,
+            plan: [
+              { text: "Leer el test", status: "completed" },
+              { text: "Arreglar el parser", status: "in_progress" },
+            ],
+            usage: {
+              input_tokens: 21_600,
+              cached_tokens: 21_120,
+              output_tokens: 226,
+              cost_micro_usd: 250_000,
+            },
+          }),
+        ],
+      }),
+    );
+    client.pauseDeliveryJob.mockResolvedValue({});
+    renderPanel();
+    const activity = await screen.findByLabelText("Actividad de Tests");
+    expect(activity).toHaveTextContent("npm test -- parser");
+    expect(activity).toHaveTextContent(/hace \d+ s/);
+    const plan = screen.getByRole("list", { name: "Plan del agente" });
+    expect(within(plan).getByText("Arreglar el parser")).toBeInTheDocument();
+    expect(
+      screen.getByText("Consumo: 21.6k de entrada · 21.1k en caché · 226 de salida · $0.25"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Pausar" }));
+    await waitFor(() => expect(client.pauseDeliveryJob).toHaveBeenCalledWith("j1"));
+  });
+
+  it("resumes a paused stage and pauses the batch", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "coord",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        ],
+        tasks: [task({ run_id: "r1" })],
+        jobs: [job({ status: "paused", result: null })],
+      }),
+    );
+    client.resumeDeliveryJob.mockResolvedValue({});
+    client.setDeliveryRunPaused.mockResolvedValue({});
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Reanudar" }));
+    await waitFor(() => expect(client.resumeDeliveryJob).toHaveBeenCalledWith("j1"));
+    expect(screen.queryByRole("button", { name: "Nuevo intento" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Pausar lote" }));
+    await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true));
   });
 
   it("links the task to its Jira issue when the repo's Jira is set", async () => {

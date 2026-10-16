@@ -11,6 +11,9 @@ import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntim
 import {
   archiveDeliveryTask,
   cancelDeliveryJob,
+  pauseDeliveryJob,
+  resumeDeliveryJob,
+  setDeliveryRunPaused,
   checkDeliveryTask,
   closeDeliveryRun,
   completeDeliveryApproval,
@@ -52,6 +55,7 @@ import type {
   DeliveryRun,
   DeliveryStageAgent,
   DeliveryTask,
+  DeliveryUsage,
 } from "../../delivery/types";
 import {
   DispatchDialog,
@@ -86,8 +90,10 @@ import {
   latestStep,
   nextStep,
   parseStatuses,
+  pausedJob,
   pendingSettingsProposals,
   prSummary,
+  quietFor,
   rolesOf,
   stepKey,
   stepOf,
@@ -236,6 +242,24 @@ function duration(job: DeliveryJob, now: number): string {
   const seconds = Math.max(0, Math.round((end - job.started_at_ms) / 1000));
   if (seconds < 60) return `${seconds} s`;
   return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+/** "hace 12 s", "hace 3 min": when the agent last did something. */
+function ago(ms: number | null | undefined, now: number): string {
+  if (!ms) return "";
+  const seconds = Math.max(0, Math.round((now - ms) / 1000));
+  return seconds < 60 ? `hace ${seconds} s` : `hace ${Math.floor(seconds / 60)} min`;
+}
+
+function tokens(count: number): string {
+  return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
+}
+
+/** What a job used: tokens in, read from cache and out, and the cost when known. */
+function usageLabel(usage: DeliveryUsage): string {
+  const cost =
+    usage.cost_micro_usd === null ? "" : ` · $${(usage.cost_micro_usd / 1_000_000).toFixed(2)}`;
+  return `Consumo: ${tokens(usage.input_tokens)} de entrada · ${tokens(usage.cached_tokens)} en caché · ${tokens(usage.output_tokens)} de salida${cost}`;
 }
 
 function changeSymbol(kind: string): string {
@@ -416,6 +440,20 @@ export function DeliveryPanel() {
                 Tomar el control
               </button>
             )}
+            <button
+              type="button"
+              disabled={busy}
+              title={
+                activeRuns[0].paused
+                  ? "Lo que está en cola vuelve a arrancar"
+                  : "Lo que está en cola espera; lo que corre sigue (puedes pausar cada etapa)"
+              }
+              onClick={() =>
+                void run(() => setDeliveryRunPaused(activeRuns[0].id, !activeRuns[0].paused))
+              }
+            >
+              {activeRuns[0].paused ? "Reanudar lote" : "Pausar lote"}
+            </button>
           </span>
         ) : (
           activeRuns.length > 1 && (
@@ -736,6 +774,7 @@ export function DeliveryPanel() {
           onQaJiraComment={(target, post) =>
             void run(() => setDeliveryRunQaJiraComment(target.id, post))
           }
+          onPause={(target, paused) => void run(() => setDeliveryRunPaused(target.id, paused))}
           onTakeover={(target) => void takeover(target)}
           onClose={(target) =>
             void (async () => {
@@ -1942,6 +1981,8 @@ function JobRow({
   onContinue: () => void;
 }) {
   const outcome = attemptOutcome(job, jobs);
+  const quiet = quietFor(job, now);
+  const held = pausedJob(jobs)?.id === job.id;
   const scope =
     (job.access === "full" ? " · acceso completo" : job.writes ? "" : " · solo lectura") +
     (job.qa_browser ? " · navegador" : "") +
@@ -1970,8 +2011,21 @@ function JobRow({
         <span className="delivery-job__changes">
           {job.changes.length > 0 ? files(job.changes.length) : ""}
         </span>
-        <span className="delivery-job__time">{duration(job, now)}</span>
+        <span className="delivery-job__time">
+          {duration(job, now)}
+          {job.status === "started" && (
+            <small className="delivery-muted"> de {job.timeout_minutes} min</small>
+          )}
+        </span>
       </button>
+      {job.status === "started" && job.activity && (
+        <p className="delivery-job__activity" aria-label={`Actividad de ${stageLabel(job.role)}`}>
+          <span>{job.activity}</span>
+          <small className={quiet ? "delivery-tone--attention" : "delivery-muted"}>
+            {quiet ?? ago(job.activity_at_ms, now)}
+          </small>
+        </p>
+      )}
       {expanded && (
         <div className="delivery-job__detail">
           {job.error && <p className="delivery-job__error">{job.error}</p>}
@@ -2015,6 +2069,26 @@ function JobRow({
               )}
             </div>
           )}
+          {(job.plan?.length ?? 0) > 0 && (
+            <>
+              <h4 className="delivery-job__subtitle">Plan del agente</h4>
+              <ul className="delivery-plan" aria-label="Plan del agente">
+                {job.plan?.map((item, index) => (
+                  <li key={index} data-status={item.status}>
+                    <span aria-hidden>
+                      {item.status === "completed"
+                        ? "✓"
+                        : item.status === "in_progress"
+                          ? "▸"
+                          : "○"}
+                    </span>
+                    {item.text}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {job.usage && <p className="delivery-job__usage">{usageLabel(job.usage)}</p>}
           {job.changes.length > 0 && (
             <>
               <h4 className="delivery-job__subtitle">
@@ -2078,7 +2152,27 @@ function JobRow({
             </dl>
           </details>
           <div className="delivery-actions">
-            {isOpen(job) && (
+            {job.status === "started" && job.agent !== "shell" && (
+              <button
+                type="button"
+                disabled={busy}
+                title="Detiene el agente; al reanudar sigue en la misma sesión, con lo que ya hizo"
+                onClick={() => void run(() => pauseDeliveryJob(job.id))}
+              >
+                Pausar
+              </button>
+            )}
+            {held && (
+              <button
+                type="button"
+                className="delivery-button--primary"
+                disabled={busy}
+                onClick={() => void run(() => resumeDeliveryJob(job.id))}
+              >
+                Reanudar
+              </button>
+            )}
+            {(isOpen(job) || held) && (
               <button
                 type="button"
                 disabled={busy}
@@ -2087,7 +2181,7 @@ function JobRow({
                 Cancelar
               </button>
             )}
-            {!isOpen(job) && job.agent !== "shell" && (
+            {!isOpen(job) && job.status !== "paused" && job.agent !== "shell" && (
               <button
                 type="button"
                 disabled={busy}
@@ -2101,7 +2195,7 @@ function JobRow({
                 Deshacer estos cambios
               </button>
             )}
-            {!isOpen(job) && job.agent !== "shell" && job.provider_session_id && (
+            {!isOpen(job) && !held && job.agent !== "shell" && job.provider_session_id && (
               <button type="button" disabled={busy} onClick={onContinue}>
                 Continuar en Agents
               </button>

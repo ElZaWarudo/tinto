@@ -849,6 +849,47 @@
 .delivery-job__note {
   color: var(--warn);
 }
+/* What a running agent did last, under its row even when folded. */
+.delivery-job__activity {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 0 10px 6px 30px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.delivery-job__activity > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+}
+.delivery-job__activity > small {
+  flex: none;
+}
+.delivery-plan {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+.delivery-plan li {
+  display: flex;
+  gap: 6px;
+}
+.delivery-plan li[data-status="completed"] {
+  color: var(--fg-muted);
+}
+.delivery-plan li[data-status="in_progress"] {
+  font-weight: 600;
+}
+.delivery-job__usage {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
 .delivery-result {
   display: grid;
   gap: 4px;

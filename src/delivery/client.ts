@@ -107,6 +107,15 @@ export const dispatchDeliveryJob = (job: NewDeliveryJob) =>
 export const cancelDeliveryJob = (jobId: string) =>
   invoke<DeliveryJob>("delivery_cancel_job", { jobId });
 
+export const pauseDeliveryJob = (jobId: string) =>
+  invoke<DeliveryJob>("delivery_pause_job", { jobId });
+
+export const resumeDeliveryJob = (jobId: string) =>
+  invoke<DeliveryJob>("delivery_resume_job", { jobId });
+
+export const setDeliveryRunPaused = (runId: string, paused: boolean) =>
+  invoke<DeliveryRun>("delivery_set_run_paused", { runId, paused });
+
 export const retryDeliveryJob = (jobId: string) =>
   invoke<DeliveryJob>("delivery_retry_job", { jobId });
 

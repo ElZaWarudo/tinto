@@ -188,6 +188,33 @@ pub fn delivery_cancel_job(
 }
 
 #[tauri::command]
+pub fn delivery_pause_job(
+    service: State<'_, DeliveryService>,
+    job_id: String,
+) -> Result<DeliveryJob, CommandError> {
+    service.pause(&job_id).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delivery_resume_job(
+    service: State<'_, DeliveryService>,
+    job_id: String,
+) -> Result<DeliveryJob, CommandError> {
+    service.resume(&job_id).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delivery_set_run_paused(
+    service: State<'_, DeliveryService>,
+    run_id: String,
+    paused: bool,
+) -> Result<DeliveryRun, CommandError> {
+    service
+        .set_run_paused(&run_id, paused)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
 pub fn delivery_retry_job(
     service: State<'_, DeliveryService>,
     job_id: String,

@@ -159,6 +159,24 @@ describe("taskStatus", () => {
     });
   });
 
+  it("holds a paused stage until it is resumed, and says when an agent goes quiet", () => {
+    const paused = job({ status: "paused", result: null });
+    expect(status({ jobs: [paused] })).toMatchObject({
+      group: "waiting",
+      label: "Tests en pausa",
+    });
+    expect(nextRole([paused])).toBeNull();
+    const resumed = job({ status: "started", ended_at_ms: null, resumes: paused.id });
+    expect(status({ jobs: [paused, resumed] }).group).toBe("running");
+    expect(attemptOutcome(paused, [paused, resumed]).label).toBe("Pausado · reanudado");
+    // 76 s after the start the agent is still talking; 7 min later it is quiet.
+    const quiet = job({ status: "started", ended_at_ms: null, activity_at_ms: 1_000 });
+    expect(status({ jobs: [quiet] }).label).not.toContain("sin actividad");
+    expect(taskStatus(task, overview({ jobs: [quiet] }), 421_000).label).toContain(
+      "sin actividad hace 7 min",
+    );
+  });
+
   it("flags a settings proposal only on the task that asked, once its agents stop", () => {
     const proposal = (taskId: string) => ({
       id: `p-${taskId}`,

@@ -451,6 +451,122 @@ fn waiting_on_a_batch_returns_the_first_job_that_ends() {
 }
 
 #[test]
+fn a_running_job_shows_what_it_does_and_what_it_used() {
+    let h = harness();
+    let task = h.task("O-1");
+    let job = h.dispatch(&task, "tests", "events=codex-ok");
+    let job = h.wait(&job.id);
+    assert!(job.activity_at_ms.is_some());
+    assert!(job.activity.is_some());
+    assert_eq!(
+        job.usage,
+        Some(super::model::DeliveryUsage {
+            input_tokens: 42723 - 21120,
+            cached_tokens: 21120,
+            output_tokens: 226,
+            cost_micro_usd: None,
+        })
+    );
+}
+
+#[test]
+fn a_paused_stage_holds_its_task_and_resource_until_it_resumes_in_its_session() {
+    let h = harness();
+    let task = h.task("P-1");
+    let running = h.dispatch(&task, "qa", "events=codex-ok sleep=30");
+    h.wait_status(&running.id, DeliveryJobStatus::Started);
+    // Its session is known once the agent starts it.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while h
+        .service
+        .job(&running.id)
+        .unwrap()
+        .provider_session_id
+        .is_none()
+    {
+        assert!(Instant::now() < deadline, "no session recorded");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    h.service.pause(&running.id).unwrap();
+    let paused = h.wait_status(&running.id, DeliveryJobStatus::Paused);
+    assert_eq!(paused.error, None);
+    // It keeps QA and its task: nothing else starts there.
+    let lease = qa_lease(&h);
+    assert_eq!(lease.state, DeliveryLeaseState::Active);
+    assert_eq!(lease.holder_job_id.as_deref(), Some(paused.id.as_str()));
+    let refused = h
+        .service
+        .dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "review".into(),
+            agent: DeliveryAgent::Codex,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=codex-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+        })
+        .unwrap_err();
+    assert_eq!(refused.category, "job_paused");
+
+    // Resuming continues the same session and takes QA over.
+    let resumed = h.service.resume(&paused.id).unwrap();
+    assert_eq!(resumed.resumes.as_deref(), Some(paused.id.as_str()));
+    assert_eq!(resumed.provider_session_id, paused.provider_session_id);
+    h.wait_status(&resumed.id, DeliveryJobStatus::Started);
+    assert_eq!(
+        qa_lease(&h).holder_job_id.as_deref(),
+        Some(resumed.id.as_str())
+    );
+    assert_eq!(
+        h.service.resume(&paused.id).unwrap_err().category,
+        "job_not_paused"
+    );
+    h.service.cancel(&resumed.id).unwrap();
+    h.wait(&resumed.id);
+}
+
+#[test]
+fn a_paused_stage_can_be_given_up_and_a_paused_batch_starts_nothing() {
+    let h = harness();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", None, None)
+        .unwrap();
+    let task = h
+        .service
+        .create_task(NewTask {
+            repo: h.repo.path().to_path_buf(),
+            distro: None,
+            key: "P-2".into(),
+            title: "x".into(),
+            base: None,
+            branch: None,
+            run_id: Some(run.id.clone()),
+        })
+        .unwrap();
+    let running = h.dispatch(&task, "tests", "events=codex-ok sleep=30");
+    h.wait_status(&running.id, DeliveryJobStatus::Started);
+    h.service.pause(&running.id).unwrap();
+    let paused = h.wait_status(&running.id, DeliveryJobStatus::Paused);
+    let given_up = h.service.cancel(&paused.id).unwrap();
+    assert_eq!(given_up.status, DeliveryJobStatus::Cancelled);
+
+    h.service.set_run_paused(&run.id, true).unwrap();
+    let waiting = h.dispatch(&task, "tests", "events=codex-ok");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        h.service.job(&waiting.id).unwrap().status,
+        DeliveryJobStatus::Queued
+    );
+    h.service.set_run_paused(&run.id, false).unwrap();
+    assert_eq!(h.wait(&waiting.id).status, DeliveryJobStatus::Finished);
+}
+
+#[test]
 fn the_qa_resource_is_exclusive_fifo_and_quarantined_after_a_crash() {
     let h = harness();
     let a = h.task("K-7");

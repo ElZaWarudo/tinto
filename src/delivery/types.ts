@@ -2,7 +2,30 @@
 // Kept apart from the frozen bus contract: Delivery evolves on its own.
 
 export type DeliveryJobStatus =
-  "queued" | "pending" | "started" | "finished" | "failed" | "cancelled" | "interrupted";
+  | "queued"
+  | "pending"
+  | "started"
+  | "finished"
+  | "failed"
+  | "cancelled"
+  | "interrupted"
+  /** Stopped by the user to continue later in the same session. */
+  | "paused";
+
+/** One item of an agent's own task list. */
+export interface DeliveryPlanItem {
+  text: string;
+  status: "pending" | "in_progress" | "completed" | string;
+}
+
+/** Tokens a job used and, when the agent says it, their cost. */
+export interface DeliveryUsage {
+  input_tokens: number;
+  cached_tokens: number;
+  output_tokens: number;
+  /** Millionths of a dollar; Claude Code reports it, Codex does not. */
+  cost_micro_usd: number | null;
+}
 
 export type DeliveryAgent = "codex" | "claude" | "shell";
 export type DeliveryAccess = "workspace" | "full";
@@ -120,6 +143,15 @@ export interface DeliveryJob {
   write_dirs?: string[];
   /** QA jobs: the approved scripts and the frozen copies it ran instead. */
   frozen_scripts?: { original: string; copy: string }[];
+  /** The paused job this one continues, in the same session. */
+  resumes?: string | null;
+  /** What the agent did last, and when. */
+  activity?: string | null;
+  activity_at_ms?: number | null;
+  /** The agent's own task list, as it last wrote it. */
+  plan?: DeliveryPlanItem[];
+  /** What the job used, once the agent reports it. */
+  usage?: DeliveryUsage | null;
 }
 
 export type DeliveryPlatform = "windows" | "wsl";
@@ -248,6 +280,8 @@ export interface DeliveryRun {
   qa_jira_comment?: boolean | null;
   /** The coordinator ended the brainstorm: decisions, commits and pushes no longer wait for the user. */
   unattended?: boolean;
+  /** The user paused the batch: its queued jobs wait. */
+  paused?: boolean;
 }
 
 export interface DeliverySettings {

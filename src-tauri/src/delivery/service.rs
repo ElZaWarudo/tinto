@@ -72,6 +72,8 @@ pub struct DeliveryService {
 pub(super) struct Inner {
     pub(super) store: Mutex<DeliveryStore>,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Jobs being stopped to be paused rather than cancelled.
+    pausing: Mutex<HashSet<String>>,
     notify: Mutex<Option<Notify>>,
     pub(super) coordinator: Mutex<Option<DeliveryCoordinatorEndpoint>>,
     sandbox_planner: Mutex<SandboxPlanner>,
@@ -169,6 +171,7 @@ impl DeliveryService {
             inner: Arc::new(Inner {
                 store: Mutex::new(store),
                 cancels: Mutex::new(HashMap::new()),
+                pausing: Mutex::new(HashSet::new()),
                 notify: Mutex::new(None),
                 coordinator: Mutex::new(None),
                 // Nothing is probed unless the real planner is set.
@@ -552,7 +555,29 @@ impl DeliveryService {
     // ---- jobs ----
 
     pub fn dispatch(&self, request: NewJob) -> Result<DeliveryJob, DeliveryError> {
+        self.dispatch_job(request, None)
+    }
+
+    /// `resumes` is the paused job the new one continues in its session.
+    fn dispatch_job(
+        &self,
+        request: NewJob,
+        resumes: Option<&DeliveryJob>,
+    ) -> Result<DeliveryJob, DeliveryError> {
         let task = self.task(&request.task_id)?;
+        // A paused stage holds its task: nothing else runs on it until the
+        // user resumes or cancels it.
+        if let Some(paused) = self.paused_job(&task.id)? {
+            if resumes.map(|job| &job.id) != Some(&paused.id) {
+                return Err(DeliveryError::new(
+                    "job_paused",
+                    format!(
+                        "{} está en pausa: el usuario la reanuda o la cancela en Tinto",
+                        paused.role
+                    ),
+                ));
+            }
+        }
         let role = request.role.trim().to_ascii_lowercase();
         if role.is_empty() || role.len() > 40 {
             return Err(DeliveryError::new(
@@ -675,7 +700,8 @@ impl DeliveryService {
             started_at_ms: None,
             ended_at_ms: None,
             pid: None,
-            provider_session_id: None,
+            // A resumed job goes on in the paused job's session.
+            provider_session_id: resumes.and_then(|paused| paused.provider_session_id.clone()),
             exit_code: None,
             error: None,
             start_candidate: None,
@@ -695,6 +721,11 @@ impl DeliveryService {
             read_dirs,
             write_dirs,
             frozen_scripts: Vec::new(),
+            resumes: resumes.map(|paused| paused.id.clone()),
+            activity: None,
+            activity_at_ms: None,
+            plan: Vec::new(),
+            usage: None,
         };
         store.put_job(&job)?;
         store.record_event(
@@ -711,6 +742,71 @@ impl DeliveryService {
         }
         self.tick();
         Ok(job)
+    }
+
+    /// The task's paused job that no later job resumes, if any.
+    fn paused_job(&self, task_id: &str) -> Result<Option<DeliveryJob>, DeliveryError> {
+        let jobs = self.store()?.task_jobs(task_id)?;
+        let resumed: HashSet<&str> = jobs
+            .iter()
+            .filter_map(|job| job.resumes.as_deref())
+            .collect();
+        Ok(jobs
+            .iter()
+            .find(|job| {
+                job.status == DeliveryJobStatus::Paused && !resumed.contains(job.id.as_str())
+            })
+            .cloned())
+    }
+
+    /// Stops a running agent to continue later in the same session. Its
+    /// changes stay, and so does the resource it holds.
+    pub fn pause(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
+        let job = self.job(job_id)?;
+        if job.agent == DeliveryAgent::Shell || !job.status.is_active() {
+            return Err(DeliveryError::new(
+                "job_not_pausable",
+                "solo se pausa un agente en marcha",
+            ));
+        }
+        if let Ok(mut pausing) = self.inner.pausing.lock() {
+            pausing.insert(job.id.clone());
+        }
+        self.cancel(job_id)
+    }
+
+    /// Continues a paused job in its agent session, as a new attempt that
+    /// takes over its resource.
+    pub fn resume(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
+        let paused = self.job(job_id)?;
+        if self.paused_job(&paused.task_id)?.map(|job| job.id) != Some(paused.id.clone()) {
+            return Err(DeliveryError::new(
+                "job_not_paused",
+                "ese trabajo no está en pausa",
+            ));
+        }
+        if paused.provider_session_id.is_none() {
+            return Err(DeliveryError::new(
+                "session_unknown",
+                "no se sabe la sesión del agente; cancélalo y lanza la etapa de nuevo",
+            ));
+        }
+        self.dispatch_job(
+            NewJob {
+                task_id: paused.task_id.clone(),
+                role: paused.role.clone(),
+                agent: paused.agent,
+                model: paused.model.clone(),
+                access: paused.access,
+                prompt: paused.prompt.clone(),
+                writes: Some(paused.writes),
+                lease: paused.lease.clone(),
+                timeout_minutes: Some(paused.timeout_minutes),
+                reasoning: paused.reasoning.clone(),
+                platform: paused.platform,
+            },
+            Some(&paused),
+        )
     }
 
     pub fn job(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
@@ -756,6 +852,28 @@ impl DeliveryService {
                         "el trabajo no está en marcha en esta sesión de Tinto",
                     )),
                 }
+            }
+            // Giving up a pause frees its task; its resource is settled as
+            // that of a job that ran.
+            DeliveryJobStatus::Paused
+                if self.paused_job(&job.task_id)?.map(|paused| paused.id)
+                    == Some(job.id.clone()) =>
+            {
+                let store = self.store()?;
+                job.status = DeliveryJobStatus::Cancelled;
+                job.error = Some("Pausado y cancelado por el usuario.".to_string());
+                store.put_job(&job)?;
+                settle_lease(&store, &job, true)?;
+                store.record_event(
+                    now_ms(),
+                    "job_cancelled",
+                    Some(&job.task_id),
+                    Some(&job.id),
+                    "",
+                )?;
+                drop(store);
+                self.tick();
+                Ok(job)
             }
             _ => Err(DeliveryError::new("job_not_open", "el trabajo ya terminó")),
         }
@@ -939,12 +1057,29 @@ impl DeliveryService {
             .filter(|job| job.status.is_active())
             .map(|job| job.task_id.clone())
             .collect();
+        // Tasks of a paused batch start nothing new.
+        let paused_runs: HashSet<String> = store
+            .runs()?
+            .into_iter()
+            .filter(|run| run.paused)
+            .map(|run| run.id)
+            .collect();
+        let held: HashSet<String> = store
+            .tasks()?
+            .into_iter()
+            .filter(|task| {
+                task.run_id
+                    .as_ref()
+                    .is_some_and(|run| paused_runs.contains(run))
+            })
+            .map(|task| task.id)
+            .collect();
         let mut started = Vec::new();
         for mut job in jobs
             .into_iter()
             .filter(|job| job.status == DeliveryJobStatus::Queued)
         {
-            if busy.contains(&job.task_id) {
+            if busy.contains(&job.task_id) || held.contains(&job.task_id) {
                 continue;
             }
             if running >= capacity {
@@ -965,7 +1100,11 @@ impl DeliveryService {
                     .queue
                     .first()
                     .is_none_or(|waiter| waiter.job_id == job.id);
-                if lease.state == DeliveryLeaseState::Free && first_in_line {
+                // The job resuming a paused one takes over what it held.
+                let inherited = lease.state == DeliveryLeaseState::Active
+                    && job.resumes.is_some()
+                    && lease.holder_job_id == job.resumes;
+                if (lease.state == DeliveryLeaseState::Free && first_in_line) || inherited {
                     lease.queue.retain(|waiter| waiter.job_id != job.id);
                     lease.state = DeliveryLeaseState::Active;
                     lease.holder_job_id = Some(job.id.clone());
@@ -1141,6 +1280,13 @@ impl DeliveryService {
                         service.record_model(&stdout_job, model);
                     }
                 }
+                // Agents write one line per message or tool call, so each
+                // is saved: the view always knows when the agent last did
+                // something.
+                let seen = adapters::observe(agent, &line);
+                if seen != adapters::Observation::default() {
+                    service.record_observation(&stdout_job, seen);
+                }
             }
         });
         let stderr_path = paths.stderr.clone();
@@ -1298,6 +1444,25 @@ impl DeliveryService {
         self.notify();
     }
 
+    fn record_observation(&self, job_id: &str, seen: adapters::Observation) {
+        if let Ok(store) = self.store() {
+            if let Ok(Some(mut job)) = store.job(job_id) {
+                if let Some(activity) = seen.activity {
+                    job.activity = Some(activity);
+                    job.activity_at_ms = Some(now_ms());
+                }
+                if let Some(plan) = seen.plan {
+                    job.plan = plan;
+                }
+                if let Some(usage) = seen.usage {
+                    job.usage = Some(usage);
+                }
+                let _ = store.put_job(&job);
+            }
+        }
+        self.notify();
+    }
+
     fn record_model(&self, job_id: &str, model: String) {
         if let Ok(store) = self.store() {
             if let Ok(Some(mut job)) = store.job(job_id) {
@@ -1330,7 +1495,14 @@ impl DeliveryService {
             job.end_candidate = Some(end.candidate_id());
             job.changes = to_changes(end);
         }
-        if ending.cancelled {
+        let paused = self
+            .inner
+            .pausing
+            .lock()
+            .is_ok_and(|mut pausing| pausing.remove(job_id));
+        if ending.cancelled && paused {
+            job.status = DeliveryJobStatus::Paused;
+        } else if ending.cancelled {
             job.status = DeliveryJobStatus::Cancelled;
             job.error = Some("Cancelado por el usuario.".to_string());
         } else if ending.timed_out {
@@ -1548,7 +1720,10 @@ fn settle_lease(
         return Ok(());
     };
     lease.queue.retain(|waiter| waiter.job_id != job.id);
-    if lease.holder_job_id.as_deref() == Some(job.id.as_str()) {
+    // A paused job keeps its resource for the job that resumes it.
+    if lease.holder_job_id.as_deref() == Some(job.id.as_str())
+        && job.status != DeliveryJobStatus::Paused
+    {
         if job.status == DeliveryJobStatus::Finished || !touched {
             lease.state = DeliveryLeaseState::Free;
             lease.holder_job_id = None;

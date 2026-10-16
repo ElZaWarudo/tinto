@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry,
-    DeliveryPlatform, DeliveryTask,
+    DeliveryPlanItem, DeliveryPlatform, DeliveryTask, DeliveryUsage,
 };
 use super::service::QA_ROLE;
 use super::tasks::{git, plain_path, Place};
@@ -469,6 +469,21 @@ pub fn codex_sandbox_plan(task: &DeliveryTask, programs: &[String]) -> SandboxPl
     }
 }
 
+/// What a resumed agent is told: the session already has its instructions.
+const RESUME_PROMPT: &str = "El usuario pausó esta etapa y ahora la reanuda. Continúa exactamente donde lo dejaste, con las mismas instrucciones, y termina entregando el resultado con el formato pedido.";
+
+/// The session a job continues, when it resumes a paused one.
+fn resumed_session(job: &DeliveryJob) -> Result<Option<&str>, DeliveryError> {
+    match (&job.resumes, job.provider_session_id.as_deref()) {
+        (None, _) => Ok(None),
+        (Some(_), Some(session)) => Ok(Some(session)),
+        (Some(_), None) => Err(DeliveryError::new(
+            "session_unknown",
+            "no se sabe la sesión del agente que hay que reanudar",
+        )),
+    }
+}
+
 /// The `-c` override that selects Codex's unelevated Windows sandbox.
 const UNELEVATED_SANDBOX: &str = r#"windows.sandbox="unelevated""#;
 
@@ -485,27 +500,34 @@ fn codex_launch(
         DeliveryAccess::Workspace => "workspace-write",
         DeliveryAccess::Full => "danger-full-access",
     };
-    let prompt = job_prompt(job, task, paths, task.distro.is_some(), &plan.obstacles);
+    // `codex exec resume` has no `-C` or `-s`: it runs in the worktree as
+    // its working directory and takes the sandbox as an override.
+    let resume = resumed_session(job)?;
+    let prompt = match resume {
+        Some(_) => RESUME_PROMPT.to_string(),
+        None => job_prompt(job, task, paths, task.distro.is_some(), &plan.obstacles),
+    };
     match task.distro.as_deref() {
         None => {
             let program = native.ok_or_else(|| {
                 DeliveryError::new("binary_not_found", "no se encontró Codex en este equipo")
             })?;
-            let mut args: Vec<String> = [
-                "exec",
-                "--json",
-                "-C",
-                &plain_path(&task.worktree),
-                "-s",
-                sandbox,
-                "--output-schema",
-                &plain_path(&paths.schema),
-                "-o",
-                &plain_path(&paths.result),
-            ]
-            .iter()
-            .map(|value| value.to_string())
-            .collect();
+            let worktree = plain_path(&task.worktree);
+            let sandbox_mode = format!("sandbox_mode={}", Value::from(sandbox));
+            let start: Vec<&str> = match resume {
+                Some(_) => vec!["exec", "resume", "--json", "-c", &sandbox_mode],
+                None => vec!["exec", "--json", "-C", &worktree, "-s", sandbox],
+            };
+            let mut args: Vec<String> = start
+                .into_iter()
+                .chain([
+                    "--output-schema",
+                    &plain_path(&paths.schema),
+                    "-o",
+                    &plain_path(&paths.result),
+                ])
+                .map(|value| value.to_string())
+                .collect();
             if let Some(model) = job.model.as_deref() {
                 args.extend(["-m".to_string(), model.to_string()]);
             }
@@ -516,13 +538,14 @@ fn codex_launch(
             if plan.unelevated {
                 args.extend(["-c".to_string(), UNELEVATED_SANDBOX.to_string()]);
             }
+            args.extend(resume.map(str::to_string));
             args.push("-".to_string());
             Ok(JobLaunch {
                 program,
                 args,
-                cwd: Some(PathBuf::from(plain_path(&task.worktree))),
+                cwd: Some(PathBuf::from(worktree)),
                 stdin: prompt,
-                provider_session_id: None,
+                provider_session_id: resume.map(str::to_string),
                 wsl_job: None,
                 note: plan.note.clone(),
             })
@@ -542,9 +565,21 @@ fn codex_launch(
                 .iter()
                 .map(|value| format!(" {}", sh_quote(value)))
                 .collect();
+            let start = match resume {
+                Some(_) => format!(
+                    "exec codex exec resume --json -c {}",
+                    sh_quote(&format!("sandbox_mode={}", Value::from(sandbox)))
+                ),
+                None => format!(
+                    "exec codex exec --json -C {} -s {sandbox}",
+                    sh_quote(&task.worktree.to_string_lossy())
+                ),
+            };
+            let session = resume
+                .map(|id| format!(" {}", sh_quote(id)))
+                .unwrap_or_default();
             let script = format!(
-                "exec codex exec --json -C {} -s {sandbox} --output-schema {} -o {}{model}{reasoning}{qa} -",
-                sh_quote(&task.worktree.to_string_lossy()),
+                "{start} --output-schema {} -o {}{model}{reasoning}{qa}{session} -",
                 sh_quote(&wsl_path(&paths.schema)?),
                 sh_quote(&wsl_path(&paths.result)?),
             );
@@ -553,7 +588,7 @@ fn codex_launch(
                 &task.worktree.to_string_lossy(),
                 script,
                 prompt,
-                None,
+                resume.map(str::to_string),
                 job,
             )
         }
@@ -582,8 +617,20 @@ fn claude_launch(
     };
     let from_wsl = native.is_none();
     let allowed = claude_allowed_tools(job, task, paths, from_wsl);
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let prompt = job_prompt(job, task, paths, from_wsl, &[]);
+    // A resumed job goes on in the paused session; a new one names its own.
+    let resume = resumed_session(job)?;
+    let session_id = resume
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_flag = if resume.is_some() {
+        "--resume"
+    } else {
+        "--session-id"
+    };
+    let prompt = match resume {
+        Some(_) => RESUME_PROMPT.to_string(),
+        None => job_prompt(job, task, paths, from_wsl, &[]),
+    };
     if let Some(program) = native {
         let mut args: Vec<String> = [
             "-p",
@@ -592,7 +639,7 @@ fn claude_launch(
             "--verbose",
             "--permission-mode",
             mode,
-            "--session-id",
+            session_flag,
             &session_id,
             "--json-schema",
             RESULT_SCHEMA,
@@ -691,7 +738,8 @@ fn claude_launch(
     .map(|value| format!(" {}", sh_quote(value)))
     .collect();
     let script = format!(
-        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} --session-id {session_id} --json-schema \"$(cat {})\"{model}{effort}{qa}{allowed}",
+        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema \"$(cat {})\"{model}{effort}{qa}{allowed}",
+        sh_quote(&session_id),
         sh_quote(&wsl_path(&paths.schema)?)
     );
     wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)
@@ -1041,6 +1089,103 @@ pub fn session_id_from_line(agent: DeliveryAgent, line: &str) -> Option<String> 
     }
 }
 
+/// What one output line tells about the job as it runs.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Observation {
+    /// The latest thing the agent did or said, in one line.
+    pub activity: Option<String>,
+    /// The agent's task list, when the line rewrites it.
+    pub plan: Option<Vec<DeliveryPlanItem>>,
+    pub usage: Option<DeliveryUsage>,
+}
+
+pub fn observe(agent: DeliveryAgent, line: &str) -> Observation {
+    let activity = log_entries(agent, line)
+        .into_iter()
+        .rev()
+        .find_map(|entry| {
+            let text = entry
+                .text
+                .lines()
+                .find(|text| !text.trim().is_empty())?
+                .trim();
+            Some(text.chars().take(160).collect::<String>())
+        });
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return Observation {
+            activity,
+            ..Observation::default()
+        };
+    };
+    let count = |pointer: &str| value.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    let (plan, usage) = match agent {
+        DeliveryAgent::Claude => {
+            let plan = value
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .and_then(|content| {
+                    content
+                        .iter()
+                        .rev()
+                        .find(|block| block["type"] == "tool_use" && block["name"] == "TodoWrite")
+                })
+                .and_then(|block| block.pointer("/input/todos")?.as_array())
+                .map(|todos| {
+                    todos
+                        .iter()
+                        .map(|todo| DeliveryPlanItem {
+                            text: todo["content"].as_str().unwrap_or_default().to_string(),
+                            status: todo["status"].as_str().unwrap_or("pending").to_string(),
+                        })
+                        .collect()
+                });
+            let usage = (value["type"] == "result").then(|| DeliveryUsage {
+                input_tokens: count("/usage/input_tokens")
+                    + count("/usage/cache_creation_input_tokens"),
+                cached_tokens: count("/usage/cache_read_input_tokens"),
+                output_tokens: count("/usage/output_tokens"),
+                cost_micro_usd: value["total_cost_usd"]
+                    .as_f64()
+                    .map(|usd| (usd * 1_000_000.0).round() as u64),
+            });
+            (plan, usage)
+        }
+        DeliveryAgent::Codex => {
+            let plan = (value.pointer("/item/type") == Some(&Value::from("todo_list")))
+                .then(|| value.pointer("/item/items")?.as_array())
+                .flatten()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| DeliveryPlanItem {
+                            text: item["text"].as_str().unwrap_or_default().to_string(),
+                            status: if item["completed"] == true {
+                                "completed"
+                            } else {
+                                "pending"
+                            }
+                            .to_string(),
+                        })
+                        .collect()
+                });
+            let usage = (value["type"] == "turn.completed").then(|| DeliveryUsage {
+                input_tokens: count("/usage/input_tokens")
+                    .saturating_sub(count("/usage/cached_input_tokens")),
+                cached_tokens: count("/usage/cached_input_tokens"),
+                output_tokens: count("/usage/output_tokens"),
+                cost_micro_usd: None,
+            });
+            (plan, usage)
+        }
+        DeliveryAgent::Shell => (None, None),
+    };
+    Observation {
+        activity,
+        plan,
+        usage,
+    }
+}
+
 /// The model a Claude Code session says it runs, in its `init` event.
 pub fn claude_init_model(line: &str) -> Option<String> {
     let value: Value = serde_json::from_str(line).ok()?;
@@ -1383,6 +1528,11 @@ mod tests {
             read_dirs: Vec::new(),
             write_dirs: Vec::new(),
             frozen_scripts: Vec::new(),
+            resumes: None,
+            activity: None,
+            activity_at_ms: None,
+            plan: Vec::new(),
+            usage: None,
         }
     }
 
@@ -1482,6 +1632,63 @@ mod tests {
         assert!(launch.provider_session_id.is_some());
         assert!(launch.stdin.contains("This job is read-only"));
         assert!(!script.contains("--allowedTools"), "{script}");
+    }
+
+    #[test]
+    fn a_resumed_job_continues_its_session_with_a_short_prompt() {
+        let mut task = sample_task();
+        task.distro = Some("Ubuntu".into());
+        let paths = JobPaths::in_dir(PathBuf::from(r"C:\jobs\j2"));
+        let mut codex = sample_job(DeliveryAgent::Codex);
+        codex.resumes = Some("j1".into());
+        codex.provider_session_id = Some("thread-1".into());
+        let launch = codex_launch(&codex, &task, &paths, None, &SandboxPlan::default()).unwrap();
+        let script = launch.args.last().unwrap();
+        assert!(
+            script.contains(r#"exec codex exec resume --json -c 'sandbox_mode="workspace-write"'"#),
+            "{script}"
+        );
+        assert!(!script.contains(" -C "), "{script}");
+        assert!(script.ends_with(" 'thread-1' -"), "{script}");
+        assert_eq!(launch.stdin, RESUME_PROMPT);
+        assert_eq!(launch.provider_session_id.as_deref(), Some("thread-1"));
+
+        let mut claude = sample_job(DeliveryAgent::Claude);
+        claude.resumes = Some("j1".into());
+        claude.provider_session_id = Some("session-1".into());
+        let launch = claude_launch(&claude, &task, &paths, None, None).unwrap();
+        let script = launch.args.last().unwrap();
+        assert!(script.contains("--resume 'session-1'"), "{script}");
+        assert!(!script.contains("--session-id"), "{script}");
+        assert_eq!(launch.stdin, RESUME_PROMPT);
+
+        claude.provider_session_id = None;
+        assert!(claude_launch(&claude, &task, &paths, None, None).is_err());
+    }
+
+    #[test]
+    fn agent_events_tell_activity_plan_and_usage() {
+        let todo = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Leer el test","status":"completed"},{"content":"Arreglar el parser","status":"in_progress"}]}}]}}"#;
+        let seen = observe(DeliveryAgent::Claude, todo);
+        assert_eq!(seen.plan.unwrap()[1].status, "in_progress");
+        assert!(seen.activity.is_some());
+        let result = r#"{"type":"result","total_cost_usd":0.25,"usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":100,"output_tokens":7}}"#;
+        assert_eq!(
+            observe(DeliveryAgent::Claude, result).usage,
+            Some(DeliveryUsage {
+                input_tokens: 15,
+                cached_tokens: 100,
+                output_tokens: 7,
+                cost_micro_usd: Some(250_000),
+            })
+        );
+        let list = r#"{"type":"item.updated","item":{"type":"todo_list","items":[{"text":"Leer","completed":true},{"text":"Arreglar","completed":false}]}}"#;
+        let plan = observe(DeliveryAgent::Codex, list).plan.unwrap();
+        assert_eq!(
+            (plan[0].status.as_str(), plan[1].status.as_str()),
+            ("completed", "pending")
+        );
+        assert_eq!(observe(DeliveryAgent::Codex, "{}"), Observation::default());
     }
 
     #[test]
