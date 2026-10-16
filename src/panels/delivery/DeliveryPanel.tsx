@@ -836,6 +836,18 @@ function TaskDetail({
   );
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
+  const [decisionsOpen, setDecisionsOpen] = useState(false);
+  const decisionsPanel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!decisionsOpen) return;
+    // Once, when it opens: later refreshes must not take focus from a card.
+    decisionsPanel.current?.focus();
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDecisionsOpen(false);
+    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [decisionsOpen]);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
   const [openingChanges, setOpeningChanges] = useState(false);
@@ -1075,8 +1087,44 @@ function TaskDetail({
         </Menu>
       </header>
 
+      {/* One line in the task; the cards open on top only when asked for. */}
       {blocked && (
-        <PendingDecisions taskId={task.id} decisions={pendingDecisions} busy={busy} run={run} />
+        <div className="delivery-pending-bar" role="status">
+          <span>
+            <strong>
+              {pendingDecisions.length === 1
+                ? "1 decisión pendiente"
+                : `${pendingDecisions.length} decisiones pendientes`}
+            </strong>{" "}
+            <span className="delivery-muted">· las etapas de esta tarea esperan tu respuesta</span>
+          </span>
+          <button
+            type="button"
+            className="delivery-button--primary"
+            onClick={() => setDecisionsOpen(true)}
+          >
+            Responder
+          </button>
+        </div>
+      )}
+      {blocked && decisionsOpen && (
+        <div
+          className="delivery-float"
+          role="dialog"
+          aria-label="Responder decisiones"
+          tabIndex={-1}
+          ref={decisionsPanel}
+        >
+          <button
+            type="button"
+            className="delivery-float__close"
+            aria-label="Cerrar decisiones"
+            onClick={() => setDecisionsOpen(false)}
+          >
+            ×
+          </button>
+          <PendingDecisions taskId={task.id} decisions={pendingDecisions} busy={busy} run={run} />
+        </div>
       )}
 
       <PendingSettingsProposals

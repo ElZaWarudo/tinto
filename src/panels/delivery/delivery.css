@@ -372,6 +372,43 @@
   border: 1px solid var(--warn);
   background: rgba(204, 167, 0, 0.08);
 }
+/* Pending decisions: one line in the task, the cards in a floating panel. */
+.delivery-pending-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--warn);
+  background: rgba(204, 167, 0, 0.08);
+}
+.delivery-float {
+  position: fixed;
+  top: 72px;
+  right: 16px;
+  z-index: 40;
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.delivery-float > .delivery-banner {
+  border: 0;
+}
+.delivery-float__close {
+  position: sticky;
+  top: 6px;
+  float: right;
+  margin: 6px 6px 0 0;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+}
 .delivery-banner--danger {
   border-color: var(--danger);
   background: rgba(241, 76, 76, 0.07);

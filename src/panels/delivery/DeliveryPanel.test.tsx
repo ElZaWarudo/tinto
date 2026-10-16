@@ -15,7 +15,7 @@ import type {
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
   getDeliveryTaskChanges: vi.fn(),
-  getDeliveryIssueUrl: vi.fn(() => Promise.resolve(null)),
+  getDeliveryIssueUrl: vi.fn((): Promise<string | null> => Promise.resolve(null)),
   openDeliveryVisualRecord: vi.fn(),
   pauseDeliveryJob: vi.fn(),
   resumeDeliveryJob: vi.fn(),
@@ -275,6 +275,43 @@ describe("DeliveryPanel", () => {
     expect(screen.queryByRole("button", { name: "Nuevo intento" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Pausar lote" }));
     await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true));
+  });
+
+  it("keeps pending decisions to one line until the user opens them", async () => {
+    const user = userEvent.setup();
+    const asked: DeliveryDecision = {
+      id: "d1",
+      task_id: "t1",
+      kind: "choice",
+      question: "¿Formato del aviso?",
+      detail: "",
+      options: [
+        { label: "Corto", consequence: "a", recommended: true },
+        { label: "Largo", consequence: "b", recommended: false },
+      ],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    } as unknown as DeliveryDecision;
+    client.getDeliveryOverview.mockResolvedValue(overview({ decisions: [asked] }));
+    renderPanel();
+    // In the task, one line (the sidebar says it too) and no cards.
+    expect(await screen.findAllByText("1 decisión pendiente")).toHaveLength(2);
+    expect(screen.queryByText("¿Formato del aviso?")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Responder" }));
+    const panel = screen.getByRole("dialog", { name: "Responder decisiones" });
+    expect(within(panel).getByText("¿Formato del aviso?")).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "Cerrar decisiones" }));
+    expect(screen.queryByRole("dialog", { name: "Responder decisiones" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Responder" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Responder decisiones" })).toBeNull();
   });
 
   it("opens the visual changes page QA left", async () => {
@@ -899,6 +936,8 @@ describe("DeliveryPanel", () => {
     client.answerDeliveryDecision.mockResolvedValue({});
     client.acceptRecommendedDecisions.mockResolvedValue([]);
     renderPanel();
+    // The task shows one line; the cards open in a floating panel.
+    await userEvent.click(await screen.findByRole("button", { name: "Responder" }));
     const pending = await screen.findByRole("region", { name: "Decisiones pendientes" });
     expect(pending).toHaveTextContent("2 pendientes");
     expect(
@@ -1038,6 +1077,8 @@ describe("DeliveryPanel", () => {
     client.renewDeliveryPermissions.mockResolvedValue([]);
     client.withdrawDeliveryDecision.mockResolvedValue(undefined);
     renderPanel();
+    // The task shows one line; the cards open in a floating panel.
+    await userEvent.click(await screen.findByRole("button", { name: "Responder" }));
     const pending = await screen.findByRole("region", { name: "Decisiones pendientes" });
     expect(pending).toHaveTextContent("Script congelado: C:/work/agentos/.agent/qa/run.sh");
     expect(pending).toHaveTextContent("exec tsx cli/src/index.ts");
@@ -1180,6 +1221,7 @@ describe("DeliveryPanel", () => {
     client.answerDeliveryDecision.mockResolvedValue({});
     renderPanel();
     expect(await screen.findByRole("heading", { name: /DEC-1/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Responder" }));
     await user.click(screen.getByRole("button", { name: "Decidir" }));
     await waitFor(() =>
       expect(screen.getByRole("region", { name: "Decisiones" })).toHaveTextContent("Sí"),
