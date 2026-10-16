@@ -694,6 +694,9 @@ pub struct DeliveryCoordinatorEndpoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryOverview {
+    /// Where each task is (by task id): the one answer every surface reads.
+    #[serde(default)]
+    pub phases: std::collections::BTreeMap<String, super::phase::DeliveryTaskPhase>,
     pub runs: Vec<DeliveryRun>,
     pub tasks: Vec<DeliveryTask>,
     pub jobs: Vec<DeliveryJob>,

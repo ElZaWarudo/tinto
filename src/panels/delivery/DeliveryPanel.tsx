@@ -90,7 +90,7 @@ import {
   latestApproval,
   latestOfRole,
   lower,
-  nextRole,
+  nextStageOf,
   latestStep,
   nextStep,
   parseStatuses,
@@ -846,7 +846,7 @@ function TaskDetail({
     (job) => job.agent !== "shell" && !job.undone_at_ms && job.changes.length > 0,
   );
   const hasOpenJob = jobs.some(isOpen);
-  const next = nextRole(jobs, approvals);
+  const next = nextStageOf(overview, task.id);
   const handoff = lastHandoff(jobs);
   const latest = newestFirst.find(
     (job) => job.agent !== "shell" && job.result_state !== "stale" && !job.undone_at_ms,

@@ -1502,7 +1502,7 @@ fn provider_error_reason(error: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::delivery::model::{DeliveryFrozenCopy, DeliveryJobStatus, DeliveryResultState};
 

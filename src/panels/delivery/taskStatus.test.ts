@@ -3,6 +3,7 @@ import type {
   DeliveryApproval,
   DeliveryJob,
   DeliveryOverview,
+  DeliveryPhase,
   DeliveryPr,
   DeliveryTask,
 } from "../../delivery/types";
@@ -12,10 +13,11 @@ import {
   isSuperseded,
   lastHandoff,
   latestOfRole,
-  nextRole,
+  nextStageOf,
   nextStep,
   prSummary,
   taskStatus,
+  type TaskStatus,
 } from "./taskStatus";
 
 const task: DeliveryTask = {
@@ -108,193 +110,119 @@ function overview(over: Partial<DeliveryOverview> = {}): DeliveryOverview {
   };
 }
 
-const status = (over: Partial<DeliveryOverview>) => taskStatus(task, overview(over), 76_000);
+/** The status of task t1 when Tinto says it is in `phase`. */
+const status = (
+  phase: DeliveryPhase | null,
+  over: Partial<DeliveryOverview> = {},
+  now = 76_000,
+): TaskStatus =>
+  taskStatus(
+    task,
+    overview({
+      phases: phase ? { t1: { ...phase, waits_on: "user", next_stage: null } } : {},
+      ...over,
+    }),
+    now,
+  );
 
-describe("taskStatus", () => {
-  it("puts a pending approval first, even over a running stage", () => {
-    expect(
-      status({
-        approvals: [approval({ rung: "pr" })],
-        jobs: [job({ status: "started", ended_at_ms: null })],
-      }),
-    ).toEqual({ group: "attention", tone: "attention", icon: "flag", label: "Aprobar PR" });
-  });
-
-  it("asks to record an approved PR or Jira step", () => {
-    expect(status({ approvals: [approval({ rung: "jira", status: "approved" })] }).label).toBe(
+// Where a task is, who it waits on and what comes next are decided by the
+// backend (src-tauri/src/delivery/phase.rs, with its own tests); the view
+// only words each phase.
+describe("taskStatus words the phase Tinto derives", () => {
+  it("asks the user for decisions, approvals, a changed step or a setting", () => {
+    expect(status({ kind: "decisions", count: 1 })).toEqual({
+      group: "attention",
+      tone: "attention",
+      icon: "flag",
+      label: "1 decisión pendiente",
+    });
+    expect(status({ kind: "decisions", count: 2 }).label).toBe("2 decisiones pendientes");
+    expect(status({ kind: "approval", rung: "pr", stage: null }).label).toBe("Aprobar PR");
+    expect(status({ kind: "record", rung: "jira", stage: "after_pr" }).label).toBe(
       "Registrar Jira (PR)",
     );
-    const closing = approval({ rung: "jira", stage: "after_merge", status: "approved" });
-    expect(status({ approvals: [closing] }).label).toBe("Registrar Jira (merge)");
+    expect(status({ kind: "record", rung: "jira", stage: "after_merge" }).label).toBe(
+      "Registrar Jira (merge)",
+    );
+    expect(status({ kind: "drifted", rung: "push", stage: null })).toMatchObject({
+      group: "attention",
+      label: "Push: ya no coincide",
+    });
+    expect(status({ kind: "settings_proposal" }).label).toBe("Aprobar cambio de ajustes");
   });
 
-  it("flags a QA lease this task left quarantined", () => {
-    const lease = {
-      name: "qa",
-      state: "quarantined" as const,
-      generation: 1,
-      holder_job_id: "j9",
-      holder_task_id: "t1",
-      acquired_at_ms: 1,
-      note: null,
-      queue: [],
-    };
-    expect(status({ leases: [lease] })).toMatchObject({
-      group: "attention",
-      label: "QA en cuarentena",
+  it("shows a running stage with its clock, and when its agent went quiet", () => {
+    const running = job({
+      id: "run",
+      role: "implementation",
+      status: "started",
+      ended_at_ms: null,
     });
-    // Its implementation running is what the task is doing.
-    const implementing = job({ role: "implementation", status: "started", ended_at_ms: null });
-    expect(status({ leases: [lease], jobs: [implementing] }).group).toBe("running");
-    // A QA job waiting on it is stuck until someone frees it, whoever left it.
-    const waiting = job({ role: "qa", status: "queued", lease: "qa" });
-    const other = {
-      ...lease,
-      holder_task_id: "t2",
-      queue: [{ job_id: waiting.id, task_id: "t1", requested_at_ms: 1 }],
-    };
-    expect(status({ leases: [other], jobs: [waiting] })).toMatchObject({
-      group: "attention",
-      label: "Espera QA, en cuarentena",
+    const phase: DeliveryPhase = { kind: "running", job_id: "run", role: "implementation" };
+    expect(status(phase, { jobs: [running] })).toEqual({
+      group: "running",
+      tone: "live",
+      icon: "live",
+      label: "Implementando · 1:15",
     });
+    const quiet = { ...running, activity_at_ms: 1_000 };
+    expect(status(phase, { jobs: [quiet] }).label).not.toContain("sin actividad");
+    expect(status(phase, { jobs: [quiet] }, 421_000).label).toContain("sin actividad hace 7 min");
   });
 
-  it("holds a paused stage until it is resumed, and says when an agent goes quiet", () => {
-    const paused = job({ status: "paused", result: null });
-    expect(status({ jobs: [paused] })).toMatchObject({
+  it("says what a task waits for: a pause, the batch, a queue or a quarantine", () => {
+    expect(status({ kind: "paused", job_id: "j", role: "tests" })).toMatchObject({
       group: "waiting",
       label: "Tests en pausa",
     });
-    expect(nextRole([paused])).toBeNull();
-    const resumed = job({ status: "started", ended_at_ms: null, resumes: paused.id });
-    expect(status({ jobs: [paused, resumed] }).group).toBe("running");
-    expect(attemptOutcome(paused, [paused, resumed]).label).toBe("Pausado · reanudado");
-    // 76 s after the start the agent is still talking; 7 min later it is quiet.
-    const quiet = job({ status: "started", ended_at_ms: null, activity_at_ms: 1_000 });
-    expect(status({ jobs: [quiet] }).label).not.toContain("sin actividad");
-    expect(taskStatus(task, overview({ jobs: [quiet] }), 421_000).label).toContain(
-      "sin actividad hace 7 min",
-    );
-  });
-
-  it("flags a settings proposal only on the task that asked, once its agents stop", () => {
-    const proposal = (taskId: string) => ({
-      id: `p-${taskId}`,
-      repo: task.repo,
-      task_id: taskId,
-      run_id: "r1",
-      reason: "",
-      changes: { checks_add: ["npm test"] },
-      status: "pending" as const,
-      approved: null,
-      requested_by: "coord",
-      requested_at_ms: 1,
-      decided_by: null,
-      decided_at_ms: null,
+    expect(status({ kind: "batch_paused", job_id: "j", role: "qa" }).label).toBe("Lote en pausa");
+    expect(
+      status({ kind: "queued", job_id: "j", role: "qa", lease: "qa", position: 1 }).label,
+    ).toBe("Esperando QA · 1.º en la cola");
+    expect(
+      status({ kind: "queued", job_id: "j", role: "tests", lease: null, position: 2 }).label,
+    ).toBe("En cola · 2.º");
+    expect(status({ kind: "waits_quarantine", job_id: "j", lease: "qa" })).toMatchObject({
+      group: "attention",
+      tone: "danger",
+      label: "Espera QA, en cuarentena",
     });
-    expect(status({ settings_proposals: [proposal("t1")] }).label).toBe(
-      "Aprobar cambio de ajustes",
-    );
-    expect(status({ settings_proposals: [proposal("t2")] }).group).not.toBe("attention");
-    expect(
-      status({
-        settings_proposals: [proposal("t1")],
-        jobs: [job({ role: "qa", status: "started", ended_at_ms: null })],
-      }).group,
-    ).toBe("running");
+    expect(status({ kind: "quarantined", lease: "qa" }).label).toBe("QA en cuarentena");
   });
 
-  it("shows a running stage with its clock", () => {
+  it("flags a broken stage and names what comes next", () => {
     expect(
-      status({ jobs: [job({ role: "implementation", status: "started", ended_at_ms: null })] }),
-    ).toEqual({ group: "running", tone: "live", icon: "live", label: "Implementando · 1:15" });
-  });
-
-  it("gives the position in the QA queue and in the capacity queue", () => {
-    const waiting = job({ role: "qa", status: "queued", lease: "qa" });
-    const lease = {
-      name: "qa",
-      state: "active" as const,
-      generation: 1,
-      holder_job_id: "x",
-      holder_task_id: "t9",
-      acquired_at_ms: 1,
-      note: null,
-      queue: [{ job_id: waiting.id, task_id: "t1", requested_at_ms: 1 }],
-    };
-    expect(status({ jobs: [waiting], leases: [lease] }).label).toBe(
-      "Esperando QA · 1.º en la cola",
-    );
-
-    const ahead = job({ task_id: "t2", status: "queued" });
-    const mine = job({ status: "queued" });
-    expect(status({ jobs: [ahead, mine] }).label).toBe("En cola · 2.º");
-  });
-
-  it("flags the latest attempt when it failed, even with an invalid result", () => {
-    expect(
-      status({
-        jobs: [
-          job(),
-          job({
-            role: "implementation",
-            attempt: 2,
-            status: "failed",
-            result: null,
-            result_state: "invalid",
-          }),
-        ],
-      }),
+      status({ kind: "broken", job_id: "j", role: "implementation", attempt: 2, blocked: false }),
     ).toEqual({
       group: "attention",
       tone: "danger",
       icon: "x",
       label: "Falló implementación · intento 2",
     });
-  });
-
-  it("names the next stage when idle, and says when it was delivered", () => {
-    expect(status({ jobs: [job()] }).label).toBe("Siguiente: implementación");
-    const done = (rung: DeliveryApproval["rung"], stage?: "after_pr" | "after_merge") =>
-      approval({ id: `${rung}-${stage}`, rung, stage, status: "executed" });
-    const upToMerge = [done("commit"), done("push"), done("pr"), done("jira"), done("merge")];
-    // The PR's Jira step alone is not the delivery.
-    expect(status({ approvals: upToMerge }).label).not.toBe("Entregada");
-    expect(nextStep(upToMerge)?.label).toBe("Jira (merge)");
-    expect(status({ approvals: [...upToMerge, done("jira", "after_merge")] }).label).toBe(
-      "Entregada",
+    expect(
+      status({ kind: "broken", job_id: "j", role: "qa", attempt: 1, blocked: true }).label,
+    ).toBe("Bloqueada en QA · intento 1");
+    expect(status({ kind: "next_stage", role: "implementation" }).label).toBe(
+      "Siguiente: implementación",
     );
+    expect(status({ kind: "next_step", rung: "jira", stage: "after_merge" }).label).toBe(
+      "Siguiente: Jira (merge)",
+    );
+    expect(status({ kind: "delivered" })).toMatchObject({ tone: "ok", label: "Entregada" });
+    expect(status(null).label).toBe("Sin actividad");
   });
-});
 
-describe("pending decisions", () => {
-  it("come before anything else", () => {
-    const pending = {
-      id: "d1",
-      task_id: "t1",
-      kind: "choice" as const,
-      question: "?",
-      detail: "",
-      options: [],
-      text: "",
-      command: null,
-      undo: "",
-      status: "pending" as const,
-      answer: null,
-      requested_by: "coord",
-      requested_at_ms: 1,
-      decided_by: null,
-      decided_at_ms: null,
-    };
-    expect(status({ decisions: [pending], approvals: [approval({ rung: "commit" })] })).toEqual({
-      group: "attention",
-      tone: "attention",
-      icon: "flag",
-      label: "1 decisión pendiente",
+  it("takes the next stage from the phase", () => {
+    const view = overview({
+      phases: {
+        t1: { kind: "running", job_id: "j", role: "review", waits_on: "agent", next_stage: null },
+      },
     });
-    expect(status({ decisions: [{ ...pending, status: "answered", answer: "x" }] }).label).toBe(
-      "Siguiente: tests",
-    );
+    expect(nextStageOf(view, "t1")).toBeNull();
+    const idle = overview({
+      phases: { t1: { kind: "next_stage", role: "qa", waits_on: "coordinator", next_stage: "qa" } },
+    });
+    expect(nextStageOf(idle, "t1")).toBe("qa");
   });
 });
 
@@ -325,7 +253,7 @@ describe("a followed PR", () => {
     approval({ id: rung, rung, status: "executed" }),
   );
   const withPr = (over: Partial<DeliveryPr>, approvals = upToJira) =>
-    status({ prs: [pr(over)], approvals });
+    status({ kind: "pr", number: 5 }, { prs: [pr(over)], approvals });
 
   it("brings the task back when the PR needs the user", () => {
     expect(withPr({ new_reviews: 1, new_comments: 1, new_authors: ["ana"] })).toEqual({
@@ -359,110 +287,33 @@ describe("a followed PR", () => {
       "PR aprobado · siguiente: Jira (PR)",
     );
     expect(prSummary(pr({ state: "closed" })).label).toBe("Cerrado sin fusionar");
-  });
-});
-
-describe("nextRole", () => {
-  it("starts with tests and follows the built-in order", () => {
-    expect(nextRole([])).toBe("tests");
-    expect(nextRole([job(), job({ role: "implementation" })])).toBe("review");
-  });
-
-  it("goes back to implementation after findings", () => {
-    const review = job({
-      role: "review",
-      result: {
-        status: "findings",
-        summary: "",
-        changed_paths: [],
-        checks: [],
-        findings: ["a"],
-        handoff: "",
-      },
-    });
-    expect(nextRole([job(), job({ role: "implementation" }), review])).toBe("implementation");
-  });
-
-  it("retries a broken stage and ignores stale results", () => {
-    expect(nextRole([job(), job({ role: "implementation", status: "failed", result: null })])).toBe(
-      "implementation",
-    );
-    expect(nextRole([job({ result_state: "stale" })])).toBe("tests");
-  });
-
-  it("suggests nothing while any stage runs, and counts answered findings as done", () => {
-    const tests = job({
-      result: { ...job().result!, status: "findings", findings: ["a", "b"] },
-    });
-    const implemented = job({ role: "implementation" });
-    const reviewing = job({ role: "review", status: "started", ended_at_ms: null });
-    // The review runs: no stage is offered, not even the tests with findings.
-    expect(nextRole([tests, implemented, reviewing])).toBeNull();
-    // Once the implementation passed, the tests' findings are answered.
-    expect(nextRole([tests, implemented, job({ role: "review" })])).toBe("qa");
-    expect(attemptOutcome(tests, [tests, implemented])).toEqual({
-      tone: "idle",
-      label: "2 hallazgos · atendidos",
-    });
-    expect(attemptOutcome(tests, [tests]).tone).toBe("attention");
-  });
-
-  it("offers no stage once the task was committed after its last one", () => {
-    const tests = job({
-      result: { ...job().result!, status: "findings", findings: ["a"] },
-    });
-    const reviewed = job({ role: "review", ended_at_ms: 61_000 });
-    const committed = approval({ status: "executed", executed_at_ms: 90_000 });
-    expect(nextRole([tests, job({ role: "implementation" }), reviewed], [committed])).toBeNull();
-    // The sidebar names the delivery step instead (here, the push).
-    expect(
-      status({
-        jobs: [tests, job({ role: "implementation" }), reviewed],
-        approvals: [committed],
-      }).label,
-    ).toBe("Siguiente: push");
-    // New work after the commit brings the stages back.
-    const later = job({
-      role: "implementation",
-      ended_at_ms: 120_000,
-      changes: [{ path: "src/app.ts", kind: "modified" }],
-    });
-    expect(nextRole([tests, reviewed, later], [committed])).toBe("review");
-  });
-
-  it("suggests nothing while the next stage runs or once every stage passed", () => {
-    expect(nextRole([job(), job({ role: "implementation", status: "started" })])).toBeNull();
-    expect(
-      nextRole([
-        job(),
-        job({ role: "implementation" }),
-        job({ role: "review" }),
-        job({ role: "qa" }),
-      ]),
-    ).toBeNull();
+    expect(nextStep(upToJira)?.label).toBe("Merge");
   });
 });
 
 describe("results left behind by later work", () => {
   const changed = [{ path: "src/app.ts", kind: "modified" }];
 
-  it("asks for the implementation again after the tests are redone", () => {
+  it("marks a result later work superseded, and answered findings", () => {
     const implementation = job({ role: "implementation" });
     const jobs = [job({ changes: changed }), implementation, job({ attempt: 2, changes: changed })];
-    expect(nextRole(jobs)).toBe("implementation");
     expect(attemptOutcome(implementation, jobs).label).toBe("Superado");
     // The tests themselves stand, and so does a result nothing came after.
     expect(attemptOutcome(jobs[2], jobs).label).toBe("Sin hallazgos");
     expect(isSuperseded(jobs[0], jobs)).toBe(false);
-  });
-
-  it("asks for the review again after new code, unless that code was undone", () => {
     const review = job({ role: "review" });
-    const fix = job({ role: "implementation", attempt: 2, changes: changed });
-    const before = [job(), job({ role: "implementation", result_state: "stale" }), review];
-    expect(nextRole([...before, fix])).toBe("review");
-    expect(nextRole([...before, { ...fix, undone_at_ms: 5 }])).toBe("implementation");
-    expect(isSuperseded(review, [...before, { ...fix, undone_at_ms: 5 }])).toBe(false);
+    const undone = job({ role: "implementation", attempt: 2, changes: changed, undone_at_ms: 5 });
+    expect(isSuperseded(review, [job(), review, undone])).toBe(false);
+
+    const tests = job({ result: { ...job().result!, status: "findings", findings: ["a", "b"] } });
+    expect(attemptOutcome(tests, [tests, job({ role: "implementation" })])).toEqual({
+      tone: "idle",
+      label: "2 hallazgos · atendidos",
+    });
+    expect(attemptOutcome(tests, [tests]).tone).toBe("attention");
+    const paused = job({ status: "paused", result: null });
+    const resumed = job({ status: "started", ended_at_ms: null, resumes: paused.id });
+    expect(attemptOutcome(paused, [paused, resumed]).label).toBe("Pausado · reanudado");
   });
 });
 

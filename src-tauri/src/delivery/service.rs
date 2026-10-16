@@ -256,39 +256,56 @@ impl DeliveryService {
         let store = self.store()?;
         let tasks = store.tasks()?;
         let live: HashSet<&str> = tasks.iter().map(|task| task.id.as_str()).collect();
-        let jobs = store
+        let jobs: Vec<_> = store
             .jobs()?
             .into_iter()
             .filter(|job| live.contains(job.task_id.as_str()))
             .collect();
-        let approvals = store
+        let approvals: Vec<_> = store
             .approvals()?
             .into_iter()
             .filter(|approval| live.contains(approval.task_id.as_str()))
             .collect();
-        let decisions = store
+        let decisions: Vec<_> = store
             .decisions()?
             .into_iter()
             .filter(|decision| live.contains(decision.task_id.as_str()))
             .collect();
-        let settings_proposals = store
+        let settings_proposals: Vec<_> = store
             .settings_proposals()?
             .into_iter()
             .filter(|proposal| proposal.status == DeliverySettingsProposalStatus::Pending)
             .collect();
-        let prs = store
+        let prs: Vec<_> = store
             .prs()?
             .into_iter()
             .filter(|pr| live.contains(pr.task_id.as_str()))
             .collect();
+        let runs = store.runs()?;
+        let leases = store.leases()?;
+        // Where each task is, from the same facts the view gets.
+        let facts = super::phase::Facts {
+            runs: &runs,
+            jobs: &jobs,
+            leases: &leases,
+            approvals: &approvals,
+            decisions: &decisions,
+            settings_proposals: &settings_proposals,
+            prs: &prs,
+        };
+        let phases = tasks
+            .iter()
+            .map(|task| (task.id.clone(), super::phase::task_phase(task, &facts)))
+            .collect();
         Ok(DeliveryOverview {
-            runs: store.runs()?,
+            phases,
+            runs,
             jobs,
             approvals,
             decisions,
             settings_proposals,
             prs,
-            leases: store.leases()?,
+            leases,
             capacity: store.settings()?.effective_capacity(tasks.len()),
             settings: store.settings()?,
             coordinator: self

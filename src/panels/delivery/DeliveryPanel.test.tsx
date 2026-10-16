@@ -9,7 +9,10 @@ import type {
   DeliveryDecision,
   DeliveryJob,
   DeliveryOverview,
+  DeliveryPhase,
   DeliveryTask,
+  DeliveryTaskPhase,
+  DeliveryWaiter,
 } from "../../delivery/types";
 
 const client = vi.hoisted(() => ({
@@ -136,8 +139,25 @@ function job(over: Partial<DeliveryJob> = {}): DeliveryJob {
   };
 }
 
+/** A task's phase as the backend derives it (src-tauri/src/delivery/phase.rs). */
+function phase(
+  of: DeliveryPhase,
+  waits_on: DeliveryWaiter = "user",
+  next_stage: string | null = null,
+): DeliveryTaskPhase {
+  return { ...of, waits_on, next_stage };
+}
+
+/** Where the default task is: its tests passed, the implementation is due. */
+const NEXT_IMPLEMENTATION = phase(
+  { kind: "next_stage", role: "implementation" },
+  "coordinator",
+  "implementation",
+);
+
 function overview(over: Partial<DeliveryOverview> = {}): DeliveryOverview {
   return {
+    phases: { t1: NEXT_IMPLEMENTATION },
     runs: [],
     tasks: [task()],
     jobs: [job()],
@@ -300,7 +320,9 @@ describe("DeliveryPanel", () => {
       decided_by: null,
       decided_at_ms: null,
     } as unknown as DeliveryDecision;
-    client.getDeliveryOverview.mockResolvedValue(overview({ decisions: [asked] }));
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ decisions: [asked], phases: { t1: phase({ kind: "decisions", count: 1 }) } }),
+    );
     renderPanel();
     // In the task, one line (the sidebar says it too) and no cards.
     expect(await screen.findAllByText("1 decisión pendiente")).toHaveLength(2);
@@ -555,7 +577,12 @@ describe("DeliveryPanel", () => {
       executed_at_ms: null,
       outcome: null,
     };
-    client.getDeliveryOverview.mockResolvedValue(overview({ approvals: [approval] }));
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [approval],
+        phases: { t1: phase({ kind: "approval", rung: "commit", stage: null }) },
+      }),
+    );
     client.decideDeliveryApproval.mockResolvedValue({ ...approval, status: "executed" });
     renderPanel();
     const group = await screen.findByRole("group", { name: "Aprobación commit" });
@@ -916,6 +943,8 @@ describe("DeliveryPanel", () => {
     });
     client.getDeliveryOverview.mockResolvedValue(
       overview({
+        // The stage due stays known while decisions hold it.
+        phases: { t1: phase({ kind: "decisions", count: 2 }, "user", "implementation") },
         decisions: [
           decision({}),
           decision({
@@ -987,6 +1016,7 @@ describe("DeliveryPanel", () => {
     });
     client.getDeliveryOverview.mockResolvedValue(
       overview({
+        phases: { t1: phase({ kind: "settings_proposal" }) },
         settings_proposals: [
           {
             id: "p1",
@@ -1213,13 +1243,22 @@ describe("DeliveryPanel", () => {
       decided_at_ms: null,
     };
     const tasks = [task(), task({ id: "t2", key: "DEC-1", title: "Decide first" })];
+    const next = (role: string) => phase({ kind: "next_stage", role }, "coordinator", role);
     client.getDeliveryOverview
-      .mockResolvedValueOnce(overview({ tasks, jobs: [], decisions: [pending] }))
+      .mockResolvedValueOnce(
+        overview({
+          tasks,
+          jobs: [],
+          decisions: [pending],
+          phases: { t1: next("tests"), t2: phase({ kind: "decisions", count: 1 }) },
+        }),
+      )
       .mockResolvedValue(
         overview({
           tasks,
           jobs: [],
           decisions: [{ ...pending, status: "answered", answer: "Sí", decided_by: "user" }],
+          phases: { t1: next("tests"), t2: next("tests") },
         }),
       );
     client.answerDeliveryDecision.mockResolvedValue({});
@@ -1391,7 +1430,12 @@ describe("DeliveryPanel", () => {
         ],
       }),
     );
-    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [] }));
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [],
+        phases: { t1: phase({ kind: "next_stage", role: "tests" }, "coordinator", "tests") },
+      }),
+    );
     client.dispatchDeliveryJob.mockResolvedValue(job({ id: "j2", status: "queued" }));
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Otra etapa…" }));
@@ -1602,6 +1646,7 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         jobs: [],
+        phases: { t1: phase({ kind: "drifted", rung: "push", stage: null }) },
         approvals: [
           step("commit"),
           step("push", { status: "drifted", notice: "La rama remota ya no existe" }),
@@ -1724,6 +1769,7 @@ describe("DeliveryPanel", () => {
           job({ id: `j${index}`, role }),
         ),
         approvals: [done("commit"), done("push"), done("pr"), done("jira")],
+        phases: { t1: phase({ kind: "pr", number: 279 }, "coordinator") },
         prs: [
           {
             task_id: "t1",
@@ -2004,6 +2050,7 @@ describe("DeliveryPanel", () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
         prs: [pr],
+        phases: { t1: phase({ kind: "pr", number: pr.number }) },
         approvals: [executed("commit"), executed("push"), executed("pr"), executed("jira")],
       }),
     );

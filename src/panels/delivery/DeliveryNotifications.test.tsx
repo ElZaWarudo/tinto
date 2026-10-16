@@ -49,7 +49,15 @@ function decision(id: string): DeliveryDecision {
 }
 
 function overview(decisions: DeliveryDecision[]): DeliveryOverview {
+  const pending = decisions.filter((decision) => decision.status === "pending").length;
   return {
+    // As the backend derives it for this task: its decisions, else its tests.
+    phases: {
+      [task.id]:
+        pending > 0
+          ? { kind: "decisions", count: pending, waits_on: "user", next_stage: "tests" }
+          : { kind: "next_stage", role: "tests", waits_on: "coordinator", next_stage: "tests" },
+    },
     runs: [],
     tasks: [task],
     jobs: [],

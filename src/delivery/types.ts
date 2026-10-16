@@ -367,7 +367,33 @@ export interface DeliverySettingsProposal {
   decided_at_ms: number | null;
 }
 
+/** Who has to act for a task to move. */
+export type DeliveryWaiter = "user" | "coordinator" | "agent" | "queue" | "reviewers" | "nobody";
+
+/** Where a task is, as Tinto derives it (src-tauri/src/delivery/phase.rs). */
+export type DeliveryPhase =
+  | { kind: "decisions"; count: number }
+  | { kind: "approval" | "record" | "drifted"; rung: DeliveryRung; stage: string | null }
+  | { kind: "running" | "paused" | "batch_paused"; job_id: string; role: string }
+  | { kind: "waits_quarantine"; job_id: string; lease: string }
+  | { kind: "queued"; job_id: string; role: string; lease: string | null; position: number }
+  | { kind: "quarantined"; lease: string }
+  | { kind: "settings_proposal" }
+  | { kind: "broken"; job_id: string; role: string; attempt: number; blocked: boolean }
+  | { kind: "delivered" }
+  | { kind: "pr"; number: number }
+  | { kind: "next_stage"; role: string }
+  | { kind: "next_step"; rung: DeliveryRung; stage: string | null };
+
+export type DeliveryTaskPhase = DeliveryPhase & {
+  waits_on: DeliveryWaiter;
+  /** The stage to run next, when one is due. */
+  next_stage: string | null;
+};
+
 export interface DeliveryOverview {
+  /** Where each task is, by task id: every surface reads this one answer. */
+  phases?: Record<string, DeliveryTaskPhase>;
   runs: DeliveryRun[];
   tasks: DeliveryTask[];
   jobs: DeliveryJob[];

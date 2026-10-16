@@ -1,6 +1,7 @@
-// What a Delivery task needs and where it is in its flow, derived from the
-// overview the view already loads. Pure functions so every surface (list,
-// header, track, banners) reads the same answer.
+// How a Delivery task reads in the view. Where a task is (its phase, who it
+// waits on, the stage due next) is decided once, by Tinto's backend
+// (src-tauri/src/delivery/phase.rs); these functions only word it, and word
+// each job and delivery step.
 
 import type {
   DeliveryApproval,
@@ -10,6 +11,7 @@ import type {
   DeliveryRung,
   DeliverySettingsProposal,
   DeliveryTask,
+  DeliveryTaskPhase,
 } from "../../delivery/types";
 
 export const STAGES = [
@@ -234,43 +236,6 @@ export function attemptOutcome(
   return { tone: "idle", label: result.status };
 }
 
-/**
- * The stage to run next: retry a broken one, go back to implementation after
- * findings, else the first built-in stage without a passing attempt that
- * still stands.
- */
-export function nextRole(jobs: DeliveryJob[], approvals: DeliveryApproval[] = []): string | null {
-  // A paused stage holds the task until it is resumed or cancelled.
-  if (pausedJob(jobs)) return null;
-  const agentJobs = jobs.filter((job) => job.agent !== "shell" && isLive(job));
-  // While one of its stages runs or waits its turn, the task's next stage
-  // is that one's to decide.
-  if (agentJobs.some(isOpen)) return null;
-  const latest = agentJobs[agentJobs.length - 1];
-  // Committed after its last stage: the task is in delivery, and what comes
-  // next is a delivery step, not another stage.
-  const delivering = approvals.some(
-    (approval) =>
-      approval.rung === "commit" &&
-      approval.status === "executed" &&
-      (approval.executed_at_ms ?? 0) > (latest?.ended_at_ms ?? 0),
-  );
-  if (delivering) return null;
-  if (latest && !isOpen(latest)) {
-    if (isBroken(latest)) return latest.role;
-    if (latest.status === "finished" && latest.result?.status === "findings") {
-      return "implementation";
-    }
-  }
-  for (const stage of STAGES) {
-    const job = latestOfRole(agentJobs, stage.role);
-    if (!job || !(isPassed(job) || isAnswered(job, agentJobs)) || isSuperseded(job, agentJobs)) {
-      return stage.role;
-    }
-  }
-  return null;
-}
-
 /** Findings a later stage answered: one after it passed (the tests' failing
  *  cases, made to pass by the implementation). */
 export function isAnswered(job: DeliveryJob, jobs: DeliveryJob[]): boolean {
@@ -345,184 +310,129 @@ export function pendingSettingsProposals(
   );
 }
 
+/** The ladder step a phase names. */
+function phaseStep(rung: DeliveryRung, stage: string | null): DeliveryStep {
+  return (
+    STEPS.find((step) => step.rung === rung && (step.stage ?? null) === (stage ?? null)) ?? {
+      rung,
+      label: rung,
+    }
+  );
+}
+
+/** The task's phase, as Tinto derives it; `null` until the overview has it. */
+export function phaseOf(overview: DeliveryOverview, taskId: string): DeliveryTaskPhase | null {
+  return overview.phases?.[taskId] ?? null;
+}
+
+/** The stage due next, as Tinto decides it. */
+export function nextStageOf(overview: DeliveryOverview, taskId: string): string | null {
+  return phaseOf(overview, taskId)?.next_stage ?? null;
+}
+
+/** How the task's phase reads in the list: Tinto decides where the task is;
+ *  this only words it and adds what changes by the second (a clock). */
 export function taskStatus(
   task: DeliveryTask,
   overview: DeliveryOverview,
   now: number,
 ): TaskStatus {
-  const decisions = pendingDecisions(overview, task.id);
-  if (decisions > 0) {
-    return {
-      group: "attention",
-      tone: "attention",
-      icon: "flag",
-      label: decisions === 1 ? "1 decisión pendiente" : `${decisions} decisiones pendientes`,
-    };
-  }
-  const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
-  const pending = approvals.find((approval) => approval.status === "pending");
-  if (pending) {
-    return {
-      group: "attention",
-      tone: "attention",
-      icon: "flag",
-      label: `Aprobar ${lower(stepOf(pending).label)}`,
-    };
-  }
-  const approved = approvals.find((approval) => approval.status === "approved");
-  if (approved) {
-    return {
-      group: "attention",
-      tone: "attention",
-      icon: "flag",
-      label: `Registrar ${lower(stepOf(approved).label)}`,
-    };
-  }
-  const drifted = approvals.find(
-    (approval) =>
-      approval.status === "drifted" && latestStep(approvals, stepOf(approval)) === approval,
-  );
-  if (drifted) {
-    return {
-      group: "attention",
-      tone: "attention",
-      icon: "alert",
-      label: `${stepOf(drifted).label}: ya no coincide`,
-    };
-  }
-  const jobs = jobsOf(overview, task.id);
-  const running = jobs.find((job) => job.status === "pending" || job.status === "started");
-  if (running) {
-    const verb =
-      STAGES.find((stage) => stage.role === running.role)?.verb ?? stageLabel(running.role);
-    const time = clock(running, now);
-    const quiet = quietFor(running, now);
-    return {
-      group: "running",
-      tone: "live",
-      icon: "live",
-      label: [verb, time, quiet].filter(Boolean).join(" · "),
-    };
-  }
-  const paused = pausedJob(jobs);
-  if (paused) {
-    return {
-      group: "waiting",
-      tone: "waiting",
-      icon: "clock",
-      label: `${stageLabel(paused.role)} en pausa`,
-    };
-  }
-  const queued = jobs.find((job) => job.status === "queued");
-  if (queued) {
-    const run = overview.runs.find((candidate) => candidate.id === task.run_id);
-    if (run?.paused) {
-      return { group: "waiting", tone: "waiting", icon: "clock", label: "Lote en pausa" };
-    }
-    const lease = overview.leases.find((candidate) =>
-      candidate.queue.some((waiter) => waiter.job_id === queued.id),
-    );
-    // Waiting on a quarantined resource is the one wait that never ends
-    // by itself.
-    if (lease?.state === "quarantined") {
-      return {
-        group: "attention",
-        tone: "danger",
-        icon: "alert",
-        label: `Espera ${lease.name.toUpperCase()}, en cuarentena`,
-      };
-    }
-    if (lease) {
-      const position = lease.queue.findIndex((waiter) => waiter.job_id === queued.id) + 1;
-      return {
-        group: "waiting",
-        tone: "waiting",
-        icon: "clock",
-        label: `Esperando ${lease.name.toUpperCase()} · ${ordinal(position)} en la cola`,
-      };
-    }
-    const queue = overview.jobs
-      .filter((job) => job.status === "queued")
-      .filter((job) => !overview.leases.some((l) => l.queue.some((w) => w.job_id === job.id)))
-      .sort((a, b) => a.created_at_ms - b.created_at_ms);
-    const position = queue.findIndex((job) => job.id === queued.id) + 1;
-    return {
-      group: "waiting",
-      tone: "waiting",
-      icon: "clock",
-      label: position > 0 ? `En cola · ${ordinal(position)}` : "En cola",
-    };
-  }
-  // The resource a job of this task left quarantined matters once its
-  // agents stop: work running on it is not held by it.
-  const quarantined = overview.leases.find(
-    (lease) => lease.state === "quarantined" && lease.holder_task_id === task.id,
-  );
-  if (quarantined) {
-    return {
-      group: "attention",
-      tone: "danger",
-      icon: "alert",
-      label: `${quarantined.name.toUpperCase()} en cuarentena`,
-    };
-  }
-  // A proposal is the repo's, but only the task that asked for it waits on
-  // it, and only once its agents stop: it holds no job already dispatched.
-  if (pendingSettingsProposals(overview, task).some((proposal) => proposal.task_id === task.id)) {
-    return {
-      group: "attention",
-      tone: "attention",
-      icon: "flag",
-      label: "Aprobar cambio de ajustes",
-    };
-  }
-
-  const latest = [...jobs].reverse().find((job) => job.agent !== "shell" && isLive(job));
-  if (latest && isBroken(latest)) {
-    const what = latest.status === "finished" ? "Bloqueada en" : "Falló";
-    return {
-      group: "attention",
-      tone: "danger",
-      icon: "x",
-      label: `${what} ${lower(stageLabel(latest.role))} · intento ${latest.attempt}`,
-    };
-  }
-
-  if (isDelivered(approvals)) {
-    return { group: "idle", tone: "ok", icon: "check", label: "Entregada" };
-  }
-  const next = nextStep(approvals);
-  const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
-  if (pr) {
-    const summary = prSummary(pr);
-    const then = next ? ` · siguiente: ${lower(next.label)}` : "";
-    if (pr.state === "merged") {
-      return { group: "idle", tone: "idle", icon: "ring", label: `PR fusionado${then}` };
-    }
-    const needsYou = summary.tone === "attention" || summary.tone === "danger";
-    const ready = summary.label === "Aprobado";
-    return {
-      group: needsYou ? "attention" : ready ? "idle" : "waiting",
-      tone: summary.tone,
-      icon: summary.icon,
-      label: ready ? `PR aprobado${then}` : `PR: ${lower(summary.label)}`,
-    };
-  }
-  const role = nextRole(jobs, approvals);
-  if (role) {
-    return {
-      group: "idle",
-      tone: "idle",
-      icon: "ring",
-      label: `Siguiente: ${lower(stageLabel(role))}`,
-    };
-  }
-  return {
+  const phase = phaseOf(overview, task.id);
+  const attention = (label: string, icon: StatusIcon = "flag"): TaskStatus => ({
+    group: "attention",
+    tone: "attention",
+    icon,
+    label,
+  });
+  const danger = (label: string, icon: StatusIcon = "alert"): TaskStatus => ({
+    group: "attention",
+    tone: "danger",
+    icon,
+    label,
+  });
+  const waiting = (label: string): TaskStatus => ({
+    group: "waiting",
+    tone: "waiting",
+    icon: "clock",
+    label,
+  });
+  const idle = (label: string): TaskStatus => ({
     group: "idle",
     tone: "idle",
     icon: "ring",
-    label: next ? `Siguiente: ${lower(next.label)}` : "Sin actividad",
-  };
+    label,
+  });
+  if (!phase) return idle("Sin actividad");
+  switch (phase.kind) {
+    case "decisions":
+      return attention(
+        phase.count === 1 ? "1 decisión pendiente" : `${phase.count} decisiones pendientes`,
+      );
+    case "approval":
+      return attention(`Aprobar ${lower(phaseStep(phase.rung, phase.stage).label)}`);
+    case "record":
+      return attention(`Registrar ${lower(phaseStep(phase.rung, phase.stage).label)}`);
+    case "drifted":
+      return attention(`${phaseStep(phase.rung, phase.stage).label}: ya no coincide`, "alert");
+    case "running": {
+      const job = overview.jobs.find((candidate) => candidate.id === phase.job_id);
+      const verb =
+        STAGES.find((stage) => stage.role === phase.role)?.verb ?? stageLabel(phase.role);
+      const time = job ? clock(job, now) : "";
+      const quiet = job ? quietFor(job, now) : null;
+      return {
+        group: "running",
+        tone: "live",
+        icon: "live",
+        label: [verb, time, quiet].filter(Boolean).join(" · "),
+      };
+    }
+    case "paused":
+      return waiting(`${stageLabel(phase.role)} en pausa`);
+    case "batch_paused":
+      return waiting("Lote en pausa");
+    case "waits_quarantine":
+      return danger(`Espera ${phase.lease.toUpperCase()}, en cuarentena`);
+    case "queued":
+      return waiting(
+        phase.lease
+          ? `Esperando ${phase.lease.toUpperCase()} · ${ordinal(phase.position)} en la cola`
+          : phase.position > 0
+            ? `En cola · ${ordinal(phase.position)}`
+            : "En cola",
+      );
+    case "quarantined":
+      return danger(`${phase.lease.toUpperCase()} en cuarentena`);
+    case "settings_proposal":
+      return attention("Aprobar cambio de ajustes");
+    case "broken":
+      return danger(
+        `${phase.blocked ? "Bloqueada en" : "Falló"} ${lower(stageLabel(phase.role))} · intento ${phase.attempt}`,
+        "x",
+      );
+    case "delivered":
+      return { group: "idle", tone: "ok", icon: "check", label: "Entregada" };
+    case "pr": {
+      const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+      if (!pr) return waiting("PR");
+      const next = nextStep(overview.approvals.filter((approval) => approval.task_id === task.id));
+      const then = next ? ` · siguiente: ${lower(next.label)}` : "";
+      if (pr.state === "merged") return idle(`PR fusionado${then}`);
+      const summary = prSummary(pr);
+      const needsYou = summary.tone === "attention" || summary.tone === "danger";
+      const ready = summary.label === "Aprobado";
+      return {
+        group: needsYou ? "attention" : ready ? "idle" : "waiting",
+        tone: summary.tone,
+        icon: summary.icon,
+        label: ready ? `PR aprobado${then}` : `PR: ${lower(summary.label)}`,
+      };
+    }
+    case "next_stage":
+      return idle(`Siguiente: ${lower(stageLabel(phase.role))}`);
+    case "next_step":
+      return idle(`Siguiente: ${lower(phaseStep(phase.rung, phase.stage).label)}`);
+  }
 }
 
 /** One line for the state of a followed PR, from most to least urgent. */

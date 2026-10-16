@@ -493,7 +493,10 @@ fn waiting_on_one_issue_never_leaves_the_rest_of_the_batch_idle() {
         .map(|task| task["key"].as_str().unwrap())
         .collect();
     assert_eq!(keys, vec!["I-2"]);
-    assert_eq!(first["idle"][0]["latest"], "no stage yet");
+    // Its phase says what it waits for: its first stage.
+    assert_eq!(first["idle"][0]["phase"]["kind"], "next_stage");
+    assert_eq!(first["idle"][0]["phase"]["role"], "tests");
+    assert_eq!(first["idle"][0]["phase"]["waits_on"], "coordinator");
     assert_eq!(first["spare_capacity"], 2);
     // Told the idle issue waits on something else, it waits, still saying so.
     let waited = wait(json!({"idle_ok": true}));
