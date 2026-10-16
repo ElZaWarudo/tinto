@@ -187,6 +187,31 @@ pub fn delivery_cancel_job(
     service.cancel(&job_id).map_err(CommandError::from)
 }
 
+/// Opens a QA job's visual changes page with the system's default browser.
+#[tauri::command]
+pub fn delivery_open_visual_record(
+    service: State<'_, DeliveryService>,
+    job_id: String,
+) -> Result<(), CommandError> {
+    let job = service.job(&job_id).map_err(CommandError::from)?;
+    let page = job
+        .visual_record
+        .filter(|page| std::path::Path::new(page).is_file())
+        .ok_or_else(|| CommandError::new("not_found", "este trabajo no tiene registro visual"))?;
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(&page)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| CommandError::new("open_failed", error.to_string()))
+}
+
 #[tauri::command]
 pub fn delivery_pause_job(
     service: State<'_, DeliveryService>,

@@ -152,6 +152,9 @@ export interface DeliveryJob {
   plan?: DeliveryPlanItem[];
   /** What the job used, once the agent reports it. */
   usage?: DeliveryUsage | null;
+  /** QA: the page rendered from its visual changes record, or why it could not be. */
+  visual_record?: string | null;
+  visual_record_error?: string | null;
 }
 
 export type DeliveryPlatform = "windows" | "wsl";

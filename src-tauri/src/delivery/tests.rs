@@ -48,6 +48,18 @@ fn fake_launcher() -> Launcher {
         let sleep: u32 = spec.get("sleep").and_then(|v| v.parse().ok()).unwrap_or(0);
         let exit: i32 = spec.get("exit").and_then(|v| v.parse().ok()).unwrap_or(0);
         let touch = spec.get("touch").map(|name| worktree.join(name));
+        // `record=1`: a QA job that writes its visual changes record.
+        if spec.contains_key("record") {
+            std::fs::create_dir_all(&paths.qa_output).unwrap();
+            std::fs::write(
+                paths.qa_output.join(format!("{}.md", task.key)),
+                format!(
+                    "# {} — Visual changes\n\n## 1. Menú\n\n**Problems:** None\n",
+                    task.key
+                ),
+            )
+            .unwrap();
+        }
         #[cfg(target_os = "windows")]
         {
             let mut lines = vec!["@echo off".to_string()];
@@ -448,6 +460,22 @@ fn waiting_on_a_batch_returns_the_first_job_that_ends() {
     assert_eq!(waited["open"], json!([slow.id]));
     h.service.cancel(&slow.id).unwrap();
     h.wait(&slow.id);
+}
+
+#[test]
+fn a_qa_visual_record_becomes_a_page_the_user_opens() {
+    let h = harness();
+    let task = h.task("V-1");
+    let qa = h.dispatch(&task, "qa", "events=codex-ok record=1");
+    let qa = h.wait(&qa.id);
+    let page = qa.visual_record.expect("a rendered page");
+    assert!(page.ends_with("V-1.html"), "{page}");
+    let html = std::fs::read_to_string(&page).unwrap();
+    assert!(html.contains("<h1>V-1 — Visual changes</h1>"));
+    assert_eq!(qa.visual_record_error, None);
+    // Without a record, nothing is rendered.
+    let plain = h.dispatch(&task, "qa", "events=codex-ok");
+    assert_eq!(h.wait(&plain.id).visual_record, None);
 }
 
 #[test]

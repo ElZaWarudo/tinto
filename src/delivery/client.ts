@@ -112,6 +112,10 @@ export const cancelDeliveryJob = (jobId: string) =>
 export const getDeliveryTaskChanges = (taskId: string) =>
   invoke<DeliveryTaskChanges>("delivery_task_changes", { taskId });
 
+/** Opens a QA job's visual changes page in the system's browser. */
+export const openDeliveryVisualRecord = (jobId: string) =>
+  invoke<void>("delivery_open_visual_record", { jobId });
+
 export const pauseDeliveryJob = (jobId: string) =>
   invoke<DeliveryJob>("delivery_pause_job", { jobId });
 

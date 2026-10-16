@@ -20,6 +20,7 @@ pub mod store;
 pub mod tasks;
 #[cfg(test)]
 mod tests;
+pub mod visual_record;
 pub mod wiring;
 
 use crate::agent_console::commands::CommandError;

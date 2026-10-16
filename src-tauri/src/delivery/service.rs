@@ -726,6 +726,8 @@ impl DeliveryService {
             activity_at_ms: None,
             plan: Vec::new(),
             usage: None,
+            visual_record: None,
+            visual_record_error: None,
         };
         store.put_job(&job)?;
         store.record_event(
@@ -1370,7 +1372,21 @@ impl DeliveryService {
             touched: !cancelled || adapters::acted(&job, &events),
         };
         let stderr_text = std::fs::read_to_string(&paths.stderr).unwrap_or_default();
-        self.finish(&job.id, ending, outcome, end, &stderr_text)
+        self.finish(&job.id, ending, outcome, end, &stderr_text)?;
+        // QA's visual changes record becomes one page the user opens.
+        let record = paths.qa_output.join(format!("{}.md", task.key));
+        if job.role == QA_ROLE && record.is_file() {
+            let rendered = super::visual_record::render_beside(&record);
+            let store = self.store()?;
+            if let Some(mut done) = store.job(&job.id)? {
+                match rendered {
+                    Ok(page) => done.visual_record = Some(plain_path(&page)),
+                    Err(error) => done.visual_record_error = Some(error),
+                }
+                store.put_job(&done)?;
+            }
+        }
+        Ok(())
     }
 
     /// Before a QA job starts: refuses it when a permission that runs the

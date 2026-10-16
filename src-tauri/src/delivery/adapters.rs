@@ -207,6 +207,7 @@ pub fn job_prompt(
             lines.push(format!(
                 "You have a headless browser with a fresh profile through the {BROWSER_SERVER} MCP tools. The screenshots it saves go to the job's folder, outside the worktree; name them in the result's checks."
             ));
+            lines.push(visual_record_instructions(&task.key));
         }
     }
     if !job.read_dirs.is_empty() {
@@ -467,6 +468,48 @@ pub fn codex_sandbox_plan(task: &DeliveryTask, programs: &[String]) -> SandboxPl
         let _ = (task, programs);
         SandboxPlan::default()
     }
+}
+
+/// How QA records the issue's visual changes for the user: Tinto renders the
+/// record to one HTML page with the screenshots embedded when the job ends.
+fn visual_record_instructions(key: &str) -> String {
+    format!(
+        r#"When the issue changes what users see, write its visual changes record in your QA folder as `{key}.md`, with its screenshots beside it, referenced by file name. It is for the user's local review only: use user-facing language, and include no secrets, local absolute paths or personal data, and no credentials on screen.
+- Record each visual change at two viewports, desktop 1280×800 and mobile 375×812, in the states that matter: dialogs, menus, warnings, errors, toasts, empty and disabled states.
+- Screenshots at full resolution: at least the viewport width in pixels (ideally twice, with a device scale factor of 2), PNG or JPEG of quality 90 or more; never a scaled-down capture, a zoomed-out page or a thumbnail. Check each image's size and retake any below the viewport width. Name each one `{key}-<n>-<slug>-desktop.png` or `-mobile.png`.
+- A toast that disappears before the capture: confirm its text with a DOM observer and say so in the record. Mark what still waits for a fix or a capture as pending.
+- Follow this layout (screenshots one per row, never side by side; every change block has the Where/Behaviour table, the screenshots, then Observations, Problems and Suggested solutions, writing "None" when empty; separate pre-existing behaviour from what the change introduces):
+
+# {key} — Visual changes: <short outcome>
+
+| Test environment | |
+| --- | --- |
+| Date | <YYYY-MM-DD> |
+| Environment | <local dev stack / staging; no secrets> |
+| Branch | `<branch>` |
+| Viewports | Desktop 1280×800, mobile 375×812 |
+
+## 1. <Change name>
+
+| | |
+| --- | --- |
+| Where | <navigation path to the screen or action> |
+| Behaviour | <what the user sees and what happens, approved texts quoted verbatim> |
+
+**Desktop — <state>**
+
+![]({key}-1-<slug>-desktop.png)
+
+**Mobile — <state>**
+
+![]({key}-1-<slug>-mobile.png)
+
+**Observations:** <layout notes; mark pre-existing behaviour as such>
+
+**Problems:** <what is wrong or risky, or "None">
+
+**Suggested solutions:** <proposals, or "None">"#
+    )
 }
 
 /// What a resumed agent is told: the session already has its instructions.
@@ -1533,6 +1576,8 @@ mod tests {
             activity_at_ms: None,
             plan: Vec::new(),
             usage: None,
+            visual_record: None,
+            visual_record_error: None,
         }
     }
 
@@ -1632,6 +1677,23 @@ mod tests {
         assert!(launch.provider_session_id.is_some());
         assert!(launch.stdin.contains("This job is read-only"));
         assert!(!script.contains("--allowedTools"), "{script}");
+    }
+
+    #[test]
+    fn qa_with_a_browser_is_asked_for_the_visual_changes_record() {
+        let task = sample_task();
+        let paths = JobPaths::in_dir(PathBuf::from(r"C:\jobs\j1"));
+        let mut qa = sample_job(DeliveryAgent::Claude);
+        qa.role = QA_ROLE.into();
+        let prompt = job_prompt(&qa, &task, &paths, false, &[]);
+        assert!(!prompt.contains("visual changes record"), "{prompt}");
+        qa.qa_browser = true;
+        let prompt = job_prompt(&qa, &task, &paths, false, &[]);
+        assert!(
+            prompt.contains(&format!("in your QA folder as `{}.md`", task.key)),
+            "{prompt}"
+        );
+        assert!(prompt.contains("desktop 1280×800 and mobile 375×812"));
     }
 
     #[test]

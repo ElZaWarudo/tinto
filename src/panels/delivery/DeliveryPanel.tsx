@@ -13,6 +13,7 @@ import {
   archiveDeliveryTask,
   cancelDeliveryJob,
   getDeliveryTaskChanges,
+  openDeliveryVisualRecord,
   pauseDeliveryJob,
   resumeDeliveryJob,
   setDeliveryRunPaused,
@@ -2054,6 +2055,11 @@ function JobRow({
         <div className="delivery-job__detail">
           {job.error && <p className="delivery-job__error">{job.error}</p>}
           {job.result_note && <p className="delivery-job__note">{job.result_note}</p>}
+          {job.visual_record_error && (
+            <p className="delivery-job__note">
+              No se pudo generar el registro visual: {job.visual_record_error}
+            </p>
+          )}
           {isSuperseded(job, jobs) && (
             <p className="delivery-job__note">
               Una etapa anterior cambió el código después de este resultado, así que ya no cuenta:
@@ -2176,6 +2182,16 @@ function JobRow({
             </dl>
           </details>
           <div className="delivery-actions">
+            {job.visual_record && (
+              <button
+                type="button"
+                className="delivery-button--primary"
+                title="Los cambios visuales que revisó la QA, con sus capturas de escritorio y móvil"
+                onClick={() => void run(() => openDeliveryVisualRecord(job.id))}
+              >
+                Abrir registro visual
+              </button>
+            )}
             {job.status === "started" && job.agent !== "shell" && (
               <button
                 type="button"

@@ -230,6 +230,12 @@ pub struct DeliveryJob {
     /// What the job used, once the agent reports it.
     #[serde(default)]
     pub usage: Option<DeliveryUsage>,
+    /// QA jobs: the page Tinto rendered from the visual changes record the
+    /// job wrote, for the user to open, or why it could not.
+    #[serde(default)]
+    pub visual_record: Option<String>,
+    #[serde(default)]
+    pub visual_record_error: Option<String>,
 }
 
 /// One item of an agent's task list.

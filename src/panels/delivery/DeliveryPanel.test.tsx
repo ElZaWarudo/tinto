@@ -15,6 +15,7 @@ import type {
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
   getDeliveryTaskChanges: vi.fn(),
+  openDeliveryVisualRecord: vi.fn(),
   pauseDeliveryJob: vi.fn(),
   resumeDeliveryJob: vi.fn(),
   setDeliveryRunPaused: vi.fn(),
@@ -273,6 +274,19 @@ describe("DeliveryPanel", () => {
     expect(screen.queryByRole("button", { name: "Nuevo intento" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Pausar lote" }));
     await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true));
+  });
+
+  it("opens the visual changes page QA left", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [job({ role: "qa", visual_record: "C:/jobs/j1/qa/AGOS-501.html" })],
+      }),
+    );
+    client.openDeliveryVisualRecord.mockResolvedValue(undefined);
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Abrir registro visual" }));
+    await waitFor(() => expect(client.openDeliveryVisualRecord).toHaveBeenCalledWith("j1"));
   });
 
   it("opens the task's changes since its base in the files view", async () => {
