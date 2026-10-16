@@ -116,6 +116,9 @@ export const getDeliveryTaskChanges = (taskId: string) =>
 export const getDeliveryIssueUrl = (taskId: string) =>
   invoke<string | null>("delivery_issue_url", { taskId });
 
+/** Opens a web page (Jira issue, PR) in the system's browser. */
+export const openDeliveryUrl = (url: string) => invoke<void>("delivery_open_url", { url });
+
 /** Opens a QA job's visual changes page in the system's browser. */
 export const openDeliveryVisualRecord = (jobId: string) =>
   invoke<void>("delivery_open_visual_record", { jobId });

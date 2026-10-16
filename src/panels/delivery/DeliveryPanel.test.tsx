@@ -17,6 +17,7 @@ const client = vi.hoisted(() => ({
   getDeliveryTaskChanges: vi.fn(),
   getDeliveryIssueUrl: vi.fn((): Promise<string | null> => Promise.resolve(null)),
   openDeliveryVisualRecord: vi.fn(),
+  openDeliveryUrl: vi.fn(() => Promise.resolve()),
   pauseDeliveryJob: vi.fn(),
   resumeDeliveryJob: vi.fn(),
   setDeliveryRunPaused: vi.fn(),
@@ -363,6 +364,9 @@ describe("DeliveryPanel", () => {
     expect(link).toHaveAttribute("href", "https://jira.example.com/browse/AGOS-501");
     expect(screen.getByRole("heading", { name: /AGOS-501/ })).toContainElement(link);
     expect(client.getDeliveryIssueUrl).toHaveBeenCalledWith("t1");
+    // The webview would not follow it: the system's browser opens it.
+    await userEvent.click(link);
+    expect(client.openDeliveryUrl).toHaveBeenCalledWith("https://jira.example.com/browse/AGOS-501");
   });
 
   it("names the model and reasoning each stage runs with, defaults included", async () => {

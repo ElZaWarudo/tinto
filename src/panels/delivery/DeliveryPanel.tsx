@@ -109,6 +109,7 @@ import {
   type Tone,
 } from "./taskStatus";
 import "./delivery.css";
+import { ExternalLink } from "./ExternalLink";
 
 type Dialog =
   | { kind: "new-task" }
@@ -1002,15 +1003,13 @@ function TaskDetail({
             {task.key}
             {task.title && <span> {task.title}</span>}
             {issueUrl && (
-              <a
+              <ExternalLink
                 className="delivery-task__issue"
                 href={issueUrl}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={`Abrir ${task.key} en Jira`}
+                label={`Abrir ${task.key} en Jira`}
               >
                 Abrir en Jira ↗
-              </a>
+              </ExternalLink>
             )}
           </h2>
           <p className="delivery-task__meta">

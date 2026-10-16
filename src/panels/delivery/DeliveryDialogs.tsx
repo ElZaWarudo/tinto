@@ -13,6 +13,7 @@ import { isWindowsHost } from "../../workbench/platform";
 import { useAccessibleDialog } from "../../workbench/useAccessibleDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import { parseStatuses } from "./taskStatus";
+import { ExternalLink } from "./ExternalLink";
 import type {
   DeliveryAccess,
   DeliveryAgent,
@@ -687,9 +688,11 @@ export function ArchivedTasksDialog({
                 {pr_number !== null && (
                   <>
                     {" · "}
-                    <a href={pr_url ?? undefined} target="_blank" rel="noreferrer">
-                      PR #{pr_number}
-                    </a>
+                    {pr_url ? (
+                      <ExternalLink href={pr_url}>PR #{pr_number}</ExternalLink>
+                    ) : (
+                      <>PR #{pr_number}</>
+                    )}
                   </>
                 )}
               </span>

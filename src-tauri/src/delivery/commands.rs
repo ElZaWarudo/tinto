@@ -210,6 +210,25 @@ pub fn delivery_open_visual_record(
         .visual_record
         .filter(|page| std::path::Path::new(page).is_file())
         .ok_or_else(|| CommandError::new("not_found", "este trabajo no tiene registro visual"))?;
+    open_with_system(&page)
+}
+
+/// Opens a web page (a Jira issue, a PR) in the system's browser: the app's
+/// webview does not follow links that would open a new window.
+#[tauri::command]
+pub fn delivery_open_url(url: String) -> Result<(), CommandError> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(CommandError::new(
+            "invalid_url",
+            "solo se abren direcciones web",
+        ));
+    }
+    open_with_system(&url)
+}
+
+/// A file or address, with what the system opens it with. No shell is
+/// involved, so the text reaches the program as one argument.
+fn open_with_system(target: &str) -> Result<(), CommandError> {
     let program = if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -218,7 +237,7 @@ pub fn delivery_open_visual_record(
         "xdg-open"
     };
     std::process::Command::new(program)
-        .arg(&page)
+        .arg(target)
         .spawn()
         .map(|_| ())
         .map_err(|error| CommandError::new("open_failed", error.to_string()))

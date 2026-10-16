@@ -5,6 +5,7 @@
 import { markDeliveryPrSeen, refreshDeliveryPr } from "../../delivery/client";
 import type { DeliveryPr } from "../../delivery/types";
 import { prSummary } from "./taskStatus";
+import { ExternalLink } from "./ExternalLink";
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>;
 
@@ -40,9 +41,9 @@ export function PrSection({ pr, busy, run }: { pr: DeliveryPr; busy: boolean; ru
       <h3>Pull request</h3>
       <div className="delivery-pr__body">
         <p className="delivery-pr__head">
-          <a href={pr.url} target="_blank" rel="noreferrer">
+          <ExternalLink href={pr.url}>
             {pr.repo}#{pr.number}
-          </a>
+          </ExternalLink>
           <span className={`delivery-status-line delivery-tone--${summary.tone}`}>
             {summary.label}
           </span>
