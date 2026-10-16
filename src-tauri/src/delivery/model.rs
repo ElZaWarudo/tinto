@@ -236,6 +236,10 @@ pub struct DeliveryJob {
     pub visual_record: Option<String>,
     #[serde(default)]
     pub visual_record_error: Option<String>,
+    /// Why the job runs with another agent than the one asked for (it was
+    /// not installed on this machine).
+    #[serde(default)]
+    pub substituted: Option<String>,
 }
 
 /// One item of an agent's task list.

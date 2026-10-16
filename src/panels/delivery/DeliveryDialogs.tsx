@@ -530,9 +530,9 @@ export function DispatchDialog({
             value={platform}
             onChange={(event) => setPlatform(event.target.value as DeliveryPlatform | "")}
           >
-            <option value="">Windows si Claude Code está instalado allí; si no, WSL</option>
-            <option value="windows">Windows</option>
-            <option value="wsl">WSL</option>
+            <option value="">En este equipo (sin Claude Code instalado, lo hace Codex)</option>
+            <option value="windows">En este equipo, solo con Claude Code</option>
+            <option value="wsl">En WSL</option>
           </select>
         </Field>
       )}

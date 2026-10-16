@@ -137,6 +137,8 @@ export interface DeliveryJob {
   platform?: DeliveryPlatform | null;
   /** Where the job ran ("Windows", "WSL · Ubuntu"…), once started. */
   ran_on?: string | null;
+  /** Why it runs with another agent than the one asked for (not installed here). */
+  substituted?: string | null;
   /** QA jobs: folders outside the worktree the permissions let it read. */
   read_dirs?: string[];
   /** QA jobs: folders outside the worktree the permissions let it write in. */

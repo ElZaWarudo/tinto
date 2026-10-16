@@ -535,6 +535,59 @@ fn waiting_on_a_batch_returns_the_first_job_that_ends() {
 }
 
 #[test]
+fn an_agent_missing_on_this_machine_gives_way_to_the_other_never_to_wsl() {
+    let h = harness();
+    let task = h.task("L-1");
+    let new_job = |agent, reasoning: &str| NewJob {
+        task_id: task.id.clone(),
+        role: "tests".into(),
+        agent,
+        model: Some("opus".into()),
+        access: DeliveryAccess::Workspace,
+        prompt: "events=codex-ok".into(),
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+        reasoning: Some(reasoning.into()),
+        platform: None,
+    };
+    // Claude Code is not installed: Codex runs it, with its own model.
+    h.service
+        .set_installed(Arc::new(|agent| agent == DeliveryAgent::Codex));
+    let swapped = h
+        .service
+        .dispatch(new_job(DeliveryAgent::Claude, "max"))
+        .unwrap();
+    assert_eq!(swapped.agent, DeliveryAgent::Codex);
+    assert_ne!(swapped.model.as_deref(), Some("opus"));
+    assert_eq!(swapped.reasoning, None, "Codex has no `max`");
+    assert_eq!(
+        swapped.substituted.as_deref(),
+        Some("Claude Code no está instalado en este equipo: corrió con Codex.")
+    );
+    h.wait(&swapped.id);
+    // And the other way round, keeping a level both know.
+    h.service
+        .set_installed(Arc::new(|agent| agent == DeliveryAgent::Claude));
+    let other = h
+        .service
+        .dispatch(new_job(DeliveryAgent::Codex, "high"))
+        .unwrap();
+    assert_eq!(other.agent, DeliveryAgent::Claude);
+    assert_eq!(other.reasoning.as_deref(), Some("high"));
+    h.wait(&other.id);
+    // With neither, nothing is dispatched.
+    h.service.set_installed(Arc::new(|_| false));
+    assert_eq!(
+        h.service
+            .dispatch(new_job(DeliveryAgent::Codex, "high"))
+            .unwrap_err()
+            .category,
+        "binary_not_found"
+    );
+}
+
+#[test]
 fn a_qa_visual_record_becomes_a_page_the_user_opens() {
     let h = harness();
     let task = h.task("V-1");

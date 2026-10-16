@@ -327,6 +327,17 @@ pub fn launch(
     }
 }
 
+/// Whether the agent's CLI is installed on this machine (outside WSL).
+pub fn installed_on_windows(agent: DeliveryAgent) -> bool {
+    match agent {
+        DeliveryAgent::Codex => {
+            crate::agent_console::validation::resolve_agent_binary("codex").is_ok()
+        }
+        DeliveryAgent::Claude => claude_binary().is_some(),
+        DeliveryAgent::Shell => true,
+    }
+}
+
 /// Claude Code on this machine: on PATH or, on Windows, the one the Claude
 /// desktop app installed.
 fn claude_binary() -> Option<PathBuf> {
@@ -645,11 +656,12 @@ fn claude_launch(
     native: Option<PathBuf>,
     claude_distro: Option<&str>,
 ) -> Result<JobLaunch, DeliveryError> {
-    if native.is_none() && task.distro.is_none() && job.platform == Some(DeliveryPlatform::Windows)
-    {
+    // A Windows repo's job runs with the Claude Code installed on Windows;
+    // WSL only when asked for (dispatch gives the job to Codex instead).
+    if native.is_none() && task.distro.is_none() && job.platform != Some(DeliveryPlatform::Wsl) {
         return Err(DeliveryError::new(
             "binary_not_found",
-            "Claude Code no está instalado en Windows; instálalo o lanza el trabajo en WSL",
+            "Claude Code no está instalado en este equipo",
         ));
     }
     let mode = match (job.access, job.writes) {
@@ -1578,6 +1590,7 @@ pub(crate) mod tests {
             usage: None,
             visual_record: None,
             visual_record_error: None,
+            substituted: None,
         }
     }
 
@@ -1987,7 +2000,15 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = JobPaths::in_dir(dir.path().join("j1"));
         let mut job = qa_job_with_permissions();
-        // Not installed on Windows: WSL, unless the job asked for Windows.
+        // Not installed on Windows: never a quiet move to WSL (dispatch
+        // gives the job to Codex instead).
+        for platform in [None, Some(DeliveryPlatform::Windows)] {
+            job.platform = platform;
+            let error = claude_launch(&job, &task, &paths, None, Some("Ubuntu")).unwrap_err();
+            assert_eq!(error.category, "binary_not_found");
+        }
+        // WSL when the job asks for it.
+        job.platform = Some(DeliveryPlatform::Wsl);
         let launch = claude_launch(&job, &task, &paths, None, Some("Ubuntu")).unwrap();
         assert_eq!(launch.program, PathBuf::from("wsl.exe"));
         assert_eq!(launch.wsl_job.as_ref().unwrap().distro, "Ubuntu");
@@ -2004,9 +2025,6 @@ pub(crate) mod tests {
             script.contains(" '/mnt/c/Users/me/.claude/skills'"),
             "{script}"
         );
-        job.platform = Some(DeliveryPlatform::Windows);
-        let error = claude_launch(&job, &task, &paths, None, Some("Ubuntu")).unwrap_err();
-        assert_eq!(error.category, "binary_not_found");
     }
 
     #[test]

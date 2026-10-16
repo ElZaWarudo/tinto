@@ -41,6 +41,8 @@ pub type PathsFor = Arc<dyn Fn(&str) -> Result<JobPaths, DeliveryError> + Send +
 /// programs, and which of them cannot run at all.
 pub type SandboxPlanner =
     Arc<dyn Fn(&DeliveryTask, &[String]) -> adapters::SandboxPlan + Send + Sync>;
+/// Whether an agent's CLI is installed on this machine, outside WSL.
+pub type Installed = Arc<dyn Fn(DeliveryAgent) -> bool + Send + Sync>;
 
 const CODEX_MODEL_SETTING: &str = "codex_model";
 /// Written next to a WSL job's files so a restart can stop what is left.
@@ -77,6 +79,7 @@ pub(super) struct Inner {
     notify: Mutex<Option<Notify>>,
     pub(super) coordinator: Mutex<Option<DeliveryCoordinatorEndpoint>>,
     sandbox_planner: Mutex<SandboxPlanner>,
+    installed: Mutex<Installed>,
     pub(super) github: Mutex<Arc<dyn GitHub>>,
     pub(super) jira: Mutex<Arc<dyn super::jira::Jira>>,
     launcher: Launcher,
@@ -138,7 +141,20 @@ impl DeliveryService {
             CheckpointConfig::default(),
         )?;
         service.set_sandbox_planner(Arc::new(adapters::codex_sandbox_plan));
+        service.set_installed(Arc::new(adapters::installed_on_windows));
         Ok(service)
+    }
+
+    /// Says whether an agent is installed on this machine (outside WSL).
+    pub fn set_installed(&self, installed: Installed) {
+        if let Ok(mut slot) = self.inner.installed.lock() {
+            *slot = installed;
+        }
+    }
+
+    fn is_installed(&self, agent: DeliveryAgent) -> bool {
+        let installed = self.inner.installed.lock().ok().map(|slot| slot.clone());
+        installed.is_none_or(|installed| installed(agent))
     }
 
     pub fn set_sandbox_planner(&self, planner: SandboxPlanner) {
@@ -176,6 +192,8 @@ impl DeliveryService {
                 coordinator: Mutex::new(None),
                 // Nothing is probed unless the real planner is set.
                 sandbox_planner: Mutex::new(Arc::new(|_, _| adapters::SandboxPlan::default())),
+                // Every agent counts as installed unless the app checks.
+                installed: Mutex::new(Arc::new(|_| true)),
                 // Nothing reaches GitHub unless the app sets `gh`.
                 github: Mutex::new(Arc::new(prs::Offline)),
                 jira: Mutex::new(Arc::new(super::jira::JiraHttp)),
@@ -578,10 +596,41 @@ impl DeliveryService {
     /// `resumes` is the paused job the new one continues in its session.
     fn dispatch_job(
         &self,
-        request: NewJob,
+        mut request: NewJob,
         resumes: Option<&DeliveryJob>,
     ) -> Result<DeliveryJob, DeliveryError> {
         let task = self.task(&request.task_id)?;
+        // On a Windows repo agents run as installed on Windows, never in WSL
+        // unless asked: an agent that is not installed gives way to the
+        // other, with that agent's own model.
+        let mut substituted = None;
+        // A platform asked for (Windows or WSL) keeps the agent asked for.
+        let local = task.distro.is_none() && request.platform.is_none();
+        if local && request.agent != DeliveryAgent::Shell && resumes.is_none() {
+            let other = match request.agent {
+                DeliveryAgent::Codex => DeliveryAgent::Claude,
+                _ => DeliveryAgent::Codex,
+            };
+            if !self.is_installed(request.agent) {
+                if !self.is_installed(other) {
+                    return Err(DeliveryError::new(
+                        "binary_not_found",
+                        "ni Codex ni Claude Code están instalados en este equipo",
+                    ));
+                }
+                substituted = Some(format!(
+                    "{} no está instalado en este equipo: corrió con {}.",
+                    agent_name(request.agent),
+                    agent_name(other)
+                ));
+                request.agent = other;
+                request.model = None;
+                // Only the levels both agents know carry over.
+                request.reasoning = request
+                    .reasoning
+                    .filter(|effort| matches!(effort.trim(), "low" | "medium" | "high" | "xhigh"));
+            }
+        }
         // A paused stage holds its task: nothing else runs on it until the
         // user resumes or cancels it.
         if let Some(paused) = self.paused_job(&task.id)? {
@@ -745,6 +794,7 @@ impl DeliveryService {
             usage: None,
             visual_record: None,
             visual_record_error: None,
+            substituted,
         };
         store.put_job(&job)?;
         store.record_event(
@@ -1832,4 +1882,12 @@ fn to_changes(snapshot: &WorktreeSnapshot) -> Vec<DeliveryChange> {
             .to_string(),
         })
         .collect()
+}
+
+fn agent_name(agent: DeliveryAgent) -> &'static str {
+    match agent {
+        DeliveryAgent::Codex => "Codex",
+        DeliveryAgent::Claude => "Claude Code",
+        DeliveryAgent::Shell => "Shell",
+    }
 }

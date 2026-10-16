@@ -87,6 +87,17 @@ fn is_windowsapps_codex_alias(agent_type: &str, path: &Path) -> bool {
 
 #[cfg(windows)]
 fn fallback_agent_candidates(agent_type: &str) -> Vec<PathBuf> {
+    if agent_type.eq_ignore_ascii_case("claude") {
+        // Claude Code's own installer puts it in ~/.local/bin, which is not
+        // always on the PATH Tinto starts with.
+        let installed = env::var_os("USERPROFILE").map(|home| {
+            PathBuf::from(home)
+                .join(".local")
+                .join("bin")
+                .join("claude.exe")
+        });
+        return sorted_existing_candidates(installed.into_iter().collect());
+    }
     if !agent_type.eq_ignore_ascii_case("codex") {
         return Vec::new();
     }

@@ -2135,6 +2135,7 @@ function JobRow({
         <div className="delivery-job__detail">
           {job.error && <p className="delivery-job__error">{job.error}</p>}
           {job.result_note && <p className="delivery-job__note">{job.result_note}</p>}
+          {job.substituted && <p className="delivery-muted">{job.substituted}</p>}
           {job.visual_record_error && (
             <p className="delivery-job__note">
               No se pudo generar el registro visual: {job.visual_record_error}
