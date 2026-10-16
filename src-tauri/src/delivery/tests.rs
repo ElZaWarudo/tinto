@@ -3212,6 +3212,129 @@ fn the_coordinators_own_calls_do_not_block_and_the_user_can_change_them() {
 }
 
 #[test]
+fn after_the_brainstorm_decisions_settle_as_they_are_asked() {
+    let h = harness();
+    let call = |name: &str, arguments: serde_json::Value| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    let repo = plain_path(h.repo.path());
+    let run = call(
+        "create_run",
+        json!({"repo": repo, "title": "B", "owner": "coord"}),
+    );
+    let run_id = run["structuredContent"]["id"].as_str().unwrap().to_string();
+    let task = call(
+        "create_task",
+        json!({"run_id": run_id, "owner": "coord", "generation": 1, "repo": repo, "key": "D-5", "title": "x"}),
+    );
+    let task_id = task["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let fenced = |extra: serde_json::Value| {
+        let mut args =
+            json!({"run_id": run_id, "owner": "coord", "generation": 1, "task_id": task_id});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        args
+    };
+    let ask = |decisions: serde_json::Value| {
+        call("request_decisions", fenced(json!({"decisions": decisions})))
+    };
+    let answers = |result: serde_json::Value| {
+        result["structuredContent"]["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|decision| {
+                (
+                    decision["answer"].as_str().map(str::to_string),
+                    decision["decided_by"].as_str().map(str::to_string),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let recommended = json!({"kind": "choice", "question": "¿Aviso?", "options": [
+        {"label": "Sí", "consequence": "a"},
+        {"label": "No", "consequence": "b", "recommended": true}]});
+    let unrecommended = json!({"kind": "choice", "question": "¿Sin recomendación?", "options": [
+        {"label": "A", "consequence": "a"}, {"label": "B", "consequence": "b"}]});
+    let permission = json!({"kind": "permission", "question": "¿Instalar?", "undo": "desinstalar", "command": "agentos skills install"});
+
+    // During the brainstorm the user answers, and it cannot end before.
+    let asked = ask(json!([recommended, unrecommended]));
+    assert_eq!(answers(asked.clone()), vec![(None, None), (None, None)]);
+    let open = call("end_brainstorm", fenced(json!({})));
+    assert_eq!(open["isError"], true);
+    assert!(open["content"][0]["text"].as_str().unwrap().contains("D-5"));
+    for decision in asked["structuredContent"]["result"].as_array().unwrap() {
+        h.service
+            .answer_decision(decision["id"].as_str().unwrap(), "Sí", "user")
+            .or_else(|_| {
+                h.service
+                    .answer_decision(decision["id"].as_str().unwrap(), "A", "user")
+            })
+            .unwrap();
+    }
+    // A settings proposal also keeps it open until the user decides it.
+    let propose = |command: &str| {
+        call(
+            "propose_settings",
+            fenced(json!({"reason": "tests", "checks_add": [command]})),
+        )["structuredContent"]
+            .clone()
+    };
+    let proposed = propose("npm test");
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    assert_eq!(call("end_brainstorm", fenced(json!({})))["isError"], true);
+    h.service
+        .reject_settings_proposal(proposed["id"].as_str().unwrap(), "user")
+        .unwrap();
+    let ended = call("end_brainstorm", fenced(json!({})));
+    assert_eq!(ended["structuredContent"]["unattended"], true, "{ended}");
+    let approved = propose("npm run lint");
+    assert_eq!(approved["status"], "approved", "{approved}");
+    assert_eq!(approved["decided_by"], super::decisions::AUTO);
+
+    // From then on nothing waits for the user before the PR.
+    let refused = ask(json!([recommended, unrecommended]));
+    assert_eq!(refused["isError"], true);
+    assert!(refused["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("recomienda una opción"));
+    let auto = Some(super::decisions::AUTO.to_string());
+    assert_eq!(
+        answers(ask(json!([
+            recommended,
+            {"kind": "text", "question": "Mensaje", "text": "Hecho."},
+            permission
+        ]))),
+        vec![
+            (Some("No".into()), auto.clone()),
+            (Some("Hecho.".into()), auto.clone()),
+            (Some(super::decisions::ALLOWED.into()), auto.clone()),
+        ]
+    );
+    let worktree = PathBuf::from(task["structuredContent"]["worktree"].as_str().unwrap());
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    let commit = call(
+        "request_approval",
+        fenced(json!({"rung": "commit", "commits": [{"message": "feat: a", "paths": ["a.txt"]}]})),
+    );
+    assert_eq!(
+        commit["structuredContent"]["status"], "executed",
+        "{commit}"
+    );
+}
+
+#[test]
 fn a_coordinator_accepts_the_recommended_decisions_but_never_a_permission() {
     let h = harness();
     let call = |name: &str, arguments: serde_json::Value| {

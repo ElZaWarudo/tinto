@@ -534,6 +534,12 @@ pub struct DeliveryRun {
     /// comment on its Jira issue. `None` until the user sets it in Tinto.
     #[serde(default)]
     pub qa_jira_comment: Option<bool>,
+    /// The coordinator ended the batch's brainstorm: from then on Tinto
+    /// settles its decisions itself (recommendations, texts, permissions)
+    /// and approves its commits and pushes, so nothing stops before the PR,
+    /// which still waits for the user.
+    #[serde(default)]
+    pub unattended: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

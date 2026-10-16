@@ -19,6 +19,7 @@ const ALLOWED = "allowed";
 const DENIED = "denied";
 
 function who(id: string | null): string {
+  if (id === "auto") return "aceptación automática";
   return !id || id === "user" ? "ti" : id;
 }
 

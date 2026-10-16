@@ -1089,6 +1089,9 @@ describe("DeliveryPanel", () => {
       expect(client.setDeliveryRunQaJiraComment).toHaveBeenCalledWith("r1", true),
     );
 
+    // The coordinator ends the brainstorm; the batch only shows where it is.
+    expect(within(settings).getByText("Brainstorm")).toBeInTheDocument();
+
     await user.type(within(settings).getByPlaceholderText("Lote de octubre"), "Lote B");
     await user.selectOptions(
       within(settings).getByRole("combobox", {

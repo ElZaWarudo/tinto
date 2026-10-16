@@ -243,6 +243,8 @@ export interface DeliveryRun {
   updated_at_ms: number;
   /** Post QA verdicts as Jira comments; null until the user sets it. */
   qa_jira_comment?: boolean | null;
+  /** The coordinator ended the brainstorm: decisions, commits and pushes no longer wait for the user. */
+  unattended?: boolean;
 }
 
 export interface DeliverySettings {

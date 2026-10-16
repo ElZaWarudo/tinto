@@ -309,14 +309,6 @@ export function taskStatus(
       label: decisions === 1 ? "1 decisión pendiente" : `${decisions} decisiones pendientes`,
     };
   }
-  if (pendingSettingsProposals(overview, task).length > 0) {
-    return {
-      group: "attention",
-      tone: "attention",
-      icon: "flag",
-      label: "Aprobar cambio de ajustes",
-    };
-  }
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const pending = approvals.find((approval) => approval.status === "pending");
   if (pending) {
@@ -397,6 +389,16 @@ export function taskStatus(
       tone: "waiting",
       icon: "clock",
       label: position > 0 ? `En cola · ${ordinal(position)}` : "En cola",
+    };
+  }
+  // A proposal is the repo's, but only the task that asked for it waits on
+  // it, and only once its agents stop: it holds no job already dispatched.
+  if (pendingSettingsProposals(overview, task).some((proposal) => proposal.task_id === task.id)) {
+    return {
+      group: "attention",
+      tone: "attention",
+      icon: "flag",
+      label: "Aprobar cambio de ajustes",
     };
   }
 

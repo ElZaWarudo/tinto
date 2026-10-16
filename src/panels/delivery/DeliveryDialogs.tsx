@@ -1222,6 +1222,21 @@ export function SettingsDialog({
                 <option value="yes">QA en Jira: comentar</option>
                 <option value="no">QA en Jira: no publicar</option>
               </select>
+              {run.unattended ? (
+                <span
+                  className="delivery-badge"
+                  title="El brainstorm terminó: Tinto responde las decisiones con lo recomendado, concede los permisos y hace commit y push. Abrir el PR sigue esperándote."
+                >
+                  Sin paradas hasta el PR
+                </span>
+              ) : (
+                <span
+                  className="delivery-badge delivery-badge--muted"
+                  title="El coordinador pregunta lo de todas las tareas; cuando lo respondas, cierra el brainstorm y el lote sigue sin paradas hasta el PR."
+                >
+                  Brainstorm
+                </span>
+              )}
               {run.owner && run.owner !== "user" && (
                 <button
                   type="button"

@@ -10,10 +10,12 @@
 //!   which freezes it.
 //! - Approving changes the settings for the jobs dispatched from then on;
 //!   jobs already queued or running keep what they got.
+//! - Once the coordinator ends its run's brainstorm, a valid proposal is
+//!   approved whole as it is made, decided by `auto`.
 
 use std::path::Path;
 
-use super::decisions::{is_absolute, names, norm, SCRIPT_EXTENSIONS};
+use super::decisions::{is_absolute, names, norm, AUTO, SCRIPT_EXTENSIONS};
 use super::model::{
     DeliveryRepoSettings, DeliverySettingsChanges, DeliverySettingsProposal,
     DeliverySettingsProposalStatus, DeliveryTask,
@@ -231,6 +233,11 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
+        // Past the brainstorm nothing waits for the user: it applies whole.
+        if self.run(run_id)?.unattended {
+            let changes = proposal.changes.clone();
+            return self.approve_settings_proposal(&proposal.id, changes, AUTO);
+        }
         Ok(proposal)
     }
 

@@ -7,6 +7,10 @@
 //! - Answered decisions go into every later job's instructions, and an
 //!   allowed permission's command joins the commands its QA job may run.
 //! - "Accept recommended" settles choices and texts, never permissions.
+//! - Once the coordinator ends a run's brainstorm, its decisions settle as
+//!   they are asked: choices with their recommendation, texts as proposed,
+//!   and permissions allowed. A choice without a recommendation is refused,
+//!   so nothing waits for the user.
 //! - What a permission lets QA run cannot change after the user allows it:
 //!   scripts agents can edit are frozen when the coordinator asks (the user
 //!   reads that text and jobs run that text), and a command that runs the
@@ -22,6 +26,22 @@ use super::{now_ms, DeliveryError};
 
 pub const ALLOWED: &str = "allowed";
 pub const DENIED: &str = "denied";
+/// Who answered a decision settled after its run's brainstorm ended.
+pub const AUTO: &str = "auto";
+
+/// The answer Tinto gives in the user's place: the recommended option of a
+/// choice, the text as proposed, and, when `permissions`, allowed.
+fn recommended_answer(decision: &DeliveryDecision, permissions: bool) -> Option<String> {
+    match decision.kind {
+        DeliveryDecisionKind::Choice => decision
+            .options
+            .iter()
+            .find(|option| option.recommended)
+            .map(|option| option.label.clone()),
+        DeliveryDecisionKind::Text => Some(decision.text.clone()),
+        DeliveryDecisionKind::Permission => permissions.then(|| ALLOWED.to_string()),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewDecision {
@@ -405,10 +425,27 @@ impl DeliveryService {
         }
         // The batch is all or nothing, and the refusal names every invalid
         // item, so a coordinator never believes a valid one was asked.
+        let unattended = self.unattended(&task)?;
         let mut frozen = Vec::new();
         let mut refused = Vec::new();
         for (index, decision) in decisions.iter().enumerate() {
-            match validate(decision).and_then(|_| freeze(decision, &task)) {
+            let settled = || {
+                match decision.kind {
+                // Past the brainstorm nothing may wait for the user.
+                DeliveryDecisionKind::Choice
+                    if unattended && !decision.options.iter().any(|option| option.recommended) =>
+                {
+                    Err(invalid(
+                        "el brainstorm terminó y nada puede esperar al usuario: recomienda una opción",
+                    ))
+                }
+                _ => Ok(()),
+            }
+            };
+            match validate(decision)
+                .and_then(|_| settled())
+                .and_then(|_| freeze(decision, &task))
+            {
                 Ok(checked) => frozen.push(checked),
                 Err(error) => refused.push(format!(
                     "#{} «{}»: {}",
@@ -500,7 +537,17 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
-        Ok(created)
+        let settled = self.settle_unattended(&task.id)?;
+        Ok(created
+            .into_iter()
+            .map(|decision| {
+                settled
+                    .iter()
+                    .find(|answered| answered.id == decision.id)
+                    .cloned()
+                    .unwrap_or(decision)
+            })
+            .collect())
     }
 
     /// What would stop an allowed permission from working when QA runs with
@@ -709,6 +756,27 @@ impl DeliveryService {
         task_id: &str,
         decided_by: &str,
     ) -> Result<Vec<DeliveryDecision>, DeliveryError> {
+        self.answer_pending(task_id, decided_by, false)
+    }
+
+    /// Once the task's run is past its brainstorm, settles what the task has
+    /// pending, permissions included. Returns the decisions it answered.
+    pub(super) fn settle_unattended(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<DeliveryDecision>, DeliveryError> {
+        if !self.unattended(&self.task(task_id)?)? {
+            return Ok(Vec::new());
+        }
+        self.answer_pending(task_id, AUTO, true)
+    }
+
+    fn answer_pending(
+        &self,
+        task_id: &str,
+        decided_by: &str,
+        permissions: bool,
+    ) -> Result<Vec<DeliveryDecision>, DeliveryError> {
         let pending: Vec<DeliveryDecision> = self
             .task_decisions(task_id)?
             .into_iter()
@@ -716,16 +784,7 @@ impl DeliveryService {
             .collect();
         let mut answered = Vec::new();
         for decision in pending {
-            let answer = match decision.kind {
-                DeliveryDecisionKind::Choice => decision
-                    .options
-                    .iter()
-                    .find(|option| option.recommended)
-                    .map(|option| option.label.clone()),
-                DeliveryDecisionKind::Text => Some(decision.text.clone()),
-                DeliveryDecisionKind::Permission => None,
-            };
-            if let Some(answer) = answer {
+            if let Some(answer) = recommended_answer(&decision, permissions) {
                 answered.push(self.answer_decision(&decision.id, &answer, decided_by)?);
             }
         }

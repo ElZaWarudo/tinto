@@ -12,10 +12,12 @@
 //!   message and files. Tinto creates them as written (it adds no trailers
 //!   or signatures), can undo them until they are pushed, and notices when
 //!   they are no longer on the branch.
+//! - Once the coordinator ends a run's brainstorm, its commit and push rungs
+//!   are approved as they are asked; the PR and Jira rungs still wait.
 
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryRun, DeliveryRung,
-    DeliveryTask,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus, DeliveryRun,
+    DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask,
 };
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
@@ -421,6 +423,7 @@ impl DeliveryService {
             created_at_ms: now,
             updated_at_ms: now,
             qa_jira_comment,
+            unattended: false,
         };
         let store = self.store()?;
         store.put_run(&run)?;
@@ -514,6 +517,57 @@ impl DeliveryService {
             },
         )?;
         Ok(run)
+    }
+
+    /// The coordinator ends the batch's brainstorm once the user has
+    /// answered everything it asked, so nothing is left for the stages to
+    /// wait on. From then on the batch runs without stopping until a PR.
+    pub fn end_brainstorm(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
+        let mut run = self.active_run(run_id)?;
+        let tasks = self.store()?.tasks()?;
+        for task in tasks
+            .iter()
+            .filter(|task| task.run_id.as_deref() == Some(run_id))
+        {
+            if self
+                .task_decisions(&task.id)?
+                .iter()
+                .any(|decision| decision.status == DeliveryDecisionStatus::Pending)
+            {
+                return Err(DeliveryError::new(
+                    "brainstorm_open",
+                    format!(
+                        "el brainstorm sigue: {} tiene decisiones sin responder",
+                        task.key
+                    ),
+                ));
+            }
+        }
+        if self
+            .repo_settings_proposals(&run.repo)?
+            .iter()
+            .any(|proposal| {
+                proposal.run_id == run_id
+                    && proposal.status == DeliverySettingsProposalStatus::Pending
+            })
+        {
+            return Err(DeliveryError::new(
+                "brainstorm_open",
+                "el brainstorm sigue: hay una propuesta de ajustes sin decidir",
+            ));
+        }
+        run.unattended = true;
+        run.updated_at_ms = now_ms();
+        self.save_run(&run, "run_policy", "unattended")?;
+        Ok(run)
+    }
+
+    /// Whether the task's batch is past its brainstorm.
+    pub(super) fn unattended(&self, task: &DeliveryTask) -> Result<bool, DeliveryError> {
+        Ok(match task.run_id.as_deref() {
+            Some(run_id) => self.run(run_id)?.unattended,
+            None => false,
+        })
     }
 
     pub fn close_run(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
@@ -734,6 +788,13 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
+        // Past the brainstorm the branch is committed and published without
+        // stopping; opening the PR still waits for the user.
+        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push)
+            && self.unattended(&task)?
+        {
+            return self.decide_approval(&approval.id, true, None);
+        }
         Ok(approval)
     }
 

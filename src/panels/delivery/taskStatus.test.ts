@@ -145,6 +145,33 @@ describe("taskStatus", () => {
     });
   });
 
+  it("flags a settings proposal only on the task that asked, once its agents stop", () => {
+    const proposal = (taskId: string) => ({
+      id: `p-${taskId}`,
+      repo: task.repo,
+      task_id: taskId,
+      run_id: "r1",
+      reason: "",
+      changes: { checks_add: ["npm test"] },
+      status: "pending" as const,
+      approved: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    });
+    expect(status({ settings_proposals: [proposal("t1")] }).label).toBe(
+      "Aprobar cambio de ajustes",
+    );
+    expect(status({ settings_proposals: [proposal("t2")] }).group).not.toBe("attention");
+    expect(
+      status({
+        settings_proposals: [proposal("t1")],
+        jobs: [job({ role: "qa", status: "started", ended_at_ms: null })],
+      }).group,
+    ).toBe("running");
+  });
+
   it("shows a running stage with its clock", () => {
     expect(
       status({ jobs: [job({ role: "implementation", status: "started", ended_at_ms: null })] }),
