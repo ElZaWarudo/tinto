@@ -660,6 +660,7 @@ impl DeliveryService {
             attempt,
             agent: request.agent,
             model,
+            session_model: None,
             access: request.access,
             prompt: request.prompt,
             contract_version: task.contract_version,
@@ -1122,6 +1123,9 @@ impl DeliveryService {
                 return;
             };
             let mut session_recorded = session_known;
+            // A Claude session says in its first event which model it runs,
+            // so the view names it even when the job asked for the default.
+            let mut model_recorded = agent != DeliveryAgent::Claude;
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
                 let _ = writeln!(file, "{line}");
@@ -1129,6 +1133,12 @@ impl DeliveryService {
                     if let Some(id) = adapters::session_id_from_line(agent, &line) {
                         session_recorded = true;
                         service.record_session_id(&stdout_job, id);
+                    }
+                }
+                if !model_recorded {
+                    if let Some(model) = adapters::claude_init_model(&line) {
+                        model_recorded = true;
+                        service.record_model(&stdout_job, model);
                     }
                 }
             }
@@ -1282,6 +1292,16 @@ impl DeliveryService {
         if let Ok(store) = self.store() {
             if let Ok(Some(mut job)) = store.job(job_id) {
                 job.provider_session_id = Some(session_id);
+                let _ = store.put_job(&job);
+            }
+        }
+        self.notify();
+    }
+
+    fn record_model(&self, job_id: &str, model: String) {
+        if let Ok(store) = self.store() {
+            if let Ok(Some(mut job)) = store.job(job_id) {
+                job.session_model = Some(model);
                 let _ = store.put_job(&job);
             }
         }

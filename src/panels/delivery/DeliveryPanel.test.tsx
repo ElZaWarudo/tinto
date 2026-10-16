@@ -200,6 +200,31 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("Implement the parser change.")).toBeInTheDocument();
   });
 
+  it("names the model and reasoning each stage runs with, defaults included", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({ role: "tests", reasoning: "high" }),
+          job({
+            id: "j2",
+            role: "implementation",
+            agent: "claude",
+            model: null,
+            session_model: "claude-opus-5-5",
+            status: "started",
+            ended_at_ms: null,
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    const track = await screen.findByRole("list", { name: "Agentes" });
+    expect(within(track).getByText("gpt-6-astra · alto")).toBeInTheDocument();
+    expect(
+      within(track).getByText("claude-opus-5-5 · razonamiento predeterminado"),
+    ).toBeInTheDocument();
+  });
+
   it("creates a task in the chosen repository", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(overview({ tasks: [], jobs: [] }));

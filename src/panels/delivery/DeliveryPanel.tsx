@@ -252,6 +252,22 @@ function agentName(agent: string): string {
   return agent === "codex" ? "Codex" : agent === "claude" ? "Claude Code" : "Shell";
 }
 
+/** The model and reasoning a stage runs with, named even when they are the defaults. */
+function runtimeLabel(job: DeliveryJob): string {
+  if (job.agent === "shell") return "";
+  const model = job.model ?? job.session_model ?? "modelo predeterminado";
+  if (job.reasoning) return `${model} · ${codexReasoningLabel(job.reasoning).toLowerCase()}`;
+  // Codex falls back to the model's default effort, as the last catalog has it.
+  const fallback =
+    job.agent === "codex"
+      ? lastRuntimeCatalog()?.models?.find((entry) => entry.model === job.model)
+          ?.default_reasoning_effort
+      : undefined;
+  return fallback
+    ? `${model} · ${codexReasoningLabel(fallback).toLowerCase()} (predeterminado)`
+    : `${model} · razonamiento predeterminado`;
+}
+
 /** Who ran the task's latest stage, for one with no agent of its own to start from. */
 function lastStageAgent(jobs: DeliveryJob[], taskId: string): DeliveryStageAgent | null {
   const last = [...jobs].reverse().find((job) => job.task_id === taskId && job.agent !== "shell");
@@ -1216,6 +1232,9 @@ function StageTrack({
                   {stageLabel(role)}
                 </span>
                 <small>{outcome.label}</small>
+                {job && job.agent !== "shell" && (
+                  <small className="delivery-node__runtime">{runtimeLabel(job)}</small>
+                )}
               </>
             );
             return (
@@ -1227,7 +1246,7 @@ function StageTrack({
                 {job ? (
                   <button
                     type="button"
-                    title={`${stageLabel(role)} · intento ${job.attempt}`}
+                    title={`${stageLabel(role)} · intento ${job.attempt} · ${agentName(job.agent)} · ${runtimeLabel(job)}`}
                     onClick={() => onFocus(job)}
                   >
                     {content}
@@ -1921,8 +1940,7 @@ function JobRow({
         </span>
         <span className="delivery-job__agent">
           {agentName(job.agent)}
-          {job.agent === "shell" ? "" : ` · ${job.model ?? "modelo predeterminado"}`}
-          {job.reasoning ? ` · ${codexReasoningLabel(job.reasoning).toLowerCase()}` : ""}
+          {job.agent === "shell" ? "" : ` · ${runtimeLabel(job)}`}
           {scope}
         </span>
         <span className={`delivery-outcome delivery-tone--${outcome.tone}`}>

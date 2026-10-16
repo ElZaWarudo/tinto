@@ -143,7 +143,12 @@ pub struct DeliveryJob {
     pub role: String,
     pub attempt: u32,
     pub agent: DeliveryAgent,
+    /// The model asked for; `None` leaves the CLI's default.
     pub model: Option<String>,
+    /// The model the agent's session says it runs (Claude Code reports it
+    /// when it starts), so a default is shown by its name.
+    #[serde(default)]
+    pub session_model: Option<String>,
     pub access: DeliveryAccess,
     pub prompt: String,
     pub contract_version: u32,

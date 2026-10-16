@@ -1041,6 +1041,15 @@ pub fn session_id_from_line(agent: DeliveryAgent, line: &str) -> Option<String> 
     }
 }
 
+/// The model a Claude Code session says it runs, in its `init` event.
+pub fn claude_init_model(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    (value["type"] == "system" && value["subtype"] == "init")
+        .then(|| value["model"].as_str().map(str::to_string))
+        .flatten()
+        .filter(|model| !model.is_empty())
+}
+
 /// Readable entries for one raw output line.
 pub fn log_entries(agent: DeliveryAgent, line: &str) -> Vec<DeliveryLogEntry> {
     let entry = |kind: &str, text: String| DeliveryLogEntry {
@@ -1342,6 +1351,7 @@ mod tests {
             attempt: 1,
             agent,
             model: Some("gpt-6-astra".into()),
+            session_model: None,
             access: DeliveryAccess::Workspace,
             prompt: "Write the failing test.".into(),
             contract_version: 1,

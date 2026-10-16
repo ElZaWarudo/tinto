@@ -77,7 +77,10 @@ export interface DeliveryJob {
   role: string;
   attempt: number;
   agent: DeliveryAgent;
+  /** The model asked for; null leaves the CLI's default. */
   model: string | null;
+  /** The model the session says it runs (Claude Code reports it at start). */
+  session_model?: string | null;
   access: DeliveryAccess;
   prompt: string;
   contract_version: number;

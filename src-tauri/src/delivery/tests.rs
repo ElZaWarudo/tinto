@@ -287,7 +287,10 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
         .unwrap();
     assert_eq!(claude.model, None);
     assert_eq!(claude.allowed_commands, vec!["npm test".to_string()]);
-    h.wait(&claude.id);
+    // Once it runs, the job says the model its session reported.
+    let ran = h.wait(&claude.id);
+    assert_eq!(ran.session_model.as_deref(), Some("claude"));
+    assert_eq!(ran.model, None, "a retry still asks for the default");
     let full = h
         .service
         .dispatch(new_job(DeliveryAgent::Claude, DeliveryAccess::Full))

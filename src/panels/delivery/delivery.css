@@ -721,6 +721,10 @@
 .delivery-node--danger small {
   color: var(--danger);
 }
+/* Who runs the stage is information, never part of its alert. */
+.delivery-node .delivery-node__runtime {
+  color: var(--fg-muted);
+}
 .delivery-node--todo .delivery-node__name {
   color: var(--fg-muted);
   font-weight: 500;
