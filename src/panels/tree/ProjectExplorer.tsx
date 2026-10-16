@@ -21,6 +21,12 @@ import { filterTreeNodes, hasActiveFilters } from "../../qol/filters";
 import { qualityStore, useQualityState } from "../../qol/state";
 import { repoTreeStore, useRepoTree } from "../../workspace/repoTreeStore";
 import { fileDock, useRepoDock } from "../../workspace/fileDock";
+import {
+  baseChangeKind,
+  setBaseView,
+  updateBaseFiles,
+  useBaseView,
+} from "../../workspace/baseView";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { FileTreeNode } from "./FileTreeNode";
 import { useExplorerExpanded } from "./explorerCollapseState";
@@ -367,11 +373,42 @@ export function ProjectExplorer({
     };
   }, [collapsed, repo]);
 
+  // Compared with a base commit, the tree holds only the files changed
+  // since then, removed ones included, and reads them again as the
+  // worktree changes.
+  const baseView = useBaseView(repo);
+  useEffect(() => {
+    if (!baseView || !delta) return;
+    const timer = setTimeout(() => {
+      baseView.refresh().then(
+        (files) => updateBaseFiles(repo, files),
+        () => {},
+      );
+    }, 1000);
+    return () => clearTimeout(timer);
+    // Only a change in the worktree (a new delta) reads them again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [delta, repo]);
   const nodes = useMemo(() => {
+    if (baseView) {
+      const created = baseView.files.filter((file) => baseChangeKind(file) === "created");
+      return filterTreeNodes(
+        buildFileTree(
+          baseView.files.map((file) => ({ path: file.path, is_dir: false })),
+          {
+            modified: baseView.files.filter((file) => !created.includes(file)).map((f) => f.path),
+            staged: [],
+            untracked: created.map((file) => file.path),
+          },
+        ),
+        filters,
+        [],
+      );
+    }
     if (!tree || !delta) return [];
     const signals = getRepoSignals(delta);
     return filterTreeNodes(buildFileTree(tree.entries, delta.status), filters, signals);
-  }, [tree, delta, filters]);
+  }, [tree, delta, filters, baseView]);
   const nodesByPath = useMemo(() => collectTreeNodes(nodes), [nodes]);
   const repoSignals = delta ? getRepoSignals(delta) : [];
   const visiblePaths = useMemo(() => visibleTreePaths(nodes, expandedDirs), [nodes, expandedDirs]);
@@ -982,6 +1019,19 @@ export function ProjectExplorer({
           </button>
         )}
       </div>
+      {baseView && (
+        <div className="project-explorer__base" role="status">
+          <span>
+            {baseView.files.length === 1
+              ? "1 archivo cambiado"
+              : `${baseView.files.length} archivos cambiados`}{" "}
+            desde {baseView.label}
+          </span>
+          <button type="button" onClick={() => setBaseView(repo, null)}>
+            Ver todos los archivos
+          </button>
+        </div>
+      )}
       <div
         ref={treeRef}
         className={`project-explorer__body${osDraggingOver ? " project-explorer--dragging-active" : ""}${draggingNode ? " project-explorer__body--internal-dragging" : ""}`}
@@ -1028,7 +1078,7 @@ export function ProjectExplorer({
               Reintentar
             </button>
           </div>
-        ) : !tree && loading ? (
+        ) : !tree && loading && !baseView ? (
           <div className="tree-files__msg" data-testid="explorer-loading" role="status">
             Cargando…
           </div>

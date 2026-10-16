@@ -689,6 +689,55 @@ pub fn delivery_close_run(
     service.close_run(&run_id).map_err(CommandError::from)
 }
 
+/// What a task changed since its worktree was created, to open in the
+/// files view.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeliveryTaskChanges {
+    /// The worktree as a repo of the active workbench.
+    pub repo: PathBuf,
+    pub base_ref: String,
+    pub base_commit: String,
+    pub files: Vec<crate::git::FileDiff>,
+}
+
+#[tauri::command]
+pub async fn delivery_task_changes(
+    service: State<'_, DeliveryService>,
+    bus: State<'_, BusHandle>,
+    workbenches: State<'_, Mutex<WorkbenchStore>>,
+    task_id: String,
+) -> Result<DeliveryTaskChanges, CommandError> {
+    let task = service.task(&task_id).map_err(CommandError::from)?;
+    if task.distro.is_some() {
+        return Err(CommandError::new(
+            "unsupported",
+            "ver los cambios todavía no está disponible para worktrees dentro de WSL",
+        ));
+    }
+    let resolved = crate::agent_console::commands::ensure_worktree_repo(
+        &bus,
+        &workbenches,
+        &task.worktree,
+        None,
+        &task.key,
+    )
+    .await?;
+    let worktree = task.worktree.clone();
+    let base = task.base_commit.clone();
+    let files = tauri::async_runtime::spawn_blocking(move || {
+        crate::git::Git2Engine::open(&worktree)?.diff_against(&base)
+    })
+    .await
+    .map_err(|error| CommandError::new("internal", error.to_string()))?
+    .map_err(|error| CommandError::new("git_error", error.to_string()))?;
+    Ok(DeliveryTaskChanges {
+        repo: resolved.path,
+        base_ref: task.base_ref,
+        base_commit: task.base_commit,
+        files,
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DeliveryConversation {
     pub session_id: String,

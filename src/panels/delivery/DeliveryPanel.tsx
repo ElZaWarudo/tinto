@@ -5,12 +5,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { busStore, useBusState } from "../../bus/store";
 import { useWorkspaceActions } from "../../workspace/actions";
+import { setBaseView } from "../../workspace/baseView";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import {
   archiveDeliveryTask,
   cancelDeliveryJob,
+  getDeliveryTaskChanges,
   pauseDeliveryJob,
   resumeDeliveryJob,
   setDeliveryRunPaused,
@@ -832,6 +834,17 @@ function TaskDetail({
   );
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
+  // The worktree in the files view, compared with the commit it started from.
+  const { openRepo } = useWorkspaceActions();
+  const openChanges = async () => {
+    const changes = await getDeliveryTaskChanges(task.id);
+    setBaseView(changes.repo, {
+      label: `${task.base_ref} (${shortCommit(changes.base_commit)})`,
+      files: changes.files,
+      refresh: async () => (await getDeliveryTaskChanges(task.id)).files,
+    });
+    openRepo(changes.repo);
+  };
   // The issue's page, when the repo's Jira is set in Tinto.
   const [issueUrl, setIssueUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -963,6 +976,17 @@ function TaskDetail({
               <a href={issueUrl} target="_blank" rel="noreferrer">
                 Abrir {task.key} en Jira
               </a>
+            )}
+            {!task.distro && (
+              <button
+                type="button"
+                className="delivery-link-button"
+                disabled={busy}
+                title={`Abre el worktree en Archivos con solo lo que cambió desde ${task.base_ref}`}
+                onClick={() => void run(openChanges)}
+              >
+                Ver cambios
+              </button>
             )}
           </p>
         </div>

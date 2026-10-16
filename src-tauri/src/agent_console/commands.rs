@@ -179,6 +179,52 @@ fn start_resolved_agent_session(
 /// the active workbench (as session forks do) so the usual repo views work,
 /// then a session starts there, or resumes the given provider thread.
 #[allow(clippy::too_many_arguments)]
+/// The worktree as a repo of the active workbench, added under `alias` when
+/// it is not one yet.
+pub(crate) async fn ensure_worktree_repo(
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    worktree: &Path,
+    distro: Option<&str>,
+    alias: &str,
+) -> Result<crate::bus::ResolvedRepo, CommandError> {
+    if let Ok(resolved) = ensure_known_agent_repo(bus, worktree).await {
+        return Ok(resolved);
+    }
+    let repos = {
+        let mut store = lock_workbenches(workbenches)?;
+        let active = store
+            .active_workbench_runtime()
+            .ok_or_else(|| CommandError::new("workbench_not_active", "no active workbench"))?;
+        let added = match distro {
+            None => store
+                .add_repo(
+                    &active.name,
+                    worktree.to_path_buf(),
+                    Some(alias.to_string()),
+                    true,
+                )
+                .map(|_| ()),
+            Some(distro) => store
+                .add_wsl_repo(
+                    &active.name,
+                    distro.to_string(),
+                    worktree.to_string_lossy().into_owned(),
+                    Some(alias.to_string()),
+                )
+                .map(|_| ()),
+        };
+        added.map_err(map_workbench_error)?;
+        store
+            .active_workbench_runtime()
+            .filter(|workbench| workbench.name == active.name)
+            .map(|workbench| workbench.repos)
+            .unwrap_or_default()
+    };
+    bus.set_workbench(repos);
+    ensure_known_agent_repo(bus, worktree).await
+}
+
 pub(crate) async fn open_worktree_conversation(
     app: &AppHandle,
     bus: &BusHandle,
@@ -190,43 +236,7 @@ pub(crate) async fn open_worktree_conversation(
     agent_type: &str,
     resume_thread: Option<&str>,
 ) -> Result<(String, PathBuf), CommandError> {
-    let resolved = match ensure_known_agent_repo(bus, worktree).await {
-        Ok(resolved) => resolved,
-        Err(_) => {
-            let repos = {
-                let mut store = lock_workbenches(workbenches)?;
-                let active = store.active_workbench_runtime().ok_or_else(|| {
-                    CommandError::new("workbench_not_active", "no active workbench")
-                })?;
-                let added = match distro {
-                    None => store
-                        .add_repo(
-                            &active.name,
-                            worktree.to_path_buf(),
-                            Some(alias.to_string()),
-                            true,
-                        )
-                        .map(|_| ()),
-                    Some(distro) => store
-                        .add_wsl_repo(
-                            &active.name,
-                            distro.to_string(),
-                            worktree.to_string_lossy().into_owned(),
-                            Some(alias.to_string()),
-                        )
-                        .map(|_| ()),
-                };
-                added.map_err(map_workbench_error)?;
-                store
-                    .active_workbench_runtime()
-                    .filter(|workbench| workbench.name == active.name)
-                    .map(|workbench| workbench.repos)
-                    .unwrap_or_default()
-            };
-            bus.set_workbench(repos);
-            ensure_known_agent_repo(bus, worktree).await?
-        }
-    };
+    let resolved = ensure_worktree_repo(bus, workbenches, worktree, distro, alias).await?;
     let permission_mode = AgentSessionPermissionMode::Workspace;
     let repo = resolved.path.clone();
     let session_id = match resume_thread {

@@ -2312,6 +2312,19 @@ select option:checked {
   gap: 8px;
   background: #1b1c1e;
 }
+/* Compared with a base commit: only the changed files, and a way back. */
+.project-explorer__base {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
 .project-explorer__title {
   flex: 1 1 auto;
   min-width: 0;

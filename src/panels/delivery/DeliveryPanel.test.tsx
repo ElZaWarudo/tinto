@@ -14,6 +14,7 @@ import type {
 
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
+  getDeliveryTaskChanges: vi.fn(),
   pauseDeliveryJob: vi.fn(),
   resumeDeliveryJob: vi.fn(),
   setDeliveryRunPaused: vi.fn(),
@@ -272,6 +273,23 @@ describe("DeliveryPanel", () => {
     expect(screen.queryByRole("button", { name: "Nuevo intento" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Pausar lote" }));
     await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true));
+  });
+
+  it("opens the task's changes since its base in the files view", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryTaskChanges.mockResolvedValue({
+      repo: "C:/work/agentos-wt/AGOS-501",
+      base_ref: "develop",
+      base_commit: "0123456789abcdef",
+      files: [],
+    });
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Ver cambios" }));
+    await waitFor(() =>
+      expect(actions.openRepo).toHaveBeenCalledWith("C:/work/agentos-wt/AGOS-501"),
+    );
+    expect(client.getDeliveryTaskChanges).toHaveBeenCalledWith("t1");
   });
 
   it("links the task to its Jira issue when the repo's Jira is set", async () => {

@@ -398,6 +398,15 @@ export interface DeliveryConversation {
   agent_type: string;
 }
 
+/** What a task changed since its worktree was created, each file against that commit. */
+export interface DeliveryTaskChanges {
+  /** The worktree as a repo of the active workbench. */
+  repo: string;
+  base_ref: string;
+  base_commit: string;
+  files: import("../bus/contract").FileDiff[];
+}
+
 /** A task's pull request as Tinto follows it on GitHub. */
 export interface DeliveryPr {
   task_id: string;

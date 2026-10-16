@@ -62,6 +62,7 @@ import { busStore } from "../../bus/store";
 import { qualityStore } from "../../qol/state";
 import { fileDock } from "../../workspace/fileDock";
 import { repoTreeStore } from "../../workspace/repoTreeStore";
+import { setBaseView } from "../../workspace/baseView";
 import { deleteUndoManager } from "../file/deleteUndo";
 import { treeClipboard } from "./treeClipboard";
 import type { RepoDelta } from "../../bus/contract";
@@ -135,6 +136,38 @@ describe("ProjectExplorer", () => {
       ],
       truncated: false,
     };
+  });
+
+  it("shows only the files changed since a base commit, removed ones included", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    const diff = (path: string, kind: "Added" | "Removed" | "Context") => ({
+      path,
+      old_path: null,
+      is_binary: false,
+      hunks: [
+        {
+          old_start: kind === "Added" ? 0 : 1,
+          new_start: kind === "Removed" ? 0 : 1,
+          lines: [{ kind, content: "x", old_lineno: null, new_lineno: null }],
+        },
+      ],
+    });
+    act(() =>
+      setBaseView(REPO, {
+        label: "develop (0123abcd)",
+        files: [diff("README.md", "Context"), diff("gone.txt", "Removed")],
+        refresh: () => Promise.resolve([]),
+      }),
+    );
+    render(<ProjectExplorer repo={REPO} />);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "2 archivos cambiados desde develop (0123abcd)",
+    );
+    expect(screen.getByTestId("tree-file-README.md")).toBeInTheDocument();
+    expect(screen.getByTestId("tree-file-gone.txt")).toBeInTheDocument();
+    expect(screen.queryByTestId("tree-file-package.json")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Ver todos los archivos" }));
+    expect(await screen.findByTestId("tree-file-package.json")).toBeInTheDocument();
   });
 
   it("loads and renders the repo's files (changed files marked)", async () => {

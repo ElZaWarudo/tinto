@@ -10,6 +10,7 @@ import type {
   DeliveryCommit,
   DeliveryCommitDraft,
   DeliveryConversation,
+  DeliveryTaskChanges,
   DeliveryDecision,
   DeliveryPr,
   DeliveryJob,
@@ -106,6 +107,10 @@ export const dispatchDeliveryJob = (job: NewDeliveryJob) =>
 
 export const cancelDeliveryJob = (jobId: string) =>
   invoke<DeliveryJob>("delivery_cancel_job", { jobId });
+
+/** What the task changed since its worktree was created; registers the worktree as a repo. */
+export const getDeliveryTaskChanges = (taskId: string) =>
+  invoke<DeliveryTaskChanges>("delivery_task_changes", { taskId });
 
 export const pauseDeliveryJob = (jobId: string) =>
   invoke<DeliveryJob>("delivery_pause_job", { jobId });

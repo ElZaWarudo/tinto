@@ -15,6 +15,7 @@ import { MediaView } from "./MediaView";
 import { mediaKind } from "./mediaTypes";
 import { MarkdownView } from "./MarkdownView";
 import { useDiffData } from "./useDiffData";
+import { useBaseDiff } from "../../workspace/baseView";
 
 /** new-side line numbers of added lines, for full-file change marking. */
 function addedLines(diff: FileDiff | null | undefined): Set<number> {
@@ -123,16 +124,21 @@ export function FileView({ repo, path }: { repo: string; path: string }) {
   const markdown = isMarkdown(path);
   const media = mediaKind(path);
   const {
-    diff,
+    diff: headDiff,
     inStatus,
     isLive,
-    loadError,
+    loadError: headLoadError,
     loadOneShot,
     renamedTo,
     repoDelta,
     stateLoaded,
     settling,
   } = useDiffData({ repo, path, enabled: !media });
+  // Opened from a comparison with a base commit (a Delivery task's changes),
+  // the file shows its diff against that commit, not against HEAD.
+  const baseDiff = useBaseDiff(repo, path);
+  const diff = baseDiff ?? headDiff;
+  const loadError = baseDiff ? null : headLoadError;
   const pathSignals = getPathSignals(repoDelta, path);
   const pathSecretFindings = getPathSecretFindings(repoDelta, path);
 
