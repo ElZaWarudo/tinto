@@ -434,20 +434,30 @@ export function DeliveryPanel() {
           {running.length} de {capacity}
           {queued.length > 0 && <span className="delivery-muted">· {queued.length} en cola</span>}
         </span>
-        {qa && (
-          <span
-            className={`delivery-lease delivery-lease--${qa.state}`}
+        {qa?.state === "quarantined" ? (
+          <button
+            type="button"
+            className="delivery-lease delivery-lease--quarantined"
             title={qa.note ?? undefined}
+            onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
           >
-            {qa.state === "quarantined"
-              ? "QA en cuarentena"
-              : qa.state === "active"
-                ? `QA: ${qaHolder?.key ?? "ocupado"}`
-                : "QA libre"}
+            QA en cuarentena
             {qa.queue.length > 0 && (
               <span className="delivery-muted">· {qa.queue.length} esperando</span>
             )}
-          </span>
+          </button>
+        ) : (
+          qa && (
+            <span
+              className={`delivery-lease delivery-lease--${qa.state}`}
+              title={qa.note ?? undefined}
+            >
+              {qa.state === "active" ? `QA: ${qaHolder?.key ?? "ocupado"}` : "QA libre"}
+              {qa.queue.length > 0 && (
+                <span className="delivery-muted">· {qa.queue.length} esperando</span>
+              )}
+            </span>
+          )
         )}
         <button type="button" onClick={() => setDialog({ kind: "archived" })}>
           Archivadas…
@@ -480,10 +490,12 @@ export function DeliveryPanel() {
         </div>
       )}
 
-      {qa?.state === "quarantined" && (
+      {/* Only when it holds work back; otherwise the header and the task say it. */}
+      {qa?.state === "quarantined" && qa.queue.length > 0 && (
         <div className="delivery-panel__warning" role="status">
-          <span>
-            El recurso QA está en cuarentena{qaHolder ? ` tras ${qaHolder.key}` : ""}. {qa.note}
+          <span title={qa.note ?? undefined}>
+            {qa.queue.length === 1 ? "Una QA espera" : `${qa.queue.length} QA esperan`} a que
+            liberes el recurso QA{qaHolder ? `, en cuarentena tras ${qaHolder.key}` : ""}.
           </span>
           <button
             type="button"

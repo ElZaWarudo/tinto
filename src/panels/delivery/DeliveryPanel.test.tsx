@@ -528,10 +528,10 @@ describe("DeliveryPanel", () => {
     );
     client.releaseDeliveryLease.mockResolvedValue({});
     renderPanel();
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "El recurso QA está en cuarentena tras AGOS-501.",
-    );
-    await user.click(screen.getByRole("button", { name: "Liberar…" }));
+    // Nothing waits on it: no banner, only the header, which releases it.
+    const chip = await screen.findByRole("button", { name: "QA en cuarentena" });
+    expect(screen.queryByRole("button", { name: "Liberar…" })).toBeNull();
+    await user.click(chip);
     const dialog = screen.getByRole("dialog", { name: "Liberar el recurso qa" });
     await user.type(
       within(dialog).getByRole("textbox", { name: "Qué comprobaste" }),
@@ -541,6 +541,30 @@ describe("DeliveryPanel", () => {
     await waitFor(() =>
       expect(client.releaseDeliveryLease).toHaveBeenCalledWith("qa", "Browser closed"),
     );
+  });
+
+  it("raises the quarantine banner only when a QA waits on it", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        leases: [
+          {
+            name: "qa",
+            state: "quarantined",
+            generation: 3,
+            holder_job_id: "j9",
+            holder_task_id: "t1",
+            acquired_at_ms: 1,
+            note: "El trabajo qa terminó sin liberar el recurso.",
+            queue: [{ job_id: "j10", task_id: "t1", requested_at_ms: 2 }],
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Una QA espera a que liberes el recurso QA, en cuarentena tras AGOS-501.",
+    );
+    expect(screen.getByRole("button", { name: "Liberar…" })).toBeInTheDocument();
   });
 
   it("continues a finished Codex job in Agents", async () => {

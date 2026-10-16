@@ -340,18 +340,6 @@ export function taskStatus(
       label: `${stepOf(drifted).label}: ya no coincide`,
     };
   }
-  const quarantined = overview.leases.find(
-    (lease) => lease.state === "quarantined" && lease.holder_task_id === task.id,
-  );
-  if (quarantined) {
-    return {
-      group: "attention",
-      tone: "danger",
-      icon: "alert",
-      label: `${quarantined.name.toUpperCase()} en cuarentena`,
-    };
-  }
-
   const jobs = jobsOf(overview, task.id);
   const running = jobs.find((job) => job.status === "pending" || job.status === "started");
   if (running) {
@@ -370,6 +358,16 @@ export function taskStatus(
     const lease = overview.leases.find((candidate) =>
       candidate.queue.some((waiter) => waiter.job_id === queued.id),
     );
+    // Waiting on a quarantined resource is the one wait that never ends
+    // by itself.
+    if (lease?.state === "quarantined") {
+      return {
+        group: "attention",
+        tone: "danger",
+        icon: "alert",
+        label: `Espera ${lease.name.toUpperCase()}, en cuarentena`,
+      };
+    }
     if (lease) {
       const position = lease.queue.findIndex((waiter) => waiter.job_id === queued.id) + 1;
       return {
@@ -389,6 +387,19 @@ export function taskStatus(
       tone: "waiting",
       icon: "clock",
       label: position > 0 ? `En cola · ${ordinal(position)}` : "En cola",
+    };
+  }
+  // The resource a job of this task left quarantined matters once its
+  // agents stop: work running on it is not held by it.
+  const quarantined = overview.leases.find(
+    (lease) => lease.state === "quarantined" && lease.holder_task_id === task.id,
+  );
+  if (quarantined) {
+    return {
+      group: "attention",
+      tone: "danger",
+      icon: "alert",
+      label: `${quarantined.name.toUpperCase()} en cuarentena`,
     };
   }
   // A proposal is the repo's, but only the task that asked for it waits on

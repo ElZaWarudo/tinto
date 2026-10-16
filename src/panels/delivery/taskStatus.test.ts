@@ -143,6 +143,20 @@ describe("taskStatus", () => {
       group: "attention",
       label: "QA en cuarentena",
     });
+    // Its implementation running is what the task is doing.
+    const implementing = job({ role: "implementation", status: "started", ended_at_ms: null });
+    expect(status({ leases: [lease], jobs: [implementing] }).group).toBe("running");
+    // A QA job waiting on it is stuck until someone frees it, whoever left it.
+    const waiting = job({ role: "qa", status: "queued", lease: "qa" });
+    const other = {
+      ...lease,
+      holder_task_id: "t2",
+      queue: [{ job_id: waiting.id, task_id: "t1", requested_at_ms: 1 }],
+    };
+    expect(status({ leases: [other], jobs: [waiting] })).toMatchObject({
+      group: "attention",
+      label: "Espera QA, en cuarentena",
+    });
   });
 
   it("flags a settings proposal only on the task that asked, once its agents stop", () => {
