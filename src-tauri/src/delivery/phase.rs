@@ -1,0 +1,1006 @@
+//! Where each task is, derived from what Tinto records about it (jobs,
+//! approvals, decisions, resources, its PR) and never stored: one state
+//! machine every surface reads, so the view, the notifications and the
+//! coordinator agree on what a task waits for and what comes next.
+//!
+//! The phase is the most urgent fact about the task, in this order: what
+//! waits on the user, what runs, what waits its turn, what broke, then the
+//! delivery ladder and the next stage. Each phase says who it waits on.
+
+use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize};
+
+use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
+use super::model::{
+    DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryDecision,
+    DeliveryDecisionStatus, DeliveryJob, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
+    DeliveryResultState, DeliveryRun, DeliveryRung, DeliverySettingsProposal, DeliveryTask,
+};
+use super::prs::DeliveryPr;
+
+/// The built-in stages, in flow order.
+pub const STAGES: [&str; 4] = ["tests", "implementation", "review", "qa"];
+
+/// The delivery ladder: Jira comes twice, once the PR is open and once merged.
+pub const STEPS: [(DeliveryRung, Option<&str>); 6] = [
+    (DeliveryRung::Commit, None),
+    (DeliveryRung::Push, None),
+    (DeliveryRung::Pr, None),
+    (DeliveryRung::Jira, Some(JIRA_AFTER_PR)),
+    (DeliveryRung::Merge, None),
+    (DeliveryRung::Jira, Some(JIRA_AFTER_MERGE)),
+];
+
+/// Who has to act for the task to move.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Waiter {
+    User,
+    Coordinator,
+    /// An agent is working on it.
+    Agent,
+    /// Its job waits for capacity or an exclusive resource.
+    Queue,
+    /// People review its PR.
+    Reviewers,
+    Nobody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Phase {
+    /// The user answers its decisions.
+    Decisions {
+        count: usize,
+    },
+    /// The user approves a delivery step.
+    Approval {
+        rung: DeliveryRung,
+        stage: Option<String>,
+    },
+    /// An approved PR or Jira step the coordinator still has to report.
+    Record {
+        rung: DeliveryRung,
+        stage: Option<String>,
+    },
+    /// A done step git or GitHub no longer bear out.
+    Drifted {
+        rung: DeliveryRung,
+        stage: Option<String>,
+    },
+    Running {
+        job_id: String,
+        role: String,
+    },
+    /// Paused by the user; it holds the task until resumed or cancelled.
+    Paused {
+        job_id: String,
+        role: String,
+    },
+    /// Its job waits because the user paused the batch.
+    BatchPaused {
+        job_id: String,
+        role: String,
+    },
+    /// Its job waits for a resource left in quarantine.
+    WaitsQuarantine {
+        job_id: String,
+        lease: String,
+    },
+    Queued {
+        job_id: String,
+        role: String,
+        lease: Option<String>,
+        /// Its place in the resource's queue, or in the capacity queue.
+        position: usize,
+    },
+    /// A job of this task left the resource in quarantine.
+    Quarantined {
+        lease: String,
+    },
+    /// The settings change this task asked for waits on the user.
+    SettingsProposal,
+    /// Its latest stage failed or was blocked.
+    Broken {
+        job_id: String,
+        role: String,
+        attempt: u32,
+        /// Ended with a `blocked` result rather than failing.
+        blocked: bool,
+    },
+    Delivered,
+    /// Its PR is followed on GitHub.
+    Pr {
+        number: u64,
+    },
+    NextStage {
+        role: String,
+    },
+    NextStep {
+        rung: DeliveryRung,
+        stage: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryTaskPhase {
+    #[serde(flatten)]
+    pub phase: Phase,
+    pub waits_on: Waiter,
+    /// The stage to run next, when one is due (whatever the phase).
+    pub next_stage: Option<String>,
+}
+
+/// Everything the phase of a task depends on, as the overview has it.
+pub struct Facts<'a> {
+    pub runs: &'a [DeliveryRun],
+    /// Every job, oldest first: queue positions are across tasks.
+    pub jobs: &'a [DeliveryJob],
+    pub leases: &'a [DeliveryLease],
+    pub approvals: &'a [DeliveryApproval],
+    pub decisions: &'a [DeliveryDecision],
+    pub settings_proposals: &'a [DeliverySettingsProposal],
+    pub prs: &'a [DeliveryPr],
+}
+
+fn is_open(job: &DeliveryJob) -> bool {
+    job.status.is_open()
+}
+
+/// Neither stale nor undone.
+fn is_live(job: &DeliveryJob) -> bool {
+    job.result_state != Some(DeliveryResultState::Stale) && job.undone_at_ms.is_none()
+}
+
+fn is_current(job: &DeliveryJob) -> bool {
+    is_live(job) && job.result_state != Some(DeliveryResultState::Invalid)
+}
+
+fn result_is(job: &DeliveryJob, status: &str) -> bool {
+    job.result
+        .as_ref()
+        .is_some_and(|result| result.status == status)
+}
+
+fn is_passed(job: &DeliveryJob) -> bool {
+    job.status == DeliveryJobStatus::Finished && is_current(job) && result_is(job, "pass")
+}
+
+/// Ended without a usable result.
+fn is_broken(job: &DeliveryJob) -> bool {
+    matches!(
+        job.status,
+        DeliveryJobStatus::Failed | DeliveryJobStatus::Interrupted
+    ) || job.result_state == Some(DeliveryResultState::Invalid)
+        || (job.status == DeliveryJobStatus::Finished && result_is(job, "blocked"))
+}
+
+fn stage_order(role: &str) -> Option<usize> {
+    STAGES.iter().position(|stage| *stage == role)
+}
+
+/// A result later work on an earlier stage left behind: new tests after
+/// the implementation, new code after its review or QA.
+fn is_superseded(job: &DeliveryJob, jobs: &[&DeliveryJob]) -> bool {
+    let Some(order) = stage_order(&job.role).filter(|order| *order > 0) else {
+        return false;
+    };
+    let Some(at) = jobs.iter().position(|other| other.id == job.id) else {
+        return false;
+    };
+    jobs[at + 1..].iter().any(|later| {
+        stage_order(&later.role).is_some_and(|later_order| later_order < order)
+            && later.undone_at_ms.is_none()
+            && !later.changes.is_empty()
+    })
+}
+
+/// Findings a later stage answered: one after it passed (the tests' failing
+/// cases, made to pass by the implementation).
+pub fn is_answered(job: &DeliveryJob, jobs: &[&DeliveryJob]) -> bool {
+    job.status == DeliveryJobStatus::Finished
+        && result_is(job, "findings")
+        && jobs.iter().any(|later| {
+            later.created_at_ms > job.created_at_ms
+                && stage_order(&later.role) > stage_order(&job.role)
+                && is_passed(later)
+        })
+}
+
+/// The paused job no later job resumes.
+fn paused_job<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
+    let resumed: HashSet<&str> = jobs
+        .iter()
+        .filter_map(|job| job.resumes.as_deref())
+        .collect();
+    jobs.iter()
+        .find(|job| job.status == DeliveryJobStatus::Paused && !resumed.contains(job.id.as_str()))
+        .copied()
+}
+
+fn step_matches(approval: &DeliveryApproval, rung: DeliveryRung, stage: Option<&str>) -> bool {
+    approval.rung == rung
+        && match stage {
+            None => true,
+            Some(stage) => approval.stage.as_deref().unwrap_or(JIRA_AFTER_PR) == stage,
+        }
+}
+
+fn latest_step<'a>(
+    approvals: &[&'a DeliveryApproval],
+    rung: DeliveryRung,
+    stage: Option<&str>,
+) -> Option<&'a DeliveryApproval> {
+    approvals
+        .iter()
+        .rev()
+        .find(|approval| step_matches(approval, rung, stage))
+        .copied()
+}
+
+/// The first ladder step not done; `None` once every step is.
+fn next_step(approvals: &[&DeliveryApproval]) -> Option<(DeliveryRung, Option<&'static str>)> {
+    STEPS.into_iter().find(|(rung, stage)| {
+        latest_step(approvals, *rung, *stage)
+            .is_none_or(|step| step.status != DeliveryApprovalStatus::Executed)
+    })
+}
+
+fn stage_of(approval: &DeliveryApproval) -> Option<String> {
+    (approval.rung == DeliveryRung::Jira).then(|| {
+        approval
+            .stage
+            .clone()
+            .unwrap_or_else(|| JIRA_AFTER_PR.into())
+    })
+}
+
+/// The stage to run next: none while a stage runs, waits or is paused, nor
+/// once the task was committed after its last stage; else retry a broken
+/// one, go back to implementation after findings, or the first built-in
+/// stage without a passing (or answered) attempt that still stands.
+pub fn next_stage(jobs: &[&DeliveryJob], approvals: &[&DeliveryApproval]) -> Option<String> {
+    if paused_job(jobs).is_some() {
+        return None;
+    }
+    let agent_jobs: Vec<&DeliveryJob> = jobs
+        .iter()
+        .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job))
+        .copied()
+        .collect();
+    if agent_jobs.iter().any(|job| is_open(job)) {
+        return None;
+    }
+    let latest = agent_jobs.last();
+    let last_end = latest.and_then(|job| job.ended_at_ms).unwrap_or(0);
+    let delivering = approvals.iter().any(|approval| {
+        approval.rung == DeliveryRung::Commit
+            && approval.status == DeliveryApprovalStatus::Executed
+            && approval.executed_at_ms.unwrap_or(0) > last_end
+    });
+    if delivering {
+        return None;
+    }
+    if let Some(latest) = latest {
+        if is_broken(latest) {
+            return Some(latest.role.clone());
+        }
+        if latest.status == DeliveryJobStatus::Finished && result_is(latest, "findings") {
+            return Some("implementation".into());
+        }
+    }
+    STAGES
+        .iter()
+        .find(|stage| {
+            let job = agent_jobs
+                .iter()
+                .rev()
+                .find(|job| job.role == **stage)
+                .copied();
+            match job {
+                None => true,
+                Some(job) => {
+                    !(is_passed(job) || is_answered(job, &agent_jobs))
+                        || is_superseded(job, &agent_jobs)
+                }
+            }
+        })
+        .map(|stage| stage.to_string())
+}
+
+/// Who a followed PR waits on: the user when it has news or trouble, the
+/// coordinator once approved or merged (the next step), else its reviewers.
+fn pr_waits_on(pr: &DeliveryPr) -> Waiter {
+    let trouble = pr.state == "closed"
+        || pr.new_reviews + pr.new_comments > 0
+        || pr.checks.failing > 0
+        || pr.conflicts
+        || pr.review_decision.as_deref() == Some("changes_requested");
+    let approved = pr.review_decision.as_deref() == Some("approved")
+        || (pr.review_decision.is_none() && !pr.approved_by.is_empty());
+    if trouble {
+        Waiter::User
+    } else if pr.state == "merged" || (approved && pr.checks.pending == 0 && !pr.draft) {
+        Waiter::Coordinator
+    } else {
+        Waiter::Reviewers
+    }
+}
+
+pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
+    let jobs: Vec<&DeliveryJob> = facts
+        .jobs
+        .iter()
+        .filter(|job| job.task_id == task.id)
+        .collect();
+    let approvals: Vec<&DeliveryApproval> = facts
+        .approvals
+        .iter()
+        .filter(|approval| approval.task_id == task.id)
+        .collect();
+    let next = next_stage(&jobs, &approvals);
+    let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
+        phase,
+        waits_on,
+        next_stage: next.clone(),
+    };
+
+    let decisions = facts
+        .decisions
+        .iter()
+        .filter(|decision| {
+            decision.task_id == task.id && decision.status == DeliveryDecisionStatus::Pending
+        })
+        .count();
+    if decisions > 0 {
+        return phase(Phase::Decisions { count: decisions }, Waiter::User);
+    }
+    if let Some(step) = approvals
+        .iter()
+        .find(|approval| approval.status == DeliveryApprovalStatus::Pending)
+    {
+        return phase(
+            Phase::Approval {
+                rung: step.rung,
+                stage: stage_of(step),
+            },
+            Waiter::User,
+        );
+    }
+    if let Some(step) = approvals
+        .iter()
+        .find(|approval| approval.status == DeliveryApprovalStatus::Approved)
+    {
+        return phase(
+            Phase::Record {
+                rung: step.rung,
+                stage: stage_of(step),
+            },
+            Waiter::Coordinator,
+        );
+    }
+    if let Some(step) = approvals.iter().find(|approval| {
+        approval.status == DeliveryApprovalStatus::Drifted
+            && latest_step(&approvals, approval.rung, stage_of(approval).as_deref())
+                .is_some_and(|latest| latest.id == approval.id)
+    }) {
+        return phase(
+            Phase::Drifted {
+                rung: step.rung,
+                stage: stage_of(step),
+            },
+            Waiter::User,
+        );
+    }
+    if let Some(job) = jobs.iter().find(|job| {
+        matches!(
+            job.status,
+            DeliveryJobStatus::Pending | DeliveryJobStatus::Started
+        )
+    }) {
+        return phase(
+            Phase::Running {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+            },
+            Waiter::Agent,
+        );
+    }
+    if let Some(job) = paused_job(&jobs) {
+        return phase(
+            Phase::Paused {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+            },
+            Waiter::User,
+        );
+    }
+    if let Some(job) = jobs
+        .iter()
+        .find(|job| job.status == DeliveryJobStatus::Queued)
+    {
+        let run_paused = facts
+            .runs
+            .iter()
+            .any(|run| Some(&run.id) == task.run_id.as_ref() && run.paused);
+        if run_paused {
+            return phase(
+                Phase::BatchPaused {
+                    job_id: job.id.clone(),
+                    role: job.role.clone(),
+                },
+                Waiter::User,
+            );
+        }
+        let lease = facts
+            .leases
+            .iter()
+            .find(|lease| lease.queue.iter().any(|waiter| waiter.job_id == job.id));
+        if let Some(lease) = lease.filter(|lease| lease.state == DeliveryLeaseState::Quarantined) {
+            return phase(
+                Phase::WaitsQuarantine {
+                    job_id: job.id.clone(),
+                    lease: lease.name.clone(),
+                },
+                Waiter::User,
+            );
+        }
+        let position = match lease {
+            Some(lease) => {
+                lease
+                    .queue
+                    .iter()
+                    .position(|waiter| waiter.job_id == job.id)
+                    .unwrap_or(0)
+                    + 1
+            }
+            None => {
+                let mut queue: Vec<&DeliveryJob> = facts
+                    .jobs
+                    .iter()
+                    .filter(|other| other.status == DeliveryJobStatus::Queued)
+                    .filter(|other| {
+                        !facts
+                            .leases
+                            .iter()
+                            .any(|lease| lease.queue.iter().any(|waiter| waiter.job_id == other.id))
+                    })
+                    .collect();
+                queue.sort_by_key(|other| other.created_at_ms);
+                queue
+                    .iter()
+                    .position(|other| other.id == job.id)
+                    .map_or(0, |at| at + 1)
+            }
+        };
+        return phase(
+            Phase::Queued {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+                lease: lease.map(|lease| lease.name.clone()),
+                position,
+            },
+            Waiter::Queue,
+        );
+    }
+    if let Some(lease) = facts.leases.iter().find(|lease| {
+        lease.state == DeliveryLeaseState::Quarantined
+            && lease.holder_task_id.as_deref() == Some(task.id.as_str())
+    }) {
+        return phase(
+            Phase::Quarantined {
+                lease: lease.name.clone(),
+            },
+            Waiter::User,
+        );
+    }
+    if facts
+        .settings_proposals
+        .iter()
+        .any(|proposal| proposal.task_id == task.id)
+    {
+        return phase(Phase::SettingsProposal, Waiter::User);
+    }
+    let latest = jobs
+        .iter()
+        .rev()
+        .find(|job| job.agent != DeliveryAgent::Shell && is_live(job));
+    if let Some(job) = latest.filter(|job| is_broken(job)) {
+        return phase(
+            Phase::Broken {
+                job_id: job.id.clone(),
+                role: job.role.clone(),
+                attempt: job.attempt,
+                blocked: job.status == DeliveryJobStatus::Finished,
+            },
+            Waiter::Coordinator,
+        );
+    }
+    let step = next_step(&approvals);
+    let Some((rung, stage)) = step else {
+        return phase(Phase::Delivered, Waiter::Nobody);
+    };
+    if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
+        return phase(Phase::Pr { number: pr.number }, pr_waits_on(pr));
+    }
+    if let Some(role) = next.clone() {
+        return phase(Phase::NextStage { role }, Waiter::Coordinator);
+    }
+    phase(
+        Phase::NextStep {
+            rung,
+            stage: stage.map(str::to_string),
+        },
+        Waiter::Coordinator,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::delivery::adapters::tests::{sample_job, sample_task};
+    use crate::delivery::model::DeliveryJobResult;
+
+    fn job(id: &str, role: &str, status: DeliveryJobStatus, result: Option<&str>) -> DeliveryJob {
+        let mut job = sample_job(DeliveryAgent::Codex);
+        job.id = id.into();
+        job.role = role.into();
+        job.status = status;
+        job.created_at_ms = id.trim_start_matches('j').parse().unwrap_or(0);
+        job.ended_at_ms = (!status.is_open()).then_some(job.created_at_ms * 1000 + 500);
+        job.result_state = Some(DeliveryResultState::Accepted);
+        job.result = result.map(|status| DeliveryJobResult {
+            status: status.into(),
+            summary: String::new(),
+            changed_paths: Vec::new(),
+            checks: Vec::new(),
+            findings: vec!["x".into()],
+            handoff: String::new(),
+            blocked_by: String::new(),
+        });
+        job
+    }
+
+    fn step(rung: &str, status: &str, executed_at_ms: Option<u64>) -> DeliveryApproval {
+        serde_json::from_value(serde_json::json!({
+            "id": format!("a-{rung}-{status}"), "task_id": "t1", "rung": rung, "title": "",
+            "body": "", "status": status, "requested_by": "coord", "requested_at_ms": 1,
+            "decided_at_ms": null, "executed_at_ms": executed_at_ms, "outcome": null,
+        }))
+        .unwrap()
+    }
+
+    struct World {
+        jobs: Vec<DeliveryJob>,
+        approvals: Vec<DeliveryApproval>,
+        decisions: Vec<DeliveryDecision>,
+        leases: Vec<DeliveryLease>,
+        runs: Vec<DeliveryRun>,
+        prs: Vec<DeliveryPr>,
+        proposals: Vec<DeliverySettingsProposal>,
+    }
+
+    impl World {
+        fn new(jobs: Vec<DeliveryJob>) -> Self {
+            World {
+                jobs,
+                approvals: Vec::new(),
+                decisions: Vec::new(),
+                leases: Vec::new(),
+                runs: Vec::new(),
+                prs: Vec::new(),
+                proposals: Vec::new(),
+            }
+        }
+
+        fn phase(&self) -> DeliveryTaskPhase {
+            task_phase(
+                &sample_task(),
+                &Facts {
+                    runs: &self.runs,
+                    jobs: &self.jobs,
+                    leases: &self.leases,
+                    approvals: &self.approvals,
+                    decisions: &self.decisions,
+                    settings_proposals: &self.proposals,
+                    prs: &self.prs,
+                },
+            )
+        }
+    }
+
+    use DeliveryJobStatus::{Finished, Paused, Queued, Started};
+
+    #[test]
+    fn a_new_task_waits_on_the_coordinator_for_its_tests() {
+        let phase = World::new(Vec::new()).phase();
+        assert_eq!(
+            phase.phase,
+            Phase::NextStage {
+                role: "tests".into()
+            }
+        );
+        assert_eq!(phase.waits_on, Waiter::Coordinator);
+    }
+
+    #[test]
+    fn what_waits_on_the_user_comes_before_what_runs() {
+        let mut world = World::new(vec![job("j1", "implementation", Started, None)]);
+        world.approvals.push(step("commit", "pending", None));
+        let phase = world.phase();
+        assert_eq!(phase.waits_on, Waiter::User);
+        assert!(matches!(
+            phase.phase,
+            Phase::Approval {
+                rung: DeliveryRung::Commit,
+                ..
+            }
+        ));
+        world.approvals[0].status = DeliveryApprovalStatus::Approved;
+        assert_eq!(
+            world.phase().waits_on,
+            Waiter::Coordinator,
+            "a step to record"
+        );
+        world.approvals.clear();
+        let running = world.phase();
+        assert_eq!(running.waits_on, Waiter::Agent);
+        assert_eq!(running.next_stage, None, "no stage while one runs");
+    }
+
+    #[test]
+    fn a_running_stage_offers_no_other_even_with_earlier_findings() {
+        let world = World::new(vec![
+            job("j1", "tests", Finished, Some("findings")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", Started, None),
+        ]);
+        assert_eq!(world.phase().next_stage, None);
+    }
+
+    #[test]
+    fn answered_findings_count_as_done_and_findings_send_back_to_implementation() {
+        let answered = World::new(vec![
+            job("j1", "tests", Finished, Some("findings")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", Finished, Some("pass")),
+        ]);
+        assert_eq!(
+            answered.phase().phase,
+            Phase::NextStage { role: "qa".into() }
+        );
+        let reviewed = World::new(vec![
+            job("j1", "tests", Finished, Some("pass")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", Finished, Some("findings")),
+        ]);
+        assert_eq!(
+            reviewed.phase().next_stage.as_deref(),
+            Some("implementation")
+        );
+    }
+
+    #[test]
+    fn a_broken_stage_is_retried_by_the_coordinator() {
+        let world = World::new(vec![job("j1", "tests", Finished, Some("blocked"))]);
+        let phase = world.phase();
+        assert_eq!(phase.waits_on, Waiter::Coordinator);
+        assert!(matches!(phase.phase, Phase::Broken { blocked: true, .. }));
+        assert_eq!(phase.next_stage.as_deref(), Some("tests"));
+    }
+
+    #[test]
+    fn a_task_committed_after_its_stages_moves_on_the_ladder() {
+        let mut world = World::new(vec![
+            job("j1", "tests", Finished, Some("findings")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", Finished, Some("pass")),
+        ]);
+        world
+            .approvals
+            .push(step("commit", "executed", Some(10_000)));
+        let phase = world.phase();
+        assert_eq!(phase.next_stage, None);
+        assert_eq!(
+            phase.phase,
+            Phase::NextStep {
+                rung: DeliveryRung::Push,
+                stage: None
+            }
+        );
+    }
+
+    #[test]
+    fn pauses_and_queues_say_who_holds_them() {
+        let paused = World::new(vec![job("j1", "implementation", Paused, None)]);
+        assert_eq!(paused.phase().waits_on, Waiter::User);
+        assert_eq!(paused.phase().next_stage, None);
+
+        let mut queued = World::new(vec![job("j1", "qa", Queued, None)]);
+        assert_eq!(queued.phase().waits_on, Waiter::Queue);
+        let mut run: DeliveryRun = serde_json::from_value(serde_json::json!({
+            "id": "r1", "repo": "/r", "title": "B", "status": "active", "generation": 1,
+            "owner": null, "created_at_ms": 1, "updated_at_ms": 1, "paused": true,
+        }))
+        .unwrap();
+        queued.runs.push(run.clone());
+        let mut task = sample_task();
+        task.run_id = Some("r1".into());
+        let facts = Facts {
+            runs: &queued.runs,
+            jobs: &queued.jobs,
+            leases: &[],
+            approvals: &[],
+            decisions: &[],
+            settings_proposals: &[],
+            prs: &[],
+        };
+        assert!(matches!(
+            task_phase(&task, &facts).phase,
+            Phase::BatchPaused { .. }
+        ));
+        run.paused = false;
+    }
+
+    fn changed(mut job: DeliveryJob) -> DeliveryJob {
+        job.changes = vec![crate::delivery::model::DeliveryChange {
+            path: "src/app.ts".into(),
+            kind: "modified".into(),
+        }];
+        job
+    }
+
+    #[test]
+    fn stale_results_do_not_count_and_new_tests_ask_for_the_implementation_again() {
+        let mut stale = job("j1", "tests", Finished, Some("pass"));
+        stale.result_state = Some(DeliveryResultState::Stale);
+        assert_eq!(
+            World::new(vec![stale]).phase().next_stage.as_deref(),
+            Some("tests")
+        );
+        let redone = World::new(vec![
+            changed(job("j1", "tests", Finished, Some("pass"))),
+            job("j2", "implementation", Finished, Some("pass")),
+            changed(job("j3", "tests", Finished, Some("pass"))),
+        ]);
+        assert_eq!(redone.phase().next_stage.as_deref(), Some("implementation"));
+    }
+
+    #[test]
+    fn new_code_asks_for_the_review_again_unless_it_was_undone() {
+        let fix = changed(job("j4", "implementation", Finished, Some("pass")));
+        let jobs = |fix: DeliveryJob| {
+            vec![
+                job("j1", "tests", Finished, Some("pass")),
+                job("j2", "implementation", Finished, Some("pass")),
+                job("j3", "review", Finished, Some("pass")),
+                fix,
+            ]
+        };
+        assert_eq!(
+            World::new(jobs(fix.clone())).phase().next_stage.as_deref(),
+            Some("review")
+        );
+        let mut undone = fix;
+        undone.undone_at_ms = Some(5);
+        assert_eq!(
+            World::new(jobs(undone)).phase().next_stage.as_deref(),
+            Some("qa")
+        );
+    }
+
+    #[test]
+    fn work_after_the_commit_brings_the_stages_back() {
+        let mut world = World::new(vec![
+            job("j1", "tests", Finished, Some("pass")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", Finished, Some("pass")),
+        ]);
+        world
+            .approvals
+            .push(step("commit", "executed", Some(4_000)));
+        assert_eq!(world.phase().next_stage, None);
+        let mut later = changed(job("j5", "implementation", Finished, Some("pass")));
+        later.ended_at_ms = Some(9_000);
+        world.jobs.push(later);
+        assert_eq!(world.phase().next_stage.as_deref(), Some("review"));
+    }
+
+    #[test]
+    fn every_stage_passed_leads_to_the_commit() {
+        let world = World::new(vec![
+            job("j1", "tests", Finished, Some("pass")),
+            job("j2", "implementation", Finished, Some("pass")),
+            job("j3", "review", Finished, Some("pass")),
+            job("j4", "qa", Finished, Some("pass")),
+        ]);
+        let phase = world.phase();
+        assert_eq!(phase.next_stage, None);
+        assert_eq!(
+            phase.phase,
+            Phase::NextStep {
+                rung: DeliveryRung::Commit,
+                stage: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_failed_stage_is_broken_even_with_an_invalid_result() {
+        let mut failed = job("j2", "implementation", DeliveryJobStatus::Failed, None);
+        failed.attempt = 2;
+        failed.result_state = Some(DeliveryResultState::Invalid);
+        let phase = World::new(vec![job("j1", "tests", Finished, Some("pass")), failed]).phase();
+        assert_eq!(
+            phase.phase,
+            Phase::Broken {
+                job_id: "j2".into(),
+                role: "implementation".into(),
+                attempt: 2,
+                blocked: false
+            }
+        );
+    }
+
+    fn proposal(task_id: &str) -> DeliverySettingsProposal {
+        serde_json::from_value(serde_json::json!({
+            "id": format!("p-{task_id}"), "repo": "/r", "task_id": task_id, "run_id": "r1",
+            "reason": "", "changes": {}, "status": "pending", "requested_by": "coord",
+            "requested_at_ms": 1, "decided_by": null, "decided_at_ms": null,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_settings_proposal_holds_only_the_task_that_asked_once_its_agents_stop() {
+        let mut world = World::new(Vec::new());
+        world.proposals.push(proposal("t1"));
+        assert_eq!(world.phase().phase, Phase::SettingsProposal);
+        world.proposals = vec![proposal("t2")];
+        assert_ne!(world.phase().phase, Phase::SettingsProposal);
+        world.proposals = vec![proposal("t1")];
+        world.jobs.push(job("j1", "qa", Started, None));
+        assert_eq!(world.phase().waits_on, Waiter::Agent);
+    }
+
+    fn lease(state: DeliveryLeaseState, holder: Option<&str>, queue: &[&str]) -> DeliveryLease {
+        let queue: Vec<serde_json::Value> = queue
+            .iter()
+            .map(|id| serde_json::json!({"job_id": id, "task_id": "t1", "requested_at_ms": 1}))
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "name": "qa", "state": state, "generation": 1, "holder_job_id": "x",
+            "holder_task_id": holder, "acquired_at_ms": 1, "note": null, "queue": queue,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn queues_say_their_place_and_quarantine_holds_only_when_nothing_runs() {
+        let mut waiting = job("j1", "qa", Queued, None);
+        waiting.lease = Some("qa".into());
+        let mut world = World::new(vec![waiting]);
+        world
+            .leases
+            .push(lease(DeliveryLeaseState::Active, Some("t9"), &["j1"]));
+        assert!(matches!(
+            world.phase().phase,
+            Phase::Queued { position: 1, .. }
+        ));
+        world.leases = vec![lease(DeliveryLeaseState::Quarantined, Some("t9"), &["j1"])];
+        assert!(matches!(world.phase().phase, Phase::WaitsQuarantine { .. }));
+
+        let mut ahead = job("j1", "tests", Queued, None);
+        ahead.task_id = "t2".into();
+        let capacity = World::new(vec![ahead, job("j2", "tests", Queued, None)]);
+        assert!(matches!(
+            capacity.phase().phase,
+            Phase::Queued { position: 2, .. }
+        ));
+
+        let mut left = World::new(Vec::new());
+        left.leases
+            .push(lease(DeliveryLeaseState::Quarantined, Some("t1"), &[]));
+        assert_eq!(
+            left.phase().phase,
+            Phase::Quarantined { lease: "qa".into() }
+        );
+        left.jobs.push(job("j1", "implementation", Started, None));
+        assert_eq!(left.phase().waits_on, Waiter::Agent);
+    }
+
+    #[test]
+    fn decisions_come_before_anything_else() {
+        let mut world = World::new(Vec::new());
+        world.approvals.push(step("commit", "pending", None));
+        world.decisions.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "d1", "task_id": "t1", "kind": "choice", "question": "?", "detail": "",
+                "options": [], "text": "", "command": null, "undo": "", "status": "pending",
+                "answer": null, "requested_by": "coord", "requested_at_ms": 1,
+                "decided_by": null, "decided_at_ms": null,
+            }))
+            .unwrap(),
+        );
+        assert_eq!(world.phase().phase, Phase::Decisions { count: 1 });
+        world.decisions[0].status = DeliveryDecisionStatus::Answered;
+        world.approvals.clear();
+        assert_eq!(
+            world.phase().phase,
+            Phase::NextStage {
+                role: "tests".into()
+            }
+        );
+    }
+
+    fn pr(over: serde_json::Value) -> DeliveryPr {
+        let mut value = serde_json::json!({
+            "task_id": "t1", "url": "https://github.com/o/r/pull/5", "repo": "o/r",
+            "number": 5, "state": "open", "draft": false, "conflicts": false,
+            "review_decision": "review_required",
+            "checks": {"passing": 2, "failing": 0, "pending": 0},
+            "new_reviews": 0, "new_comments": 0, "new_authors": [], "latest_activity": null,
+            "seen_until": null, "checked_at_ms": 1, "error": null,
+        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(over.as_object().unwrap().clone());
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_pr_waits_on_whoever_has_to_act_on_it() {
+        let mut world = World::new(vec![job("j1", "qa", Finished, Some("pass"))]);
+        for rung in ["commit", "push", "pr"] {
+            world.approvals.push(step(rung, "executed", Some(9_000)));
+        }
+        let mut waits = |over: serde_json::Value| {
+            world.prs = vec![pr(over)];
+            (world.phase().phase, world.phase().waits_on)
+        };
+        assert_eq!(
+            waits(serde_json::json!({})),
+            (Phase::Pr { number: 5 }, Waiter::Reviewers)
+        );
+        assert_eq!(
+            waits(serde_json::json!({"new_comments": 1})).1,
+            Waiter::User
+        );
+        assert_eq!(
+            waits(serde_json::json!({"conflicts": true})).1,
+            Waiter::User
+        );
+        assert_eq!(
+            waits(serde_json::json!({"review_decision": "approved"})).1,
+            Waiter::Coordinator
+        );
+        assert_eq!(
+            waits(serde_json::json!({
+                "review_decision": "approved",
+                "checks": {"passing": 1, "failing": 0, "pending": 1},
+            }))
+            .1,
+            Waiter::Reviewers
+        );
+        assert_eq!(
+            waits(serde_json::json!({"state": "merged"})).1,
+            Waiter::Coordinator
+        );
+    }
+
+    #[test]
+    fn a_delivered_task_waits_on_nobody() {
+        let mut world = World::new(vec![job("j1", "qa", Finished, Some("pass"))]);
+        for (rung, stage) in STEPS {
+            let mut done = step(&format!("{rung:?}").to_lowercase(), "executed", Some(1));
+            done.stage = stage.map(str::to_string);
+            done.id = format!("{rung:?}-{stage:?}");
+            world.approvals.push(done);
+        }
+        let phase = world.phase();
+        assert_eq!(phase.phase, Phase::Delivered);
+        assert_eq!(phase.waits_on, Waiter::Nobody);
+    }
+}

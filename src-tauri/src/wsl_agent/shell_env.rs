@@ -69,7 +69,6 @@ fi
 
 export TINTO_IADE=1
 export TINTO_IADE_NAME='Integrated Agentic Development Environment'
-export TINTO_TURN_DONE_MARKER='::tinto-turn-done::'
 load_tinto_agent_environment
 
 if ! resolved_agent=$(resolve_tinto_agent_binary "$agent_name"); then

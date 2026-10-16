@@ -21,7 +21,7 @@ use super::{
         execute_install, preflight_install, recipe_for, AgentInstallRegistry, PreparedInstall,
     },
     journal::AgentJournal,
-    pty::{AgentTurnAttachment, TINTO_TURN_DONE_MARKER},
+    pty::AgentTurnAttachment,
     validate_permission_mode,
     validation::{resolve_agent_binary, validate_agent_type},
     AgentConsoleError, AgentSessionRegistry,
@@ -29,7 +29,6 @@ use super::{
 #[cfg(any(target_os = "windows", test))]
 use crate::bus::contract::McpDefinition;
 use crate::bus::{
-    commands::write_repo_agents_md_config,
     contract::{
         AgentCliUpdateOutcome, AgentCliUpdateStatus, AgentHostCommandResult,
         AgentHostCommandStatus, AgentInstallOutcome, AgentInstallOutcomeKind, AgentInstallPreview,
@@ -71,7 +70,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(category: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(category: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             category: category.into(),
             message: message.into(),
@@ -174,6 +173,122 @@ fn start_resolved_agent_session(
     );
     refresh_and_emit_sessions(app);
     Ok(started.id)
+}
+
+/// The worktree as a repo of the active workbench, added under `alias` when
+/// it is not one yet.
+pub(crate) async fn ensure_worktree_repo(
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    worktree: &Path,
+    distro: Option<&str>,
+    alias: &str,
+) -> Result<crate::bus::ResolvedRepo, CommandError> {
+    if let Ok(resolved) = ensure_known_agent_repo(bus, worktree).await {
+        return Ok(resolved);
+    }
+    let repos = {
+        let mut store = lock_workbenches(workbenches)?;
+        let active = store
+            .active_workbench_runtime()
+            .ok_or_else(|| CommandError::new("workbench_not_active", "no active workbench"))?;
+        let added = match distro {
+            None => store
+                .add_repo(
+                    &active.name,
+                    worktree.to_path_buf(),
+                    Some(alias.to_string()),
+                    true,
+                )
+                .map(|_| ()),
+            Some(distro) => store
+                .add_wsl_repo(
+                    &active.name,
+                    distro.to_string(),
+                    worktree.to_string_lossy().into_owned(),
+                    Some(alias.to_string()),
+                )
+                .map(|_| ()),
+        };
+        added.map_err(map_workbench_error)?;
+        store
+            .active_workbench_runtime()
+            .filter(|workbench| workbench.name == active.name)
+            .map(|workbench| workbench.repos)
+            .unwrap_or_default()
+    };
+    bus.set_workbench(repos);
+    ensure_known_agent_repo(bus, worktree).await
+}
+
+/// Opens an Agents conversation in a Delivery worktree. The worktree joins
+/// the active workbench (as session forks do) so the usual repo views work,
+/// then a session starts there, or resumes the given provider thread.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn open_worktree_conversation(
+    app: &AppHandle,
+    bus: &BusHandle,
+    workbenches: &Mutex<WorkbenchStore>,
+    registry: &Mutex<AgentSessionRegistry>,
+    worktree: &Path,
+    distro: Option<&str>,
+    alias: &str,
+    agent_type: &str,
+    resume_thread: Option<&str>,
+) -> Result<(String, PathBuf), CommandError> {
+    let resolved = ensure_worktree_repo(bus, workbenches, worktree, distro, alias).await?;
+    let permission_mode = AgentSessionPermissionMode::Workspace;
+    let repo = resolved.path.clone();
+    let session_id = match resume_thread {
+        None => start_resolved_agent_session(
+            app,
+            registry,
+            resolved,
+            agent_type.to_string(),
+            permission_mode,
+        )?,
+        Some(thread) => {
+            let started = {
+                let mut registry = lock_registry(registry)?;
+                match resolved.source {
+                    RepoSource::Local => registry.resume_session_with_output(
+                        resolved.path,
+                        agent_type.to_string(),
+                        thread.to_string(),
+                        AgentSessionContextSummary {
+                            text: String::new(),
+                            created_at_ms: now_ms(),
+                            source_events: 0,
+                            source_turns: 0,
+                        },
+                        permission_mode,
+                    )?,
+                    RepoSource::Wsl => registry.resume_wsl_session_with_output(
+                        resolved.path,
+                        resolved.distro.ok_or_else(|| {
+                            CommandError::new("missing_distro", "repo WSL sin distro")
+                        })?,
+                        agent_type.to_string(),
+                        thread.to_string(),
+                        permission_mode,
+                    )?,
+                }
+            };
+            if let Some(output_reader) = started.output_reader {
+                spawn_output_reader(app.clone(), started.id.clone(), output_reader);
+            }
+            emit_timeline_text(
+                app,
+                &started.id,
+                AgentSessionTimelineKind::Lifecycle,
+                Some("Session started".to_string()),
+                now_ms(),
+            );
+            refresh_and_emit_sessions(app);
+            started.id
+        }
+    };
+    Ok((session_id, repo))
 }
 
 #[tauri::command]
@@ -1556,20 +1671,6 @@ pub async fn run_agent_host_command(
             review_summary: None,
             review_findings: None,
         },
-        "init" => {
-            create_agents_md_for_session(&bus, &session).await?;
-            refresh_and_emit_sessions(&app);
-            AgentHostCommandResult {
-                command: normalized.clone(),
-                status: AgentHostCommandStatus::Completed,
-                message: "AGENTS.md is configured for this repo.".to_string(),
-                session_id: None,
-                repo: None,
-                agent_type: None,
-                review_summary: None,
-                review_findings: None,
-            }
-        }
         "goal" | "objective" => run_goal_host_command(&app, &registry, &session, argument)?,
         "plan" | "plan-mode" => {
             run_plan_mode_host_command(&app, &registry, &session, &normalized, argument)?
@@ -1678,6 +1779,46 @@ pub fn revert_session(
     Ok(session)
 }
 
+/// Revert a conversation opened from history. A session still in the
+/// registry takes the live path; otherwise its saved checkpoint is used.
+#[tauri::command]
+pub fn revert_agent_journal_session(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    journal: State<'_, Mutex<AgentJournal>>,
+    session_id: String,
+    user_consent: bool,
+) -> Result<AgentSession, CommandError> {
+    if !user_consent {
+        return Err(CommandError::new(
+            "consent_required",
+            "revert requires explicit user consent",
+        ));
+    }
+    let mut registry = lock_registry(&registry)?;
+    if registry.get_session(&session_id).is_some() {
+        let session = registry
+            .revert_session(&session_id, true)
+            .map_err(CommandError::from)?;
+        let sessions = registry.list_sessions();
+        emit_sessions_snapshot(&app, &sessions);
+        return Ok(session);
+    }
+    let journal = lock_journal(&journal)?;
+    let mut saved = journal
+        .session_from_journal(&session_id)
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?
+        .ok_or_else(|| CommandError::from(AgentConsoleError::session_not_found(&session_id)))?;
+    registry
+        .revert_saved_session(&saved)
+        .map_err(CommandError::from)?;
+    saved.status = AgentSessionStatus::Reverted;
+    journal
+        .record_session(&saved)
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?;
+    Ok(saved)
+}
+
 #[tauri::command]
 pub fn revert_session_turn_file(
     app: AppHandle,
@@ -1759,45 +1900,6 @@ fn wsl_agent_binary_available(distro: &str, agent_type: String) -> Result<bool, 
             "respuesta inesperada del agente WSL",
         )),
         Err(error) => Err(CommandError::new(error.safe_category(), error.message)),
-    }
-}
-
-async fn create_agents_md_for_session(
-    bus: &BusHandle,
-    session: &AgentSession,
-) -> Result<(), CommandError> {
-    let resolved = ensure_known_agent_repo(bus, &session.repo).await?;
-    match resolved.source {
-        RepoSource::Local => {
-            let repo = resolved.path;
-            tokio::task::spawn_blocking(move || write_repo_agents_md_config(&repo))
-                .await
-                .map_err(|_| CommandError::new("internal", "AGENTS.md task failed"))?
-                .map_err(|error| CommandError::new(error.category, error.message))
-        }
-        RepoSource::Wsl => {
-            let distro = resolved
-                .distro
-                .ok_or_else(|| CommandError::new("missing_distro", "repo WSL sin distro"))?;
-            match request_wsl_agent(
-                &distro,
-                &AgentRequest::CreateAgentsMdConfig {
-                    protocol_version: PROTOCOL_VERSION,
-                    repo: resolved.path,
-                    allowed_repos: resolved.wsl_repos,
-                },
-            ) {
-                Ok(AgentResponse::Unit) => Ok(()),
-                Ok(AgentResponse::Error { category, message }) => {
-                    Err(CommandError::new(category, message))
-                }
-                Ok(_) => Err(CommandError::new(
-                    "malformed_response",
-                    "respuesta inesperada del agente WSL",
-                )),
-                Err(error) => Err(CommandError::new(error.safe_category(), error.message)),
-            }
-        }
     }
 }
 
@@ -3461,7 +3563,7 @@ fn git_output_message(output: &std::process::Output) -> String {
 }
 
 fn git_command(repo: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = Command::new(crate::git::git_program());
     command.arg("-C").arg(repo);
     #[cfg(target_os = "windows")]
     {
@@ -3511,7 +3613,15 @@ fn spawn_output_reader(
 ) {
     let last_output_at = Arc::new(AtomicU64::new(0));
     let done = Arc::new(AtomicBool::new(false));
-    spawn_output_quiet_monitor(app.clone(), last_output_at.clone(), done.clone());
+    let hook_events = app
+        .try_state::<Mutex<AgentSessionRegistry>>()
+        .and_then(|registry| registry.lock().ok()?.session_hook_events_path(&session_id));
+    spawn_output_quiet_monitor(
+        app.clone(),
+        last_output_at.clone(),
+        done.clone(),
+        hook_events,
+    );
     std::thread::spawn(move || {
         let mut buffer = vec![0u8; 2 * 1024 * 1024];
         loop {
@@ -3520,22 +3630,7 @@ fn spawn_output_reader(
                 Ok(read) => {
                     let timestamp_ms = now_ms();
                     last_output_at.store(timestamp_ms, Ordering::Relaxed);
-                    let child_output = parse_timeline_frame(&buffer[..read])
-                        .is_some_and(|frame| frame.thread_id.is_some());
-                    if !child_output {
-                        if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
-                            if let Ok(mut registry) = registry.lock() {
-                                let _ = registry.record_session_output(&session_id, timestamp_ms);
-                            }
-                        }
-                    }
-                    let explicit_turn_done = emit_output_without_turn_done_marker(
-                        &app,
-                        &session_id,
-                        &buffer[..read],
-                        timestamp_ms,
-                    );
-                    if explicit_turn_done {
+                    if emit_output(&app, &session_id, &buffer[..read], timestamp_ms) {
                         if let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() {
                             if let Ok(mut registry) = registry.lock() {
                                 let _ =
@@ -3553,28 +3648,13 @@ fn spawn_output_reader(
     });
 }
 
-fn emit_output_without_turn_done_marker(
-    app: &AppHandle,
-    session_id: &str,
-    output: &[u8],
-    timestamp_ms: u64,
-) -> bool {
-    if let Some(frame) = parse_timeline_frame(output) {
-        let turn_done = frame.turn_done && frame.thread_id.is_none();
-        emit_output_chunk(app, session_id, output, timestamp_ms);
-        return turn_done;
-    }
-    let marker = TINTO_TURN_DONE_MARKER.as_bytes();
-    let mut cursor = 0;
-    let mut explicit_turn_done = false;
-    while let Some(offset) = find_bytes(&output[cursor..], marker) {
-        let marker_start = cursor + offset;
-        emit_output_chunk(app, session_id, &output[cursor..marker_start], timestamp_ms);
-        cursor = marker_start + marker.len();
-        explicit_turn_done = true;
-    }
-    emit_output_chunk(app, session_id, &output[cursor..], timestamp_ms);
-    explicit_turn_done
+/// Emits a read of the agent's output; true when it is a frame that ends
+/// the root thread's turn.
+fn emit_output(app: &AppHandle, session_id: &str, output: &[u8], timestamp_ms: u64) -> bool {
+    let turn_done = parse_timeline_frame(output)
+        .is_some_and(|frame| frame.turn_done && frame.thread_id.is_none());
+    emit_output_chunk(app, session_id, output, timestamp_ms);
+    turn_done
 }
 
 fn emit_output_chunk(app: &AppHandle, session_id: &str, chunk: &[u8], timestamp_ms: u64) {
@@ -3796,22 +3876,15 @@ fn strip_ansi(text: &str) -> String {
     output
 }
 
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
 fn spawn_output_quiet_monitor(
     app: AppHandle,
     last_output_at: Arc<AtomicU64>,
     done: Arc<AtomicBool>,
+    hook_events: Option<std::path::PathBuf>,
 ) {
     thread::spawn(move || {
         let mut last_emitted_output_at = 0;
+        let mut hook_events_len = 0;
         loop {
             thread::sleep(std::time::Duration::from_millis(
                 SESSION_OUTPUT_MONITOR_TICK_MS,
@@ -3824,6 +3897,16 @@ fn spawn_output_quiet_monitor(
             {
                 refresh_and_emit_sessions(&app);
                 last_emitted_output_at = observed;
+            }
+            // A hook reported something (a turn's start or end), maybe with
+            // no output around it.
+            let hooks_len = hook_events
+                .as_deref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map_or(0, |metadata| metadata.len());
+            if hooks_len != hook_events_len {
+                hook_events_len = hooks_len;
+                refresh_and_emit_sessions(&app);
             }
             if is_done && (observed == 0 || observed == last_emitted_output_at) {
                 return;
@@ -4275,8 +4358,7 @@ mod tests {
     #[test]
     fn encoded_timeline_frame_preserves_provider_control_literals_as_text() {
         let text = format!(
-            "{} {}",
-            TINTO_TURN_DONE_MARKER,
+            "before {} after",
             String::from_utf8_lossy(TIMELINE_FRAME_PREFIX)
         );
         let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
@@ -4294,8 +4376,8 @@ mod tests {
         assert_eq!(parsed.text, text);
         let payload = frame.strip_prefix(TIMELINE_FRAME_PREFIX).unwrap();
         assert!(!payload
-            .windows(TINTO_TURN_DONE_MARKER.len())
-            .any(|window| window == TINTO_TURN_DONE_MARKER.as_bytes()));
+            .windows(TIMELINE_FRAME_PREFIX.len())
+            .any(|window| window == TIMELINE_FRAME_PREFIX));
     }
 
     #[test]

@@ -87,6 +87,17 @@ fn is_windowsapps_codex_alias(agent_type: &str, path: &Path) -> bool {
 
 #[cfg(windows)]
 fn fallback_agent_candidates(agent_type: &str) -> Vec<PathBuf> {
+    if agent_type.eq_ignore_ascii_case("claude") {
+        // Claude Code's own installer puts it in ~/.local/bin, which is not
+        // always on the PATH Tinto starts with.
+        let installed = env::var_os("USERPROFILE").map(|home| {
+            PathBuf::from(home)
+                .join(".local")
+                .join("bin")
+                .join("claude.exe")
+        });
+        return sorted_existing_candidates(installed.into_iter().collect());
+    }
     if !agent_type.eq_ignore_ascii_case("codex") {
         return Vec::new();
     }
@@ -100,6 +111,20 @@ fn fallback_agent_candidates(agent_type: &str) -> Vec<PathBuf> {
     }
 
     sorted_existing_candidates(paths)
+}
+
+/// The newest Claude Code the Claude desktop app installed. It is not on
+/// PATH: `<appdata>\Claude\claude-code\<version>\<build>\claude.exe`.
+#[cfg(windows)]
+pub fn claude_desktop_binary(appdata: &Path) -> Option<PathBuf> {
+    let versions = appdata.join("Claude").join("claude-code");
+    let mut paths = Vec::new();
+    for version in fs::read_dir(versions).into_iter().flatten().flatten() {
+        for build in fs::read_dir(version.path()).into_iter().flatten().flatten() {
+            paths.push(build.path().join("claude.exe"));
+        }
+    }
+    sorted_existing_candidates(paths).into_iter().next()
 }
 
 #[cfg(windows)]
@@ -235,5 +260,24 @@ mod tests {
                 .unwrap_err();
 
         assert_eq!(error.category, "binary_not_found");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn finds_the_claude_code_of_the_desktop_app() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(claude_desktop_binary(temp.path()), None);
+        let build = temp
+            .path()
+            .join("Claude")
+            .join("claude-code")
+            .join("2.1.293")
+            .join("83cb0bd7fed4");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("claude.exe"), "fake").unwrap();
+        assert_eq!(
+            claude_desktop_binary(temp.path()),
+            Some(build.join("claude.exe"))
+        );
     }
 }

@@ -287,6 +287,7 @@ describe("MenuBar", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     act(() => busStore.setConfig(config));
@@ -526,6 +527,7 @@ describe("MenuBar", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     act(() => {
@@ -559,7 +561,6 @@ describe("MenuBar", () => {
             error: null,
             metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
             gitleaks_configured: false,
-            agents_md_configured: false,
             secret_scan_status: { state: "not_run" },
             signals: [],
             secret_findings: [],
@@ -621,6 +622,7 @@ describe("MenuBar", () => {
       openTimeline,
       openDashboard,
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     act(() => busStore.setConfig(config));
@@ -646,6 +648,7 @@ describe("MenuBar", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     ops.getGitleaksSetupStatus.mockResolvedValue({
@@ -678,6 +681,7 @@ describe("MenuBar", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     act(() => {
@@ -699,7 +703,6 @@ describe("MenuBar", () => {
             error: null,
             metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
             gitleaks_configured: false,
-            agents_md_configured: false,
             secret_scan_status: { state: "not_run" },
           },
         ],
@@ -725,6 +728,7 @@ describe("MenuBar", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     ops.getGitleaksSetupStatus.mockResolvedValue({
@@ -789,6 +793,7 @@ describe("MenuBar", () => {
       openTimeline: vi.fn(),
       openDashboard,
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     ops.createAndActivate.mockResolvedValue(undefined);

@@ -174,7 +174,7 @@ export interface AgentSessionChangeLog {
   changes: AgentSessionChange[];
 }
 
-export type AgentSessionTurnStatus = "waiting" | "working" | "settling";
+export type AgentSessionTurnStatus = "waiting" | "working";
 
 export interface AgentSessionTurnCheckpoint {
   id: string;
@@ -312,6 +312,8 @@ export interface AgentSession {
   context_summary?: AgentSessionContextSummary | null;
   context_usage?: AgentSessionContextUsage | null;
   turn_interrupt_supported: boolean;
+  /** The provider says when its turns start and end; without it, a plain terminal. */
+  reports_turns?: boolean;
   reverted_at_ms?: number | null;
   restored_to_turn_index?: number | null;
   active_sessions: number;
@@ -584,7 +586,6 @@ export interface RepoDelta {
   error: RepoErrorState | null;
   metrics: RepoMetrics;
   gitleaks_configured: boolean;
-  agents_md_configured: boolean;
   signals?: PassiveSignal[]; // RDM-011 additive
   secret_findings?: SecretFinding[]; // additive
   secret_scan_status: SecretScanStatus;

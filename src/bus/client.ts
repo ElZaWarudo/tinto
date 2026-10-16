@@ -221,8 +221,6 @@ export const installRepoGitleaks = (repo: string) =>
   invoke<GitleaksInstallResult>("install_repo_gitleaks", { repo });
 export const createRepoGitleaksConfig = (repo: string) =>
   invoke("create_repo_gitleaks_config", { repo });
-export const createRepoAgentsMdConfig = (repo: string) =>
-  invoke("create_repo_agents_md_config", { repo });
 export const getRepoFetchPreview = (repo: string) =>
   invoke<RepoFetchPreview>("get_repo_fetch_preview", { repo });
 export const fetchRepo = (
@@ -240,6 +238,9 @@ export const fetchRepo = (
 
 export const revertSession = (sessionId: string, userConsent: boolean) =>
   invoke<AgentSession>("revert_session", { sessionId, userConsent });
+
+export const revertJournalSession = (sessionId: string, userConsent: boolean) =>
+  invoke<AgentSession>("revert_agent_journal_session", { sessionId, userConsent });
 
 export const revertSessionTurnFile = (
   sessionId: string,

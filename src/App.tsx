@@ -5,6 +5,7 @@ import {
   PANEL_AGENT_CONSOLES,
   PANEL_AGENT_TERMINAL,
   PANEL_DASHBOARD,
+  PANEL_DELIVERY,
   PANEL_REPO,
   PANEL_TIMELINE,
   TAB_REPO,
@@ -14,6 +15,7 @@ import { openRepoPanel } from "./workspace/openRepo";
 import { openTimelinePanel } from "./workspace/openTimeline";
 import { openDashboardPanel, resetToDashboardPanel } from "./workspace/openDashboard";
 import { openAgentConsolesPanel, openAgentTerminalPanel } from "./workspace/openAgentTerminal";
+import { openDeliveryPanel } from "./workspace/openDelivery";
 import {
   closePanelsForRemovedRepo,
   closePanelsOutsideActiveWorkbench,
@@ -27,6 +29,7 @@ import { RepoTab } from "./panels/RepoTab";
 import { TimelinePanel } from "./panels/timeline/TimelinePanel";
 import { ConsoleDockPanel } from "./panels/terminal/ConsoleDockPanel";
 import { TerminalPanel } from "./panels/terminal/TerminalPanel";
+import { DeliveryPanel } from "./panels/delivery/DeliveryPanel";
 import { onDetachedConsolesReattach } from "./panels/terminal/detachTerminalWindow";
 import {
   armConsolesExternalDetach,
@@ -45,6 +48,7 @@ import { busStore, useBusState } from "./bus/store";
 import type { WorkbenchConfig } from "./bus/contract";
 import { GlanceMode } from "./qol/GlanceMode";
 import { NotificationWatcher } from "./qol/notifications";
+import { DeliveryNotificationWatcher } from "./panels/delivery/DeliveryNotifications";
 import { useQualityState } from "./qol/state";
 import { installZoomKeybindings, zoomStore } from "./qol/zoom";
 import { installShortcuts } from "./qol/shortcuts";
@@ -56,6 +60,7 @@ const components: PanelComponents = {
   [PANEL_TIMELINE]: TimelinePanel,
   [PANEL_AGENT_CONSOLES]: ConsoleDockPanel,
   [PANEL_AGENT_TERMINAL]: TerminalPanel,
+  [PANEL_DELIVERY]: DeliveryPanel,
 };
 
 const tabComponents: TabComponents = {
@@ -184,6 +189,11 @@ function NativeApp() {
           openAgentConsolesPanel(apiRef.current);
         }
       },
+      openDelivery: () => {
+        if (apiRef.current) {
+          openDeliveryPanel(apiRef.current);
+        }
+      },
       openAgentTerminal: (params) => {
         if (apiRef.current) {
           openAgentTerminalPanel(apiRef.current, params);
@@ -276,6 +286,7 @@ function NativeApp() {
     <WorkspaceActionsContext.Provider value={actions}>
       <div className="app-shell">
         <NotificationWatcher />
+        <DeliveryNotificationWatcher />
         <MenuBar />
         {connectionErrors.length > 0 && (
           <div

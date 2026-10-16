@@ -51,6 +51,20 @@ impl Git2Engine {
         }
     }
 
+    /// Everything that changed since `base`: its commits after it, what is
+    /// staged or modified, and new files git does not ignore, each with its
+    /// content.
+    pub fn diff_against(&self, base: &str) -> Result<Vec<FileDiff>, GitError> {
+        let repo = self.repo()?;
+        let base_tree = Self::find_commit(&repo, base)?.tree()?;
+        let mut opts = DiffOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .show_untracked_content(true);
+        let diff = repo.diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut opts))?;
+        Self::collect_diff(&diff)
+    }
+
     fn collect_diff(diff: &git2::Diff<'_>) -> Result<Vec<FileDiff>, GitError> {
         use std::cell::RefCell;
         // Tres callbacks de git2 mutan la misma colección; RefCell evita el
@@ -623,5 +637,38 @@ mod tests {
         // exactamente el archivo que vino de la branch.
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].path, PathBuf::from("de-feature.txt"));
+    }
+
+    #[test]
+    fn diff_against_reune_commits_cambios_y_archivos_nuevos_desde_la_base() {
+        let fixture = TempRepo::with_initial_commit();
+        let base = fixture.head_id();
+        fixture.commit_file("committed.txt", "uno\n", "commit tras la base");
+        fixture.write_and_stage("staged.txt", "dos\n");
+        fixture.write("nuevo.txt", "tres\n");
+
+        let engine = Git2Engine::open(fixture.path()).unwrap();
+        let mut paths: Vec<PathBuf> = engine
+            .diff_against(&base)
+            .unwrap()
+            .into_iter()
+            .map(|diff| diff.path)
+            .collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("committed.txt"),
+                PathBuf::from("nuevo.txt"),
+                PathBuf::from("staged.txt"),
+            ]
+        );
+        let nuevo = engine
+            .diff_against(&base)
+            .unwrap()
+            .into_iter()
+            .find(|diff| diff.path == Path::new("nuevo.txt"))
+            .unwrap();
+        assert_eq!(nuevo.hunks[0].lines[0].content, "tres");
     }
 }

@@ -7,3 +7,6 @@ docs/
 *.md
 .pumarejo/
 .pumarejo.json
+# Copied verbatim from the backlog-delivery skill so the QA page matches it.
+src-tauri/src/delivery/visual_record.css
+src-tauri/src/delivery/visual_record.js

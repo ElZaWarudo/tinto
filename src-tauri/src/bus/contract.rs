@@ -375,7 +375,6 @@ pub struct AgentSessionChangeLog {
 pub enum AgentSessionTurnStatus {
     Waiting,
     Working,
-    Settling,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -584,6 +583,10 @@ pub struct AgentSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<AgentSessionContextUsage>,
     pub turn_interrupt_supported: bool,
+    /// The provider says when its turns start and end. Without it the
+    /// session is a plain terminal: no turns, no queue.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reports_turns: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverted_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -947,8 +950,6 @@ pub struct RepoDelta {
     pub error: Option<RepoErrorState>,
     pub metrics: RepoMetrics,
     pub gitleaks_configured: bool,
-    #[serde(default)]
-    pub agents_md_configured: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signals: Vec<PassiveSignal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1100,7 +1101,6 @@ mod tests {
                 lines_removed: 3,
             },
             gitleaks_configured: false,
-            agents_md_configured: false,
             signals: vec![PassiveSignal {
                 kind: PassiveSignalKind::SensitivePath,
                 severity: SignalSeverity::Warning,
@@ -1128,7 +1128,6 @@ mod tests {
         assert_eq!(json["error"]["class"], "terminal");
         assert_eq!(json["metrics"]["changed_files"], 1);
         assert_eq!(json["gitleaks_configured"], false);
-        assert_eq!(json["agents_md_configured"], false);
         assert_eq!(json["signals"][0]["kind"], "sensitive_path");
         assert_eq!(json["signals"][0]["severity"], "warning");
         assert_eq!(json["secret_findings"][0]["line"], 12);
@@ -1271,6 +1270,7 @@ mod tests {
                 model_context_window: 128_000,
             }),
             turn_interrupt_supported: true,
+            reports_turns: true,
             reverted_at_ms: None,
             restored_to_turn_index: None,
             active_sessions: 1,

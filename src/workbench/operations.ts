@@ -2,7 +2,8 @@
 // autodetect), remove. All target the ACTIVE workbench by name (no implicit
 // active workbench in the backend mutations) and reload the snapshot after.
 
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import { confirm } from "./confirmDialog";
 import {
   addRepo,
   addWslRepo,

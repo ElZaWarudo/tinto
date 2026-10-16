@@ -5,6 +5,7 @@
 pub mod acp;
 pub mod app_server;
 pub mod checkpoint;
+pub mod claude_hooks;
 pub mod cli_update;
 pub mod commands;
 pub mod install;
@@ -42,8 +43,7 @@ use std::{
 use crate::bus::contract::{
     AgentRuntimeCatalog, AgentSession, AgentSessionContextSummary, AgentSessionError,
     AgentSessionFeedback, AgentSessionLimits, AgentSessionPermissionMode, AgentSessionResumeMode,
-    AgentSessionRuntimeOptions, AgentSessionTimelineItem, AgentSessionTimelineKind,
-    AgentSubagentThread,
+    AgentSessionRuntimeOptions, AgentSessionTimelineItem, AgentSubagentThread,
 };
 use crate::wsl_agent::{
     launcher::request_wsl_agent,
@@ -196,12 +196,12 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let (checkpoint, checkpoint_notice) = checkpoint_unless_oversized(create_checkpoint(
+        let checkpoint = Some(create_checkpoint(
             &repo,
             &id,
             started_at_ms,
             &self.checkpoint_config,
-        ))?;
+        )?);
         let acp_provider = matches!(agent_type.as_str(), "kimi" | "opencode");
         let mut process: Box<dyn AgentProcess> = if acp_provider {
             let intent = AcpLaunchIntent::LoadSession {
@@ -247,9 +247,6 @@ impl AgentSessionRegistry {
         if !acp_provider {
             session.set_provider_session_id(provider_session_id);
         }
-        if let Some(notice) = checkpoint_notice {
-            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
-        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -288,12 +285,12 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let (checkpoint, checkpoint_notice) = checkpoint_unless_oversized(create_checkpoint(
+        let checkpoint = Some(create_checkpoint(
             &repo,
             &id,
             started_at_ms,
             &self.checkpoint_config,
-        ))?;
+        )?);
         let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
             "kimi" => Box::new(AcpProcessSupervisor::spawn(
                 binary_path.clone(),
@@ -322,9 +319,6 @@ impl AgentSessionRegistry {
             self.checkpoint_config.clone(),
             CheckpointBackend::Local,
         );
-        if let Some(notice) = checkpoint_notice {
-            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
-        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -373,9 +367,10 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let (checkpoint, checkpoint_notice) =
-            checkpoint_unless_oversized(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms))
-                .map_err(|error| wsl_startup_error("checkpoint_create", error))?;
+        let checkpoint = Some(
+            create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)
+                .map_err(|error| wsl_startup_error("checkpoint_create", error))?,
+        );
         let mut process = self.process_factory.resume_wsl_agent(
             &agent_type,
             &distro,
@@ -397,9 +392,6 @@ impl AgentSessionRegistry {
         );
         session.set_wsl_distro(distro);
         session.set_provider_session_id(provider_session_id);
-        if let Some(notice) = checkpoint_notice {
-            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
-        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -446,11 +438,13 @@ impl AgentSessionRegistry {
         self.ensure_capacity(&repo)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started_at_ms = now_ms();
-        let (checkpoint, checkpoint_notice) = if create_remote_checkpoint {
-            checkpoint_unless_oversized(create_wsl_checkpoint(&repo, &distro, &id, started_at_ms))
-                .map_err(|error| wsl_startup_error("checkpoint_create", error))?
+        let checkpoint = if create_remote_checkpoint {
+            Some(
+                create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)
+                    .map_err(|error| wsl_startup_error("checkpoint_create", error))?,
+            )
         } else {
-            (None, None)
+            None
         };
         let process = self
             .process_factory
@@ -479,9 +473,6 @@ impl AgentSessionRegistry {
             CheckpointBackend::Wsl,
         );
         session.set_wsl_distro(distro);
-        if let Some(notice) = checkpoint_notice {
-            session.record_timeline_item(checkpoint_skipped_item(&id, started_at_ms, notice));
-        }
         session.start(process)?;
         self.sessions.insert(id.clone(), session);
         Ok(StartedAgentSession {
@@ -542,7 +533,6 @@ impl AgentSessionRegistry {
         let now = now_ms();
         for session in self.sessions.values_mut() {
             session.refresh_status()?;
-            session.refresh_turn_checkpoints(now, false)?;
             session.enforce_lifetime(now, self.limits.max_lifetime_ms)?;
         }
         Ok(())
@@ -689,6 +679,10 @@ impl AgentSessionRegistry {
             .get(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         Ok(session.supports_context_compaction())
+    }
+
+    pub fn session_hook_events_path(&self, session_id: &str) -> Option<PathBuf> {
+        self.sessions.get(session_id)?.hook_events_path()
     }
 
     pub fn compact_session_context(&mut self, session_id: &str) -> Result<(), AgentConsoleError> {
@@ -936,17 +930,36 @@ impl AgentSessionRegistry {
         Ok(session.to_contract())
     }
 
-    pub fn record_session_output(
-        &mut self,
-        session_id: &str,
-        timestamp_ms: u64,
-    ) -> Result<(), AgentConsoleError> {
-        let session = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
-        session.record_output_activity(timestamp_ms);
-        Ok(())
+    /// Undo a session that is no longer live (reopened from history), from
+    /// the start checkpoint it left on disk.
+    pub fn revert_saved_session(&mut self, saved: &AgentSession) -> Result<(), AgentConsoleError> {
+        self.refresh_session_statuses()?;
+        let repo_busy = self.list_sessions().iter().any(|session| {
+            session.repo == saved.repo
+                && matches!(
+                    session.status,
+                    crate::bus::contract::AgentSessionStatus::Starting
+                        | crate::bus::contract::AgentSessionStatus::Running
+                )
+        });
+        if repo_busy {
+            return Err(AgentConsoleError::new(
+                "agent_session_active",
+                "detén las sesiones activas de este repo antes de revertir una sesión anterior",
+            ));
+        }
+        let backend = if saved.wsl_distro.is_some() {
+            session::CheckpointBackend::Wsl
+        } else {
+            session::CheckpointBackend::Local
+        };
+        session::revert_saved_session(
+            backend,
+            saved.wsl_distro.as_deref(),
+            &saved.repo,
+            &saved.id,
+            &self.checkpoint_config,
+        )
     }
 
     pub fn record_session_timeline_item(
@@ -1204,46 +1217,6 @@ fn validate_wsl_repo(repo: &Path) -> Result<(), AgentConsoleError> {
     Ok(())
 }
 
-/// The safety checkpoint is a convenience, not a requirement: a repo with
-/// more uncommitted data than the checkpoint limit still gets its session,
-/// just without undo, and the conversation says so.
-fn checkpoint_unless_oversized(
-    result: Result<CheckpointRecord, AgentConsoleError>,
-) -> Result<(Option<CheckpointRecord>, Option<String>), AgentConsoleError> {
-    match result {
-        Ok(checkpoint) => Ok((Some(checkpoint), None)),
-        Err(error) if error.category == "checkpoint_too_large" => {
-            Ok((None, Some(checkpoint_skipped_notice(&error.message))))
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn checkpoint_skipped_notice(detail: &str) -> String {
-    let size = detail
-        .split_once(": ")
-        .map(|(_, rest)| format!(" ({rest})"))
-        .unwrap_or_default();
-    format!(
-        "Sesión iniciada sin punto de control de seguridad: el repo tiene demasiados cambios sin confirmar{size}. Deshacer los cambios del Agent no estará disponible en esta sesión."
-    )
-}
-
-fn checkpoint_skipped_item(
-    session_id: &str,
-    timestamp_ms: u64,
-    text: String,
-) -> AgentSessionTimelineItem {
-    AgentSessionTimelineItem {
-        session_id: session_id.to_string(),
-        id: format!("{session_id}:checkpoint-skipped"),
-        kind: AgentSessionTimelineKind::Lifecycle,
-        text,
-        timestamp_ms,
-        attachments: Vec::new(),
-    }
-}
-
 fn create_wsl_checkpoint(
     repo: &Path,
     distro: &str,
@@ -1413,6 +1386,10 @@ mod tests {
             Ok(())
         }
 
+        fn reports_turns(&self) -> bool {
+            true
+        }
+
         fn supports_turn_interrupt(&self) -> bool {
             self.supports_controls
         }
@@ -1463,37 +1440,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_checkpoint_starts_the_session_without_undo_and_says_so() {
-        let factory = Arc::new(FakeProcessFactory::default());
-        let mut registry = AgentSessionRegistry::with_process_factory(factory)
-            .with_checkpoint_config(CheckpointConfig {
-                max_checkpoint_bytes: 1024,
-                ..CheckpointConfig::default()
-            });
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::write(repo.path().join("big.log"), vec![b'x'; 4096]).unwrap();
-        let binary = repo.path().join("codex-bin");
-        std::fs::write(&binary, "fake").unwrap();
-
-        let id = registry
-            .start_session_with_binary(repo.path().into(), "codex".into(), binary)
-            .unwrap();
-
-        let session = registry.get_session(&id).unwrap();
-        assert_eq!(session.status, AgentSessionStatus::Running);
-        assert!(session.checkpoint.is_none());
-        let notice = session
-            .timeline
-            .iter()
-            .find(|item| item.id == format!("{id}:checkpoint-skipped"))
-            .expect("checkpoint notice");
-        assert!(notice
-            .text
-            .starts_with("Sesión iniciada sin punto de control de seguridad"));
-        assert!(notice.text.contains("MB in"), "{}", notice.text);
-    }
-
-    #[test]
     fn registry_stop_session_is_idempotent_at_session_level() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry = AgentSessionRegistry::with_process_factory(factory);
@@ -1530,19 +1476,36 @@ mod tests {
     }
 
     #[test]
-    fn registry_rejects_revert_for_running_session() {
+    fn registry_revert_stops_a_running_session_first() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry = AgentSessionRegistry::with_process_factory(factory);
         let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("base.txt"),
+            "before
+",
+        )
+        .unwrap();
         let binary = repo.path().join("codex-bin");
         std::fs::write(&binary, "fake").unwrap();
         let id = registry
             .start_session_with_binary(repo.path().into(), "codex".into(), binary)
             .unwrap();
+        std::fs::write(
+            repo.path().join("base.txt"),
+            "after
+",
+        )
+        .unwrap();
 
-        let error = registry.revert_session(&id, true).unwrap_err();
+        let reverted = registry.revert_session(&id, true).unwrap();
 
-        assert_eq!(error.category, "session_still_running");
+        assert_eq!(reverted.status, AgentSessionStatus::Reverted);
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "before
+"
+        );
     }
 
     #[test]
@@ -1690,7 +1653,7 @@ mod tests {
 
         registry.compact_session_context(&id).unwrap();
         registry
-            .write_session_input(&id, b"working\r", None)
+            .write_session_turn(&id, "working", &[], None)
             .unwrap();
         registry.interrupt_session_turn(&id).unwrap();
 
@@ -1808,6 +1771,139 @@ mod tests {
     }
 
     #[test]
+    fn registry_local_revert_restores_a_dirty_git_repo() {
+        let factory = Arc::new(FakeProcessFactory::default());
+        let mut registry = AgentSessionRegistry::with_process_factory(factory);
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(
+            repo.path().join("README.md"),
+            "base
+",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.path().join("value.ts"),
+            "41
+",
+        )
+        .unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        std::fs::write(
+            repo.path().join("README.md"),
+            "base
+dirty
+",
+        )
+        .unwrap();
+        let binary = tempfile::NamedTempFile::new().unwrap();
+
+        let id = registry
+            .start_session_with_binary(repo.path().into(), "codex".into(), binary.path().into())
+            .unwrap();
+        registry
+            .record_session_timeline_item(AgentSessionTimelineItem {
+                session_id: id.clone(),
+                id: "turn-user-1".into(),
+                kind: crate::bus::contract::AgentSessionTimelineKind::UserMessage,
+                text: "edit".into(),
+                timestamp_ms: 10,
+                attachments: Vec::new(),
+            })
+            .unwrap();
+        registry.write_session_turn(&id, "edit", &[], None).unwrap();
+        std::fs::write(
+            repo.path().join("value.ts"),
+            "42
+",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.path().join("notes.md"),
+            "alpha
+",
+        )
+        .unwrap();
+        registry.record_session_turn_done(&id, 11).unwrap();
+        registry.stop_session(&id).unwrap();
+        let turn = registry.get_session(&id).unwrap().turn_checkpoints[0].clone();
+        registry
+            .revert_turn_file(&id, &turn.id, Path::new("notes.md"), true)
+            .unwrap();
+        assert!(!repo.path().join("notes.md").exists());
+
+        let reverted = registry.revert_session(&id, true).unwrap();
+
+        assert_eq!(reverted.status, AgentSessionStatus::Reverted);
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("value.ts")).unwrap(),
+            "41
+"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("README.md")).unwrap(),
+            "base
+dirty
+"
+        );
+        assert!(!repo.path().join("notes.md").exists());
+    }
+
+    #[test]
+    fn saved_session_can_be_reverted_after_a_restart() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("base.txt"),
+            "before
+",
+        )
+        .unwrap();
+        let binary = tempfile::NamedTempFile::new().unwrap();
+        let saved = {
+            let mut registry =
+                AgentSessionRegistry::with_process_factory(Arc::new(FakeProcessFactory::default()));
+            let id = registry
+                .start_session_with_binary(repo.path().into(), "codex".into(), binary.path().into())
+                .unwrap();
+            std::fs::write(
+                repo.path().join("base.txt"),
+                "after
+",
+            )
+            .unwrap();
+            std::fs::write(
+                repo.path().join("created.txt"),
+                "new
+",
+            )
+            .unwrap();
+            registry.stop_session(&id).unwrap();
+            registry.get_session(&id).unwrap()
+        };
+
+        let mut restarted =
+            AgentSessionRegistry::with_process_factory(Arc::new(FakeProcessFactory::default()));
+        restarted.revert_saved_session(&saved).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
+            "before
+"
+        );
+        assert!(!repo.path().join("created.txt").exists());
+    }
+
+    #[test]
     fn registry_local_turn_checkpoint_can_restore_completed_session_to_post_turn_state() {
         let factory = Arc::new(FakeProcessFactory::default());
         let mut registry = AgentSessionRegistry::with_process_factory(factory);
@@ -1827,6 +1923,9 @@ mod tests {
                 timestamp_ms: 10,
                 attachments: Vec::new(),
             })
+            .unwrap();
+        registry
+            .write_session_turn(&id, "modify the temp repo", &[], None)
             .unwrap();
         std::fs::write(repo.path().join("base.txt"), "after\n").unwrap();
         std::fs::write(repo.path().join("created.txt"), "new\n").unwrap();

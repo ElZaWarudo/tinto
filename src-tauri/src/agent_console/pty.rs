@@ -9,6 +9,7 @@ use std::{
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+use super::claude_hooks::{forward_slashes, ClaudeHooks};
 use super::{app_server::CodexAppServerHandle, AgentConsoleError, ResumeResultReceiver};
 use crate::{
     bus::contract::{
@@ -18,8 +19,6 @@ use crate::{
     },
     wsl_agent::shell_env::agent_console_script,
 };
-
-pub const TINTO_TURN_DONE_MARKER: &str = "::tinto-turn-done::";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTurnAttachment {
@@ -85,6 +84,20 @@ pub trait AgentProcess: Send {
             "steer_unsupported",
             "este runtime no admite intervenir en el turno activo",
         ))
+    }
+    /// Whether the provider says when its turns start and end. Without it a
+    /// session has no turns: Tinto does not guess them from the output.
+    fn reports_turns(&self) -> bool {
+        false
+    }
+    /// Whether sending a turn starts one. Claude Code says so itself when it
+    /// accepts the prompt; a local command such as `/help` starts none.
+    fn turn_starts_on_send(&self) -> bool {
+        self.reports_turns()
+    }
+    /// The file where the provider's hooks report its turns, to watch it.
+    fn hook_events_path(&self) -> Option<PathBuf> {
+        None
     }
     fn supports_turn_interrupt(&self) -> bool {
         false
@@ -257,7 +270,7 @@ pub trait AgentProcess: Send {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProcessEvent {
-    FileActivity {
+    TurnStarted {
         timestamp_ms: u64,
     },
     TurnCompleted {
@@ -409,6 +422,14 @@ impl AgentProcessFactory for PortablePtyFactory {
         provider_session_id: &str,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if is_claude_binary(binary_path) {
+            return Ok(Box::new(PtyHandle::resume_claude(
+                binary_path,
+                working_dir,
+                provider_session_id,
+                permission_mode,
+            )?));
+        }
         if !is_codex_binary(binary_path) {
             return Err(AgentConsoleError::new(
                 "agent_resume_unsupported",
@@ -431,6 +452,14 @@ impl AgentProcessFactory for PortablePtyFactory {
         provider_session_id: &str,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if agent_type.eq_ignore_ascii_case("claude") {
+            return Ok(Box::new(PtyHandle::resume_wsl_claude(
+                distro,
+                working_dir,
+                provider_session_id,
+                permission_mode,
+            )?));
+        }
         if !agent_type.eq_ignore_ascii_case("codex") {
             return Err(AgentConsoleError::new(
                 "agent_resume_unsupported",
@@ -452,6 +481,7 @@ pub struct PtyHandle {
     reader: Option<Box<dyn Read + Send>>,
     writer: Box<dyn Write + Send>,
     exit_code: Option<i32>,
+    claude_hooks: Option<ClaudeHooks>,
 }
 
 impl PtyHandle {
@@ -468,11 +498,38 @@ impl PtyHandle {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
-        Self::spawn_command_builder(build_agent_command_with_permission(
+        Self::spawn_local(binary_path, working_dir, permission_mode, None)
+    }
+
+    /// Claude Code continuing one of its conversations.
+    pub fn resume_claude(
+        binary_path: &Path,
+        working_dir: &Path,
+        claude_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<Self, AgentConsoleError> {
+        Self::spawn_local(
             binary_path,
             working_dir,
             permission_mode,
-        ))
+            Some(claude_session_id),
+        )
+    }
+
+    fn spawn_local(
+        binary_path: &Path,
+        working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
+        resume: Option<&str>,
+    ) -> Result<Self, AgentConsoleError> {
+        let mut command =
+            build_agent_command_with_permission(binary_path, working_dir, permission_mode);
+        let hooks = is_claude_binary(binary_path)
+            .then(|| with_claude_hooks(&mut command, false, resume))
+            .flatten();
+        let mut handle = Self::spawn_command_builder(command)?;
+        handle.claude_hooks = hooks;
+        Ok(handle)
     }
 
     pub fn spawn_with_env_allowlist(
@@ -493,12 +550,41 @@ impl PtyHandle {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
-        Self::spawn_command_builder(build_wsl_agent_command(
+        Self::spawn_wsl(agent_type, distro, working_dir, permission_mode, None)
+    }
+
+    /// Claude Code in WSL continuing one of its conversations.
+    pub fn resume_wsl_claude(
+        distro: &str,
+        working_dir: &Path,
+        claude_session_id: &str,
+        permission_mode: AgentSessionPermissionMode,
+    ) -> Result<Self, AgentConsoleError> {
+        Self::spawn_wsl(
+            "claude",
             distro,
-            agent_type,
             working_dir,
             permission_mode,
-        )?)
+            Some(claude_session_id),
+        )
+    }
+
+    fn spawn_wsl(
+        agent_type: &str,
+        distro: &str,
+        working_dir: &Path,
+        permission_mode: AgentSessionPermissionMode,
+        resume: Option<&str>,
+    ) -> Result<Self, AgentConsoleError> {
+        let mut command =
+            build_wsl_agent_command(distro, agent_type, working_dir, permission_mode)?;
+        let hooks = agent_type
+            .eq_ignore_ascii_case("claude")
+            .then(|| with_claude_hooks(&mut command, true, resume))
+            .flatten();
+        let mut handle = Self::spawn_command_builder(command)?;
+        handle.claude_hooks = hooks;
+        Ok(handle)
     }
 
     fn spawn_command_builder(command: CommandBuilder) -> Result<Self, AgentConsoleError> {
@@ -525,6 +611,7 @@ impl PtyHandle {
             reader: Some(reader),
             writer,
             exit_code: None,
+            claude_hooks: None,
         })
     }
 
@@ -614,6 +701,76 @@ impl AgentProcess for PtyHandle {
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
         self.reader.take()
     }
+
+    fn reports_turns(&self) -> bool {
+        self.claude_hooks.as_ref().is_some_and(ClaudeHooks::active)
+    }
+
+    fn turn_starts_on_send(&self) -> bool {
+        false
+    }
+
+    fn hook_events_path(&self) -> Option<PathBuf> {
+        self.claude_hooks
+            .as_ref()
+            .map(|hooks| hooks.path().to_path_buf())
+    }
+
+    fn provider_session_id(&self) -> Option<String> {
+        self.claude_hooks
+            .as_ref()
+            .and_then(|hooks| hooks.session_id())
+            .map(str::to_owned)
+    }
+
+    fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
+        self.claude_hooks
+            .as_mut()
+            .map(ClaudeHooks::drain)
+            .unwrap_or_default()
+    }
+
+    fn supports_turn_interrupt(&self) -> bool {
+        self.reports_turns()
+    }
+
+    fn interrupt_turn(&mut self) -> Result<(), AgentConsoleError> {
+        if !self.reports_turns() {
+            return Err(AgentConsoleError::new(
+                "interrupt_unsupported",
+                "este runtime no admite interrumpir el turno activo",
+            ));
+        }
+        self.write_input_pty(b"")?;
+        // Claude reports nothing when interrupted; the next drain ends the turn.
+        if let Some(hooks) = self.claude_hooks.as_mut() {
+            hooks.mark_interrupted();
+        }
+        Ok(())
+    }
+}
+
+/// Adds Claude Code's turn hooks to its command. Without them (no config
+/// folder, no path to this executable) the session simply has no turns.
+fn with_claude_hooks(
+    command: &mut CommandBuilder,
+    wsl: bool,
+    resume: Option<&str>,
+) -> Option<ClaudeHooks> {
+    if let Some(claude_session_id) = resume {
+        command.arg("--resume");
+        command.arg(claude_session_id);
+    }
+    let hooks = ClaudeHooks::create(resume).ok()?;
+    let exe = std::env::current_exe().ok()?;
+    let hook_command = if wsl {
+        crate::wsl_agent::launcher::windows_path_to_wsl_mount(&exe).ok()?
+    } else {
+        forward_slashes(&exe)
+    };
+    command.arg("--settings");
+    command.arg(hooks.settings(&hook_command));
+    Some(hooks)
 }
 
 pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> CommandBuilder {
@@ -635,6 +792,11 @@ pub(crate) fn build_agent_command_with_permission(
         command.arg(arg);
     }
     append_codex_permission_args(&mut command, is_codex_binary(binary_path), permission_mode);
+    if is_claude_binary(binary_path) {
+        for arg in crate::delivery::wiring::claude_args(false) {
+            command.arg(arg);
+        }
+    }
     apply_terminal_env(&mut command);
     command
 }
@@ -685,6 +847,11 @@ pub(crate) fn build_wsl_agent_command(
         agent_type.eq_ignore_ascii_case("codex"),
         permission_mode,
     );
+    if agent_type.eq_ignore_ascii_case("claude") {
+        for arg in crate::delivery::wiring::claude_args(true) {
+            command.arg(arg);
+        }
+    }
     apply_terminal_env(&mut command);
     Ok(command)
 }
@@ -714,6 +881,13 @@ fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {
     }
 }
 
+fn is_claude_binary(binary_path: &Path) -> bool {
+    binary_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("claude"))
+}
+
 fn is_codex_binary(binary_path: &Path) -> bool {
     binary_path
         .file_stem()
@@ -737,7 +911,6 @@ fn apply_terminal_env(command: &mut CommandBuilder) {
         "TINTO_IADE_NAME",
         "Integrated Agentic Development Environment",
     );
-    command.env("TINTO_TURN_DONE_MARKER", TINTO_TURN_DONE_MARKER);
 }
 
 fn spawn_error(message: String) -> AgentConsoleError {
@@ -875,10 +1048,6 @@ mod tests {
             command.get_env("TINTO_IADE_NAME"),
             Some(OsStr::new("Integrated Agentic Development Environment"))
         );
-        assert_eq!(
-            command.get_env("TINTO_TURN_DONE_MARKER"),
-            Some(OsStr::new(TINTO_TURN_DONE_MARKER))
-        );
     }
 
     #[test]
@@ -954,10 +1123,6 @@ mod tests {
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
         assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new("truecolor")));
         assert_eq!(command.get_env("TINTO_IADE"), Some(OsStr::new("1")));
-        assert_eq!(
-            command.get_env("TINTO_TURN_DONE_MARKER"),
-            Some(OsStr::new(TINTO_TURN_DONE_MARKER))
-        );
     }
 
     #[test]

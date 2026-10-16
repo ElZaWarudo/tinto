@@ -20,6 +20,10 @@ const WSL_ALLOWED_RUNTIME_FILES = new Set([
   "src/bus/contract.generated.ts",
   "src/bus/contract.ts",
   "src/bus/store.ts",
+  // Delivery lets the user choose where a Claude Code job on a Windows repo
+  // runs; the choice is only offered on a Windows host.
+  "src/delivery/types.ts",
+  "src/panels/delivery/DeliveryDialogs.tsx",
   "src/panels/agentAvailability.ts",
   "src/panels/repoSource.ts",
   "src/panels/RepoCard.tsx",

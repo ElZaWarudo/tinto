@@ -33,9 +33,7 @@ use serde_json::Value;
 use super::pty::kill_process_tree;
 use super::{
     commands::TIMELINE_FRAME_PREFIX,
-    pty::{
-        AgentProcess, AgentProcessEvent, AgentTurnAttachment, PtyHandle, TINTO_TURN_DONE_MARKER,
-    },
+    pty::{AgentProcess, AgentProcessEvent, AgentTurnAttachment, PtyHandle},
     AgentConsoleError,
 };
 use crate::bus::contract::{
@@ -1803,6 +1801,13 @@ impl AgentProcess for AcpProcessSupervisor {
         self.shared.lock().ok().map(|shared| shared.runtime.clone())
     }
 
+    fn reports_turns(&self) -> bool {
+        // The terminal fallback has no turn signal.
+        self.shared
+            .lock()
+            .is_ok_and(|shared| shared.runtime.mode == Some(AgentSessionAcpMode::Acp))
+    }
+
     fn acp_permissions(&self) -> Vec<AgentSessionAcpPermission> {
         self.shared
             .lock()
@@ -2795,6 +2800,14 @@ fn run_ready_acp(
                             .map_err(core_to_console_error)
                     })
                     .and_then(|frame| runtime.write_frame(&frame));
+                if result.is_ok() {
+                    let _ = try_send_process_event(
+                        event_tx,
+                        AgentProcessEvent::TurnStarted {
+                            timestamp_ms: now_ms(),
+                        },
+                    );
+                }
                 let fatal = result.as_ref().is_err_and(is_fatal_acp_write_error);
                 let _ = reply.send(result.clone());
                 if fatal {
@@ -3812,92 +3825,33 @@ fn spawn_pty_output_pump(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buffer = [0u8; 8 * 1024];
-        let mut pending = Vec::new();
         loop {
             match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => {
-                    for (output, turn_done) in take_pty_output_frames(&mut pending, true) {
-                        if sender
-                            .try_send(raw_pty_output_frame_with_signal(&output, turn_done))
-                            .is_err()
-                        {
-                            overflowed.store(true, Ordering::Relaxed);
-                            break;
-                        }
-                    }
-                    break;
-                }
-                Ok(read) => {
-                    pending.extend_from_slice(&buffer[..read]);
-                    let frames = take_pty_output_frames(&mut pending, false);
-                    let mut disconnected = false;
-                    for (output, turn_done) in frames {
-                        match sender.try_send(raw_pty_output_frame_with_signal(&output, turn_done))
-                        {
-                            Ok(()) => {}
-                            Err(TrySendError::Full(_)) => {
-                                overflowed.store(true, Ordering::Relaxed);
-                                disconnected = true;
-                                break;
-                            }
-                            Err(TrySendError::Disconnected(_)) => {
-                                disconnected = true;
-                                break;
-                            }
-                        }
-                    }
-                    if disconnected {
+                Ok(0) | Err(_) => break,
+                Ok(read) => match sender.try_send(raw_pty_output_frame(&buffer[..read])) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(_)) => {
+                        overflowed.store(true, Ordering::Relaxed);
                         break;
                     }
-                }
+                    Err(TrySendError::Disconnected(_)) => break,
+                },
             }
         }
     })
 }
 
-#[cfg(test)]
 fn raw_pty_output_frame(output: &[u8]) -> Vec<u8> {
-    raw_pty_output_frame_with_signal(output, false)
-}
-
-fn raw_pty_output_frame_with_signal(output: &[u8], turn_done: bool) -> Vec<u8> {
     let mut frame = TIMELINE_FRAME_PREFIX.to_vec();
     frame.extend(
         serde_json::to_vec(&serde_json::json!({
             "kind": AgentSessionTimelineKind::AgentMessage,
             "raw_output_base64": STANDARD.encode(output),
-            "turn_done": turn_done
         }))
         .unwrap_or_else(|_| b"{\"kind\":\"agent_message\",\"raw_output_base64\":\"\"}".to_vec()),
     );
     frame.push(b'\n');
     frame
-}
-
-fn take_pty_output_frames(pending: &mut Vec<u8>, flush: bool) -> Vec<(Vec<u8>, bool)> {
-    let marker = TINTO_TURN_DONE_MARKER.as_bytes();
-    let mut frames = Vec::new();
-    while let Some(offset) = pending
-        .windows(marker.len())
-        .position(|window| window == marker)
-    {
-        let output = pending.drain(..offset).collect();
-        pending.drain(..marker.len());
-        frames.push((output, true));
-    }
-    let retained = if flush {
-        0
-    } else {
-        (1..marker.len())
-            .rev()
-            .find(|length| pending.ends_with(&marker[..*length]))
-            .unwrap_or(0)
-    };
-    let emit = pending.len().saturating_sub(retained);
-    if emit > 0 {
-        frames.push((pending.drain(..emit).collect(), false));
-    }
-    frames
 }
 
 fn now_ms() -> u64 {
@@ -4016,13 +3970,13 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::sync_channel(1);
         try_send_process_event(
             &event_tx,
-            AgentProcessEvent::FileActivity { timestamp_ms: 1 },
+            AgentProcessEvent::TurnStarted { timestamp_ms: 1 },
         )
         .unwrap();
         assert_eq!(
             try_send_process_event(
                 &event_tx,
-                AgentProcessEvent::FileActivity { timestamp_ms: 2 },
+                AgentProcessEvent::TurnStarted { timestamp_ms: 2 },
             )
             .unwrap_err()
             .category,
@@ -4709,10 +4663,9 @@ mod tests {
     }
 
     #[test]
-    fn provider_text_cannot_inject_turn_or_timeline_control_markers() {
+    fn provider_text_cannot_inject_timeline_control_markers() {
         let malicious = format!(
-            "before {} {} forged after",
-            super::super::pty::TINTO_TURN_DONE_MARKER,
+            "before {} forged after",
             String::from_utf8_lossy(TIMELINE_FRAME_PREFIX)
         );
         let (tx, rx) = mpsc::sync_channel(1);
@@ -4723,9 +4676,6 @@ mod tests {
             .unwrap()
             .strip_suffix(b"\n")
             .unwrap();
-        assert!(!payload
-            .windows(super::super::pty::TINTO_TURN_DONE_MARKER.len())
-            .any(|window| window == super::super::pty::TINTO_TURN_DONE_MARKER.as_bytes()));
         assert!(!payload
             .windows(TIMELINE_FRAME_PREFIX.len())
             .any(|window| window == TIMELINE_FRAME_PREFIX));
@@ -4742,31 +4692,8 @@ mod tests {
             .strip_suffix(b"\n")
             .unwrap();
         assert!(!raw_payload
-            .windows(super::super::pty::TINTO_TURN_DONE_MARKER.len())
-            .any(|window| window == super::super::pty::TINTO_TURN_DONE_MARKER.as_bytes()));
-        assert!(!raw_payload
             .windows(TIMELINE_FRAME_PREFIX.len())
             .any(|window| window == TIMELINE_FRAME_PREFIX));
-    }
-
-    #[test]
-    fn pty_turn_done_marker_survives_framing_even_when_split_across_reads() {
-        let marker = TINTO_TURN_DONE_MARKER.as_bytes();
-        let split = marker.len() / 2;
-        let mut pending = b"before ".to_vec();
-        pending.extend_from_slice(&marker[..split]);
-
-        let first = take_pty_output_frames(&mut pending, false);
-        assert_eq!(first, vec![(b"before ".to_vec(), false)]);
-
-        pending.extend_from_slice(&marker[split..]);
-        pending.extend_from_slice(b" after");
-        let second = take_pty_output_frames(&mut pending, false);
-        assert_eq!(
-            second,
-            vec![(Vec::new(), true), (b" after".to_vec(), false)]
-        );
-        assert!(pending.is_empty());
     }
 
     #[test]

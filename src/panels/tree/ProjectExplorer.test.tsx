@@ -57,11 +57,15 @@ vi.mock("../../bus/client", () => ({
   redoDeletedFromRepo: (repo: string, token: string) => redoDeletedFromRepoMock(repo, token),
 }));
 
+const deliveryClient = vi.hoisted(() => ({ getDeliveryTaskChanges: vi.fn() }));
+vi.mock("../../delivery/client", () => deliveryClient);
+
 import { ProjectExplorer } from "./ProjectExplorer";
 import { busStore } from "../../bus/store";
 import { qualityStore } from "../../qol/state";
 import { fileDock } from "../../workspace/fileDock";
 import { repoTreeStore } from "../../workspace/repoTreeStore";
+import { setBaseView } from "../../workspace/baseView";
 import { deleteUndoManager } from "../file/deleteUndo";
 import { treeClipboard } from "./treeClipboard";
 import type { RepoDelta } from "../../bus/contract";
@@ -79,7 +83,6 @@ function delta(over: Partial<RepoDelta> = {}): RepoDelta {
     error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
-    agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
     ...over,
   };
@@ -136,6 +139,73 @@ describe("ProjectExplorer", () => {
       ],
       truncated: false,
     };
+  });
+
+  it("shows only the files changed since a base commit, removed ones included", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    const diff = (path: string, kind: "Added" | "Removed" | "Context") => ({
+      path,
+      old_path: null,
+      is_binary: false,
+      hunks: [
+        {
+          old_start: kind === "Added" ? 0 : 1,
+          new_start: kind === "Removed" ? 0 : 1,
+          lines: [{ kind, content: "x", old_lineno: null, new_lineno: null }],
+        },
+      ],
+    });
+    act(() =>
+      setBaseView(REPO, {
+        label: "develop (0123abcd)",
+        taskId: "t1",
+        files: [diff("README.md", "Context"), diff("gone.txt", "Removed")],
+      }),
+    );
+    render(<ProjectExplorer repo={REPO} />);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "2 archivos cambiados desde develop (0123abcd)",
+    );
+    expect(screen.getByTestId("tree-file-README.md")).toBeInTheDocument();
+    expect(screen.getByTestId("tree-file-gone.txt")).toBeInTheDocument();
+    expect(screen.queryByTestId("tree-file-package.json")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Ver todos los archivos" }));
+    expect(await screen.findByTestId("tree-file-package.json")).toBeInTheDocument();
+    // And back: the comparison stays until the user leaves it.
+    fireEvent.click(screen.getByRole("button", { name: "Solo los cambios" }));
+    await waitFor(() => expect(screen.queryByTestId("tree-file-package.json")).toBeNull());
+    expect(screen.getByTestId("tree-file-gone.txt")).toBeInTheDocument();
+    act(() => setBaseView(REPO, null));
+  });
+
+  it("brings back a task tab's comparison when Tinto opens again", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    localStorage.setItem(
+      "tinto:delivery-base-views",
+      JSON.stringify({ [REPO]: { label: "develop (0123abcd)", taskId: "t1" } }),
+    );
+    let answer: (changes: unknown) => void = () => {};
+    deliveryClient.getDeliveryTaskChanges.mockReturnValue(
+      new Promise((resolve) => (answer = resolve)),
+    );
+    render(<ProjectExplorer repo={REPO} />);
+    // Until its changes are read it says so, never passing for a plain repo.
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Leyendo los cambios desde develop (0123abcd)…",
+    );
+    expect(screen.queryByTestId("tree-file-package.json")).toBeNull();
+    expect(deliveryClient.getDeliveryTaskChanges).toHaveBeenCalledWith("t1");
+    act(() =>
+      answer({
+        repo: REPO,
+        base_ref: "develop",
+        base_commit: "0123abcd",
+        files: [{ path: "README.md", old_path: null, is_binary: false, hunks: [] }],
+      }),
+    );
+    expect(await screen.findByTestId("tree-file-README.md")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("1 archivo cambiado");
+    act(() => setBaseView(REPO, null));
   });
 
   it("loads and renders the repo's files (changed files marked)", async () => {

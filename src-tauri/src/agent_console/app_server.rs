@@ -622,6 +622,10 @@ impl AgentProcess for CodexAppServerHandle {
         )
     }
 
+    fn reports_turns(&self) -> bool {
+        true
+    }
+
     fn supports_turn_interrupt(&self) -> bool {
         true
     }
@@ -869,6 +873,7 @@ fn build_app_server_command(binary_path: &Path, working_dir: &Path) -> Command {
     let mut command = Command::new(binary_path);
     command
         .arg("app-server")
+        .args(crate::delivery::wiring::codex_args(false))
         .arg("--stdio")
         .current_dir(working_dir)
         .stdin(Stdio::piped())
@@ -900,6 +905,7 @@ pub(crate) fn build_wsl_app_server_command(
         .arg(working_dir.as_os_str())
         .arg("codex")
         .arg("app-server")
+        .args(crate::delivery::wiring::codex_args(true))
         .arg("--stdio")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1308,6 +1314,15 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 ));
             }
             if is_root_thread {
+                // A rejected turn (e.g. a model the account cannot use) ends
+                // with no agent message; say why instead of looking idle.
+                if let Some(text) = message.pointer("/params/turn").and_then(failed_turn_notice) {
+                    let _ = context.output_tx.send(timeline_frame_for_thread(
+                        AgentSessionTimelineKind::Lifecycle,
+                        &text,
+                        None,
+                    ));
+                }
                 let _ = context
                     .output_tx
                     .send(timeline_frame_for_thread_with_turn_done(
@@ -1387,7 +1402,7 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 }
             }
             if is_root_thread {
-                let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
+                let _ = context.event_tx.send(AgentProcessEvent::TurnStarted {
                     timestamp_ms: now_ms(),
                 });
             } else if let Some(thread_id) = target_thread_id {
@@ -1407,13 +1422,6 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                         used_tokens,
                         model_context_window,
                     });
-            }
-        }
-        "turn/diff/updated" | "item/fileChange/patchUpdated" | "fs/changed" => {
-            if is_root_thread {
-                let _ = context.event_tx.send(AgentProcessEvent::FileActivity {
-                    timestamp_ms: now_ms(),
-                });
             }
         }
         "item/commandExecution/requestApproval"
@@ -1911,6 +1919,33 @@ fn result_from_value(value: &Value) -> Option<AgentSubagentResult> {
         }),
         updated_at_ms: now_ms(),
     })
+}
+
+fn failed_turn_notice(turn: &Value) -> Option<String> {
+    let result = result_from_turn(turn)?;
+    if result.status != "failed" && result.error.is_none() {
+        return None;
+    }
+    let reason = result
+        .error
+        .as_deref()
+        .map(provider_error_reason)
+        .unwrap_or_else(|| "sin detalle del proveedor".to_string());
+    Some(format!("El turno falló: {reason}"))
+}
+
+/// Codex wraps API errors as JSON text; keep the human-readable message.
+fn provider_error_reason(error: &str) -> String {
+    serde_json::from_str::<Value>(error)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .or_else(|| value.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| error.to_string())
 }
 
 fn result_from_turn(turn: &Value) -> Option<AgentSubagentResult> {
@@ -3436,6 +3471,31 @@ mod tests {
     }
 
     #[test]
+    fn failed_turn_tells_the_conversation_why() {
+        let (tx, rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        let api_error = r#"{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}}"#;
+        handle_server_message(
+            &json!({"method":"turn/completed","params":{"threadId":"t","turn":{
+                "id":"u","status":"failed","error":{"message": api_error}
+            }}}),
+            &context,
+        );
+
+        let notice = crate::agent_console::commands::parse_timeline_frame(&rx.recv().unwrap())
+            .expect("failure notice frame");
+        assert_eq!(notice.kind, AgentSessionTimelineKind::Lifecycle);
+        assert_eq!(
+            notice.text,
+            "El turno falló: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."
+        );
+        let done = crate::agent_console::commands::parse_timeline_frame(&rx.recv().unwrap())
+            .expect("completion frame");
+        assert!(done.turn_done);
+    }
+
+    #[test]
     fn turn_notifications_track_the_active_turn_for_steering() {
         let (tx, _rx) = mpsc::channel();
         let (event_tx, _event_rx) = mpsc::channel();
@@ -3746,7 +3806,7 @@ mod tests {
     }
 
     #[test]
-    fn fs_changed_emits_structured_activity_event() {
+    fn only_the_root_turn_start_starts_a_turn() {
         let (tx, _rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let context = dummy_context(tx, event_tx);
@@ -3754,10 +3814,15 @@ mod tests {
             &json!({"method":"fs/changed","params":{"watchId":"w","changedPaths":["/tmp/a"]}}),
             &context,
         );
+        assert!(event_rx.try_recv().is_err());
 
+        handle_server_message(
+            &json!({"method":"turn/started","params":{"threadId":"t","turn":{"id":"turn-1"}}}),
+            &context,
+        );
         assert!(matches!(
             event_rx.recv().unwrap(),
-            AgentProcessEvent::FileActivity { .. }
+            AgentProcessEvent::TurnStarted { .. }
         ));
     }
 

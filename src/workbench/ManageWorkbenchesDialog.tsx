@@ -4,7 +4,7 @@
 // creates a new workbench inline.
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "./confirmDialog";
 import { basename } from "../bus/store";
 import type { Workbench, WorkbenchConfig } from "../bus/contract";
 import {
@@ -145,7 +145,7 @@ export function ManageWorkbenchesDialog({
     setBusy(name);
     setError(null);
     try {
-      const ok = await safeConfirm(
+      const ok = await confirm(
         `¿Eliminar la workbench "${name}"?\nLos repos en disco no se tocan. Las workbenches que comparten repos con esta no se ven afectadas.`,
         {
           title: "Eliminar workbench",
@@ -447,17 +447,6 @@ export function ManageWorkbenchesDialog({
       </div>
     </div>
   );
-}
-
-async function safeConfirm(
-  message: string,
-  options: { title: string; kind: "warning"; okLabel: string; cancelLabel: string },
-): Promise<boolean> {
-  try {
-    return await confirm(message, options);
-  } catch {
-    return window.confirm(message);
-  }
 }
 
 function extractErrorMessage(error: unknown, fallback: string): string {

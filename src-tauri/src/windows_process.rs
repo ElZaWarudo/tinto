@@ -10,7 +10,7 @@ use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE},
     System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     },
 };
@@ -55,6 +55,16 @@ impl KillOnCloseJob {
             return Err(io::Error::last_os_error());
         }
         Ok(Self { handle })
+    }
+
+    /// Kills every process in the job (the child and its descendants)
+    /// while keeping the job itself open.
+    pub(crate) fn kill_all(&self) -> io::Result<()> {
+        if unsafe { TerminateJobObject(self.handle, 1) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn terminate(mut self) -> io::Result<()> {

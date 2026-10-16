@@ -2,7 +2,8 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import type { FormEvent, KeyboardEvent, SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import type { IDockviewPanelProps } from "dockview-react";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../../workbench/confirmDialog";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { agentErrorCategory, retryAgentRecoveryOperation } from "../../agent/boundedRetry";
@@ -27,6 +28,7 @@ import {
   setAgentSessionPermissionMode,
   setAgentSessionAcpConfigOption,
   setMcpDefaultProfile,
+  revertJournalSession,
   revertSession,
   revertSessionTurnFile,
   restoreSessionTurn,
@@ -71,6 +73,7 @@ import { consoleDock } from "../../workspace/consoleDock";
 import { consumeTerminalDetachedMarker } from "./detachTerminalWindow";
 import { AgentRuntimeControls, type CodexRuntimeMenu } from "./AgentRuntimeControls";
 import {
+  effectiveRuntimeModel,
   lastRuntimeCatalog,
   reasoningSupportedByModel,
   rememberRuntimeCatalog,
@@ -267,7 +270,6 @@ type AgentComposerHostCommand =
   | "feedback"
   | "fork"
   | "goal"
-  | "init"
   | "mcp"
   | "mascot"
   | "personality"
@@ -328,14 +330,6 @@ const CODEX_HOST_COMMANDS: Array<{
     label: "Estado",
     description: "Mostrar el ID del chat, estado, uso y runtime",
     aliases: ["estado"],
-    scope: "Tinto",
-  },
-  {
-    id: "init",
-    command: "init",
-    label: "Inicializar",
-    description: "Crear o actualizar AGENTS.md para Tinto",
-    aliases: ["initialize", "inicializar"],
     scope: "Tinto",
   },
   {
@@ -549,7 +543,7 @@ function provisionalResumedSession(
 interface AgentProcessView {
   label: string;
   phase: string;
-  tone: "starting" | "thinking" | "settling";
+  tone: "starting" | "thinking";
 }
 
 interface AgentReviewResponseView {
@@ -959,8 +953,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     ? composerCommandOptionId(sessionId, activeComposerCommand.id)
     : undefined;
   const effectiveRuntimeOptions = useMemo(
-    () => codexRuntimeOptions(selectedModel, selectedReasoning, selectedSpeed),
-    [selectedModel, selectedReasoning, selectedSpeed],
+    () => codexRuntimeOptions(selectedModel, selectedReasoning, selectedSpeed, runtimeCatalog),
+    [selectedModel, selectedReasoning, selectedSpeed, runtimeCatalog],
   );
 
   useEffect(() => {
@@ -1266,13 +1260,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     };
   }, [mode, readOnly, sessionId]);
 
+  // Reverting a live session stops it first (the backend does both). A
+  // conversation reopened from history reverts from its saved checkpoint.
   const canRevert =
     !!session &&
-    !readOnly &&
-    !!session.checkpoint &&
-    session.status !== "running" &&
+    (readOnly || !!session.checkpoint) &&
     session.status !== "starting" &&
-    session.status !== "reverted";
+    session.status !== "reverted" &&
+    !(readOnly && session.status === "running");
 
   const canRevertTurnFile =
     !!session &&
@@ -1913,8 +1908,14 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
 
   const onRevert = async () => {
     if (!sessionId || !canRevert || reverting) return;
+    if (readOnly) {
+      await onRevertSaved();
+      return;
+    }
     const ok = await confirm(
-      "Se desharán todos los cambios hechos por esta sesión. ¿Quieres continuar?",
+      session?.status === "running"
+        ? "Se detendrá la sesión y se desharán todos los cambios que hizo. ¿Quieres continuar?"
+        : "Se desharán todos los cambios hechos por esta sesión. ¿Quieres continuar?",
       {
         title: "Revertir sesión de Agent",
         kind: "warning",
@@ -1933,6 +1934,35 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         reportAgentFailure(
           e,
           "No se revirtió la sesión. Los cambios permanecen como estaban; vuelve a intentarlo.",
+        ),
+      );
+    } finally {
+      setReverting(false);
+    }
+  };
+
+  const onRevertSaved = async () => {
+    const ok = await confirm(
+      `Se restaurará ${repo ? repoName(repo) : "el repo"} al estado que tenía cuando empezó esta sesión.
+
+También se desharán los cambios hechos después en este repo, incluidos los de otras sesiones y tus propias ediciones. ¿Quieres continuar?`,
+      {
+        title: "Revertir sesión anterior",
+        kind: "warning",
+        okLabel: "Revertir sesión",
+        cancelLabel: "Cancelar",
+      },
+    );
+    if (!ok) return;
+    setReverting(true);
+    setError(null);
+    try {
+      setArchivedSession(await revertJournalSession(sessionId, true));
+    } catch (e) {
+      setError(
+        reportAgentFailure(
+          e,
+          "No se revirtió la sesión. Puede que su punto de control ya no exista o que haya sesiones activas en este repo.",
         ),
       );
     } finally {
@@ -2127,7 +2157,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         </div>
         <SessionStatus session={session} />
         <AgentContextRemaining usage={session?.context_usage ?? null} />
-        {!readOnly && (
+        {(!readOnly || canRevert) && (
           <details className="agent-panel__session-menu">
             <summary aria-label="Acciones de sesión" role="button" title="Acciones de sesión">
               <span aria-hidden="true">•••</span>
@@ -2138,16 +2168,18 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
                   {session.permission_mode === "full_access" ? "Acceso completo" : "Workspace"}
                 </span>
               )}
-              <button
-                aria-label="Detener sesión"
-                className="agent-panel__stop"
-                disabled={!canStop}
-                onClick={onStopSession}
-                title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
-                type="button"
-              >
-                <span>{stopping ? "Deteniendo sesión" : "Detener sesión"}</span>
-              </button>
+              {!readOnly && (
+                <button
+                  aria-label="Detener sesión"
+                  className="agent-panel__stop"
+                  disabled={!canStop}
+                  onClick={onStopSession}
+                  title={agentStopControlTitle(agentType, repo, readOnly, canStop, stopping)}
+                  type="button"
+                >
+                  <span>{stopping ? "Deteniendo sesión" : "Detener sesión"}</span>
+                </button>
+              )}
               <button
                 className="agent-panel__revert"
                 disabled={!canRevert || reverting}
@@ -4671,7 +4703,7 @@ function AgentTurn({
                 className="agent-panel__chat-turn-file-kind"
                 data-change-kind={change.kind}
               >
-                {changeKindShortLabel(change.kind)}
+                {changeKindSymbol(change.kind)}
               </span>
               <span className="agent-panel__chat-turn-file-path">{change.path}</span>
             </button>
@@ -5208,9 +5240,6 @@ function agentProcessState(
     return { label: `${name} se está preparando`, phase: "INICIANDO", tone: "starting" };
   }
   if (session.status !== "running") return null;
-  if (session.turn_status === "settling") {
-    return { label: `${name} está revisando cambios`, phase: "VERIFICANDO", tone: "settling" };
-  }
   if (session.turn_status === "working") {
     const activity = latestAgentActivity(timeline);
     if (activity) return null;
@@ -5553,9 +5582,14 @@ function codexRuntimeOptions(
   model: CodexModelSelection,
   reasoning: CodexReasoningSelection,
   speed: CodexSpeedSelection,
+  catalog: AgentRuntimeCatalog | null,
 ): AgentSessionRuntimeOptions {
   const options: AgentSessionRuntimeOptions = { speed };
-  if (model !== "auto") options.model = model;
+  // "auto" shows the catalog's default model, so send that one: without a
+  // model Codex falls back to its config file, which may name a model the
+  // account can no longer use.
+  const resolvedModel = model === "auto" ? effectiveRuntimeModel(catalog, "auto")?.id : model;
+  if (resolvedModel) options.model = resolvedModel;
   if (reasoning !== "auto") options.reasoning_effort = reasoning;
   return options;
 }
@@ -5740,6 +5774,9 @@ function agentRevertControlTitle(
   if (reverting) {
     return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: revirtiendo cambios.`;
   }
+  if (readOnly && canRevert) {
+    return `Revertir la sesión de ${agentLabel(agentType)} en ${repoLabel} desde su punto de control guardado.`;
+  }
   if (readOnly) {
     return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: la transcripción archivada es de solo lectura.`;
   }
@@ -5752,7 +5789,7 @@ function agentRevertControlTitle(
   if (canRevert) {
     return `Revertir la sesión de ${agentLabel(agentType)} en ${repoLabel} y deshacer sus cambios.`;
   }
-  return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: detén el turno antes de revertir.`;
+  return `Revertir sesión de ${agentLabel(agentType)} en ${repoLabel}: espera a que la sesión termine de iniciar.`;
 }
 
 function SessionStatus({ session }: { session: AgentSession | undefined }) {
@@ -6003,7 +6040,7 @@ function AgentLens({
       >
         <div>
           <span title={agentLensTurnStateValueTitle(session.turn_status ?? "waiting")}>
-            {turnStatusLabel(session.turn_status ?? "waiting")}
+            {sessionTurnLabel(session)}
           </span>
           <small title={agentLensTurnStateMetricTitle(session.turn_status ?? "waiting")}>
             Estado del turno
@@ -7553,11 +7590,19 @@ function fileStatusLabel(label: string): string {
   }
 }
 
+function changeKindSymbol(kind: string): string {
+  if (kind === "created" || kind === "added" || kind === "untracked") return "+";
+  if (kind === "deleted" || kind === "removed") return "×";
+  if (kind === "renamed") return "→";
+  return "−";
+}
+
 function changeKindLabel(kind: string): string {
   switch (kind.toLocaleLowerCase()) {
     case "added":
       return "añadido";
     case "created":
+    case "untracked":
       return "creado";
     case "modified":
       return "modificado";
@@ -7569,13 +7614,6 @@ function changeKindLabel(kind: string): string {
     default:
       return kind;
   }
-}
-
-function changeKindShortLabel(kind: string): string {
-  if (kind === "added" || kind === "untracked") return "A";
-  if (kind === "deleted" || kind === "removed") return "D";
-  if (kind === "renamed") return "R";
-  return "M";
 }
 
 function artifactKindLabel(kind: string): string {
@@ -7905,13 +7943,22 @@ function agentActivitySummary(
       tone: "done",
     };
   }
-  if (session.turn_status === "working" || session.turn_status === "settling") {
+  if (session.turn_status === "working") {
     return {
       title: "Agent está trabajando",
       detail: `${turnState}. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
       checkpoint,
       throughput,
       tone: "working",
+    };
+  }
+  if (!hasTurns(session)) {
+    return {
+      title: "Terminal sin turnos",
+      detail: `Lo que envíes llega directo al agente; los cambios se deshacen por sesión. ${countLabel(changeCount, "cambio registrado", "cambios registrados")} hasta ahora.`,
+      checkpoint,
+      throughput,
+      tone: "idle",
     };
   }
   return {
@@ -7993,6 +8040,8 @@ function latestActivityText(turn: AgentTurnView): string | null {
 }
 
 function turnTimeLabel(turn: AgentTurnView, firstTurnAtMs: number | null): string | null {
+  // The offset is relative to the first turn, so on that turn it is always +0s.
+  if (turn.startedAtMs === firstTurnAtMs) return null;
   return timeOffsetLabel(turn.startedAtMs, firstTurnAtMs);
 }
 
@@ -8547,12 +8596,7 @@ function appendTimelineText(turn: AgentTurnView, item: AgentSessionTimelineItem,
 
 function visibleTurnEvents(events: AgentTurnEventView[]): AgentTurnEventView[] {
   const visible: AgentTurnEventView[] = [];
-  let hidingMarkerOutput = false;
   events.forEach((event, index) => {
-    if (event.kind === "command_output" && hidingMarkerOutput) return;
-    const command = event.kind === "activity" ? activityCommandText(event.text) : null;
-    hidingMarkerOutput = command !== null && isTurnDoneMarkerCommand(command);
-    if (hidingMarkerOutput) return;
     const progress = event.kind === "activity" || event.kind === "agent_progress";
     if (progress && isGenericActivityText(event.text)) return;
     if (
@@ -8637,12 +8681,6 @@ function activityCommandText(text: string): string | null {
   const match = activityDisplayText(text.trim()).match(/^Ejecutando\s+([\s\S]+)$/i);
   if (!match) return null;
   return unquoteShellWord(match[1].trim());
-}
-
-function isTurnDoneMarkerCommand(command: string): boolean {
-  return /^(?:Write-Output|printf\s+'%s\\n'|echo)\s+"?\$(?:env:)?\{?TINTO_TURN_DONE_MARKER\}?"?\s*;?$/i.test(
-    command.trim(),
-  );
 }
 
 /** Unquotes a value that is entirely one POSIX shell word, e.g. 'a'"'"'b' -> a'b. */
@@ -8800,8 +8838,6 @@ function turnStatusLabel(status: string): string {
   switch (status) {
     case "working":
       return "Trabajando";
-    case "settling":
-      return "Finalizando";
     default:
       return "En espera";
   }
@@ -8833,8 +8869,17 @@ function sessionStatusLabel(status: string): string {
   }
 }
 
+/** A running session whose provider reports no turns behaves as a terminal. */
+function hasTurns(session: AgentSession): boolean {
+  return session.status !== "running" || session.reports_turns === true;
+}
+
+function sessionTurnLabel(session: AgentSession): string {
+  return hasTurns(session) ? turnStatusLabel(session.turn_status ?? "waiting") : "Sin turnos";
+}
+
 function sessionCompletionLabel(session: AgentSession): string {
-  if (session.status === "running") return turnStatusLabel(session.turn_status ?? "waiting");
+  if (session.status === "running") return sessionTurnLabel(session);
   if (session.status !== "completed") return sessionStatusLabel(session.status);
   return session.checkpoint
     ? "Turno completado · punto de control listo"

@@ -136,7 +136,6 @@ function pendingRepoDelta(repo: string): RepoDelta {
     error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
-    agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
     signals: [],
     secret_findings: [],
@@ -267,7 +266,8 @@ export function DashboardPanel() {
   const state = useBusState();
   const { repos, activity, watching, loaded } = state;
   const { filters } = useQualityState();
-  const { openRepo, addRepo, openAgents, openAgentTerminal, removeRepo } = useWorkspaceActions();
+  const { openRepo, addRepo, openAgents, openDelivery, openAgentTerminal, removeRepo } =
+    useWorkspaceActions();
   const nowMs = useNow(1000);
   const deltaAnnouncement = useDeltaAnnouncement(
     repos,
@@ -356,6 +356,9 @@ export function DashboardPanel() {
           </button>
           <button type="button" onClick={openAgents} data-testid="dashboard-open-agents">
             Abrir Agents
+          </button>
+          <button type="button" onClick={openDelivery} data-testid="dashboard-open-delivery">
+            Abrir Delivery
           </button>
         </div>
       </div>

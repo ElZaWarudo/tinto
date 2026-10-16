@@ -21,6 +21,13 @@ import { filterTreeNodes, hasActiveFilters } from "../../qol/filters";
 import { qualityStore, useQualityState } from "../../qol/state";
 import { repoTreeStore, useRepoTree } from "../../workspace/repoTreeStore";
 import { fileDock, useRepoDock } from "../../workspace/fileDock";
+import {
+  baseChangeKind,
+  refreshBaseView,
+  restoreBaseView,
+  setShowAll,
+  useBaseView,
+} from "../../workspace/baseView";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { FileTreeNode } from "./FileTreeNode";
 import { useExplorerExpanded } from "./explorerCollapseState";
@@ -367,11 +374,44 @@ export function ProjectExplorer({
     };
   }, [collapsed, repo]);
 
+  // Compared with a base commit, the tree holds only the files changed
+  // since then, removed ones included, and reads them again as the
+  // worktree changes.
+  const baseView = useBaseView(repo);
+  const onlyChanges = baseView !== null && !baseView.showAll;
+  const baseFiles = baseView?.files ?? null;
+  // A tab restored with the layout gets back the comparison it had.
+  useEffect(() => restoreBaseView(repo), [repo]);
+  // Agents change the worktree often: one read at a time (the store sees to
+  // it), and only once the worktree has been quiet for a few seconds.
+  useEffect(() => {
+    if (!baseView || !delta) return;
+    const timer = setTimeout(() => void refreshBaseView(repo), 3000);
+    return () => clearTimeout(timer);
+    // Only a change in the worktree (a new delta) reads them again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [delta, repo]);
   const nodes = useMemo(() => {
+    if (onlyChanges) {
+      if (!baseFiles) return [];
+      const created = baseFiles.filter((file) => baseChangeKind(file) === "created");
+      return filterTreeNodes(
+        buildFileTree(
+          baseFiles.map((file) => ({ path: file.path, is_dir: false })),
+          {
+            modified: baseFiles.filter((file) => !created.includes(file)).map((f) => f.path),
+            staged: [],
+            untracked: created.map((file) => file.path),
+          },
+        ),
+        filters,
+        [],
+      );
+    }
     if (!tree || !delta) return [];
     const signals = getRepoSignals(delta);
     return filterTreeNodes(buildFileTree(tree.entries, delta.status), filters, signals);
-  }, [tree, delta, filters]);
+  }, [tree, delta, filters, baseFiles, onlyChanges]);
   const nodesByPath = useMemo(() => collectTreeNodes(nodes), [nodes]);
   const repoSignals = delta ? getRepoSignals(delta) : [];
   const visiblePaths = useMemo(() => visibleTreePaths(nodes, expandedDirs), [nodes, expandedDirs]);
@@ -982,6 +1022,18 @@ export function ProjectExplorer({
           </button>
         )}
       </div>
+      {baseView && (
+        <div className="project-explorer__base" role="status">
+          <span>
+            {baseFiles === null
+              ? `Leyendo los cambios desde ${baseView.label}…`
+              : `${baseFiles.length === 1 ? "1 archivo cambiado" : `${baseFiles.length} archivos cambiados`} desde ${baseView.label}`}
+          </span>
+          <button type="button" onClick={() => setShowAll(repo, onlyChanges)}>
+            {onlyChanges ? "Ver todos los archivos" : "Solo los cambios"}
+          </button>
+        </div>
+      )}
       <div
         ref={treeRef}
         className={`project-explorer__body${osDraggingOver ? " project-explorer--dragging-active" : ""}${draggingNode ? " project-explorer__body--internal-dragging" : ""}`}
@@ -1028,7 +1080,7 @@ export function ProjectExplorer({
               Reintentar
             </button>
           </div>
-        ) : !tree && loading ? (
+        ) : !tree && loading && !onlyChanges ? (
           <div className="tree-files__msg" data-testid="explorer-loading" role="status">
             Cargando…
           </div>
@@ -1036,8 +1088,12 @@ export function ProjectExplorer({
           <div className="tree-files__msg" data-testid="explorer-no-matches">
             Ningún archivo coincide con los filtros actuales.
           </div>
+        ) : onlyChanges && baseFiles === null ? (
+          <div className="tree-files__msg">Leyendo los cambios…</div>
         ) : nodes.length === 0 ? (
-          <div className="tree-files__msg">No hay archivos.</div>
+          <div className="tree-files__msg">
+            {onlyChanges ? "No hay cambios desde la base." : "No hay archivos."}
+          </div>
         ) : (
           <>
             {delta &&

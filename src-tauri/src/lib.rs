@@ -12,6 +12,13 @@ fn pumarejo_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bui
 
 pub mod agent_console;
 pub mod bus;
+pub mod delivery;
+
+/// Tests that change `HOME` hold this exclusively; tests whose checkpoints
+/// live under the user's home hold it shared, so they never write into a
+/// temporary home that is about to be deleted.
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 pub mod file_ops;
 pub mod git;
 pub mod paths;
@@ -96,6 +103,9 @@ pub fn run() {
     let mut initial_repos = Some(initial_repos);
     let agent_journal = agent_console::journal::AgentJournal::open_default()
         .expect("no se pudo abrir el diario SQLite de agentes");
+    let delivery = delivery::service::DeliveryService::open_default()
+        .expect("no se pudo abrir el estado SQLite de Delivery");
+    let delivery_for_setup = delivery.clone();
 
     let builder = pumarejo_builder(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
@@ -113,9 +123,61 @@ pub fn run() {
             agent_console::install::AgentInstallRegistry::default(),
         ))
         .manage(std::sync::Mutex::new(agent_journal))
+        .manage(delivery)
         .manage(bus_handle)
         .invoke_handler(tauri::generate_handler![
             ping,
+            delivery::commands::delivery_overview,
+            delivery::commands::delivery_refresh_pr,
+            delivery::commands::delivery_pr_seen,
+            delivery::commands::delivery_check_task,
+            delivery::commands::delivery_find_pr,
+            delivery::commands::delivery_pr_reviewers,
+            delivery::commands::delivery_answer_decision,
+            delivery::commands::delivery_approve_settings_proposal,
+            delivery::commands::delivery_reject_settings_proposal,
+            delivery::commands::delivery_change_decision,
+            delivery::commands::delivery_renew_permissions,
+            delivery::commands::delivery_withdraw_decision,
+            delivery::commands::delivery_accept_recommended,
+            delivery::commands::delivery_set_run_qa_jira_comment,
+            delivery::commands::delivery_create_task,
+            delivery::commands::delivery_remove_task,
+            delivery::commands::delivery_archive_task,
+            delivery::commands::delivery_archived_tasks,
+            delivery::commands::delivery_unarchive_task,
+            delivery::commands::delivery_update_task,
+            delivery::commands::delivery_dispatch_job,
+            delivery::commands::delivery_cancel_job,
+            delivery::commands::delivery_pause_job,
+            delivery::commands::delivery_open_visual_record,
+            delivery::commands::delivery_issue_url,
+            delivery::commands::delivery_open_url,
+            delivery::commands::delivery_task_changes,
+            delivery::commands::delivery_resume_job,
+            delivery::commands::delivery_set_run_paused,
+            delivery::commands::delivery_retry_job,
+            delivery::commands::delivery_undo_job,
+            delivery::commands::delivery_job_log,
+            delivery::commands::delivery_update_settings,
+            delivery::commands::delivery_set_codex_model,
+            delivery::commands::delivery_repo_settings,
+            delivery::commands::delivery_set_repo_settings,
+            delivery::commands::delivery_set_jira_token,
+            delivery::commands::delivery_check_jira,
+            delivery::commands::delivery_release_lease,
+            delivery::commands::delivery_request_approval,
+            delivery::commands::delivery_commit_draft,
+            delivery::commands::delivery_merge_method,
+            delivery::commands::delivery_undo_commit,
+            delivery::commands::delivery_decide_approval,
+            delivery::commands::delivery_complete_approval,
+            delivery::commands::delivery_correct_approval,
+            delivery::commands::delivery_create_run,
+            delivery::commands::delivery_takeover_run,
+            delivery::commands::delivery_close_run,
+            delivery::commands::delivery_open_task_in_agents,
+            delivery::commands::delivery_open_job_in_agents,
             workbench::commands::list_workbenches,
             workbench::commands::create_workbench,
             workbench::commands::rename_workbench,
@@ -156,7 +218,6 @@ pub fn run() {
             bus::commands::get_repo_gitleaks_setup_status,
             bus::commands::install_repo_gitleaks,
             bus::commands::create_repo_gitleaks_config,
-            bus::commands::create_repo_agents_md_config,
             bus::commands::get_repo_fetch_preview,
             bus::commands::fetch_repo,
             agent_console::commands::start_agent_session,
@@ -195,6 +256,7 @@ pub fn run() {
             agent_console::commands::resize_agent_session,
             agent_console::commands::revert_session,
             agent_console::commands::revert_session_turn_file,
+            agent_console::commands::revert_agent_journal_session,
             agent_console::commands::restore_session_turn,
             file_ops::commands::copy_to_repo,
             file_ops::commands::copy_within_repo,
@@ -207,6 +269,18 @@ pub fn run() {
             ui_state::set_ui_state
         ])
         .setup(move |app| {
+            {
+                let handle = app.handle().clone();
+                delivery_for_setup.set_notify(std::sync::Arc::new(move || {
+                    let _ = handle.emit(delivery::commands::EVENT_DELIVERY_CHANGED, ());
+                }));
+                if let Err(error) = delivery::mcp::start(delivery_for_setup.clone()) {
+                    eprintln!("tinto: el API de coordinador de Delivery no arrancó: {error}");
+                }
+                delivery_for_setup.set_github(std::sync::Arc::new(delivery::prs::GhCli));
+                delivery_for_setup.start_pr_watch();
+                delivery_for_setup.tick();
+            }
             #[cfg(feature = "e2e-wdio")]
             {
                 let data_dir = runtime_paths::e2e_webview_data_dir().ok_or_else(|| {

@@ -10,7 +10,6 @@ const listAgentSessionsMock = vi.fn();
 const agentProviderReadinessForRepoMock = vi.fn();
 const updateRepoFsWatchMock = vi.fn();
 const createRepoGitleaksConfigMock = vi.fn();
-const createRepoAgentsMdConfigMock = vi.fn();
 let nestedDockviewProps: Record<string, unknown> | null = null;
 vi.mock("../bus/client", () => ({
   getCommitLog: (...a: unknown[]) => getCommitLogMock(...a),
@@ -19,7 +18,6 @@ vi.mock("../bus/client", () => ({
   listAgentSessions: (...a: unknown[]) => listAgentSessionsMock(...a),
   agentProviderReadinessForRepo: (...a: unknown[]) => agentProviderReadinessForRepoMock(...a),
   createRepoGitleaksConfig: (...a: unknown[]) => createRepoGitleaksConfigMock(...a),
-  createRepoAgentsMdConfig: (...a: unknown[]) => createRepoAgentsMdConfigMock(...a),
   // FileView (imported by RepoPanel) pulls in the subscription reconciler, which
   // binds setSubscriptions at module load. The overview tests never render it,
   // but the export must exist.
@@ -62,7 +60,6 @@ function delta(repo: string, over: Partial<RepoDelta> = {}): RepoDelta {
     error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
-    agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
     ...over,
   };
@@ -85,10 +82,8 @@ describe("RepoPanel", () => {
     agentProviderReadinessForRepoMock.mockReset();
     updateRepoFsWatchMock.mockReset();
     createRepoGitleaksConfigMock.mockReset();
-    createRepoAgentsMdConfigMock.mockReset();
     updateRepoFsWatchMock.mockResolvedValue(undefined);
     createRepoGitleaksConfigMock.mockResolvedValue(undefined);
-    createRepoAgentsMdConfigMock.mockResolvedValue(undefined);
     startAgentSessionMock.mockResolvedValue("sess-new");
     listAgentSessionsMock.mockResolvedValue([]);
     agentProviderReadinessForRepoMock.mockResolvedValue({
@@ -291,38 +286,27 @@ describe("RepoPanel", () => {
   it("configures repo-specific files from the overview configuration section", async () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() =>
-      busStore.loadSnapshot(
-        [delta("/r/api", { gitleaks_configured: false, agents_md_configured: false })],
-        { available: true },
-      ),
+      busStore.loadSnapshot([delta("/r/api", { gitleaks_configured: false })], { available: true }),
     );
     render(<RepoPanel {...panelProps("/r/api")} />);
 
     const section = screen.getByTestId("repo-config-section");
-    const buttons = within(section).getAllByRole("button", { name: "Configurar" });
-    fireEvent.click(buttons[0]);
+    fireEvent.click(within(section).getByRole("button", { name: "Configurar" }));
 
     expect(createRepoGitleaksConfigMock).toHaveBeenCalledWith("/r/api");
     await waitFor(() => expect(within(section).getAllByText("Configurado")).toHaveLength(1));
-
-    fireEvent.click(within(section).getByRole("button", { name: "Configurar" }));
-    expect(createRepoAgentsMdConfigMock).toHaveBeenCalledWith("/r/api");
-    await waitFor(() => expect(within(section).getAllByText("Configurado")).toHaveLength(2));
   });
 
   it("renders configured repo settings as compact status rows", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() =>
-      busStore.loadSnapshot(
-        [delta("/r/api", { gitleaks_configured: true, agents_md_configured: true })],
-        { available: true },
-      ),
+      busStore.loadSnapshot([delta("/r/api", { gitleaks_configured: true })], { available: true }),
     );
 
     render(<RepoPanel {...panelProps("/r/api")} />);
 
     const section = screen.getByTestId("repo-config-section");
-    expect(within(section).getAllByText("Configurado")).toHaveLength(2);
+    expect(within(section).getAllByText("Configurado")).toHaveLength(1);
     expect(within(section).queryByText(/falsos positivos/i)).toBeNull();
     expect(within(section).queryByText(/notifiquen a Tinto/i)).toBeNull();
     expect(within(section).queryByRole("button", { name: "Configurar" })).toBeNull();
@@ -340,6 +324,7 @@ describe("RepoPanel", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal,
     };
 
@@ -386,6 +371,21 @@ describe("RepoPanel", () => {
     expect(retryRepoMock).toHaveBeenCalledWith("/r/api");
   });
 
+  it("says a repo just added to the workbench is being read, not that it is gone", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => {
+      busStore.loadSnapshot([], { available: true });
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [{ path: "/r/new" }] }],
+      } as never);
+    });
+    render(<RepoPanel {...panelProps("/r/new")} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Leyendo el repo por primera vez…");
+    expect(screen.queryByText(/ya no está disponible/i)).toBeNull();
+  });
+
   it("shows a graceful message when the repo left the workbench", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() => busStore.loadSnapshot([], { available: true }));
@@ -407,6 +407,7 @@ describe("RepoPanel", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     render(
@@ -431,6 +432,7 @@ describe("RepoPanel", () => {
       openTimeline: vi.fn(),
       openDashboard: vi.fn(),
       openAgents: vi.fn(),
+      openDelivery: vi.fn(),
       openAgentTerminal: vi.fn(),
     };
     render(

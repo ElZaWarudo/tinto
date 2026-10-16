@@ -6,14 +6,15 @@ use std::{fs, io};
 use ignore::WalkBuilder;
 
 use crate::agent_console::checkpoint::{
-    create_checkpoint, create_ephemeral_checkpoint, remove_ephemeral_checkpoint, revert_checkpoint,
-    revert_checkpoint_file, scan_change_log, CheckpointConfig,
+    create_checkpoint, create_ephemeral_checkpoint, load_session_checkpoint,
+    remove_ephemeral_checkpoint, revert_checkpoint, revert_checkpoint_file, scan_change_log,
+    snapshot_worktree, CheckpointConfig,
 };
 use crate::agent_console::validation::validate_agent_type;
 use crate::bus::commands::{
     fetch_repo_local, file_content_from_bytes, gitleaks_setup_status, list_repo_tree_capped,
     read_file_content_bounded, read_media_content_bounded, repo_fetch_preview, validate_media_path,
-    write_repo_agents_md_config, write_repo_gitleaks_config,
+    write_repo_gitleaks_config,
 };
 use crate::bus::contract::{
     GitleaksInstallResult, RepoDelta, RepoErrorClass, RepoErrorState, RepoMetrics,
@@ -282,14 +283,6 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             write_repo_gitleaks_config(&repo)?;
             Ok(AgentResponse::Unit)
         }),
-        AgentRequest::CreateAgentsMdConfig {
-            repo,
-            allowed_repos,
-            ..
-        } => with_allowed_repo(&repo, &allowed_repos, || {
-            write_repo_agents_md_config(&repo)?;
-            Ok(AgentResponse::Unit)
-        }),
         AgentRequest::AgentBinaryAvailable { agent_type, .. } => {
             match agent_binary_available(&agent_type) {
                 Ok(available) => AgentResponse::AgentBinaryAvailable { available },
@@ -337,6 +330,13 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
             checkpoint,
             ..
         } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
+            // An empty directory asks for the session's saved start checkpoint
+            // (undo of a session reopened from history).
+            let checkpoint = if checkpoint.checkpoint_dir.as_os_str().is_empty() {
+                load_session_checkpoint(&checkpoint.repo, &checkpoint.session_id)?
+            } else {
+                checkpoint
+            };
             revert_checkpoint(&checkpoint)?;
             Ok(AgentResponse::Unit)
         }),
@@ -348,6 +348,23 @@ fn handle_request(request: AgentRequest) -> AgentResponse {
         } => with_allowed_repo(&checkpoint.repo.clone(), &allowed_repos, || {
             revert_checkpoint_file(&checkpoint, &path)?;
             Ok(AgentResponse::Unit)
+        }),
+        AgentRequest::WorktreeSnapshot {
+            repo,
+            allowed_repos,
+            name,
+            created_at_ms,
+            compare_to,
+            ..
+        } => with_allowed_repo(&repo, &allowed_repos, || {
+            let snapshot = snapshot_worktree(
+                &repo,
+                &name,
+                created_at_ms,
+                &CheckpointConfig::default(),
+                compare_to.as_deref(),
+            )?;
+            Ok(AgentResponse::WorktreeSnapshot { snapshot })
         }),
         AgentRequest::AgentCheckpointRemove {
             allowed_repos,
@@ -818,7 +835,6 @@ pub(crate) fn repo_delta(
             error: None,
             metrics: outcome.metrics,
             gitleaks_configured: outcome.gitleaks_configured,
-            agents_md_configured: outcome.agents_md_configured,
             signals: outcome.signals,
             secret_findings: outcome.secret_findings.unwrap_or_default(),
             secret_scan_status: outcome.secret_scan_status.unwrap_or_default(),
@@ -834,7 +850,6 @@ pub(crate) fn repo_delta(
             error: Some(agent_repo_error(git_error_state(&error))),
             metrics: RepoMetrics::default(),
             gitleaks_configured: false,
-            agents_md_configured: false,
             signals: Vec::new(),
             secret_findings: Vec::new(),
             secret_scan_status: Default::default(),
@@ -1646,6 +1661,9 @@ mod tests {
     #[test]
     fn create_git_worktree_request_creates_detached_worktree_under_tinto_home() {
         let repo = TempRepo::with_initial_commit();
+        let _home_lock = crate::HOME_ENV_LOCK
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home");
         let old_home = std::env::var_os("HOME");
         std::env::set_var("HOME", home.path());
@@ -1935,6 +1953,86 @@ mod tests {
             std::fs::read_to_string(repo.path().join("base.txt")).unwrap(),
             "before\n"
         );
+        assert!(!repo.path().join("created.txt").exists());
+    }
+
+    #[test]
+    fn worktree_snapshots_give_a_candidate_and_the_changes_since_the_start() {
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let repo = TempRepo::with_initial_commit();
+        let snapshot = |name: &str, compare_to: Option<String>| {
+            let request = AgentRequest::WorktreeSnapshot {
+                protocol_version: PROTOCOL_VERSION,
+                repo: repo.path().to_path_buf(),
+                allowed_repos: vec![repo.path().to_path_buf()],
+                name: name.to_string(),
+                created_at_ms: 1,
+                compare_to,
+            };
+            let response = parse_agent_response_line(
+                &respond_to_request_line(&encode_agent_request(&request).expect("encode"))
+                    .expect("respond"),
+            )
+            .expect("parse");
+            let AgentResponse::WorktreeSnapshot { snapshot } = response else {
+                panic!("expected a snapshot, got {response:?}");
+            };
+            snapshot
+        };
+        let start = snapshot("job-x-start", None);
+        assert!(start.head.is_some());
+        repo.write(
+            "added.txt",
+            "new
+",
+        );
+        let end = snapshot("job-x-end", Some(start.tree.clone()));
+        assert_ne!(start.candidate_id(), end.candidate_id());
+        assert_eq!(end.changes.len(), 1);
+        assert_eq!(end.changes[0].path, PathBuf::from("added.txt"));
+    }
+
+    #[test]
+    fn agent_reverts_a_saved_checkpoint_resolved_on_its_side() {
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let repo = TempRepo::with_initial_commit();
+        let create = AgentRequest::AgentCheckpointCreate {
+            protocol_version: PROTOCOL_VERSION,
+            repo: repo.path().to_path_buf(),
+            allowed_repos: vec![repo.path().to_path_buf()],
+            session_id: "sess-wsl-saved".into(),
+            created_at_ms: 1,
+            ephemeral: false,
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&create).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+        let AgentResponse::AgentCheckpoint { mut checkpoint } = response else {
+            panic!("expected checkpoint");
+        };
+        repo.write("base.txt", "after\n");
+        repo.write("created.txt", "new\n");
+        // What the host sends after a restart: no directory, only repo + id.
+        checkpoint.checkpoint_dir = PathBuf::new();
+
+        let revert = AgentRequest::AgentCheckpointRevert {
+            protocol_version: PROTOCOL_VERSION,
+            allowed_repos: vec![checkpoint.repo.clone()],
+            checkpoint,
+        };
+        let response = parse_agent_response_line(
+            &respond_to_request_line(&encode_agent_request(&revert).expect("encode"))
+                .expect("respond"),
+        )
+        .expect("parse");
+
+        assert_eq!(response, AgentResponse::Unit);
         assert!(!repo.path().join("created.txt").exists());
     }
 

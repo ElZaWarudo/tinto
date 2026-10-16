@@ -244,7 +244,6 @@ const repoDelta: RepoDelta = {
   error: null,
   metrics: { changed_files: 3, lines_added: 48, lines_removed: 9 },
   gitleaks_configured: true,
-  agents_md_configured: true,
   secret_scan_status: { state: "clean", engine: "gitleaks", version: "8.30.1" },
   signals: [],
   secret_findings: [],
@@ -360,6 +359,7 @@ const actions: WorkspaceActions = {
   openTimeline: () => {},
   openDashboard: () => {},
   openAgents: () => {},
+  openDelivery: () => {},
   openAgentTerminal: (params) => {
     document.documentElement.dataset.openedAgentSession = params.sessionId;
   },

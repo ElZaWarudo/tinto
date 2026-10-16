@@ -92,6 +92,10 @@ const revertSessionMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(sessionFixture({ status: "reverted", reverted_at_ms: 3 }));
 });
+const revertJournalSessionMock = vi.fn((...args: unknown[]) => {
+  void args;
+  return Promise.resolve(sessionFixture({ status: "reverted", pid: null, checkpoint: null }));
+});
 const revertSessionTurnFileMock = vi.fn((...args: unknown[]) => {
   void args;
   return Promise.resolve(sessionFixture({ status: "completed", turn_checkpoints: [] }));
@@ -168,6 +172,7 @@ vi.mock("../../bus/client", () => ({
   setMcpDefaultProfile: (workbench: string, profileId: string) =>
     setMcpDefaultProfileMock(workbench, profileId),
   revertSession: (...a: unknown[]) => revertSessionMock(...a),
+  revertJournalSession: (...a: unknown[]) => revertJournalSessionMock(...a),
   revertSessionTurnFile: (...a: unknown[]) => revertSessionTurnFileMock(...a),
   restoreSessionTurn: (...a: unknown[]) => restoreSessionTurnMock(...a),
   runAgentHostCommand: (...a: unknown[]) => runAgentHostCommandMock(...a),
@@ -179,8 +184,11 @@ vi.mock("../../bus/client", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: (...a: unknown[]) => confirmMock(...a),
   open: (...a: unknown[]) => openMock(...a),
+}));
+
+vi.mock("../../workbench/confirmDialog", () => ({
+  confirm: (...a: unknown[]) => confirmMock(...a),
 }));
 
 import {
@@ -210,6 +218,7 @@ function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
     change_log: [{ path: "src/a.ts", kind: "modified", timestamp_ms: 2 }],
     turn_status: "waiting",
     turn_interrupt_supported: true,
+    reports_turns: true,
     turn_checkpoints: [],
     reverted_at_ms: null,
     restored_to_turn_index: null,
@@ -298,7 +307,6 @@ function repoDelta(overrides: Partial<RepoDelta> = {}): RepoDelta {
     error: null,
     metrics: { changed_files: 0, lines_added: 0, lines_removed: 0 },
     gitleaks_configured: false,
-    agents_md_configured: false,
     secret_scan_status: { state: "not_run" },
     subscribed_diffs: null,
     ...overrides,
@@ -330,6 +338,7 @@ function renderWithWorkspaceActions(ui: ReactElement, actions: Partial<Workspace
     openTimeline: vi.fn(),
     openDashboard: vi.fn(),
     openAgents: vi.fn(),
+    openDelivery: vi.fn(),
     openAgentTerminal: vi.fn(),
   };
   return render(
@@ -912,21 +921,37 @@ describe("TerminalPanel", () => {
     expect(screen.getByText("En espera")).toBeInTheDocument();
   });
 
+  it("shows a session whose provider reports no turns as a terminal", async () => {
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ agent_type: "claude", reports_turns: false }),
+    ]);
+
+    render(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "claude" })} />,
+    );
+
+    expect(await screen.findByTitle(/Estado: Sin turnos/)).toHaveTextContent("Sin turnos");
+    expect(screen.getByLabelText("Actividad de Agent")).toHaveTextContent("Terminal sin turnos");
+    expect(screen.getByLabelText("Actividad de Agent")).not.toHaveTextContent(
+      "Listo para el siguiente turno",
+    );
+  });
+
   it("shows distinct live process states without exposing private reasoning", async () => {
     listAgentSessionsMock.mockResolvedValueOnce([
-      sessionFixture({ turn_status: "settling", output_bytes_per_second: 42 }),
+      sessionFixture({ turn_status: "working", output_bytes_per_second: 42 }),
     ]);
 
     const { unmount } = render(
       <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />,
     );
 
-    const settling = await screen.findByRole("status", {
-      name: "Codex está revisando cambios",
+    const working = await screen.findByRole("status", {
+      name: "Codex está trabajando",
     });
-    expect(settling).toHaveTextContent("VERIFICANDO");
-    expect(screen.getByTitle(/Estado: Finalizando/)).toHaveTextContent("Finalizando");
-    expect(settling.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
+    expect(working).toHaveTextContent("EN CURSO");
+    expect(screen.getByTitle(/Estado: Trabajando/)).toHaveTextContent("Trabajando");
+    expect(working.querySelectorAll(".agent-panel__process-signal i")).toHaveLength(3);
     unmount();
 
     listAgentSessionsMock.mockResolvedValueOnce([sessionFixture({ turn_status: "waiting" })]);
@@ -1062,20 +1087,6 @@ describe("TerminalPanel", () => {
           },
           {
             session_id: "sess-1",
-            id: "activity-3",
-            kind: "activity",
-            text: "Ejecutando Write-Output $env:TINTO_TURN_DONE_MARKER",
-            timestamp_ms: 14,
-          },
-          {
-            session_id: "sess-1",
-            id: "output-3",
-            kind: "command_output",
-            text: "turn-done-marker",
-            timestamp_ms: 15,
-          },
-          {
-            session_id: "sess-1",
             id: "agent-1",
             kind: "agent_message",
             text: "Listo:\n- uno\n- dos",
@@ -1099,8 +1110,6 @@ describe("TerminalPanel", () => {
     expect(
       within(commands[1]).getByText("$ErrorActionPreference='Stop' …", { selector: "code" }),
     ).toBeInTheDocument();
-    expect(within(conversation).queryByText(/TINTO_TURN_DONE_MARKER/)).not.toBeInTheDocument();
-    expect(within(conversation).queryByText("turn-done-marker")).not.toBeInTheDocument();
     expect(within(conversation).getAllByRole("listitem")).toHaveLength(2);
   });
 
@@ -1208,6 +1217,7 @@ describe("TerminalPanel", () => {
     await user.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "implementa la vista\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(composer).toHaveValue("");
@@ -1243,6 +1253,7 @@ describe("TerminalPanel", () => {
 
     await waitFor(() => expect(resumeAgentJournalSessionMock).toHaveBeenCalledWith("sess-1"));
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-resumed", "Seguimos\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(openAgentTerminal).toHaveBeenCalledWith({
@@ -1298,7 +1309,7 @@ describe("TerminalPanel", () => {
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith(
       "sess-resumed",
       "Seguimos después del reinicio\r",
-      { speed: "standard" },
+      { model: "gpt-5.6-sol", speed: "standard" },
     );
     expect(openAgentTerminal).toHaveBeenCalledWith({
       sessionId: "sess-resumed",
@@ -1340,6 +1351,7 @@ describe("TerminalPanel", () => {
     await waitFor(() => expect(writeAgentSessionInputMock).toHaveBeenCalledTimes(2));
     expect(resumeAgentJournalSessionMock).toHaveBeenCalledTimes(1);
     expect(writeAgentSessionInputMock).toHaveBeenLastCalledWith("sess-resumed", "Seguimos\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(openAgentTerminal).toHaveBeenCalledWith({
@@ -1491,6 +1503,7 @@ describe("TerminalPanel", () => {
 
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "analiza el sistema\r", {
       reasoning_effort: "high",
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
   });
@@ -1608,6 +1621,7 @@ describe("TerminalPanel", () => {
     await user.click(screen.getByRole("button", { name: "Reanudar cola" }));
     await waitFor(() =>
       expect(writeAgentSessionTurnMock).toHaveBeenCalledWith("sess-1", "Haz esto después", [], {
+        model: "gpt-5.6-sol",
         speed: "fast",
       }),
     );
@@ -1697,6 +1711,7 @@ describe("TerminalPanel", () => {
 
     await waitFor(() =>
       expect(writeAgentSessionTurnMock).toHaveBeenCalledWith("sess-1", "Usa rápido", [], {
+        model: "gpt-5.6-sol",
         speed: "fast",
       }),
     );
@@ -2004,7 +2019,6 @@ describe("TerminalPanel", () => {
       "/comments",
       "/compact",
       "/status",
-      "/init",
       "/fork",
       "/mcp",
       "/mascot",
@@ -2261,26 +2275,6 @@ describe("TerminalPanel", () => {
     expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
   }, 10_000);
 
-  it("runs init through the host command backend from the palette", async () => {
-    const user = userEvent.setup();
-    listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
-    runAgentHostCommandMock.mockResolvedValueOnce({
-      command: "init",
-      status: "completed",
-      message: "AGENTS.md is configured for this repo.",
-    });
-    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
-
-    const composer = await screen.findByLabelText("Mensaje para Codex");
-    await user.type(composer, "/init");
-    await user.type(composer, "{Enter}");
-
-    await waitFor(() =>
-      expect(runAgentHostCommandMock).toHaveBeenCalledWith("sess-1", "init", undefined),
-    );
-    expect(writeAgentSessionInputMock).not.toHaveBeenCalled();
-  });
-
   it("runs review through the host command backend", async () => {
     const user = userEvent.setup();
     listAgentSessionsMock.mockResolvedValue([sessionFixture()]);
@@ -2486,6 +2480,7 @@ describe("TerminalPanel", () => {
 
     await user.type(composer, "{Enter}");
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", `${expectedReviewPrompt}\r`, {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
     expect(
@@ -3020,6 +3015,7 @@ describe("TerminalPanel", () => {
 
     await user.type(composer, "{Enter}");
     expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "line one\nline two\r", {
+      model: "gpt-5.6-sol",
       speed: "standard",
     });
   });
@@ -3107,7 +3103,7 @@ describe("TerminalPanel", () => {
     expect(filesMetric).toHaveTextContent("Archivos");
     expect(within(overview).getByText("Actividad reciente")).toBeInTheDocument();
     expect(within(overview).getByText("Ya quedó verificado")).toBeInTheDocument();
-    expect(within(overview).getByText("+0s")).toBeInTheDocument();
+    expect(within(overview).queryByText("+0s")).not.toBeInTheDocument();
     const turnMap = screen.getByLabelText("Mapa de turnos");
     const firstTurnButton = within(turnMap).getByRole("button", { name: /T1/ });
     expect(firstTurnButton).toHaveTextContent("T1");
@@ -3289,7 +3285,8 @@ describe("TerminalPanel", () => {
     const lastCall =
       writeClipboardTextMock.mock.calls[writeClipboardTextMock.mock.calls.length - 1];
     const copied = String(lastCall?.[0] ?? "");
-    expect(copied).toContain("Turno 1 (+0s)");
+    expect(copied).toContain("Turno 1\n");
+    expect(copied).not.toContain("(+0s)");
     expect(copied).toContain("Tú:\nHaz el cambio");
     expect(copied).toContain("Agent:\nVoy con ello");
     expect(copied).toContain("Comando:\nnpm test");
@@ -4127,6 +4124,31 @@ describe("TerminalPanel", () => {
     },
   );
 
+  it("reverts a conversation reopened from history from its saved checkpoint", async () => {
+    const user = userEvent.setup();
+    getAgentJournalSessionMock.mockResolvedValueOnce(
+      sessionFixture({ status: "completed", pid: null, checkpoint: null }),
+    );
+    renderWithWorkspaceActions(
+      <TerminalPanel
+        {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex", mode: "journal" })}
+      />,
+      {},
+    );
+
+    const revert = await screen.findByRole("button", { name: "Revertir sesión", hidden: true });
+    await waitFor(() => expect(revert).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Detener sesión", hidden: true })).toBeNull();
+    await user.click(revert);
+
+    expect(confirmMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("También se desharán los cambios hechos después"),
+      expect.objectContaining({ title: "Revertir sesión anterior" }),
+    );
+    await waitFor(() => expect(revertJournalSessionMock).toHaveBeenCalledWith("sess-1", true));
+    expect(revertSessionMock).not.toHaveBeenCalled();
+  });
+
   it("opens a resumed journal conversation once and keeps its pending panel usable", async () => {
     const user = userEvent.setup();
     const openAgentTerminal = vi.fn();
@@ -4444,7 +4466,7 @@ describe("TerminalPanel", () => {
     expect(screen.getByLabelText("Archivos: 1")).toBeInTheDocument();
     expect(screen.getByTitle("Turno 1: 0 comandos, 1 archivo")).toBeInTheDocument();
     const changedFile = screen.getByRole("button", { name: "Abrir diff de src/a.ts" });
-    expect(changedFile).toHaveTextContent("Msrc/a.ts");
+    expect(changedFile).toHaveTextContent("−src/a.ts");
     expect(changedFile).not.toHaveTextContent("Diff");
 
     await user.click(changedFile);

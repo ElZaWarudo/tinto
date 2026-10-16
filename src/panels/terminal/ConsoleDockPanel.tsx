@@ -1160,7 +1160,6 @@ function activeSessionPreview(
   if (lastMessage) return plainPreviewText(lastMessage.text);
   if (!session) return null;
   if (session.turn_status === "working") return "Trabajando en el turno actual";
-  if (session.turn_status === "settling") return "Recopilando los archivos modificados";
   return null;
 }
 
@@ -1196,16 +1195,12 @@ function conversationTitle(text: string | null | undefined): string {
 function sessionStatusLabel(session: AgentSession | undefined): string {
   if (!session) return "abriendo";
   if (session.status === "running" && session.turn_status === "working") return "trabajando";
-  if (session.status === "running" && session.turn_status === "settling") {
-    return "recopilando cambios";
-  }
   if (session.status === "running") return "listo";
   return localizedSessionStatus(session.status);
 }
 
-function sessionStatusTone(session: AgentSession | undefined): "live" | "settling" | "done" {
+function sessionStatusTone(session: AgentSession | undefined): "live" | "done" {
   if (!session) return "live";
-  if (session.status === "running" && session.turn_status === "settling") return "settling";
   if (session.status === "running") return "live";
   return "done";
 }

@@ -742,7 +742,6 @@ function reportLaunchFailure(error: unknown): string {
     "child_exit",
     "binary_not_found",
     "repository_not_found",
-    "checkpoint_too_large",
     "checkpoint_git_failed",
     "checkpoint_home_unavailable",
     "permission_denied",

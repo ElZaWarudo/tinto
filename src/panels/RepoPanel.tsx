@@ -36,6 +36,7 @@ import { RepoConfigSection } from "./RepoConfigSection";
 import { RepoSourceBadge } from "./RepoSourceBadge";
 import { ProjectExplorer } from "./tree/ProjectExplorer";
 import { useExplorerCollapsed } from "./tree/explorerCollapseState";
+import { restoreBaseView } from "../workspace/baseView";
 
 const COMMIT_LOG_LIMIT = 30;
 
@@ -147,6 +148,9 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
 
   // Drop the nested dock binding when the project tab unmounts.
   useEffect(() => () => fileDock.unregister(repo), [repo]);
+  // A Delivery task's tab restored with the layout reads its changes at once
+  // (which also leaves its git index fresh for the repo's first read).
+  useEffect(() => restoreBaseView(repo), [repo]);
 
   const onReady = (event: DockviewReadyEvent) => fileDock.register(repo, event.api);
 
@@ -243,6 +247,19 @@ function RepoOverview({ repo }: { repo: string }) {
     };
   }, [repo, commitLogKey]);
 
+  // A repo just added to the active workbench is read for the first time.
+  const inActiveWorkbench = (state.config?.workbenches ?? [])
+    .find((workbench) => workbench.name === state.config?.active)
+    ?.repos.some((entry) => entry.path === repo);
+  if (!delta && inActiveWorkbench) {
+    return (
+      <div className="repo-overview repo-overview--missing" data-testid="repo-overview-loading">
+        <RepoPanelHeader repo={repo} repoEntry={repoEntry} />
+        <p role="status">Leyendo el repo por primera vez…</p>
+      </div>
+    );
+  }
+
   if (!delta) {
     return (
       <div
@@ -313,7 +330,6 @@ function RepoOverview({ repo }: { repo: string }) {
       <RepoConfigSection
         repo={repo}
         gitleaksConfigured={delta.gitleaks_configured !== false}
-        agentsMdConfigured={delta.agents_md_configured === true}
         secretScanStatus={delta.secret_scan_status}
         secretFindings={delta.secret_findings?.length ?? 0}
       />
