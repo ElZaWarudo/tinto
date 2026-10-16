@@ -57,6 +57,9 @@ vi.mock("../../bus/client", () => ({
   redoDeletedFromRepo: (repo: string, token: string) => redoDeletedFromRepoMock(repo, token),
 }));
 
+const deliveryClient = vi.hoisted(() => ({ getDeliveryTaskChanges: vi.fn() }));
+vi.mock("../../delivery/client", () => deliveryClient);
+
 import { ProjectExplorer } from "./ProjectExplorer";
 import { busStore } from "../../bus/store";
 import { qualityStore } from "../../qol/state";
@@ -155,8 +158,8 @@ describe("ProjectExplorer", () => {
     act(() =>
       setBaseView(REPO, {
         label: "develop (0123abcd)",
+        taskId: "t1",
         files: [diff("README.md", "Context"), diff("gone.txt", "Removed")],
-        refresh: () => Promise.resolve([]),
       }),
     );
     render(<ProjectExplorer repo={REPO} />);
@@ -172,6 +175,36 @@ describe("ProjectExplorer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Solo los cambios" }));
     await waitFor(() => expect(screen.queryByTestId("tree-file-package.json")).toBeNull());
     expect(screen.getByTestId("tree-file-gone.txt")).toBeInTheDocument();
+    act(() => setBaseView(REPO, null));
+  });
+
+  it("brings back a task tab's comparison when Tinto opens again", async () => {
+    act(() => busStore.loadSnapshot([delta()], { available: true }));
+    localStorage.setItem(
+      "tinto:delivery-base-views",
+      JSON.stringify({ [REPO]: { label: "develop (0123abcd)", taskId: "t1" } }),
+    );
+    let answer: (changes: unknown) => void = () => {};
+    deliveryClient.getDeliveryTaskChanges.mockReturnValue(
+      new Promise((resolve) => (answer = resolve)),
+    );
+    render(<ProjectExplorer repo={REPO} />);
+    // Until its changes are read it says so, never passing for a plain repo.
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Leyendo los cambios desde develop (0123abcd)…",
+    );
+    expect(screen.queryByTestId("tree-file-package.json")).toBeNull();
+    expect(deliveryClient.getDeliveryTaskChanges).toHaveBeenCalledWith("t1");
+    act(() =>
+      answer({
+        repo: REPO,
+        base_ref: "develop",
+        base_commit: "0123abcd",
+        files: [{ path: "README.md", old_path: null, is_binary: false, hunks: [] }],
+      }),
+    );
+    expect(await screen.findByTestId("tree-file-README.md")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("1 archivo cambiado");
     act(() => setBaseView(REPO, null));
   });
 

@@ -290,6 +290,22 @@
   margin: 0;
   font-size: 15px;
 }
+/* The issue's page, right by its key. */
+.delivery-task__issue {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  vertical-align: middle;
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+.delivery-task__issue:hover {
+  background: color-mix(in srgb, var(--accent-fg) 12%, transparent);
+}
 .delivery-task__header h2 span {
   font-weight: 400;
   color: var(--fg-muted);

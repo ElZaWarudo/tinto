@@ -216,6 +216,21 @@ impl DeliveryService {
         }))
     }
 
+    /// The page of the task's issue: on the repo's Jira set in Tinto, else
+    /// on the host the backlog-delivery skill keeps in the checkout's
+    /// `.agent/env/jira.env` (only `JIRA_HOST` is read from it).
+    pub fn issue_url(&self, task_id: &str) -> Result<Option<String>, DeliveryError> {
+        let task = self.task(task_id)?;
+        let configured = self
+            .store()?
+            .repo_settings(&task.repo)?
+            .jira
+            .map(|jira| jira.host)
+            .filter(|host| !host.trim().is_empty());
+        let host = configured.or_else(|| skill_jira_host(&task.repo));
+        Ok(host.map(|host| format!("{}/browse/{}", host.trim().trim_end_matches('/'), task.key)))
+    }
+
     /// Saves the token apart from the repo's settings; empty forgets it.
     pub fn set_jira_token(&self, repo: &std::path::Path, token: &str) -> Result<(), DeliveryError> {
         self.store()?.set_jira_token(repo, token.trim())
@@ -237,5 +252,38 @@ impl DeliveryService {
             .or(me["name"].as_str())
             .unwrap_or("usuario sin nombre")
             .to_string())
+    }
+}
+
+/// `JIRA_HOST` from the skill's `.agent/env/jira.env` in the main checkout,
+/// when it is an http(s) address. Nothing else in that file is read.
+fn skill_jira_host(repo: &std::path::Path) -> Option<String> {
+    let env = std::fs::read_to_string(repo.join(".agent").join("env").join("jira.env")).ok()?;
+    env.lines()
+        .find_map(|line| line.trim().strip_prefix("JIRA_HOST="))
+        .map(|host| host.trim().trim_matches(['"', '\'']).to_string())
+        .filter(|host| host.starts_with("https://") || host.starts_with("http://"))
+}
+
+#[cfg(test)]
+mod issue_url_tests {
+    use super::skill_jira_host;
+
+    #[test]
+    fn the_skill_env_gives_only_its_host() {
+        let repo = tempfile::tempdir().unwrap();
+        let env = repo.path().join(".agent").join("env");
+        std::fs::create_dir_all(&env).unwrap();
+        std::fs::write(
+            env.join("jira.env"),
+            "JIRA_API_TOKEN=secret\nJIRA_HOST=\"https://jira.example.com/\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            skill_jira_host(repo.path()).as_deref(),
+            Some("https://jira.example.com/")
+        );
+        std::fs::write(env.join("jira.env"), "JIRA_HOST=file:///etc\n").unwrap();
+        assert_eq!(skill_jira_host(repo.path()), None);
     }
 }

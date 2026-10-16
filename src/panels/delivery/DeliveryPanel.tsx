@@ -12,6 +12,7 @@ import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntim
 import {
   archiveDeliveryTask,
   cancelDeliveryJob,
+  getDeliveryIssueUrl,
   getDeliveryTaskChanges,
   openDeliveryVisualRecord,
   pauseDeliveryJob,
@@ -844,8 +845,8 @@ function TaskDetail({
       const changes = await getDeliveryTaskChanges(task.id);
       setBaseView(changes.repo, {
         label: `${task.base_ref} (${shortCommit(changes.base_commit)})`,
+        taskId: task.id,
         files: changes.files,
-        refresh: async () => (await getDeliveryTaskChanges(task.id)).files,
       });
       openRepo(changes.repo);
     } finally {
@@ -856,17 +857,16 @@ function TaskDetail({
   const [issueUrl, setIssueUrl] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    getDeliveryRepoSettings(task.repo).then(
-      (settings) => {
-        const host = settings.jira?.host.trim().replace(/\/+$/, "");
-        if (live && host) setIssueUrl(`${host}/browse/${encodeURIComponent(task.key)}`);
+    getDeliveryIssueUrl(task.id).then(
+      (url) => {
+        if (live) setIssueUrl(url);
       },
       () => {},
     );
     return () => {
       live = false;
     };
-  }, [task.repo, task.key]);
+  }, [task.id]);
   // The approval whose result is being corrected.
   const [correcting, setCorrecting] = useState<string | null>(null);
   const correctable = correctableSteps(approvals);
@@ -969,6 +969,17 @@ function TaskDetail({
           <h2>
             {task.key}
             {task.title && <span> {task.title}</span>}
+            {issueUrl && (
+              <a
+                className="delivery-task__issue"
+                href={issueUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Abrir ${task.key} en Jira`}
+              >
+                Abrir en Jira ↗
+              </a>
+            )}
           </h2>
           <p className="delivery-task__meta">
             <span>
@@ -979,11 +990,6 @@ function TaskDetail({
             <span title={delivered ? undefined : "Lo fija quien coordina la tarea"}>
               Estado: {stateLabel}
             </span>
-            {issueUrl && (
-              <a href={issueUrl} target="_blank" rel="noreferrer">
-                Abrir {task.key} en Jira
-              </a>
-            )}
             {!task.distro && (
               <button
                 type="button"

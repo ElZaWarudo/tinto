@@ -36,6 +36,7 @@ import { RepoConfigSection } from "./RepoConfigSection";
 import { RepoSourceBadge } from "./RepoSourceBadge";
 import { ProjectExplorer } from "./tree/ProjectExplorer";
 import { useExplorerCollapsed } from "./tree/explorerCollapseState";
+import { restoreBaseView } from "../workspace/baseView";
 
 const COMMIT_LOG_LIMIT = 30;
 
@@ -147,6 +148,9 @@ export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
 
   // Drop the nested dock binding when the project tab unmounts.
   useEffect(() => () => fileDock.unregister(repo), [repo]);
+  // A Delivery task's tab restored with the layout reads its changes at once
+  // (which also leaves its git index fresh for the repo's first read).
+  useEffect(() => restoreBaseView(repo), [repo]);
 
   const onReady = (event: DockviewReadyEvent) => fileDock.register(repo, event.api);
 

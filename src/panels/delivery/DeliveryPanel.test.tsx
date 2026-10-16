@@ -15,6 +15,7 @@ import type {
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
   getDeliveryTaskChanges: vi.fn(),
+  getDeliveryIssueUrl: vi.fn(() => Promise.resolve(null)),
   openDeliveryVisualRecord: vi.fn(),
   pauseDeliveryJob: vi.fn(),
   resumeDeliveryJob: vi.fn(),
@@ -317,23 +318,14 @@ describe("DeliveryPanel", () => {
     expect(client.getDeliveryTaskChanges).toHaveBeenCalledWith("t1");
   });
 
-  it("links the task to its Jira issue when the repo's Jira is set", async () => {
+  it("links the task to its Jira issue by its title when Tinto knows the host", async () => {
     client.getDeliveryOverview.mockResolvedValue(overview());
-    client.getDeliveryRepoSettings.mockResolvedValue({
-      worktree_root: null,
-      bootstrap: null,
-      default_base: null,
-      jira: {
-        host: "https://jira.example.com/",
-        project: "AGOS",
-        after_pr: [],
-        after_merge: [],
-        has_token: true,
-      },
-    });
+    client.getDeliveryIssueUrl.mockResolvedValue("https://jira.example.com/browse/AGOS-501");
     renderPanel();
     const link = await screen.findByRole("link", { name: "Abrir AGOS-501 en Jira" });
     expect(link).toHaveAttribute("href", "https://jira.example.com/browse/AGOS-501");
+    expect(screen.getByRole("heading", { name: /AGOS-501/ })).toContainElement(link);
+    expect(client.getDeliveryIssueUrl).toHaveBeenCalledWith("t1");
   });
 
   it("names the model and reasoning each stage runs with, defaults included", async () => {

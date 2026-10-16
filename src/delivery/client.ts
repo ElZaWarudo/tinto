@@ -112,6 +112,10 @@ export const cancelDeliveryJob = (jobId: string) =>
 export const getDeliveryTaskChanges = (taskId: string) =>
   invoke<DeliveryTaskChanges>("delivery_task_changes", { taskId });
 
+/** The task's Jira issue page, from the repo's Jira in Tinto or the skill's jira.env. */
+export const getDeliveryIssueUrl = (taskId: string) =>
+  invoke<string | null>("delivery_issue_url", { taskId });
+
 /** Opens a QA job's visual changes page in the system's browser. */
 export const openDeliveryVisualRecord = (jobId: string) =>
   invoke<void>("delivery_open_visual_record", { jobId });

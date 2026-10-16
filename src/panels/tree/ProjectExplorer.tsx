@@ -21,7 +21,13 @@ import { filterTreeNodes, hasActiveFilters } from "../../qol/filters";
 import { qualityStore, useQualityState } from "../../qol/state";
 import { repoTreeStore, useRepoTree } from "../../workspace/repoTreeStore";
 import { fileDock, useRepoDock } from "../../workspace/fileDock";
-import { baseChangeKind, setShowAll, updateBaseFiles, useBaseView } from "../../workspace/baseView";
+import {
+  baseChangeKind,
+  refreshBaseView,
+  restoreBaseView,
+  setShowAll,
+  useBaseView,
+} from "../../workspace/baseView";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { FileTreeNode } from "./FileTreeNode";
 import { useExplorerExpanded } from "./explorerCollapseState";
@@ -373,36 +379,27 @@ export function ProjectExplorer({
   // worktree changes.
   const baseView = useBaseView(repo);
   const onlyChanges = baseView !== null && !baseView.showAll;
-  // Agents change the worktree often: one read at a time, and at most every
-  // few seconds, so the explorer never piles reads up behind each other.
-  const reading = useRef(false);
+  const baseFiles = baseView?.files ?? null;
+  // A tab restored with the layout gets back the comparison it had.
+  useEffect(() => restoreBaseView(repo), [repo]);
+  // Agents change the worktree often: one read at a time (the store sees to
+  // it), and only once the worktree has been quiet for a few seconds.
   useEffect(() => {
     if (!baseView || !delta) return;
-    const timer = setTimeout(() => {
-      if (reading.current) return;
-      reading.current = true;
-      baseView
-        .refresh()
-        .then(
-          (files) => updateBaseFiles(repo, files),
-          () => {},
-        )
-        .finally(() => {
-          reading.current = false;
-        });
-    }, 3000);
+    const timer = setTimeout(() => void refreshBaseView(repo), 3000);
     return () => clearTimeout(timer);
     // Only a change in the worktree (a new delta) reads them again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [delta, repo]);
   const nodes = useMemo(() => {
-    if (baseView && onlyChanges) {
-      const created = baseView.files.filter((file) => baseChangeKind(file) === "created");
+    if (onlyChanges) {
+      if (!baseFiles) return [];
+      const created = baseFiles.filter((file) => baseChangeKind(file) === "created");
       return filterTreeNodes(
         buildFileTree(
-          baseView.files.map((file) => ({ path: file.path, is_dir: false })),
+          baseFiles.map((file) => ({ path: file.path, is_dir: false })),
           {
-            modified: baseView.files.filter((file) => !created.includes(file)).map((f) => f.path),
+            modified: baseFiles.filter((file) => !created.includes(file)).map((f) => f.path),
             staged: [],
             untracked: created.map((file) => file.path),
           },
@@ -414,7 +411,7 @@ export function ProjectExplorer({
     if (!tree || !delta) return [];
     const signals = getRepoSignals(delta);
     return filterTreeNodes(buildFileTree(tree.entries, delta.status), filters, signals);
-  }, [tree, delta, filters, baseView, onlyChanges]);
+  }, [tree, delta, filters, baseFiles, onlyChanges]);
   const nodesByPath = useMemo(() => collectTreeNodes(nodes), [nodes]);
   const repoSignals = delta ? getRepoSignals(delta) : [];
   const visiblePaths = useMemo(() => visibleTreePaths(nodes, expandedDirs), [nodes, expandedDirs]);
@@ -1028,10 +1025,9 @@ export function ProjectExplorer({
       {baseView && (
         <div className="project-explorer__base" role="status">
           <span>
-            {baseView.files.length === 1
-              ? "1 archivo cambiado"
-              : `${baseView.files.length} archivos cambiados`}{" "}
-            desde {baseView.label}
+            {baseFiles === null
+              ? `Leyendo los cambios desde ${baseView.label}…`
+              : `${baseFiles.length === 1 ? "1 archivo cambiado" : `${baseFiles.length} archivos cambiados`} desde ${baseView.label}`}
           </span>
           <button type="button" onClick={() => setShowAll(repo, onlyChanges)}>
             {onlyChanges ? "Ver todos los archivos" : "Solo los cambios"}
@@ -1092,8 +1088,12 @@ export function ProjectExplorer({
           <div className="tree-files__msg" data-testid="explorer-no-matches">
             Ningún archivo coincide con los filtros actuales.
           </div>
+        ) : onlyChanges && baseFiles === null ? (
+          <div className="tree-files__msg">Leyendo los cambios…</div>
         ) : nodes.length === 0 ? (
-          <div className="tree-files__msg">No hay archivos.</div>
+          <div className="tree-files__msg">
+            {onlyChanges ? "No hay cambios desde la base." : "No hay archivos."}
+          </div>
         ) : (
           <>
             {delta &&

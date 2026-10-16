@@ -187,6 +187,15 @@ pub fn delivery_cancel_job(
     service.cancel(&job_id).map_err(CommandError::from)
 }
 
+/// The page of the task's Jira issue, when Tinto knows the repo's Jira host.
+#[tauri::command]
+pub fn delivery_issue_url(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Option<String>, CommandError> {
+    service.issue_url(&task_id).map_err(CommandError::from)
+}
+
 /// Opens a QA job's visual changes page with the system's default browser.
 #[tauri::command]
 pub fn delivery_open_visual_record(
