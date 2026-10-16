@@ -144,7 +144,7 @@ pub fn handle_message(service: &DeliveryService, message: &Value) -> Option<Valu
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "tinto-delivery", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are."
+            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. You coordinate every task of the batch at once, not one issue after another: keep each task's next stage running up to the capacity, and while one task waits (a job, QA, the user), move the others; wait_job lists the idle ones and does not wait while they can run. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are."
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
@@ -363,6 +363,26 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             let timeout =
                 Duration::from_secs(args["timeout_seconds"].as_u64().unwrap_or(50).clamp(1, 600));
             let deadline = Instant::now() + timeout;
+            // The batch's other tasks: a coordinator waiting on one job must
+            // not leave the rest of the batch with nothing running.
+            let mut runs: Vec<String> = Vec::new();
+            for id in &ids {
+                let job = service.job(id)?;
+                if let Some(run) = service.task(&job.task_id)?.run_id {
+                    if !runs.contains(&run) {
+                        runs.push(run);
+                    }
+                }
+            }
+            let idle = || -> Result<Vec<Value>, DeliveryError> {
+                let mut idle = Vec::new();
+                for run in &runs {
+                    idle.extend(service.idle_tasks(run)?);
+                }
+                Ok(idle)
+            };
+            let idle_ok = args["idle_ok"].as_bool().unwrap_or(false);
+            let mut first_look = true;
             loop {
                 let jobs = ids
                     .iter()
@@ -371,15 +391,29 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
                 let (ended, open): (Vec<_>, Vec<_>) =
                     jobs.into_iter().partition(|job| !job.status.is_open());
                 let open_ids: Vec<&str> = open.iter().map(|job| job.id.as_str()).collect();
+                let spare = service.spare_capacity()?;
                 if let Some(first) = ended.first() {
-                    return Ok(
-                        json!({ "done": true, "job": first, "ended": ended, "open": open_ids }),
-                    );
+                    return Ok(json!({
+                        "done": true, "job": first, "ended": ended, "open": open_ids,
+                        "idle": idle()?, "spare_capacity": spare,
+                    }));
                 }
+                if first_look && !idle_ok && spare > 0 {
+                    let idle = idle()?;
+                    if !idle.is_empty() {
+                        return Ok(json!({
+                            "done": false, "waited": false, "job": open[0], "ended": [],
+                            "open": open_ids, "idle": idle, "spare_capacity": spare,
+                            "note": "Not waiting: these tasks of the batch have nothing running and nothing waiting on the user, and there is room for more jobs. Dispatch their next stage, then wait on everything that runs. Pass idle_ok only for tasks that wait on something outside Tinto.",
+                        }));
+                    }
+                }
+                first_look = false;
                 if Instant::now() >= deadline {
-                    return Ok(
-                        json!({ "done": false, "job": open[0], "ended": [], "open": open_ids }),
-                    );
+                    return Ok(json!({
+                        "done": false, "job": open[0], "ended": [], "open": open_ids,
+                        "idle": idle()?, "spare_capacity": spare,
+                    }));
                 }
                 std::thread::sleep(Duration::from_millis(500));
             }
@@ -691,7 +725,7 @@ fn tool_definitions() -> Value {
         { "name": "create_task", "description": "Create a task: its own worktree and branch from a verified base.", "inputSchema": fenced(json!({"properties": {"repo": {"type": "string"}, "distro": {"type": "string"}, "key": {"type": "string"}, "title": {"type": "string"}, "base": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "key", "title"]})) },
         { "name": "set_task_state", "description": "Set a task's stage label and/or raise its contract version (older results become stale).", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "state": {"type": "string"}, "contract_version": {"type": "integer"}}, "required": ["task_id"]})) },
         { "name": "dispatch_job", "description": "Queue a background agent job in a task's worktree. Its result's `blocked_by` says what stopped it: `sandbox` (the job's sandbox or permission rules refused something a decision allows), `environment` (something outside them failed) or `none`. Roles: tests, implementation, review (read-only), qa (read-only, holds the qa resource). Claude jobs without full access can run read-only commands (read-only git on the worktree included) plus the repo's verification commands set in Tinto; anything else is denied. On a Windows repository a Claude job runs on Windows when Claude Code is installed there, otherwise in WSL; `platform` forces one, and the job's `ran_on` says where it ran. You cannot choose a job's access: jobs run with workspace access, except QA on a task whose user allowed a `full_access` permission (see request_decisions), which runs with full access and says so in `access`. The job ends with a structured result.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "role": {"type": "string"}, "agent": {"type": "string", "enum": ["codex", "claude"], "description": "Omit it to use the agent, model and reasoning the user fixed for this stage in Tinto (read_settings `stages`); required when the stage has none."}, "platform": {"type": "string", "enum": ["windows", "wsl"], "description": "Claude jobs on a Windows repository only: where it runs. Omit it unless the user asked for one."}, "prompt": {"type": "string"}, "model": {"type": "string", "description": "Model id. When omitted, the model the user fixed for the stage (if the agent is the fixed one); otherwise Codex jobs use the default of the account's model catalog as last seen by Tinto (falling back to the CLI's configured model) and Claude jobs use the CLI's default."}, "reasoning": {"type": "string", "description": "Reasoning effort: minimal, low, medium, high or xhigh for Codex; low, medium, high, xhigh or max for Claude Code. When omitted, what the user fixed for the stage, else the CLI's default."}, "writes": {"type": "boolean"}, "lease": {"type": "string"}, "timeout_minutes": {"type": "integer"}}, "required": ["task_id", "role", "prompt"]})) },
-        { "name": "wait_job", "description": "Wait until a job ends (or the timeout passes) and return it. With several jobs running, pass them all in `job_ids`: it returns as soon as any of them ends, with the ended ones in `ended` (`job` is the first) and the rest in `open`. Handle what ended (a `blocked` result, the next stage) and wait again on what is still open, instead of waiting on one job at a time or on several in parallel calls. A job can end `paused`: the user stopped it to continue later in the same session. Its task then refuses new jobs (`job_paused`) until the user resumes it in Tinto, which queues a new attempt with `resumes` set to it; do not retry it or dispatch on that task, work on other tasks and read_job it later. While the user pauses the batch (read_settings `run.paused`) dispatched jobs stay `queued` and start when they resume it.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "job_ids": {"type": "array", "items": {"type": "string"}}, "timeout_seconds": {"type": "integer"}}), json!([])) },
+        { "name": "wait_job", "description": "Wait until a job ends (or the timeout passes) and return it. With several jobs running, pass them all in `job_ids`: it returns as soon as any of them ends, with the ended ones in `ended` (`job` is the first) and the rest in `open`. Handle what ended (a `blocked` result, the next stage) and wait again on what is still open, instead of waiting on one job at a time or on several in parallel calls. You coordinate the whole batch, not one issue: every result lists in `idle` the batch's tasks that have nothing running, queued or paused, nothing waiting on the user and no PR yet (with how their `latest` stage ended), and `spare_capacity`, how many more jobs can run now. Dispatch the next stage of each idle task while there is capacity. While there are idle tasks and capacity, wait_job does not wait (`waited: false`): dispatch them first, then wait on everything running. Pass `idle_ok: true` only when every idle task waits on something outside Tinto (a dependency on another issue, a person); say why in your next message to the user. A job can end `paused`: the user stopped it to continue later in the same session. Its task then refuses new jobs (`job_paused`) until the user resumes it in Tinto, which queues a new attempt with `resumes` set to it; do not retry it or dispatch on that task, work on other tasks and read_job it later. While the user pauses the batch (read_settings `run.paused`) dispatched jobs stay `queued` and start when they resume it.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "job_ids": {"type": "array", "items": {"type": "string"}}, "timeout_seconds": {"type": "integer"}, "idle_ok": {"type": "boolean", "description": "Wait even though some tasks of the batch are idle: only when they wait on something outside Tinto."}}), json!([])) },
         { "name": "read_job", "description": "A job with its status, result, result state, candidates and changed files, and while it runs what the agent did last (`activity`, at `activity_at_ms`), its own task list (`plan`) and, once reported, the tokens it used (`usage`). A QA job that wrote its visual changes record has the page Tinto rendered from it in `visual_record` (or why it could not in `visual_record_error`); it is for the user's local review, never to commit, attach or link.", "inputSchema": schema(json!({"job_id": {"type": "string"}}), json!(["job_id"])) },
         { "name": "job_log", "description": "Readable log of a job from a raw line onwards.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "from_line": {"type": "integer"}}), json!(["job_id"])) },
         { "name": "cancel_job", "description": "Cancel a queued or running job.", "inputSchema": fenced(json!({"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]})) },

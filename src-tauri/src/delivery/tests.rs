@@ -441,6 +441,75 @@ fn capacity_and_one_job_per_task_are_respected() {
 }
 
 #[test]
+fn waiting_on_one_issue_never_leaves_the_rest_of_the_batch_idle() {
+    let h = harness();
+    h.service
+        .update_settings(DeliverySettings { capacity: 3 })
+        .unwrap();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", Some("coord".into()), None)
+        .unwrap();
+    let task = |key: &str| {
+        h.service
+            .create_task(NewTask {
+                repo: h.repo.path().to_path_buf(),
+                distro: None,
+                key: key.into(),
+                title: "x".into(),
+                base: None,
+                branch: None,
+                run_id: Some(run.id.clone()),
+            })
+            .unwrap()
+    };
+    let busy = task("I-1");
+    let idle = task("I-2");
+    let asking = task("I-3");
+    h.service
+        .request_decisions(&asking.id, vec![choice("¿Aviso?", Some(0))], "coord")
+        .unwrap();
+    let slow = h.dispatch(&busy, "tests", "sleep=30");
+    let wait = |extra: serde_json::Value| {
+        let mut args = json!({"job_ids": [slow.id], "timeout_seconds": 1});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "wait_job", "arguments": args}}),
+        )
+        .unwrap()["result"]["structuredContent"]
+            .clone()
+    };
+    // It does not wait while an issue could run: only I-2, since I-3 waits
+    // on the user and I-1 runs.
+    let first = wait(json!({}));
+    assert_eq!(first["waited"], false, "{first}");
+    let keys: Vec<&str> = first["idle"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, vec!["I-2"]);
+    assert_eq!(first["idle"][0]["latest"], "no stage yet");
+    assert_eq!(first["spare_capacity"], 2);
+    // Told the idle issue waits on something else, it waits, still saying so.
+    let waited = wait(json!({"idle_ok": true}));
+    assert_eq!(waited["done"], false);
+    assert!(waited.get("waited").is_none(), "{waited}");
+    assert_eq!(waited["idle"].as_array().unwrap().len(), 1);
+    // Once it runs, nothing is idle.
+    let other = h.dispatch(&idle, "tests", "sleep=30");
+    assert_eq!(wait(json!({}))["idle"], json!([]));
+    for job in [&slow, &other] {
+        h.service.cancel(&job.id).unwrap();
+        h.wait(&job.id);
+    }
+}
+
+#[test]
 fn waiting_on_a_batch_returns_the_first_job_that_ends() {
     let h = harness();
     h.service

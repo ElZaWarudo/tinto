@@ -16,8 +16,9 @@
 //!   are approved as they are asked; the PR and Jira rungs still wait.
 
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus, DeliveryRun,
-    DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask,
+    DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit,
+    DeliveryDecisionStatus, DeliveryJobStatus, DeliveryRun, DeliveryRung,
+    DeliverySettingsProposalStatus, DeliveryTask,
 };
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
@@ -576,6 +577,84 @@ impl DeliveryService {
         run.updated_at_ms = now_ms();
         self.save_run(&run, "run_policy", "unattended")?;
         Ok(run)
+    }
+
+    /// The batch's tasks that wait on nobody but the coordinator: nothing of
+    /// theirs runs, is queued or paused, and nothing waits on the user (a
+    /// decision, an approval), and they have no PR yet (after it, people
+    /// review). Each says how its latest stage ended, to pick the next one.
+    pub fn idle_tasks(&self, run_id: &str) -> Result<Vec<serde_json::Value>, DeliveryError> {
+        let store = self.store()?;
+        let tasks: Vec<DeliveryTask> = store
+            .tasks()?
+            .into_iter()
+            .filter(|task| task.run_id.as_deref() == Some(run_id))
+            .collect();
+        let approvals = store.approvals()?;
+        let mut idle = Vec::new();
+        for task in tasks {
+            let jobs = store.task_jobs(&task.id)?;
+            let resumed: std::collections::HashSet<&str> = jobs
+                .iter()
+                .filter_map(|job| job.resumes.as_deref())
+                .collect();
+            let busy = jobs.iter().any(|job| {
+                job.status.is_open()
+                    || (job.status == DeliveryJobStatus::Paused
+                        && !resumed.contains(job.id.as_str()))
+            });
+            let asks_user = store
+                .task_decisions(&task.id)?
+                .iter()
+                .any(|decision| decision.status == DeliveryDecisionStatus::Pending)
+                || approvals.iter().any(|approval| {
+                    approval.task_id == task.id
+                        && matches!(
+                            approval.status,
+                            DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                        )
+                });
+            let has_pr = approvals.iter().any(|approval| {
+                approval.task_id == task.id
+                    && approval.rung == DeliveryRung::Pr
+                    && approval.status == DeliveryApprovalStatus::Executed
+            });
+            if busy || asks_user || has_pr {
+                continue;
+            }
+            let last = jobs
+                .iter()
+                .filter(|job| job.agent != DeliveryAgent::Shell)
+                .max_by_key(|job| job.created_at_ms);
+            let latest = match last {
+                None => "no stage yet".to_string(),
+                Some(job) => match (&job.status, &job.result) {
+                    (DeliveryJobStatus::Finished, Some(result)) => {
+                        format!("{} ended {}", job.role, result.status)
+                    }
+                    (status, _) => format!("{} {:?}", job.role, status).to_lowercase(),
+                },
+            };
+            idle.push(serde_json::json!({
+                "task_id": task.id,
+                "key": task.key,
+                "state": task.state,
+                "latest": latest,
+            }));
+        }
+        Ok(idle)
+    }
+
+    /// How many more jobs can run now.
+    pub fn spare_capacity(&self) -> Result<usize, DeliveryError> {
+        let store = self.store()?;
+        let capacity = store.settings()?.effective_capacity(store.tasks()?.len()) as usize;
+        let running = store
+            .jobs()?
+            .iter()
+            .filter(|job| job.status.is_open())
+            .count();
+        Ok(capacity.saturating_sub(running))
     }
 
     /// Whether the task's batch is past its brainstorm.
