@@ -1160,8 +1160,9 @@ export function SettingsDialog({
   const [jiraComment, setJiraComment] = useState(false);
   // The token is a credential: the dialog shows it masked and only the copy
   // buttons carry it.
-  // Through tinto.exe as a stdio server, which opens Tinto when it is
-  // closed; over HTTP only when the executable is unknown.
+  // Through tinto.exe as a stdio server, which finds Tinto's server
+  // wherever it listens (its port can change between launches) and opens
+  // Tinto when it is closed; over HTTP only when the executable is unknown.
   const command = endpoint?.command;
   // Claude Code starts the server through a shell that drops backslashes.
   const claudeCommand = command?.replace(/\\/g, "/");
@@ -1169,13 +1170,13 @@ export function SettingsDialog({
     !endpoint
       ? ""
       : command
-        ? `claude mcp add tinto-delivery -- "${claudeCommand}" --delivery-mcp-proxy ${endpoint.url} ${token}`
+        ? `claude mcp add tinto-delivery -- "${claudeCommand}" --delivery-mcp-proxy`
         : `claude mcp add --transport http tinto-delivery ${endpoint.url} --header "Authorization: Bearer ${token}"`;
   const codex = (token: string) =>
     !endpoint
       ? ""
       : command
-        ? `[mcp_servers.tinto-delivery]\ncommand = '${command}'\nargs = ["--delivery-mcp-proxy", "${endpoint.url}", "${token}"]`
+        ? `[mcp_servers.tinto-delivery]\ncommand = '${command}'\nargs = ["--delivery-mcp-proxy"]`
         : `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`;
   const activeRuns = runs.filter((run) => run.status === "active");
   return (
@@ -1313,8 +1314,9 @@ export function SettingsDialog({
           <p className="file-op-modal__body">
             Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
             herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
-            fuera de Tinto: arrancan tinto.exe como servidor MCP, que abre Tinto si está cerrado. No
-            hace falta abrirlo de otra forma.
+            fuera de Tinto: arrancan tinto.exe como servidor MCP, que abre Tinto si está cerrado y
+            lo encuentra aunque cambie de puerto. No hace falta abrirlo de otra forma ni
+            configurarlo de nuevo.
           </p>
           <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
           <CopySnippet

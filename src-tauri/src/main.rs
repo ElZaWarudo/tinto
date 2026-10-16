@@ -10,10 +10,16 @@ fn main() {
             std::process::exit(tinto_lib::agent_console::claude_hooks::append_event(path));
         }
     }
-    if let [flag, url, token] = args.as_slice() {
-        if flag == tinto_lib::delivery::wiring::PROXY_FLAG {
-            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(url, token));
+    // It finds Tinto's server by itself; configs written before that also
+    // pass a URL and token, kept for when Tinto has saved none.
+    match args.as_slice() {
+        [flag] if flag == tinto_lib::delivery::wiring::PROXY_FLAG => {
+            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(None));
         }
+        [flag, url, token] if flag == tinto_lib::delivery::wiring::PROXY_FLAG => {
+            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(Some((url, token))));
+        }
+        _ => {}
     }
     tinto_lib::run()
 }

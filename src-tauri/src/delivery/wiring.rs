@@ -118,9 +118,38 @@ fn codex_args_for(server: &Server) -> Vec<String> {
         .collect()
 }
 
+/// Where the proxy sends messages: the server's URL and its token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Target {
+    url: String,
+    token: String,
+}
+
+/// Where Tinto's server listens now, as Tinto saved it when it started.
+/// Its port can change between launches (the saved one may be taken or
+/// reserved by Windows), so a config never has to name it.
+fn saved_target() -> Option<Target> {
+    let store = super::store::DeliveryStore::open_default().ok()?;
+    let port = store.setting::<u16>("mcp_port").ok()??;
+    let token = store.setting::<String>("mcp_token").ok()??;
+    Some(Target {
+        url: format!("http://127.0.0.1:{port}/mcp"),
+        token,
+    })
+}
+
 /// Runs the stdio side of the bridge: one JSON-RPC message per line in,
-/// the server's answer (if any) per line out.
-pub fn proxy_stdio(url: &str, token: &str) -> i32 {
+/// the server's answer (if any) per line out. `given` is the URL and token
+/// of older configs, used only when Tinto has saved none.
+pub fn proxy_stdio(given: Option<(&str, &str)>) -> i32 {
+    let resolve = || {
+        saved_target().or_else(|| {
+            given.map(|(url, token)| Target {
+                url: url.to_string(),
+                token: token.to_string(),
+            })
+        })
+    };
     let client = match reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15 * 60))
         .build()
@@ -133,34 +162,51 @@ pub fn proxy_stdio(url: &str, token: &str) -> i32 {
     };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
+    let mut target = resolve();
     let mut opened = false;
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
-        let send = || {
-            client
-                .post(url)
-                .bearer_auth(token)
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .body(line.clone())
-                .send()
+        let send = |target: &Option<Target>| {
+            let target = target.as_ref()?;
+            Some(
+                client
+                    .post(&target.url)
+                    .bearer_auth(&target.token)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .body(line.clone())
+                    .send(),
+            )
         };
-        let mut sent = send();
-        // Nobody listening: Tinto is closed. Open it, once, and wait for its
-        // server, so an agent never has to start Tinto some other way.
-        if sent.as_ref().is_err_and(reqwest::Error::is_connect) && !opened {
+        let unreachable = |sent: &Option<reqwest::Result<reqwest::blocking::Response>>| {
+            sent.as_ref()
+                .is_none_or(|sent| sent.as_ref().is_err_and(reqwest::Error::is_connect))
+        };
+        let mut sent = send(&target);
+        // Nobody listening there: Tinto restarted on another port, or is
+        // closed. Read where it listens now; if nobody does, open Tinto,
+        // once, and wait for its server, so an agent never has to start
+        // Tinto some other way or be set up again.
+        if unreachable(&sent) {
+            target = resolve();
+            sent = send(&target);
+        }
+        if unreachable(&sent) && !opened {
             opened = true;
-            if open_tinto() && wait_for_server(url, std::time::Duration::from_secs(60)) {
-                sent = send();
+            if open_tinto() {
+                if let Some(found) = wait_for_server(resolve, std::time::Duration::from_secs(60)) {
+                    target = Some(found);
+                    sent = send(&target);
+                }
             }
         }
-        let reply = sent.and_then(|response| response.text());
-        let answer = match reply {
-            Ok(body) => body,
-            Err(error) => proxy_error(&line, &error.to_string()),
+        let answer = match sent.map(|sent| sent.and_then(|response| response.text())) {
+            Some(Ok(body)) => body,
+            Some(Err(error)) => proxy_error(&line, &error.to_string()),
+            None => proxy_error(&line, "Tinto no ha iniciado nunca su servidor"),
         };
         if answer.trim().is_empty() {
             continue;
@@ -200,30 +246,34 @@ fn open_tinto() -> bool {
     command.spawn().is_ok()
 }
 
-/// Whether something accepts connections at `url`'s host and port before
-/// `limit` runs out.
-fn wait_for_server(url: &str, limit: std::time::Duration) -> bool {
-    let address = url
-        .trim_start_matches("http://")
-        .split('/')
-        .next()
-        .unwrap_or_default()
-        .to_string();
-    let Ok(mut addresses) = std::net::ToSocketAddrs::to_socket_addrs(&address) else {
-        return false;
-    };
-    let Some(address) = addresses.next() else {
-        return false;
-    };
+/// The first target `resolve` gives that accepts connections before
+/// `limit` runs out. It is asked again on every try: a starting Tinto saves
+/// its port only once it listens.
+fn wait_for_server(
+    resolve: impl Fn() -> Option<Target>,
+    limit: std::time::Duration,
+) -> Option<Target> {
     let deadline = std::time::Instant::now() + limit;
+    let step = std::time::Duration::from_millis(500);
     while std::time::Instant::now() < deadline {
-        let step = std::time::Duration::from_millis(500);
-        if std::net::TcpStream::connect_timeout(&address, step).is_ok() {
-            return true;
+        let listening = resolve().filter(|target| {
+            let address = target
+                .url
+                .trim_start_matches("http://")
+                .split('/')
+                .next()
+                .unwrap_or_default();
+            std::net::ToSocketAddrs::to_socket_addrs(address)
+                .ok()
+                .and_then(|mut addresses| addresses.next())
+                .is_some_and(|address| std::net::TcpStream::connect_timeout(&address, step).is_ok())
+        });
+        if listening.is_some() {
+            return listening;
         }
         std::thread::sleep(step);
     }
-    false
+    None
 }
 
 /// A JSON-RPC error for a request Tinto could not be reached for; nothing
@@ -310,16 +360,41 @@ mod tests {
     }
 
     #[test]
-    fn the_proxy_waits_for_a_server_that_listens() {
+    fn the_proxy_waits_for_a_server_that_listens_wherever_it_moved() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let url = format!("http://127.0.0.1:{port}/mcp");
-        assert!(wait_for_server(&url, std::time::Duration::from_secs(5)));
+        let moved = Target {
+            url: format!("http://127.0.0.1:{port}/mcp"),
+            token: "t0k".into(),
+        };
+        // The first read still has the old port; the next one the new.
+        let reads = std::cell::Cell::new(0);
+        let resolve = || {
+            reads.set(reads.get() + 1);
+            Some(match reads.get() {
+                1 => Target {
+                    url: "http://127.0.0.1:1/mcp".into(),
+                    token: "t0k".into(),
+                },
+                _ => moved.clone(),
+            })
+        };
+        assert_eq!(
+            wait_for_server(resolve, std::time::Duration::from_secs(5)),
+            Some(moved.clone())
+        );
         drop(listener);
-        assert!(!wait_for_server(
-            &url,
-            std::time::Duration::from_millis(600)
-        ));
+        assert_eq!(
+            wait_for_server(
+                || Some(moved.clone()),
+                std::time::Duration::from_millis(600)
+            ),
+            None
+        );
+        assert_eq!(
+            wait_for_server(|| None, std::time::Duration::from_millis(600)),
+            None
+        );
     }
 
     #[test]
