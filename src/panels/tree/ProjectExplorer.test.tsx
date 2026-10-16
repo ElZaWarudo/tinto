@@ -168,6 +168,11 @@ describe("ProjectExplorer", () => {
     expect(screen.queryByTestId("tree-file-package.json")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Ver todos los archivos" }));
     expect(await screen.findByTestId("tree-file-package.json")).toBeInTheDocument();
+    // And back: the comparison stays until the user leaves it.
+    fireEvent.click(screen.getByRole("button", { name: "Solo los cambios" }));
+    await waitFor(() => expect(screen.queryByTestId("tree-file-package.json")).toBeNull());
+    expect(screen.getByTestId("tree-file-gone.txt")).toBeInTheDocument();
+    act(() => setBaseView(REPO, null));
   });
 
   it("loads and renders the repo's files (changed files marked)", async () => {

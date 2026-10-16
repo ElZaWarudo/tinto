@@ -12,6 +12,16 @@ export interface BaseView {
   files: FileDiff[];
   /** Reads the changes again (the task's agents may still be working). */
   refresh: () => Promise<FileDiff[]>;
+  /** The explorer shows every file; the changed ones still open against the base. */
+  showAll?: boolean;
+}
+
+/** Switches the explorer between only the changed files and all of them. */
+export function setShowAll(repo: string, showAll: boolean) {
+  const view = views.get(repo);
+  if (!view) return;
+  views.set(repo, { ...view, showAll });
+  emit();
 }
 
 const views = new Map<string, BaseView>();

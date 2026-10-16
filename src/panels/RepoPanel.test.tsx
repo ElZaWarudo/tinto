@@ -371,6 +371,21 @@ describe("RepoPanel", () => {
     expect(retryRepoMock).toHaveBeenCalledWith("/r/api");
   });
 
+  it("says a repo just added to the workbench is being read, not that it is gone", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => {
+      busStore.loadSnapshot([], { available: true });
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [{ name: "Work", repos: [{ path: "/r/new" }] }],
+      } as never);
+    });
+    render(<RepoPanel {...panelProps("/r/new")} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Leyendo el repo por primera vez…");
+    expect(screen.queryByText(/ya no está disponible/i)).toBeNull();
+  });
+
   it("shows a graceful message when the repo left the workbench", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() => busStore.loadSnapshot([], { available: true }));

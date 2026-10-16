@@ -243,6 +243,19 @@ function RepoOverview({ repo }: { repo: string }) {
     };
   }, [repo, commitLogKey]);
 
+  // A repo just added to the active workbench is read for the first time.
+  const inActiveWorkbench = (state.config?.workbenches ?? [])
+    .find((workbench) => workbench.name === state.config?.active)
+    ?.repos.some((entry) => entry.path === repo);
+  if (!delta && inActiveWorkbench) {
+    return (
+      <div className="repo-overview repo-overview--missing" data-testid="repo-overview-loading">
+        <RepoPanelHeader repo={repo} repoEntry={repoEntry} />
+        <p role="status">Leyendo el repo por primera vez…</p>
+      </div>
+    );
+  }
+
   if (!delta) {
     return (
       <div

@@ -298,11 +298,22 @@ describe("DeliveryPanel", () => {
       base_commit: "0123456789abcdef",
       files: [],
     });
+    let answer: (changes: unknown) => void = () => {};
+    client.getDeliveryTaskChanges.mockReturnValue(new Promise((resolve) => (answer = resolve)));
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Ver cambios" }));
+    // It says so at once while the changes are read.
+    expect(await screen.findByRole("button", { name: "Abriendo cambios…" })).toBeDisabled();
+    answer({
+      repo: "C:/work/agentos-wt/AGOS-501",
+      base_ref: "develop",
+      base_commit: "0123456789abcdef",
+      files: [],
+    });
     await waitFor(() =>
       expect(actions.openRepo).toHaveBeenCalledWith("C:/work/agentos-wt/AGOS-501"),
     );
+    expect(await screen.findByRole("button", { name: "Ver cambios" })).toBeEnabled();
     expect(client.getDeliveryTaskChanges).toHaveBeenCalledWith("t1");
   });
 

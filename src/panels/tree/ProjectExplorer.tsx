@@ -21,12 +21,7 @@ import { filterTreeNodes, hasActiveFilters } from "../../qol/filters";
 import { qualityStore, useQualityState } from "../../qol/state";
 import { repoTreeStore, useRepoTree } from "../../workspace/repoTreeStore";
 import { fileDock, useRepoDock } from "../../workspace/fileDock";
-import {
-  baseChangeKind,
-  setBaseView,
-  updateBaseFiles,
-  useBaseView,
-} from "../../workspace/baseView";
+import { baseChangeKind, setShowAll, updateBaseFiles, useBaseView } from "../../workspace/baseView";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { FileTreeNode } from "./FileTreeNode";
 import { useExplorerExpanded } from "./explorerCollapseState";
@@ -377,20 +372,31 @@ export function ProjectExplorer({
   // since then, removed ones included, and reads them again as the
   // worktree changes.
   const baseView = useBaseView(repo);
+  const onlyChanges = baseView !== null && !baseView.showAll;
+  // Agents change the worktree often: one read at a time, and at most every
+  // few seconds, so the explorer never piles reads up behind each other.
+  const reading = useRef(false);
   useEffect(() => {
     if (!baseView || !delta) return;
     const timer = setTimeout(() => {
-      baseView.refresh().then(
-        (files) => updateBaseFiles(repo, files),
-        () => {},
-      );
-    }, 1000);
+      if (reading.current) return;
+      reading.current = true;
+      baseView
+        .refresh()
+        .then(
+          (files) => updateBaseFiles(repo, files),
+          () => {},
+        )
+        .finally(() => {
+          reading.current = false;
+        });
+    }, 3000);
     return () => clearTimeout(timer);
     // Only a change in the worktree (a new delta) reads them again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [delta, repo]);
   const nodes = useMemo(() => {
-    if (baseView) {
+    if (baseView && onlyChanges) {
       const created = baseView.files.filter((file) => baseChangeKind(file) === "created");
       return filterTreeNodes(
         buildFileTree(
@@ -408,7 +414,7 @@ export function ProjectExplorer({
     if (!tree || !delta) return [];
     const signals = getRepoSignals(delta);
     return filterTreeNodes(buildFileTree(tree.entries, delta.status), filters, signals);
-  }, [tree, delta, filters, baseView]);
+  }, [tree, delta, filters, baseView, onlyChanges]);
   const nodesByPath = useMemo(() => collectTreeNodes(nodes), [nodes]);
   const repoSignals = delta ? getRepoSignals(delta) : [];
   const visiblePaths = useMemo(() => visibleTreePaths(nodes, expandedDirs), [nodes, expandedDirs]);
@@ -1027,8 +1033,8 @@ export function ProjectExplorer({
               : `${baseView.files.length} archivos cambiados`}{" "}
             desde {baseView.label}
           </span>
-          <button type="button" onClick={() => setBaseView(repo, null)}>
-            Ver todos los archivos
+          <button type="button" onClick={() => setShowAll(repo, onlyChanges)}>
+            {onlyChanges ? "Ver todos los archivos" : "Solo los cambios"}
           </button>
         </div>
       )}
@@ -1078,7 +1084,7 @@ export function ProjectExplorer({
               Reintentar
             </button>
           </div>
-        ) : !tree && loading && !baseView ? (
+        ) : !tree && loading && !onlyChanges ? (
           <div className="tree-files__msg" data-testid="explorer-loading" role="status">
             Cargando…
           </div>

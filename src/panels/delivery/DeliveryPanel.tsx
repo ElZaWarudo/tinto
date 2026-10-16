@@ -837,14 +837,20 @@ function TaskDetail({
   const [requesting, setRequesting] = useState(false);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
+  const [openingChanges, setOpeningChanges] = useState(false);
   const openChanges = async () => {
-    const changes = await getDeliveryTaskChanges(task.id);
-    setBaseView(changes.repo, {
-      label: `${task.base_ref} (${shortCommit(changes.base_commit)})`,
-      files: changes.files,
-      refresh: async () => (await getDeliveryTaskChanges(task.id)).files,
-    });
-    openRepo(changes.repo);
+    setOpeningChanges(true);
+    try {
+      const changes = await getDeliveryTaskChanges(task.id);
+      setBaseView(changes.repo, {
+        label: `${task.base_ref} (${shortCommit(changes.base_commit)})`,
+        files: changes.files,
+        refresh: async () => (await getDeliveryTaskChanges(task.id)).files,
+      });
+      openRepo(changes.repo);
+    } finally {
+      setOpeningChanges(false);
+    }
   };
   // The issue's page, when the repo's Jira is set in Tinto.
   const [issueUrl, setIssueUrl] = useState<string | null>(null);
@@ -982,11 +988,12 @@ function TaskDetail({
               <button
                 type="button"
                 className="delivery-link-button"
-                disabled={busy}
+                disabled={busy || openingChanges}
+                aria-busy={openingChanges}
                 title={`Abre el worktree en Archivos con solo lo que cambió desde ${task.base_ref}`}
                 onClick={() => void run(openChanges)}
               >
-                Ver cambios
+                {openingChanges ? "Abriendo cambios…" : "Ver cambios"}
               </button>
             )}
           </p>

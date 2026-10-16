@@ -739,6 +739,19 @@ pub async fn delivery_task_changes(
             "ver los cambios todavía no está disponible para worktrees dentro de WSL",
         ));
     }
+    // Agents (often from WSL) touch files in ways that leave git's index
+    // stale, and libgit2 would hash every tracked file again on each read
+    // without saving it: git refreshes the index once and saves it, so both
+    // Tinto's first read of the repo and the diff below stay quick.
+    let refreshed = task.worktree.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        super::tasks::git(
+            super::tasks::Place::Native,
+            &refreshed,
+            &["update-index", "-q", "--refresh"],
+        )
+    })
+    .await;
     let resolved = crate::agent_console::commands::ensure_worktree_repo(
         &bus,
         &workbenches,
