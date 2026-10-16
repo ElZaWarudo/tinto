@@ -200,6 +200,25 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("Implement the parser change.")).toBeInTheDocument();
   });
 
+  it("links the task to its Jira issue when the repo's Jira is set", async () => {
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      jira: {
+        host: "https://jira.example.com/",
+        project: "AGOS",
+        after_pr: [],
+        after_merge: [],
+        has_token: true,
+      },
+    });
+    renderPanel();
+    const link = await screen.findByRole("link", { name: "Abrir AGOS-501 en Jira" });
+    expect(link).toHaveAttribute("href", "https://jira.example.com/browse/AGOS-501");
+  });
+
   it("names the model and reasoning each stage runs with, defaults included", async () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({

@@ -793,6 +793,21 @@ function TaskDetail({
   );
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
+  // The issue's page, when the repo's Jira is set in Tinto.
+  const [issueUrl, setIssueUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    getDeliveryRepoSettings(task.repo).then(
+      (settings) => {
+        const host = settings.jira?.host.trim().replace(/\/+$/, "");
+        if (live && host) setIssueUrl(`${host}/browse/${encodeURIComponent(task.key)}`);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [task.repo, task.key]);
   // The approval whose result is being corrected.
   const [correcting, setCorrecting] = useState<string | null>(null);
   const correctable = correctableSteps(approvals);
@@ -905,6 +920,11 @@ function TaskDetail({
             <span title={delivered ? undefined : "Lo fija quien coordina la tarea"}>
               Estado: {stateLabel}
             </span>
+            {issueUrl && (
+              <a href={issueUrl} target="_blank" rel="noreferrer">
+                Abrir {task.key} en Jira
+              </a>
+            )}
           </p>
         </div>
         <Menu label="Más acciones de la tarea" trigger={<Icon name="more" />}>
