@@ -79,10 +79,11 @@ export function DeliveryNotificationWatcher({
     void check();
     void onDeliveryChanged(() => {
       if (pending) return;
+      // At most once a second: running agents change things all the time.
       pending = setTimeout(() => {
         pending = null;
         void check();
-      }, 150);
+      }, 1000);
     }).then((dispose) => {
       if (active) unlisten = dispose;
       else dispose();

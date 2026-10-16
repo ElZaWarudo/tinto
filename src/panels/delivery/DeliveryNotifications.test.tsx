@@ -97,10 +97,13 @@ describe("Delivery notifications", () => {
     // Answering one of them is not news; a new question is.
     client.getDeliveryOverview.mockResolvedValue(overview([decision("d2")]));
     changed();
-    await waitFor(() => expect(client.getDeliveryOverview).toHaveBeenCalledTimes(2));
+    // Changes are read at most once a second.
+    await waitFor(() => expect(client.getDeliveryOverview).toHaveBeenCalledTimes(2), {
+      timeout: 3000,
+    });
     client.getDeliveryOverview.mockResolvedValue(overview([decision("d2"), decision("d3")]));
     changed();
-    await waitFor(() => expect(adapter.send).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(adapter.send).toHaveBeenCalledTimes(2), { timeout: 3000 });
     expect(adapter.send).toHaveBeenLastCalledWith(
       expect.objectContaining({ body: "2 decisiones pendientes" }),
     );

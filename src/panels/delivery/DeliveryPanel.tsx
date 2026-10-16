@@ -341,18 +341,38 @@ export function DeliveryPanel() {
         if (active) setError(errorText(cause));
       },
     );
-    void onDeliveryChanged(() => {
+    // Running agents change things several times a second: read the
+    // overview at most once a second, one read at a time, so the panel
+    // keeps answering clicks.
+    let reading = false;
+    let again = false;
+    const reload = () => {
+      if (reading) {
+        again = true;
+        return;
+      }
+      reading = true;
+      void refresh().finally(() => {
+        reading = false;
+        if (again && active) {
+          again = false;
+          schedule();
+        }
+      });
+    };
+    const schedule = () => {
       if (pending) return;
       pending = setTimeout(() => {
         pending = null;
-        if (active) void refresh();
-      }, 150);
-    }).then((dispose) => {
+        if (active) reload();
+      }, 1000);
+    };
+    void onDeliveryChanged(schedule).then((dispose) => {
       if (active) unlisten = dispose;
       else dispose();
     });
     const clock = setInterval(() => setNow(Date.now()), 1000);
-    const fallback = setInterval(() => void refresh(), 5000);
+    const fallback = setInterval(reload, 5000);
     return () => {
       active = false;
       unlisten?.();

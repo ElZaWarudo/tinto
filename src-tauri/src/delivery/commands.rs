@@ -35,11 +35,14 @@ async fn blocking<T: Send + 'static>(
         .map_err(CommandError::from)
 }
 
+/// Off the main thread: it is read after every change while agents work,
+/// and a busy main thread is a window that does not answer clicks.
 #[tauri::command]
-pub fn delivery_overview(
+pub async fn delivery_overview(
     service: State<'_, DeliveryService>,
 ) -> Result<DeliveryOverview, CommandError> {
-    service.overview().map_err(CommandError::from)
+    let service = service.inner().clone();
+    blocking(move || service.overview()).await
 }
 
 #[tauri::command]
@@ -265,15 +268,15 @@ pub async fn delivery_undo_job(
     blocking(move || service.undo(&job_id)).await
 }
 
+/// Off the main thread: a running job's log is read again every second or so.
 #[tauri::command]
-pub fn delivery_job_log(
+pub async fn delivery_job_log(
     service: State<'_, DeliveryService>,
     job_id: String,
     from_line: Option<usize>,
 ) -> Result<DeliveryJobLog, CommandError> {
-    service
-        .job_log(&job_id, from_line.unwrap_or(0))
-        .map_err(CommandError::from)
+    let service = service.inner().clone();
+    blocking(move || service.job_log(&job_id, from_line.unwrap_or(0))).await
 }
 
 #[tauri::command]
