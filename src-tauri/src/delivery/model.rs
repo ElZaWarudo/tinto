@@ -453,6 +453,59 @@ pub struct DeliveryDecisionOption {
     pub recommended: bool,
 }
 
+/// Code a decision is about, as Tinto read it from GitHub or the task's
+/// worktree: what the user reads before choosing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryCodeThread {
+    /// `pr_comment` (a review comment and the diff it is anchored to) or
+    /// `code` (lines of the task's worktree).
+    pub kind: String,
+    /// The file, relative to the repository.
+    pub path: String,
+    /// The line it is about, when known.
+    #[serde(default)]
+    pub line: Option<u32>,
+    /// The comment on GitHub.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The commented line changed after the comment.
+    #[serde(default)]
+    pub outdated: bool,
+    #[serde(default)]
+    pub lines: Vec<DeliveryCodeLine>,
+    #[serde(default)]
+    pub comment: Option<DeliveryThreadComment>,
+    /// Why it matters, in the coordinator's words.
+    #[serde(default)]
+    pub note: String,
+    /// Why Tinto could not show it.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// One line of a code thread.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryCodeLine {
+    /// `add`, `del` or `ctx`.
+    pub kind: String,
+    /// Its number before and after the change; `None` on the side it is not.
+    pub old: Option<u32>,
+    pub new: Option<u32>,
+    pub text: String,
+    /// The line the comment is on.
+    #[serde(default)]
+    pub target: bool,
+}
+
+/// A review comment as GitHub has it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryThreadComment {
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+    pub replies: u32,
+}
+
 /// A question the coordinator needs the user to answer before a task's
 /// stages run. Answers are final: changing one is a new contract version.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -465,6 +518,9 @@ pub struct DeliveryDecision {
     /// Technical context, folded in the interface.
     #[serde(default)]
     pub detail: String,
+    /// The code the question is about, shown above the options.
+    #[serde(default)]
+    pub references: Vec<DeliveryCodeThread>,
     /// `choice` only.
     #[serde(default)]
     pub options: Vec<DeliveryDecisionOption>,

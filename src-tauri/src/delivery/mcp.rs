@@ -735,10 +735,39 @@ fn parse_decisions(value: &Value) -> Result<Vec<NewDecision>, DeliveryError> {
                     )
                 })?,
             };
+            let references = match item.get("references") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(list)) if list.len() <= super::threads::MAX_REFERENCES => list
+                    .iter()
+                    .map(|reference| {
+                        let line = |key: &str| reference[key].as_u64().map(|n| n as u32);
+                        let found = super::threads::NewReference {
+                            comment_url: reference["comment_url"].as_str().map(str::to_string),
+                            path: reference["path"].as_str().map(str::to_string),
+                            start_line: line("start_line"),
+                            end_line: line("end_line"),
+                            note: text(reference, "note"),
+                        };
+                        if found.comment_url.is_none() && found.path.is_none() {
+                            return Err(invalid(
+                                "references: cada referencia necesita comment_url o path",
+                            ));
+                        }
+                        Ok(found)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                Some(_) => {
+                    return Err(invalid(&format!(
+                        "references: una lista de hasta {} referencias",
+                        super::threads::MAX_REFERENCES
+                    )))
+                }
+            };
             Ok(NewDecision {
                 kind,
                 question: text(item, "question"),
                 detail: text(item, "detail"),
+                references,
                 options,
                 text: text(item, "text"),
                 command: item["command"].as_str().map(str::to_string),
@@ -781,7 +810,7 @@ fn tool_definitions() -> Value {
     };
     let schema = |properties: Value, required: Value| json!({ "type": "object", "properties": properties, "required": required });
     // Apart from the list: one `json!` this deep exceeds the macro's recursion limit.
-    let decision_item = json!({"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}, "scripts": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of the scripts the command runs; frozen and shown to the user."}, "read_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of folders outside the worktree QA may read and list."}, "write_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of concrete folders outside the worktree QA's commands may write in. Never the user's whole home."}, "clients": {"type": "array", "items": {"type": "string", "enum": ["claude", "codex"]}, "description": "permission: the user's real clients the command starts."}, "blocking": {"type": "boolean", "description": "Default true: the stages wait for the user. false: your own call, answered at once with the recommended option (or the text), changeable by the user later. Never false for a permission."}, "full_access": {"type": "boolean", "description": "permission: ask the user to let this task's QA run with full access (no sandbox, any command, writes anywhere). An exception for QA that cannot run in a sandbox, for example when it must start the user's real Codex; say in the question why nothing narrower works and what QA will do. Once allowed, the QA jobs you dispatch on this task run with full access; other roles never do."}}, "required": ["kind", "question"]});
+    let decision_item = json!({"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "references": {"type": "array", "maxItems": 5, "description": "The code the question is about, shown to the user above the options as GitHub shows a review thread: give `comment_url` (a PR review comment, e.g. https://github.com/o/r/pull/7#discussion_r123) or `path` with `start_line`/`end_line` (lines of the task worktree, relative to it). Tinto reads the comment, its diff and the code itself; add `note` to say why it matters. Always attach them when a decision comes from a PR review or from specific code.", "items": {"type": "object", "properties": {"comment_url": {"type": "string"}, "path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}, "note": {"type": "string"}}}}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}, "scripts": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of the scripts the command runs; frozen and shown to the user."}, "read_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of folders outside the worktree QA may read and list."}, "write_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of concrete folders outside the worktree QA's commands may write in. Never the user's whole home."}, "clients": {"type": "array", "items": {"type": "string", "enum": ["claude", "codex"]}, "description": "permission: the user's real clients the command starts."}, "blocking": {"type": "boolean", "description": "Default true: the stages wait for the user. false: your own call, answered at once with the recommended option (or the text), changeable by the user later. Never false for a permission."}, "full_access": {"type": "boolean", "description": "permission: ask the user to let this task's QA run with full access (no sandbox, any command, writes anywhere). An exception for QA that cannot run in a sandbox, for example when it must start the user's real Codex; say in the question why nothing narrower works and what QA will do. Once allowed, the QA jobs you dispatch on this task run with full access; other roles never do."}}, "required": ["kind", "question"]});
     json!([
         { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, queued, quarantined, settings_proposal, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, nobody) and the `next_stage` due. Act on the tasks that wait on the coordinator; do not dispatch on one that waits on the user, an agent or the queue.", "inputSchema": schema(json!({}), json!([])) },
         { "name": "create_run", "description": "Start a run you coordinate. Returns its id and generation 1.", "inputSchema": schema(json!({"repo": {"type": "string"}, "title": {"type": "string"}, "owner": {"type": "string"}}), json!(["repo", "title", "owner"])) },

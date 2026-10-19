@@ -12,6 +12,7 @@ import {
 } from "../../delivery/client";
 import { confirm } from "../../workbench/confirmDialog";
 import type { DeliveryDecision } from "../../delivery/types";
+import { CodeThreads } from "./DeliveryCodeThread";
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>;
 
@@ -78,6 +79,7 @@ function ChoiceCard({
   return (
     <fieldset className="delivery-decision">
       <legend>{decision.question}</legend>
+      <CodeThreads threads={decision.references} />
       {decision.options.map((option) => (
         <label key={option.label} className="delivery-decision__option">
           <input
@@ -123,6 +125,7 @@ function TextCard({
   return (
     <fieldset className="delivery-decision">
       <legend>{decision.question}</legend>
+      <CodeThreads threads={decision.references} />
       <label className="delivery-request__field">
         <span>Texto exacto, tal como lo verá el usuario</span>
         <textarea value={text} onChange={(event) => setText(event.target.value)} rows={2} />
@@ -242,6 +245,7 @@ function PermissionCard({
   return (
     <fieldset className="delivery-decision delivery-decision--permission">
       <legend>{decision.question}</legend>
+      <CodeThreads threads={decision.references} />
       <PermissionScope decision={decision} />
       <p className="delivery-muted">Cómo se deshace: {decision.undo}</p>
       <TechnicalDetail detail={decision.detail} />

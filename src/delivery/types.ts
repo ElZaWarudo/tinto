@@ -230,6 +230,35 @@ export interface DeliveryDecisionOption {
 }
 
 /** Something the user settles before a task's stages run; answers are final. */
+/** Code a decision is about: a PR review comment and its diff, or worktree lines. */
+export interface DeliveryCodeThread {
+  kind: "pr_comment" | "code" | string;
+  path: string;
+  line?: number | null;
+  url?: string | null;
+  outdated?: boolean;
+  lines: DeliveryCodeLine[];
+  comment?: DeliveryThreadComment | null;
+  note?: string;
+  /** Why Tinto could not show it. */
+  error?: string | null;
+}
+
+export interface DeliveryCodeLine {
+  kind: "add" | "del" | "ctx" | string;
+  old: number | null;
+  new: number | null;
+  text: string;
+  target?: boolean;
+}
+
+export interface DeliveryThreadComment {
+  author: string;
+  body: string;
+  created_at: string;
+  replies: number;
+}
+
 export interface DeliveryDecision {
   id: string;
   task_id: string;
@@ -238,6 +267,8 @@ export interface DeliveryDecision {
   question: string;
   /** Technical context, folded. */
   detail: string;
+  /** The code the question is about, as Tinto read it. */
+  references?: DeliveryCodeThread[];
   options: DeliveryDecisionOption[];
   /** `text`: the proposed text, exactly as it will be shown. */
   text: string;

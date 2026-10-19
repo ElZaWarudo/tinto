@@ -49,6 +49,8 @@ pub struct NewDecision {
     pub kind: DeliveryDecisionKind,
     pub question: String,
     pub detail: String,
+    /// The code the question is about: review comments or worktree lines.
+    pub references: Vec<super::threads::NewReference>,
     pub options: Vec<DeliveryDecisionOption>,
     pub text: String,
     pub command: Option<String>,
@@ -495,6 +497,7 @@ impl DeliveryService {
                 kind: decision.kind,
                 question: decision.question.trim().to_string(),
                 detail: decision.detail.trim().to_string(),
+                references: self.resolve_references(&task, &decision.references),
                 text: decision.text.trim().to_string(),
                 command: decision
                     .command

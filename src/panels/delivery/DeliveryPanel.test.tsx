@@ -304,6 +304,84 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.setDeliveryRunPaused).toHaveBeenCalledWith("r1", true));
   });
 
+  it("shows the code a decision is about as a review thread, before its options", async () => {
+    const user = userEvent.setup();
+    const asked = {
+      id: "d1",
+      task_id: "t1",
+      kind: "choice",
+      question: "¿Qué carpetas puede reemplazar --force?",
+      detail: "",
+      references: [
+        {
+          kind: "pr_comment",
+          path: "cli/src/commands.ts",
+          line: 1092,
+          url: "https://github.com/o/r/pull/299#discussion_r2105",
+          outdated: false,
+          lines: [
+            { kind: "del", old: 980, new: null, text: "await installIntoDir(old);" },
+            {
+              kind: "add",
+              old: null,
+              new: 1092,
+              text: "await installIntoDir(force);",
+              target: true,
+            },
+          ],
+          comment: {
+            author: "Sn4pe",
+            body: "With `--force`, a folder is deleted.",
+            created_at: "2026-10-19T10:00:00Z",
+            replies: 0,
+          },
+        },
+        {
+          kind: "code",
+          path: "cli/src/commands.ts",
+          line: 918,
+          lines: [],
+          error: "el archivo no existe en el worktree de la tarea",
+        },
+      ],
+      options: [
+        { label: "Solo copias de esta skill", consequence: "a", recommended: true },
+        { label: "Cualquiera", consequence: "b", recommended: false },
+      ],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    } as unknown as DeliveryDecision;
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ decisions: [asked], phases: { t1: phase({ kind: "decisions", count: 1 }) } }),
+    );
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Responder" }));
+    const panel = screen.getByRole("dialog", { name: "Responder decisiones" });
+    const diff = within(panel).getByRole("table", { name: "Líneas de cli/src/commands.ts" });
+    expect(within(diff).getByText("await installIntoDir(force);")).toBeInTheDocument();
+    expect(within(panel).getByText("--force").tagName).toBe("CODE");
+    expect(within(panel).getByText("Sn4pe")).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "Ver en GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/o/r/pull/299#discussion_r2105",
+    );
+    // What Tinto could not read says so, with no made-up code.
+    expect(
+      within(panel).getByText("No disponible: el archivo no existe en el worktree de la tarea"),
+    ).toBeInTheDocument();
+    // The thread comes before the options.
+    const thread = within(panel).getByText("Sn4pe");
+    const option = within(panel).getByText("Solo copias de esta skill");
+    expect(thread.compareDocumentPosition(option) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("keeps pending decisions to one line until the user opens them", async () => {
     const user = userEvent.setup();
     const asked: DeliveryDecision = {

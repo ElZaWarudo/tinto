@@ -22,6 +22,7 @@ pub mod store;
 pub mod tasks;
 #[cfg(test)]
 mod tests;
+pub mod threads;
 pub mod visual_record;
 pub mod wiring;
 

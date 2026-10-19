@@ -1170,6 +1170,7 @@ fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDe
         kind: DeliveryDecisionKind::Choice,
         question: question.into(),
         detail: "flag --dir".into(),
+        references: Vec::new(),
         options: ["Sí", "No"]
             .iter()
             .enumerate()
@@ -1196,6 +1197,7 @@ fn permission(command: &str) -> super::decisions::NewDecision {
         kind: DeliveryDecisionKind::Permission,
         question: "¿Instalar en tu ~/.claude real?".into(),
         detail: String::new(),
+        references: Vec::new(),
         options: Vec::new(),
         text: String::new(),
         command: Some(command.into()),
@@ -2475,6 +2477,8 @@ struct FakeGitHub {
     branch_prs: std::sync::Mutex<serde_json::Value>,
     /// `create <base> <head>`, `edit <url>`, `close <url>`, `draft <url>`.
     actions: std::sync::Mutex<Vec<String>>,
+    /// What `gh api …/pulls/<n>/comments` answers.
+    review_comments: std::sync::Mutex<serde_json::Value>,
 }
 
 impl FakeGitHub {
@@ -2487,6 +2491,7 @@ impl FakeGitHub {
             reviews: std::sync::Mutex::new(Vec::new()),
             branch_prs: std::sync::Mutex::new(branch_prs),
             actions: std::sync::Mutex::new(Vec::new()),
+            review_comments: std::sync::Mutex::new(json!([])),
         })
     }
 }
@@ -2563,6 +2568,14 @@ impl super::prs::GitHub for FakeGitHub {
         self.snapshot.lock().unwrap()["state"] = json!("CLOSED");
         Ok(())
     }
+    fn pr_review_comments(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> Result<serde_json::Value, super::DeliveryError> {
+        assert_eq!((repo, number), ("o/r", 299));
+        Ok(self.review_comments.lock().unwrap().clone())
+    }
     fn pr_to_draft(&self, url: &str) -> Result<(), super::DeliveryError> {
         self.actions.lock().unwrap().push(format!("draft {url}"));
         self.snapshot.lock().unwrap()["isDraft"] = json!(true);
@@ -2596,6 +2609,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
+        review_comments: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
 
@@ -2668,6 +2682,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
+        review_comments: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
     let merge = |method: Option<&str>| NewApproval {
@@ -4549,4 +4564,88 @@ fn a_coordinator_the_user_asks_takes_the_batch_and_the_old_one_is_told() {
         .any(|event| event["text"] == "otro coordinador tomó el lote"));
     let refused = old.write("wait_run", json!({}));
     assert!(error_text(&refused).contains("deja este lote"));
+}
+
+#[test]
+fn a_decision_shows_the_review_comment_and_the_code_it_is_about() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("R-1");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    *github.review_comments.lock().unwrap() = json!([
+        {"id": 2105, "path": "cli/src/commands.ts", "line": 1092, "position": 14,
+         "html_url": "https://github.com/o/r/pull/299#discussion_r2105",
+         "user": {"login": "Sn4pe"}, "created_at": "2026-10-19T10:00:00Z",
+         "body": "With `--force`, a folder the CLI did not install is deleted.",
+         "diff_hunk": "@@ -979,2 +1091,2 @@ install\n-  // Replace only\n-  old();\n+  // Replace\n+  installIntoDir(force);"},
+        {"id": 2106, "in_reply_to_id": 2105, "user": {"login": "me"}, "body": "ok"},
+        {"id": 2200, "path": "cli/src/commands.ts", "line": null, "original_line": 1071,
+         "position": null, "user": {"login": "Sn4pe"}, "body": "outdated", "diff_hunk": "@@ -1,1 +1,1 @@\n+x"}
+    ]);
+    h.service.set_github(github);
+    // The worktree: two lines the task added to a file of its base.
+    std::fs::write(worktree.join("README.md"), "base\nadded\nmore\n").unwrap();
+
+    let asked = coordinator.write(
+        "request_decisions",
+        json!({"task_id": task_id, "decisions": [{
+            "kind": "choice", "question": "Which folders may --force replace?",
+            "options": [{"label": "Only copies of this skill", "recommended": true}, {"label": "Any"}],
+            "references": [
+                {"comment_url": "https://github.com/o/r/pull/299#discussion_r2105", "note": "first comment"},
+                {"comment_url": "https://github.com/o/r/pull/299#discussion_r2200"},
+                {"path": "README.md", "start_line": 1, "end_line": 3},
+                {"path": "../outside.ts", "start_line": 1},
+                {"comment_url": "https://github.com/o/r/pull/299#discussion_r9"}
+            ]
+        }]}),
+    );
+    let threads = asked["structuredContent"]["result"][0]["references"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{asked}"))
+        .clone();
+    assert_eq!(threads.len(), 5);
+
+    let review = &threads[0];
+    assert_eq!(review["kind"], "pr_comment");
+    assert_eq!(review["path"], "cli/src/commands.ts");
+    assert_eq!(review["line"], 1092);
+    assert_eq!(review["outdated"], false);
+    assert_eq!(review["note"], "first comment");
+    assert_eq!(review["comment"]["author"], "Sn4pe");
+    assert_eq!(review["comment"]["replies"], 1);
+    let lines = review["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[3]["new"], 1092);
+    assert_eq!(lines[3]["target"], true);
+    assert_eq!(lines[0]["kind"], "del");
+
+    assert_eq!(threads[1]["outdated"], true);
+    assert_eq!(threads[1]["line"], 1071);
+
+    let code = &threads[2];
+    assert_eq!(code["kind"], "code");
+    let kinds: Vec<_> = code["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| {
+            (
+                line["new"].as_u64().unwrap(),
+                line["kind"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (1, "ctx".to_string()),
+            (2, "add".to_string()),
+            (3, "add".to_string())
+        ]
+    );
+
+    // What cannot be read says why instead of showing made-up code.
+    assert!(threads[3]["error"].as_str().unwrap().contains("relativa"));
+    assert_eq!(threads[4]["error"], "el comentario ya no existe en GitHub");
 }

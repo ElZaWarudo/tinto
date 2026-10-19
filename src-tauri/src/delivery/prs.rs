@@ -414,6 +414,11 @@ pub trait GitHub: Send + Sync {
     fn pr_to_draft(&self, _url: &str) -> Result<(), DeliveryError> {
         Err(offline())
     }
+    /// Every review comment of PR `number` in `repo` (`owner/name`), as
+    /// GitHub's REST API lists them.
+    fn pr_review_comments(&self, _repo: &str, _number: u64) -> Result<Value, DeliveryError> {
+        Err(offline())
+    }
 }
 
 fn offline() -> DeliveryError {
@@ -624,6 +629,24 @@ impl GitHub for GhCli {
 
     fn close_pr(&self, url: &str) -> Result<(), DeliveryError> {
         Self::act(&["pr", "close", url], "gh no pudo cerrar el PR").map(|_| ())
+    }
+
+    fn pr_review_comments(&self, repo: &str, number: u64) -> Result<Value, DeliveryError> {
+        let path = format!("repos/{repo}/pulls/{number}/comments");
+        // One comment per line, across every page.
+        let output = Self::act(
+            &["api", "--paginate", &path, "--jq", ".[]"],
+            "gh no pudo leer los comentarios del PR",
+        )?;
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str(line)
+                    .map_err(|error| DeliveryError::new("github_failed", error.to_string()))
+            })
+            .collect::<Result<Vec<Value>, _>>()
+            .map(Value::Array)
     }
 
     fn pr_to_draft(&self, url: &str) -> Result<(), DeliveryError> {
