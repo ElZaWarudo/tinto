@@ -841,12 +841,20 @@ fn scan_with_gitleaks(
 ) -> Result<(Vec<SecretFinding>, Option<String>), ScanFailure> {
     let gitleaks = gitleaks_binary_path().ok_or(ScanFailure::BinaryUnavailable)?;
     let version = gitleaks_version(&gitleaks);
+    // Only the changed files are scanned: a whole repository (its
+    // dependencies and build output) took gitleaks past its timeout on every
+    // change, and held one of the bus's two reads while it did.
+    let staged = StagedChanges::copy(repo, changed_paths).map_err(|_| ScanFailure::LaunchFailed)?;
     let report_path = std::env::temp_dir().join(format!("tinto-gitleaks-{}.json", Uuid::new_v4()));
     let mut command = Command::new(gitleaks);
     #[cfg(target_os = "windows")]
     hide_console(&mut command);
     if let Some(path) = config_path {
         command.arg("--config").arg(path);
+    }
+    let ignore = repo.join(".gitleaksignore");
+    if ignore.is_file() {
+        command.arg("--gitleaks-ignore-path").arg(ignore);
     }
     let output = command
         .arg("dir")
@@ -860,7 +868,7 @@ fn scan_with_gitleaks(
         .arg("json")
         .arg("--report-path")
         .arg(&report_path)
-        .arg(repo)
+        .arg(&staged.root)
         .output()
         .map_err(|_| ScanFailure::LaunchFailed)?;
     if !output.status.success() {
@@ -879,9 +887,49 @@ fn scan_with_gitleaks(
     let parsed: Vec<GitleaksReportFinding> =
         serde_json::from_str(&report).map_err(|_| ScanFailure::InvalidReport)?;
     Ok((
-        filter_report_findings(repo, status, diffs, changed_paths, parsed),
+        filter_report_findings(&staged.root, status, diffs, changed_paths, parsed),
         version,
     ))
+}
+
+/// The changed files copied, at their paths in the repository, into a
+/// folder of their own that is removed afterwards.
+struct StagedChanges {
+    root: PathBuf,
+}
+
+impl StagedChanges {
+    fn copy(repo: &Path, changed_paths: &HashSet<String>) -> std::io::Result<Self> {
+        let root = std::env::temp_dir().join(format!("tinto-gitleaks-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root)?;
+        let staged = Self { root };
+        for path in changed_paths {
+            let source = repo.join(path);
+            // Deleted files and folders (a submodule) have nothing to scan.
+            if !source.is_file()
+                || Path::new(path).components().any(|part| {
+                    matches!(
+                        part,
+                        std::path::Component::ParentDir | std::path::Component::RootDir
+                    )
+                })
+            {
+                continue;
+            }
+            let target = staged.root.join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&source, &target)?;
+        }
+        Ok(staged)
+    }
+}
+
+impl Drop for StagedChanges {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }
 
 fn classify_scan_failure(stderr: &[u8]) -> ScanFailure {
@@ -913,7 +961,27 @@ fn classify_scan_failure(stderr: &[u8]) -> ScanFailure {
     ScanFailure::ScanFailed
 }
 
+/// Asked once per binary: starting gitleaks costs as much as a small scan.
 fn gitleaks_version(binary: &Path) -> Option<String> {
+    static VERSIONS: std::sync::Mutex<Option<HashMap<PathBuf, Option<String>>>> =
+        std::sync::Mutex::new(None);
+    if let Some(known) = VERSIONS
+        .lock()
+        .ok()
+        .and_then(|versions| versions.as_ref()?.get(binary).cloned())
+    {
+        return known;
+    }
+    let version = read_gitleaks_version(binary);
+    if let Ok(mut versions) = VERSIONS.lock() {
+        versions
+            .get_or_insert_with(HashMap::new)
+            .insert(binary.to_path_buf(), version.clone());
+    }
+    version
+}
+
+fn read_gitleaks_version(binary: &Path) -> Option<String> {
     let mut command = Command::new(binary);
     command.arg("version");
     #[cfg(target_os = "windows")]

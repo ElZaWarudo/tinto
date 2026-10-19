@@ -137,6 +137,17 @@ function FilePanel(props: IDockviewPanelProps<{ repo: string; path: string }>) {
 const fileComponents = { file: FilePanel };
 const fileTabComponents = { fileTab: FileTab };
 
+/** The same repo, whatever Windows prefix (`\\?\`), slashes or case its path carries. */
+function sameRepoPath(a: string, b: string): boolean {
+  const clean = (path: string) =>
+    path
+      .replace(/^\\\\\?\\/, "")
+      .replace(/\\/g, "/")
+      .replace(/\/+$/, "")
+      .toLowerCase();
+  return clean(a) === clean(b);
+}
+
 export function RepoPanel(props: IDockviewPanelProps<{ repo: string }>) {
   const repo = props.params.repo;
   const busState = useBusState();
@@ -250,7 +261,7 @@ function RepoOverview({ repo }: { repo: string }) {
   // A repo just added to the active workbench is read for the first time.
   const inActiveWorkbench = (state.config?.workbenches ?? [])
     .find((workbench) => workbench.name === state.config?.active)
-    ?.repos.some((entry) => entry.path === repo);
+    ?.repos.some((entry) => sameRepoPath(entry.path, repo));
   if (!delta && inActiveWorkbench) {
     return (
       <div className="repo-overview repo-overview--missing" data-testid="repo-overview-loading">

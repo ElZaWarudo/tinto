@@ -386,6 +386,22 @@ describe("RepoPanel", () => {
     expect(screen.queryByText(/ya no está disponible/i)).toBeNull();
   });
 
+  it("knows a task worktree is in the workbench whatever form its Windows path takes", () => {
+    getCommitLogMock.mockResolvedValue([]);
+    act(() => {
+      busStore.loadSnapshot([], { available: true });
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          { name: "Work", repos: [{ path: String.raw`\\?\C:\work\agentos-wt\AGOS-414` }] },
+        ],
+      } as never);
+    });
+    render(<RepoPanel {...panelProps("C:/Work/agentos-wt/AGOS-414")} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Leyendo el repo por primera vez…");
+  });
+
   it("shows a graceful message when the repo left the workbench", () => {
     getCommitLogMock.mockResolvedValue([]);
     act(() => busStore.loadSnapshot([], { available: true }));
