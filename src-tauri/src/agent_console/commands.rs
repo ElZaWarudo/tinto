@@ -38,9 +38,9 @@ use crate::bus::{
         AgentSessionFeedback, AgentSessionGoalStatus, AgentSessionOutput,
         AgentSessionPermissionMode, AgentSessionResumeMode, AgentSessionResumeResult,
         AgentSessionRuntimeOptions, AgentSessionStatus, AgentSessionTimelineItem,
-        AgentSessionTimelineKind, McpInventory, McpInventoryStatus, McpProvider, McpTarget,
-        EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG, EVENT_AGENT_SESSION_OUTPUT,
-        EVENT_AGENT_SESSION_TIMELINE,
+        AgentSessionTimelineKind, AgentSessionTurnStatus, McpInventory, McpInventoryStatus,
+        McpProvider, McpTarget, EVENT_AGENT_SESSIONS_CHANGED, EVENT_AGENT_SESSION_CHANGE_LOG,
+        EVENT_AGENT_SESSION_OUTPUT, EVENT_AGENT_SESSION_TIMELINE,
     },
     BusHandle, RepoResolveError,
 };
@@ -3925,6 +3925,106 @@ fn spawn_output_quiet_monitor(
             }
         }
     });
+}
+
+/// Wakes the Agents conversations that coordinate Delivery batches: when
+/// something waits on a coordinator that is not inside wait_run, and its
+/// conversation is idle, Tinto writes the changes to it as a message, once
+/// they have been quiet for a moment (see `delivery::feed`).
+pub fn start_delivery_waker(app: AppHandle, delivery: crate::delivery::service::DeliveryService) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let Ok(wakeups) = delivery.pending_wakeups(now_ms()) else {
+            continue;
+        };
+        for wakeup in wakeups {
+            if wake_coordinator(&app, &wakeup) {
+                let _ = delivery.mark_coordinator_notified(&wakeup.run_id, wakeup.cursor);
+            }
+        }
+    });
+}
+
+/// The user hands a Delivery batch to an Agents conversation: Tinto asks it
+/// to take the batch over, and it does so with takeover_run.
+#[tauri::command]
+pub fn hand_over_delivery_run(
+    app: AppHandle,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    delivery: State<'_, crate::delivery::service::DeliveryService>,
+    run_id: String,
+    session_id: String,
+) -> Result<(), CommandError> {
+    let run = delivery.run(&run_id).map_err(CommandError::from)?;
+    let text = format!(
+        "[Tinto] El usuario te pide coordinar el lote «{}» (run_id {}). Tómalo con takeover_run (run_id {}, tu owner, reason «pedido por el usuario en Tinto»); no hace falta comprobar al coordinador anterior. Después llama a wait_run sin cursor, lee delivery_overview y sigue con el lote.",
+        run.title, run.id, run.id
+    );
+    let mut registry = lock_registry(&registry)?;
+    let session = registry
+        .get_session(&session_id)
+        .ok_or_else(|| CommandError::from(AgentConsoleError::session_not_found(&session_id)))?;
+    if session.status != AgentSessionStatus::Running {
+        return Err(CommandError::new(
+            "session_not_running",
+            "esa conversación no está en marcha",
+        ));
+    }
+    if session.turn_status != AgentSessionTurnStatus::Waiting {
+        return Err(CommandError::new(
+            "session_busy",
+            "esa conversación está trabajando; pásale el lote cuando termine su turno",
+        ));
+    }
+    registry
+        .write_session_turn(&session_id, &text, &[], None)
+        .map_err(CommandError::from)?;
+    drop(registry);
+    emit_timeline_item(
+        &app,
+        &session_id,
+        AgentSessionTimelineKind::UserMessage,
+        Some(text),
+        now_ms(),
+        Vec::new(),
+    );
+    refresh_and_emit_sessions(&app);
+    Ok(())
+}
+
+/// Sends the message when the conversation is running and waiting for the
+/// user; a busy one is tried again on the next round.
+fn wake_coordinator(app: &AppHandle, wakeup: &crate::delivery::feed::CoordinatorWakeup) -> bool {
+    let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() else {
+        return false;
+    };
+    let Ok(mut registry) = registry.lock() else {
+        return false;
+    };
+    let idle = registry
+        .get_session(&wakeup.session_id)
+        .is_some_and(|session| {
+            session.status == AgentSessionStatus::Running
+                && session.turn_status == AgentSessionTurnStatus::Waiting
+        });
+    if !idle
+        || registry
+            .write_session_turn(&wakeup.session_id, &wakeup.text, &[], None)
+            .is_err()
+    {
+        return false;
+    }
+    drop(registry);
+    emit_timeline_item(
+        app,
+        &wakeup.session_id,
+        AgentSessionTimelineKind::UserMessage,
+        Some(wakeup.text.clone()),
+        now_ms(),
+        Vec::new(),
+    );
+    refresh_and_emit_sessions(app);
+    true
 }
 
 fn refresh_and_emit_sessions(app: &AppHandle) {

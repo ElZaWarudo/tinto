@@ -761,7 +761,13 @@ impl DeliveryService {
             Err(error) => pr.error = Some(error.message),
         }
         pr.checked_at_ms = Some(now_ms());
-        self.store()?.put_pr(&pr)?;
+        {
+            let store = self.store()?;
+            store.put_pr(&pr)?;
+            if let Some(news) = pr_news(&before, &pr) {
+                store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
+            }
+        }
         if pr_changed(&before, &pr) {
             self.notify();
         }
@@ -1211,6 +1217,36 @@ fn merged_outside(pr: &DeliveryPr) -> String {
         text.push_str(&format!(" (commit {})", commit.get(..7).unwrap_or(commit)));
     }
     text
+}
+
+/// What a coordinator acts on in a PR that changed: its state, the review
+/// decision, conflicts, checks starting to fail, others' new reviews and
+/// comments. Checks that merely progress are left out.
+fn pr_news(before: &DeliveryPr, after: &DeliveryPr) -> Option<String> {
+    let mut news = Vec::new();
+    if after.state != before.state {
+        news.push(format!("ahora está {}", after.state));
+    }
+    if after.review_decision != before.review_decision {
+        if let Some(decision) = after.review_decision.as_deref() {
+            news.push(format!("revisión: {decision}"));
+        }
+    }
+    if after.conflicts && !before.conflicts {
+        news.push("tiene conflictos".to_string());
+    }
+    if after.checks.failing > 0 && before.checks.failing == 0 {
+        news.push(format!("{} checks fallan", after.checks.failing));
+    }
+    let reviews = after.new_reviews.saturating_sub(before.new_reviews);
+    let comments = after.new_comments.saturating_sub(before.new_comments);
+    if reviews > 0 {
+        news.push(format!("{reviews} revisiones nuevas"));
+    }
+    if comments > 0 {
+        news.push(format!("{comments} comentarios nuevos"));
+    }
+    (!news.is_empty()).then(|| format!("PR #{}: {}", after.number, news.join(", ")))
 }
 
 fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { busStore } from "../../bus/store";
+import type { AgentSession } from "../../bus/contract";
+import { agentSessionStore } from "../../agent/sessionStore";
 import { setWindowsHostOverrideForTests } from "../../workbench/platform";
 import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/actions";
 import type {
@@ -55,6 +57,7 @@ const client = vi.hoisted(() => ({
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
   closeDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  handOverDeliveryRun: vi.fn(() => Promise.resolve()),
   openDeliveryPr: vi.fn(() => Promise.resolve({})),
   deliveryPrToDraft: vi.fn(() => Promise.resolve(null)),
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
@@ -1734,6 +1737,52 @@ describe("DeliveryPanel", () => {
     expect(
       within(banner).getByText("Un solo commit porque: the test only compiles with the change"),
     ).toBeInTheDocument();
+  });
+
+  it("hands the batch to another Agents conversation of its repo", async () => {
+    const user = userEvent.setup();
+    const session = (id: string, repo: string, status: AgentSession["status"]): AgentSession =>
+      ({
+        id,
+        repo,
+        agent_type: "muse",
+        status,
+        pid: 1,
+        started_at_ms: 1,
+        exit_code: null,
+        error: null,
+        turn_status: "waiting",
+      }) as AgentSession;
+    agentSessionStore.setSessions([
+      session("current-coordinator", "C:/work/agentos", "running"),
+      session("next-coordinator", "C:\\work\\agentos\\", "running"),
+      session("other-repo", "C:/work/elsewhere", "running"),
+      session("ended", "C:/work/agentos", "exited"),
+    ]);
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [
+          {
+            id: "run-1",
+            repo: "C:/work/agentos",
+            title: "Backlog",
+            status: "active",
+            generation: 1,
+            owner: "coord",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            coordinator_session: "current-coordinator",
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: /Cambiar coordinador/ }));
+    const choices = screen.getAllByRole("menuitem");
+    expect(choices.map((choice) => choice.textContent)).toEqual(["Muse Code · next-coo"]);
+    await user.click(choices[0]);
+    expect(client.handOverDeliveryRun).toHaveBeenCalledWith("run-1", "next-coordinator");
+    agentSessionStore.setSessions([]);
   });
 
   it("says a task is delivered only once both Jira steps are done", async () => {

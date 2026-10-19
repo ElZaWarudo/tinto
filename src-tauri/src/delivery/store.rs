@@ -8,8 +8,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::model::{
-    DeliveryApproval, DeliveryDecision, DeliveryJob, DeliveryLease, DeliveryRepoSettings,
-    DeliveryRun, DeliverySettings, DeliverySettingsProposal, DeliveryTask,
+    DeliveryApproval, DeliveryDecision, DeliveryEvent, DeliveryJob, DeliveryLease,
+    DeliveryRepoSettings, DeliveryRun, DeliverySettings, DeliverySettingsProposal, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::tasks::plain_path;
@@ -402,6 +402,32 @@ impl DeliveryStore {
             params![at_ms as i64, kind, task_id, job_id, detail],
         )?;
         Ok(())
+    }
+
+    /// The trail after `seq`, oldest first.
+    pub fn events_after(&self, seq: u64) -> Result<Vec<DeliveryEvent>, DeliveryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, at_ms, kind, task_id, job_id, detail FROM events WHERE seq > ?1 ORDER BY seq",
+        )?;
+        let rows = stmt.query_map([seq as i64], |row| {
+            Ok(DeliveryEvent {
+                seq: row.get::<_, i64>(0)? as u64,
+                at_ms: row.get::<_, i64>(1)? as u64,
+                kind: row.get(2)?,
+                task_id: row.get(3)?,
+                job_id: row.get(4)?,
+                detail: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The newest entry's `seq`; 0 when there is none.
+    pub fn last_event_seq(&self) -> Result<u64, DeliveryError> {
+        let seq: Option<i64> = self
+            .conn
+            .query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))?;
+        Ok(seq.unwrap_or(0) as u64)
     }
 
     #[cfg(test)]

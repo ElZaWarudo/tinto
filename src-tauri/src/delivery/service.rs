@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::adapters::{self, JobLaunch, JobOutcome, JobPaths};
@@ -77,6 +77,11 @@ pub(super) struct Inner {
     /// Jobs being stopped to be paused rather than cancelled.
     pausing: Mutex<HashSet<String>>,
     notify: Mutex<Option<Notify>>,
+    /// Counts every change; wait_run sleeps on it until the next one.
+    pub(super) changes: (Mutex<u64>, Condvar),
+    /// Coordinators inside wait_run, by run: Tinto does not wake their
+    /// conversation then, the wait hands them the changes.
+    pub(super) waiting: Mutex<HashMap<String, usize>>,
     pub(super) coordinator: Mutex<Option<DeliveryCoordinatorEndpoint>>,
     sandbox_planner: Mutex<SandboxPlanner>,
     installed: Mutex<Installed>,
@@ -189,6 +194,8 @@ impl DeliveryService {
                 cancels: Mutex::new(HashMap::new()),
                 pausing: Mutex::new(HashSet::new()),
                 notify: Mutex::new(None),
+                changes: (Mutex::new(0), Condvar::new()),
+                waiting: Mutex::new(HashMap::new()),
                 coordinator: Mutex::new(None),
                 // Nothing is probed unless the real planner is set.
                 sandbox_planner: Mutex::new(Arc::new(|_, _| adapters::SandboxPlan::default())),
@@ -214,6 +221,11 @@ impl DeliveryService {
     }
 
     pub(super) fn notify(&self) {
+        let (count, changed) = &self.inner.changes;
+        if let Ok(mut count) = count.lock() {
+            *count += 1;
+            changed.notify_all();
+        }
         let notify = self.inner.notify.lock().ok().and_then(|slot| slot.clone());
         if let Some(notify) = notify {
             notify();

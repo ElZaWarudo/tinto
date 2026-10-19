@@ -10,6 +10,7 @@ pub mod adapters;
 pub mod commands;
 pub mod coordination;
 pub mod decisions;
+pub mod feed;
 pub mod jira;
 pub mod mcp;
 pub mod model;

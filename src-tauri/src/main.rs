@@ -14,10 +14,20 @@ fn main() {
     // pass a URL and token, kept for when Tinto has saved none.
     match args.as_slice() {
         [flag] if flag == tinto_lib::delivery::wiring::PROXY_FLAG => {
-            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(None));
+            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(None, None));
         }
         [flag, url, token] if flag == tinto_lib::delivery::wiring::PROXY_FLAG => {
-            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(Some((url, token))));
+            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(
+                Some((url, token)),
+                None,
+            ));
+        }
+        // The Agents conversation it serves, to tell Tinto who is calling.
+        [flag, url, token, session] if flag == tinto_lib::delivery::wiring::PROXY_FLAG => {
+            std::process::exit(tinto_lib::delivery::wiring::proxy_stdio(
+                Some((url, token)),
+                Some(session),
+            ));
         }
         _ => {}
     }

@@ -135,6 +135,7 @@ pub fn run() {
             delivery::commands::delivery_check_task,
             delivery::commands::delivery_find_pr,
             delivery::commands::delivery_open_pr,
+            agent_console::commands::hand_over_delivery_run,
             delivery::commands::delivery_close_pr,
             delivery::commands::delivery_pr_to_draft,
             delivery::commands::delivery_pr_reviewers,
@@ -284,6 +285,10 @@ pub fn run() {
                 }
                 delivery_for_setup.set_github(std::sync::Arc::new(delivery::prs::GhCli));
                 delivery_for_setup.start_pr_watch();
+                agent_console::commands::start_delivery_waker(
+                    app.handle().clone(),
+                    delivery_for_setup.clone(),
+                );
                 delivery_for_setup.tick();
             }
             #[cfg(feature = "e2e-wdio")]

@@ -275,6 +275,9 @@ export interface DeliveryDecision {
 }
 
 export interface DeliveryRun {
+  /** The Agents conversation coordinating it, and when Tinto last woke it. */
+  coordinator_session?: string | null;
+  notified_at_ms?: number | null;
   id: string;
   repo: string;
   title: string;

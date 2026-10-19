@@ -200,6 +200,10 @@ export const checkDeliveryTask = (taskId: string) =>
 export const findDeliveryPr = (taskId: string) =>
   invoke<DeliveryPr | null>("delivery_find_pr", { taskId });
 
+/** Asks the Agents conversation `sessionId` to take the batch over. */
+export const handOverDeliveryRun = (runId: string, sessionId: string) =>
+  invoke<void>("hand_over_delivery_run", { runId, sessionId });
+
 /** Opens an approved PR step's PR on GitHub with its approved text. */
 export const openDeliveryPr = (approvalId: string) =>
   invoke<DeliveryApproval>("delivery_open_pr", { approvalId });

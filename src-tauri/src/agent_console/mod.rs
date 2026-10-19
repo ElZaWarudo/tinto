@@ -226,12 +226,14 @@ impl AgentSessionRegistry {
             };
             Box::new(supervisor)
         } else {
-            self.process_factory.resume_agent(
-                &binary_path,
-                &repo,
-                &provider_session_id,
-                permission_mode,
-            )?
+            crate::delivery::wiring::with_agent_session(&id, || {
+                self.process_factory.resume_agent(
+                    &binary_path,
+                    &repo,
+                    &provider_session_id,
+                    permission_mode,
+                )
+            })?
         };
         let resume_result = process.take_resume_result();
         let output_reader = process.take_output_reader();
@@ -305,9 +307,10 @@ impl AgentSessionRegistry {
                 id.clone(),
                 AcpLaunchIntent::NewSession,
             )?),
-            _ => self
-                .process_factory
-                .spawn_agent(&binary_path, &repo, permission_mode)?,
+            _ => crate::delivery::wiring::with_agent_session(&id, || {
+                self.process_factory
+                    .spawn_agent(&binary_path, &repo, permission_mode)
+            })?,
         };
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
@@ -372,13 +375,15 @@ impl AgentSessionRegistry {
             create_wsl_checkpoint(&repo, &distro, &id, started_at_ms)
                 .map_err(|error| wsl_startup_error("checkpoint_create", error))?,
         );
-        let mut process = self.process_factory.resume_wsl_agent(
-            &agent_type,
-            &distro,
-            &repo,
-            &provider_session_id,
-            permission_mode,
-        )?;
+        let mut process = crate::delivery::wiring::with_agent_session(&id, || {
+            self.process_factory.resume_wsl_agent(
+                &agent_type,
+                &distro,
+                &repo,
+                &provider_session_id,
+                permission_mode,
+            )
+        })?;
         let resume_result = process.take_resume_result();
         let output_reader = process.take_output_reader();
         let mut session = AgentSessionRecord::new(
@@ -447,10 +452,11 @@ impl AgentSessionRegistry {
         } else {
             None
         };
-        let process = self
-            .process_factory
-            .spawn_wsl_agent(&agent_type, &distro, &repo, permission_mode)
-            .map_err(|error| wsl_startup_error("provider_spawn", error))?;
+        let process = crate::delivery::wiring::with_agent_session(&id, || {
+            self.process_factory
+                .spawn_wsl_agent(&agent_type, &distro, &repo, permission_mode)
+        })
+        .map_err(|error| wsl_startup_error("provider_spawn", error))?;
         let mut process: Box<dyn AgentProcess> = match agent_type.as_str() {
             "kimi" => Box::new(PtyCompatibilityProcess::new(
                 process,

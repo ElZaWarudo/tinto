@@ -600,6 +600,30 @@ pub struct DeliveryRun {
     /// The user paused the batch: its queued jobs wait, the running ones go on.
     #[serde(default)]
     pub paused: bool,
+    /// The Agents conversation coordinating the batch, as its Delivery
+    /// tool calls say: Tinto wakes it when something waits on it.
+    #[serde(default)]
+    pub coordinator_session: Option<String>,
+    /// The event cursor the coordinator last read with wait_run.
+    #[serde(default)]
+    pub coordinator_cursor: u64,
+    /// The event cursor Tinto last woke the coordinator's conversation up to.
+    #[serde(default)]
+    pub notified_cursor: u64,
+    /// When Tinto last woke it.
+    #[serde(default)]
+    pub notified_at_ms: Option<u64>,
+}
+
+/// One entry of Delivery's audit trail; `seq` is the cursor of wait_run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryEvent {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub kind: String,
+    pub task_id: Option<String>,
+    pub job_id: Option<String>,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

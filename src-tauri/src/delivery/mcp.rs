@@ -83,6 +83,7 @@ fn serve(mut stream: TcpStream, service: &DeliveryService, token: &str) -> std::
     let path = parts.next().unwrap_or_default().to_string();
     let mut content_length = 0usize;
     let mut authorized = false;
+    let mut session: Option<String> = None;
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
@@ -93,6 +94,7 @@ fn serve(mut stream: TcpStream, service: &DeliveryService, token: &str) -> std::
         match name.trim().to_ascii_lowercase().as_str() {
             "content-length" => content_length = value.parse().unwrap_or(0),
             "authorization" => authorized = value == format!("Bearer {token}"),
+            "x-tinto-agent-session" if !value.is_empty() => session = Some(value.to_string()),
             _ => {}
         }
     }
@@ -114,7 +116,7 @@ fn serve(mut stream: TcpStream, service: &DeliveryService, token: &str) -> std::
         let error = rpc_error(Value::Null, -32700, "parse error");
         return respond(&mut stream, 200, "OK", Some(&error));
     };
-    match handle_message(service, &message) {
+    match handle_message_from(service, &message, session.as_deref()) {
         Some(reply) => respond(&mut stream, 200, "OK", Some(&reply)),
         None => respond(&mut stream, 202, "Accepted", None),
     }
@@ -137,6 +139,16 @@ fn respond(
 
 /// One JSON-RPC message. Notifications get no reply.
 pub fn handle_message(service: &DeliveryService, message: &Value) -> Option<Value> {
+    handle_message_from(service, message, None)
+}
+
+/// A message from the Agents conversation `session`, when its MCP
+/// connection says which one it is.
+pub fn handle_message_from(
+    service: &DeliveryService,
+    message: &Value,
+    session: Option<&str>,
+) -> Option<Value> {
     let id = message.get("id").cloned()?;
     let method = message["method"].as_str().unwrap_or_default();
     let reply = match method {
@@ -144,7 +156,7 @@ pub fn handle_message(service: &DeliveryService, message: &Value) -> Option<Valu
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "tinto-delivery", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. You coordinate every task of the batch at once, not one issue after another: keep each task's next stage running up to the capacity, and while one task waits (a job, QA, the user), move the others; wait_job lists the idle ones and does not wait while they can run. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are."
+            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. You coordinate every task of the batch at once, not one issue after another: keep each task's next stage running up to the capacity, and while one task waits (a job, QA, the user), move the others; wait_run returns as soon as anything needs you (a job ends, the user answers, approves or rejects, the PR moves), lists the idle tasks and does not wait while they can run; never end your turn while the batch has open tasks, call wait_run again with its cursor. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are."
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
@@ -152,6 +164,7 @@ pub fn handle_message(service: &DeliveryService, message: &Value) -> Option<Valu
             service,
             message["params"]["name"].as_str().unwrap_or_default(),
             &message["params"]["arguments"],
+            session,
         )),
         _ => Err((-32601, format!("method not found: {method}"))),
     };
@@ -165,8 +178,8 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-fn call_tool(service: &DeliveryService, name: &str, args: &Value) -> Value {
-    match run_tool(service, name, args) {
+fn call_tool(service: &DeliveryService, name: &str, args: &Value, session: Option<&str>) -> Value {
+    match run_tool(service, name, args, session) {
         Ok(value) => {
             // MCP clients refuse structured content that is not an object:
             // a list (read_decisions) or null (read_pr without a PR) goes
@@ -188,7 +201,12 @@ fn call_tool(service: &DeliveryService, name: &str, args: &Value) -> Value {
     }
 }
 
-fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value, DeliveryError> {
+fn run_tool(
+    service: &DeliveryService,
+    name: &str,
+    args: &Value,
+    session: Option<&str>,
+) -> Result<Value, DeliveryError> {
     let text = |key: &str| -> Result<String, DeliveryError> {
         args[key]
             .as_str()
@@ -208,9 +226,13 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
             .ok_or_else(|| DeliveryError::new("invalid_arguments", format!("falta {key}")))
     };
     // Every write is fenced by the caller's run lock.
+    // The conversation holding the run is the one Tinto wakes.
     let fence = || -> Result<String, DeliveryError> {
         let run_id = text("run_id")?;
         service.verify_run(&run_id, &text("owner")?, number("generation")?)?;
+        if let Some(session) = session {
+            service.set_coordinator_session(&run_id, session)?;
+        }
         Ok(run_id)
     };
     let task_in_run = |run_id: &str, task_id: &str| -> Result<(), DeliveryError> {
@@ -225,19 +247,37 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
     };
     match name {
         "delivery_overview" => to_json(&service.overview()?),
-        "create_run" => to_json(&service.create_run(
-            PathBuf::from(text("repo")?),
-            &text("title")?,
-            Some(text("owner")?),
-            None,
-        )?),
-        "acquire_run" => to_json(&service.acquire_run(&text("run_id")?, &text("owner")?)?),
-        "takeover_run" => to_json(&service.takeover_run(
-            &text("run_id")?,
-            &text("owner")?,
-            Some(number("expect_generation")?),
-            &text("reason")?,
-        )?),
+        "create_run" => {
+            let run = service.create_run(
+                PathBuf::from(text("repo")?),
+                &text("title")?,
+                Some(text("owner")?),
+                None,
+            )?;
+            if let Some(session) = session {
+                service.set_coordinator_session(&run.id, session)?;
+            }
+            to_json(&service.run(&run.id)?)
+        }
+        "acquire_run" => {
+            let run = service.acquire_run(&text("run_id")?, &text("owner")?)?;
+            if let Some(session) = session {
+                service.set_coordinator_session(&run.id, session)?;
+            }
+            to_json(&service.run(&run.id)?)
+        }
+        "takeover_run" => {
+            let run = service.takeover_run(
+                &text("run_id")?,
+                &text("owner")?,
+                args["expect_generation"].as_u64(),
+                &optional("reason").unwrap_or_else(|| "pedido por el usuario".to_string()),
+            )?;
+            if let Some(session) = session {
+                service.set_coordinator_session(&run.id, session)?;
+            }
+            to_json(&service.run(&run.id)?)
+        }
         "release_run" => to_json(&service.release_run(
             &text("run_id")?,
             &text("owner")?,
@@ -418,6 +458,17 @@ fn run_tool(service: &DeliveryService, name: &str, args: &Value) -> Result<Value
                 }
                 std::thread::sleep(Duration::from_millis(500));
             }
+        }
+        "wait_run" => {
+            let run_id = fence()?;
+            let timeout =
+                Duration::from_secs(args["timeout_seconds"].as_u64().unwrap_or(50).clamp(1, 600));
+            service.wait_run(
+                &run_id,
+                args["cursor"].as_u64(),
+                timeout,
+                args["idle_ok"].as_bool().unwrap_or(false),
+            )
         }
         "read_job" => to_json(&service.job(&text("job_id")?)?),
         "job_log" => to_json(&service.job_log(
@@ -734,13 +785,14 @@ fn tool_definitions() -> Value {
     json!([
         { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, queued, quarantined, settings_proposal, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, nobody) and the `next_stage` due. Act on the tasks that wait on the coordinator; do not dispatch on one that waits on the user, an agent or the queue.", "inputSchema": schema(json!({}), json!([])) },
         { "name": "create_run", "description": "Start a run you coordinate. Returns its id and generation 1.", "inputSchema": schema(json!({"repo": {"type": "string"}, "title": {"type": "string"}, "owner": {"type": "string"}}), json!(["repo", "title", "owner"])) },
-        { "name": "acquire_run", "description": "Take a run nobody coordinates, or confirm you hold it.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}}), json!(["run_id", "owner"])) },
-        { "name": "takeover_run", "description": "Replace a coordinator that stopped. Only after the user confirmed it stopped.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "expect_generation": {"type": "integer"}, "reason": {"type": "string"}}), json!(["run_id", "owner", "expect_generation", "reason"])) },
+        { "name": "acquire_run", "description": "Take a run nobody coordinates, or confirm you hold it. When another coordinator holds it, it is refused with run_locked: then, if the user asked you to coordinate it, use takeover_run.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}}), json!(["run_id", "owner"])) },
+        { "name": "takeover_run", "description": "Become the run's coordinator in place of the one holding it. Do it when the user asks you to coordinate (or take over) the batch, which is enough: you need not check on the other coordinator; also when that coordinator stopped. The generation increases, so whatever the previous coordinator still sends is refused (fenced), and its wait_run hands it a run_takeover event. Pass `expect_generation` (the generation you read) to make sure nobody took it in between; without it the current one is taken. `reason` says why (default: asked by the user). Then call wait_run without a cursor and go on with the batch from delivery_overview.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "expect_generation": {"type": "integer"}, "reason": {"type": "string"}}), json!(["run_id", "owner"])) },
         { "name": "release_run", "description": "Release the run lock when you stop.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "generation": {"type": "integer"}}), json!(["run_id", "owner", "generation"])) },
         { "name": "create_task", "description": "Create a task: its own worktree and branch from a verified base.", "inputSchema": fenced(json!({"properties": {"repo": {"type": "string"}, "distro": {"type": "string"}, "key": {"type": "string"}, "title": {"type": "string"}, "base": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "key", "title"]})) },
         { "name": "set_task_state", "description": "Set a task's stage label and/or raise its contract version (older results become stale).", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "state": {"type": "string"}, "contract_version": {"type": "integer"}}, "required": ["task_id"]})) },
         { "name": "dispatch_job", "description": "Queue a background agent job in a task's worktree. Its result's `blocked_by` says what stopped it: `sandbox` (the job's sandbox or permission rules refused something a decision allows), `environment` (something outside them failed) or `none`. Roles: tests, implementation, review (read-only), qa (read-only, holds the qa resource). Claude jobs without full access can run read-only commands (read-only git on the worktree included) plus the repo's verification commands set in Tinto; anything else is denied. On a Windows repository jobs run with the agents installed on Windows, never in WSL unless `platform` asks for it: when the agent asked for is not installed, another one (Codex, or Claude Code for Codex) runs the job with its own model, and the job's `substituted` says so. The job's `ran_on` says where it ran. You cannot choose a job's access: jobs run with workspace access, except QA on a task whose user allowed a `full_access` permission (see request_decisions), which runs with full access and says so in `access`. The job ends with a structured result.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "role": {"type": "string"}, "agent": {"type": "string", "enum": ["codex", "claude", "muse"], "description": "Omit it to use the agent, model and reasoning the user fixed for this stage in Tinto (read_settings `stages`); required when the stage has none."}, "platform": {"type": "string", "enum": ["windows", "wsl"], "description": "Claude jobs on a Windows repository only: `wsl` runs it in WSL. Omit it unless the user asked for WSL."}, "prompt": {"type": "string"}, "model": {"type": "string", "description": "Model id. When omitted, the model the user fixed for the stage (if the agent is the fixed one); otherwise Codex jobs use the default of the account's model catalog as last seen by Tinto (falling back to the CLI's configured model) and Claude jobs use the CLI's default."}, "reasoning": {"type": "string", "description": "Reasoning effort: minimal, low, medium, high or xhigh for Codex; low, medium, high, xhigh or max for Claude Code; minimal, low, medium, high, xhigh or max for Muse Code. When omitted, what the user fixed for the stage, else the CLI's default."}, "writes": {"type": "boolean"}, "lease": {"type": "string"}, "timeout_minutes": {"type": "integer"}}, "required": ["task_id", "role", "prompt"]})) },
-        { "name": "wait_job", "description": "Wait until a job ends (or the timeout passes) and return it. With several jobs running, pass them all in `job_ids`: it returns as soon as any of them ends, with the ended ones in `ended` (`job` is the first) and the rest in `open`. Handle what ended (a `blocked` result, the next stage) and wait again on what is still open, instead of waiting on one job at a time or on several in parallel calls. You coordinate the whole batch, not one issue: every result lists in `idle` the batch's tasks whose `phase` waits on you (see delivery_overview: a stage to run or retry, a delivery step to ask for or record), and `spare_capacity`, how many more jobs can run now. Dispatch the next stage of each idle task while there is capacity. While there are idle tasks and capacity, wait_job does not wait (`waited: false`): dispatch them first, then wait on everything running. Pass `idle_ok: true` only when every idle task waits on something outside Tinto (a dependency on another issue, a person); say why in your next message to the user. A job can end `paused`: the user stopped it to continue later in the same session. Its task then refuses new jobs (`job_paused`) until the user resumes it in Tinto, which queues a new attempt with `resumes` set to it; do not retry it or dispatch on that task, work on other tasks and read_job it later. While the user pauses the batch (read_settings `run.paused`) dispatched jobs stay `queued` and start when they resume it.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "job_ids": {"type": "array", "items": {"type": "string"}}, "timeout_seconds": {"type": "integer"}, "idle_ok": {"type": "boolean", "description": "Wait even though some tasks of the batch are idle: only when they wait on something outside Tinto."}}), json!([])) },
+        { "name": "wait_run", "description": "Wait for whatever needs you in the batch, not only jobs: a job ends; the user answers or changes a decision, approves, rejects or records a step, decides a settings proposal, pauses or resumes the batch, edits or removes a task; a step drifts from git or GitHub; the task's PR changes (opened, merged, closed, reviewed, conflicts, failing checks). It returns as soon as one happens, with `events` (each with `seq`, `kind`, `key`, `text`), the `cursor` to pass next time, `idle` (tasks whose phase waits on you), `open_jobs` and `spare_capacity`. Call it once without `cursor` to get the current one, then always pass the last `cursor` you got so nothing is missed between calls. It works with no job running: while the batch has open tasks, never end your turn; handle the events (dispatch the next stage, request or record a step, read the answered decisions), then call wait_run again. Like wait_job it does not wait while `idle` tasks wait on you (`waited: false`); pass `idle_ok: true` only when every idle task waits on something outside Tinto. If your conversation stopped anyway, Tinto writes to it, in Agents, the changes it has not seen, naming the cursor to read them from.", "inputSchema": fenced(json!({"properties": {"cursor": {"type": "integer"}, "timeout_seconds": {"type": "integer"}, "idle_ok": {"type": "boolean"}}})) },
+        { "name": "wait_job", "description": "Prefer wait_run, which also wakes on the user's answers and approvals and on PR changes. Wait until a job ends (or the timeout passes) and return it. With several jobs running, pass them all in `job_ids`: it returns as soon as any of them ends, with the ended ones in `ended` (`job` is the first) and the rest in `open`. Handle what ended (a `blocked` result, the next stage) and wait again on what is still open, instead of waiting on one job at a time or on several in parallel calls. You coordinate the whole batch, not one issue: every result lists in `idle` the batch's tasks whose `phase` waits on you (see delivery_overview: a stage to run or retry, a delivery step to ask for or record), and `spare_capacity`, how many more jobs can run now. Dispatch the next stage of each idle task while there is capacity. While there are idle tasks and capacity, wait_job does not wait (`waited: false`): dispatch them first, then wait on everything running. Pass `idle_ok: true` only when every idle task waits on something outside Tinto (a dependency on another issue, a person); say why in your next message to the user. A job can end `paused`: the user stopped it to continue later in the same session. Its task then refuses new jobs (`job_paused`) until the user resumes it in Tinto, which queues a new attempt with `resumes` set to it; do not retry it or dispatch on that task, work on other tasks and read_job it later. While the user pauses the batch (read_settings `run.paused`) dispatched jobs stay `queued` and start when they resume it.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "job_ids": {"type": "array", "items": {"type": "string"}}, "timeout_seconds": {"type": "integer"}, "idle_ok": {"type": "boolean", "description": "Wait even though some tasks of the batch are idle: only when they wait on something outside Tinto."}}), json!([])) },
         { "name": "read_job", "description": "A job with its status, result, result state, candidates and changed files, and while it runs what the agent did last (`activity`, at `activity_at_ms`), its own task list (`plan`) and, once reported, the tokens it used (`usage`). A QA job that wrote its visual changes record has the page Tinto rendered from it in `visual_record` (or why it could not in `visual_record_error`); it is for the user's local review, never to commit, attach or link.", "inputSchema": schema(json!({"job_id": {"type": "string"}}), json!(["job_id"])) },
         { "name": "job_log", "description": "Readable log of a job from a raw line onwards.", "inputSchema": schema(json!({"job_id": {"type": "string"}, "from_line": {"type": "integer"}}), json!(["job_id"])) },
         { "name": "cancel_job", "description": "Cancel a queued or running job.", "inputSchema": fenced(json!({"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]})) },

@@ -494,6 +494,10 @@ impl DeliveryService {
             qa_jira_comment,
             unattended: false,
             paused: false,
+            coordinator_session: None,
+            coordinator_cursor: 0,
+            notified_cursor: 0,
+            notified_at_ms: None,
         };
         let store = self.store()?;
         store.put_run(&run)?;
@@ -516,7 +520,7 @@ impl DeliveryService {
             Some(current) if current != owner => Err(DeliveryError::new(
                 "run_locked",
                 format!(
-                    "la ejecución la coordina {current} (generación {}); usa takeover solo si ese coordinador se detuvo",
+                    "la ejecución la coordina {current} (generación {}); si el usuario te pidió coordinarla, o ese coordinador se detuvo, tómala con takeover_run",
                     run.generation
                 ),
             )),
@@ -712,7 +716,7 @@ impl DeliveryService {
             return Err(DeliveryError::new(
                 "fenced",
                 format!(
-                    "la ejecución está en la generación {} coordinada por {}; esta escritura se descarta",
+                    "la ejecución está en la generación {} coordinada por {}; esta escritura se descarta. Si el usuario no te pidió volver a coordinarla, deja este lote",
                     run.generation,
                     run.owner.as_deref().unwrap_or("nadie")
                 ),
@@ -1526,13 +1530,13 @@ impl DeliveryService {
     ) -> Result<(), DeliveryError> {
         let store = self.store()?;
         store.put_approval(approval)?;
-        store.record_event(
-            now_ms(),
-            event,
-            Some(&approval.task_id),
-            None,
-            approval.outcome.as_deref().unwrap_or_default(),
-        )?;
+        // The step first, so the coordinator's wake-up can name it.
+        let step = format!("{:?}", approval.rung).to_ascii_lowercase();
+        let detail = match approval.outcome.as_deref().unwrap_or_default() {
+            "" => step,
+            outcome => format!("{step}: {outcome}"),
+        };
+        store.record_event(now_ms(), event, Some(&approval.task_id), None, &detail)?;
         drop(store);
         self.notify();
         Ok(())

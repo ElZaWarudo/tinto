@@ -24,26 +24,58 @@ pub(super) fn publish(endpoint: &DeliveryCoordinatorEndpoint) {
     }
 }
 
+/// Header naming the Agents conversation a Delivery tool call comes from.
+pub const SESSION_HEADER: &str = "X-Tinto-Agent-Session";
+/// Variable that carries the conversation's id to Muse Code, whose `-c`
+/// header values must come from the environment.
+pub const MUSE_SESSION_ENV: &str = "TINTO_AGENT_SESSION";
+
+thread_local! {
+    static AGENT_SESSION: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `spawn`, which starts the Agents conversation `session`: the
+/// Delivery tool arguments built meanwhile name it, so Tinto knows which
+/// conversation coordinates a batch and can wake it.
+pub fn with_agent_session<T>(session: &str, spawn: impl FnOnce() -> T) -> T {
+    AGENT_SESSION.with(|slot| *slot.borrow_mut() = Some(session.to_string()));
+    let spawned = spawn();
+    AGENT_SESSION.with(|slot| *slot.borrow_mut() = None);
+    spawned
+}
+
+fn agent_session() -> Option<String> {
+    AGENT_SESSION.with(|slot| slot.borrow().clone())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Server {
-    Http { url: String, token: String },
-    Stdio { command: String, args: Vec<String> },
+    Http {
+        url: String,
+        token: String,
+        session: Option<String>,
+    },
+    Stdio {
+        command: String,
+        args: Vec<String>,
+    },
 }
 
 fn server(wsl: bool) -> Option<Server> {
     let endpoint = ENDPOINT.lock().ok()?.clone()?;
+    let session = agent_session();
     if !wsl {
         return Some(Server::Http {
             url: endpoint.url,
             token: endpoint.token,
+            session,
         });
     }
     let exe = std::env::current_exe().ok()?;
     let command = crate::wsl_agent::launcher::windows_path_to_wsl_mount(&exe).ok()?;
-    Some(Server::Stdio {
-        command,
-        args: vec![PROXY_FLAG.to_string(), endpoint.url, endpoint.token],
-    })
+    let mut args = vec![PROXY_FLAG.to_string(), endpoint.url, endpoint.token];
+    args.extend(session);
+    Some(Server::Stdio { command, args })
 }
 
 /// Arguments for an interactive Claude Code conversation: the Delivery
@@ -77,13 +109,19 @@ pub fn muse_args(wsl: bool) -> (Vec<String>, Vec<(&'static str, String)>) {
 
 fn muse_args_for(server: &Server) -> (Vec<String>, Vec<(&'static str, String)>) {
     let (config, env) = match server {
-        Server::Http { url, token } => (
-            json!({
-                "url": url,
-                "headers": { "Authorization": format!("${{{MUSE_AUTH_ENV}}}") },
-            }),
-            vec![(MUSE_AUTH_ENV, format!("Bearer {token}"))],
-        ),
+        Server::Http {
+            url,
+            token,
+            session,
+        } => {
+            let mut headers = json!({ "Authorization": format!("${{{MUSE_AUTH_ENV}}}") });
+            let mut env = vec![(MUSE_AUTH_ENV, format!("Bearer {token}"))];
+            if let Some(session) = session {
+                headers[SESSION_HEADER] = json!(format!("${{{MUSE_SESSION_ENV}}}"));
+                env.push((MUSE_SESSION_ENV, session.clone()));
+            }
+            (json!({ "url": url, "headers": headers }), env)
+        }
         Server::Stdio { command, args } => {
             (json!({ "command": command, "args": args }), Vec::new())
         }
@@ -99,11 +137,17 @@ fn muse_args_for(server: &Server) -> (Vec<String>, Vec<(&'static str, String)>) 
 
 fn claude_args_for(server: &Server) -> Vec<String> {
     let config = match server {
-        Server::Http { url, token } => json!({
-            "type": "http",
-            "url": url,
-            "headers": { "Authorization": format!("Bearer {token}") },
-        }),
+        Server::Http {
+            url,
+            token,
+            session,
+        } => {
+            let mut headers = json!({ "Authorization": format!("Bearer {token}") });
+            if let Some(session) = session {
+                headers[SESSION_HEADER] = json!(session);
+            }
+            json!({ "type": "http", "url": url, "headers": headers })
+        }
         Server::Stdio { command, args } => json!({
             "type": "stdio",
             "command": command,
@@ -123,14 +167,24 @@ fn codex_args_for(server: &Server) -> Vec<String> {
     let text = |value: &str| Value::from(value).to_string();
     let key = |name: &str| format!("mcp_servers.{SERVER_NAME}.{name}");
     let overrides = match server {
-        Server::Http { url, token } => vec![
-            format!("{}={}", key("url"), text(url)),
-            format!(
-                "{}={{ Authorization = {} }}",
-                key("http_headers"),
-                text(&format!("Bearer {token}"))
-            ),
-        ],
+        Server::Http {
+            url,
+            token,
+            session,
+        } => {
+            let session = session
+                .as_deref()
+                .map(|session| format!(", {} = {}", text(SESSION_HEADER), text(session)))
+                .unwrap_or_default();
+            vec![
+                format!("{}={}", key("url"), text(url)),
+                format!(
+                    "{}={{ Authorization = {}{session} }}",
+                    key("http_headers"),
+                    text(&format!("Bearer {token}"))
+                ),
+            ]
+        }
         Server::Stdio { command, args } => vec![
             format!("{}={}", key("command"), text(command)),
             format!(
@@ -176,7 +230,7 @@ fn saved_target() -> Option<Target> {
 /// Runs the stdio side of the bridge: one JSON-RPC message per line in,
 /// the server's answer (if any) per line out. `given` is the URL and token
 /// of older configs, used only when Tinto has saved none.
-pub fn proxy_stdio(given: Option<(&str, &str)>) -> i32 {
+pub fn proxy_stdio(given: Option<(&str, &str)>, session: Option<&str>) -> i32 {
     let resolve = || {
         saved_target().or_else(|| {
             given.map(|(url, token)| Target {
@@ -210,6 +264,7 @@ pub fn proxy_stdio(given: Option<(&str, &str)>) -> i32 {
                 client
                     .post(&target.url)
                     .bearer_auth(&target.token)
+                    .header(SESSION_HEADER, session.unwrap_or_default())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .body(line.clone())
@@ -336,7 +391,36 @@ mod tests {
         Server::Http {
             url: "http://127.0.0.1:47920/mcp".into(),
             token: "t0k".into(),
+            session: None,
         }
+    }
+
+    #[test]
+    fn every_runtime_names_its_conversation_to_delivery() {
+        let http = Server::Http {
+            url: "http://127.0.0.1:47920/mcp".into(),
+            token: "t0k".into(),
+            session: Some("s-1".into()),
+        };
+        let claude: Value = serde_json::from_str(&claude_args_for(&http)[1]).unwrap();
+        assert_eq!(
+            claude["mcpServers"]["tinto-delivery"]["headers"][SESSION_HEADER],
+            "s-1"
+        );
+        let codex = codex_args_for(&http);
+        assert!(
+            codex[3].contains(r#""X-Tinto-Agent-Session" = "s-1""#),
+            "{}",
+            codex[3]
+        );
+        let (muse, env) = muse_args_for(&http);
+        assert!(muse[1].contains(r#""X-Tinto-Agent-Session":"${TINTO_AGENT_SESSION}""#));
+        assert!(env.contains(&(MUSE_SESSION_ENV, "s-1".to_string())));
+        assert_eq!(
+            with_agent_session("s-2", agent_session),
+            Some("s-2".to_string())
+        );
+        assert_eq!(agent_session(), None, "only while the conversation starts");
     }
 
     fn stdio() -> Server {

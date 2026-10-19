@@ -4324,3 +4324,199 @@ fn an_approved_pr_step_without_a_pr_is_opened_when_the_user_asks() {
         "approval_not_approved"
     );
 }
+
+impl Coordinator<'_> {
+    /// A tool call from the Agents conversation `session`.
+    fn write_from(
+        &self,
+        session: &str,
+        name: &str,
+        mut arguments: serde_json::Value,
+    ) -> serde_json::Value {
+        arguments["run_id"] = json!(self.run_id);
+        arguments["owner"] = json!("coord");
+        arguments["generation"] = json!(1);
+        super::mcp::handle_message_from(
+            &self.h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+            Some(session),
+        )
+        .unwrap()["result"]
+            .clone()
+    }
+}
+
+#[test]
+fn wait_run_wakes_on_the_users_decision_even_with_no_job_running() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("F-1");
+    let task = h.service.task(&task_id).unwrap();
+    put_step(&h, &task, "a-push", "push", "pending", "");
+
+    let now = coordinator.write("wait_run", json!({}));
+    let cursor = now["structuredContent"]["cursor"].as_u64().expect("cursor");
+    assert_eq!(now["structuredContent"]["events"], json!([]));
+
+    // The user rejects the step while the coordinator waits.
+    let service = h.service.clone();
+    let user = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        service.decide_approval("a-push", false, None).unwrap();
+    });
+    let started = Instant::now();
+    let woken = coordinator.write(
+        "wait_run",
+        json!({"cursor": cursor, "timeout_seconds": 20, "idle_ok": true}),
+    );
+    user.join().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "it wakes on the change, not at the timeout"
+    );
+    let reply = &woken["structuredContent"];
+    let events = reply["events"].as_array().expect("events");
+    assert_eq!(events.len(), 1, "{reply}");
+    assert_eq!(events[0]["kind"], "approval_rejected");
+    assert_eq!(events[0]["text"], "F-1: el usuario rechazó el paso push");
+    let next = reply["cursor"].as_u64().unwrap();
+    assert!(next > cursor);
+
+    // Nothing new: it waits out the timeout and says so.
+    let quiet = coordinator.write(
+        "wait_run",
+        json!({"cursor": next, "timeout_seconds": 1, "idle_ok": true}),
+    );
+    assert_eq!(quiet["structuredContent"]["events"], json!([]));
+    assert_eq!(quiet["structuredContent"]["waited"], true);
+}
+
+#[test]
+fn wait_run_leaves_out_what_the_coordinator_asked_and_other_batches() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("F-2");
+    let cursor = coordinator.write("wait_run", json!({}))["structuredContent"]["cursor"]
+        .as_u64()
+        .unwrap();
+    // The coordinator's own request, and a change in another batch.
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "commit", "commits": [{"message": "feat: a", "paths": ["a.txt"]}]}),
+    );
+    let other = h.task("OTHER-1");
+    put_step(&h, &other, "o-push", "push", "pending", "");
+    h.service.decide_approval("o-push", false, None).unwrap();
+
+    let (events, _) = h
+        .service
+        .coordinator_events(&coordinator.run_id, cursor)
+        .unwrap();
+    assert!(events.is_empty(), "{events:?}");
+}
+
+#[test]
+fn the_coordinators_conversation_is_woken_once_with_what_it_has_not_seen() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("F-3");
+    let task = h.service.task(&task_id).unwrap();
+    put_step(&h, &task, "a-push", "push", "pending", "");
+    h.service.decide_approval("a-push", false, None).unwrap();
+
+    // Its tool calls name its conversation; what happened before it is not news.
+    coordinator.write_from("session-1", "wait_run", json!({}));
+    let run = h.service.run(&coordinator.run_id).unwrap();
+    assert_eq!(run.coordinator_session.as_deref(), Some("session-1"));
+    let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
+    assert!(h.service.pending_wakeups(later).unwrap().is_empty());
+
+    h.service.set_run_paused(&coordinator.run_id, true).unwrap();
+    // Still settling: nothing yet.
+    assert!(h
+        .service
+        .pending_wakeups(super::now_ms())
+        .unwrap()
+        .is_empty());
+    let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
+    let wakeups = h.service.pending_wakeups(later).unwrap();
+    assert_eq!(wakeups.len(), 1);
+    let wakeup = &wakeups[0];
+    assert_eq!(wakeup.session_id, "session-1");
+    assert!(
+        wakeup.text.contains("- el usuario pausó el lote"),
+        "{}",
+        wakeup.text
+    );
+    assert!(wakeup.text.contains("Llama a wait_run"), "{}", wakeup.text);
+
+    // Once sent, it is not sent again.
+    h.service
+        .mark_coordinator_notified(&wakeup.run_id, wakeup.cursor)
+        .unwrap();
+    assert!(h.service.pending_wakeups(later).unwrap().is_empty());
+    assert!(h
+        .service
+        .run(&coordinator.run_id)
+        .unwrap()
+        .notified_at_ms
+        .is_some());
+}
+
+#[test]
+fn a_coordinator_inside_wait_run_is_not_woken() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    coordinator.task("F-4");
+    coordinator.write_from("session-2", "wait_run", json!({}));
+    let service = h.service.clone();
+    let run_id = coordinator.run_id.clone();
+    let waiting = std::thread::spawn(move || {
+        service
+            .wait_run(&run_id, Some(u64::MAX), Duration::from_secs(2), true)
+            .unwrap()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    h.service.set_run_paused(&coordinator.run_id, true).unwrap();
+    let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
+    // The wait hands it the change; no message is needed.
+    let pending = h.service.pending_wakeups(later).unwrap();
+    waiting.join().unwrap();
+    assert!(pending.is_empty(), "{pending:?}");
+}
+
+#[test]
+fn a_coordinator_the_user_asks_takes_the_batch_and_the_old_one_is_told() {
+    let h = harness();
+    let old = Coordinator::start(&h);
+    old.task("H-1");
+    let cursor = old.write_from("old-session", "wait_run", json!({}))["structuredContent"]
+        ["cursor"]
+        .as_u64()
+        .unwrap();
+
+    // Another conversation is asked to take it: no generation needed.
+    let locked = old.call("acquire_run", json!({"run_id": old.run_id, "owner": "new"}));
+    assert!(error_text(&locked).contains("takeover_run"));
+    let taken = super::mcp::handle_message_from(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "takeover_run",
+            "arguments": {"run_id": old.run_id, "owner": "new"}}}),
+        Some("new-session"),
+    )
+    .unwrap()["result"]
+        .clone();
+    let run = &taken["structuredContent"];
+    assert_eq!(run["owner"], "new", "{taken}");
+    assert_eq!(run["generation"], 2);
+    assert_eq!(run["coordinator_session"], "new-session");
+
+    // The old one learns it from its wait, and its writes are refused.
+    let (events, _) = h.service.coordinator_events(&old.run_id, cursor).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event["text"] == "otro coordinador tomó el lote"));
+    let refused = old.write("wait_run", json!({}));
+    assert!(error_text(&refused).contains("deja este lote"));
+}

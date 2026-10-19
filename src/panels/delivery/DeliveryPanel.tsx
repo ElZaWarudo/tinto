@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { busStore, useBusState } from "../../bus/store";
+import { useAgentSessionState } from "../../agent/sessionStore";
 import { useWorkspaceActions } from "../../workspace/actions";
 import { setBaseView } from "../../workspace/baseView";
 import { isWslRepoSource } from "../repoSource";
@@ -21,6 +22,7 @@ import {
   checkDeliveryTask,
   closeDeliveryRun,
   closeDeliveryPr,
+  handOverDeliveryRun,
   completeDeliveryApproval,
   deliveryPrToDraft,
   openDeliveryPr,
@@ -253,6 +255,12 @@ function duration(job: DeliveryJob, now: number): string {
   return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
 }
 
+/** Two paths of the same folder, whatever their slashes and case. */
+function samePath(a: string, b: string): boolean {
+  const clean = (path: string) => path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return clean(a) === clean(b);
+}
+
 /** "hace 12 s", "hace 3 min": when the agent last did something. */
 function ago(ms: number | null | undefined, now: number): string {
   if (!ms) return "";
@@ -447,6 +455,16 @@ export function DeliveryPanel() {
     }
   };
 
+  // Running Agents conversations of the batch's repo, to hand it to one.
+  const agentSessions = Object.values(useAgentSessionState().sessions);
+  const handOverTargets = (target: DeliveryRun) =>
+    agentSessions.filter(
+      (session) =>
+        session.status === "running" &&
+        session.id !== target.coordinator_session &&
+        samePath(session.repo, target.repo),
+    );
+
   const takeover = async (target: DeliveryRun) => {
     const ok = await confirm(
       `${target.owner} dejará de coordinar "${target.title}". Lo que envíe a partir de ahora se descarta.`,
@@ -470,11 +488,51 @@ export function DeliveryPanel() {
                   ? `coordina ${activeRuns[0].owner}`
                   : "sin coordinador"}
             </span>
+            {activeRuns[0].notified_at_ms && (
+              <span
+                className="delivery-muted"
+                title="Tinto le escribe en Agents lo que espera de él"
+              >
+                · coordinador avisado {ago(activeRuns[0].notified_at_ms, now)}
+              </span>
+            )}
             {activeRuns[0].owner && activeRuns[0].owner !== "user" && (
               <button type="button" disabled={busy} onClick={() => void takeover(activeRuns[0])}>
                 Tomar el control
               </button>
             )}
+            <Menu
+              disabled={busy}
+              trigger={
+                <>
+                  Cambiar coordinador <Icon name="down" />
+                </>
+              }
+            >
+              {(close) => {
+                const targets = handOverTargets(activeRuns[0]);
+                return targets.length === 0 ? (
+                  <span className="delivery-muted" role="menuitem" aria-disabled="true">
+                    Abre en Agents una conversación de este repositorio
+                  </span>
+                ) : (
+                  targets.map((session) => (
+                    <button
+                      key={session.id}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        void run(() => handOverDeliveryRun(activeRuns[0].id, session.id));
+                      }}
+                    >
+                      {agentName(session.agent_type)} · {session.id.slice(0, 8)}
+                      {session.turn_status === "working" ? " (trabajando)" : ""}
+                    </button>
+                  ))
+                );
+              }}
+            </Menu>
             <button
               type="button"
               disabled={busy}
