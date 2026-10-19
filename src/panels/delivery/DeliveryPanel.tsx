@@ -1280,6 +1280,8 @@ function TaskDetail({
         </div>
       )}
 
+      <QaRecordBanner jobs={jobs} busy={busy} run={run} />
+
       <StageTrack jobs={jobs} approvals={approvals} pr={pr} next={next} onFocus={focusStage} />
 
       <div className="delivery-actions">
@@ -1446,6 +1448,49 @@ function brokenVerb(job: DeliveryJob): string {
   return "está bloqueada";
 }
 
+/** The latest QA's visual changes page, where the task opens: it is what
+ *  the user reviews before the PR. */
+function QaRecordBanner({
+  jobs,
+  busy,
+  run,
+}: {
+  jobs: DeliveryJob[];
+  busy: boolean;
+  run: (action: () => Promise<unknown>) => Promise<boolean>;
+}) {
+  const qa = latestOfRole(jobs, "qa");
+  if (!qa || (!qa.visual_record && !qa.visual_record_error)) return null;
+  return (
+    <div className="delivery-banner" role="group" aria-label="Registro visual de QA">
+      <p className="delivery-banner__title">
+        <Icon name="flag" />
+        <strong>Registro visual de la QA</strong>
+        <span className="delivery-muted">
+          intento {qa.attempt} · cambios visuales con capturas de escritorio y móvil
+        </span>
+      </p>
+      {qa.visual_record ? (
+        <div className="delivery-actions">
+          <button
+            type="button"
+            className="delivery-button--primary"
+            disabled={busy}
+            onClick={() => void run(() => openDeliveryVisualRecord(qa.id))}
+          >
+            Abrir registro visual
+          </button>
+          <span className="delivery-muted">Se abre en tu navegador.</span>
+        </div>
+      ) : (
+        <p className="delivery-job__note">
+          No se pudo generar el registro visual: {qa.visual_record_error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function StageTrack({
   jobs,
   approvals,
@@ -1478,6 +1523,7 @@ function StageTrack({
                   {stageLabel(role)}
                 </span>
                 <small>{outcome.label}</small>
+                {job?.visual_record && <small>Con registro visual ↓</small>}
                 {job && job.agent !== "shell" && (
                   <small className="delivery-node__runtime">{runtimeLabel(job)}</small>
                 )}

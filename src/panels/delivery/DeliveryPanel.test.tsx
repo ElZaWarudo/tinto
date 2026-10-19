@@ -352,7 +352,10 @@ describe("DeliveryPanel", () => {
     );
     client.openDeliveryVisualRecord.mockResolvedValue(undefined);
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Abrir registro visual" }));
+    // The job keeps its own button too, besides the banner at the top.
+    const buttons = await screen.findAllByRole("button", { name: "Abrir registro visual" });
+    expect(buttons).toHaveLength(2);
+    await user.click(buttons[1]);
     await waitFor(() => expect(client.openDeliveryVisualRecord).toHaveBeenCalledWith("j1"));
   });
 
@@ -1785,6 +1788,20 @@ describe("DeliveryPanel", () => {
     await user.click(choices[0]);
     expect(client.handOverDeliveryRun).toHaveBeenCalledWith("run-1", "next-coordinator");
     agentSessionStore.setSessions([]);
+  });
+
+  it("shows the QA's visual record at the top of the task", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [job({ id: "qa-1", role: "qa", visual_record: "C:/jobs/qa-1/qa/AGOS-501.html" })],
+      }),
+    );
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Registro visual de QA" });
+    await user.click(within(banner).getByRole("button", { name: "Abrir registro visual" }));
+    expect(client.openDeliveryVisualRecord).toHaveBeenCalledWith("qa-1");
+    expect(screen.getByText("Con registro visual ↓")).toBeInTheDocument();
   });
 
   it("approves a Jira step with nothing to fill in", async () => {
