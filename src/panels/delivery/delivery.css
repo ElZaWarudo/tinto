@@ -294,20 +294,34 @@
   font-size: 15px;
 }
 /* The issue's page, right by its key. */
-.delivery-task__issue {
+.delivery-task__issue,
+.delivery-task__pr {
   display: inline-block;
   margin-left: 10px;
   padding: 1px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 500;
   vertical-align: middle;
-  color: var(--accent-fg);
   text-decoration: none;
 }
+/* Each service in its own colours, so the link says where it goes. */
+.delivery-task__issue {
+  color: #ffffff;
+  background: #0052cc;
+}
 .delivery-task__issue:hover {
-  background: color-mix(in srgb, var(--accent-fg) 12%, transparent);
+  background: #0065ff;
+}
+.delivery-task__pr {
+  margin-left: 6px;
+  color: #ffffff;
+  background: #24292f;
+  border-color: #6e7681;
+}
+.delivery-task__pr:hover {
+  background: #32383f;
 }
 .delivery-task__header h2 span {
   font-weight: 400;

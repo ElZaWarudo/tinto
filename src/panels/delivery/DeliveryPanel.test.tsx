@@ -1804,6 +1804,36 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("Con registro visual ↓")).toBeInTheDocument();
   });
 
+  it("opens the task's PR on GitHub from its header", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        prs: [
+          {
+            task_id: "t1",
+            url: "https://github.com/o/r/pull/5",
+            repo: "o/r",
+            number: 5,
+            state: "open",
+            draft: false,
+            conflicts: false,
+            review_decision: null,
+            checks: { passing: 0, failing: 0, pending: 0 },
+            new_reviews: 0,
+            new_comments: 0,
+            new_authors: [],
+            latest_activity: null,
+            seen_until: null,
+            checked_at_ms: 1,
+            error: null,
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const link = await screen.findByRole("link", { name: "Abrir el PR #5 en GitHub" });
+    expect(link).toHaveAttribute("href", "https://github.com/o/r/pull/5");
+  });
+
   it("approves a Jira step with nothing to fill in", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(

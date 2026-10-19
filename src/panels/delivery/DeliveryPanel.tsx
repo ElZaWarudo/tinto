@@ -1082,6 +1082,15 @@ function TaskDetail({
                 Abrir en Jira ↗
               </ExternalLink>
             )}
+            {pr && (
+              <ExternalLink
+                className="delivery-task__pr"
+                href={pr.url}
+                label={`Abrir el PR #${pr.number} en GitHub`}
+              >
+                Abrir PR #{pr.number} en GitHub ↗
+              </ExternalLink>
+            )}
           </h2>
           <p className="delivery-task__meta">
             <span>
