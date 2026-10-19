@@ -14,7 +14,7 @@ you **awake to the changes in your projects**: it watches what your coding
 agents are doing, in real time, and shows it to you so you decide where to
 look — without opening a heavy editor, without losing the thread.
 
-If your Claude Code, Codex, or OpenCode is silently modifying six files,
+If your Claude Code, Codex, Muse Code, or OpenCode is silently modifying six files,
 Tinto tells you. If it left uncommitted work an hour ago, Tinto flags it.
 If an `.env` changed and nobody told you, Tinto highlights it.
 
@@ -23,7 +23,7 @@ Like the morning coffee: small, brief, useful. And it keeps you awake.
 ## What it does
 
 Tinto is a **non-invasive supervisor** for local git repositories. While
-coding agents (Claude Code, Codex, OpenCode, and similar) edit your code,
+coding agents (Claude Code, Codex, Muse Code, OpenCode, and similar) edit your code,
 Tinto watches, classifies, and shows — without silently mutating your work
 as part of the monitoring loop.
 
@@ -48,6 +48,9 @@ the monitoring pipeline** and Tinto will never trigger them on its own:
   (recoverable), copy and move can be undone from the file dock clipboard.
 - **Agent session consoles** for launching and directing supported coding
   agents against a registered repo, with detachable windows when needed.
+- **Delivery** for taking issues from a branch to a merged PR with agents.
+  It works only in worktrees it creates, and it commits, pushes, opens or
+  merges a PR, or touches Jira only after you approve that exact step.
 
 Turning any of these off does not affect monitoring. They are conveniences
 for you, the human.
@@ -107,10 +110,36 @@ tree sitting uncommitted for a while).
 
 ### Agents
 
-Agent consoles launch supported coding-agent sessions against a registered
-repo and keep their turns, commands, checkpoints, and changed files together.
-They support **detached windows** so you can direct a session on one monitor
-while watching repository activity or a diff on another.
+Agent consoles launch supported coding-agent sessions (Codex, Claude Code,
+Muse Code) against a registered repo and keep their turns, commands,
+checkpoints, and changed files together. They support **detached windows** so
+you can direct a session on one monitor while watching repository activity or
+a diff on another.
+
+### Delivery
+
+A batch of issues, each in **its own worktree and branch**, taken through
+stages (implementation, tests, review, QA) by headless Codex, Claude Code, or
+Muse Code jobs, from local repos or WSL.
+
+- **A coordinator agent** runs the batch over the `tinto-delivery` MCP
+  server. Tinto wakes it when something changes, and you can take the
+  batch over or hand it to another Agents conversation at any time.
+- **Decisions** wait for you in Tinto: choices, user-facing texts, and
+  permissions. Each one shows the code it is about, like a GitHub review
+  thread.
+- **QA's visual record**: a page with desktop and mobile screenshots of every
+  visual change. Its problems are listed in the task, where you apply the
+  suggested fix, write your own, dismiss one, or report one QA missed. Then
+  you send them to the coordinator, and the next QA checks exactly those.
+- **Approvals** for commit (with a commit plan), push, PR (with reviewers),
+  merge, and Jira, each showing the exact text Tinto will publish. Tinto then
+  follows the PR's checks, reviews, and comments.
+- Every button shows its own progress and result, and only locks the card it
+  belongs to.
+
+The design is in
+[docs/plans/2026-10-07-001-feat-delivery-mode-plan.md](docs/plans/2026-10-07-001-feat-delivery-mode-plan.md).
 
 ### Project explorer
 
@@ -159,7 +188,7 @@ architecture) is in [tinto-design.md](tinto-design.md).
 ## Status
 
 The app already ships: dashboard, live diff viewer, file tree, Agent consoles,
-timeline, workbenches, WSL support, glance mode, notifications,
+Delivery, timeline, workbenches, WSL support, glance mode, notifications,
 and most of the passive signals. The living roadmap is in
 [docs/roadmaps/](docs/roadmaps/) and the build/packaging plan in
 [docs/build-guide.md](docs/build-guide.md).
