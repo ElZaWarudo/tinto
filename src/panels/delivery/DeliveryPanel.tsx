@@ -909,6 +909,11 @@ function TaskDetail({
   const jobs = jobsOf(overview, task.id);
   // The latest QA's visual changes page: what the user reviews before the PR.
   const qaRecord = latestOfRole(jobs, "qa");
+  const qaProblems = (overview.qa_problems ?? []).filter((problem) => problem.task_id === task.id);
+  // The QA's problems that wait on the user: new ones, and fixes that did not hold.
+  const qaProblemsToDecide = qaProblems.filter(
+    (problem) => problem.status === "open" || problem.status === "still_failing",
+  ).length;
   const newestFirst = [...jobs].reverse();
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const taskRun = overview.runs.find((candidate) => candidate.id === task.run_id);
@@ -1099,10 +1104,19 @@ function TaskDetail({
                 type="button"
                 className="delivery-task__record"
                 disabled={busy}
+                aria-label={
+                  qaProblemsToDecide > 0
+                    ? `Abrir registro visual de QA, ${qaProblemsToDecide} ${qaProblemsToDecide === 1 ? "problema" : "problemas"} por decidir`
+                    : "Abrir registro visual de QA"
+                }
                 title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
                 onClick={() => void run(() => openDeliveryVisualRecord(qaRecord.id))}
               >
-                Abrir registro visual de QA ↗
+                Registro visual QA
+                {qaProblemsToDecide > 0 && (
+                  <span className="delivery-task__record-count">{qaProblemsToDecide} !</span>
+                )}{" "}
+                ↗
               </button>
             )}
           </h2>
@@ -1303,12 +1317,7 @@ function TaskDetail({
         </div>
       )}
 
-      <QaProblems
-        taskId={task.id}
-        problems={(overview.qa_problems ?? []).filter((problem) => problem.task_id === task.id)}
-        busy={busy}
-        run={run}
-      />
+      <QaProblems taskId={task.id} problems={qaProblems} busy={busy} run={run} />
 
       {qaRecord?.visual_record_error && !qaRecord.visual_record && (
         <div

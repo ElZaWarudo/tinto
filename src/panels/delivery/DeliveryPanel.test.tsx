@@ -1954,12 +1954,50 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const button = await screen.findByRole("button", { name: "Abrir registro visual de QA ↗" });
+    const button = await screen.findByRole("button", { name: "Abrir registro visual de QA" });
     // In the task's header, next to Jira and the PR.
     expect(button.closest(".delivery-task__heading")).not.toBeNull();
+    expect(button.querySelector(".delivery-task__record-count")).toBeNull();
     await user.click(button);
     expect(client.openDeliveryVisualRecord).toHaveBeenCalledWith("qa-1");
     expect(screen.getByText("Con registro visual ↓")).toBeInTheDocument();
+  });
+
+  it("counts on the visual record's button the QA problems the user has to decide", async () => {
+    const problem = (id: string, status: DeliveryQaProblem["status"]): DeliveryQaProblem => ({
+      id,
+      task_id: "t1",
+      job_id: "qa-1",
+      attempt: 1,
+      number: 1,
+      label: "P1",
+      change: "",
+      place: "",
+      text: id,
+      suggestions: [],
+      status,
+      solution: null,
+      reason: null,
+      notes: [],
+      created_at_ms: 1,
+      updated_at_ms: 1,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [job({ id: "qa-1", role: "qa", visual_record: "C:/jobs/qa-1/qa/AGOS-501.html" })],
+        qa_problems: [
+          problem("a", "open"),
+          problem("b", "still_failing"),
+          problem("c", "sent"),
+          problem("d", "verified"),
+        ],
+      }),
+    );
+    renderPanel();
+    const button = await screen.findByRole("button", {
+      name: "Abrir registro visual de QA, 2 problemas por decidir",
+    });
+    expect(within(button).getByText("2 !")).toBeInTheDocument();
   });
 
   it("says when the QA's visual record could not be made", async () => {

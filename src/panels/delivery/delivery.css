@@ -323,14 +323,18 @@
 .delivery-task__pr:hover {
   background: #32383f;
 }
-/* The QA's visual record: the one thing to look at before the PR. */
+/* The QA's visual record: Jira's and GitHub's pill, in Tinto's colour. */
 .delivery-task__record {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   margin-left: 6px;
-  padding: 2px 12px;
-  border: 1px solid var(--accent-fg);
+  padding: 1px 8px;
+  border: 1px solid transparent;
   border-radius: 999px;
+  font: inherit;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   vertical-align: middle;
   color: #ffffff;
   background: var(--accent);
@@ -338,6 +342,15 @@
 }
 .delivery-task__record:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 80%, #ffffff);
+}
+/* The QA's problems that wait on the user. */
+.delivery-task__record-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #d1242f;
 }
 .delivery-task__header h2 span {
   font-weight: 400;
