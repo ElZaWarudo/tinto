@@ -211,6 +211,9 @@ impl DeliveryService {
         };
         service.reconcile()?;
         service.stage_legacy_jira()?;
+        if let Err(error) = service.record_missed_qa_problems() {
+            eprintln!("tinto: delivery could not read earlier QA problems: {error}");
+        }
         Ok(service)
     }
 

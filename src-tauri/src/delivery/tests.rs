@@ -4752,3 +4752,39 @@ fn qa_problems_wait_for_the_user_and_reach_the_coordinator_and_the_next_qa() {
         .collect();
     assert_eq!(open, [(4, "The toast covers Retry on mobile.")]);
 }
+
+#[test]
+fn a_qa_record_from_before_tinto_read_problems_is_read_at_startup() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("Q-1");
+    let task = h.service.task(&task_id).unwrap();
+    let qa = h.dispatch(&task, "qa", "events=codex-ok record=problems");
+    h.wait(&qa.id);
+    // A later QA whose record an older Tinto rendered without reading it.
+    let mut older = h.service.store().unwrap().job(&qa.id).unwrap().unwrap();
+    assert!(older.visual_record.is_some());
+    older.id = "qa-before-update".to_string();
+    older.attempt += 1;
+    older.created_at_ms += 1;
+    h.service.store().unwrap().put_job(&older).unwrap();
+
+    h.service.record_missed_qa_problems().unwrap();
+    h.service.record_missed_qa_problems().unwrap();
+    let open: Vec<_> = h
+        .service
+        .task_qa_problems(&task_id)
+        .unwrap()
+        .into_iter()
+        .filter(|problem| problem.status == super::model::DeliveryQaProblemStatus::Open)
+        .map(|problem| (problem.job_id.unwrap(), problem.number))
+        .collect();
+    assert_eq!(
+        open,
+        [
+            ("qa-before-update".to_string(), 3),
+            ("qa-before-update".to_string(), 4)
+        ],
+        "read once, in place of the earlier QA's"
+    );
+}

@@ -6,10 +6,12 @@
 //! `**Suggested solutions:**` of each change, labelled `P1`, `P2`…); Tinto
 //! reads them when the QA job ends and numbers them per task (`#1`, `#2`…).
 
+use std::path::Path;
+
 use serde::Deserialize;
 
 use super::model::{DeliveryQaProblem, DeliveryQaProblemStatus, DeliveryTask};
-use super::service::DeliveryService;
+use super::service::{DeliveryService, QA_ROLE};
 use super::{now_ms, DeliveryError};
 
 /// A problem as the record states it.
@@ -287,6 +289,30 @@ impl DeliveryService {
         drop(store);
         self.notify();
         Ok(added)
+    }
+
+    /// Each task's latest QA record whose problems were never read (it ended
+    /// under a Tinto that did not read them) is read now, at startup.
+    pub(super) fn record_missed_qa_problems(&self) -> Result<(), DeliveryError> {
+        let (tasks, jobs, problems) = {
+            let store = self.store()?;
+            (store.tasks()?, store.jobs()?, store.qa_problems()?)
+        };
+        for task in tasks {
+            let latest = jobs
+                .iter()
+                .filter(|job| job.task_id == task.id && job.role == QA_ROLE)
+                .max_by_key(|job| job.created_at_ms);
+            let Some(job) = latest else { continue };
+            let Some(page) = &job.visual_record else { continue };
+            if problems.iter().any(|problem| problem.job_id.as_deref() == Some(job.id.as_str())) {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(Path::new(page).with_extension("md")) {
+                self.record_qa_problems(&task, &job.id, job.attempt, &text)?;
+            }
+        }
+        Ok(())
     }
 
     /// A problem QA missed, as the user describes it.
