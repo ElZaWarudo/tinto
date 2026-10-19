@@ -73,7 +73,9 @@ export const TASK_STATE_LABEL: Record<string, string> = {
   blocked: "Bloqueada",
 };
 
-export type Tone = "attention" | "danger" | "live" | "waiting" | "idle" | "ok";
+/** `step`: a delivery step (commit, push, PR, merge, Jira) the user acts on,
+ *  told apart from blockers (`attention`, `danger`). */
+export type Tone = "attention" | "step" | "danger" | "live" | "waiting" | "idle" | "ok";
 export type StatusGroup = "attention" | "running" | "waiting" | "idle";
 export type StatusIcon = "flag" | "x" | "alert" | "live" | "clock" | "ring" | "check";
 
@@ -344,6 +346,12 @@ export function taskStatus(
     icon,
     label,
   });
+  const step = (label: string, icon: StatusIcon = "flag"): TaskStatus => ({
+    group: "attention",
+    tone: "step",
+    icon,
+    label,
+  });
   const danger = (label: string, icon: StatusIcon = "alert"): TaskStatus => ({
     group: "attention",
     tone: "danger",
@@ -369,11 +377,14 @@ export function taskStatus(
         phase.count === 1 ? "1 decisión pendiente" : `${phase.count} decisiones pendientes`,
       );
     case "approval":
-      return attention(`Aprobar ${lower(phaseStep(phase.rung, phase.stage).label)}`);
+      return step(`Aprobar ${lower(phaseStep(phase.rung, phase.stage).label)}`);
     case "record":
-      return attention(`Registrar ${lower(phaseStep(phase.rung, phase.stage).label)}`);
+      // Approved: running it and reporting it is the coordinator's turn.
+      return waiting(
+        `Esperando al coordinador: ${lower(phaseStep(phase.rung, phase.stage).label)}`,
+      );
     case "drifted":
-      return attention(`${phaseStep(phase.rung, phase.stage).label}: ya no coincide`, "alert");
+      return step(`${phaseStep(phase.rung, phase.stage).label}: ya no coincide`, "alert");
     case "running": {
       const job = overview.jobs.find((candidate) => candidate.id === phase.job_id);
       const verb =

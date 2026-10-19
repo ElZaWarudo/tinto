@@ -36,6 +36,51 @@ fn task_github_repo(task: &DeliveryTask) -> Option<String> {
         .and_then(github_repo)
 }
 
+/// The notice of a PR step whose PR says something else than was approved.
+pub const PUBLISHED_MISMATCH: &str = "La PR publicada no coincide con el texto aprobado";
+
+/// How a published title and body differ from the approved ones, ignoring
+/// line endings and surrounding blank space; `None` when they match.
+pub fn text_difference(
+    published_title: &str,
+    published_body: &str,
+    title: &str,
+    body: &str,
+) -> Option<String> {
+    let clean = |text: &str| text.replace("\r\n", "\n").trim().to_string();
+    let mut differences = Vec::new();
+    if clean(published_title) != clean(title) {
+        differences.push(format!(
+            "el título publicado es «{}» y el aprobado «{}»",
+            clean(published_title),
+            clean(title)
+        ));
+    }
+    let (published, approved) = (clean(published_body), clean(body));
+    if published != approved {
+        let (published_lines, approved_lines): (Vec<_>, Vec<_>) =
+            (published.lines().collect(), approved.lines().collect());
+        let at = published_lines
+            .iter()
+            .zip(&approved_lines)
+            .position(|(left, right)| left != right)
+            .unwrap_or(published_lines.len().min(approved_lines.len()));
+        let line = |lines: &[&str]| -> String {
+            lines
+                .get(at)
+                .map(|line| line.chars().take(120).collect())
+                .unwrap_or_else(|| "(nada)".to_string())
+        };
+        differences.push(format!(
+            "el cuerpo cambia en la línea {}: publicado «{}», aprobado «{}»",
+            at + 1,
+            line(&published_lines),
+            line(&approved_lines)
+        ));
+    }
+    (!differences.is_empty()).then(|| differences.join("; "))
+}
+
 /// Marking the PR step done needs a PR Tinto can follow.
 pub fn no_branch_pr(branch: &str) -> DeliveryError {
     DeliveryError::new(
@@ -186,7 +231,7 @@ impl DeliveryPr {
 
 /// `gh pr view --json` fields Tinto reads.
 pub const PR_FIELDS: &str =
-    "state,isDraft,mergeable,reviewDecision,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit";
+    "title,body,state,isDraft,mergeable,reviewDecision,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit";
 
 fn check_state(check: &Value) -> &'static str {
     // Check runs carry status + conclusion; commit statuses carry state.
@@ -345,6 +390,34 @@ pub trait GitHub: Send + Sync {
         subject: &str,
         body: &str,
     ) -> Result<(), DeliveryError>;
+    /// Opens a PR from `head` into `base` (`None`: the repo's default
+    /// branch) in `repo` (`owner/name`) and returns its URL.
+    fn create_pr(
+        &self,
+        _repo: &str,
+        _base: Option<&str>,
+        _head: &str,
+        _title: &str,
+        _body: &str,
+    ) -> Result<String, DeliveryError> {
+        Err(offline())
+    }
+    /// Sets the PR's title and body.
+    fn edit_pr(&self, _url: &str, _title: &str, _body: &str) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
+    /// Closes the PR without merging it.
+    fn close_pr(&self, _url: &str) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
+    /// Turns the PR back into a draft.
+    fn pr_to_draft(&self, _url: &str) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
+}
+
+fn offline() -> DeliveryError {
+    DeliveryError::new("github_unavailable", "GitHub no está conectado")
 }
 
 /// Until the app sets `gh`, nothing reaches GitHub.
@@ -352,10 +425,7 @@ pub struct Offline;
 
 impl GitHub for Offline {
     fn pr(&self, _url: &str) -> Result<Value, DeliveryError> {
-        Err(DeliveryError::new(
-            "github_unavailable",
-            "GitHub no está conectado",
-        ))
+        Err(offline())
     }
     fn me(&self) -> Result<String, DeliveryError> {
         self.pr("").map(|_| String::new())
@@ -402,6 +472,23 @@ impl GhCli {
                 format!("no se pudo ejecutar gh (GitHub CLI): {error}"),
             )
         })
+    }
+
+    /// Runs `gh` for its effect; its stdout on success.
+    fn act(args: &[&str], failure: &str) -> Result<String, DeliveryError> {
+        let output = Self::run(args)?;
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+        }
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(DeliveryError::new(
+            "github_failed",
+            if message.is_empty() {
+                failure.to_string()
+            } else {
+                message
+            },
+        ))
     }
 
     fn json(args: &[&str]) -> Result<Value, DeliveryError> {
@@ -506,6 +593,45 @@ impl GitHub for GhCli {
                 message
             },
         ))
+    }
+
+    fn create_pr(
+        &self,
+        repo: &str,
+        base: Option<&str>,
+        head: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<String, DeliveryError> {
+        let mut args = vec![
+            "pr", "create", "--repo", repo, "--head", head, "--title", title, "--body", body,
+        ];
+        if let Some(base) = base {
+            args.extend(["--base", base]);
+        }
+        // gh prints the new PR's URL last.
+        let output = Self::act(&args, "gh no pudo abrir el PR")?;
+        Ok(output.lines().last().unwrap_or_default().trim().to_string())
+    }
+
+    fn edit_pr(&self, url: &str, title: &str, body: &str) -> Result<(), DeliveryError> {
+        Self::act(
+            &["pr", "edit", url, "--title", title, "--body", body],
+            "gh no pudo editar el PR",
+        )
+        .map(|_| ())
+    }
+
+    fn close_pr(&self, url: &str) -> Result<(), DeliveryError> {
+        Self::act(&["pr", "close", url], "gh no pudo cerrar el PR").map(|_| ())
+    }
+
+    fn pr_to_draft(&self, url: &str) -> Result<(), DeliveryError> {
+        Self::act(
+            &["pr", "ready", url, "--undo"],
+            "gh no pudo pasar el PR a borrador",
+        )
+        .map(|_| ())
     }
 
     fn feed(&self, etag: Option<&str>) -> Result<Feed, DeliveryError> {
@@ -819,6 +945,73 @@ impl DeliveryService {
         ))
     }
 
+    /// Opens the task's PR with the approved title and body, or, when the
+    /// branch already has an open PR, gives it that text: what GitHub shows
+    /// is what the user approved.
+    pub(super) fn open_approved_pr(
+        &self,
+        approval: &DeliveryApproval,
+    ) -> Result<PrRef, DeliveryError> {
+        let task = self.task(&approval.task_id)?;
+        let repo = task_github_repo(&task).ok_or_else(|| {
+            DeliveryError::new("github_unavailable", "el remoto origin no está en GitHub")
+        })?;
+        let github = self.github_client();
+        let open = pick_branch_pr(&github.branch_prs(&repo, &task.branch)?).filter(|found| {
+            github
+                .pr(&found.url)
+                .is_ok_and(|pr| pr["state"].as_str() == Some("OPEN"))
+        });
+        if let Some(found) = open {
+            github.edit_pr(&found.url, &approval.title, &approval.body)?;
+            return Ok(found);
+        }
+        let base = task.base_ref.trim_start_matches("origin/");
+        let base = (base != "HEAD" && !base.is_empty()).then_some(base);
+        let url = github.create_pr(&repo, base, &task.branch, &approval.title, &approval.body)?;
+        parse_pr_url(&url).ok_or_else(|| {
+            DeliveryError::new(
+                "github_failed",
+                format!("gh no devolvió la URL del PR abierto: {url}"),
+            )
+        })
+    }
+
+    /// How the PR on GitHub differs from the approved title and body, or
+    /// `None` when it says exactly what was approved.
+    pub(super) fn published_difference(
+        &self,
+        url: &str,
+        approval: &DeliveryApproval,
+    ) -> Result<Option<String>, DeliveryError> {
+        let pr = self.github_client().pr(url)?;
+        Ok(text_difference(
+            pr["title"].as_str().unwrap_or_default(),
+            pr["body"].as_str().unwrap_or_default(),
+            &approval.title,
+            &approval.body,
+        ))
+    }
+
+    /// Closes the task's PR on GitHub without merging it.
+    pub fn close_task_pr(&self, task_id: &str) -> Result<Option<DeliveryPr>, DeliveryError> {
+        let pr = self.linked_pr(task_id)?;
+        self.github_client().close_pr(&pr.url)?;
+        self.refresh_pr(task_id, std::time::Duration::ZERO)
+    }
+
+    /// Turns the task's PR back into a draft on GitHub.
+    pub fn task_pr_to_draft(&self, task_id: &str) -> Result<Option<DeliveryPr>, DeliveryError> {
+        let pr = self.linked_pr(task_id)?;
+        self.github_client().pr_to_draft(&pr.url)?;
+        self.refresh_pr(task_id, std::time::Duration::ZERO)
+    }
+
+    fn linked_pr(&self, task_id: &str) -> Result<DeliveryPr, DeliveryError> {
+        self.task_pr(task_id)?
+            .ok_or_else(|| DeliveryError::new("pr_missing", "la tarea no tiene un PR de GitHub"))
+    }
+
     /// Who can review the task's PR: the repo's assignable people, without
     /// the user, who cannot review their own PR.
     pub fn pr_reviewers(&self, task_id: &str) -> Result<Vec<String>, DeliveryError> {
@@ -912,6 +1105,14 @@ impl DeliveryService {
                 step.status = DeliveryApprovalStatus::Executed;
                 step.executed_at_ms = Some(now_ms());
                 step.outcome = Some(found.url.clone());
+                // Found on GitHub rather than opened by Tinto: say so when it
+                // is not what the user approved.
+                if let Ok(Some(difference)) = self.published_difference(&found.url, &step) {
+                    let notice = format!("{PUBLISHED_MISMATCH}: {difference}");
+                    step.notice = Some(notice);
+                    self.save_approval(&step, "pr_found")?;
+                    return self.request_pr_reviewers(&task.id);
+                }
                 step
             }
             _ => found_step(

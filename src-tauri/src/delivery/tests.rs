@@ -903,6 +903,7 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         requested_by: "user".to_string(),
         commits: Vec::new(),
         leave_out: Vec::new(),
+        single_commit_reason: None,
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
@@ -2077,6 +2078,7 @@ fn commit_plan(
         requested_by: "coord".to_string(),
         commits,
         leave_out: leave_out.iter().map(|path| path.to_string()).collect(),
+        single_commit_reason: None,
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
@@ -2222,23 +2224,22 @@ fn a_commit_plan_creates_its_commits_in_order_and_can_be_undone() {
         h.service.undo_commit(&asked.id).unwrap_err().category,
         "undo_unavailable"
     );
-    let again = h
-        .service
-        .request_approval(commit_plan(
-            &task,
-            vec![commit(
-                "feat: everything",
-                &[
-                    "README.md",
-                    "cli/a.test.ts",
-                    "cli/a.ts",
-                    "docs/c.md",
-                    "scratch.log",
-                ],
-            )],
-            &[],
-        ))
-        .unwrap();
+    let mut everything = commit_plan(
+        &task,
+        vec![commit(
+            "feat: everything",
+            &[
+                "README.md",
+                "cli/a.test.ts",
+                "cli/a.ts",
+                "docs/c.md",
+                "scratch.log",
+            ],
+        )],
+        &[],
+    );
+    everything.single_commit_reason = Some("the files only make sense together".into());
+    let again = h.service.request_approval(everything).unwrap();
     assert_eq!(again.title, "feat: everything");
 }
 
@@ -2329,6 +2330,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             requested_by: "user".into(),
             commits: Vec::new(),
             leave_out: Vec::new(),
+            single_commit_reason: None,
             merge_method: None,
             stage: None,
             jira_statuses: Vec::new(),
@@ -2383,6 +2385,7 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             requested_by: "user".into(),
             commits: Vec::new(),
             leave_out: Vec::new(),
+            single_commit_reason: None,
             merge_method: None,
             stage: None,
             jira_statuses: Vec::new(),
@@ -2470,6 +2473,8 @@ struct FakeGitHub {
     reviews: std::sync::Mutex<Vec<String>>,
     /// What `gh pr list --head <branch>` answers, for any branch.
     branch_prs: std::sync::Mutex<serde_json::Value>,
+    /// `create <base> <head>`, `edit <url>`, `close <url>`, `draft <url>`.
+    actions: std::sync::Mutex<Vec<String>>,
 }
 
 impl FakeGitHub {
@@ -2481,6 +2486,7 @@ impl FakeGitHub {
             merged: std::sync::Mutex::new(Vec::new()),
             reviews: std::sync::Mutex::new(Vec::new()),
             branch_prs: std::sync::Mutex::new(branch_prs),
+            actions: std::sync::Mutex::new(Vec::new()),
         })
     }
 }
@@ -2525,6 +2531,43 @@ impl super::prs::GitHub for FakeGitHub {
         snapshot["state"] = json!("MERGED");
         Ok(())
     }
+    fn create_pr(
+        &self,
+        repo: &str,
+        base: Option<&str>,
+        head: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<String, super::DeliveryError> {
+        assert_eq!(repo, "o/r");
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("create {} {head}", base.unwrap_or("-")));
+        let mut snapshot = self.snapshot.lock().unwrap();
+        snapshot["state"] = json!("OPEN");
+        snapshot["title"] = json!(title);
+        snapshot["body"] = json!(body);
+        *self.branch_prs.lock().unwrap() = json!([open_pr(50, "OPEN")]);
+        Ok("Creating pull request...\nhttps://github.com/o/r/pull/50".into())
+    }
+    fn edit_pr(&self, url: &str, title: &str, body: &str) -> Result<(), super::DeliveryError> {
+        self.actions.lock().unwrap().push(format!("edit {url}"));
+        let mut snapshot = self.snapshot.lock().unwrap();
+        snapshot["title"] = json!(title);
+        snapshot["body"] = json!(body);
+        Ok(())
+    }
+    fn close_pr(&self, url: &str) -> Result<(), super::DeliveryError> {
+        self.actions.lock().unwrap().push(format!("close {url}"));
+        self.snapshot.lock().unwrap()["state"] = json!("CLOSED");
+        Ok(())
+    }
+    fn pr_to_draft(&self, url: &str) -> Result<(), super::DeliveryError> {
+        self.actions.lock().unwrap().push(format!("draft {url}"));
+        self.snapshot.lock().unwrap()["isDraft"] = json!(true);
+        Ok(())
+    }
     fn feed(&self, _etag: Option<&str>) -> Result<super::prs::Feed, super::DeliveryError> {
         self.feed_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2552,6 +2595,7 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         merged: std::sync::Mutex::new(Vec::new()),
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
+        actions: std::sync::Mutex::new(Vec::new()),
     });
     h.service.set_github(github.clone());
 
@@ -2623,6 +2667,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         merged: std::sync::Mutex::new(Vec::new()),
         reviews: std::sync::Mutex::new(Vec::new()),
         branch_prs: std::sync::Mutex::new(json!([])),
+        actions: std::sync::Mutex::new(Vec::new()),
     });
     h.service.set_github(github.clone());
     let merge = |method: Option<&str>| NewApproval {
@@ -2633,6 +2678,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         requested_by: "user".into(),
         commits: Vec::new(),
         leave_out: Vec::new(),
+        single_commit_reason: None,
         merge_method: method.map(str::to_string),
         stage: None,
         jira_statuses: Vec::new(),
@@ -2759,7 +2805,10 @@ fn the_pr_step_is_done_only_with_a_pr_tinto_can_follow() {
     let h = harness();
     github_origin(&h);
     let task = h.task("P-4");
-    let github = FakeGitHub::new(json!({"state": "OPEN"}), json!([]));
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "title": "pr", "body": ""}),
+        json!([]),
+    );
     h.service.set_github(github.clone());
     put_step(&h, &task, "a-pr", "pr", "approved", "");
 
@@ -2790,7 +2839,7 @@ fn the_branchs_pr_wins_over_a_different_recorded_url() {
     github_origin(&h);
     let task = h.task("P-5");
     h.service.set_github(FakeGitHub::new(
-        json!({"state": "OPEN"}),
+        json!({"state": "OPEN", "title": "pr", "body": ""}),
         json!([open_pr(7, "OPEN")]),
     ));
     put_step(&h, &task, "a-pr", "pr", "approved", "");
@@ -2899,6 +2948,7 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         requested_by: "user".to_string(),
         commits: Vec::new(),
         leave_out: Vec::new(),
+        single_commit_reason: None,
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
@@ -3048,6 +3098,7 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
         requested_by: "user".into(),
         commits: Vec::new(),
         leave_out: Vec::new(),
+        single_commit_reason: None,
         merge_method: None,
         stage: stage.map(str::to_string),
         jira_statuses: Vec::new(),
@@ -3158,8 +3209,13 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
     h.service
         .set_pr_reviewers("a-pr", vec!["@ana".into(), " Luis ".into()])
         .unwrap();
-    h.service.decide_approval("a-pr", true, None).unwrap();
-    let done = h.service.complete_approval("a-pr", true, "").unwrap();
+    let done = h.service.decide_approval("a-pr", true, None).unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(
+        github.actions.lock().unwrap().as_slice(),
+        ["edit https://github.com/o/r/pull/40".to_string()],
+        "the branch's open PR gets the approved text"
+    );
     assert!(done.reviewers_requested);
     assert_eq!(
         github.reviews.lock().unwrap().as_slice(),
@@ -3178,6 +3234,7 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
         requested_by: "user".into(),
         commits: Vec::new(),
         leave_out: Vec::new(),
+        single_commit_reason: None,
         merge_method: Some("merge".into()),
         stage: None,
         jira_statuses: Vec::new(),
@@ -3278,6 +3335,7 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         requested_by: "user".into(),
         commits: Vec::new(),
         leave_out: Vec::new(),
+        single_commit_reason: None,
         merge_method: None,
         stage: Some(stage.into()),
         jira_statuses: statuses,
@@ -3913,5 +3971,356 @@ fn the_user_can_reject_a_settings_proposal() {
             .repo_settings(h.repo.path())
             .unwrap()
             .qa_browser
+    );
+}
+
+/// A coordinator over MCP, on a run it holds as `coord`, generation 1.
+struct Coordinator<'a> {
+    h: &'a Harness,
+    run_id: String,
+}
+
+impl<'a> Coordinator<'a> {
+    fn start(h: &'a Harness) -> Self {
+        let mut coordinator = Self {
+            h,
+            run_id: String::new(),
+        };
+        let repo = plain_path(h.repo.path());
+        let run = coordinator.call(
+            "create_run",
+            json!({"repo": repo, "title": "B", "owner": "coord"}),
+        );
+        coordinator.run_id = run["structuredContent"]["id"].as_str().unwrap().to_string();
+        coordinator
+    }
+
+    fn call(&self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        super::mcp::handle_message(
+            &self.h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+        )
+        .unwrap()["result"]
+            .clone()
+    }
+
+    /// A tool call on the run, fenced as its owner.
+    fn write(&self, name: &str, mut arguments: serde_json::Value) -> serde_json::Value {
+        arguments["run_id"] = json!(self.run_id);
+        arguments["owner"] = json!("coord");
+        arguments["generation"] = json!(1);
+        self.call(name, arguments)
+    }
+
+    /// A task of the run and its worktree.
+    fn task(&self, key: &str) -> (String, PathBuf) {
+        let repo = plain_path(self.h.repo.path());
+        let task = self.write(
+            "create_task",
+            json!({"repo": repo, "key": key, "title": "x"}),
+        );
+        (
+            task["structuredContent"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            PathBuf::from(task["structuredContent"]["worktree"].as_str().unwrap()),
+        )
+    }
+}
+
+fn error_text(result: &serde_json::Value) -> String {
+    assert_eq!(result["isError"], true, "{result}");
+    result["content"][0]["text"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_pending_approval_can_be_withdrawn_with_a_reason_but_not_a_decided_one() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("W-1");
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    let request = |message: &str| {
+        coordinator.write(
+            "request_approval",
+            json!({"task_id": task_id, "rung": "commit", "commits": [{"message": message, "paths": ["a.txt"]}]}),
+        )
+    };
+    let first = request("feat: a, badly worded");
+    let first_id = first["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(error_text(&request("feat: a")).contains("ya hay una aprobación abierta"));
+
+    let no_reason = coordinator.write(
+        "withdraw_approval",
+        json!({"approval_id": first_id, "reason": " "}),
+    );
+    assert!(error_text(&no_reason).contains("falta reason"));
+    let withdrawn = coordinator.write(
+        "withdraw_approval",
+        json!({"approval_id": first_id, "reason": "the message did not follow the template"}),
+    );
+    assert_eq!(
+        withdrawn["structuredContent"]["withdrawn"],
+        first_id.as_str()
+    );
+    assert!(h.service.approval(&first_id).is_err());
+    assert_eq!(
+        h.service
+            .store()
+            .unwrap()
+            .event_details("approval_withdrawn")
+            .unwrap(),
+        ["commit: the message did not follow the template".to_string()]
+    );
+
+    // The corrected request takes its place; once decided it cannot go.
+    let second = request("feat: a");
+    let second_id = second["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.service.decide_approval(&second_id, true, None).unwrap();
+    let refused = coordinator.write(
+        "withdraw_approval",
+        json!({"approval_id": second_id, "reason": "too late"}),
+    );
+    assert!(error_text(&refused).contains("ya tiene una decisión del usuario"));
+}
+
+#[test]
+fn a_commit_step_needs_a_plan_and_one_commit_across_areas_says_why() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("S-1");
+    std::fs::create_dir_all(worktree.join("src")).unwrap();
+    std::fs::create_dir_all(worktree.join("tests")).unwrap();
+    std::fs::write(worktree.join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(worktree.join("tests/a.rs"), "#[test]\nfn a() {}\n").unwrap();
+    std::fs::write(worktree.join("NOTES.md"), "# a\n").unwrap();
+    let paths = json!(["src/a.rs", "tests/a.rs", "NOTES.md"]);
+    let request = |extra: serde_json::Value| {
+        let mut arguments = json!({"task_id": task_id, "rung": "commit", "title": "feat: a"});
+        for (key, value) in extra.as_object().unwrap() {
+            arguments[key] = value.clone();
+        }
+        coordinator.write("request_approval", arguments)
+    };
+
+    let unplanned = error_text(&request(json!({})));
+    assert!(
+        unplanned.contains("necesita su plan en commits"),
+        "{unplanned}"
+    );
+
+    let one = json!([{"message": "feat: a", "paths": paths}]);
+    let unjustified = error_text(&request(json!({ "commits": one })));
+    assert!(
+        unjustified.contains("mezcla code, docs, tests"),
+        "{unjustified}"
+    );
+    assert!(
+        unjustified.contains("single_commit_reason"),
+        "{unjustified}"
+    );
+    assert!(unjustified.contains("commits atómicos"), "{unjustified}");
+
+    let justified = request(
+        json!({"commits": one, "single_commit_reason": "the doc only describes this test"}),
+    );
+    let approval = &justified["structuredContent"];
+    assert_eq!(
+        approval["single_commit_reason"], "the doc only describes this test",
+        "{justified}"
+    );
+    assert_eq!(approval["status"], "pending");
+}
+
+#[test]
+fn a_small_single_commit_in_one_area_needs_no_reason_and_the_limits_are_the_repos() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("S-2");
+    let lines: String = (0..12).map(|line| format!("line {line}\n")).collect();
+    std::fs::write(worktree.join("a.rs"), &lines).unwrap();
+    std::fs::write(worktree.join("b.rs"), "b\n").unwrap();
+    let request = || {
+        coordinator.write(
+            "request_approval",
+            json!({"task_id": task_id, "rung": "commit", "commits": [{"message": "feat: a", "paths": ["a.rs", "b.rs"]}]}),
+        )
+    };
+    let asked = request();
+    let id = asked["structuredContent"]["id"]
+        .as_str()
+        .expect("accepted")
+        .to_string();
+    h.service
+        .withdraw_approval(&id, "try the repo's limit")
+        .unwrap();
+
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.single_commit_max_lines = Some(10);
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let refused = error_text(&request());
+    assert!(
+        refused.contains("cambia 13 líneas (más de 10)"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn approving_the_pr_step_opens_the_pr_with_the_approved_text() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-1");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    h.service.set_github(github.clone());
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": "a-pr", "task_id": task.id, "rung": "pr", "title": "feat: open it",
+        "body": "## Summary\n\nWhat was approved.", "status": "pending",
+        "requested_by": "coord", "requested_at_ms": 1
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+
+    let done = h.service.decide_approval("a-pr", true, None).unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(
+        done.outcome.as_deref(),
+        Some("https://github.com/o/r/pull/50")
+    );
+    assert_eq!(done.notice, None);
+    let base = task.base_ref.trim_start_matches("origin/");
+    assert_eq!(
+        github.actions.lock().unwrap().as_slice(),
+        [format!("create {base} {}", task.branch)]
+    );
+    let published = github.snapshot.lock().unwrap().clone();
+    assert_eq!(published["title"], "feat: open it");
+    assert_eq!(published["body"], "## Summary\n\nWhat was approved.");
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 50);
+}
+
+#[test]
+fn a_pr_reported_by_the_coordinator_must_say_what_was_approved() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-2");
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": "a-pr", "task_id": task.id, "rung": "pr", "title": "feat: approved",
+        "body": "Approved body.\nSecond line.", "status": "pending",
+        "requested_by": "coord", "requested_at_ms": 1
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+    // GitHub out of reach: the step waits for the coordinator and says so.
+    let approved = h.service.decide_approval("a-pr", true, None).unwrap();
+    assert_eq!(approved.status, DeliveryApprovalStatus::Approved);
+    assert!(approved
+        .notice
+        .as_deref()
+        .is_some_and(|notice| notice.starts_with("Tinto no pudo abrir el PR")));
+
+    // The coordinator opened it with other text.
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "title": "feat: approved", "body": "Approved body.\nAnother line."}),
+        json!([open_pr(8, "OPEN")]),
+    );
+    h.service.set_github(github.clone());
+    let refused = h.service.complete_approval("a-pr", true, "").unwrap_err();
+    assert_eq!(refused.category, "pr_mismatch");
+    assert!(
+        refused.message.starts_with(super::prs::PUBLISHED_MISMATCH),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused
+            .message
+            .contains("línea 2: publicado «Another line.», aprobado «Second line.»"),
+        "{}",
+        refused.message
+    );
+    assert!(h.service.task_pr(&task.id).unwrap().is_none());
+
+    // Once the PR says what was approved (line endings aside), it is done.
+    github.snapshot.lock().unwrap()["body"] = json!("Approved body.\r\nSecond line.\r\n");
+    let done = h.service.complete_approval("a-pr", true, "").unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(done.notice, None);
+}
+
+#[test]
+fn a_pr_found_on_github_with_other_text_is_marked() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-3");
+    put_step(&h, &task, "a-push", "push", "executed", "Publicado");
+    put_step(&h, &task, "a-pr", "pr", "approved", "");
+    h.service.set_github(FakeGitHub::new(
+        json!({"state": "OPEN", "title": "something else", "body": ""}),
+        json!([open_pr(9, "OPEN")]),
+    ));
+    h.service.find_task_pr(&task.id).unwrap();
+    let step = h.service.approval("a-pr").unwrap();
+    assert_eq!(step.status, DeliveryApprovalStatus::Executed);
+    assert!(step
+        .notice
+        .as_deref()
+        .is_some_and(|notice| notice.starts_with(super::prs::PUBLISHED_MISMATCH)));
+}
+
+#[test]
+fn the_user_can_close_or_draft_the_pr_of_a_stopped_delivery() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-4");
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "title": "pr", "body": ""}),
+        json!([open_pr(11, "OPEN")]),
+    );
+    h.service.set_github(github.clone());
+    put_step(&h, &task, "a-push", "push", "executed", "Publicado");
+    h.service.find_task_pr(&task.id).unwrap();
+    h.service.task_pr_to_draft(&task.id).unwrap();
+    h.service.close_task_pr(&task.id).unwrap();
+    assert_eq!(
+        github.actions.lock().unwrap().as_slice(),
+        [
+            "draft https://github.com/o/r/pull/11".to_string(),
+            "close https://github.com/o/r/pull/11".to_string()
+        ]
+    );
+}
+
+#[test]
+fn an_approved_pr_step_without_a_pr_is_opened_when_the_user_asks() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-5");
+    // Approved before Tinto opened PRs itself, and nobody opened it.
+    put_step(&h, &task, "a-pr", "pr", "approved", "");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    h.service.set_github(github.clone());
+    let done = h.service.open_pr_step("a-pr").unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(h.service.task_pr(&task.id).unwrap().unwrap().number, 50);
+    assert_eq!(github.actions.lock().unwrap().len(), 1);
+    // Only an approved PR step without its PR.
+    assert_eq!(
+        h.service.open_pr_step("a-pr").unwrap_err().category,
+        "approval_not_approved"
     );
 }

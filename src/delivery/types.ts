@@ -201,6 +201,8 @@ export interface DeliveryApproval {
   outcome: string | null;
   /** `commit`: the commits to create, in order. */
   commits?: DeliveryCommit[];
+  /** `commit`: why a single commit holds a change across areas or a large one. */
+  single_commit_reason?: string | null;
   /** `commit`: changed files the plan leaves uncommitted on purpose. */
   left_out?: string[];
   /** `commit`: the commits Tinto created. */
@@ -310,6 +312,9 @@ export interface DeliveryRepoSettings {
   verification?: string;
   /** Whether QA may make paid model calls; null until set. */
   paid_model_calls?: boolean | null;
+  /** A coordinator's single commit with more files or lines must say why (default 5 and 300). */
+  single_commit_max_files?: number | null;
+  single_commit_max_lines?: number | null;
   /** The agent each stage runs with, by role, fixed by the user. */
   stages?: Record<string, DeliveryStageAgent>;
   /** The repo's Jira, for Tinto to run the Jira steps; the token is kept apart. */

@@ -320,6 +320,39 @@ pub fn remove_worktree(
 /// Every file with uncommitted changes (modified, deleted or new), relative
 /// to the worktree with `/`. A rename counts as a deletion and a new file,
 /// so each side can go to the commit it belongs to.
+/// Lines added plus removed in the worktree's changes to `paths`, new
+/// files counted whole. Binary files count no lines.
+pub fn changed_lines(place: Place<'_>, worktree: &Path, paths: &[String]) -> u64 {
+    let sum = |numstat: &[u8]| -> u64 {
+        String::from_utf8_lossy(numstat)
+            .lines()
+            .map(|line| {
+                line.split('\t')
+                    .take(2)
+                    .filter_map(|count| count.parse::<u64>().ok())
+                    .sum::<u64>()
+            })
+            .sum()
+    };
+    let mut args = vec!["diff", "--numstat", "HEAD", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let mut total = git_command(place, worktree, &args)
+        .output()
+        .map(|output| sum(&output.stdout))
+        .unwrap_or(0);
+    let mut untracked = vec!["ls-files", "--others", "--exclude-standard", "--"];
+    untracked.extend(paths.iter().map(String::as_str));
+    for path in git(place, worktree, &untracked).unwrap_or_default().lines() {
+        // Exits 1 when the files differ, which they always do.
+        let args = ["diff", "--no-index", "--numstat", "--", "/dev/null", path];
+        total += git_command(place, worktree, &args)
+            .output()
+            .map(|output| sum(&output.stdout))
+            .unwrap_or(0);
+    }
+    total
+}
+
 pub fn changed_files(place: Place<'_>, worktree: &Path) -> Result<Vec<String>, DeliveryError> {
     let args = [
         "-c",

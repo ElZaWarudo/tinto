@@ -137,12 +137,19 @@ describe("taskStatus words the phase Tinto derives", () => {
       label: "1 decisión pendiente",
     });
     expect(status({ kind: "decisions", count: 2 }).label).toBe("2 decisiones pendientes");
-    expect(status({ kind: "approval", rung: "pr", stage: null }).label).toBe("Aprobar PR");
-    expect(status({ kind: "record", rung: "jira", stage: "after_pr" }).label).toBe(
-      "Registrar Jira (PR)",
-    );
+    // Delivery steps get their own colour, apart from blockers.
+    expect(status({ kind: "approval", rung: "pr", stage: null })).toMatchObject({
+      group: "attention",
+      tone: "step",
+      label: "Aprobar PR",
+    });
+    // An approved step is the coordinator's to run and report: the task waits.
+    expect(status({ kind: "record", rung: "jira", stage: "after_pr" })).toMatchObject({
+      group: "waiting",
+      label: "Esperando al coordinador: Jira (PR)",
+    });
     expect(status({ kind: "record", rung: "jira", stage: "after_merge" }).label).toBe(
-      "Registrar Jira (merge)",
+      "Esperando al coordinador: Jira (merge)",
     );
     expect(status({ kind: "drifted", rung: "push", stage: null })).toMatchObject({
       group: "attention",

@@ -17,7 +17,8 @@
 
 use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus, DeliveryRun,
-    DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask,
+    DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask, SINGLE_COMMIT_MAX_FILES,
+    SINGLE_COMMIT_MAX_LINES,
 };
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
@@ -43,6 +44,73 @@ pub struct NewApproval {
     pub jira_statuses: Vec<String>,
     /// `commit` only: changed files the plan leaves uncommitted on purpose.
     pub leave_out: Vec<String>,
+    /// `commit` only: why a single commit is right when the change spans
+    /// several areas or is large; a coordinator's plan needs it then.
+    pub single_commit_reason: Option<String>,
+}
+
+/// Where a changed file belongs for splitting commits: `docs`, `tests` or
+/// `code`.
+fn change_area(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    let in_dir = |dirs: &[&str]| lower.split('/').any(|part| dirs.contains(&part));
+    if in_dir(&["docs", "doc"])
+        || [".md", ".mdx", ".rst", ".adoc"]
+            .iter()
+            .any(|ext| name.ends_with(ext))
+    {
+        "docs"
+    } else if in_dir(&["test", "tests", "__tests__", "spec", "e2e"])
+        || [".test.", ".spec.", "_test."]
+            .iter()
+            .any(|part| name.contains(part))
+        || name.starts_with("test_")
+    {
+        "tests"
+    } else {
+        "code"
+    }
+}
+
+/// A plan of one commit is the exception: when it mixes areas or is larger
+/// than the repo allows, it has to say why.
+fn check_single_commit(
+    paths: &[String],
+    lines: u64,
+    max_files: u32,
+    max_lines: u32,
+    reason: Option<&str>,
+) -> Result<(), DeliveryError> {
+    if reason.is_some_and(|reason| !reason.trim().is_empty()) {
+        return Ok(());
+    }
+    let mut areas: Vec<&str> = paths.iter().map(|path| change_area(path)).collect();
+    areas.sort_unstable();
+    areas.dedup();
+    let mut why = Vec::new();
+    if areas.len() > 1 {
+        why.push(format!("mezcla {}", areas.join(", ")));
+    }
+    if paths.len() > max_files as usize {
+        why.push(format!(
+            "tiene {} archivos (más de {max_files})",
+            paths.len()
+        ));
+    }
+    if lines > u64::from(max_lines) {
+        why.push(format!("cambia {lines} líneas (más de {max_lines})"));
+    }
+    if why.is_empty() {
+        return Ok(());
+    }
+    Err(DeliveryError::new(
+        "single_commit_unjustified",
+        format!(
+            "un único commit que {} necesita single_commit_reason: la norma es dividir el cambio en commits atómicos, cada uno con su código y sus tests; si debe ir junto, di por qué",
+            why.join(" y ")
+        ),
+    ))
 }
 
 /// What the form to prepare a commit starts from.
@@ -183,6 +251,7 @@ pub(super) fn found_step(
         reviewers_requested: false,
         commits: Vec::new(),
         left_out: Vec::new(),
+        single_commit_reason: None,
         created: Vec::new(),
         before: None,
         tip: None,
@@ -756,6 +825,7 @@ impl DeliveryService {
         let mut body = request.body;
         let mut commits = Vec::new();
         let mut left_out = Vec::new();
+        let mut single_commit_reason = None;
         match request.rung {
             DeliveryRung::Commit => {
                 let changed = tasks::changed_files(place, &task.worktree)?;
@@ -783,6 +853,28 @@ impl DeliveryService {
                     .map(|path| plan_path(path))
                     .collect();
                 check_plan(&changed, &commits, &left_out)?;
+                // The user who prepares one commit knows what it holds; a
+                // coordinator justifies it.
+                if let ([only], false) = (commits.as_slice(), request.requested_by == "user") {
+                    let settings = self.store()?.repo_settings(&task.repo)?;
+                    check_single_commit(
+                        &only.paths,
+                        tasks::changed_lines(place, &task.worktree, &only.paths),
+                        settings
+                            .single_commit_max_files
+                            .unwrap_or(SINGLE_COMMIT_MAX_FILES),
+                        settings
+                            .single_commit_max_lines
+                            .unwrap_or(SINGLE_COMMIT_MAX_LINES),
+                        request.single_commit_reason.as_deref(),
+                    )?;
+                    single_commit_reason = request
+                        .single_commit_reason
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|reason| !reason.is_empty())
+                        .map(str::to_string);
+                }
                 // The plan is the exact text; the title only names the step.
                 title = match commits.as_slice() {
                     [only] => subject(&only.message).to_string(),
@@ -811,6 +903,7 @@ impl DeliveryService {
             reviewers_requested: false,
             commits,
             left_out,
+            single_commit_reason,
             created: Vec::new(),
             before: None,
             tip: None,
@@ -891,6 +984,26 @@ impl DeliveryService {
                 }
             }
         }
+        // Tinto opens the PR with the approved text. When it cannot reach
+        // GitHub the step stays approved for the coordinator, whose report
+        // is checked against that text.
+        let mut opened = None;
+        if approval.rung == DeliveryRung::Pr {
+            match self.open_approved_pr(&approval) {
+                Ok(found) => {
+                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.executed_at_ms = Some(now_ms());
+                    approval.outcome = Some(found.url.clone());
+                    opened = Some(found);
+                }
+                Err(error) => {
+                    approval.notice = Some(format!(
+                        "Tinto no pudo abrir el PR ({}): el coordinador lo abre con este título y cuerpo y lo informa",
+                        error.message
+                    ));
+                }
+            }
+        }
         if approval.rung == DeliveryRung::Merge {
             let executed = self.merge_pr(&approval);
             approval.executed_at_ms = Some(now_ms());
@@ -932,12 +1045,71 @@ impl DeliveryService {
             }
         }
         self.save_approval(&approval, "approval_approved")?;
+        if let Some(found) = opened {
+            let task = self.task(&approval.task_id)?;
+            self.adopt_pr(&task, &found)?;
+            approval = self.approval(&approval.id)?;
+        }
         // Read only once the step is saved as done, so the read does not
         // take Tinto's own merge for one made outside it.
         if approval.rung == DeliveryRung::Merge {
             let _ = self.refresh_pr(&approval.task_id, std::time::Duration::ZERO);
         }
         Ok(approval)
+    }
+
+    /// The user has Tinto open an approved PR step that is not open yet:
+    /// Tinto could not reach GitHub when it was approved, or it was approved
+    /// before Tinto opened PRs itself.
+    pub fn open_pr_step(&self, approval_id: &str) -> Result<DeliveryApproval, DeliveryError> {
+        let mut approval = self.approval(approval_id)?;
+        if approval.rung != DeliveryRung::Pr || approval.status != DeliveryApprovalStatus::Approved
+        {
+            return Err(DeliveryError::new(
+                "approval_not_approved",
+                "solo se abre un paso PR aprobado que aún no tiene PR",
+            ));
+        }
+        let found = self.open_approved_pr(&approval)?;
+        approval.status = DeliveryApprovalStatus::Executed;
+        approval.executed_at_ms = Some(now_ms());
+        approval.outcome = Some(found.url.clone());
+        approval.notice = None;
+        self.save_approval(&approval, "approval_completed")?;
+        let task = self.task(&approval.task_id)?;
+        self.adopt_pr(&task, &found)?;
+        self.approval(&approval.id)
+    }
+
+    /// The coordinator takes back a request the user has not answered, to
+    /// ask it again with other text. The reason stays in the log.
+    pub fn withdraw_approval(&self, approval_id: &str, reason: &str) -> Result<(), DeliveryError> {
+        let approval = self.approval(approval_id)?;
+        if approval.status != DeliveryApprovalStatus::Pending {
+            return Err(DeliveryError::new(
+                "approval_not_pending",
+                "esta aprobación ya tiene una decisión del usuario y no se puede retirar ni sustituir; pide el paso siguiente o informa su resultado",
+            ));
+        }
+        if reason.trim().is_empty() {
+            return Err(DeliveryError::new(
+                "invalid_arguments",
+                "di por qué se retira la aprobación",
+            ));
+        }
+        let rung = format!("{:?}", approval.rung).to_ascii_lowercase();
+        let store = self.store()?;
+        store.delete_approval(&approval.id)?;
+        store.record_event(
+            now_ms(),
+            "approval_withdrawn",
+            Some(&approval.task_id),
+            None,
+            &format!("{rung}: {}", reason.trim()),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(())
     }
 
     /// The coordinator (or the user) reports how an approved PR or Jira step
@@ -973,6 +1145,25 @@ impl DeliveryService {
                 .flatten()
                 .or_else(|| super::prs::parse_pr_url(outcome))
                 .ok_or_else(|| super::prs::no_branch_pr(&task.branch))?;
+            // What was published has to be what the user approved.
+            match self.published_difference(&found.url, &approval) {
+                Ok(Some(difference)) => {
+                    return Err(DeliveryError::new(
+                        "pr_mismatch",
+                        format!(
+                            "{}: {difference}. Pon en el PR el título y el cuerpo aprobados (gh pr edit) y vuelve a informar",
+                            super::prs::PUBLISHED_MISMATCH
+                        ),
+                    ))
+                }
+                Ok(None) => approval.notice = None,
+                Err(_) => {
+                    approval.notice = Some(
+                        "No se pudo leer el PR en GitHub para comprobar que coincide con el texto aprobado"
+                            .to_string(),
+                    )
+                }
+            }
             opened = Some((task, found));
         }
         approval.status = if success {

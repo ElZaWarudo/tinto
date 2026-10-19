@@ -391,6 +391,10 @@ pub struct DeliveryApproval {
     /// `commit` only: changed files the plan leaves uncommitted on purpose.
     #[serde(default)]
     pub left_out: Vec<String>,
+    /// `commit` only: why one commit holds a change that spans several
+    /// areas or is large, which the user reads with the plan.
+    #[serde(default)]
+    pub single_commit_reason: Option<String>,
     /// `commit` only: the commits Tinto created, in order.
     #[serde(default)]
     pub created: Vec<String>,
@@ -656,7 +660,18 @@ pub struct DeliveryRepoSettings {
     /// Whether QA may make paid model calls. `None` until the user sets it.
     #[serde(default)]
     pub paid_model_calls: Option<bool>,
+    /// A coordinator's plan of one commit with more files than this must
+    /// say why; default [`SINGLE_COMMIT_MAX_FILES`].
+    #[serde(default)]
+    pub single_commit_max_files: Option<u32>,
+    /// Likewise for changed lines (added plus removed); default
+    /// [`SINGLE_COMMIT_MAX_LINES`].
+    #[serde(default)]
+    pub single_commit_max_lines: Option<u32>,
 }
+
+pub const SINGLE_COMMIT_MAX_FILES: u32 = 5;
+pub const SINGLE_COMMIT_MAX_LINES: u32 = 300;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryJiraSettings {

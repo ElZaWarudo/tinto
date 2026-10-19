@@ -312,6 +312,12 @@ function effortChoices(
   };
 }
 
+/** A limit typed in a field: a whole number above zero, else none. */
+function positive(text: string): number | null {
+  const value = Number.parseInt(text, 10);
+  return value > 0 ? value : null;
+}
+
 /** Who runs a stage, as the selectors hold it ("" is the CLI's default). */
 interface AgentChoice {
   agent: DeliveryAgent;
@@ -872,6 +878,9 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
   const [verification, setVerification] = useState("");
   // "yes", "no", or "" while the user has not set it.
   const [paidCalls, setPaidCalls] = useState("");
+  // "" keeps Tinto's default.
+  const [maxFiles, setMaxFiles] = useState("");
+  const [maxLines, setMaxLines] = useState("");
   const [stages, setStages] = useState<Record<string, DeliveryStageAgent>>({});
   const [jiraHost, setJiraHost] = useState("");
   const [jiraProject, setJiraProject] = useState("");
@@ -891,6 +900,8 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         setCommands((settings.qa_commands ?? []).join("\n"));
         setEnvironment(settings.qa_environment ?? "");
         setVerification(settings.verification ?? "");
+        setMaxFiles(settings.single_commit_max_files?.toString() ?? "");
+        setMaxLines(settings.single_commit_max_lines?.toString() ?? "");
         setPaidCalls(
           settings.paid_model_calls === true
             ? "yes"
@@ -981,6 +992,31 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
           <option value="no">No permitidas</option>
         </select>
       </Field>
+      <Field
+        label="Un solo commit, como mucho"
+        hint="Un coordinador que proponga un único commit más grande, o que mezcle código, tests y documentación, debe justificarlo."
+      >
+        <span className="delivery-field-row">
+          <input
+            aria-label="Archivos de un único commit"
+            type="number"
+            min={1}
+            value={maxFiles}
+            placeholder="5"
+            onChange={(event) => setMaxFiles(event.target.value)}
+          />
+          archivos y
+          <input
+            aria-label="Líneas de un único commit"
+            type="number"
+            min={1}
+            value={maxLines}
+            placeholder="300"
+            onChange={(event) => setMaxLines(event.target.value)}
+          />
+          líneas
+        </span>
+      </Field>
       <h3 className="delivery-dialog__subtitle">Jira</h3>
       <p className="file-op-modal__body">
         Con Jira configurado, Tinto hace los pasos Jira al aprobarlos: enlaza el PR, lleva la issue
@@ -1070,6 +1106,8 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
               qa_environment: environment.trim(),
               verification: verification.trim(),
               paid_model_calls: paidCalls === "" ? null : paidCalls === "yes",
+              single_commit_max_files: positive(maxFiles),
+              single_commit_max_lines: positive(maxLines),
               stages,
               jira: jiraHost.trim()
                 ? {

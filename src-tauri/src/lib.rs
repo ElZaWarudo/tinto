@@ -1,3 +1,5 @@
+// The MCP tool list is one large json! literal.
+#![recursion_limit = "256"]
 // <pumarejo:begin>
 #[cfg(all(debug_assertions, feature = "pumarejo"))]
 fn pumarejo_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
@@ -132,6 +134,9 @@ pub fn run() {
             delivery::commands::delivery_pr_seen,
             delivery::commands::delivery_check_task,
             delivery::commands::delivery_find_pr,
+            delivery::commands::delivery_open_pr,
+            delivery::commands::delivery_close_pr,
+            delivery::commands::delivery_pr_to_draft,
             delivery::commands::delivery_pr_reviewers,
             delivery::commands::delivery_answer_decision,
             delivery::commands::delivery_approve_settings_proposal,

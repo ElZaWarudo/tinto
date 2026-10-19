@@ -413,6 +413,9 @@ pub fn delivery_set_repo_settings(
         qa_environment: settings.qa_environment.trim().to_string(),
         verification: settings.verification.trim().to_string(),
         paid_model_calls: settings.paid_model_calls,
+        // Zero means no limit was set: the default applies.
+        single_commit_max_files: settings.single_commit_max_files.filter(|limit| *limit > 0),
+        single_commit_max_lines: settings.single_commit_max_lines.filter(|limit| *limit > 0),
         stages: settings
             .stages
             .into_iter()
@@ -490,6 +493,7 @@ pub fn delivery_request_approval(
             requested_by: "user".to_string(),
             commits: commits.unwrap_or_default(),
             leave_out: leave_out.unwrap_or_default(),
+            single_commit_reason: None,
             merge_method,
             stage,
             jira_statuses: jira_statuses.unwrap_or_default(),
@@ -688,6 +692,37 @@ pub async fn delivery_find_pr(
 ) -> Result<Option<DeliveryPr>, CommandError> {
     let service = service.inner().clone();
     blocking(move || service.find_task_pr(&task_id)).await
+}
+
+/// Opens an approved PR step's PR on GitHub with its approved text.
+#[tauri::command]
+pub async fn delivery_open_pr(
+    service: State<'_, DeliveryService>,
+    approval_id: String,
+) -> Result<DeliveryApproval, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.open_pr_step(&approval_id)).await
+}
+
+/// Closes the task's PR on GitHub without merging it, for a delivery the
+/// user stopped.
+#[tauri::command]
+pub async fn delivery_close_pr(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Option<DeliveryPr>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.close_task_pr(&task_id)).await
+}
+
+/// Turns the task's PR back into a draft on GitHub.
+#[tauri::command]
+pub async fn delivery_pr_to_draft(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Option<DeliveryPr>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.task_pr_to_draft(&task_id)).await
 }
 
 #[tauri::command]

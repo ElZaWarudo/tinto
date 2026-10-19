@@ -28,11 +28,7 @@ export function deliveryNeeds(overview: DeliveryOverview, now: number): Delivery
       .filter((decision) => decision.task_id === task.id && decision.status === "pending")
       .map((decision) => decision.id);
     const approvals = overview.approvals
-      .filter(
-        (approval) =>
-          approval.task_id === task.id &&
-          (approval.status === "pending" || approval.status === "approved"),
-      )
+      .filter((approval) => approval.task_id === task.id && approval.status === "pending")
       .map((approval) => `${approval.id}:${approval.status}`);
     const keys =
       decisions.length > 0

@@ -200,6 +200,18 @@ export const checkDeliveryTask = (taskId: string) =>
 export const findDeliveryPr = (taskId: string) =>
   invoke<DeliveryPr | null>("delivery_find_pr", { taskId });
 
+/** Opens an approved PR step's PR on GitHub with its approved text. */
+export const openDeliveryPr = (approvalId: string) =>
+  invoke<DeliveryApproval>("delivery_open_pr", { approvalId });
+
+/** Closes the task's PR on GitHub without merging it. */
+export const closeDeliveryPr = (taskId: string) =>
+  invoke<DeliveryPr | null>("delivery_close_pr", { taskId });
+
+/** Turns the task's PR back into a draft on GitHub. */
+export const deliveryPrToDraft = (taskId: string) =>
+  invoke<DeliveryPr | null>("delivery_pr_to_draft", { taskId });
+
 /** What is new on the task's PR stops being new. */
 export const markDeliveryPrSeen = (taskId: string) =>
   invoke<DeliveryPr | null>("delivery_pr_seen", { taskId });

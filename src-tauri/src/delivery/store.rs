@@ -294,6 +294,12 @@ impl DeliveryStore {
         self.all("SELECT data FROM approvals ORDER BY rowid", [])
     }
 
+    pub fn delete_approval(&self, id: &str) -> Result<(), DeliveryError> {
+        self.conn
+            .execute("DELETE FROM approvals WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     // ---- pull requests ----
 
     pub fn put_pr(&self, pr: &DeliveryPr) -> Result<(), DeliveryError> {
@@ -402,6 +408,15 @@ impl DeliveryStore {
     pub fn event_kinds(&self) -> Result<Vec<String>, DeliveryError> {
         let mut stmt = self.conn.prepare("SELECT kind FROM events ORDER BY seq")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<Result<Vec<String>, _>>()?)
+    }
+
+    #[cfg(test)]
+    pub fn event_details(&self, kind: &str) -> Result<Vec<String>, DeliveryError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT detail FROM events WHERE kind = ?1 ORDER BY seq")?;
+        let rows = stmt.query_map([kind], |row| row.get(0))?;
         Ok(rows.collect::<Result<Vec<String>, _>>()?)
     }
 

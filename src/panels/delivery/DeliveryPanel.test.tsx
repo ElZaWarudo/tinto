@@ -54,6 +54,9 @@ const client = vi.hoisted(() => ({
   refreshDeliveryPr: vi.fn(() => Promise.resolve(null)),
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  closeDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  openDeliveryPr: vi.fn(() => Promise.resolve({})),
+  deliveryPrToDraft: vi.fn(() => Promise.resolve(null)),
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
   getDeliveryPrReviewers: vi.fn((): Promise<string[]> => Promise.resolve([])),
   correctDeliveryApproval: vi.fn(),
@@ -1569,6 +1572,170 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
   });
 
+  it("waits on the coordinator after a PR step is approved, without holding the user", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          {
+            id: "a3",
+            task_id: "t1",
+            rung: "pr",
+            title: "feat: x",
+            body: "",
+            status: "approved",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_at_ms: 2,
+            executed_at_ms: null,
+            outcome: null,
+            notice:
+              "Tinto no pudo abrir el PR (GitHub no está conectado): el coordinador lo abre con este título y cuerpo y lo informa",
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Aprobación pr" });
+    expect(within(banner).getByText("Esperando al coordinador: PR")).toBeInTheDocument();
+    expect(within(banner).getByText(/Tinto no pudo abrir el PR/)).toBeInTheDocument();
+    // Recording it by hand is a correction tucked away, not a prompt.
+    expect(
+      within(banner).getByText("Anotar el resultado a mano").closest("details"),
+    ).not.toHaveAttribute("open");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Tinto can open it itself, with the approved text.
+    await userEvent
+      .setup()
+      .click(within(banner).getByRole("button", { name: "Abrir el PR en GitHub" }));
+    expect(client.openDeliveryPr).toHaveBeenCalledWith("a3");
+    expect(screen.getByRole("button", { name: /^(Otra etapa|Lanzar etapa)…$/ })).toBeEnabled();
+  });
+
+  it("says what a rejected Jira step leaves open and offers to close the PR", async () => {
+    const user = userEvent.setup();
+    const step = (
+      id: string,
+      rung: DeliveryApproval["rung"],
+      status: DeliveryApproval["status"],
+      at: number,
+      stage: DeliveryApproval["stage"] = null,
+    ): DeliveryApproval => ({
+      id,
+      task_id: "t1",
+      rung,
+      title: rung,
+      body: "",
+      status,
+      requested_by: "coord",
+      requested_at_ms: at,
+      decided_at_ms: at,
+      executed_at_ms: at,
+      outcome: "hecho",
+      stage,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          step("a1", "commit", "executed", 1),
+          step("a2", "push", "executed", 2),
+          step("a3", "pr", "executed", 3),
+          step("a4", "jira", "rejected", 4, "after_pr"),
+        ],
+        prs: [
+          {
+            task_id: "t1",
+            url: "https://github.com/o/r/pull/299",
+            repo: "o/r",
+            number: 299,
+            state: "open",
+            draft: false,
+            conflicts: false,
+            review_decision: null,
+            checks: { passing: 0, failing: 0, pending: 0 },
+            new_reviews: 0,
+            new_comments: 0,
+            new_authors: [],
+            latest_activity: null,
+            seen_until: null,
+            checked_at_ms: 1,
+            error: null,
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const notice = await screen.findByRole("group", { name: "Paso rechazado" });
+    expect(
+      within(notice).getByText(
+        "El PR #299 sigue abierto en GitHub; rechazar este paso solo evita los cambios en Jira.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(within(notice).getByRole("button", { name: "Pasar el PR a borrador" }));
+    expect(client.deliveryPrToDraft).toHaveBeenCalledWith("t1");
+    await user.click(within(notice).getByRole("button", { name: "Cerrar el PR #299" }));
+    expect(client.closeDeliveryPr).toHaveBeenCalledWith("t1");
+  });
+
+  it("says before rejecting a step what stays as it is", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          {
+            id: "a2",
+            task_id: "t1",
+            rung: "push",
+            title: "Publicar",
+            body: "",
+            status: "pending",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_at_ms: null,
+            executed_at_ms: null,
+            outcome: null,
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Aprobación push" });
+    expect(
+      within(banner).getByText(/Rechazar no deshace los commits: siguen en .*, sin publicar\./),
+    ).toBeInTheDocument();
+  });
+
+  it("shows why a single commit holds the whole change", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          {
+            id: "a1",
+            task_id: "t1",
+            rung: "commit",
+            title: "feat: all",
+            body: "",
+            status: "pending",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_at_ms: null,
+            executed_at_ms: null,
+            outcome: null,
+            commits: [{ message: "feat: all", paths: ["src/a.rs", "tests/a.rs"] }],
+            single_commit_reason: "the test only compiles with the change",
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Aprobación commit" });
+    expect(
+      within(banner).getByText("Un solo commit porque: the test only compiles with the change"),
+    ).toBeInTheDocument();
+  });
+
   it("says a task is delivered only once both Jira steps are done", async () => {
     const done = (id: string, rung: DeliveryApproval["rung"], stage?: "after_merge") => ({
       id,
@@ -1833,7 +2000,7 @@ describe("DeliveryPanel", () => {
     renderPanel();
     const banner = await screen.findByRole("group", { name: "Aprobación pr" });
     const reviewers = within(banner).getByRole("group", { name: "Revisores" });
-    const approve = within(banner).getByRole("button", { name: "Aprobar" });
+    const approve = within(banner).getByRole("button", { name: "Aprobar y abrir el PR" });
     await within(reviewers).findByRole("checkbox", { name: "ana" });
     expect(approve).toBeDisabled();
     await user.click(within(reviewers).getByRole("checkbox", { name: "luis" }));

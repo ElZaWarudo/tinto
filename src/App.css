@@ -18,6 +18,9 @@
   --accent-fg: #4ec9b0;
   --danger: #f14c4c;
   --warn: #cca700;
+  /* Delivery steps (commit, push, PR, merge, Jira) waiting on the user: apart
+     from blockers' amber and red, light enough to read as text. */
+  --step: #c5a3ff;
   --added: #4ec9b0;
   --border: #333333;
   color-scheme: dark;

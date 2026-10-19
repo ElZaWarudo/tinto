@@ -20,7 +20,10 @@ import {
   setDeliveryRunPaused,
   checkDeliveryTask,
   closeDeliveryRun,
+  closeDeliveryPr,
   completeDeliveryApproval,
+  deliveryPrToDraft,
+  openDeliveryPr,
   correctDeliveryApproval,
   createDeliveryRun,
   createDeliveryTask,
@@ -163,6 +166,7 @@ function StatusMark({ icon }: { icon: StatusIcon }) {
 
 const TONE_ICON: Record<Tone, StatusIcon> = {
   attention: "alert",
+  step: "flag",
   danger: "x",
   live: "live",
   waiting: "clock",
@@ -920,7 +924,10 @@ function TaskDetail({
   );
   const pendingDecisions = taskDecisions.filter((decision) => decision.status === "pending");
   const blocked = pendingDecisions.length > 0;
-  const needsYou = blocked || openApprovals.length > 0 || broken !== null;
+  // An approved step waits on the coordinator, not on the user.
+  const needsYou =
+    blocked || openApprovals.some((approval) => approval.status === "pending") || broken !== null;
+  const rejected = rejectedStep(approvals);
   // The coordinator's label stops at the stages; the delivery is Tinto's to know.
   const delivered = isDelivered(approvals);
   const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
@@ -1159,8 +1166,19 @@ function TaskDetail({
       />
 
       {openApprovals.map((approval) => (
-        <ApprovalBanner key={approval.id} task={task} approval={approval} busy={busy} run={run} />
+        <ApprovalBanner
+          key={approval.id}
+          task={task}
+          approval={approval}
+          pr={pr}
+          busy={busy}
+          run={run}
+        />
       ))}
+
+      {rejected && openApprovals.length === 0 && (
+        <RejectedStep task={task} approval={rejected} pr={pr} busy={busy} run={run} />
+      )}
 
       {broken && (
         <div
@@ -1441,7 +1459,7 @@ function StageTrack({
               ? { ...live, title: `${pr?.repo}#${pr?.number}` }
               : unlinked
                 ? {
-                    tone: "attention" as const,
+                    tone: "step" as const,
                     icon: "alert" as const,
                     label: "Hecho · sin PR vinculado",
                     title: approval.outcome ?? undefined,
@@ -1474,9 +1492,9 @@ function rungStep(approval: DeliveryApproval | undefined): {
   if (!approval) return { tone: "todo", icon: "ring", label: "—" };
   switch (approval.status) {
     case "pending":
-      return { tone: "attention", icon: "flag", label: "Tu aprobación" };
+      return { tone: "step", icon: "flag", label: "Tu aprobación" };
     case "approved":
-      return { tone: "attention", icon: "flag", label: "Falta registrarlo" };
+      return { tone: "waiting", icon: "clock", label: "Lo hace el coordinador" };
     case "executed":
       return {
         tone: "ok",
@@ -1495,7 +1513,7 @@ function rungStep(approval: DeliveryApproval | undefined): {
       };
     case "drifted":
       return {
-        tone: "attention",
+        tone: "step",
         icon: "alert",
         label: "Ya no coincide",
         title: approval.notice ?? undefined,
@@ -1708,14 +1726,96 @@ function CommitStep({
   );
 }
 
-function ApprovalBanner({
+/** The latest step, when the user rejected it and nothing was asked since. */
+function rejectedStep(approvals: DeliveryApproval[]): DeliveryApproval | null {
+  const latest = [...approvals].sort((a, b) => b.requested_at_ms - a.requested_at_ms)[0];
+  return latest?.status === "rejected" ? latest : null;
+}
+
+/** What stays as it is when the user rejects a step: a rejection only stops
+ *  that step, it undoes none before it. */
+function rejectionScope(
+  approval: DeliveryApproval,
+  task: DeliveryTask,
+  pr: DeliveryPr | undefined,
+) {
+  const openPr = pr && pr.state === "open" ? `El PR #${pr.number} sigue abierto en GitHub` : null;
+  switch (approval.rung) {
+    case "commit":
+      return `Rechazar no toca los cambios: siguen sin commit en ${task.branch}.`;
+    case "push":
+      return `Rechazar no deshace los commits: siguen en ${task.branch}, sin publicar.`;
+    case "pr":
+      return `Rechazar no borra nada: la rama ${task.branch} sigue publicada en GitHub, sin PR.`;
+    case "merge":
+      return openPr
+        ? `${openPr}; rechazar este paso solo evita fusionarlo.`
+        : "Rechazar este paso solo evita fusionar el PR.";
+    default:
+      if (approval.stage === "after_merge")
+        return "El PR ya está fusionado; rechazar este paso solo evita los cambios en Jira.";
+      return openPr
+        ? `${openPr}; rechazar este paso solo evita los cambios en Jira.`
+        : "Rechazar este paso solo evita los cambios en Jira.";
+  }
+}
+
+/** A rejected step: what still stands, and how to undo the PR when it is open. */
+function RejectedStep({
   task,
   approval,
+  pr,
   busy,
   run,
 }: {
   task: DeliveryTask;
   approval: DeliveryApproval;
+  pr: DeliveryPr | undefined;
+  busy: boolean;
+  run: (action: () => Promise<unknown>) => Promise<boolean>;
+}) {
+  const openPr = pr?.state === "open";
+  return (
+    <div className="delivery-banner delivery-banner--step" role="group" aria-label="Paso rechazado">
+      <p className="delivery-banner__title">
+        <Icon name="x" />
+        <strong>Rechazaste {lower(stepOf(approval).label)}</strong>
+      </p>
+      <p className="delivery-muted">{rejectionScope(approval, task, pr)}</p>
+      {openPr && (
+        <div className="delivery-actions">
+          {!pr.draft && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run(() => deliveryPrToDraft(task.id))}
+            >
+              Pasar el PR a borrador
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void run(() => closeDeliveryPr(task.id))}
+          >
+            Cerrar el PR #{pr.number}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ApprovalBanner({
+  task,
+  approval,
+  pr,
+  busy,
+  run,
+}: {
+  task: DeliveryTask;
+  approval: DeliveryApproval;
+  pr: DeliveryPr | undefined;
   busy: boolean;
   run: (action: () => Promise<unknown>) => Promise<boolean>;
 }) {
@@ -1746,23 +1846,50 @@ function ApprovalBanner({
       : approval.rung === "push"
         ? `Al aprobar, Tinto publica la rama ${task.branch}.`
         : approval.rung === "pr"
-          ? "Al aprobar, el coordinador abre el PR con este título y cuerpo. Después lo registras aquí; si no pegas su URL, Tinto busca el PR de la rama. Desde entonces Tinto lo sigue en GitHub y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar."
+          ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar.`
           : approval.rung === "merge"
             ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
             : approval.jira_statuses?.length
               ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
-              : "Al aprobar, el coordinador hace estas operaciones en Jira. Después registras aquí qué se hizo.";
+              : "Al aprobar, el coordinador hace estas operaciones en Jira y las informa; no tienes que hacer nada más.";
   return (
-    <div className="delivery-banner" role="group" aria-label={`Aprobación ${approval.rung}`}>
+    <div
+      className="delivery-banner delivery-banner--step"
+      role="group"
+      aria-label={`Aprobación ${approval.rung}`}
+    >
       <p className="delivery-banner__title">
         <Icon name="flag" />
-        <strong>{pending ? `Aprobar ${name}` : `Registrar ${name}`}</strong>
+        <strong>{pending ? `Aprobar ${name}` : `Esperando al coordinador: ${name}`}</strong>
         <span className="delivery-muted">
-          {pending ? preparedBy(approval) : "aprobado; falta anotar el resultado"}
+          {pending ? preparedBy(approval) : "aprobado; el coordinador lo hace y lo informa"}
         </span>
       </p>
+      {!pending && approval.notice && <p className="delivery-job__note">{approval.notice}</p>}
+      {!pending && approval.rung === "pr" && (
+        <div className="delivery-actions">
+          <button
+            type="button"
+            className="delivery-button--primary"
+            disabled={busy}
+            onClick={() => void run(() => openDeliveryPr(approval.id))}
+          >
+            Abrir el PR en GitHub
+          </button>
+          <span className="delivery-muted">
+            Tinto lo abre desde {task.branch} con el título y el cuerpo aprobados.
+          </span>
+        </div>
+      )}
       {approval.rung === "commit" ? (
-        <CommitPlanView approval={approval} />
+        <>
+          <CommitPlanView approval={approval} />
+          {approval.single_commit_reason && (
+            <p className="delivery-job__note">
+              Un solo commit porque: {approval.single_commit_reason}
+            </p>
+          )}
+        </>
       ) : (
         <pre className="delivery-banner__text">
           {approval.title}
@@ -1825,41 +1952,50 @@ function ApprovalBanner({
                 ? "Aprobar y publicar"
                 : approval.rung === "merge"
                   ? "Aprobar y fusionar"
-                  : "Aprobar"}
+                  : approval.rung === "pr"
+                    ? "Aprobar y abrir el PR"
+                    : "Aprobar"}
           </button>
           <button
             type="button"
             disabled={busy}
+            title={rejectionScope(approval, task, pr)}
             onClick={() => void run(() => decideDeliveryApproval(approval.id, false))}
           >
             Rechazar
           </button>
+          <span className="delivery-muted">{rejectionScope(approval, task, pr)}</span>
         </div>
       ) : (
-        <div className="delivery-actions">
-          <input
-            aria-label="Resultado del paso"
-            placeholder={
-              approval.rung === "pr"
-                ? "URL del PR (si no, Tinto lo busca por la rama)"
-                : "Qué se hizo"
-            }
-            value={outcome}
-            onChange={(event) => setOutcome(event.target.value)}
-          />
-          <button
-            type="button"
-            disabled={busy || (approval.rung === "jira" && !outcome.trim())}
-            title={
-              approval.rung === "jira" && !outcome.trim()
-                ? "Escribe qué se hizo en Jira: transiciones y estado final."
-                : undefined
-            }
-            onClick={() => void run(() => completeDeliveryApproval(approval.id, true, outcome))}
-          >
-            Marcar como hecho
-          </button>
-        </div>
+        // Only a correction: the coordinator reports the step. Nothing here
+        // waits on it.
+        <details className="delivery-manual-record">
+          <summary>Anotar el resultado a mano</summary>
+          <div className="delivery-actions">
+            <input
+              aria-label="Resultado del paso"
+              placeholder={
+                approval.rung === "pr"
+                  ? "URL del PR (si no, Tinto lo busca por la rama)"
+                  : "Qué se hizo"
+              }
+              value={outcome}
+              onChange={(event) => setOutcome(event.target.value)}
+            />
+            <button
+              type="button"
+              disabled={busy || (approval.rung === "jira" && !outcome.trim())}
+              title={
+                approval.rung === "jira" && !outcome.trim()
+                  ? "Escribe qué se hizo en Jira: transiciones y estado final."
+                  : undefined
+              }
+              onClick={() => void run(() => completeDeliveryApproval(approval.id, true, outcome))}
+            >
+              Marcar como hecho
+            </button>
+          </div>
+        </details>
       )}
     </div>
   );

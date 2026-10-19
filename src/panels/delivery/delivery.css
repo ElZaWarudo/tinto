@@ -68,6 +68,9 @@
 }
 
 /* Tones: icon + text, never colour alone. */
+.delivery-tone--step {
+  color: var(--step);
+}
 .delivery-tone--attention {
   color: var(--warn);
 }
@@ -412,6 +415,13 @@
 .delivery-banner--danger {
   border-color: var(--danger);
   background: rgba(241, 76, 76, 0.07);
+}
+.delivery-banner--step {
+  border-color: var(--step);
+  background: color-mix(in srgb, var(--step) 7%, transparent);
+}
+.delivery-banner--step .delivery-banner__title .delivery-icon {
+  color: var(--step);
 }
 .delivery-banner p {
   margin: 0;
@@ -769,6 +779,14 @@
 }
 .delivery-node--danger {
   border-top-color: var(--danger);
+}
+.delivery-node--step {
+  border-top-color: var(--step);
+  background: color-mix(in srgb, var(--step) 8%, var(--bg));
+}
+.delivery-node--step .delivery-icon,
+.delivery-node--step small {
+  color: var(--step);
 }
 .delivery-node--danger .delivery-icon,
 .delivery-node--danger small {
