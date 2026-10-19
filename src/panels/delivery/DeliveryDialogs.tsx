@@ -268,11 +268,11 @@ const CLAUDE_MODELS: Choice[] = [
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const CODEX_FALLBACK_EFFORTS = ["low", "medium", "high"];
 
-/** The models an agent offers. Codex's come from the catalog Agents keeps;
- *  Sol 6.1 is the default when the account has it. */
+/** The models an agent offers. Codex's and Muse Code's come from the catalog
+ *  Agents keeps; Sol 6.1 is Codex's default when the account has it. */
 function modelChoices(agent: DeliveryAgent): { choices: Choice[]; preferred: string } {
-  if (agent !== "codex") return { choices: CLAUDE_MODELS, preferred: "" };
-  const catalog = lastRuntimeCatalog();
+  if (agent !== "codex" && agent !== "muse") return { choices: CLAUDE_MODELS, preferred: "" };
+  const catalog = lastRuntimeCatalog(agent);
   const models = catalog?.models ?? [];
   if (models.length === 0)
     return { choices: [{ value: "", label: "Predeterminado" }], preferred: "" };
@@ -300,8 +300,8 @@ function effortChoices(
   model: string,
 ): { choices: Choice[]; preferred: string } {
   const values =
-    agent === "codex"
-      ? (lastRuntimeCatalog()
+    agent === "codex" || agent === "muse"
+      ? (lastRuntimeCatalog(agent)
           ?.models?.find((option) => option.model === model)
           ?.supported_reasoning_efforts.map((effort) => effort.value) ?? CODEX_FALLBACK_EFFORTS)
       : CLAUDE_EFFORTS;
@@ -322,7 +322,8 @@ interface AgentChoice {
 /** What the selectors show for a stage's agent: its own model and reasoning
  *  where this machine offers them, the preferred ones otherwise. */
 function agentChoice(from: DeliveryStageAgent | null | undefined): AgentChoice {
-  const agent = from?.agent === "claude" ? "claude" : "codex";
+  const agent =
+    from?.agent === "claude" || from?.agent === "muse" ? from.agent : ("codex" as const);
   const models = modelChoices(agent);
   const wanted = from?.agent === agent ? (from.model ?? "") : null;
   const model = models.choices.some((choice) => choice.value === wanted)
@@ -479,6 +480,7 @@ export function DispatchDialog({
           >
             <option value="codex">Codex</option>
             <option value="claude">Claude Code</option>
+            <option value="muse">Muse Code</option>
           </select>
         </Field>
       </div>
@@ -822,6 +824,7 @@ function StageAgentRow({
           <option value="">Sin fijar</option>
           <option value="codex">Codex</option>
           <option value="claude">Claude Code</option>
+          <option value="muse">Muse Code</option>
         </select>
       </Field>
       {shown && (

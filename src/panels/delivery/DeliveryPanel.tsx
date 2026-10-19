@@ -278,7 +278,13 @@ function files(count: number): string {
 }
 
 function agentName(agent: string): string {
-  return agent === "codex" ? "Codex" : agent === "claude" ? "Claude Code" : "Shell";
+  return agent === "codex"
+    ? "Codex"
+    : agent === "claude"
+      ? "Claude Code"
+      : agent === "muse"
+        ? "Muse Code"
+        : "Shell";
 }
 
 /** The model and reasoning a stage runs with, named even when they are the defaults. */
@@ -286,10 +292,10 @@ function runtimeLabel(job: DeliveryJob): string {
   if (job.agent === "shell") return "";
   const model = job.model ?? job.session_model ?? "modelo predeterminado";
   if (job.reasoning) return `${model} · ${codexReasoningLabel(job.reasoning).toLowerCase()}`;
-  // Codex falls back to the model's default effort, as the last catalog has it.
+  // Codex and Muse Code fall back to the model's default effort, as the last catalog has it.
   const fallback =
-    job.agent === "codex"
-      ? lastRuntimeCatalog()?.models?.find((entry) => entry.model === job.model)
+    job.agent === "codex" || job.agent === "muse"
+      ? lastRuntimeCatalog(job.agent)?.models?.find((entry) => entry.model === job.model)
           ?.default_reasoning_effort
       : undefined;
   return fallback
@@ -1224,7 +1230,7 @@ function TaskDetail({
           }
         >
           {(close) =>
-            (["codex", "claude"] as const).map((agent) => (
+            (["codex", "claude", "muse"] as const).map((agent) => (
               <button
                 key={agent}
                 type="button"

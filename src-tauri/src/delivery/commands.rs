@@ -858,10 +858,11 @@ pub async fn delivery_open_job_in_agents(
     let agent_type = match job.agent {
         DeliveryAgent::Codex => "codex",
         DeliveryAgent::Claude => "claude",
+        DeliveryAgent::Muse => "muse",
         DeliveryAgent::Shell => {
             return Err(CommandError::new(
                 "resume_unsupported",
-                "Agents solo puede continuar trabajos de Codex o Claude Code",
+                "Agents solo puede continuar trabajos de Codex, Claude Code o Muse Code",
             ))
         }
     };

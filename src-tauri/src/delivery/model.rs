@@ -74,6 +74,8 @@ impl DeliveryJobStatus {
 pub enum DeliveryAgent {
     Codex,
     Claude,
+    /// Muse Code, headless through `muse exec --json`.
+    Muse,
     /// A plain shell command (bootstrap, checks); no snapshot, no result.
     Shell,
 }

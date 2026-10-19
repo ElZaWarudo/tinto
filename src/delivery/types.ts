@@ -27,7 +27,7 @@ export interface DeliveryUsage {
   cost_micro_usd: number | null;
 }
 
-export type DeliveryAgent = "codex" | "claude" | "shell";
+export type DeliveryAgent = "codex" | "claude" | "muse" | "shell";
 export type DeliveryAccess = "workspace" | "full";
 export type DeliveryResultState = "accepted" | "stale" | "invalid";
 export type DeliveryLeaseState = "free" | "active" | "quarantined";

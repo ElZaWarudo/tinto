@@ -1888,6 +1888,7 @@ fn agent_name(agent: DeliveryAgent) -> &'static str {
     match agent {
         DeliveryAgent::Codex => "Codex",
         DeliveryAgent::Claude => "Claude Code",
+        DeliveryAgent::Muse => "Muse Code",
         DeliveryAgent::Shell => "Shell",
     }
 }

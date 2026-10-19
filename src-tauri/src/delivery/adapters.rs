@@ -56,6 +56,8 @@ pub struct JobPaths {
     pub stderr: PathBuf,
     pub result: PathBuf,
     pub schema: PathBuf,
+    /// Muse Code reads its prompt from a file.
+    pub prompt: PathBuf,
     /// Where a QA job's browser saves screenshots, outside the worktree.
     pub qa_output: PathBuf,
     pub qa_browser_script: PathBuf,
@@ -77,6 +79,7 @@ impl JobPaths {
             stderr: dir.join("stderr.log"),
             result: dir.join("result.json"),
             schema: dir.join("result.schema.json"),
+            prompt: dir.join("prompt.md"),
             qa_output: dir.join("qa"),
             qa_browser_script: dir.join("qa-browser.mjs"),
             dir,
@@ -323,6 +326,15 @@ pub fn launch(
             };
             claude_launch(job, task, paths, native, claude_distro)
         }
+        DeliveryAgent::Muse => {
+            let native = match task.distro {
+                Some(_) => None,
+                None => Some(crate::agent_console::validation::resolve_agent_binary(
+                    "muse",
+                )?),
+            };
+            muse_launch(job, task, paths, native)
+        }
         DeliveryAgent::Shell => shell_launch(job, task, paths),
     }
 }
@@ -334,6 +346,9 @@ pub fn installed_on_windows(agent: DeliveryAgent) -> bool {
             crate::agent_console::validation::resolve_agent_binary("codex").is_ok()
         }
         DeliveryAgent::Claude => claude_binary().is_some(),
+        DeliveryAgent::Muse => {
+            crate::agent_console::validation::resolve_agent_binary("muse").is_ok()
+        }
         DeliveryAgent::Shell => true,
     }
 }
@@ -646,6 +661,115 @@ fn codex_launch(
                 job,
             )
         }
+    }
+}
+
+/// `native` is Muse Code on this machine for a repo on its filesystem.
+/// The prompt goes in a file; `--session-id` names a new session and, given
+/// again, resumes it.
+fn muse_launch(
+    job: &DeliveryJob,
+    task: &DeliveryTask,
+    paths: &JobPaths,
+    native: Option<PathBuf>,
+) -> Result<JobLaunch, DeliveryError> {
+    let resume = resumed_session(job)?;
+    let session_id = resume
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+    let from_wsl = native.is_none();
+    let prompt = match resume {
+        Some(_) => RESUME_PROMPT.to_string(),
+        None => job_prompt(job, task, paths, from_wsl, &[]),
+    };
+    std::fs::write(&paths.prompt, prompt).map_err(DeliveryError::io)?;
+    let path = |path: &Path| -> Result<String, DeliveryError> {
+        if from_wsl {
+            wsl_path(path)
+        } else {
+            Ok(plain_path(path))
+        }
+    };
+    let worktree = if from_wsl {
+        task.worktree.to_string_lossy().to_string()
+    } else {
+        plain_path(&task.worktree)
+    };
+    // No one answers prompts; the workspace is trusted so Muse follows the
+    // repo's own rules, as Codex reads AGENTS.md.
+    let mut args: Vec<String> = [
+        "exec",
+        "--json",
+        "--workspace",
+        &worktree,
+        "--output-schema",
+        &path(&paths.schema)?,
+        "--prompt-file",
+        &path(&paths.prompt)?,
+        "--approval-mode",
+        "never",
+        "--trust-workspace",
+        "--session-id",
+        &session_id,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    if job.access == DeliveryAccess::Full {
+        args.push("--yolo".to_string());
+    } else if job.role == QA_ROLE {
+        args.extend(["--sandbox-network".to_string(), "enabled".to_string()]);
+    }
+    if job.role == QA_ROLE && job.qa_browser {
+        // The same headless browser Codex and Claude get, for this run only.
+        let (command, server_args) = browser_server(from_wsl, paths)?;
+        let server = serde_json::json!({ "command": command, "args": server_args });
+        args.extend([
+            "-c".to_string(),
+            format!("mcpServers.{BROWSER_SERVER}={server}"),
+        ]);
+    }
+    if let Some(model) = job.model.as_deref() {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(effort) = job.reasoning.as_deref() {
+        args.extend(["--reasoning-effort".to_string(), effort.to_string()]);
+    }
+    match (native, task.distro.as_deref()) {
+        (Some(binary), _) => {
+            let (program, prefix) = crate::agent_console::msp::muse_program(&binary);
+            Ok(JobLaunch {
+                program,
+                args: prefix
+                    .into_iter()
+                    .map(|arg| arg.to_string_lossy().to_string())
+                    .chain(args)
+                    .collect(),
+                cwd: Some(PathBuf::from(worktree)),
+                stdin: String::new(),
+                provider_session_id: Some(session_id),
+                wsl_job: None,
+                note: None,
+            })
+        }
+        (None, Some(distro)) => {
+            let script = std::iter::once("exec muse".to_string())
+                .chain(args.iter().map(|arg| sh_quote(arg)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            wsl_launch(
+                distro,
+                &worktree,
+                script,
+                String::new(),
+                Some(session_id),
+                job,
+            )
+        }
+        (None, None) => Err(DeliveryError::new(
+            "binary_not_found",
+            "no se encontró Muse Code en este equipo",
+        )),
     }
 }
 
@@ -1140,9 +1264,36 @@ pub fn session_id_from_line(agent: DeliveryAgent, line: &str) -> Option<String> 
         DeliveryAgent::Claude => (value["type"] == "system" && value["subtype"] == "init")
             .then(|| value["session_id"].as_str().map(str::to_string))
             .flatten(),
+        DeliveryAgent::Muse => (value.pointer("/stream/kind") == Some(&Value::from("session")))
+            .then(|| value.pointer("/stream/id")?.as_str().map(str::to_string))
+            .flatten(),
         DeliveryAgent::Shell => None,
     }
 }
+
+/// A Muse `exec --json` record: its payload type and the payload. The
+/// event itself sits in `record` or `event` for some kinds.
+fn muse_record(value: &Value) -> (&str, &Value) {
+    let payload = &value["payload"];
+    let body = payload
+        .get("record")
+        .or_else(|| payload.get("event"))
+        .filter(|body| body.is_object())
+        .unwrap_or(payload);
+    (value["payload_type"].as_str().unwrap_or_default(), body)
+}
+
+/// Muse tools that only read; any other tool may have changed something.
+const MUSE_READ_TOOLS: [&str; 8] = [
+    "read_file",
+    "search",
+    "glob",
+    "list_dir",
+    "read_skill",
+    "web_search",
+    "web_fetch",
+    "write_todos",
+];
 
 /// What one output line tells about the job as it runs.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -1231,6 +1382,22 @@ pub fn observe(agent: DeliveryAgent, line: &str) -> Observation {
                 cost_micro_usd: None,
             });
             (plan, usage)
+        }
+        DeliveryAgent::Muse => {
+            let (kind, body) = muse_record(&value);
+            let plan = (kind == "todo.snapshot.updated")
+                .then(|| body["items"].as_array())
+                .flatten()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| DeliveryPlanItem {
+                            text: item["text"].as_str().unwrap_or_default().to_string(),
+                            status: item["status"].as_str().unwrap_or("pending").to_string(),
+                        })
+                        .collect()
+                });
+            (plan, None)
         }
         DeliveryAgent::Shell => (None, None),
     };
@@ -1348,6 +1515,35 @@ pub fn log_entries(agent: DeliveryAgent, line: &str) -> Vec<DeliveryLogEntry> {
             )],
             _ => Vec::new(),
         },
+        DeliveryAgent::Muse => {
+            let (kind, body) = muse_record(&value);
+            match kind {
+                "run.terminal.completed" => body["text"]
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty())
+                    .map(|text| vec![entry("message", text.to_string())])
+                    .unwrap_or_default(),
+                "run.terminal.failed" | "run.terminal.cancelled" => vec![entry(
+                    "error",
+                    body["reason"]
+                        .as_str()
+                        .unwrap_or("el agente terminó con error")
+                        .to_string(),
+                )],
+                "tool_batch.effect.started" => body["tool_name"]
+                    .as_str()
+                    .map(|tool| vec![entry("command", tool.to_string())])
+                    .unwrap_or_default(),
+                "tool_batch.effect.terminal" if body["outcome"]["kind"] == "failed" => {
+                    let reason = body["outcome"]["reason"]
+                        .as_str()
+                        .and_then(|reason| reason.lines().next())
+                        .unwrap_or("sin detalle");
+                    vec![entry("info", format!("Falló una herramienta: {reason}"))]
+                }
+                _ => Vec::new(),
+            }
+        }
         DeliveryAgent::Shell => Vec::new(),
     }
 }
@@ -1380,6 +1576,11 @@ pub fn acted(job: &DeliveryJob, events: &str) -> bool {
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|value| match job.agent {
             DeliveryAgent::Shell => true,
+            DeliveryAgent::Muse => {
+                let (kind, body) = muse_record(&value);
+                kind == "tool_batch.effect.started"
+                    && !MUSE_READ_TOOLS.contains(&body["tool_name"].as_str().unwrap_or_default())
+            }
             // Its sandbox lets it run anything inside the worktree.
             DeliveryAgent::Codex => matches!(
                 value["item"]["type"].as_str(),
@@ -1452,6 +1653,23 @@ pub fn read_outcome(agent: DeliveryAgent, events: &str, result_file: Option<&str
                         final_value = Some(value["structured_output"].clone());
                     }
                     last_message = value["result"].as_str().map(str::to_string);
+                }
+            }
+            DeliveryAgent::Muse => {
+                let (kind, body) = muse_record(&value);
+                match kind {
+                    "run.terminal.completed" => {
+                        last_message = body["text"].as_str().map(str::to_string);
+                    }
+                    "run.terminal.failed" | "run.terminal.cancelled" => {
+                        outcome.error = Some(
+                            body["reason"]
+                                .as_str()
+                                .unwrap_or("el agente terminó con error")
+                                .to_string(),
+                        );
+                    }
+                    _ => {}
                 }
             }
             DeliveryAgent::Shell => {}
@@ -1617,6 +1835,127 @@ pub(crate) mod tests {
             )
         );
         assert!(outcome.result.is_none());
+    }
+
+    // A real `muse exec --json` run the provider refused.
+    const MUSE_FAILED: &str = include_str!("fixtures/muse-failed.jsonl");
+    // Assembled from the record shapes Muse writes to its session logs.
+    const MUSE_OK: &str = include_str!("fixtures/muse-ok.jsonl");
+
+    #[test]
+    fn muse_success_yields_session_plan_and_result() {
+        let outcome = read_outcome(DeliveryAgent::Muse, MUSE_OK, None);
+        assert_eq!(
+            outcome.provider_session_id.as_deref(),
+            Some("01a14513-07d7-7f39-8201-b2ba63d1231c")
+        );
+        assert_eq!(outcome.error, None);
+        let result = outcome.result.expect("result");
+        assert_eq!(result.changed_paths, vec!["hello.txt".to_string()]);
+
+        let plan = MUSE_OK
+            .lines()
+            .find_map(|line| observe(DeliveryAgent::Muse, line).plan)
+            .expect("plan");
+        assert_eq!(plan[1].text, "Create hello.txt");
+        assert_eq!(plan[1].status, "in_progress");
+
+        let commands: Vec<_> = MUSE_OK
+            .lines()
+            .flat_map(|line| log_entries(DeliveryAgent::Muse, line))
+            .filter(|entry| entry.kind == "command")
+            .map(|entry| entry.text)
+            .collect();
+        assert_eq!(commands, ["read_file", "write_file"]);
+        assert!(acted(&sample_job(DeliveryAgent::Muse), MUSE_OK));
+    }
+
+    #[test]
+    fn muse_reads_alone_do_not_count_as_acting() {
+        let reads: String = MUSE_OK
+            .lines()
+            .filter(|line| !line.contains("write_file"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!acted(&sample_job(DeliveryAgent::Muse), &reads));
+    }
+
+    #[test]
+    fn muse_failure_reports_the_provider_reason() {
+        let outcome = read_outcome(DeliveryAgent::Muse, MUSE_FAILED, None);
+        let error = outcome.error.expect("error");
+        assert!(error.contains("Billing verification failed"), "{error}");
+        assert!(outcome.result.is_none());
+        let entries: Vec<_> = MUSE_FAILED
+            .lines()
+            .flat_map(|line| log_entries(DeliveryAgent::Muse, line))
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, "error");
+    }
+
+    #[test]
+    fn muse_job_names_its_session_and_reads_its_prompt_from_a_file() {
+        let dir = std::env::temp_dir().join(format!("tinto-muse-job-{}", uuid::Uuid::new_v4()));
+        let paths = JobPaths::in_dir(dir.clone());
+        paths.prepare().unwrap();
+        let mut job = sample_job(DeliveryAgent::Muse);
+        job.model = Some("muse-spark-1.3".into());
+        job.reasoning = Some("high".into());
+        let launch =
+            muse_launch(&job, &sample_task(), &paths, Some(PathBuf::from("muse"))).unwrap();
+        let session = launch.provider_session_id.clone().expect("session");
+        let arg = |flag: &str| {
+            let at = launch.args.iter().position(|arg| arg == flag).expect(flag);
+            launch.args[at + 1].clone()
+        };
+        assert_eq!(arg("--session-id"), session);
+        assert_eq!(arg("--approval-mode"), "never");
+        assert_eq!(arg("--model"), "muse-spark-1.3");
+        assert_eq!(arg("--reasoning-effort"), "high");
+        assert!(!launch.args.contains(&"--yolo".to_string()));
+        assert!(std::fs::read_to_string(&paths.prompt)
+            .unwrap()
+            .contains("Write the failing test."));
+
+        // Resuming a paused job goes on in the same session.
+        job.resumes = Some("j0".into());
+        job.provider_session_id = Some(session.clone());
+        job.access = DeliveryAccess::Full;
+        let resumed =
+            muse_launch(&job, &sample_task(), &paths, Some(PathBuf::from("muse"))).unwrap();
+        assert_eq!(resumed.provider_session_id, Some(session));
+        assert!(resumed.args.contains(&"--yolo".to_string()));
+        assert_eq!(
+            std::fs::read_to_string(&paths.prompt).unwrap(),
+            RESUME_PROMPT
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn muse_qa_gets_the_headless_browser_for_its_run() {
+        let dir = std::env::temp_dir().join(format!("tinto-muse-qa-{}", uuid::Uuid::new_v4()));
+        let paths = JobPaths::in_dir(dir.clone());
+        paths.prepare().unwrap();
+        let mut job = sample_job(DeliveryAgent::Muse);
+        job.role = QA_ROLE.into();
+        job.qa_browser = true;
+        let launch =
+            muse_launch(&job, &sample_task(), &paths, Some(PathBuf::from("muse"))).unwrap();
+        let at = launch.args.iter().position(|arg| arg == "-c").expect("-c");
+        let (key, value) = launch.args[at + 1].split_once('=').unwrap();
+        assert_eq!(key, "mcpServers.playwright");
+        let server: Value = serde_json::from_str(value).unwrap();
+        let args = server["args"].as_array().unwrap();
+        assert!(args.contains(&Value::from(PLAYWRIGHT_MCP)));
+        assert!(args.contains(&Value::from(plain_path(&paths.qa_output))));
+        assert!(paths.qa_browser_script.is_file());
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--sandbox-network", "enabled"]));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
