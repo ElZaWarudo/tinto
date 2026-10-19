@@ -6,6 +6,7 @@ import { busStore } from "../bus/store";
 import type { RepoDelta } from "../bus/contract";
 import {
   collectRelevantNotifications,
+  disableNotifications,
   enableNotifications,
   NotificationWatcher,
   type NotificationAdapter,
@@ -30,6 +31,25 @@ describe("quality notifications", () => {
   beforeEach(() => {
     busStore.resetAll();
     qualityStore.reset();
+    localStorage.clear();
+  });
+
+  it("keeps the switch across restarts and turns it back on at startup", async () => {
+    const adapter: NotificationAdapter = {
+      ensurePermission: vi.fn().mockResolvedValue("granted"),
+      send: vi.fn(),
+    };
+    await enableNotifications(adapter);
+    // A new session starts with everything off.
+    qualityStore.reset();
+    render(createElement(NotificationWatcher, { adapter }));
+    await waitFor(() => expect(qualityStore.getState().notificationsEnabled).toBe(true));
+
+    disableNotifications();
+    qualityStore.reset();
+    render(createElement(NotificationWatcher, { adapter }));
+    await act(async () => {});
+    expect(qualityStore.getState().notificationsEnabled).toBe(false);
   });
 
   it("collects high-attention events with redacted copy and stable keys", () => {

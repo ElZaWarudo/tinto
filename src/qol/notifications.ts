@@ -110,11 +110,32 @@ export function collectRelevantNotifications(
   return notifications;
 }
 
+/** The user's choice in Ajustes → Notificaciones, kept across restarts. */
+const PREFERENCE_KEY = "tinto.notifications";
+
+function rememberChoice(enabled: boolean) {
+  try {
+    localStorage.setItem(PREFERENCE_KEY, enabled ? "on" : "off");
+  } catch {
+    // Without storage the switch only lasts this session.
+  }
+}
+
+/** Whether the user left notifications on last time. */
+export function notificationsWereOn(): boolean {
+  try {
+    return localStorage.getItem(PREFERENCE_KEY) === "on";
+  } catch {
+    return false;
+  }
+}
+
 export async function enableNotifications(adapter: NotificationAdapter = tauriNotificationAdapter) {
   qualityStore.setNotificationState({ status: "checking", message: null });
   const permission = await adapter.ensurePermission();
   if (permission === "granted") {
     qualityStore.setNotificationState({ enabled: true, status: "ready", message: null });
+    rememberChoice(true);
     return true;
   }
   if (permission === "denied") {
@@ -135,6 +156,7 @@ export async function enableNotifications(adapter: NotificationAdapter = tauriNo
 
 export function disableNotifications() {
   qualityStore.setNotificationState({ enabled: false, status: "idle", message: null });
+  rememberChoice(false);
 }
 
 export function NotificationWatcher({
@@ -145,6 +167,11 @@ export function NotificationWatcher({
   const busState = useBusState();
   const { notificationsEnabled } = useQualityState();
   const sent = useRef(new Set<string>());
+
+  // Turned on last time: on again at startup, once the system still allows it.
+  useEffect(() => {
+    if (notificationsWereOn()) void enableNotifications(adapter);
+  }, [adapter]);
 
   useEffect(() => {
     if (!notificationsEnabled) return;
