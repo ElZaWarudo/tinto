@@ -48,13 +48,18 @@ fn fake_launcher() -> Launcher {
         let sleep: u32 = spec.get("sleep").and_then(|v| v.parse().ok()).unwrap_or(0);
         let exit: i32 = spec.get("exit").and_then(|v| v.parse().ok()).unwrap_or(0);
         let touch = spec.get("touch").map(|name| worktree.join(name));
-        // `record=1`: a QA job that writes its visual changes record.
-        if spec.contains_key("record") {
+        // `record=1`: a QA job that writes its visual changes record;
+        // `record=problems`: one that lists two problems.
+        if let Some(record) = spec.get("record") {
+            let problems = match *record {
+                "problems" => "**Problems:**\n- P1: The toast covers Retry on mobile.\n- P2: The menu is cut off.\n\n**Suggested solutions:**\n- P1: Move the toast up.\n- P2: Let the menu scroll.\n",
+                _ => "**Problems:** None\n",
+            };
             std::fs::create_dir_all(&paths.qa_output).unwrap();
             std::fs::write(
                 paths.qa_output.join(format!("{}.md", task.key)),
                 format!(
-                    "# {} — Visual changes\n\n## 1. Menú\n\n**Problems:** None\n",
+                    "# {} — Visual changes\n\n## 1. Menú\n\n{problems}",
                     task.key
                 ),
             )
@@ -4648,4 +4653,102 @@ fn a_decision_shows_the_review_comment_and_the_code_it_is_about() {
     // What cannot be read says why instead of showing made-up code.
     assert!(threads[3]["error"].as_str().unwrap().contains("relativa"));
     assert_eq!(threads[4]["error"], "el comentario ya no existe en GitHub");
+}
+
+#[test]
+fn qa_problems_wait_for_the_user_and_reach_the_coordinator_and_the_next_qa() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("Q-1");
+    let task = h.service.task(&task_id).unwrap();
+    let qa = h.dispatch(&task, "qa", "events=codex-ok record=problems");
+    h.wait(&qa.id);
+
+    let problems = h.service.task_qa_problems(&task_id).unwrap();
+    assert_eq!(problems.len(), 2);
+    assert_eq!(problems[0].number, 1);
+    assert_eq!(problems[0].label, "P1");
+    assert_eq!(problems[0].suggestions, ["Move the toast up."]);
+    assert_eq!(
+        problems[0].status,
+        super::model::DeliveryQaProblemStatus::Open
+    );
+
+    // The user dismisses one, reports another and sends two to fix.
+    h.service
+        .dismiss_qa_problem(&problems[1].id, "the menu is meant to be cut")
+        .unwrap();
+    let own = h
+        .service
+        .report_qa_problem(&task_id, "The header hides the mocks", "npm test")
+        .unwrap();
+    assert_eq!(own.number, 3);
+    let cursor = coordinator.write("wait_run", json!({}))["structuredContent"]["cursor"]
+        .as_u64()
+        .unwrap();
+    let choices = [
+        super::qa_problems::QaProblemChoice {
+            problem_id: problems[0].id.clone(),
+            solution: "Move the toast up.".into(),
+        },
+        super::qa_problems::QaProblemChoice {
+            problem_id: own.id.clone(),
+            solution: "Two columns, real and mocked".into(),
+        },
+    ];
+    h.service.send_qa_problems(&task_id, &choices).unwrap();
+    assert!(
+        h.service.send_qa_problems(&task_id, &choices).is_err(),
+        "sent once"
+    );
+
+    // The coordinator hears it and reads exactly what to fix.
+    let (events, _) = h
+        .service
+        .coordinator_events(&coordinator.run_id, cursor)
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(events[0]["text"].as_str().unwrap().contains("(#1, #3)"));
+    let read = coordinator.call("read_qa_problems", json!({"task_id": task_id}));
+    let listed = read["structuredContent"]["result"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(listed[0]["status"], "sent");
+    assert_eq!(listed[0]["solution"], "Move the toast up.");
+    assert_eq!(listed[1]["status"], "dismissed");
+    let updated = coordinator.write(
+        "update_qa_problems",
+        json!({"task_id": task_id, "updates": [{"problem_id": problems[0].id, "status": "fixing", "note": "implementation 3"}]}),
+    );
+    assert_eq!(
+        updated["structuredContent"]["result"][0]["status"], "fixing",
+        "{updated}"
+    );
+    let refused = coordinator.write(
+        "update_qa_problems",
+        json!({"task_id": task_id, "updates": [{"problem_id": problems[1].id, "status": "verified"}]}),
+    );
+    assert!(error_text(&refused).contains("#2"));
+
+    // The next QA is told what to check again and what not to report.
+    let followup = h.service.qa_followup(&task_id).unwrap();
+    assert_eq!(followup.len(), 3, "{followup:?}");
+    assert!(followup[0].starts_with("Check #1 again"));
+    assert!(followup
+        .iter()
+        .any(|line| line.contains("Do not report «The menu is cut off.»")));
+    let record = "# Q-1 — Visual changes\n\n## 1. Menú\n\n**Problems:**\n- P1: The toast covers Retry on mobile.\n- P2: The menu is cut off.\n";
+    h.service
+        .record_qa_problems(&task, "qa-2", 2, record)
+        .unwrap();
+    // Its record brings back neither the dismissed problem nor duplicates
+    // of what was open.
+    let after = h.service.task_qa_problems(&task_id).unwrap();
+    let open: Vec<_> = after
+        .iter()
+        .filter(|problem| problem.status == super::model::DeliveryQaProblemStatus::Open)
+        .map(|problem| (problem.number, problem.text.as_str()))
+        .collect();
+    assert_eq!(open, [(4, "The toast covers Retry on mobile.")]);
 }

@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod model;
 pub mod phase;
 pub mod prs;
+pub mod qa_problems;
 pub mod service;
 pub mod settings_proposals;
 pub mod store;

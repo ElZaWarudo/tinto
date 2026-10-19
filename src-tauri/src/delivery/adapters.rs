@@ -273,6 +273,10 @@ pub fn job_prompt(
             agent_path(&plain_path(&task.worktree), from_wsl)
         ));
     }
+    if job.role == QA_ROLE && !job.qa_followup.is_empty() {
+        lines.push("Problems from earlier QA the user decided on:".to_string());
+        lines.extend(job.qa_followup.iter().map(|note| format!("- {note}")));
+    }
     if !job.decisions.is_empty() {
         lines.push("Decisions the user made for this task (follow them):".to_string());
         lines.extend(job.decisions.iter().map(|note| format!("- {note}")));
@@ -532,9 +536,11 @@ fn visual_record_instructions(key: &str) -> String {
 
 **Observations:** <layout notes; mark pre-existing behaviour as such>
 
-**Problems:** <what is wrong or risky, or "None">
+**Problems:** <a list, one problem per item, each starting with its label P1, P2… numbered across the whole record; or "None">
 
-**Suggested solutions:** <proposals, or "None">"#
+**Suggested solutions:** <a list, each item starting with the label of the problem it fixes ("P1: …"); several for one problem are alternatives, the one you recommend first; or "None">
+
+The user decides on each problem in Tinto, by its label: write each so it can be fixed on its own."#
     )
 }
 
@@ -1794,6 +1800,7 @@ pub(crate) mod tests {
             allowed_commands: Vec::new(),
             qa_browser: false,
             decisions: Vec::new(),
+            qa_followup: Vec::new(),
             qa_environment: String::new(),
             reasoning: None,
             platform: None,

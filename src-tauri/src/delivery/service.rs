@@ -311,6 +311,11 @@ impl DeliveryService {
             .into_iter()
             .filter(|pr| live.contains(pr.task_id.as_str()))
             .collect();
+        let qa_problems: Vec<_> = store
+            .qa_problems()?
+            .into_iter()
+            .filter(|problem| live.contains(problem.task_id.as_str()))
+            .collect();
         let runs = store.runs()?;
         let leases = store.leases()?;
         // Where each task is, from the same facts the view gets.
@@ -333,6 +338,7 @@ impl DeliveryService {
             jobs,
             approvals,
             decisions,
+            qa_problems,
             settings_proposals,
             prs,
             leases,
@@ -682,6 +688,12 @@ impl DeliveryService {
                 ));
             }
         }
+        // Read before the store is held: it reads the store itself.
+        let qa_followup = if role == QA_ROLE {
+            self.qa_followup(&task.id)?
+        } else {
+            Vec::new()
+        };
         let store = self.store()?;
         let model = match request.model.filter(|model| !model.trim().is_empty()) {
             None if request.agent == DeliveryAgent::Codex => store
@@ -792,6 +804,7 @@ impl DeliveryService {
             allowed_commands,
             qa_browser,
             decisions: decision_notes,
+            qa_followup,
             qa_environment,
             reasoning,
             platform: request.platform,
@@ -1455,6 +1468,10 @@ impl DeliveryService {
         // QA's visual changes record becomes one page the user opens.
         let record = paths.qa_output.join(format!("{}.md", task.key));
         if job.role == QA_ROLE && record.is_file() {
+            // Its problems wait for the user's call in the task.
+            if let Ok(text) = std::fs::read_to_string(&record) {
+                self.record_qa_problems(&task, &job.id, job.attempt, &text)?;
+            }
             let rendered = super::visual_record::render_beside(&record);
             let store = self.store()?;
             if let Some(mut done) = store.job(&job.id)? {

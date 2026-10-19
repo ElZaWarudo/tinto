@@ -6,6 +6,7 @@ import type {
   DeliveryAccess,
   DeliveryAgent,
   DeliveryApproval,
+  DeliveryQaProblem,
   DeliveryArchivedTask,
   DeliveryCommit,
   DeliveryCommitDraft,
@@ -199,6 +200,20 @@ export const checkDeliveryTask = (taskId: string) =>
 /** Links the PR GitHub has for the task's branch. */
 export const findDeliveryPr = (taskId: string) =>
   invoke<DeliveryPr | null>("delivery_find_pr", { taskId });
+
+/** A problem QA missed, as the user describes it. */
+export const reportDeliveryQaProblem = (taskId: string, text: string, place: string) =>
+  invoke<DeliveryQaProblem>("delivery_report_qa_problem", { taskId, text, place });
+
+/** The user decides a QA problem is not one. */
+export const dismissDeliveryQaProblem = (problemId: string, reason: string) =>
+  invoke<DeliveryQaProblem>("delivery_dismiss_qa_problem", { problemId, reason });
+
+/** The user sends QA problems to fix, each with its solution. */
+export const sendDeliveryQaProblems = (
+  taskId: string,
+  choices: { problem_id: string; solution: string }[],
+) => invoke<DeliveryQaProblem[]>("delivery_send_qa_problems", { taskId, choices });
 
 /** Asks the Agents conversation `sessionId` to take the batch over. */
 export const handOverDeliveryRun = (runId: string, sessionId: string) =>

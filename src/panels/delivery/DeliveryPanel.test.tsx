@@ -9,6 +9,7 @@ import { WorkspaceActionsContext, type WorkspaceActions } from "../../workspace/
 import type {
   DeliveryApproval,
   DeliveryDecision,
+  DeliveryQaProblem,
   DeliveryJob,
   DeliveryOverview,
   DeliveryPhase,
@@ -57,6 +58,9 @@ const client = vi.hoisted(() => ({
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
   closeDeliveryPr: vi.fn(() => Promise.resolve(null)),
+  sendDeliveryQaProblems: vi.fn(() => Promise.resolve([])),
+  dismissDeliveryQaProblem: vi.fn(() => Promise.resolve({})),
+  reportDeliveryQaProblem: vi.fn(() => Promise.resolve({})),
   handOverDeliveryRun: vi.fn(() => Promise.resolve()),
   openDeliveryPr: vi.fn(() => Promise.resolve({})),
   deliveryPrToDraft: vi.fn(() => Promise.resolve(null)),
@@ -380,6 +384,82 @@ describe("DeliveryPanel", () => {
     const thread = within(panel).getByText("Sn4pe");
     const option = within(panel).getByText("Solo copias de esta skill");
     expect(thread.compareDocumentPosition(option) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("lets the user pick a fix for each QA problem, dismiss one and send them together", async () => {
+    const user = userEvent.setup();
+    const problem = (over: Partial<DeliveryQaProblem>): DeliveryQaProblem => ({
+      id: "p1",
+      task_id: "t1",
+      job_id: "qa-1",
+      attempt: 2,
+      number: 1,
+      label: "P1",
+      change: "Error toast",
+      place: "Run panel",
+      text: "The toast covers Retry on mobile.",
+      suggestions: ["Move the toast up.", "Keep the error in the panel."],
+      status: "open",
+      solution: null,
+      reason: null,
+      notes: [],
+      created_at_ms: 1,
+      updated_at_ms: 1,
+      ...over,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        qa_problems: [
+          problem({}),
+          problem({
+            id: "p2",
+            number: 2,
+            label: "P2",
+            text: "The menu is cut off.",
+            suggestions: [],
+          }),
+          problem({
+            id: "p3",
+            number: 3,
+            text: "Old one",
+            status: "verified",
+            solution: "Done",
+            notes: ["implementation 3"],
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    const section = await screen.findByRole("region", { name: "Problemas de la QA" });
+    // What is settled hides until the user asks for everything.
+    expect(within(section).queryByText("Old one")).toBeNull();
+    const first = within(section).getByRole("article", { name: "Problema #1" });
+    expect(within(first).getByText("P1 de la QA intento 2", { exact: false })).toBeInTheDocument();
+    await user.click(within(first).getByRole("button", { name: "Aplicar solución sugerida" }));
+    // Its own words for the second.
+    const second = within(section).getByRole("article", { name: "Problema #2" });
+    await user.type(
+      within(second).getByRole("textbox", { name: "Tu solución para el problema #2" }),
+      "Let it scroll",
+    );
+    expect(within(section).getByText(/2 problemas listos/)).toBeInTheDocument();
+    await user.click(within(section).getByRole("button", { name: "Enviar al coordinador" }));
+    expect(client.sendDeliveryQaProblems).toHaveBeenCalledWith("t1", [
+      { problem_id: "p1", solution: "Move the toast up." },
+      { problem_id: "p2", solution: "Let it scroll" },
+    ]);
+
+    // Dismissing asks why.
+    await user.click(within(first).getByRole("button", { name: "No es un problema…" }));
+    await user.type(
+      within(first).getByRole("textbox", { name: "Por qué el problema #1 no es un problema" }),
+      "by design",
+    );
+    await user.click(within(first).getByRole("button", { name: "Descartar" }));
+    expect(client.dismissDeliveryQaProblem).toHaveBeenCalledWith("p1", "by design");
+
+    await user.click(within(section).getByRole("button", { name: "Todos (3)" }));
+    expect(within(section).getByText("Coordinador: implementation 3")).toBeInTheDocument();
   });
 
   it("keeps pending decisions to one line until the user opens them", async () => {

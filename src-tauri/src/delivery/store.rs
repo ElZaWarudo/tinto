@@ -9,7 +9,8 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use super::model::{
     DeliveryApproval, DeliveryDecision, DeliveryEvent, DeliveryJob, DeliveryLease,
-    DeliveryRepoSettings, DeliveryRun, DeliverySettings, DeliverySettingsProposal, DeliveryTask,
+    DeliveryQaProblem, DeliveryRepoSettings, DeliveryRun, DeliverySettings,
+    DeliverySettingsProposal, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::tasks::plain_path;
@@ -68,6 +69,9 @@ impl DeliveryStore {
               id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS prs (task_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS qa_problems (
+              id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS settings_proposals (
               id TEXT PRIMARY KEY, repo TEXT NOT NULL, data TEXT NOT NULL
             );
@@ -347,6 +351,32 @@ impl DeliveryStore {
     pub fn task_decisions(&self, task_id: &str) -> Result<Vec<DeliveryDecision>, DeliveryError> {
         self.all(
             "SELECT data FROM decisions WHERE task_id = ?1 ORDER BY rowid",
+            [task_id],
+        )
+    }
+
+    // ---- QA problems ----
+
+    pub fn put_qa_problem(&self, problem: &DeliveryQaProblem) -> Result<(), DeliveryError> {
+        self.conn.execute(
+            "INSERT INTO qa_problems (id, task_id, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+            params![problem.id, problem.task_id, encode(problem)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn qa_problem(&self, id: &str) -> Result<Option<DeliveryQaProblem>, DeliveryError> {
+        self.one("SELECT data FROM qa_problems WHERE id = ?1", id)
+    }
+
+    pub fn qa_problems(&self) -> Result<Vec<DeliveryQaProblem>, DeliveryError> {
+        self.all("SELECT data FROM qa_problems ORDER BY rowid", [])
+    }
+
+    pub fn task_qa_problems(&self, task_id: &str) -> Result<Vec<DeliveryQaProblem>, DeliveryError> {
+        self.all(
+            "SELECT data FROM qa_problems WHERE task_id = ?1 ORDER BY rowid",
             [task_id],
         )
     }

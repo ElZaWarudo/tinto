@@ -45,6 +45,7 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "run_policy",
     "run_takeover",
     "run_closed",
+    "qa_problems_sent",
 ];
 
 /// Changes are sent to the coordinator's conversation once they have been
@@ -352,6 +353,9 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         "run_policy" if detail.ends_with("resumed") => "el usuario reanudó el lote".to_string(),
         "run_takeover" => "otro coordinador tomó el lote".to_string(),
         "run_closed" => "el lote se cerró".to_string(),
+        "qa_problems_sent" => format!(
+            "el usuario envió problemas de la QA para arreglar ({detail}); léelos con read_qa_problems"
+        ),
         other => format!("{other}: {detail}"),
     };
     let line: String = what.chars().take(240).collect();

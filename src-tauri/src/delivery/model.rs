@@ -192,6 +192,10 @@ pub struct DeliveryJob {
     /// job's instructions state them.
     #[serde(default)]
     pub decisions: Vec<String>,
+    /// QA jobs only: the problems to check again and the ones not to
+    /// report, when the job was dispatched.
+    #[serde(default)]
+    pub qa_followup: Vec<String>,
     /// QA jobs only: the repo's QA environment when the job was dispatched.
     #[serde(default)]
     pub qa_environment: String,
@@ -451,6 +455,64 @@ pub struct DeliveryDecisionOption {
     pub consequence: String,
     #[serde(default)]
     pub recommended: bool,
+}
+
+/// A problem QA found (or the user reported) and what the user decided.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryQaProblem {
+    pub id: String,
+    pub task_id: String,
+    /// The QA job whose record lists it; `None` when the user reported it.
+    pub job_id: Option<String>,
+    /// That QA job's attempt.
+    #[serde(default)]
+    pub attempt: Option<u32>,
+    /// `#n` in the task.
+    pub number: u32,
+    /// `P3` as the record names it.
+    #[serde(default)]
+    pub label: String,
+    /// The change of the record it is about.
+    #[serde(default)]
+    pub change: String,
+    /// Where it happens.
+    #[serde(default)]
+    pub place: String,
+    pub text: String,
+    /// QA's proposals, the recommended first.
+    #[serde(default)]
+    pub suggestions: Vec<String>,
+    pub status: DeliveryQaProblemStatus,
+    /// The fix the user chose: a suggestion or their own words.
+    #[serde(default)]
+    pub solution: Option<String>,
+    /// Why the user dismissed it.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// What the coordinator said about it, oldest first.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryQaProblemStatus {
+    /// Waiting for the user.
+    Open,
+    /// The user sent it to fix.
+    Sent,
+    /// The coordinator is fixing it.
+    Fixing,
+    /// QA checked it is fixed.
+    Verified,
+    /// QA found it again after the fix.
+    StillFailing,
+    /// The user decided it is not a problem.
+    Dismissed,
+    /// A later QA replaced it before the user decided.
+    Superseded,
 }
 
 /// Code a decision is about, as Tinto read it from GitHub or the task's
@@ -804,6 +866,9 @@ pub struct DeliveryOverview {
     pub leases: Vec<DeliveryLease>,
     pub approvals: Vec<DeliveryApproval>,
     pub decisions: Vec<DeliveryDecision>,
+    /// Problems of the QA records, and the user's.
+    #[serde(default)]
+    pub qa_problems: Vec<DeliveryQaProblem>,
     /// Settings changes coordinators asked for and the user has not decided.
     #[serde(default)]
     pub settings_proposals: Vec<DeliverySettingsProposal>,

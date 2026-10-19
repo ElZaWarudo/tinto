@@ -77,6 +77,7 @@ import {
   type RepoChoice,
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
+import { QaProblems } from "./DeliveryQaProblems";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
@@ -1301,6 +1302,13 @@ function TaskDetail({
           </div>
         </div>
       )}
+
+      <QaProblems
+        taskId={task.id}
+        problems={(overview.qa_problems ?? []).filter((problem) => problem.task_id === task.id)}
+        busy={busy}
+        run={run}
+      />
 
       {qaRecord?.visual_record_error && !qaRecord.visual_record && (
         <div

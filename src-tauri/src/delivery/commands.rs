@@ -694,6 +694,43 @@ pub async fn delivery_find_pr(
     blocking(move || service.find_task_pr(&task_id)).await
 }
 
+/// A problem QA missed, as the user describes it.
+#[tauri::command]
+pub fn delivery_report_qa_problem(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+    text: String,
+    place: String,
+) -> Result<super::model::DeliveryQaProblem, CommandError> {
+    service
+        .report_qa_problem(&task_id, &text, &place)
+        .map_err(CommandError::from)
+}
+
+/// The user decides a QA problem is not one.
+#[tauri::command]
+pub fn delivery_dismiss_qa_problem(
+    service: State<'_, DeliveryService>,
+    problem_id: String,
+    reason: String,
+) -> Result<super::model::DeliveryQaProblem, CommandError> {
+    service
+        .dismiss_qa_problem(&problem_id, &reason)
+        .map_err(CommandError::from)
+}
+
+/// The user sends QA problems to fix, each with its solution.
+#[tauri::command]
+pub fn delivery_send_qa_problems(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+    choices: Vec<super::qa_problems::QaProblemChoice>,
+) -> Result<Vec<super::model::DeliveryQaProblem>, CommandError> {
+    service
+        .send_qa_problems(&task_id, &choices)
+        .map_err(CommandError::from)
+}
+
 /// Opens an approved PR step's PR on GitHub with its approved text.
 #[tauri::command]
 pub async fn delivery_open_pr(

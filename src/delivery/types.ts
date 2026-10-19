@@ -230,6 +230,33 @@ export interface DeliveryDecisionOption {
 }
 
 /** Something the user settles before a task's stages run; answers are final. */
+export type DeliveryQaProblemStatus =
+  "open" | "sent" | "fixing" | "verified" | "still_failing" | "dismissed" | "superseded";
+
+/** A problem QA found (or the user reported) and what the user decided. */
+export interface DeliveryQaProblem {
+  id: string;
+  task_id: string;
+  /** The QA job whose record lists it; null when the user reported it. */
+  job_id: string | null;
+  attempt?: number | null;
+  /** #n in the task. */
+  number: number;
+  /** P3 as the record names it. */
+  label: string;
+  change: string;
+  place: string;
+  text: string;
+  /** QA's proposals, the recommended first. */
+  suggestions: string[];
+  status: DeliveryQaProblemStatus;
+  solution?: string | null;
+  reason?: string | null;
+  notes: string[];
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
 /** Code a decision is about: a PR review comment and its diff, or worktree lines. */
 export interface DeliveryCodeThread {
   kind: "pr_comment" | "code" | string;
@@ -441,6 +468,8 @@ export interface DeliveryOverview {
   leases: DeliveryLease[];
   approvals: DeliveryApproval[];
   decisions: DeliveryDecision[];
+  /** Problems of the QA records, and the ones the user reported. */
+  qa_problems?: DeliveryQaProblem[];
   /** Settings changes coordinators asked for, waiting for the user. */
   settings_proposals?: DeliverySettingsProposal[];
   /** The tasks' pull requests Tinto follows. */

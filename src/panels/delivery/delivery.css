@@ -572,6 +572,151 @@
   background: var(--bg);
   min-width: 0;
 }
+/* QA's problems, and what the user decides on each. */
+.delivery-qa-problems {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.delivery-qa-problems__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.delivery-qa-problems__head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.delivery-qa-problems__spacer {
+  flex: 1;
+}
+.delivery-qa-problems__filters {
+  display: flex;
+  gap: 4px;
+}
+.delivery-qa-problems__filters button {
+  padding: 1px 8px;
+  font-size: 12px;
+}
+.delivery-qa-problems__filters button[aria-pressed="true"] {
+  border-color: var(--accent-fg);
+  color: var(--accent-fg);
+}
+.delivery-qa-problem {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.delivery-qa-problem input[type="checkbox"] {
+  margin-top: 4px;
+  accent-color: var(--accent-fg);
+}
+.delivery-qa-problem p {
+  margin: 0;
+}
+.delivery-qa-problem__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.delivery-qa-problem__number {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.delivery-qa-problem__where {
+  margin: 2px 0 6px !important;
+  font-size: 12px;
+}
+.delivery-qa-problem__solutions {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.delivery-qa-problem__solutions label {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 6px;
+  align-items: start;
+  font-size: 13px;
+}
+.delivery-qa-problem__solutions input {
+  margin-top: 3px;
+  accent-color: var(--step);
+}
+.delivery-qa-problem__own {
+  width: 100%;
+  margin-bottom: 6px;
+}
+.delivery-qa-problem__history {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.delivery-qa-chip {
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.delivery-qa-chip--new {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+}
+.delivery-qa-chip--sent {
+  color: var(--step);
+  border-color: color-mix(in srgb, var(--step) 50%, transparent);
+}
+.delivery-qa-chip--fixing {
+  color: var(--accent-fg);
+  border-color: color-mix(in srgb, var(--accent-fg) 50%, transparent);
+}
+.delivery-qa-chip--verified {
+  color: #3fb950;
+  border-color: #2a6b35;
+}
+.delivery-qa-chip--failing {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+.delivery-qa-problems__report {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.delivery-qa-problems__report-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr auto;
+  gap: 6px;
+}
+.delivery-qa-problems__send {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--step) 8%, var(--bg));
+  font-size: 13px;
+}
+.delivery-qa-problems__send span {
+  flex: 1;
+}
+@media (max-width: 640px) {
+  .delivery-qa-problems__report-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* The code a decision is about, as GitHub shows a review thread. */
 .delivery-threads {
   display: grid;
