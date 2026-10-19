@@ -2028,7 +2028,7 @@ function ApprovalBanner({
         // Only a correction: the coordinator reports the step. Nothing here
         // waits on it.
         <details className="delivery-manual-record">
-          <summary>Anotar el resultado a mano</summary>
+          <summary>Lo hice fuera de Tinto: registrar el paso hecho</summary>
           <div className="delivery-actions">
             <input
               aria-label="Resultado del paso"

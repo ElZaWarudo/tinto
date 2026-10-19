@@ -4487,6 +4487,36 @@ fn a_coordinator_inside_wait_run_is_not_woken() {
 }
 
 #[test]
+fn approving_a_step_tinto_does_not_run_asks_for_no_outcome() {
+    let h = harness();
+    let task = h.task("J-1");
+    // A Jira step without the repo's Jira in Tinto, at both stages: the
+    // coordinator runs it and reports it.
+    for (id, stage) in [("a-jira-pr", "after_pr"), ("a-jira-merge", "after_merge")] {
+        let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+            "id": id, "task_id": task.id, "rung": "jira", "title": "Jira", "body": "",
+            "status": "pending", "requested_by": "coord", "requested_at_ms": 1, "stage": stage
+        }))
+        .unwrap();
+        h.service.store().unwrap().put_approval(&step).unwrap();
+        let approved = h.service.decide_approval(id, true, None).unwrap();
+        assert_eq!(approved.status, DeliveryApprovalStatus::Approved, "{stage}");
+        assert_eq!(approved.outcome, None, "{stage}");
+    }
+    let done = h
+        .service
+        .complete_approval("a-jira-pr", true, "AGOS-474 → In Review")
+        .unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(done.outcome.as_deref(), Some("AGOS-474 → In Review"));
+    let failed = h
+        .service
+        .complete_approval("a-jira-merge", false, "Jira no respondió")
+        .unwrap();
+    assert_eq!(failed.status, DeliveryApprovalStatus::Failed);
+}
+
+#[test]
 fn a_coordinator_the_user_asks_takes_the_batch_and_the_old_one_is_told() {
     let h = harness();
     let old = Coordinator::start(&h);

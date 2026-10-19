@@ -1604,7 +1604,9 @@ describe("DeliveryPanel", () => {
     expect(within(banner).getByText(/Tinto no pudo abrir el PR/)).toBeInTheDocument();
     // Recording it by hand is a correction tucked away, not a prompt.
     expect(
-      within(banner).getByText("Anotar el resultado a mano").closest("details"),
+      within(banner)
+        .getByText("Lo hice fuera de Tinto: registrar el paso hecho")
+        .closest("details"),
     ).not.toHaveAttribute("open");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     // Tinto can open it itself, with the approved text.
@@ -1783,6 +1785,40 @@ describe("DeliveryPanel", () => {
     await user.click(choices[0]);
     expect(client.handOverDeliveryRun).toHaveBeenCalledWith("run-1", "next-coordinator");
     agentSessionStore.setSessions([]);
+  });
+
+  it("approves a Jira step with nothing to fill in", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          {
+            id: "a4",
+            task_id: "t1",
+            rung: "jira",
+            title: "AGOS-474 a In Review",
+            body: "",
+            status: "pending",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_at_ms: null,
+            executed_at_ms: null,
+            outcome: null,
+            stage: "after_pr",
+          },
+        ],
+      }),
+    );
+    client.decideDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Aprobación jira" });
+    // Approving asks for nothing: the coordinator does the step and reports it.
+    expect(within(banner).queryByRole("textbox")).not.toBeInTheDocument();
+    const approve = within(banner).getByRole("button", { name: "Aprobar" });
+    expect(approve).toBeEnabled();
+    await user.click(approve);
+    expect(client.decideDeliveryApproval).toHaveBeenCalledWith("a4", true);
   });
 
   it("says a task is delivered only once both Jira steps are done", async () => {
