@@ -116,6 +116,8 @@ import {
 } from "./taskStatus";
 import "./delivery.css";
 import { ExternalLink } from "./ExternalLink";
+import { ActionButton, ActionGroup } from "./ActionButton";
+import { DeliveryRefreshContext } from "./deliveryRefresh";
 
 type Dialog =
   | { kind: "new-task" }
@@ -328,7 +330,6 @@ export function DeliveryPanel() {
   const [overview, setOverview] = useState<DeliveryOverview | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
@@ -441,8 +442,9 @@ export function DeliveryPanel() {
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
   const activeRuns = (overview?.runs ?? []).filter((candidate) => candidate.status === "active");
 
+  // For what is not a button (a select, a menu item): its error goes to the
+  // panel's banner. Buttons are ActionButtons and say it themselves.
   const run = async (action: () => Promise<unknown>) => {
-    setBusy(true);
     setError(null);
     try {
       await action();
@@ -451,8 +453,6 @@ export function DeliveryPanel() {
     } catch (cause) {
       setError(errorText(cause));
       return false;
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -471,277 +471,271 @@ export function DeliveryPanel() {
       `${target.owner} dejará de coordinar "${target.title}". Lo que envíe a partir de ahora se descarta.`,
       { title: "Tomar el control", kind: "warning", okLabel: "Tomar el control" },
     );
-    if (ok) await run(() => takeoverDeliveryRun(target.id));
+    if (!ok) return false;
+    await takeoverDeliveryRun(target.id);
   };
 
   return (
-    <div className="delivery-panel" data-testid="delivery-panel">
-      <header className="delivery-panel__header">
-        <h1>Delivery</h1>
-        {activeRuns.length === 1 ? (
-          <span className="delivery-run" title={activeRuns[0].repo}>
-            <strong>{batchName(activeRuns[0].title || activeRuns[0].id)}</strong>
-            <span className="delivery-muted">
-              {busStore.displayName(activeRuns[0].repo)} ·{" "}
-              {activeRuns[0].owner === "user"
-                ? "lo diriges tú"
-                : activeRuns[0].owner
-                  ? `coordina ${activeRuns[0].owner}`
-                  : "sin coordinador"}
-            </span>
-            {activeRuns[0].notified_at_ms && (
-              <span
-                className="delivery-muted"
-                title="Tinto le escribe en Agents lo que espera de él"
-              >
-                · coordinador avisado {ago(activeRuns[0].notified_at_ms, now)}
+    <DeliveryRefreshContext.Provider value={refresh}>
+      <div className="delivery-panel" data-testid="delivery-panel">
+        <header className="delivery-panel__header">
+          <h1>Delivery</h1>
+          {activeRuns.length === 1 ? (
+            <span className="delivery-run" title={activeRuns[0].repo}>
+              <strong>{batchName(activeRuns[0].title || activeRuns[0].id)}</strong>
+              <span className="delivery-muted">
+                {busStore.displayName(activeRuns[0].repo)} ·{" "}
+                {activeRuns[0].owner === "user"
+                  ? "lo diriges tú"
+                  : activeRuns[0].owner
+                    ? `coordina ${activeRuns[0].owner}`
+                    : "sin coordinador"}
               </span>
-            )}
-            {activeRuns[0].owner && activeRuns[0].owner !== "user" && (
-              <button type="button" disabled={busy} onClick={() => void takeover(activeRuns[0])}>
-                Tomar el control
+              {activeRuns[0].notified_at_ms && (
+                <span
+                  className="delivery-muted"
+                  title="Tinto le escribe en Agents lo que espera de él"
+                >
+                  · coordinador avisado {ago(activeRuns[0].notified_at_ms, now)}
+                </span>
+              )}
+              {activeRuns[0].owner && activeRuns[0].owner !== "user" && (
+                <ActionButton onAction={() => takeover(activeRuns[0])}>
+                  Tomar el control
+                </ActionButton>
+              )}
+              <Menu
+                trigger={
+                  <>
+                    Cambiar coordinador <Icon name="down" />
+                  </>
+                }
+              >
+                {(close) => {
+                  const targets = handOverTargets(activeRuns[0]);
+                  return targets.length === 0 ? (
+                    <span className="delivery-muted" role="menuitem" aria-disabled="true">
+                      Abre en Agents una conversación de este repositorio
+                    </span>
+                  ) : (
+                    targets.map((session) => (
+                      <button
+                        key={session.id}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          close();
+                          void run(() => handOverDeliveryRun(activeRuns[0].id, session.id));
+                        }}
+                      >
+                        {agentName(session.agent_type)} · {session.id.slice(0, 8)}
+                        {session.turn_status === "working" ? " (trabajando)" : ""}
+                      </button>
+                    ))
+                  );
+                }}
+              </Menu>
+              <ActionButton
+                title={
+                  activeRuns[0].paused
+                    ? "Lo que está en cola vuelve a arrancar"
+                    : "Lo que está en cola espera; lo que corre sigue (puedes pausar cada etapa)"
+                }
+                onAction={() => setDeliveryRunPaused(activeRuns[0].id, !activeRuns[0].paused)}
+              >
+                {activeRuns[0].paused ? "Reanudar lote" : "Pausar lote"}
+              </ActionButton>
+            </span>
+          ) : (
+            activeRuns.length > 1 && (
+              <button
+                type="button"
+                className="delivery-run"
+                title="Ver, tomar el control o cerrar los lotes"
+                onClick={() => setDialog({ kind: "settings" })}
+              >
+                {activeRuns.length} lotes activos
               </button>
-            )}
-            <Menu
-              disabled={busy}
-              trigger={
-                <>
-                  Cambiar coordinador <Icon name="down" />
-                </>
-              }
-            >
-              {(close) => {
-                const targets = handOverTargets(activeRuns[0]);
-                return targets.length === 0 ? (
-                  <span className="delivery-muted" role="menuitem" aria-disabled="true">
-                    Abre en Agents una conversación de este repositorio
-                  </span>
-                ) : (
-                  targets.map((session) => (
-                    <button
-                      key={session.id}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        close();
-                        void run(() => handOverDeliveryRun(activeRuns[0].id, session.id));
-                      }}
-                    >
-                      {agentName(session.agent_type)} · {session.id.slice(0, 8)}
-                      {session.turn_status === "working" ? " (trabajando)" : ""}
-                    </button>
-                  ))
-                );
-              }}
-            </Menu>
+            )
+          )}
+          <span className="delivery-panel__spacer" />
+          {needYou.length > 0 && (
             <button
               type="button"
-              disabled={busy}
-              title={
-                activeRuns[0].paused
-                  ? "Lo que está en cola vuelve a arrancar"
-                  : "Lo que está en cola espera; lo que corre sigue (puedes pausar cada etapa)"
-              }
-              onClick={() =>
-                void run(() => setDeliveryRunPaused(activeRuns[0].id, !activeRuns[0].paused))
-              }
+              className="delivery-attention"
+              onClick={() => setSelectedTaskId(needYou[0].id)}
             >
-              {activeRuns[0].paused ? "Reanudar lote" : "Pausar lote"}
+              <Icon name="flag" />
+              {needYou.length === 1
+                ? "1 tarea te necesita"
+                : `${needYou.length} tareas te necesitan`}
             </button>
+          )}
+          <span className="delivery-load">
+            Agentes
+            <span className="delivery-meter" aria-hidden>
+              {Array.from({ length: capacity }, (_, index) => (
+                <i key={index} className={index < running.length ? "on" : undefined} />
+              ))}
+            </span>
+            {running.length} de {capacity}
+            {queued.length > 0 && <span className="delivery-muted">· {queued.length} en cola</span>}
           </span>
-        ) : (
-          activeRuns.length > 1 && (
+          {qa?.state === "quarantined" ? (
             <button
               type="button"
-              className="delivery-run"
-              title="Ver, tomar el control o cerrar los lotes"
-              onClick={() => setDialog({ kind: "settings" })}
-            >
-              {activeRuns.length} lotes activos
-            </button>
-          )
-        )}
-        <span className="delivery-panel__spacer" />
-        {needYou.length > 0 && (
-          <button
-            type="button"
-            className="delivery-attention"
-            onClick={() => setSelectedTaskId(needYou[0].id)}
-          >
-            <Icon name="flag" />
-            {needYou.length === 1 ? "1 tarea te necesita" : `${needYou.length} tareas te necesitan`}
-          </button>
-        )}
-        <span className="delivery-load">
-          Agentes
-          <span className="delivery-meter" aria-hidden>
-            {Array.from({ length: capacity }, (_, index) => (
-              <i key={index} className={index < running.length ? "on" : undefined} />
-            ))}
-          </span>
-          {running.length} de {capacity}
-          {queued.length > 0 && <span className="delivery-muted">· {queued.length} en cola</span>}
-        </span>
-        {qa?.state === "quarantined" ? (
-          <button
-            type="button"
-            className="delivery-lease delivery-lease--quarantined"
-            title={qa.note ?? undefined}
-            onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
-          >
-            QA en cuarentena
-            {qa.queue.length > 0 && (
-              <span className="delivery-muted">· {qa.queue.length} esperando</span>
-            )}
-          </button>
-        ) : (
-          qa && (
-            <span
-              className={`delivery-lease delivery-lease--${qa.state}`}
+              className="delivery-lease delivery-lease--quarantined"
               title={qa.note ?? undefined}
+              onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
             >
-              {qa.state === "active" ? `QA: ${qaHolder?.key ?? "ocupado"}` : "QA libre"}
+              QA en cuarentena
               {qa.queue.length > 0 && (
                 <span className="delivery-muted">· {qa.queue.length} esperando</span>
               )}
-            </span>
-          )
-        )}
-        <button type="button" onClick={() => setDialog({ kind: "archived" })}>
-          Archivadas…
-        </button>
-        <button
-          type="button"
-          className="delivery-icon-button"
-          aria-label="Ajustes de Delivery"
-          title="Ajustes de Delivery"
-          onClick={() => setDialog({ kind: "settings" })}
-        >
-          <Icon name="gear" />
-        </button>
-        <button
-          type="button"
-          className="delivery-button--primary"
-          disabled={repos.length === 0}
-          onClick={() => setDialog({ kind: "new-task" })}
-        >
-          Nueva tarea
-        </button>
-      </header>
-
-      {error && (
-        <div className="delivery-panel__error" role="alert">
-          <span>{error}</span>
-          <button type="button" aria-label="Descartar error" onClick={() => setError(null)}>
-            ×
+            </button>
+          ) : (
+            qa && (
+              <span
+                className={`delivery-lease delivery-lease--${qa.state}`}
+                title={qa.note ?? undefined}
+              >
+                {qa.state === "active" ? `QA: ${qaHolder?.key ?? "ocupado"}` : "QA libre"}
+                {qa.queue.length > 0 && (
+                  <span className="delivery-muted">· {qa.queue.length} esperando</span>
+                )}
+              </span>
+            )
+          )}
+          <button type="button" onClick={() => setDialog({ kind: "archived" })}>
+            Archivadas…
           </button>
-        </div>
-      )}
-
-      {/* Only when it holds work back; otherwise the header and the task say it. */}
-      {qa?.state === "quarantined" && qa.queue.length > 0 && (
-        <div className="delivery-panel__warning" role="status">
-          <span title={qa.note ?? undefined}>
-            {qa.queue.length === 1 ? "Una QA espera" : `${qa.queue.length} QA esperan`} a que
-            liberes el recurso QA{qaHolder ? `, en cuarentena tras ${qaHolder.key}` : ""}.
-          </span>
           <button
             type="button"
-            onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
+            className="delivery-icon-button"
+            aria-label="Ajustes de Delivery"
+            title="Ajustes de Delivery"
+            onClick={() => setDialog({ kind: "settings" })}
           >
-            Liberar…
+            <Icon name="gear" />
           </button>
-        </div>
-      )}
+          <button
+            type="button"
+            className="delivery-button--primary"
+            disabled={repos.length === 0}
+            onClick={() => setDialog({ kind: "new-task" })}
+          >
+            Nueva tarea
+          </button>
+        </header>
 
-      <div className="delivery-panel__body">
-        <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
-          {tasks.length === 0 && (
-            <p className="delivery-panel__empty">
-              Crea una tarea para trabajar un issue en su propio worktree y rama.
-            </p>
-          )}
-          {groups.map((group) => (
-            <section key={group.group} className="delivery-task-group" aria-label={group.label}>
-              <h2>
-                {group.label} <span>{group.tasks.length}</span>
-              </h2>
-              {group.tasks.map((task) => (
-                <button
-                  key={task.id}
-                  type="button"
-                  className="delivery-task-row"
-                  aria-current={selectedTask?.id === task.id ? "true" : undefined}
-                  onClick={() => setSelectedTaskId(task.id)}
-                >
-                  <span className="delivery-task-row__key">
-                    {task.key}
-                    {multiRepo && (
-                      <span className="delivery-task-row__repo" title={task.repo}>
-                        {busStore.displayName(task.repo)}
-                      </span>
-                    )}
-                  </span>
-                  <span className="delivery-task-row__title">{task.title || task.branch}</span>
-                  <StatusLine status={statuses.get(task.id)!} />
-                </button>
-              ))}
-            </section>
-          ))}
-        </nav>
+        {error && (
+          <div className="delivery-panel__error" role="alert">
+            <span>{error}</span>
+            <button type="button" aria-label="Descartar error" onClick={() => setError(null)}>
+              ×
+            </button>
+          </div>
+        )}
 
-        <main className="delivery-panel__detail">
-          {selectedTask && overview ? (
-            <TaskDetail
-              key={selectedTask.id}
-              task={selectedTask}
-              overview={overview}
-              now={now}
-              busy={busy}
-              run={run}
-              onDispatch={(role, prompt, source) => {
-                setRepoSettings(null);
-                getDeliveryRepoSettings(selectedTask.repo).then(setRepoSettings, () =>
-                  setRepoSettings({ worktree_root: null, bootstrap: null, default_base: null }),
-                );
-                setDialog({ kind: "dispatch", task: selectedTask, role, prompt, source });
-              }}
-              onOpenConversation={async (agentType) => {
-                await run(async () => {
-                  const conversation = await openDeliveryTaskInAgents(selectedTask.id, agentType);
-                  openAgentTerminal({
-                    sessionId: conversation.session_id,
-                    repo: conversation.repo,
-                    agentType: conversation.agent_type,
+        {/* Only when it holds work back; otherwise the header and the task say it. */}
+        {qa?.state === "quarantined" && qa.queue.length > 0 && (
+          <div className="delivery-panel__warning" role="status">
+            <span title={qa.note ?? undefined}>
+              {qa.queue.length === 1 ? "Una QA espera" : `${qa.queue.length} QA esperan`} a que
+              liberes el recurso QA{qaHolder ? `, en cuarentena tras ${qaHolder.key}` : ""}.
+            </span>
+            <button
+              type="button"
+              onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
+            >
+              Liberar…
+            </button>
+          </div>
+        )}
+
+        <div className="delivery-panel__body">
+          <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
+            {tasks.length === 0 && (
+              <p className="delivery-panel__empty">
+                Crea una tarea para trabajar un issue en su propio worktree y rama.
+              </p>
+            )}
+            {groups.map((group) => (
+              <section key={group.group} className="delivery-task-group" aria-label={group.label}>
+                <h2>
+                  {group.label} <span>{group.tasks.length}</span>
+                </h2>
+                {group.tasks.map((task) => (
+                  <button
+                    key={task.id}
+                    type="button"
+                    className="delivery-task-row"
+                    aria-current={selectedTask?.id === task.id ? "true" : undefined}
+                    onClick={() => setSelectedTaskId(task.id)}
+                  >
+                    <span className="delivery-task-row__key">
+                      {task.key}
+                      {multiRepo && (
+                        <span className="delivery-task-row__repo" title={task.repo}>
+                          {busStore.displayName(task.repo)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="delivery-task-row__title">{task.title || task.branch}</span>
+                    <StatusLine status={statuses.get(task.id)!} />
+                  </button>
+                ))}
+              </section>
+            ))}
+          </nav>
+
+          <main className="delivery-panel__detail">
+            {selectedTask && overview ? (
+              <TaskDetail
+                key={selectedTask.id}
+                task={selectedTask}
+                overview={overview}
+                now={now}
+                run={run}
+                onDispatch={(role, prompt, source) => {
+                  setRepoSettings(null);
+                  getDeliveryRepoSettings(selectedTask.repo).then(setRepoSettings, () =>
+                    setRepoSettings({ worktree_root: null, bootstrap: null, default_base: null }),
+                  );
+                  setDialog({ kind: "dispatch", task: selectedTask, role, prompt, source });
+                }}
+                onOpenConversation={async (agentType) => {
+                  await run(async () => {
+                    const conversation = await openDeliveryTaskInAgents(selectedTask.id, agentType);
+                    openAgentTerminal({
+                      sessionId: conversation.session_id,
+                      repo: conversation.repo,
+                      agentType: conversation.agent_type,
+                    });
                   });
-                });
-              }}
-              onContinueJob={async (job) => {
-                await run(async () => {
+                }}
+                onContinueJob={async (job) => {
                   const conversation = await openDeliveryJobInAgents(job.id);
                   openAgentTerminal({
                     sessionId: conversation.session_id,
                     repo: conversation.repo,
                     agentType: conversation.agent_type,
                   });
-                });
-              }}
-              onRemoved={() => setSelectedTaskId(null)}
-            />
-          ) : (
-            <p className="delivery-panel__empty">Sin tareas.</p>
-          )}
-        </main>
-      </div>
+                }}
+                onRemoved={() => setSelectedTaskId(null)}
+              />
+            ) : (
+              <p className="delivery-panel__empty">Sin tareas.</p>
+            )}
+          </main>
+        </div>
 
-      {dialog?.kind === "new-task" && (
-        <NewTaskDialog
-          repos={repos}
-          runs={overview?.runs ?? []}
-          busy={busy}
-          onCancel={() => setDialog(null)}
-          onSubmit={(values) =>
-            void run(async () => {
+        {dialog?.kind === "new-task" && (
+          <NewTaskDialog
+            repos={repos}
+            runs={overview?.runs ?? []}
+            onCancel={() => setDialog(null)}
+            onSubmit={async (values) => {
               if (values.bootstrap.trim()) {
                 const current = await getDeliveryRepoSettings(values.repo.path);
                 await setDeliveryRepoSettings(values.repo.path, {
@@ -760,22 +754,19 @@ export function DeliveryPanel() {
               });
               setSelectedTaskId(task.id);
               setDialog(null);
-            })
-          }
-        />
-      )}
-      {dialog?.kind === "dispatch" && (
-        <DispatchDialog
-          task={dialog.task}
-          settings={repoSettings}
-          lastAgent={lastStageAgent(jobs, dialog.task.id)}
-          initialRole={dialog.role}
-          initialPrompt={dialog.prompt}
-          promptSource={dialog.source}
-          busy={busy}
-          onCancel={() => setDialog(null)}
-          onSubmit={(values) =>
-            void (async () => {
+            }}
+          />
+        )}
+        {dialog?.kind === "dispatch" && (
+          <DispatchDialog
+            task={dialog.task}
+            settings={repoSettings}
+            lastAgent={lastStageAgent(jobs, dialog.task.id)}
+            initialRole={dialog.role}
+            initialPrompt={dialog.prompt}
+            promptSource={dialog.source}
+            onCancel={() => setDialog(null)}
+            onSubmit={async (values) => {
               if (values.access === "full") {
                 const ok = await confirm(
                   `El agente podrá ejecutar comandos y modificar archivos fuera del worktree sin pedir aprobación.\n\nWorktree: ${dialog.task.worktree}`,
@@ -785,9 +776,9 @@ export function DeliveryPanel() {
                     okLabel: "Dar acceso completo",
                   },
                 );
-                if (!ok) return;
+                if (!ok) return false;
               }
-              const done = await run(async () => {
+              {
                 // The stage keeps the agent it was launched with.
                 const stage = values.role.toLowerCase();
                 const current = await getDeliveryRepoSettings(dialog.task.repo);
@@ -810,7 +801,7 @@ export function DeliveryPanel() {
                     },
                   });
                 }
-                return dispatchDeliveryJob({
+                await dispatchDeliveryJob({
                   taskId: dialog.task.id,
                   role: values.role,
                   agent: values.agent,
@@ -820,68 +811,60 @@ export function DeliveryPanel() {
                   prompt: values.prompt,
                   platform: values.platform,
                 });
-              });
-              if (done) setDialog(null);
-            })()
-          }
-        />
-      )}
-      {dialog?.kind === "release" && (
-        <ReleaseLeaseDialog
-          name={dialog.name}
-          note={dialog.note}
-          busy={busy}
-          onCancel={() => setDialog(null)}
-          onSubmit={(confirmation) =>
-            void run(async () => {
+              }
+              setDialog(null);
+            }}
+          />
+        )}
+        {dialog?.kind === "release" && (
+          <ReleaseLeaseDialog
+            name={dialog.name}
+            note={dialog.note}
+            onCancel={() => setDialog(null)}
+            onSubmit={async (confirmation) => {
               await releaseDeliveryLease(dialog.name, confirmation);
               setDialog(null);
-            })
-          }
-        />
-      )}
-      {dialog?.kind === "archived" && (
-        <ArchivedTasksDialog
-          busy={busy}
-          onCancel={() => setDialog(null)}
-          onUnarchive={(taskId) =>
-            void run(async () => {
+            }}
+          />
+        )}
+        {dialog?.kind === "archived" && (
+          <ArchivedTasksDialog
+            onCancel={() => setDialog(null)}
+            onUnarchive={async (taskId) => {
               const task = await unarchiveDeliveryTask(taskId);
               setDialog(null);
               setSelectedTaskId(task.id);
-            })
-          }
-        />
-      )}
-      {dialog?.kind === "settings" && (
-        <SettingsDialog
-          capacity={capacitySetting}
-          endpoint={overview?.coordinator ?? null}
-          runs={overview?.runs ?? []}
-          repos={repos}
-          busy={busy}
-          onCancel={() => setDialog(null)}
-          onCapacity={(value) => void run(() => updateDeliverySettings(value))}
-          onCreateRun={(repo, title, qaJiraComment) =>
-            void run(() => createDeliveryRun(repo, title, qaJiraComment))
-          }
-          onQaJiraComment={(target, post) =>
-            void run(() => setDeliveryRunQaJiraComment(target.id, post))
-          }
-          onPause={(target, paused) => void run(() => setDeliveryRunPaused(target.id, paused))}
-          onTakeover={(target) => void takeover(target)}
-          onClose={(target) =>
-            void (async () => {
+            }}
+          />
+        )}
+        {dialog?.kind === "settings" && (
+          <SettingsDialog
+            capacity={capacitySetting}
+            endpoint={overview?.coordinator ?? null}
+            runs={overview?.runs ?? []}
+            repos={repos}
+            onCancel={() => setDialog(null)}
+            onCapacity={(value) => void run(() => updateDeliverySettings(value))}
+            onCreateRun={(repo, title, qaJiraComment) =>
+              createDeliveryRun(repo, title, qaJiraComment)
+            }
+            onQaJiraComment={(target, post) =>
+              void run(() => setDeliveryRunQaJiraComment(target.id, post))
+            }
+            onPause={(target, paused) => setDeliveryRunPaused(target.id, paused)}
+            onTakeover={takeover}
+            onClose={async (target) => {
               const ok = await confirm(
                 `Se cerrará el lote "${target.title}". Sus tareas siguen disponibles.`,
                 { title: "Cerrar lote", okLabel: "Cerrar" },
               );
-              if (ok) await run(() => closeDeliveryRun(target.id));
-            })()
-          }
-        />
-      )}
-    </div>
+              if (!ok) return false;
+              await closeDeliveryRun(target.id);
+            }}
+          />
+        )}
+      </div>
+    </DeliveryRefreshContext.Provider>
   );
 }
 
@@ -889,7 +872,6 @@ function TaskDetail({
   task,
   overview,
   now,
-  busy,
   run,
   onDispatch,
   onOpenConversation,
@@ -899,7 +881,6 @@ function TaskDetail({
   task: DeliveryTask;
   overview: DeliveryOverview;
   now: number;
-  busy: boolean;
   run: (action: () => Promise<unknown>) => Promise<boolean>;
   onDispatch: (role: string, prompt: string, source: string | null) => void;
   onOpenConversation: (agentType: string) => Promise<void>;
@@ -947,20 +928,14 @@ function TaskDetail({
   }, [decisionsOpen]);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
-  const [openingChanges, setOpeningChanges] = useState(false);
   const openChanges = async () => {
-    setOpeningChanges(true);
-    try {
-      const changes = await getDeliveryTaskChanges(task.id);
-      setBaseView(changes.repo, {
-        label: `${task.base_ref} (${shortCommit(changes.base_commit)})`,
-        taskId: task.id,
-        files: changes.files,
-      });
-      openRepo(changes.repo);
-    } finally {
-      setOpeningChanges(false);
-    }
+    const changes = await getDeliveryTaskChanges(task.id);
+    setBaseView(changes.repo, {
+      label: `${task.base_ref} (${shortCommit(changes.base_commit)})`,
+      taskId: task.id,
+      files: changes.files,
+    });
+    openRepo(changes.repo);
   };
   // The issue's page, when the repo's Jira is set in Tinto.
   const [issueUrl, setIssueUrl] = useState<string | null>(null);
@@ -1024,7 +999,8 @@ function TaskDetail({
       `Se restaurarán ${files(job.changes.length)} al estado en que estaban cuando empezó este intento.`,
       { title: "Deshacer intento", kind: "warning", okLabel: "Deshacer" },
     );
-    if (ok) await run(() => undoDeliveryJob(job.id));
+    if (!ok) return false;
+    await undoDeliveryJob(job.id);
   };
 
   const remove = async () => {
@@ -1032,8 +1008,8 @@ function TaskDetail({
       `Se eliminarán el worktree ${task.worktree} y la rama local ${task.branch}. Lo publicado sigue en GitHub.`,
       { title: "Eliminar tarea", kind: "warning", okLabel: "Eliminar" },
     );
-    if (!ok) return;
-    const removed = await run(async () => {
+    if (!ok) return false;
+    {
       try {
         await removeDeliveryTask(task.id, false);
       } catch (cause) {
@@ -1046,11 +1022,11 @@ function TaskDetail({
           `${errorText(cause)}. Si eliminas la tarea, se pierden con el worktree y la rama local ${task.branch}.`,
           { title: "Hay trabajo sin guardar", kind: "warning", okLabel: "Eliminar igualmente" },
         );
-        if (!force) return;
+        if (!force) return false;
         await removeDeliveryTask(task.id, true);
       }
-    });
-    if (removed) onRemoved();
+    }
+    onRemoved();
   };
 
   const archive = async () => {
@@ -1058,8 +1034,9 @@ function TaskDetail({
       `Se borran el worktree ${task.worktree} y la rama local ${task.branch}: todo está en GitHub. La tarea sale de la lista y puedes recuperarla en "Archivadas…" por ${task.key} o por el número de su PR.`,
       { title: "Archivar tarea", okLabel: "Archivar" },
     );
-    if (!ok) return;
-    if (await run(() => archiveDeliveryTask(task.id))) onRemoved();
+    if (!ok) return false;
+    await archiveDeliveryTask(task.id);
+    onRemoved();
   };
 
   const bumpContract = async () => {
@@ -1068,7 +1045,8 @@ function TaskDetail({
       `La tarea pasa a la versión ${version} del contrato. Los resultados que están en curso quedarán obsoletos y no harán avanzar la tarea.`,
       { title: "Nueva versión del contrato", kind: "warning", okLabel: `Subir a v${version}` },
     );
-    if (ok) await run(() => updateDeliveryTask(task.id, { contractVersion: version }));
+    if (!ok) return false;
+    await updateDeliveryTask(task.id, { contractVersion: version });
   };
 
   // Stages with the most recent activity first; older attempts fold under the latest.
@@ -1100,24 +1078,22 @@ function TaskDetail({
               </ExternalLink>
             )}
             {qaRecord?.visual_record && (
-              <button
-                type="button"
+              <ActionButton
                 className="delivery-task__record"
-                disabled={busy}
                 aria-label={
                   qaProblemsToDecide > 0
                     ? `Abrir registro visual de QA, ${qaProblemsToDecide} ${qaProblemsToDecide === 1 ? "problema" : "problemas"} por decidir`
                     : "Abrir registro visual de QA"
                 }
                 title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
-                onClick={() => void run(() => openDeliveryVisualRecord(qaRecord.id))}
+                onAction={() => openDeliveryVisualRecord(qaRecord.id)}
               >
                 Registro visual QA
                 {qaProblemsToDecide > 0 && (
                   <span className="delivery-task__record-count">{qaProblemsToDecide} !</span>
                 )}{" "}
                 ↗
-              </button>
+              </ActionButton>
             )}
           </h2>
           <p className="delivery-task__meta">
@@ -1130,16 +1106,13 @@ function TaskDetail({
               Estado: {stateLabel}
             </span>
             {!task.distro && (
-              <button
-                type="button"
+              <ActionButton
                 className="delivery-link-button"
-                disabled={busy || openingChanges}
-                aria-busy={openingChanges}
                 title={`Abre el worktree en Archivos con solo lo que cambió desde ${task.base_ref}`}
-                onClick={() => void run(openChanges)}
+                onAction={openChanges}
               >
-                {openingChanges ? "Abriendo cambios…" : "Ver cambios"}
-              </button>
+                Ver cambios
+              </ActionButton>
             )}
           </p>
         </div>
@@ -1159,10 +1132,9 @@ function TaskDetail({
               <button
                 type="button"
                 role="menuitem"
-                disabled={busy}
                 onClick={() => {
                   close();
-                  void bumpContract();
+                  void run(bumpContract);
                 }}
               >
                 Nueva versión del contrato… <small>v{task.contract_version}</small>
@@ -1170,7 +1142,7 @@ function TaskDetail({
               <button
                 type="button"
                 role="menuitem"
-                disabled={busy || correctable.length === 0}
+                disabled={correctable.length === 0}
                 title={
                   correctable.length === 0
                     ? "Aún no hay un PR, merge o Jira hecho que corregir."
@@ -1186,11 +1158,11 @@ function TaskDetail({
               <button
                 type="button"
                 role="menuitem"
-                disabled={busy || !delivered || hasOpenJob}
+                disabled={!delivered || hasOpenJob}
                 title={delivered ? undefined : "Se archiva una vez entregada."}
                 onClick={() => {
                   close();
-                  void archive();
+                  void run(archive);
                 }}
               >
                 Archivar tarea…
@@ -1200,11 +1172,11 @@ function TaskDetail({
                 type="button"
                 role="menuitem"
                 className="delivery-menu__danger"
-                disabled={busy || hasOpenJob}
+                disabled={hasOpenJob}
                 title={hasOpenJob ? "Cancela o espera a que terminen sus etapas." : undefined}
                 onClick={() => {
                   close();
-                  void remove();
+                  void run(remove);
                 }}
               >
                 Eliminar tarea…
@@ -1250,29 +1222,18 @@ function TaskDetail({
           >
             ×
           </button>
-          <PendingDecisions taskId={task.id} decisions={pendingDecisions} busy={busy} run={run} />
+          <PendingDecisions taskId={task.id} decisions={pendingDecisions} />
         </div>
       )}
 
-      <PendingSettingsProposals
-        proposals={pendingSettingsProposals(overview, task)}
-        busy={busy}
-        run={run}
-      />
+      <PendingSettingsProposals proposals={pendingSettingsProposals(overview, task)} />
 
       {openApprovals.map((approval) => (
-        <ApprovalBanner
-          key={approval.id}
-          task={task}
-          approval={approval}
-          pr={pr}
-          busy={busy}
-          run={run}
-        />
+        <ApprovalBanner key={approval.id} task={task} approval={approval} pr={pr} />
       ))}
 
       {rejected && openApprovals.length === 0 && (
-        <RejectedStep task={task} approval={rejected} pr={pr} busy={busy} run={run} />
+        <RejectedStep task={task} approval={rejected} pr={pr} />
       )}
 
       {broken && (
@@ -1294,30 +1255,28 @@ function TaskDetail({
           {broken.changes.length > 0 && !broken.undone_at_ms && (
             <p className="delivery-muted">Dejó {files(broken.changes.length)} cambiados.</p>
           )}
-          <div className="delivery-actions">
-            <button
-              type="button"
-              className="delivery-button--primary"
-              disabled={busy}
-              onClick={() => void run(() => retryDeliveryJob(broken.id))}
-            >
-              Reintentar
-            </button>
-            {broken.agent !== "shell" && broken.provider_session_id && (
-              <button type="button" disabled={busy} onClick={() => void onContinueJob(broken)}>
-                Continuar en Agents
-              </button>
-            )}
-            {latestUndoable?.id === broken.id && (
-              <button type="button" disabled={busy} onClick={() => void undo(broken)}>
-                Deshacer cambios
-              </button>
-            )}
-          </div>
+          <ActionGroup>
+            <div className="delivery-actions">
+              <ActionButton
+                className="delivery-button--primary"
+                onAction={() => retryDeliveryJob(broken.id)}
+              >
+                Reintentar
+              </ActionButton>
+              {broken.agent !== "shell" && broken.provider_session_id && (
+                <ActionButton onAction={() => onContinueJob(broken)}>
+                  Continuar en Agents
+                </ActionButton>
+              )}
+              {latestUndoable?.id === broken.id && (
+                <ActionButton onAction={() => undo(broken)}>Deshacer cambios</ActionButton>
+              )}
+            </div>
+          </ActionGroup>
         </div>
       )}
 
-      <QaProblems taskId={task.id} problems={qaProblems} busy={busy} run={run} />
+      <QaProblems taskId={task.id} problems={qaProblems} />
 
       {qaRecord?.visual_record_error && !qaRecord.visual_record && (
         <div
@@ -1351,7 +1310,6 @@ function TaskDetail({
           {next && !broken ? "Otra etapa…" : "Lanzar etapa…"}
         </button>
         <Menu
-          disabled={busy}
           trigger={
             <>
               Abrir en Agents <Icon name="down" />
@@ -1394,18 +1352,16 @@ function TaskDetail({
           </span>
         )}
         {delivered && !hasOpenJob && (
-          <button type="button" disabled={busy} onClick={() => void archive()}>
-            Archivar tarea…
-          </button>
+          <ActionButton onAction={archive}>Archivar tarea…</ActionButton>
         )}
       </div>
 
-      <StepChecks task={task} approvals={approvals} pr={pr} busy={busy} run={run} />
+      <StepChecks task={task} approvals={approvals} pr={pr} />
 
-      <CommitStep approvals={approvals} busy={busy} run={run} />
+      <CommitStep approvals={approvals} />
 
       {step?.rung === "commit" && requesting && (
-        <CommitPlanForm task={task} busy={busy} run={run} onClose={() => setRequesting(false)} />
+        <CommitPlanForm task={task} onClose={() => setRequesting(false)} />
       )}
       {step && step.rung !== "commit" && requesting && (
         <DeliveryRequest
@@ -1413,33 +1369,27 @@ function TaskDetail({
           task={task}
           step={step}
           pr={pr}
-          busy={busy}
-          run={run}
           onClose={() => setRequesting(false)}
         />
       )}
 
-      {pr && <PrSection pr={pr} busy={busy} run={run} />}
+      {pr && <PrSection pr={pr} />}
 
-      <DeliveryResults approvals={approvals} busy={busy} onCorrect={setCorrecting} />
+      <DeliveryResults approvals={approvals} onCorrect={setCorrecting} />
       {correcting && (
         <CorrectResultDialog
           steps={correctable}
           initial={correcting}
-          busy={busy}
           onCancel={() => setCorrecting(null)}
-          onSubmit={(approvalId, outcome, reason) =>
-            void run(() => correctDeliveryApproval(approvalId, outcome, reason)).then((ok) => {
-              if (ok) setCorrecting(null);
-            })
-          }
+          onSubmit={async (approvalId, outcome, reason) => {
+            await correctDeliveryApproval(approvalId, outcome, reason);
+            setCorrecting(null);
+          }}
         />
       )}
 
       <CoordinatorDecisions
         decisions={taskDecisions.filter((decision) => decision.blocking === false)}
-        busy={busy}
-        run={run}
       />
 
       <DecisionLog
@@ -1448,8 +1398,6 @@ function TaskDetail({
         decisions={taskDecisions.filter(
           (decision) => decision.status === "answered" && decision.blocking !== false,
         )}
-        busy={busy}
-        run={run}
       />
 
       <section className="delivery-section" aria-label="Historial">
@@ -1474,13 +1422,11 @@ function TaskDetail({
                     job={job}
                     jobs={jobs}
                     now={now}
-                    busy={busy}
                     expanded={expandedJobId === job.id}
                     undoable={latestUndoable?.id === job.id && !hasOpenJob}
                     onToggle={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
-                    run={run}
-                    onUndo={() => void undo(job)}
-                    onContinue={() => void onContinueJob(job)}
+                    onUndo={() => undo(job)}
+                    onContinue={() => onContinueJob(job)}
                   />
                 )}
               />
@@ -1649,14 +1595,10 @@ function StepChecks({
   task,
   approvals,
   pr,
-  busy,
-  run,
 }: {
   task: DeliveryTask;
   approvals: DeliveryApproval[];
   pr: DeliveryPr | undefined;
-  busy: boolean;
-  run: (action: () => Promise<unknown>) => Promise<boolean>;
 }) {
   type Check = {
     text: string;
@@ -1692,11 +1634,7 @@ function StepChecks({
       {checks.map(({ text, action }) => (
         <p key={text}>
           <span className="delivery-job__note">{text}</span>
-          {action && (
-            <button type="button" disabled={busy} onClick={() => void run(action.run)}>
-              {action.label}
-            </button>
-          )}
+          {action && <ActionButton onAction={action.run}>{action.label}</ActionButton>}
         </p>
       ))}
     </div>
@@ -1729,11 +1667,9 @@ function correctableSteps(approvals: DeliveryApproval[]): CorrectableStep[] {
 /** Each done step's result, with the corrections the user made and when. */
 function DeliveryResults({
   approvals,
-  busy,
   onCorrect,
 }: {
   approvals: DeliveryApproval[];
-  busy: boolean;
   onCorrect: (approvalId: string) => void;
 }) {
   const done = STEPS.flatMap((step) => {
@@ -1777,7 +1713,6 @@ function DeliveryResults({
                 <button
                   type="button"
                   className="delivery-link-button"
-                  disabled={busy}
                   onClick={() => onCorrect(approval.id)}
                 >
                   Corregir resultado…
@@ -1793,15 +1728,7 @@ function DeliveryResults({
 
 /** What happened to the task's last commit step when it is not simply
  *  done, and the way to take back commits that are not pushed yet. */
-function CommitStep({
-  approvals,
-  busy,
-  run,
-}: {
-  approvals: DeliveryApproval[];
-  busy: boolean;
-  run: (action: () => Promise<unknown>) => Promise<boolean>;
-}) {
+function CommitStep({ approvals }: { approvals: DeliveryApproval[] }) {
   const commit = latestApproval(approvals, "commit");
   if (!commit) return null;
   const pushed = latestApproval(approvals, "push")?.status === "executed";
@@ -1817,22 +1744,19 @@ function CommitStep({
     <div className="delivery-commit-step" role="group" aria-label="Paso de commit">
       {notice && commit.outcome && <p className="delivery-job__note">{commit.outcome}</p>}
       {undoable && (
-        <button
-          type="button"
-          disabled={busy}
+        <ActionButton
           title="Los cambios vuelven al worktree, sin confirmar; no se pierde nada."
-          onClick={() =>
-            void (async () => {
-              const ok = await confirm(
-                `La rama volverá a donde estaba antes de ${made === 1 ? "el commit" : `los ${made} commits`} y sus cambios quedarán en el worktree, sin confirmar. No se pierde nada.`,
-                { title: "Deshacer el commit", okLabel: "Deshacer" },
-              );
-              if (ok) await run(() => undoDeliveryCommit(commit.id));
-            })()
-          }
+          onAction={async () => {
+            const ok = await confirm(
+              `La rama volverá a donde estaba antes de ${made === 1 ? "el commit" : `los ${made} commits`} y sus cambios quedarán en el worktree, sin confirmar. No se pierde nada.`,
+              { title: "Deshacer el commit", okLabel: "Deshacer" },
+            );
+            if (!ok) return false;
+            await undoDeliveryCommit(commit.id);
+          }}
         >
           {made === 1 ? "Deshacer el commit" : `Deshacer los ${made} commits`}
-        </button>
+        </ActionButton>
       )}
     </div>
   );
@@ -1877,14 +1801,10 @@ function RejectedStep({
   task,
   approval,
   pr,
-  busy,
-  run,
 }: {
   task: DeliveryTask;
   approval: DeliveryApproval;
   pr: DeliveryPr | undefined;
-  busy: boolean;
-  run: (action: () => Promise<unknown>) => Promise<boolean>;
 }) {
   const openPr = pr?.state === "open";
   return (
@@ -1895,24 +1815,18 @@ function RejectedStep({
       </p>
       <p className="delivery-muted">{rejectionScope(approval, task, pr)}</p>
       {openPr && (
-        <div className="delivery-actions">
-          {!pr.draft && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void run(() => deliveryPrToDraft(task.id))}
-            >
-              Pasar el PR a borrador
-            </button>
-          )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void run(() => closeDeliveryPr(task.id))}
-          >
-            Cerrar el PR #{pr.number}
-          </button>
-        </div>
+        <ActionGroup>
+          <div className="delivery-actions">
+            {!pr.draft && (
+              <ActionButton onAction={() => deliveryPrToDraft(task.id)}>
+                Pasar el PR a borrador
+              </ActionButton>
+            )}
+            <ActionButton onAction={() => closeDeliveryPr(task.id)}>
+              Cerrar el PR #{pr.number}
+            </ActionButton>
+          </div>
+        </ActionGroup>
       )}
     </div>
   );
@@ -1922,14 +1836,10 @@ function ApprovalBanner({
   task,
   approval,
   pr,
-  busy,
-  run,
 }: {
   task: DeliveryTask;
   approval: DeliveryApproval;
   pr: DeliveryPr | undefined;
-  busy: boolean;
-  run: (action: () => Promise<unknown>) => Promise<boolean>;
 }) {
   const [outcome, setOutcome] = useState("");
   const name = lower(stepOf(approval).label);
@@ -1980,14 +1890,12 @@ function ApprovalBanner({
       {!pending && approval.notice && <p className="delivery-job__note">{approval.notice}</p>}
       {!pending && approval.rung === "pr" && (
         <div className="delivery-actions">
-          <button
-            type="button"
+          <ActionButton
             className="delivery-button--primary"
-            disabled={busy}
-            onClick={() => void run(() => openDeliveryPr(approval.id))}
+            onAction={() => openDeliveryPr(approval.id)}
           >
             Abrir el PR en GitHub
-          </button>
+          </ActionButton>
           <span className="delivery-muted">
             Tinto lo abre desde {task.branch} con el título y el cuerpo aprobados.
           </span>
@@ -2044,40 +1952,37 @@ function ApprovalBanner({
       )}
       {pending && <p className="delivery-muted">{consequence}</p>}
       {pending ? (
-        <div className="delivery-actions">
-          <button
-            type="button"
-            className="delivery-button--primary"
-            disabled={busy || needsReviewer}
-            title={needsReviewer ? "Elige al menos un revisor." : undefined}
-            onClick={() =>
-              void run(() =>
+        <ActionGroup>
+          <div className="delivery-actions">
+            <ActionButton
+              className="delivery-button--primary"
+              disabled={needsReviewer}
+              title={needsReviewer ? "Elige al menos un revisor." : undefined}
+              onAction={() =>
                 choosesReviewers
                   ? decideDeliveryApproval(approval.id, true, undefined, reviewers)
-                  : decideDeliveryApproval(approval.id, true),
-              )
-            }
-          >
-            {approval.rung === "commit"
-              ? "Aprobar y hacer commit"
-              : approval.rung === "push"
-                ? "Aprobar y publicar"
-                : approval.rung === "merge"
-                  ? "Aprobar y fusionar"
-                  : approval.rung === "pr"
-                    ? "Aprobar y abrir el PR"
-                    : "Aprobar"}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            title={rejectionScope(approval, task, pr)}
-            onClick={() => void run(() => decideDeliveryApproval(approval.id, false))}
-          >
-            Rechazar
-          </button>
-          <span className="delivery-muted">{rejectionScope(approval, task, pr)}</span>
-        </div>
+                  : decideDeliveryApproval(approval.id, true)
+              }
+            >
+              {approval.rung === "commit"
+                ? "Aprobar y hacer commit"
+                : approval.rung === "push"
+                  ? "Aprobar y publicar"
+                  : approval.rung === "merge"
+                    ? "Aprobar y fusionar"
+                    : approval.rung === "pr"
+                      ? "Aprobar y abrir el PR"
+                      : "Aprobar"}
+            </ActionButton>
+            <ActionButton
+              title={rejectionScope(approval, task, pr)}
+              onAction={() => decideDeliveryApproval(approval.id, false)}
+            >
+              Rechazar
+            </ActionButton>
+            <span className="delivery-muted">{rejectionScope(approval, task, pr)}</span>
+          </div>
+        </ActionGroup>
       ) : (
         // Only a correction: the coordinator reports the step. Nothing here
         // waits on it.
@@ -2094,18 +1999,17 @@ function ApprovalBanner({
               value={outcome}
               onChange={(event) => setOutcome(event.target.value)}
             />
-            <button
-              type="button"
-              disabled={busy || (approval.rung === "jira" && !outcome.trim())}
+            <ActionButton
+              disabled={approval.rung === "jira" && !outcome.trim()}
               title={
                 approval.rung === "jira" && !outcome.trim()
                   ? "Escribe qué se hizo en Jira: transiciones y estado final."
                   : undefined
               }
-              onClick={() => void run(() => completeDeliveryApproval(approval.id, true, outcome))}
+              onAction={() => completeDeliveryApproval(approval.id, true, outcome)}
             >
               Marcar como hecho
-            </button>
+            </ActionButton>
           </div>
         </details>
       )}
@@ -2117,16 +2021,12 @@ function DeliveryRequest({
   task,
   step,
   pr,
-  busy,
-  run,
   onClose,
 }: {
   task: DeliveryTask;
   step: DeliveryStep;
   /** The followed PR, for GitHub's own merge commit message. */
   pr: DeliveryPr | undefined;
-  busy: boolean;
-  run: (action: () => Promise<unknown>) => Promise<boolean>;
   onClose: () => void;
 }) {
   const named = task.title ? `${task.key}: ${task.title}` : task.key;
@@ -2188,27 +2088,8 @@ function DeliveryRequest({
     <form
       className="delivery-request"
       aria-label={`Pedir aprobación de ${name}`}
-      onSubmit={(event) => {
-        event.preventDefault();
-        void run(() =>
-          merge
-            ? requestDeliveryApproval(task.id, rung, title, body, undefined, method)
-            : step.stage
-              ? requestDeliveryApproval(
-                  task.id,
-                  rung,
-                  title,
-                  body,
-                  undefined,
-                  undefined,
-                  step.stage,
-                  jiraByTinto ? parseStatuses(statuses) : undefined,
-                )
-              : requestDeliveryApproval(task.id, rung, title, body),
-        ).then((ok) => {
-          if (ok) onClose();
-        });
-      }}
+      // The submit button sends it, also on Enter.
+      onSubmit={(event) => event.preventDefault()}
     >
       {merge && (
         <label className="delivery-request__field">
@@ -2268,9 +2149,29 @@ function DeliveryRequest({
         </p>
       )}
       <div className="delivery-actions">
-        <button type="submit" className="delivery-button--primary" disabled={busy}>
+        <ActionButton
+          type="submit"
+          className="delivery-button--primary"
+          onAction={async () => {
+            await (merge
+              ? requestDeliveryApproval(task.id, rung, title, body, undefined, method)
+              : step.stage
+                ? requestDeliveryApproval(
+                    task.id,
+                    rung,
+                    title,
+                    body,
+                    undefined,
+                    undefined,
+                    step.stage,
+                    jiraByTinto ? parseStatuses(statuses) : undefined,
+                  )
+                : requestDeliveryApproval(task.id, rung, title, body));
+            onClose();
+          }}
+        >
           Pedir aprobación
-        </button>
+        </ActionButton>
         <button type="button" onClick={onClose}>
           Cancelar
         </button>
@@ -2319,11 +2220,9 @@ function JobRow({
   job,
   jobs,
   now,
-  busy,
   expanded,
   undoable,
   onToggle,
-  run,
   onUndo,
   onContinue,
 }: {
@@ -2331,13 +2230,11 @@ function JobRow({
   /** Every job of the task, oldest first. */
   jobs: DeliveryJob[];
   now: number;
-  busy: boolean;
   expanded: boolean;
   undoable: boolean;
   onToggle: () => void;
-  run: (action: () => Promise<unknown>) => Promise<boolean>;
-  onUndo: () => void;
-  onContinue: () => void;
+  onUndo: () => Promise<unknown>;
+  onContinue: () => Promise<unknown>;
 }) {
   const outcome = attemptOutcome(job, jobs);
   const quiet = quietFor(job, now);
@@ -2516,66 +2413,45 @@ function JobRow({
               )}
             </dl>
           </details>
-          <div className="delivery-actions">
-            {job.visual_record && (
-              <button
-                type="button"
-                className="delivery-button--primary"
-                title="Los cambios visuales que revisó la QA, con sus capturas de escritorio y móvil"
-                onClick={() => void run(() => openDeliveryVisualRecord(job.id))}
-              >
-                Abrir registro visual
-              </button>
-            )}
-            {job.status === "started" && job.agent !== "shell" && (
-              <button
-                type="button"
-                disabled={busy}
-                title="Detiene el agente; al reanudar sigue en la misma sesión, con lo que ya hizo"
-                onClick={() => void run(() => pauseDeliveryJob(job.id))}
-              >
-                Pausar
-              </button>
-            )}
-            {held && (
-              <button
-                type="button"
-                className="delivery-button--primary"
-                disabled={busy}
-                onClick={() => void run(() => resumeDeliveryJob(job.id))}
-              >
-                Reanudar
-              </button>
-            )}
-            {(isOpen(job) || held) && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void run(() => cancelDeliveryJob(job.id))}
-              >
-                Cancelar
-              </button>
-            )}
-            {!isOpen(job) && job.status !== "paused" && job.agent !== "shell" && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void run(() => retryDeliveryJob(job.id))}
-              >
-                Nuevo intento
-              </button>
-            )}
-            {undoable && (
-              <button type="button" disabled={busy} onClick={onUndo}>
-                Deshacer estos cambios
-              </button>
-            )}
-            {!isOpen(job) && !held && job.agent !== "shell" && job.provider_session_id && (
-              <button type="button" disabled={busy} onClick={onContinue}>
-                Continuar en Agents
-              </button>
-            )}
-          </div>
+          <ActionGroup>
+            <div className="delivery-actions">
+              {job.visual_record && (
+                <ActionButton
+                  className="delivery-button--primary"
+                  title="Los cambios visuales que revisó la QA, con sus capturas de escritorio y móvil"
+                  onAction={() => openDeliveryVisualRecord(job.id)}
+                >
+                  Abrir registro visual
+                </ActionButton>
+              )}
+              {job.status === "started" && job.agent !== "shell" && (
+                <ActionButton
+                  title="Detiene el agente; al reanudar sigue en la misma sesión, con lo que ya hizo"
+                  onAction={() => pauseDeliveryJob(job.id)}
+                >
+                  Pausar
+                </ActionButton>
+              )}
+              {held && (
+                <ActionButton
+                  className="delivery-button--primary"
+                  onAction={() => resumeDeliveryJob(job.id)}
+                >
+                  Reanudar
+                </ActionButton>
+              )}
+              {(isOpen(job) || held) && (
+                <ActionButton onAction={() => cancelDeliveryJob(job.id)}>Cancelar</ActionButton>
+              )}
+              {!isOpen(job) && job.status !== "paused" && job.agent !== "shell" && (
+                <ActionButton onAction={() => retryDeliveryJob(job.id)}>Nuevo intento</ActionButton>
+              )}
+              {undoable && <ActionButton onAction={onUndo}>Deshacer estos cambios</ActionButton>}
+              {!isOpen(job) && !held && job.agent !== "shell" && job.provider_session_id && (
+                <ActionButton onAction={onContinue}>Continuar en Agents</ActionButton>
+              )}
+            </div>
+          </ActionGroup>
         </div>
       )}
     </li>

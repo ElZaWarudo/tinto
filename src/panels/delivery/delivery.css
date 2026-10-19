@@ -1704,3 +1704,55 @@
   align-items: flex-start;
   gap: 8px;
 }
+
+/* Buttons that run something: the label keeps its place, so the button
+   never changes size; the spinner and the check sit over it. */
+.delivery-action {
+  position: relative;
+}
+.delivery-action--working,
+.delivery-action--done {
+  cursor: progress;
+}
+.delivery-action--working .delivery-action__label,
+.delivery-action--done .delivery-action__label {
+  visibility: hidden;
+}
+.delivery-action__status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.delivery-action__spinner {
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: delivery-action-spin 0.7s linear infinite;
+}
+@keyframes delivery-action-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.delivery-action--failed {
+  box-shadow: 0 0 0 1px #d1242f;
+  animation: delivery-action-shake 0.3s;
+}
+@keyframes delivery-action-shake {
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+.delivery-action__error {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #ff8182;
+}

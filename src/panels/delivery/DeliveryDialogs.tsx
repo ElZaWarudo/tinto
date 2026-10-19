@@ -14,6 +14,7 @@ import { useAccessibleDialog } from "../../workbench/useAccessibleDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 import { parseStatuses } from "./taskStatus";
 import { ExternalLink } from "./ExternalLink";
+import { ActionButton, ActionGroup } from "./ActionButton";
 import type {
   DeliveryAccess,
   DeliveryAgent,
@@ -37,24 +38,21 @@ function FormDialog({
   submitLabel,
   onSubmit,
   onCancel,
-  busy,
   children,
   wide,
 }: {
   title: string;
   submitLabel?: string;
-  onSubmit?: () => void;
+  /** Resolves to false when the form is not ready; throwing shows why. */
+  onSubmit?: () => Promise<unknown>;
   onCancel: () => void;
-  busy?: boolean;
   children: ReactNode;
   wide?: boolean;
 }) {
   const firstFieldRef = useRef<HTMLDivElement>(null);
   const dialogRef = useAccessibleDialog<HTMLDivElement>({ onClose: onCancel });
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (!busy) onSubmit?.();
-  };
+  // The submit button sends it, also on Enter.
+  const submit = (event: FormEvent) => event.preventDefault();
   return (
     <div
       ref={dialogRef}
@@ -79,13 +77,13 @@ function FormDialog({
             {onSubmit ? "Cancelar" : "Cerrar"}
           </button>
           {onSubmit && (
-            <button
+            <ActionButton
               type="submit"
               className="file-op-modal__button delivery-dialog__submit"
-              disabled={busy}
+              onAction={onSubmit}
             >
-              {busy ? "Trabajando…" : submitLabel}
-            </button>
+              {submitLabel}
+            </ActionButton>
           )}
         </div>
       </form>
@@ -126,14 +124,12 @@ export interface NewTaskValues {
 export function NewTaskDialog({
   repos,
   runs,
-  busy,
   onSubmit,
   onCancel,
 }: {
   repos: RepoChoice[];
   runs: DeliveryRun[];
-  busy: boolean;
-  onSubmit: (values: NewTaskValues) => void;
+  onSubmit: (values: NewTaskValues) => Promise<unknown>;
   onCancel: () => void;
 }) {
   const [repoPath, setRepoPath] = useState(repos[0]?.path ?? "");
@@ -154,11 +150,10 @@ export function NewTaskDialog({
     <FormDialog
       title="Nueva tarea"
       submitLabel="Crear tarea"
-      busy={busy}
       onCancel={onCancel}
-      onSubmit={() => {
-        if (!repo || !key.trim()) return;
-        onSubmit({ repo, key, title, base, branch, runId, bootstrap });
+      onSubmit={async () => {
+        if (!repo || !key.trim()) return false;
+        await onSubmit({ repo, key, title, base, branch, runId, bootstrap });
       }}
     >
       <Field label="Repositorio">
@@ -372,7 +367,6 @@ export function DispatchDialog({
   initialRole,
   initialPrompt,
   promptSource,
-  busy,
   onSubmit,
   onCancel,
 }: {
@@ -387,8 +381,7 @@ export function DispatchDialog({
   initialPrompt: string;
   /** Where initialPrompt came from, shown under the field. */
   promptSource: string | null;
-  busy: boolean;
-  onSubmit: (values: DispatchValues) => void;
+  onSubmit: (values: DispatchValues) => Promise<unknown>;
   onCancel: () => void;
 }) {
   const builtIn = DELIVERY_ROLES.some((choice) => choice.value === initialRole);
@@ -420,13 +413,12 @@ export function DispatchDialog({
     <FormDialog
       title={`Lanzar etapa en ${task.key}`}
       submitLabel="Poner en cola"
-      busy={busy}
       wide
       onCancel={onCancel}
-      onSubmit={() => {
+      onSubmit={async () => {
         const finalRole = role === "custom" ? customRole.trim() : role;
-        if (!finalRole || !prompt.trim()) return;
-        onSubmit({
+        if (!finalRole || !prompt.trim()) return false;
+        return onSubmit({
           role: finalRole,
           agent,
           model,
@@ -610,14 +602,12 @@ export function DispatchDialog({
 export function ReleaseLeaseDialog({
   name,
   note,
-  busy,
   onSubmit,
   onCancel,
 }: {
   name: string;
   note: string | null;
-  busy: boolean;
-  onSubmit: (confirmation: string) => void;
+  onSubmit: (confirmation: string) => Promise<unknown>;
   onCancel: () => void;
 }) {
   const [confirmation, setConfirmation] = useState("");
@@ -625,11 +615,8 @@ export function ReleaseLeaseDialog({
     <FormDialog
       title={`Liberar el recurso ${name}`}
       submitLabel="Liberar"
-      busy={busy}
       onCancel={onCancel}
-      onSubmit={() => {
-        if (confirmation.trim()) onSubmit(confirmation);
-      }}
+      onSubmit={async () => (confirmation.trim() ? onSubmit(confirmation) : false)}
     >
       {note && <p className="file-op-modal__body">{note}</p>}
       <p className="file-op-modal__body">
@@ -652,12 +639,10 @@ export function ReleaseLeaseDialog({
 
 /** Finds archived tasks by issue key or PR number and brings one back. */
 export function ArchivedTasksDialog({
-  busy,
   onUnarchive,
   onCancel,
 }: {
-  busy: boolean;
-  onUnarchive: (taskId: string) => void;
+  onUnarchive: (taskId: string) => Promise<unknown>;
   onCancel: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -678,9 +663,8 @@ export function ArchivedTasksDialog({
     <FormDialog
       title="Tareas archivadas"
       submitLabel="Buscar"
-      busy={busy}
       onCancel={onCancel}
-      onSubmit={() => void search(query)}
+      onSubmit={() => search(query)}
     >
       <Field label="Issue o número de PR" hint="Por ejemplo: AGOS-455 o #279">
         <input value={query} onChange={(event) => setQuery(event.target.value)} autoFocus />
@@ -704,14 +688,9 @@ export function ArchivedTasksDialog({
                   </>
                 )}
               </span>
-              <button
-                type="button"
-                className="file-op-modal__button"
-                disabled={busy}
-                onClick={() => onUnarchive(task.id)}
-              >
+              <ActionButton className="file-op-modal__button" onAction={() => onUnarchive(task.id)}>
                 Desarchivar
-              </button>
+              </ActionButton>
             </li>
           ))}
         </ul>
@@ -731,14 +710,12 @@ export interface CorrectableStep {
 export function CorrectResultDialog({
   steps,
   initial,
-  busy,
   onSubmit,
   onCancel,
 }: {
   steps: CorrectableStep[];
   initial: string;
-  busy: boolean;
-  onSubmit: (approvalId: string, outcome: string, reason: string) => void;
+  onSubmit: (approvalId: string, outcome: string, reason: string) => Promise<unknown>;
   onCancel: () => void;
 }) {
   const [id, setId] = useState(initial);
@@ -749,11 +726,10 @@ export function CorrectResultDialog({
     <FormDialog
       title="Corregir resultado"
       submitLabel="Guardar corrección"
-      busy={busy}
       onCancel={onCancel}
-      onSubmit={() => {
-        if (step && outcome.trim() && reason.trim()) onSubmit(step.id, outcome, reason);
-      }}
+      onSubmit={async () =>
+        step && outcome.trim() && reason.trim() ? onSubmit(step.id, outcome, reason) : false
+      }
     >
       <p className="file-op-modal__body">
         El resultado anterior se conserva en el historial del paso, con su fecha.
@@ -1054,21 +1030,20 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
       </Field>
       <div className="delivery-actions">
-        <button
-          type="button"
+        <ActionButton
           className="file-op-modal__button"
           disabled={!loaded?.jira?.has_token}
           title={loaded?.jira?.has_token ? undefined : "Guarda antes el host y el token."}
-          onClick={() => {
+          onAction={() => {
             setJiraCheck("Comprobando…");
-            checkDeliveryJira(repo).then(
+            return checkDeliveryJira(repo).then(
               (name) => setJiraCheck(`Conectado como ${name}.`),
               (cause) => setJiraCheck(`No se pudo: ${String(cause?.message ?? cause)}`),
             );
           }}
         >
           Comprobar Jira
-        </button>
+        </ActionButton>
         <span className="delivery-field__hint" role="status">
           {jiraCheck}
         </span>
@@ -1093,11 +1068,10 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         />
       ))}
       <div className="delivery-actions">
-        <button
-          type="button"
+        <ActionButton
           className="file-op-modal__button"
           disabled={!loaded}
-          onClick={() =>
+          onAction={async () =>
             loaded &&
             setDeliveryRepoSettings(repo, {
               ...loaded,
@@ -1130,7 +1104,7 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
           }
         >
           Guardar los ajustes de {label}
-        </button>
+        </ActionButton>
         <span className="delivery-field__hint" role="status">
           {status}
         </span>
@@ -1179,7 +1153,6 @@ export function SettingsDialog({
   endpoint,
   runs,
   repos,
-  busy,
   onCapacity,
   onCreateRun,
   onQaJiraComment,
@@ -1192,13 +1165,12 @@ export function SettingsDialog({
   endpoint: DeliveryCoordinatorEndpoint | null;
   runs: DeliveryRun[];
   repos: RepoChoice[];
-  busy: boolean;
   onCapacity: (capacity: number) => void;
-  onCreateRun: (repo: string, title: string, qaJiraComment: boolean) => void;
+  onCreateRun: (repo: string, title: string, qaJiraComment: boolean) => Promise<unknown>;
   onQaJiraComment: (run: DeliveryRun, post: boolean) => void;
-  onPause: (run: DeliveryRun, paused: boolean) => void;
-  onTakeover: (run: DeliveryRun) => void;
-  onClose: (run: DeliveryRun) => void;
+  onPause: (run: DeliveryRun, paused: boolean) => Promise<unknown>;
+  onTakeover: (run: DeliveryRun) => Promise<unknown>;
+  onClose: (run: DeliveryRun) => Promise<unknown>;
   onCancel: () => void;
 }) {
   const [repo, setRepo] = useState(repos[0]?.path ?? "");
@@ -1231,11 +1203,7 @@ export function SettingsDialog({
         label="Agentes en paralelo"
         hint="Automático: uno por cada tarea activa (cada issue), hasta 8. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
       >
-        <select
-          value={capacity}
-          disabled={busy}
-          onChange={(event) => onCapacity(Number(event.target.value))}
-        >
+        <select value={capacity} onChange={(event) => onCapacity(Number(event.target.value))}>
           <option value={0}>Automático: uno por issue</option>
           {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
             <option key={value} value={value}>
@@ -1262,7 +1230,6 @@ export function SettingsDialog({
               <select
                 aria-label={`Resultado de QA en Jira del lote ${run.title || run.id}`}
                 value={run.qa_jira_comment == null ? "" : run.qa_jira_comment ? "yes" : "no"}
-                disabled={busy}
                 onChange={(event) => onQaJiraComment(run, event.target.value === "yes")}
               >
                 {run.qa_jira_comment == null && <option value="">QA en Jira: sin decidir</option>}
@@ -1284,32 +1251,28 @@ export function SettingsDialog({
                   Brainstorm
                 </span>
               )}
-              <button
-                type="button"
-                aria-label={`${run.paused ? "Reanudar" : "Pausar"} el lote ${run.title || run.id}`}
-                disabled={busy}
-                onClick={() => onPause(run, !run.paused)}
-              >
-                {run.paused ? "Reanudar" : "Pausar"}
-              </button>
-              {run.owner && run.owner !== "user" && (
-                <button
-                  type="button"
-                  aria-label={`Tomar el control del lote ${run.title || run.id}`}
-                  disabled={busy}
-                  onClick={() => onTakeover(run)}
+              <ActionGroup>
+                <ActionButton
+                  aria-label={`${run.paused ? "Reanudar" : "Pausar"} el lote ${run.title || run.id}`}
+                  onAction={() => onPause(run, !run.paused)}
                 >
-                  Tomar el control
-                </button>
-              )}
-              <button
-                type="button"
-                aria-label={`Cerrar el lote ${run.title || run.id}`}
-                disabled={busy}
-                onClick={() => onClose(run)}
-              >
-                Cerrar
-              </button>
+                  {run.paused ? "Reanudar" : "Pausar"}
+                </ActionButton>
+                {run.owner && run.owner !== "user" && (
+                  <ActionButton
+                    aria-label={`Tomar el control del lote ${run.title || run.id}`}
+                    onAction={() => onTakeover(run)}
+                  >
+                    Tomar el control
+                  </ActionButton>
+                )}
+                <ActionButton
+                  aria-label={`Cerrar el lote ${run.title || run.id}`}
+                  onAction={() => onClose(run)}
+                >
+                  Cerrar
+                </ActionButton>
+              </ActionGroup>
             </span>
           </li>
         ))}
@@ -1344,17 +1307,16 @@ export function SettingsDialog({
           <option value="yes">Comentar en cada issue</option>
         </select>
       </Field>
-      <button
-        type="button"
+      <ActionButton
         className="file-op-modal__button"
-        disabled={busy || !repo || !title.trim()}
-        onClick={() => {
-          onCreateRun(repo, title.trim(), jiraComment);
+        disabled={!repo || !title.trim()}
+        onAction={async () => {
+          await onCreateRun(repo, title.trim(), jiraComment);
           setTitle("");
         }}
       >
         Crear lote
-      </button>
+      </ActionButton>
 
       <RepoQaSettings repos={repos} />
 

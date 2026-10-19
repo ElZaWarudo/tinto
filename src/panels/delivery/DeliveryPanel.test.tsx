@@ -527,9 +527,11 @@ describe("DeliveryPanel", () => {
     let answer: (changes: unknown) => void = () => {};
     client.getDeliveryTaskChanges.mockReturnValue(new Promise((resolve) => (answer = resolve)));
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Ver cambios" }));
-    // It says so at once while the changes are read.
-    expect(await screen.findByRole("button", { name: "Abriendo cambios…" })).toBeDisabled();
+    const button = await screen.findByRole("button", { name: "Ver cambios" });
+    await user.click(button);
+    // It says so at once while the changes are read, at the same size.
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveTextContent("Ver cambios");
     answer({
       repo: "C:/work/agentos-wt/AGOS-501",
       base_ref: "develop",
@@ -539,7 +541,7 @@ describe("DeliveryPanel", () => {
     await waitFor(() =>
       expect(actions.openRepo).toHaveBeenCalledWith("C:/work/agentos-wt/AGOS-501"),
     );
-    expect(await screen.findByRole("button", { name: "Ver cambios" })).toBeEnabled();
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-busy"));
     expect(client.getDeliveryTaskChanges).toHaveBeenCalledWith("t1");
   });
 

@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { getDeliveryCommitDraft, requestDeliveryApproval } from "../../delivery/client";
 import type { DeliveryApproval, DeliveryCommitDraft, DeliveryTask } from "../../delivery/types";
 
-type Run = (action: () => Promise<unknown>) => Promise<boolean>;
+import { ActionButton } from "./ActionButton";
 
 /** Where a changed file goes: a commit's position, or this to stay uncommitted. */
 const LEFT_OUT = -1;
@@ -59,17 +59,7 @@ export function CommitPlanView({ approval }: { approval: DeliveryApproval }) {
 }
 
 /** Prepares the commit step: messages, and which commit each file goes in. */
-export function CommitPlanForm({
-  task,
-  busy,
-  run,
-  onClose,
-}: {
-  task: DeliveryTask;
-  busy: boolean;
-  run: Run;
-  onClose: () => void;
-}) {
+export function CommitPlanForm({ task, onClose }: { task: DeliveryTask; onClose: () => void }) {
   const [draft, setDraft] = useState<DeliveryCommitDraft | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [messages, setMessages] = useState<string[]>([""]);
@@ -125,15 +115,8 @@ export function CommitPlanForm({
     <form
       className="delivery-request"
       aria-label="Pedir aprobación de commit"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!ready) return;
-        void run(() =>
-          requestDeliveryApproval(task.id, "commit", "", "", { commits, leaveOut }),
-        ).then((ok) => {
-          if (ok) onClose();
-        });
-      }}
+      // The submit button sends it, also on Enter.
+      onSubmit={(event) => event.preventDefault()}
     >
       {draft.recent.length > 0 && (
         <details className="delivery-decision__detail">
@@ -208,9 +191,17 @@ export function CommitPlanForm({
           : "No quedará ningún cambio sin confirmar."}
       </p>
       <div className="delivery-actions">
-        <button type="submit" className="delivery-button--primary" disabled={busy || !ready}>
+        <ActionButton
+          type="submit"
+          className="delivery-button--primary"
+          disabled={!ready}
+          onAction={async () => {
+            await requestDeliveryApproval(task.id, "commit", "", "", { commits, leaveOut });
+            onClose();
+          }}
+        >
           Pedir aprobación
-        </button>
+        </ActionButton>
         <button type="button" onClick={onClose}>
           Cancelar
         </button>

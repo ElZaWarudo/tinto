@@ -13,7 +13,7 @@ import type {
   DeliverySettingsProposal,
 } from "../../delivery/types";
 
-type Run = (action: () => Promise<unknown>) => Promise<boolean>;
+import { ActionButton, ActionGroup } from "./ActionButton";
 
 type ListField = "checks_add" | "checks_remove" | "qa_commands_add";
 
@@ -162,15 +162,7 @@ function ValueChange({
   );
 }
 
-function ProposalCard({
-  proposal,
-  busy,
-  run,
-}: {
-  proposal: DeliverySettingsProposal;
-  busy: boolean;
-  run: Run;
-}) {
+function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
   const changes = proposal.changes;
   const [current, setCurrent] = useState<DeliveryRepoSettings | null>(null);
   const [selected, setSelected] = useState(() => new Set(changeKeys(changes)));
@@ -247,37 +239,26 @@ function ProposalCard({
           toggle={toggle}
         />
       )}
-      <div className="delivery-actions">
-        <button
-          type="button"
-          className="delivery-button--primary"
-          disabled={busy || selected.size === 0}
-          onClick={() => void run(() => approveDeliverySettingsProposal(proposal.id, part))}
-        >
-          {selected.size === all ? "Aprobar" : `Aprobar ${selected.size} de ${all}`}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void run(() => rejectDeliverySettingsProposal(proposal.id))}
-        >
-          Rechazar
-        </button>
-      </div>
+      <ActionGroup>
+        <div className="delivery-actions">
+          <ActionButton
+            className="delivery-button--primary"
+            disabled={selected.size === 0}
+            onAction={() => approveDeliverySettingsProposal(proposal.id, part)}
+          >
+            {selected.size === all ? "Aprobar" : `Aprobar ${selected.size} de ${all}`}
+          </ActionButton>
+          <ActionButton onAction={() => rejectDeliverySettingsProposal(proposal.id)}>
+            Rechazar
+          </ActionButton>
+        </div>
+      </ActionGroup>
     </fieldset>
   );
 }
 
 /** The settings changes waiting for the user on a task's repo. */
-export function PendingSettingsProposals({
-  proposals,
-  busy,
-  run,
-}: {
-  proposals: DeliverySettingsProposal[];
-  busy: boolean;
-  run: Run;
-}) {
+export function PendingSettingsProposals({ proposals }: { proposals: DeliverySettingsProposal[] }) {
   if (proposals.length === 0) return null;
   return (
     <section
@@ -291,7 +272,7 @@ export function PendingSettingsProposals({
         </span>
       </p>
       {proposals.map((proposal) => (
-        <ProposalCard key={proposal.id} proposal={proposal} busy={busy} run={run} />
+        <ProposalCard key={proposal.id} proposal={proposal} />
       ))}
     </section>
   );

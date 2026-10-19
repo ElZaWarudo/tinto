@@ -14,7 +14,7 @@ import { confirm } from "../../workbench/confirmDialog";
 import type { DeliveryDecision } from "../../delivery/types";
 import { CodeThreads } from "./DeliveryCodeThread";
 
-type Run = (action: () => Promise<unknown>) => Promise<boolean>;
+import { ActionButton, ActionGroup } from "./ActionButton";
 
 const ALLOWED = "allowed";
 const DENIED = "denied";
@@ -35,45 +35,26 @@ function TechnicalDetail({ detail }: { detail: string }) {
 }
 
 /** Takes back a question that stopped making sense, so it stops blocking the task. */
-function WithdrawButton({
-  decision,
-  busy,
-  run,
-}: {
-  decision: DeliveryDecision;
-  busy: boolean;
-  run: Run;
-}) {
+function WithdrawButton({ decision }: { decision: DeliveryDecision }) {
   return (
-    <button
-      type="button"
-      disabled={busy}
+    <ActionButton
       aria-label={`Retirar la decisión «${decision.question}»`}
       title="Si ya no tiene sentido. Se quita sin respuesta y deja de bloquear las etapas."
-      onClick={() =>
-        void (async () => {
-          const ok = await confirm(
-            `«${decision.question}» se retira sin respuesta y deja de bloquear las etapas. Si vuelve a hacer falta, hay que pedirla otra vez.`,
-            { title: "Retirar la decisión", okLabel: "Retirar" },
-          );
-          if (ok) await run(() => withdrawDeliveryDecision(decision.id));
-        })()
-      }
+      onAction={async () => {
+        const ok = await confirm(
+          `«${decision.question}» se retira sin respuesta y deja de bloquear las etapas. Si vuelve a hacer falta, hay que pedirla otra vez.`,
+          { title: "Retirar la decisión", okLabel: "Retirar" },
+        );
+        if (!ok) return false;
+        await withdrawDeliveryDecision(decision.id);
+      }}
     >
       Retirar
-    </button>
+    </ActionButton>
   );
 }
 
-function ChoiceCard({
-  decision,
-  busy,
-  run,
-}: {
-  decision: DeliveryDecision;
-  busy: boolean;
-  run: Run;
-}) {
+function ChoiceCard({ decision }: { decision: DeliveryDecision }) {
   const recommended = decision.options.find((option) => option.recommended)?.label ?? null;
   const [choice, setChoice] = useState<string | null>(recommended);
   return (
@@ -98,29 +79,22 @@ function ChoiceCard({
         </label>
       ))}
       <TechnicalDetail detail={decision.detail} />
-      <div className="delivery-actions">
-        <button
-          type="button"
-          disabled={busy || choice === null}
-          onClick={() => choice && void run(() => answerDeliveryDecision(decision.id, choice))}
-        >
-          Decidir
-        </button>
-        <WithdrawButton decision={decision} busy={busy} run={run} />
-      </div>
+      <ActionGroup>
+        <div className="delivery-actions">
+          <ActionButton
+            disabled={choice === null}
+            onAction={() => answerDeliveryDecision(decision.id, choice ?? "")}
+          >
+            Decidir
+          </ActionButton>
+          <WithdrawButton decision={decision} />
+        </div>
+      </ActionGroup>
     </fieldset>
   );
 }
 
-function TextCard({
-  decision,
-  busy,
-  run,
-}: {
-  decision: DeliveryDecision;
-  busy: boolean;
-  run: Run;
-}) {
+function TextCard({ decision }: { decision: DeliveryDecision }) {
   const [text, setText] = useState(decision.text);
   return (
     <fieldset className="delivery-decision">
@@ -131,16 +105,17 @@ function TextCard({
         <textarea value={text} onChange={(event) => setText(event.target.value)} rows={2} />
       </label>
       <TechnicalDetail detail={decision.detail} />
-      <div className="delivery-actions">
-        <button
-          type="button"
-          disabled={busy || !text.trim()}
-          onClick={() => void run(() => answerDeliveryDecision(decision.id, text))}
-        >
-          {text === decision.text ? "Aprobar texto" : "Aprobar texto editado"}
-        </button>
-        <WithdrawButton decision={decision} busy={busy} run={run} />
-      </div>
+      <ActionGroup>
+        <div className="delivery-actions">
+          <ActionButton
+            disabled={!text.trim()}
+            onAction={() => answerDeliveryDecision(decision.id, text)}
+          >
+            {text === decision.text ? "Aprobar texto" : "Aprobar texto editado"}
+          </ActionButton>
+          <WithdrawButton decision={decision} />
+        </div>
+      </ActionGroup>
     </fieldset>
   );
 }
@@ -233,15 +208,7 @@ function PermissionScope({ decision }: { decision: DeliveryDecision }) {
   );
 }
 
-function PermissionCard({
-  decision,
-  busy,
-  run,
-}: {
-  decision: DeliveryDecision;
-  busy: boolean;
-  run: Run;
-}) {
+function PermissionCard({ decision }: { decision: DeliveryDecision }) {
   return (
     <fieldset className="delivery-decision delivery-decision--permission">
       <legend>{decision.question}</legend>
@@ -249,23 +216,17 @@ function PermissionCard({
       <PermissionScope decision={decision} />
       <p className="delivery-muted">Cómo se deshace: {decision.undo}</p>
       <TechnicalDetail detail={decision.detail} />
-      <div className="delivery-actions">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void run(() => answerDeliveryDecision(decision.id, ALLOWED))}
-        >
-          Permitir
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void run(() => answerDeliveryDecision(decision.id, DENIED))}
-        >
-          No permitir
-        </button>
-        <WithdrawButton decision={decision} busy={busy} run={run} />
-      </div>
+      <ActionGroup>
+        <div className="delivery-actions">
+          <ActionButton onAction={() => answerDeliveryDecision(decision.id, ALLOWED)}>
+            Permitir
+          </ActionButton>
+          <ActionButton onAction={() => answerDeliveryDecision(decision.id, DENIED)}>
+            No permitir
+          </ActionButton>
+          <WithdrawButton decision={decision} />
+        </div>
+      </ActionGroup>
     </fieldset>
   );
 }
@@ -274,13 +235,9 @@ function PermissionCard({
 export function PendingDecisions({
   taskId,
   decisions,
-  busy,
-  run,
 }: {
   taskId: string;
   decisions: DeliveryDecision[];
-  busy: boolean;
-  run: Run;
 }) {
   const choices = decisions.filter((decision) => decision.kind === "choice");
   const texts = decisions.filter((decision) => decision.kind === "text");
@@ -303,14 +260,12 @@ export function PendingDecisions({
       </p>
       {acceptable > 0 && (
         <div className="delivery-actions">
-          <button
-            type="button"
+          <ActionButton
             className="delivery-button--primary"
-            disabled={busy}
-            onClick={() => void run(() => acceptRecommendedDecisions(taskId))}
+            onAction={() => acceptRecommendedDecisions(taskId)}
           >
             Aceptar recomendadas
-          </button>
+          </ActionButton>
           {permissions.length > 0 && (
             <span className="delivery-muted">Los permisos se deciden uno a uno.</span>
           )}
@@ -318,19 +273,19 @@ export function PendingDecisions({
       )}
       {choices.length > 0 && <h4 className="delivery-decisions__group">Decisiones</h4>}
       {choices.map((decision) => (
-        <ChoiceCard key={decision.id} decision={decision} busy={busy} run={run} />
+        <ChoiceCard key={decision.id} decision={decision} />
       ))}
       {texts.length > 0 && (
         <h4 className="delivery-decisions__group">Textos que verá el usuario</h4>
       )}
       {texts.map((decision) => (
-        <TextCard key={decision.id} decision={decision} busy={busy} run={run} />
+        <TextCard key={decision.id} decision={decision} />
       ))}
       {permissions.length > 0 && (
         <h4 className="delivery-decisions__group">Permisos fuera del worktree</h4>
       )}
       {permissions.map((decision) => (
-        <PermissionCard key={decision.id} decision={decision} busy={busy} run={run} />
+        <PermissionCard key={decision.id} decision={decision} />
       ))}
     </section>
   );
@@ -382,15 +337,7 @@ function LogRow({
 }
 
 /** One call the coordinator made on its own, with the way to change it. */
-function CoordinatorDecision({
-  decision,
-  busy,
-  run,
-}: {
-  decision: DeliveryDecision;
-  busy: boolean;
-  run: Run;
-}) {
+function CoordinatorDecision({ decision }: { decision: DeliveryDecision }) {
   const [changing, setChanging] = useState(false);
   const [answer, setAnswer] = useState(decision.answer ?? "");
   const changed = decision.decided_by === "user";
@@ -408,7 +355,6 @@ function CoordinatorDecision({
           <button
             type="button"
             className="delivery-link-button"
-            disabled={busy}
             aria-label={`Cambiar «${decision.question}»`}
             onClick={() => setChanging(true)}
           >
@@ -441,17 +387,15 @@ function CoordinatorDecision({
             />
           )}
           <span className="delivery-actions">
-            <button
-              type="button"
-              disabled={busy || !answer.trim() || answer === decision.answer}
-              onClick={() =>
-                void run(() => changeDeliveryDecision(decision.id, answer)).then((ok) => {
-                  if (ok) setChanging(false);
-                })
-              }
+            <ActionButton
+              disabled={!answer.trim() || answer === decision.answer}
+              onAction={async () => {
+                await changeDeliveryDecision(decision.id, answer);
+                setChanging(false);
+              }}
             >
               Guardar
-            </button>
+            </ActionButton>
             <button type="button" onClick={() => setChanging(false)}>
               Cancelar
             </button>
@@ -465,15 +409,7 @@ function CoordinatorDecision({
 
 /** What the coordinator settled on its own: it does not hold the stages,
  *  and any of it can be changed; later stages get the new answer. */
-export function CoordinatorDecisions({
-  decisions,
-  busy,
-  run,
-}: {
-  decisions: DeliveryDecision[];
-  busy: boolean;
-  run: Run;
-}) {
+export function CoordinatorDecisions({ decisions }: { decisions: DeliveryDecision[] }) {
   if (decisions.length === 0) return null;
   return (
     <section className="delivery-section" aria-label="Decidido por el coordinador">
@@ -491,7 +427,7 @@ export function CoordinatorDecisions({
         </p>
         <ul>
           {decisions.map((decision) => (
-            <CoordinatorDecision key={decision.id} decision={decision} busy={busy} run={run} />
+            <CoordinatorDecision key={decision.id} decision={decision} />
           ))}
         </ul>
       </details>
@@ -505,15 +441,11 @@ export function DecisionLog({
   taskId,
   decisions,
   candidate,
-  busy,
-  run,
 }: {
   taskId: string;
   decisions: DeliveryDecision[];
   /** The task's code (tree id) as its latest stage saw it; null when unknown. */
   candidate: string | null;
-  busy: boolean;
-  run: Run;
 }) {
   if (decisions.length === 0) return null;
   const choices = decisions.filter((decision) => decision.kind === "choice");
@@ -586,13 +518,9 @@ export function DecisionLog({
                     : `El código cambió desde que permitiste ${outdated.length} permisos que lo ejecutan`}
                   : la QA no arranca hasta que vuelvas a permitirlos.
                 </span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void run(() => renewDeliveryPermissions(taskId))}
-                >
+                <ActionButton onAction={() => renewDeliveryPermissions(taskId)}>
                   Volver a permitir para el código actual
-                </button>
+                </ActionButton>
               </p>
             )}
             <ul>

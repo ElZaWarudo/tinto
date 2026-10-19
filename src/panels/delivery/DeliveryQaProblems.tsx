@@ -10,7 +10,7 @@ import {
 } from "../../delivery/client";
 import type { DeliveryQaProblem, DeliveryQaProblemStatus } from "../../delivery/types";
 
-type Run = (action: () => Promise<unknown>) => Promise<boolean>;
+import { ActionButton } from "./ActionButton";
 
 const STATUS: Record<DeliveryQaProblemStatus, { label: string; tone: string }> = {
   open: { label: "nuevo", tone: "new" },
@@ -33,13 +33,9 @@ type Choice = { picked: number | "own"; own: string; included: boolean };
 export function QaProblems({
   taskId,
   problems,
-  busy,
-  run,
 }: {
   taskId: string;
   problems: DeliveryQaProblem[];
-  busy: boolean;
-  run: Run;
 }) {
   const [showAll, setShowAll] = useState(false);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
@@ -65,14 +61,13 @@ export function QaProblems({
     (problem) =>
       problem.status === "open" && choiceOf(problem).included && solutionOf(problem) !== "",
   );
-  const send = () =>
-    run(async () => {
-      await sendDeliveryQaProblems(
-        taskId,
-        ready.map((problem) => ({ problem_id: problem.id, solution: solutionOf(problem) })),
-      );
-      setChoices({});
-    });
+  const send = async () => {
+    await sendDeliveryQaProblems(
+      taskId,
+      ready.map((problem) => ({ problem_id: problem.id, solution: solutionOf(problem) })),
+    );
+    setChoices({});
+  };
 
   return (
     <section className="delivery-qa-problems" aria-label="Problemas de la QA">
@@ -192,19 +187,16 @@ export function QaProblems({
                           value={reason}
                           onChange={(event) => setReason(event.target.value)}
                         />
-                        <button
-                          type="button"
-                          disabled={busy || !reason.trim()}
-                          onClick={() =>
-                            void run(async () => {
-                              await dismissDeliveryQaProblem(problem.id, reason);
-                              setDismissing(null);
-                              setReason("");
-                            })
-                          }
+                        <ActionButton
+                          disabled={!reason.trim()}
+                          onAction={async () => {
+                            await dismissDeliveryQaProblem(problem.id, reason);
+                            setDismissing(null);
+                            setReason("");
+                          }}
                         >
                           Descartar
-                        </button>
+                        </ActionButton>
                         <button type="button" onClick={() => setDismissing(null)}>
                           Cancelar
                         </button>
@@ -245,19 +237,16 @@ export function QaProblems({
             value={reportPlace}
             onChange={(event) => setReportPlace(event.target.value)}
           />
-          <button
-            type="button"
-            disabled={busy || !report.trim()}
-            onClick={() =>
-              void run(async () => {
-                await reportDeliveryQaProblem(taskId, report, reportPlace);
-                setReport("");
-                setReportPlace("");
-              })
-            }
+          <ActionButton
+            disabled={!report.trim()}
+            onAction={async () => {
+              await reportDeliveryQaProblem(taskId, report, reportPlace);
+              setReport("");
+              setReportPlace("");
+            }}
           >
             Añadir a la lista
-          </button>
+          </ActionButton>
         </div>
       </div>
 
@@ -267,14 +256,13 @@ export function QaProblems({
             ? "Elige una solución para los problemas que quieras arreglar."
             : `${ready.length === 1 ? "1 problema listo" : `${ready.length} problemas listos`} para el coordinador: se arreglan en una sola implementación y la QA vuelve a comprobar solo esos puntos.`}
         </span>
-        <button
-          type="button"
+        <ActionButton
           className="delivery-button--primary"
-          disabled={busy || ready.length === 0}
-          onClick={() => void send()}
+          disabled={ready.length === 0}
+          onAction={send}
         >
           Enviar al coordinador
-        </button>
+        </ActionButton>
       </footer>
     </section>
   );

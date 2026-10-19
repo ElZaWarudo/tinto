@@ -6,8 +6,7 @@ import { markDeliveryPrSeen, refreshDeliveryPr } from "../../delivery/client";
 import type { DeliveryPr } from "../../delivery/types";
 import { prSummary } from "./taskStatus";
 import { ExternalLink } from "./ExternalLink";
-
-type Run = (action: () => Promise<unknown>) => Promise<boolean>;
+import { ActionButton } from "./ActionButton";
 
 function checked(ms: number | null): string {
   if (!ms) return "todavía sin leer";
@@ -32,7 +31,7 @@ const DECISION: Record<string, string> = {
   review_required: "Pendiente de revisión",
 };
 
-export function PrSection({ pr, busy, run }: { pr: DeliveryPr; busy: boolean; run: Run }) {
+export function PrSection({ pr }: { pr: DeliveryPr }) {
   const summary = prSummary(pr);
   const fresh = news(pr);
   const { passing, failing, pending } = pr.checks;
@@ -81,25 +80,20 @@ export function PrSection({ pr, busy, run }: { pr: DeliveryPr; busy: boolean; ru
             <span>
               Nuevo desde que lo viste: <strong>{fresh}</strong>.
             </span>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void run(() => markDeliveryPrSeen(pr.task_id))}
-            >
+            <ActionButton onAction={() => markDeliveryPrSeen(pr.task_id)}>
               Marcar como visto
-            </button>
+            </ActionButton>
           </div>
         )}
         {pr.error && <p className="delivery-tone--danger">No se pudo leer GitHub: {pr.error}</p>}
         <p className="delivery-muted delivery-pr__meta">
           {checked(pr.checked_at_ms)} ·{" "}
-          <button
-            type="button"
+          <ActionButton
             className="delivery-link-button"
-            onClick={() => void run(() => refreshDeliveryPr(pr.task_id))}
+            onAction={() => refreshDeliveryPr(pr.task_id)}
           >
             Actualizar
-          </button>
+          </ActionButton>
         </p>
       </div>
     </section>
