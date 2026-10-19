@@ -906,6 +906,8 @@ function TaskDetail({
   onRemoved: () => void;
 }) {
   const jobs = jobsOf(overview, task.id);
+  // The latest QA's visual changes page: what the user reviews before the PR.
+  const qaRecord = latestOfRole(jobs, "qa");
   const newestFirst = [...jobs].reverse();
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const taskRun = overview.runs.find((candidate) => candidate.id === task.run_id);
@@ -1090,6 +1092,17 @@ function TaskDetail({
               >
                 Abrir PR #{pr.number} en GitHub ↗
               </ExternalLink>
+            )}
+            {qaRecord?.visual_record && (
+              <button
+                type="button"
+                className="delivery-task__record"
+                disabled={busy}
+                title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
+                onClick={() => void run(() => openDeliveryVisualRecord(qaRecord.id))}
+              >
+                Abrir registro visual de QA ↗
+              </button>
             )}
           </h2>
           <p className="delivery-task__meta">
@@ -1289,7 +1302,19 @@ function TaskDetail({
         </div>
       )}
 
-      <QaRecordBanner jobs={jobs} busy={busy} run={run} />
+      {qaRecord?.visual_record_error && !qaRecord.visual_record && (
+        <div
+          className="delivery-banner delivery-banner--danger"
+          role="group"
+          aria-label="Registro visual de QA"
+        >
+          <p className="delivery-banner__title">
+            <Icon name="x" />
+            <strong>No se pudo generar el registro visual de la QA</strong>
+          </p>
+          <p>{qaRecord.visual_record_error}</p>
+        </div>
+      )}
 
       <StageTrack jobs={jobs} approvals={approvals} pr={pr} next={next} onFocus={focusStage} />
 
@@ -1455,49 +1480,6 @@ function brokenVerb(job: DeliveryJob): string {
   if (job.status === "failed") return "falló";
   if (job.result_state === "invalid") return "terminó sin un resultado válido";
   return "está bloqueada";
-}
-
-/** The latest QA's visual changes page, where the task opens: it is what
- *  the user reviews before the PR. */
-function QaRecordBanner({
-  jobs,
-  busy,
-  run,
-}: {
-  jobs: DeliveryJob[];
-  busy: boolean;
-  run: (action: () => Promise<unknown>) => Promise<boolean>;
-}) {
-  const qa = latestOfRole(jobs, "qa");
-  if (!qa || (!qa.visual_record && !qa.visual_record_error)) return null;
-  return (
-    <div className="delivery-banner" role="group" aria-label="Registro visual de QA">
-      <p className="delivery-banner__title">
-        <Icon name="flag" />
-        <strong>Registro visual de la QA</strong>
-        <span className="delivery-muted">
-          intento {qa.attempt} · cambios visuales con capturas de escritorio y móvil
-        </span>
-      </p>
-      {qa.visual_record ? (
-        <div className="delivery-actions">
-          <button
-            type="button"
-            className="delivery-button--primary"
-            disabled={busy}
-            onClick={() => void run(() => openDeliveryVisualRecord(qa.id))}
-          >
-            Abrir registro visual
-          </button>
-          <span className="delivery-muted">Se abre en tu navegador.</span>
-        </div>
-      ) : (
-        <p className="delivery-job__note">
-          No se pudo generar el registro visual: {qa.visual_record_error}
-        </p>
-      )}
-    </div>
-  );
 }
 
 function StageTrack({

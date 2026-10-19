@@ -323,6 +323,22 @@
 .delivery-task__pr:hover {
   background: #32383f;
 }
+/* The QA's visual record: the one thing to look at before the PR. */
+.delivery-task__record {
+  margin-left: 6px;
+  padding: 2px 12px;
+  border: 1px solid var(--accent-fg);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  vertical-align: middle;
+  color: #ffffff;
+  background: var(--accent);
+  cursor: pointer;
+}
+.delivery-task__record:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 80%, #ffffff);
+}
 .delivery-task__header h2 span {
   font-weight: 400;
   color: var(--fg-muted);

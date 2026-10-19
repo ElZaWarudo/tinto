@@ -352,10 +352,8 @@ describe("DeliveryPanel", () => {
     );
     client.openDeliveryVisualRecord.mockResolvedValue(undefined);
     renderPanel();
-    // The job keeps its own button too, besides the banner at the top.
-    const buttons = await screen.findAllByRole("button", { name: "Abrir registro visual" });
-    expect(buttons).toHaveLength(2);
-    await user.click(buttons[1]);
+    // The job keeps its own button too, besides the one in the task's header.
+    await user.click(await screen.findByRole("button", { name: "Abrir registro visual" }));
     await waitFor(() => expect(client.openDeliveryVisualRecord).toHaveBeenCalledWith("j1"));
   });
 
@@ -1790,7 +1788,7 @@ describe("DeliveryPanel", () => {
     agentSessionStore.setSessions([]);
   });
 
-  it("shows the QA's visual record at the top of the task", async () => {
+  it("opens the QA's visual record from the task's header", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(
       overview({
@@ -1798,10 +1796,24 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const banner = await screen.findByRole("group", { name: "Registro visual de QA" });
-    await user.click(within(banner).getByRole("button", { name: "Abrir registro visual" }));
+    const button = await screen.findByRole("button", { name: "Abrir registro visual de QA ↗" });
+    // In the task's header, next to Jira and the PR.
+    expect(button.closest(".delivery-task__heading")).not.toBeNull();
+    await user.click(button);
     expect(client.openDeliveryVisualRecord).toHaveBeenCalledWith("qa-1");
     expect(screen.getByText("Con registro visual ↓")).toBeInTheDocument();
+  });
+
+  it("says when the QA's visual record could not be made", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [job({ id: "qa-1", role: "qa", visual_record_error: "faltan las capturas" })],
+      }),
+    );
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Registro visual de QA" });
+    expect(within(banner).getByText("faltan las capturas")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /registro visual de QA/ })).toBeNull();
   });
 
   it("opens the task's PR on GitHub from its header", async () => {
