@@ -52,6 +52,7 @@ const AGENT_OPTIONS = [
   { id: "claude", label: "Claude Code" },
   { id: "kimi", label: "Kimi Code" },
   { id: "opencode", label: "OpenCode" },
+  { id: "muse", label: "Muse Code" },
 ];
 
 const SLOW_START_NOTICE_MS = 4000;
@@ -188,7 +189,8 @@ export function RepoAgentLauncher({
         setLaunchMessage(
           reportActionFailure(
             error,
-            `No se puede instalar ${selectedAgent.label} automáticamente. Sigue la guía manual y vuelve a comprobar.`,
+            manualInstallGuide(error) ??
+              `No se puede instalar ${selectedAgent.label} automáticamente. Sigue la guía manual y vuelve a comprobar.`,
           ),
         ),
       )
@@ -725,6 +727,15 @@ function RepoCardImpl({
 }
 
 export const RepoCard = memo(RepoCardImpl);
+
+/** The installer's own guide when the CLI has no recipe Tinto can run (Muse Code). */
+function manualInstallGuide(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const failure = error as { category?: unknown; message?: unknown };
+  return failure.category === "unsupported_recipe" && typeof failure.message === "string"
+    ? failure.message
+    : null;
+}
 
 function reportActionFailure(error: unknown, userMessage: string): string {
   console.error("tinto: repo action failed", error);

@@ -75,6 +75,7 @@ import { AgentRuntimeControls, type CodexRuntimeMenu } from "./AgentRuntimeContr
 import {
   effectiveRuntimeModel,
   lastRuntimeCatalog,
+  MUSE_CATALOG_SOURCE,
   reasoningSupportedByModel,
   rememberRuntimeCatalog,
   speedSupportedByModel,
@@ -814,10 +815,13 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     session?.status !== "error";
   const runtimeProvider = agentRuntimeProvider(agentType);
   const isCodexSession = runtimeProvider?.id === "codex";
-  const isAcpSession = !isCodexSession && Boolean(acpRuntime);
+  // Codex and Muse Code: a model catalog, steering and file attachments.
+  const hasStructuredRuntime = runtimeProvider !== null;
+  const runtimeLabel = runtimeProvider?.label ?? "Codex";
+  const isAcpSession = !hasStructuredRuntime && Boolean(acpRuntime);
   const acpAcceptsImageAttachments =
     acpRuntime?.state === "acp_ready" && acpRuntime.image_attachments;
-  const canAttachFiles = composerEnabled && (isCodexSession || acpAcceptsImageAttachments);
+  const canAttachFiles = composerEnabled && (hasStructuredRuntime || acpAcceptsImageAttachments);
   const canEditMessages = !readOnly && !turnActive && !sending;
   const composerCommandTrigger = readComposerCommandTrigger(draft);
 
@@ -849,10 +853,10 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         id: "model",
         command: "model",
-        description: "Elegir el modelo activo de Codex",
+        description: `Elegir el modelo activo de ${runtimeLabel}`,
         disabled:
           !canCompose ||
-          !isCodexSession ||
+          !hasStructuredRuntime ||
           !speedSupportedByModel(runtimeCatalog, selectedModel, "fast"),
         label: "Modelo",
         aliases: ["modelo"],
@@ -863,8 +867,8 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       {
         id: "reasoning",
         command: "reasoning",
-        description: "Elegir el nivel de razonamiento de Codex",
-        disabled: !canCompose || !isCodexSession,
+        description: `Elegir el nivel de razonamiento de ${runtimeLabel}`,
+        disabled: !canCompose || !hasStructuredRuntime,
         label: "Razonamiento",
         aliases: ["razonamiento"],
         runtimeCommand: "reasoning" as const,
@@ -875,7 +879,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         id: "effort",
         command: "effort",
         description: "Alias del nivel de razonamiento",
-        disabled: !canCompose || !isCodexSession,
+        disabled: !canCompose || !hasStructuredRuntime,
         label: "Esfuerzo",
         aliases: ["razonamiento"],
         runtimeCommand: "reasoning" as const,
@@ -936,7 +940,15 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         trigger: "$" as const,
       })),
     ],
-    [canCompose, isCodexSession, runtimeCatalog, selectedModel, session],
+    [
+      canCompose,
+      hasStructuredRuntime,
+      isCodexSession,
+      runtimeCatalog,
+      runtimeLabel,
+      selectedModel,
+      session,
+    ],
   );
   const filteredComposerCommandItems = useMemo(
     () => filterComposerCommands(composerCommandItems, composerCommandTrigger),
@@ -1037,7 +1049,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
   useEffect(() => {
     if (!session || runtimeOptionsHydratedSessionRef.current === session.id) return;
     const restored =
-      isCodexSession &&
+      hasStructuredRuntime &&
       session.runtime_options &&
       runtimeOptionsHaveSelection(session.runtime_options)
         ? runtimeSelectionsFromOptions(session.runtime_options)
@@ -1056,20 +1068,23 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [isCodexSession, session]);
+  }, [hasStructuredRuntime, session]);
 
+  const runtimeProviderId = runtimeProvider?.id;
   useEffect(() => {
-    if (!isCodexSession || !session?.id) return;
+    if (!runtimeProviderId || !session?.id) return;
+    const liveSource = runtimeProviderId === "muse" ? MUSE_CATALOG_SOURCE : "codex_app_server";
+    const providerName = runtimeProviderId === "muse" ? "Muse Code" : "Codex";
     if (readOnly) {
-      // Archived transcripts have no Codex process to list models; reuse the last known catalog.
+      // Archived transcripts have no process to list models; reuse the last known catalog.
       queueMicrotask(() =>
         setRuntimeCatalog(
-          lastRuntimeCatalog() ?? {
+          lastRuntimeCatalog(runtimeProviderId) ?? {
             status: "error",
             source: "codex_fallback",
             models: [],
             default_model: null,
-            error: "Inicia o retoma una sesión de Codex para cargar los modelos disponibles.",
+            error: `Inicia o retoma una sesión de ${providerName} para cargar los modelos disponibles.`,
             updated_at_ms: Date.now(),
           },
         ),
@@ -1106,7 +1121,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
         if (!active) return;
         setRuntimeCatalog({
           status: "error",
-          source: "codex_app_server",
+          source: liveSource,
           models: [],
           default_model: null,
           error: reportAgentFailure(
@@ -1124,7 +1139,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
           ? { ...current, status: "loading", error: null }
           : {
               status: "loading",
-              source: "codex_app_server",
+              source: liveSource,
               models: [],
               default_model: null,
               error: null,
@@ -1137,7 +1152,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
       active = false;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [isCodexSession, readOnly, runtimeCatalogRefreshKey, session?.id]);
+  }, [runtimeProviderId, readOnly, runtimeCatalogRefreshKey, session?.id]);
 
   useEffect(() => {
     if (runtimeCatalog?.status !== "ready") return;
@@ -1296,7 +1311,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     const text = draft.trimEnd();
     const slashCommandHandled =
       !resumesConversation &&
-      isCodexSession &&
+      hasStructuredRuntime &&
       applyCodexRuntimeSlashCommand(text, {
         setModel: setSelectedModel,
         setReasoning: setSelectedReasoning,
@@ -2605,7 +2620,7 @@ También se desharán los cambios hechos después en este repo, incluidos los de
             onPermissionModeChange={onPermissionModeChange}
             permissionMode={session?.permission_mode ?? "workspace"}
             permissionModeChangeSupported={
-              isCodexSession && session?.permission_mode_change_supported === true
+              hasStructuredRuntime && session?.permission_mode_change_supported === true
             }
             permissionModeChanging={permissionModeChanging}
             reasoning={selectedReasoning}
@@ -2735,7 +2750,7 @@ También se desharán los cambios hechos después en este repo, incluidos los de
             disabled={!canAttachFiles || attachments.length >= MAX_AGENT_ATTACHMENTS}
             onClick={() => void pickFiles()}
             title={
-              isCodexSession
+              hasStructuredRuntime
                 ? `Adjuntar hasta ${MAX_AGENT_ATTACHMENTS} archivos al próximo turno`
                 : acpAcceptsImageAttachments
                   ? `Adjuntar hasta ${MAX_AGENT_IMAGE_ATTACHMENTS} imágenes al próximo turno`
@@ -2793,8 +2808,8 @@ También se desharán los cambios hechos después en este repo, incluidos los de
               <button
                 aria-label="Intervenir en el turno activo"
                 className="agent-panel__steer"
-                disabled={!canSend || !isCodexSession}
-                hidden={!isCodexSession}
+                disabled={!canSend || !hasStructuredRuntime}
+                hidden={!hasStructuredRuntime}
                 onClick={() => void sendDraft("steer")}
                 title="Incorporar este mensaje al turno activo en la siguiente oportunidad"
                 type="button"
@@ -8893,7 +8908,7 @@ function checkpointLabel(type: string): string {
 }
 
 interface AgentRuntimeProviderDescriptor {
-  id: "codex" | "claude" | "opencode";
+  id: "codex" | "muse";
   label: string;
 }
 
@@ -8901,6 +8916,8 @@ function agentRuntimeProvider(agentType: string): AgentRuntimeProviderDescriptor
   switch (agentType) {
     case "codex":
       return { id: "codex", label: "Codex" };
+    case "muse":
+      return { id: "muse", label: "Muse Code" };
     default:
       return null;
   }
@@ -8916,6 +8933,8 @@ function agentLabel(agentType: string): string {
       return "Kimi Code";
     case "opencode":
       return "OpenCode";
+    case "muse":
+      return "Muse Code";
     default:
       return agentType;
   }

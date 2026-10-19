@@ -10,6 +10,7 @@ pub mod cli_update;
 pub mod commands;
 pub mod install;
 pub mod journal;
+pub mod msp;
 pub mod pty;
 pub mod session;
 pub mod validation;
@@ -112,11 +113,11 @@ fn validate_permission_mode(
     permission_mode: AgentSessionPermissionMode,
 ) -> Result<(), AgentConsoleError> {
     if permission_mode == AgentSessionPermissionMode::FullAccess
-        && !agent_type.eq_ignore_ascii_case("codex")
+        && !validation::supports_full_access(agent_type)
     {
         return Err(AgentConsoleError::new(
             "permission_mode_unsupported",
-            "el acceso completo solo esta disponible para Codex",
+            "el acceso completo solo esta disponible para Codex y Muse Code",
         ));
     }
     Ok(())
@@ -185,7 +186,7 @@ impl AgentSessionRegistry {
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         validate_permission_mode(&agent_type, permission_mode)?;
-        let permission_mode = if agent_type.eq_ignore_ascii_case("codex") {
+        let permission_mode = if validation::supports_full_access(&agent_type) {
             permission_mode
         } else {
             AgentSessionPermissionMode::Workspace
@@ -354,7 +355,7 @@ impl AgentSessionRegistry {
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<StartedAgentSession, AgentConsoleError> {
         validate_permission_mode(&agent_type, permission_mode)?;
-        let permission_mode = if agent_type.eq_ignore_ascii_case("codex") {
+        let permission_mode = if validation::supports_full_access(&agent_type) {
             permission_mode
         } else {
             AgentSessionPermissionMode::Workspace

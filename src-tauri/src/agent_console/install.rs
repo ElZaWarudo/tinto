@@ -80,6 +80,12 @@ pub fn recipe_for(provider: &str) -> Result<InstallRecipe, AgentConsoleError> {
             minimum_node: None,
             revision: "npm-v1",
         }),
+        // Muse Code has no npm package: Meta's installer is a script piped
+        // into a shell, which Tinto never runs on the user's behalf.
+        "muse" => Err(AgentConsoleError::new(
+            "unsupported_recipe",
+            "Muse Code se instala con el instalador de Meta: ejecuta `irm https://dev.meta.ai/install.ps1 | iex` en PowerShell (o `curl -fsSL https://dev.meta.ai/install.sh | sh` en WSL) y vuelve a abrir Tinto",
+        )),
         _ => unreachable!("provider validated above"),
     }
 }
@@ -881,6 +887,13 @@ mod tests {
             assert!(!recipe.display_command().contains("cmd.exe"));
             assert!(!recipe.display_command().contains("powershell"));
         }
+    }
+
+    #[test]
+    fn muse_has_no_recipe_and_points_to_meta_installer() {
+        let error = recipe_for("muse").unwrap_err();
+        assert_eq!(error.category, "unsupported_recipe");
+        assert!(error.message.contains("dev.meta.ai/install.ps1"));
     }
 
     #[test]

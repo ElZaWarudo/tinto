@@ -209,9 +209,7 @@ impl AgentJournal {
             .context_summary
             .as_ref()
             .map(|summary| summary.source_turns as i64);
-        let permission_mode = session
-            .agent_type
-            .eq_ignore_ascii_case("codex")
+        let permission_mode = super::validation::supports_full_access(&session.agent_type)
             .then_some(session.permission_mode)
             .flatten()
             .map(permission_mode_name);
@@ -581,7 +579,7 @@ impl AgentJournal {
             .unwrap_or_default();
         let ended_at_ms = ended_at_ms.map(|value| value as u64);
         let status = archived_status(status_from_name(&status), ended_at_ms);
-        let permission_mode = if agent_type.eq_ignore_ascii_case("codex") {
+        let permission_mode = if super::validation::supports_full_access(&agent_type) {
             Some(permission_mode_from_name(permission_mode.as_deref()))
         } else {
             None

@@ -51,6 +51,9 @@ describe("detached console windows", () => {
     expect(detachedTerminalWindowTitle({ sessionId: "sess-open-123", agentType: "opencode" })).toBe(
       "OpenCode sess-ope",
     );
+    expect(detachedTerminalWindowTitle({ sessionId: "sess-muse-123", agentType: "muse" })).toBe(
+      "Muse Code sess-mus",
+    );
   });
 
   it("ignores malformed detached console session data", () => {

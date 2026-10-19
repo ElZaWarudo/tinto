@@ -79,6 +79,15 @@ describe("consoleDock", () => {
     ).toBe("Kimi Code · api · Revisa el parser");
   });
 
+  it("labels Muse Code conversation tabs", () => {
+    expect(
+      agentConversationTabTitle(
+        { sessionId: "sess-muse", repo: "/work/api", agentType: "muse" },
+        "Revisa el parser",
+      ),
+    ).toBe("Muse Code · api · Revisa el parser");
+  });
+
   beforeEach(() => {
     consoleDock.resetForTests();
   });

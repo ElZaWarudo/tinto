@@ -5,7 +5,12 @@ use std::{env, fs, time::SystemTime};
 
 use super::AgentConsoleError;
 
-pub const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "kimi", "opencode"];
+pub const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "kimi", "opencode", "muse"];
+
+/// Runtimes that can run without their sandbox, chosen per session.
+pub fn supports_full_access(agent_type: &str) -> bool {
+    agent_type.eq_ignore_ascii_case("codex") || agent_type.eq_ignore_ascii_case("muse")
+}
 
 pub fn resolve_agent_binary(agent_type: &str) -> Result<PathBuf, AgentConsoleError> {
     resolve_agent_binary_with_candidates(
@@ -98,6 +103,17 @@ fn fallback_agent_candidates(agent_type: &str) -> Vec<PathBuf> {
         });
         return sorted_existing_candidates(installed.into_iter().collect());
     }
+    if agent_type.eq_ignore_ascii_case("muse") {
+        // Muse Code's installer puts its launcher in
+        // %LOCALAPPDATA%\Programs\muse, which may not be on Tinto's PATH.
+        let installed = env::var_os("LOCALAPPDATA").map(|local_appdata| {
+            PathBuf::from(local_appdata)
+                .join("Programs")
+                .join("muse")
+                .join("muse.cmd")
+        });
+        return sorted_existing_candidates(installed.into_iter().collect());
+    }
     if !agent_type.eq_ignore_ascii_case("codex") {
         return Vec::new();
     }
@@ -181,6 +197,11 @@ mod tests {
     #[test]
     fn accepts_kimi_agent() {
         assert_eq!(validate_agent_type("kimi").unwrap(), "kimi");
+    }
+
+    #[test]
+    fn accepts_muse_agent() {
+        assert_eq!(validate_agent_type("muse").unwrap(), "muse");
     }
 
     #[test]

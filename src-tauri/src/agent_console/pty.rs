@@ -10,7 +10,11 @@ use std::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use super::claude_hooks::{forward_slashes, ClaudeHooks};
-use super::{app_server::CodexAppServerHandle, AgentConsoleError, ResumeResultReceiver};
+use super::{
+    app_server::CodexAppServerHandle,
+    msp::{is_muse_binary, muse_program, MuseServeHandle},
+    AgentConsoleError, ResumeResultReceiver,
+};
 use crate::{
     bus::contract::{
         AgentRuntimeCatalog, AgentSessionAcpPermission, AgentSessionAcpRuntime,
@@ -375,6 +379,13 @@ impl AgentProcessFactory for PortablePtyFactory {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if is_muse_binary(binary_path) {
+            // Like Codex, prefer the structured protocol and keep Muse's own
+            // terminal UI as the fallback.
+            if let Ok(handle) = MuseServeHandle::spawn(binary_path, working_dir, permission_mode) {
+                return Ok(Box::new(handle));
+            }
+        }
         if is_codex_binary(binary_path) {
             match CodexAppServerHandle::spawn(binary_path, working_dir, permission_mode) {
                 Ok(handle) => return Ok(Box::new(handle)),
@@ -398,6 +409,11 @@ impl AgentProcessFactory for PortablePtyFactory {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if agent_type.eq_ignore_ascii_case("muse") {
+            if let Ok(handle) = MuseServeHandle::spawn_wsl(distro, working_dir, permission_mode) {
+                return Ok(Box::new(handle));
+            }
+        }
         if agent_type.eq_ignore_ascii_case("codex") {
             match CodexAppServerHandle::spawn_wsl(distro, working_dir, permission_mode) {
                 Ok(handle) => return Ok(Box::new(handle)),
@@ -430,6 +446,14 @@ impl AgentProcessFactory for PortablePtyFactory {
                 permission_mode,
             )?));
         }
+        if is_muse_binary(binary_path) {
+            return Ok(Box::new(MuseServeHandle::resume(
+                binary_path,
+                working_dir,
+                provider_session_id,
+                permission_mode,
+            )?));
+        }
         if !is_codex_binary(binary_path) {
             return Err(AgentConsoleError::new(
                 "agent_resume_unsupported",
@@ -454,6 +478,14 @@ impl AgentProcessFactory for PortablePtyFactory {
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         if agent_type.eq_ignore_ascii_case("claude") {
             return Ok(Box::new(PtyHandle::resume_wsl_claude(
+                distro,
+                working_dir,
+                provider_session_id,
+                permission_mode,
+            )?));
+        }
+        if agent_type.eq_ignore_ascii_case("muse") {
+            return Ok(Box::new(MuseServeHandle::resume_wsl(
                 distro,
                 working_dir,
                 provider_session_id,
@@ -786,12 +818,21 @@ pub(crate) fn build_agent_command_with_permission(
     working_dir: &Path,
     permission_mode: AgentSessionPermissionMode,
 ) -> CommandBuilder {
-    let mut command = CommandBuilder::new(binary_path.as_os_str());
+    let (program, prefix_args) = if is_muse_binary(binary_path) {
+        muse_program(binary_path)
+    } else {
+        (binary_path.to_path_buf(), Vec::new())
+    };
+    let mut command = CommandBuilder::new(program.as_os_str());
     command.cwd(working_dir.as_os_str());
+    for arg in prefix_args {
+        command.arg(arg);
+    }
     for arg in default_agent_args(binary_path) {
         command.arg(arg);
     }
     append_codex_permission_args(&mut command, is_codex_binary(binary_path), permission_mode);
+    append_muse_permission_args(&mut command, is_muse_binary(binary_path), permission_mode);
     if is_claude_binary(binary_path) {
         for arg in crate::delivery::wiring::claude_args(false) {
             command.arg(arg);
@@ -847,6 +888,11 @@ pub(crate) fn build_wsl_agent_command(
         agent_type.eq_ignore_ascii_case("codex"),
         permission_mode,
     );
+    append_muse_permission_args(
+        &mut command,
+        agent_type.eq_ignore_ascii_case("muse"),
+        permission_mode,
+    );
     if agent_type.eq_ignore_ascii_case("claude") {
         for arg in crate::delivery::wiring::claude_args(true) {
             command.arg(arg);
@@ -871,6 +917,18 @@ fn append_codex_permission_args(
         AgentSessionPermissionMode::Workspace => "workspace-write",
         AgentSessionPermissionMode::FullAccess => "danger-full-access",
     });
+}
+
+/// Muse's own terminal asks before acting and sandboxes its shell; full
+/// access turns both off, as Codex's danger-full-access does.
+fn append_muse_permission_args(
+    command: &mut CommandBuilder,
+    is_muse: bool,
+    permission_mode: AgentSessionPermissionMode,
+) {
+    if is_muse && permission_mode == AgentSessionPermissionMode::FullAccess {
+        command.arg("--yolo");
+    }
 }
 
 fn default_agent_args(binary_path: &Path) -> &'static [&'static str] {

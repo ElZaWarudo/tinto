@@ -1512,6 +1512,8 @@ function agentLabel(agentType: string): string {
       return "Kimi Code";
     case "opencode":
       return "OpenCode";
+    case "muse":
+      return "Muse Code";
     default:
       return agentType;
   }
@@ -1527,6 +1529,8 @@ function agentLogoText(agentType: string): string {
       return "Ki";
     case "opencode":
       return "OC";
+    case "muse":
+      return "Mu";
     default:
       return agentType.slice(0, 2).toUpperCase();
   }

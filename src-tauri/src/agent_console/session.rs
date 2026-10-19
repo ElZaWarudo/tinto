@@ -288,11 +288,11 @@ impl AgentSessionRecord {
     ) -> Result<(), AgentConsoleError> {
         self.error = None;
         if permission_mode == AgentSessionPermissionMode::FullAccess
-            && !self.agent_type.eq_ignore_ascii_case("codex")
+            && !super::validation::supports_full_access(&self.agent_type)
         {
             return Err(AgentConsoleError::new(
                 "permission_mode_unsupported",
-                "el acceso completo solo esta disponible para Codex",
+                "el acceso completo solo esta disponible para Codex y Muse Code",
             ));
         }
         if self.status != AgentSessionStatus::Running {
@@ -1227,9 +1227,7 @@ impl AgentSessionRecord {
             id: self.id.clone(),
             repo: self.repo.clone(),
             agent_type: self.agent_type.clone(),
-            permission_mode: self
-                .agent_type
-                .eq_ignore_ascii_case("codex")
+            permission_mode: super::validation::supports_full_access(&self.agent_type)
                 .then_some(self.permission_mode),
             permission_mode_change_supported: self.status == AgentSessionStatus::Running
                 && self

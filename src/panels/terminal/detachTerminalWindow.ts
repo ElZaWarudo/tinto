@@ -36,7 +36,9 @@ export function detachedTerminalWindowTitle(params: TerminalPanelParams): string
           ? "Kimi Code"
           : agentType === "opencode"
             ? "OpenCode"
-            : params.agentType?.trim() || "Agent";
+            : agentType === "muse"
+              ? "Muse Code"
+              : params.agentType?.trim() || "Agent";
   return `${agentLabel} ${params.sessionId.slice(0, 8)}`;
 }
 

@@ -60,6 +60,9 @@ export function codexReasoningLabel(value: CodexReasoningSelection): string {
     medium: "Medio",
     high: "Alto",
     xhigh: "Muy alto",
+    max: "Máximo",
+    ultra: "Ultra",
+    none: "Ninguno",
   };
   return labels[value] ?? value;
 }
@@ -68,30 +71,45 @@ export function codexSpeedLabel(value: CodexSpeedSelection): string {
   return value === "fast" ? "Rápido" : "Normal";
 }
 
-const LAST_CATALOG_KEY = "tinto.agents.lastRuntimeCatalog";
+export type RuntimeCatalogProvider = "codex" | "muse";
+
+/** The source Muse Code's `muse serve` runtime gives its catalog. */
+export const MUSE_CATALOG_SOURCE = "muse_serve";
+
+const LAST_CATALOG_KEYS: Record<RuntimeCatalogProvider, string> = {
+  codex: "tinto.agents.lastRuntimeCatalog",
+  muse: "tinto.agents.lastRuntimeCatalog.muse",
+};
+
+export function catalogProvider(catalog: AgentRuntimeCatalog): RuntimeCatalogProvider {
+  return catalog.source === MUSE_CATALOG_SOURCE ? "muse" : "codex";
+}
 
 /**
- * Remembers the last ready Codex model catalog so archived sessions can offer the same choices,
- * and tells Delivery its default, which Codex jobs that name no model use.
+ * Remembers each provider's last ready model catalog so archived sessions and Delivery can offer
+ * the same choices, and tells Delivery Codex's default, which Codex jobs that name no model use.
  */
 export function rememberRuntimeCatalog(catalog: AgentRuntimeCatalog): void {
   if (catalog.status !== "ready" || !catalog.models?.length) return;
+  const provider = catalogProvider(catalog);
   try {
-    localStorage.setItem(LAST_CATALOG_KEY, JSON.stringify(catalog));
+    localStorage.setItem(LAST_CATALOG_KEYS[provider], JSON.stringify(catalog));
   } catch {
     // Storage may be unavailable; the catalog is only a convenience here.
   }
   const model = catalog.default_model;
-  if (model) {
+  if (model && provider === "codex") {
     Promise.resolve()
       .then(() => setDeliveryCodexModel(model))
       .catch(() => {});
   }
 }
 
-export function lastRuntimeCatalog(): AgentRuntimeCatalog | null {
+export function lastRuntimeCatalog(
+  provider: RuntimeCatalogProvider = "codex",
+): AgentRuntimeCatalog | null {
   try {
-    const stored = localStorage.getItem(LAST_CATALOG_KEY);
+    const stored = localStorage.getItem(LAST_CATALOG_KEYS[provider]);
     const catalog = stored ? (JSON.parse(stored) as AgentRuntimeCatalog) : null;
     return catalog?.status === "ready" && Array.isArray(catalog.models) ? catalog : null;
   } catch {

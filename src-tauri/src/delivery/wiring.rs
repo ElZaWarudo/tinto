@@ -62,6 +62,41 @@ pub fn codex_args(wsl: bool) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Variable that carries the Delivery token to Muse Code: its `-c` values
+/// refuse a literal secret and take it only as a whole `${VAR}`.
+pub const MUSE_AUTH_ENV: &str = "TINTO_DELIVERY_AUTH";
+
+/// `-c` overrides for a Muse Code conversation, and the environment they
+/// read. Muse runs it without approval prompts, so the tools need no
+/// pre-approval. Empty when the coordinator API is not running.
+pub fn muse_args(wsl: bool) -> (Vec<String>, Vec<(&'static str, String)>) {
+    server(wsl)
+        .map(|server| muse_args_for(&server))
+        .unwrap_or_default()
+}
+
+fn muse_args_for(server: &Server) -> (Vec<String>, Vec<(&'static str, String)>) {
+    let (config, env) = match server {
+        Server::Http { url, token } => (
+            json!({
+                "url": url,
+                "headers": { "Authorization": format!("${{{MUSE_AUTH_ENV}}}") },
+            }),
+            vec![(MUSE_AUTH_ENV, format!("Bearer {token}"))],
+        ),
+        Server::Stdio { command, args } => {
+            (json!({ "command": command, "args": args }), Vec::new())
+        }
+    };
+    (
+        vec![
+            "-c".to_string(),
+            format!("mcpServers.{SERVER_NAME}={config}"),
+        ],
+        env,
+    )
+}
+
 fn claude_args_for(server: &Server) -> Vec<String> {
     let config = match server {
         Server::Http { url, token } => json!({
@@ -313,6 +348,26 @@ mod tests {
                 "t0k".into(),
             ],
         }
+    }
+
+    #[test]
+    fn muse_reads_the_token_from_its_environment() {
+        let (args, env) = muse_args_for(&http());
+        assert_eq!(args[0], "-c");
+        let (key, value) = args[1].split_once('=').unwrap();
+        assert_eq!(key, "mcpServers.tinto-delivery");
+        let config: Value = serde_json::from_str(value).unwrap();
+        assert_eq!(
+            config,
+            json!({"url": "http://127.0.0.1:47920/mcp", "headers": {"Authorization": "${TINTO_DELIVERY_AUTH}"}})
+        );
+        assert!(!args[1].contains("t0k"));
+        assert_eq!(env, [(MUSE_AUTH_ENV, "Bearer t0k".to_string())]);
+
+        let (args, env) = muse_args_for(&stdio());
+        let config: Value = serde_json::from_str(args[1].split_once('=').unwrap().1).unwrap();
+        assert_eq!(config["command"], "/mnt/c/Program Files/Tinto/tinto.exe");
+        assert!(env.is_empty());
     }
 
     #[test]

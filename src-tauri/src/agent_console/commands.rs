@@ -97,20 +97,29 @@ pub async fn start_agent_session(
     let permission_mode = permission_mode.unwrap_or_default();
     validate_permission_mode(&agent_type, permission_mode).map_err(CommandError::from)?;
     if permission_mode == AgentSessionPermissionMode::FullAccess {
-        confirm_full_access_launch(&app, &resolved.path).await?;
+        confirm_full_access_launch(&app, &resolved.path, &agent_type).await?;
     }
     start_resolved_agent_session(&app, &registry, resolved, agent_type, permission_mode)
 }
 
-async fn confirm_full_access_launch(app: &AppHandle, repo: &Path) -> Result<(), CommandError> {
+async fn confirm_full_access_launch(
+    app: &AppHandle,
+    repo: &Path,
+    agent_type: &str,
+) -> Result<(), CommandError> {
     let app = app.clone();
     let repo = repo.display().to_string();
+    let agent = if agent_type.eq_ignore_ascii_case("muse") {
+        "Muse Code"
+    } else {
+        "Codex"
+    };
     let confirmed = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .message(format!(
-                "Codex podrá leer y modificar archivos fuera del workspace y ejecutar comandos del sistema sin pedir aprobación durante esta sesión.\n\nRepositorio: {repo}"
+                "{agent} podrá leer y modificar archivos fuera del workspace y ejecutar comandos del sistema sin pedir aprobación durante esta sesión.\n\nRepositorio: {repo}"
             ))
-            .title("Dar acceso completo a Codex")
+            .title(format!("Dar acceso completo a {agent}"))
             .buttons(MessageDialogButtons::OkCancelCustom(
                 "Dar acceso completo".to_string(),
                 "Cancelar".to_string(),
@@ -381,7 +390,9 @@ pub async fn confirm_agent_install(
     if outcome.outcome == AgentInstallOutcomeKind::Verified
         && claimed.permission_mode == AgentSessionPermissionMode::FullAccess
     {
-        if let Err(error) = confirm_full_access_launch(&app, &resolved.path).await {
+        if let Err(error) =
+            confirm_full_access_launch(&app, &resolved.path, claimed.recipe.provider).await
+        {
             lock_install_registry(&installs)?.finish(&attempt_id);
             return Err(error);
         }
@@ -630,7 +641,7 @@ fn permission_mode_for_resume(
     agent_type: &str,
     archived_mode: Option<AgentSessionPermissionMode>,
 ) -> AgentSessionPermissionMode {
-    if agent_type.eq_ignore_ascii_case("codex") {
+    if super::validation::supports_full_access(agent_type) {
         archived_mode.unwrap_or_default()
     } else {
         AgentSessionPermissionMode::Workspace
@@ -910,12 +921,13 @@ pub async fn set_agent_session_permission_mode(
     session_id: String,
     permission_mode: AgentSessionPermissionMode,
 ) -> Result<AgentSession, CommandError> {
-    let (repo, current_mode, status, supported) = {
+    let (agent_type, repo, current_mode, status, supported) = {
         let registry = lock_registry(&registry)?;
         let session = registry
             .get_session(&session_id)
             .ok_or_else(|| CommandError::from(AgentConsoleError::session_not_found(&session_id)))?;
         (
+            session.agent_type,
             session.repo,
             session.permission_mode,
             session.status,
@@ -941,7 +953,7 @@ pub async fn set_agent_session_permission_mode(
         ));
     }
     if permission_mode == AgentSessionPermissionMode::FullAccess {
-        confirm_full_access_launch(&app, &repo).await?;
+        confirm_full_access_launch(&app, &repo, &agent_type).await?;
     }
 
     let session = {

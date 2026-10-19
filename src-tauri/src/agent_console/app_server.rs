@@ -913,7 +913,7 @@ pub(crate) fn build_wsl_app_server_command(
     Ok(command)
 }
 
-fn spawn_command(mut command: Command) -> Result<Child, AgentConsoleError> {
+pub(super) fn spawn_command(mut command: Command) -> Result<Child, AgentConsoleError> {
     #[cfg(windows)]
     let command = hide_console(&mut command);
     command
@@ -2891,7 +2891,7 @@ fn parse_runtime_model(value: &Value) -> Option<AgentRuntimeModel> {
     })
 }
 
-fn timeline_frame_for_thread(
+pub(super) fn timeline_frame_for_thread(
     kind: AgentSessionTimelineKind,
     text: &str,
     thread_id: Option<&str>,
@@ -2899,7 +2899,7 @@ fn timeline_frame_for_thread(
     timeline_frame_for_thread_with_turn_done(kind, text, thread_id, false)
 }
 
-fn timeline_frame_for_thread_with_turn_done(
+pub(super) fn timeline_frame_for_thread_with_turn_done(
     kind: AgentSessionTimelineKind,
     text: &str,
     thread_id: Option<&str>,
@@ -2923,14 +2923,14 @@ fn timeline_frame_for_thread_with_turn_done(
     frame
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
-fn buffered_turn_text(bytes: &[u8]) -> String {
+pub(super) fn buffered_turn_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
 
@@ -3280,7 +3280,10 @@ fn context_usage_from_message(message: &Value) -> Option<(u64, u64)> {
     ))
 }
 
-fn write_json(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), AgentConsoleError> {
+pub(super) fn write_json(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    value: &Value,
+) -> Result<(), AgentConsoleError> {
     let mut line = serde_json::to_vec(value)
         .map_err(|e| AgentConsoleError::new("app_server_encode_failed", e.to_string()))?;
     line.push(b'\n');
@@ -3293,14 +3296,14 @@ fn write_json(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), Agent
         .map_err(|e| AgentConsoleError::new("app_server_write_failed", e.to_string()))
 }
 
-struct ChannelReader {
+pub(super) struct ChannelReader {
     rx: Receiver<Vec<u8>>,
     buffer: VecDeque<u8>,
     closed: bool,
 }
 
 impl ChannelReader {
-    fn new(rx: Receiver<Vec<u8>>) -> Self {
+    pub(super) fn new(rx: Receiver<Vec<u8>>) -> Self {
         Self {
             rx,
             buffer: VecDeque::new(),

@@ -39,6 +39,7 @@ function agentTitleLabel(agentType: string | undefined): string {
   if (normalized === "claude") return "Claude";
   if (normalized === "kimi") return "Kimi Code";
   if (normalized === "opencode") return "OpenCode";
+  if (normalized === "muse") return "Muse Code";
   return agentType?.trim() || "Agent";
 }
 
