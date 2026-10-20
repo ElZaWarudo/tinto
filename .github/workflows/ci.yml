@@ -106,6 +106,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Pull requests restore develop's cache. It is saved from pushes
+          # even when a check fails, so a red develop keeps it warm.
+          save-if: ${{ github.event_name == 'push' }}
+          cache-on-failure: true
 
       - name: Check formatting
         working-directory: src-tauri
@@ -119,9 +123,37 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
-      - name: Build
-        working-directory: src-tauri
-        run: cargo build
+  wsl-agent:
+    name: WSL agent
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
 
       - name: Build WSL agent artifact
         working-directory: src-tauri
@@ -139,9 +171,11 @@ jobs:
   tauri-bundle:
     name: Tauri bundle
     runs-on: ubuntu-22.04
+    if: github.event_name == 'push'
     needs:
       - frontend
       - rust
+      - wsl-agent
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -174,6 +208,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
 
       - name: Install dependencies
         run: npm ci
@@ -193,9 +228,11 @@ jobs:
   tauri-windows-bundle:
     name: Tauri Windows bundle
     runs-on: windows-latest
+    if: github.event_name == 'push'
     needs:
       - frontend
       - rust
+      - wsl-agent
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -213,6 +250,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
 
       - name: Install dependencies
         run: npm ci
