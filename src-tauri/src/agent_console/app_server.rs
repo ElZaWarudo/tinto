@@ -916,6 +916,13 @@ pub(crate) fn build_wsl_app_server_command(
 pub(super) fn spawn_command(mut command: Command) -> Result<Child, AgentConsoleError> {
     #[cfg(windows)]
     let command = hide_console(&mut command);
+    // Its own group, so stopping it reaches what the launcher starts: `codex`
+    // installed with npm is a Node script that runs the native binary.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     command
         .spawn()
         .map_err(|e| AgentConsoleError::new("app_server_spawn_failed", e.to_string()))

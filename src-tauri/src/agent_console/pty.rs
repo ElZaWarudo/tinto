@@ -53,7 +53,7 @@ pub fn prompt_with_file_attachments(
 #[cfg(windows)]
 use crate::windows_process::hide_console;
 
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 use std::process::Stdio;
 
 pub trait AgentProcess: Send {
@@ -1076,12 +1076,15 @@ pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
     }
 }
 
+/// Stops the process group `pid` leads, and the groups its descendants lead
+/// apart: Codex runs each command in a group of its own, which a signal to
+/// the tree's group misses and which outlives it, adopted by init.
 #[cfg(unix)]
 pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
+    // Read before signalling: once a parent dies its children's link to the tree is gone.
+    let detached = descendant_group_leaders(pid);
     let process_group = format!("-{pid}");
-    let term = Command::new("kill")
-        .args(["-TERM", "--", &process_group])
-        .status()
+    let term = signal_group("-TERM", &process_group)
         .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
     if !term.success() {
         if is_unreaped(pid) {
@@ -1092,12 +1095,77 @@ pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
             "no se pudo senalizar el grupo de proceso",
         ));
     }
+    for leader in &detached {
+        let _ = signal_group("-TERM", &format!("-{leader}"));
+    }
 
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let _ = Command::new("kill")
-        .args(["-KILL", "--", &process_group])
-        .status();
+    // A moment to exit on its own (Codex closes its connection), then for sure.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline && !has_exited(pid) {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let _ = signal_group("-KILL", &process_group);
+    for leader in &detached {
+        let _ = signal_group("-KILL", &format!("-{leader}"));
+    }
     Ok(())
+}
+
+/// Sends `signal` to a process group; a group already gone is not an error worth a log line.
+#[cfg(unix)]
+fn signal_group(signal: &str, group: &str) -> std::io::Result<std::process::ExitStatus> {
+    Command::new("kill")
+        .args([signal, "--", group])
+        .stderr(Stdio::null())
+        .status()
+}
+
+/// The descendants of `pid` that lead a process group of their own.
+#[cfg(unix)]
+fn descendant_group_leaders(pid: u32) -> Vec<u32> {
+    let Ok(output) = Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,pgid="])
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let processes: Vec<[u32; 3]> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().map(|field| field.parse().ok());
+            Some([fields.next()??, fields.next()??, fields.next()??])
+        })
+        .collect();
+    let mut tree = vec![pid];
+    let mut leaders = Vec::new();
+    let mut index = 0;
+    while index < tree.len() {
+        let parent = tree[index];
+        for &[child, ppid, pgid] in &processes {
+            if ppid == parent && !tree.contains(&child) {
+                tree.push(child);
+                if pgid == child {
+                    leaders.push(child);
+                }
+            }
+        }
+        index += 1;
+    }
+    leaders
+}
+
+/// Whether the process is gone or only waits to be reaped.
+#[cfg(unix)]
+fn has_exited(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .stderr(Stdio::null())
+        .output()
+        .map_or(true, |output| {
+            let stat = output.stdout.trim_ascii_start();
+            stat.is_empty() || stat.starts_with(b"Z")
+        })
 }
 
 /// Whether the group leader has exited and waits to be reaped. macOS refuses
@@ -1259,6 +1327,60 @@ mod tests {
         // Written before raw mode, the line buffer would have turned the
         // Enter into a newline and delivered the line as one chunk.
         assert_eq!(std::fs::read(&keys).unwrap(), b"hola\r");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_tree_kill_reaches_commands_running_in_their_own_group() {
+        use std::os::unix::process::CommandExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        // One command in the tree's group and one in its own, as Codex runs them.
+        let mut agent = Command::new("sh")
+            .current_dir(dir.path())
+            .args([
+                "-c",
+                "sleep 60 & echo $! > same.pid; \
+                 perl -e 'setpgrp(0, 0); exec \"sleep\", \"60\"' & echo $! > own.pid; wait",
+            ])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid_in = |name: &str| -> u32 {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(text) = std::fs::read_to_string(dir.path().join(name)) {
+                    if let Ok(pid) = text.trim().parse() {
+                        return pid;
+                    }
+                }
+                assert!(Instant::now() < deadline, "{name} never appeared");
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let commands = [pid_in("same.pid"), pid_in("own.pid")];
+        let own_group = commands[1].to_string();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Command::new("ps")
+            .args(["-o", "pgid=", "-p", &own_group])
+            .output()
+            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() != own_group)
+        {
+            assert!(
+                Instant::now() < deadline,
+                "the command never left the group"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        kill_process_tree(agent.id()).unwrap();
+        agent.wait().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !commands.iter().all(|&pid| has_exited(pid)) {
+            assert!(Instant::now() < deadline, "a command outlived the stop");
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[cfg(unix)]
