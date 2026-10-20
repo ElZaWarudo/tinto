@@ -5082,3 +5082,20 @@ fn the_overview_says_what_a_coordinator_that_is_not_waiting_has_not_read() {
     );
     assert_eq!(state(&h).unread, 0);
 }
+
+#[test]
+fn a_qa_problem_is_dismissed_without_saying_why() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("Q-2");
+    let reported = h
+        .service
+        .report_qa_problem(&task_id, "The header is too tall", "home")
+        .unwrap();
+    let dismissed = h.service.dismiss_qa_problem(&reported.id, "  ").unwrap();
+    assert_eq!(dismissed.reason, None);
+    assert_eq!(
+        h.service.qa_followup(&task_id).unwrap(),
+        ["Do not report «The header is too tall» again: the user decided it is not a problem."]
+    );
+}

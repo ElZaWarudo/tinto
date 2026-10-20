@@ -463,14 +463,15 @@ describe("DeliveryPanel", () => {
       { problem_id: "p2", solution: "Let it scroll" },
     ]);
 
-    // Dismissing asks why.
+    // Dismissing offers to say why, without asking for it.
     await user.click(within(first).getByRole("button", { name: "No es un problema…" }));
-    await user.type(
-      within(first).getByRole("textbox", { name: "Por qué el problema #1 no es un problema" }),
-      "by design",
-    );
+    expect(
+      within(first).getByRole("textbox", {
+        name: "Por qué el problema #1 no es un problema (opcional)",
+      }),
+    ).toHaveValue("");
     await user.click(within(first).getByRole("button", { name: "Descartar" }));
-    expect(client.dismissDeliveryQaProblem).toHaveBeenCalledWith("p1", "by design");
+    expect(client.dismissDeliveryQaProblem).toHaveBeenCalledWith("p1", "");
 
     await user.click(within(section).getByRole("button", { name: "Todos (3)" }));
     expect(within(section).getByText("Coordinador: implementation 3")).toBeInTheDocument();

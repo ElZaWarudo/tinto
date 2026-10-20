@@ -186,13 +186,12 @@ export function QaProblems({
                     {dismissing === problem.id ? (
                       <>
                         <input
-                          aria-label={`Por qué el problema #${problem.number} no es un problema`}
-                          placeholder="Por qué no es un problema"
+                          aria-label={`Por qué el problema #${problem.number} no es un problema (opcional)`}
+                          placeholder="Por qué no es un problema (opcional)"
                           value={reason}
                           onChange={(event) => setReason(event.target.value)}
                         />
                         <ActionButton
-                          disabled={!reason.trim()}
                           onAction={async () => {
                             await dismissDeliveryQaProblem(problem.id, reason);
                             setDismissing(null);

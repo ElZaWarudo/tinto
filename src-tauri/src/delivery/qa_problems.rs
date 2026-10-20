@@ -362,14 +362,12 @@ impl DeliveryService {
         reason: &str,
     ) -> Result<DeliveryQaProblem, DeliveryError> {
         let mut problem = self.qa_problem(id)?;
-        if reason.trim().is_empty() {
-            return Err(invalid("di por qué no es un problema"));
-        }
         if problem.status != DeliveryQaProblemStatus::Open {
             return Err(invalid("solo se descarta un problema que aún no se envió"));
         }
         problem.status = DeliveryQaProblemStatus::Dismissed;
-        problem.reason = Some(reason.trim().to_string());
+        // Saying why is optional.
+        problem.reason = Some(reason.trim().to_string()).filter(|reason| !reason.is_empty());
         problem.updated_at_ms = now_ms();
         self.store()?.put_qa_problem(&problem)?;
         self.notify();
@@ -487,9 +485,12 @@ impl DeliveryService {
                     problem.number
                 )),
                 DeliveryQaProblemStatus::Dismissed => Some(format!(
-                    "Do not report «{}» again: the user decided it is not a problem ({}).",
+                    "Do not report «{}» again: the user decided it is not a problem{}.",
                     problem.text,
-                    problem.reason.unwrap_or_default()
+                    problem
+                        .reason
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default()
                 )),
                 _ => None,
             })
