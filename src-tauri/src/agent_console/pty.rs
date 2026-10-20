@@ -514,6 +514,35 @@ pub struct PtyHandle {
     writer: Box<dyn Write + Send>,
     exit_code: Option<i32>,
     claude_hooks: Option<ClaudeHooks>,
+    /// Whether the agent has been seen reading keys (see `wait_until_reading_keys`).
+    #[cfg(unix)]
+    reads_keys: bool,
+}
+
+/// The pause between a message and the Enter that sends it.
+const ENTER_DELAY: Duration = Duration::from_millis(200);
+/// How long the first write waits for an agent that just started to read keys.
+#[cfg(unix)]
+const READS_KEYS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Writes a message and the Enter that sends it as two writes, `delay`
+/// apart. In one write a TUI on a Unix PTY reads both in one chunk, takes
+/// it for pasted text and leaves the message unsent. A lone key (Enter,
+/// Escape, an arrow) stays one write.
+fn write_with_separate_enter(
+    writer: &mut dyn Write,
+    input: &[u8],
+    delay: Duration,
+) -> std::io::Result<()> {
+    match input.split_last() {
+        Some((b'\r', text)) if !text.is_empty() => {
+            writer.write_all(text)?;
+            writer.flush()?;
+            thread::sleep(delay);
+            writer.write_all(b"\r")
+        }
+        _ => writer.write_all(input),
+    }
 }
 
 impl PtyHandle {
@@ -644,6 +673,8 @@ impl PtyHandle {
             writer,
             exit_code: None,
             claude_hooks: None,
+            #[cfg(unix)]
+            reads_keys: false,
         })
     }
 
@@ -659,10 +690,37 @@ impl PtyHandle {
     }
 
     fn write_input_pty(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
-        self.writer
-            .write_all(input)
+        self.wait_until_reading_keys();
+        write_with_separate_enter(&mut self.writer, input, ENTER_DELAY)
             .map_err(|e| AgentConsoleError::new("pty_write_failed", e.to_string()))
     }
+
+    /// An agent that has just started reads keys once its TUI puts the
+    /// terminal in raw mode. What arrives before waits in the line buffer and
+    /// reaches it as one chunk it does not send: a resumed conversation's
+    /// first message, written as soon as the agent starts. The first write
+    /// waits for raw mode, a few seconds at most.
+    #[cfg(unix)]
+    fn wait_until_reading_keys(&mut self) {
+        use nix::sys::termios::LocalFlags;
+        if self.reads_keys {
+            return;
+        }
+        let deadline = Instant::now() + READS_KEYS_TIMEOUT;
+        while Instant::now() < deadline
+            && self
+                .master
+                .get_termios()
+                .is_some_and(|termios| termios.local_flags.contains(LocalFlags::ICANON))
+        {
+            thread::sleep(Duration::from_millis(50));
+        }
+        self.reads_keys = true;
+    }
+
+    /// ConPTY delivers keys as key events from the start.
+    #[cfg(not(unix))]
+    fn wait_until_reading_keys(&mut self) {}
 
     pub fn read_output(&mut self, output: &mut [u8]) -> Result<usize, AgentConsoleError> {
         self.reader
@@ -1150,6 +1208,57 @@ mod tests {
             let error = kill_process_tree(123).unwrap_err();
             assert_eq!(error.category, "process_tree_kill_unsupported");
         }
+    }
+
+    /// Keeps each write apart, as the PTY receives them.
+    #[derive(Default)]
+    struct RecordingWriter(Vec<Vec<u8>>);
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.push(buf.to_vec());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_message_and_the_enter_that_sends_it_go_in_two_writes() {
+        let mut writer = RecordingWriter::default();
+        for input in [&b"hola\r"[..], b"a\nb\r", b"\r", b"\x1b[B"] {
+            write_with_separate_enter(&mut writer, input, Duration::ZERO).unwrap();
+        }
+        let expected: Vec<&[u8]> = vec![b"hola", b"\r", b"a\nb", b"\r", b"\r", b"\x1b[B"];
+        assert_eq!(writer.0, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_first_write_waits_until_the_agent_reads_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = dir.path().join("keys");
+        // Like a TUI that takes a moment to start: raw mode, then read.
+        let mut command = CommandBuilder::new("sh");
+        command.arg("-c");
+        command.arg(format!(
+            "sleep 0.5; stty raw -echo; head -c 5 > '{}'",
+            keys.display()
+        ));
+        let mut handle = PtyHandle::spawn_command_builder(command).unwrap();
+
+        handle.write_input(b"hola\r").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while handle.try_exit_code().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the agent never read its keys");
+            thread::sleep(Duration::from_millis(20));
+        }
+        // Written before raw mode, the line buffer would have turned the
+        // Enter into a newline and delivered the line as one chunk.
+        assert_eq!(std::fs::read(&keys).unwrap(), b"hola\r");
     }
 
     #[cfg(unix)]

@@ -1259,8 +1259,10 @@ where
     })
 }
 
+// Async so it runs off the main thread: a write to a terminal agent waits
+// for it to read keys and sends the Enter apart (PtyHandle::write_input_pty).
 #[tauri::command]
-pub fn write_agent_session_input(
+pub async fn write_agent_session_input(
     app: AppHandle,
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     session_id: String,
@@ -1288,7 +1290,7 @@ pub fn write_agent_session_input(
 }
 
 #[tauri::command]
-pub fn write_agent_session_turn(
+pub async fn write_agent_session_turn(
     app: AppHandle,
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     session_id: String,

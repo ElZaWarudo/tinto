@@ -4706,6 +4706,7 @@ dependencies = [
  "git2",
  "globset",
  "ignore",
+ "nix",
  "notify",
  "portable-pty",
  "reqwest 0.12.28",
