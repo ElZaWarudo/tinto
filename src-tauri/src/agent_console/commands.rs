@@ -3848,44 +3848,59 @@ fn accepted_subagent_journal_target(thread_id: Option<&str>, accepted: bool) -> 
     thread_id.filter(|_| accepted)
 }
 
+/// What the user sent, as the transcript shows it. Keys sent as such (an
+/// arrow and Enter to answer a terminal menu) are no message.
 fn timeline_text_from_input(input: &[u8]) -> Option<String> {
-    let text = String::from_utf8_lossy(input)
-        .replace('\r', "\n")
-        .trim()
-        .to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    let text = strip_ansi(&String::from_utf8_lossy(input)).replace('\r', "\n");
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 fn timeline_text_from_output(output: &[u8]) -> Option<String> {
-    let text = String::from_utf8_lossy(output)
-        .replace('\r', "\n")
-        .trim()
-        .to_string();
-    if text.is_empty() || text == ">" {
-        None
-    } else {
-        Some(strip_ansi(&text))
-    }
+    let text = strip_ansi(&String::from_utf8_lossy(output)).replace('\r', "\n");
+    let text = text.trim();
+    (!text.is_empty() && text != ">").then(|| text.to_string())
 }
 
+/// Removes what a terminal app writes besides text: CSI sequences (ESC [ …),
+/// OSC, DCS, APC, PM and SOS strings up to BEL or ESC \ (window titles,
+/// links, queries), charset selections (ESC ( B), two-character escapes
+/// (ESC 7) and the control characters left, but line breaks and tabs.
 fn strip_ansi(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            let _ = chars.next();
-            for code in chars.by_ref() {
-                if ('@'..='~').contains(&code) {
-                    break;
-                }
+        if ch != '\u{1b}' {
+            if !ch.is_control() || matches!(ch, '\n' | '\r' | '\t') {
+                output.push(ch);
             }
             continue;
         }
-        output.push(ch);
+        match chars.next() {
+            Some('[') => {
+                for code in chars.by_ref() {
+                    if ('@'..='~').contains(&code) {
+                        break;
+                    }
+                }
+            }
+            Some(']' | 'P' | '_' | '^' | 'X') => {
+                while let Some(code) = chars.next() {
+                    if code == '\u{7}' {
+                        break;
+                    }
+                    if code == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            Some('(' | ')' | '*' | '+' | '#' | '%') => {
+                chars.next();
+            }
+            // ESC and one character (ESC 7, ESC =, ESC M), or a lone ESC.
+            _ => {}
+        }
     }
     output
 }
@@ -4436,6 +4451,39 @@ mod tests {
         let attachment = validate_agent_attachment_path(path).unwrap();
 
         assert!(attachment.is_image);
+    }
+
+    #[test]
+    fn terminal_output_reaches_the_transcript_as_plain_text() {
+        let cases: [(&[u8], &str); 7] = [
+            (b"\x1b[1;38;2;215;119;87mClaude\x1b[0m", "Claude"),
+            (b"\x1b]0;\xe2\x9c\xb3 Claude Code\x07ready", "ready"),
+            (
+                b"\x1b]8;;https://code.claude.com/docs/en/security\x07Security guide\x1b]8;;\x07",
+                "Security guide",
+            ),
+            (b"\x1b]8;;https://a.test\x1b\\link\x1b]8;;\x1b\\", "link"),
+            (
+                b"\x1b(B\x0fYes, I trust this folder",
+                "Yes, I trust this folder",
+            ),
+            (b"\x1b7\x1b=menu\x1b8\x1bM", "menu"),
+            (b"\x1bP+q544e\x1b\\done", "done"),
+        ];
+        for (output, text) in cases {
+            assert_eq!(timeline_text_from_output(output).as_deref(), Some(text));
+        }
+        assert_eq!(timeline_text_from_output(b"\x1b[?2026h\x1b[?25l"), None);
+    }
+
+    #[test]
+    fn keys_sent_to_a_terminal_menu_are_no_message() {
+        assert_eq!(timeline_text_from_input(b"\x1b[B\r"), None);
+        assert_eq!(timeline_text_from_input(b"\x1b"), None);
+        assert_eq!(
+            timeline_text_from_input(b"hola\tmundo\r").as_deref(),
+            Some("hola\tmundo")
+        );
     }
 
     #[test]

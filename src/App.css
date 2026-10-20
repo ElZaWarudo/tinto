@@ -8361,6 +8361,40 @@ select option:checked {
   background: #181b1a;
 }
 
+/* Claude Code's folder trust question, answered with its menu keys. */
+.agent-panel__trust-bar {
+  grid-row: 4;
+  z-index: 7;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 7px 16px;
+  border-top: 1px solid var(--agent-rule-strong);
+  background: #181b1a;
+}
+
+.agent-panel__trust-bar span {
+  flex: 1 1 240px;
+}
+
+.agent-panel__trust-bar button {
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid var(--agent-rule-strong);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+}
+
+.agent-panel__trust-bar button:hover,
+.agent-panel__trust-bar button:focus-visible {
+  background: rgba(148, 163, 184, 0.12);
+}
+
 .agent-panel__goal-state {
   width: 7px;
   height: 7px;

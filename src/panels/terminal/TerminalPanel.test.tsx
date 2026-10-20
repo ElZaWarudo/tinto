@@ -938,6 +938,34 @@ describe("TerminalPanel", () => {
     );
   });
 
+  it("answers Claude Code's folder trust question with its menu keys", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([
+      sessionFixture({ agent_type: "claude", reports_turns: false }),
+    ]);
+    render(
+      <TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "claude" })} />,
+    );
+    await screen.findByTitle(/Estado: Sin turnos/);
+    expect(screen.queryByRole("region", { name: "Confianza en la carpeta" })).toBeNull();
+
+    await act(async () => {
+      agentSessionStore.appendTimelineItem({
+        session_id: "sess-1",
+        id: "sess-1:agent:1",
+        kind: "agent_message",
+        // Spaces may come as cursor moves, which the transcript drops.
+        text: "Accessing workspace: /r/a\n❯ 1. No, exit\n  2. Yes,Itrustthis folder",
+        timestamp_ms: 1,
+      });
+    });
+
+    const trust = await screen.findByRole("region", { name: "Confianza en la carpeta" });
+    await user.click(within(trust).getByRole("button", { name: "Confiar en esta carpeta" }));
+    expect(writeAgentSessionInputMock).toHaveBeenCalledWith("sess-1", "\u001b[B\r");
+    expect(screen.queryByRole("region", { name: "Confianza en la carpeta" })).toBeNull();
+  });
+
   it("shows distinct live process states without exposing private reasoning", async () => {
     listAgentSessionsMock.mockResolvedValueOnce([
       sessionFixture({ turn_status: "working", output_bytes_per_second: 42 }),
@@ -3027,7 +3055,10 @@ describe("TerminalPanel", () => {
     await act(async () => {
       agentSessionStore.appendOutput({
         session_id: "sess-1",
-        chunk_base64: b64("\u001b[32mDone\u001b[0m\n\nChanged src/a.ts"),
+        chunk_base64: b64(
+          "\u001b]0;Claude Code\u0007\u001b[32mDone\u001b[0m\u001b(B\u000f\n\n" +
+            "\u001b]8;;https://a.test\u001b\\Changed src/a.ts\u001b]8;;\u001b\\",
+        ),
         timestamp_ms: 1,
       });
     });
@@ -3035,6 +3066,8 @@ describe("TerminalPanel", () => {
     const conversation = screen.getByLabelText("Conversación con Agent");
     expect(await within(conversation).findByText("Done")).toBeInTheDocument();
     expect(within(conversation).getByText("Changed src/a.ts")).toBeInTheDocument();
+    expect(conversation).not.toHaveTextContent("]0;");
+    expect(conversation).not.toHaveTextContent("]8;;");
   });
 
   it("renders native timeline items as conversational turns", async () => {

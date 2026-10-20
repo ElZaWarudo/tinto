@@ -612,6 +612,7 @@ export function TerminalPanel({ params }: TerminalPanelProps) {
     });
   };
   const [editingMessage, setEditingMessage] = useState<EditingAgentMessage | null>(null);
+  const [trustAnswered, setTrustAnswered] = useState(false);
   const [transcriptQuery, setTranscriptQuery] = useState("");
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -2559,6 +2560,17 @@ También se desharán los cambios hechos después en este repo, incluidos los de
         />
       )}
 
+      {!readOnly && !trustAnswered && asksToTrustFolder(session, timeline) && (
+        <ClaudeTrustBar
+          onAnswer={(keys) => {
+            setTrustAnswered(true);
+            writeAgentSessionInput(sessionId, keys).catch((e) =>
+              setError(reportAgentFailure(e, "No se pudo responder a Claude Code.")),
+            );
+          }}
+        />
+      )}
+
       <form
         className="agent-panel__composer"
         hidden={Boolean(editingMessage)}
@@ -4239,6 +4251,41 @@ function AgentContextRemaining({
         <span style={{ width: `${remainingPercent}%` }} />
       </i>
     </div>
+  );
+}
+
+/** Claude Code's first run in a folder asks whether to trust it in a keyboard
+ *  menu the transcript cannot answer; it stops asking once its hooks run. */
+function asksToTrustFolder(
+  session: AgentSession | undefined,
+  timeline: AgentSessionTimelineItem[],
+): boolean {
+  if (session?.agent_type !== "claude" || session.status !== "running" || session.reports_turns) {
+    return false;
+  }
+  // Without spaces: the terminal may draw them as cursor moves, which are stripped.
+  const recent = timeline
+    .slice(-20)
+    .filter((item) => item.kind === "agent_message")
+    .map((item) => item.text)
+    .join("")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+  return recent.includes("trustthisfolder") || recent.includes("trustthefilesinthisfolder");
+}
+
+function ClaudeTrustBar({ onAnswer }: { onAnswer: (keys: string) => void }) {
+  return (
+    <section aria-label="Confianza en la carpeta" className="agent-panel__trust-bar">
+      <span>Claude Code pregunta si confías en esta carpeta antes de trabajar en ella.</span>
+      {/* "No, exit" comes first and focused: Down and Enter choose "Yes". */}
+      <button onClick={() => onAnswer("\u001b[B\r")} type="button">
+        Confiar en esta carpeta
+      </button>
+      <button onClick={() => onAnswer("\u001b")} type="button">
+        No, salir
+      </button>
+    </section>
   );
 }
 
@@ -8829,7 +8876,19 @@ function decodeBase64Text(chunk: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const ansiEscapePattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
+// What strip_ansi removes in the backend (agent_console/commands.rs): CSI,
+// OSC/DCS/APC/PM/SOS strings, charset selections, two-character escapes and
+// control characters other than tabs and line breaks.
+const ansiEscapePattern = new RegExp(
+  [
+    "\\x1b\\[[0-?]*[ -/]*[@-~]",
+    "\\x1b[\\]P_^X][\\s\\S]*?(?:\\x07|\\x1b\\\\|$)",
+    "\\x1b[()*+#%].?",
+    "\\x1b.?",
+    "[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f]",
+  ].join("|"),
+  "g",
+);
 
 function stripAnsi(text: string): string {
   return text.replace(ansiEscapePattern, "");
