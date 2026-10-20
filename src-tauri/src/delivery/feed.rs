@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::model::{DeliveryEvent, DeliveryRun};
+use super::model::{DeliveryCoordinatorState, DeliveryEvent, DeliveryRun};
 use super::service::DeliveryService;
 use super::{now_ms, DeliveryError};
 
@@ -290,6 +290,32 @@ impl DeliveryService {
             });
         }
         Ok(wakeups)
+    }
+
+    /// For each active batch: the changes its coordinator has neither read
+    /// with wait_run nor been woken for, and whether it waits now. A
+    /// coordinator Tinto cannot wake (one outside Agents) shows here when
+    /// it stops waiting with work pending.
+    pub fn coordinator_states(&self) -> Result<Vec<DeliveryCoordinatorState>, DeliveryError> {
+        let runs = self.store()?.runs()?;
+        let waiting = self
+            .inner
+            .waiting
+            .lock()
+            .map(|waiting| waiting.clone())
+            .unwrap_or_default();
+        let mut states = Vec::new();
+        for run in runs.into_iter().filter(|run| run.status == "active") {
+            let after = run.coordinator_cursor.max(run.notified_cursor);
+            let (events, _) = self.coordinator_events(&run.id, after)?;
+            states.push(DeliveryCoordinatorState {
+                waiting: waiting.get(&run.id).is_some_and(|count| *count > 0),
+                unread: events.len() as u32,
+                unread_since_ms: events.first().and_then(|event| event["at_ms"].as_u64()),
+                run_id: run.id,
+            });
+        }
+        Ok(states)
     }
 
     /// Tinto woke the run's coordinator up to `cursor`.

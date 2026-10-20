@@ -1056,6 +1056,33 @@ describe("DeliveryPanel", () => {
     );
   });
 
+  it("warns when a batch's coordinator stopped waiting with changes unread", async () => {
+    const since = Date.now() - 10 * 60_000;
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "claude-coord-1",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        ],
+        coordinators: [{ run_id: "r1", waiting: false, unread: 2, unread_since_ms: since }],
+      }),
+    );
+    renderPanel();
+    expect(
+      await screen.findByText(
+        /el coordinador \(claude-coord-1\) no está esperando y tiene 2 cambios sin leer/,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows one batch inline and several behind a single button", async () => {
     const user = userEvent.setup();
     const batch = (id: string, title: string) => ({

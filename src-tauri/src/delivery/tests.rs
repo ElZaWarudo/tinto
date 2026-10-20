@@ -4788,3 +4788,32 @@ fn a_qa_record_from_before_tinto_read_problems_is_read_at_startup() {
         "read once, in place of the earlier QA's"
     );
 }
+
+#[test]
+fn the_overview_says_what_a_coordinator_that_is_not_waiting_has_not_read() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("F-1");
+    let task = h.service.task(&task_id).unwrap();
+    put_step(&h, &task, "a-push", "push", "pending", "");
+    let cursor = coordinator.write("wait_run", json!({}))["structuredContent"]["cursor"]
+        .as_u64()
+        .unwrap();
+    let state = |h: &Harness| h.service.overview().unwrap().coordinators[0].clone();
+    assert_eq!(state(&h).unread, 0);
+
+    // The user decides while the coordinator is not waiting: nobody reads it.
+    h.service.decide_approval("a-push", false, None).unwrap();
+    let stalled = state(&h);
+    assert_eq!(stalled.run_id, coordinator.run_id);
+    assert!(!stalled.waiting);
+    assert_eq!(stalled.unread, 1);
+    assert!(stalled.unread_since_ms.is_some());
+
+    // Once it reads it with wait_run, there is nothing left.
+    coordinator.write(
+        "wait_run",
+        json!({"cursor": cursor, "timeout_seconds": 1, "idle_ok": true}),
+    );
+    assert_eq!(state(&h).unread, 0);
+}

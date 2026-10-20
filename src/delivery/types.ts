@@ -479,6 +479,18 @@ export interface DeliveryOverview {
   /** Agents that may run now: the setting, or one per active task. */
   capacity?: number;
   coordinator: DeliveryCoordinatorEndpoint | null;
+  /** What each active batch's coordinator has not read yet. */
+  coordinators?: DeliveryCoordinatorState[];
+}
+
+/** Whether a batch's coordinator keeps up with its changes. */
+export interface DeliveryCoordinatorState {
+  run_id: string;
+  /** It is inside wait_run now, reading each change as it comes. */
+  waiting: boolean;
+  /** Changes it has not read and Tinto has not woken it for. */
+  unread: number;
+  unread_since_ms: number | null;
 }
 
 export interface DeliveryLogEntry {

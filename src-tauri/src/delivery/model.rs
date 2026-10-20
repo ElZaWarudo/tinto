@@ -878,6 +878,21 @@ pub struct DeliveryOverview {
     /// Agents that may run now: the setting, or one per active task.
     pub capacity: u32,
     pub coordinator: Option<DeliveryCoordinatorEndpoint>,
+    /// What each active batch's coordinator has not read yet.
+    #[serde(default)]
+    pub coordinators: Vec<DeliveryCoordinatorState>,
+}
+
+/// Whether a batch's coordinator keeps up with its changes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryCoordinatorState {
+    pub run_id: String,
+    /// It is inside wait_run now, so it reads each change as it comes.
+    pub waiting: bool,
+    /// Changes for it that it has not read and Tinto has not woken it for.
+    pub unread: u32,
+    /// When the oldest of them happened.
+    pub unread_since_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

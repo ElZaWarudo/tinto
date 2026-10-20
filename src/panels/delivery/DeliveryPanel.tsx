@@ -78,6 +78,7 @@ import {
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { QaProblems } from "./DeliveryQaProblems";
+import { coordinatorStalls } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
@@ -441,6 +442,7 @@ export function DeliveryPanel() {
   const qa = overview?.leases.find((lease) => lease.name === "qa");
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
   const activeRuns = (overview?.runs ?? []).filter((candidate) => candidate.status === "active");
+  const stalls = overview ? coordinatorStalls(overview, now) : [];
 
   // For what is not a button (a select, a menu item): its error goes to the
   // panel's banner. Buttons are ActionButtons and say it themselves.
@@ -636,6 +638,20 @@ export function DeliveryPanel() {
             </button>
           </div>
         )}
+
+        {/* A coordinator Tinto could not wake: nothing moves until it goes on. */}
+        {stalls.map(({ run, unread, since }) => (
+          <div key={run.id} className="delivery-panel__warning" role="status">
+            <span>
+              {batchName(run.title || run.id)}: el coordinador
+              {run.owner && run.owner !== "user" ? ` (${run.owner})` : ""} no está esperando y tiene{" "}
+              {unread === 1 ? "1 cambio" : `${unread} cambios`} sin leer desde las{" "}
+              {new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
+              Pídele que siga con wait_run; si sus herramientas de Delivery fallan, que las
+              reconecte.
+            </span>
+          </div>
+        ))}
 
         {/* Only when it holds work back; otherwise the header and the task say it. */}
         {qa?.state === "quarantined" && qa.queue.length > 0 && (
