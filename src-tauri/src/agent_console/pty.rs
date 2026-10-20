@@ -1026,6 +1026,9 @@ pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
         .status()
         .map_err(|e| AgentConsoleError::new("process_tree_kill_failed", e.to_string()))?;
     if !term.success() {
+        if is_unreaped(pid) {
+            return Ok(());
+        }
         return Err(AgentConsoleError::new(
             "process_tree_kill_failed",
             "no se pudo senalizar el grupo de proceso",
@@ -1037,6 +1040,17 @@ pub(crate) fn kill_process_tree(pid: u32) -> Result<(), AgentConsoleError> {
         .args(["-KILL", "--", &process_group])
         .status();
     Ok(())
+}
+
+/// Whether the group leader has exited and waits to be reaped. macOS refuses
+/// to signal a group left with only that leader (EPERM) where Linux delivers
+/// the signal; either way nothing in the group is running.
+#[cfg(unix)]
+fn is_unreaped(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .is_ok_and(|output| output.stdout.trim_ascii_start().starts_with(b"Z"))
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1136,6 +1150,26 @@ mod tests {
             let error = kill_process_tree(123).unwrap_err();
             assert_eq!(error.category, "process_tree_kill_unsupported");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_tree_kill_accepts_a_group_whose_leader_already_exited() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !is_unreaped(child.id()) {
+            assert!(Instant::now() < deadline, "the leader never exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        kill_process_tree(child.id()).unwrap();
+        child.wait().unwrap();
     }
 
     #[test]
