@@ -835,16 +835,19 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ae2_clasifica_y_descarta_por_bucket() {
+        // FSEvents (macOS) también entrega los cambios hechos justo antes
+        // de empezar a vigilar, como los del fixture: la referencia se toma
+        // antes de crearlo.
+        let epoch_before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         // Plano 2 = gitignoreado Y en watchlist: .env debe estar en ambos.
         let repo = fixture_repo("target/\n.env\n");
         let (mut watcher, mut rx) = FsWatcher::new().unwrap();
         watcher.watch_workbench(&[entry(&repo, &[".env"])]);
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let epoch_before = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
         fs::write(repo.path().join("src/main.rs"), "fn main() {}").unwrap();
         fs::create_dir_all(repo.path().join("target")).unwrap();
         fs::write(repo.path().join("target/x.o"), "obj").unwrap();
