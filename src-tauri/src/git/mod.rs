@@ -75,6 +75,13 @@ pub struct RepoStatus {
     pub untracked: Vec<PathBuf>,
 }
 
+impl RepoStatus {
+    /// Sin ningún cambio: nada modificado, staged ni sin trackear.
+    pub fn is_clean(&self) -> bool {
+        self.modified.is_empty() && self.staged.is_empty() && self.untracked.is_empty()
+    }
+}
+
 /// The `git` executable for CLI calls. A GUI-launched Tinto may not inherit
 /// Git on its PATH (Git for Windows installed "from Git Bash only", or
 /// installed after login), so Windows also checks the standard install dirs.

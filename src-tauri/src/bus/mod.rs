@@ -87,9 +87,11 @@ pub(crate) struct RecalcOutcome {
     pub branch: Option<crate::git::BranchInfo>,
     pub head: Option<Option<crate::git::CommitInfo>>,
     pub subscribed_diffs: Option<Vec<crate::git::FileDiff>>,
-    pub metrics: RepoMetrics,
+    /// `None` cuando el recálculo no leyó diffs (se conserva el análisis
+    /// previo), igual que `signals` y el escaneo de secretos.
+    pub metrics: Option<RepoMetrics>,
     pub gitleaks_configured: bool,
-    pub signals: Vec<PassiveSignal>,
+    pub signals: Option<Vec<PassiveSignal>>,
     pub secret_findings: Option<Vec<SecretFinding>>,
     pub secret_scan_status: Option<SecretScanStatus>,
 }
@@ -147,9 +149,13 @@ impl RepoLiveState {
         // retry/remount, que dispara este recálculo). El estado de watching
         // degradado se reporta aparte por `tinto://watching-state`.
         self.error = None;
-        self.metrics = outcome.metrics.clone();
+        if let Some(metrics) = &outcome.metrics {
+            self.metrics = metrics.clone();
+        }
         self.gitleaks_configured = outcome.gitleaks_configured;
-        self.signals = outcome.signals.clone();
+        if let Some(signals) = &outcome.signals {
+            self.signals = signals.clone();
+        }
         if let Some(secret_findings) = &outcome.secret_findings {
             self.secret_findings = secret_findings.clone();
         }
@@ -1137,6 +1143,8 @@ async fn run_bus_inner(
                             }
                         }
                         let subscribed_diffs = external.subscribed_diffs.clone();
+                        // Un repo limpio llega analizado sea cual sea el scope (recalc_blocking).
+                        let analysis_included = analysis_included || external.status.is_clean();
                         let changed = state.apply_external_delta(&external, analysis_included);
                         if changed || subscribed_diffs.is_some() {
                             let mut delta = state.delta(&result.repo);
@@ -1751,7 +1759,8 @@ pub(crate) fn recalc_blocking(
         }
     };
 
-    let needs_analysis = scope == RecalcScope::Everything || !subs.is_empty();
+    // El análisis de un repo limpio es vacío y barato: borra lo que halló el anterior.
+    let needs_analysis = scope == RecalcScope::Everything || !subs.is_empty() || status.is_clean();
     let worktree_diffs = if needs_analysis {
         engine.worktree_diff()?
     } else {
@@ -1770,13 +1779,14 @@ pub(crate) fn recalc_blocking(
     let secret_scan_status = secret_scan.map(|result| result.status);
     let gitleaks_configured = secret_scan::has_repo_gitleaks_config(repo);
     let (metrics, signals) = if needs_analysis {
-        metrics_and_signals(
+        let (metrics, signals) = metrics_and_signals(
             &status,
             &worktree_diffs,
             secret_findings.as_deref().unwrap_or_default(),
-        )
+        );
+        (Some(metrics), Some(signals))
     } else {
-        (RepoMetrics::default(), Vec::new())
+        (None, None)
     };
 
     let subscribed_diffs = if subs.is_empty() {
@@ -1888,8 +1898,8 @@ mod tests {
             .contains(&PathBuf::from("changed.txt")));
         assert!(outcome.branch.is_some());
         assert!(outcome.head.as_ref().is_some_and(|head| head.is_some()));
-        assert_eq!(outcome.metrics, RepoMetrics::default());
-        assert!(outcome.signals.is_empty());
+        assert!(outcome.metrics.is_none());
+        assert!(outcome.signals.is_none());
         assert!(outcome.secret_findings.is_none());
         assert!(outcome.secret_scan_status.is_none());
         assert!(outcome.subscribed_diffs.is_none());
@@ -1914,6 +1924,26 @@ mod tests {
             state.secret_scan_status.state,
             contract::SecretScanState::Findings
         );
+    }
+
+    #[test]
+    fn status_only_recalc_keeps_the_last_analysis_until_the_repo_is_clean() {
+        let repo = TempRepo::with_initial_commit();
+        repo.write(".env", "TOKEN=x\n");
+        let mut state = RepoLiveState::default();
+        state.apply_recalc(&recalc_blocking(repo.path(), RecalcScope::Everything, &[]).unwrap());
+        let analysis = (state.metrics.clone(), state.signals.clone());
+        assert_eq!(analysis.0.changed_files, 1);
+        assert!(!analysis.1.is_empty());
+
+        // A touch that changes no content reads only the status again.
+        state.apply_recalc(&recalc_blocking(repo.path(), RecalcScope::StatusOnly, &[]).unwrap());
+        assert_eq!((state.metrics.clone(), state.signals.clone()), analysis);
+
+        std::fs::remove_file(repo.path().join(".env")).unwrap();
+        state.apply_recalc(&recalc_blocking(repo.path(), RecalcScope::StatusOnly, &[]).unwrap());
+        assert_eq!(state.metrics, RepoMetrics::default());
+        assert!(state.signals.is_empty());
     }
 
     #[test]
@@ -2009,9 +2039,9 @@ mod tests {
             branch: None,
             head: None,
             subscribed_diffs: None,
-            metrics: RepoMetrics::default(),
+            metrics: Some(RepoMetrics::default()),
             gitleaks_configured: false,
-            signals: Vec::new(),
+            signals: Some(Vec::new()),
             secret_findings: Some(Vec::new()),
             secret_scan_status: Some(SecretScanStatus::default()),
         };
@@ -2048,9 +2078,9 @@ mod tests {
             branch: None,
             head: None,
             subscribed_diffs: None,
-            metrics: RepoMetrics::default(),
+            metrics: Some(RepoMetrics::default()),
             gitleaks_configured: false,
-            signals: Vec::new(),
+            signals: Some(Vec::new()),
             secret_findings: Some(Vec::new()),
             secret_scan_status: Some(SecretScanStatus::default()),
         };

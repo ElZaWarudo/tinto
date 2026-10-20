@@ -833,9 +833,10 @@ pub(crate) fn repo_delta(
             head: outcome.head.flatten(),
             last_activity_ms: now_ms(),
             error: None,
-            metrics: outcome.metrics,
+            // Without analysis the host keeps its own (it knows the scope it asked for).
+            metrics: outcome.metrics.unwrap_or_default(),
             gitleaks_configured: outcome.gitleaks_configured,
-            signals: outcome.signals,
+            signals: outcome.signals.unwrap_or_default(),
             secret_findings: outcome.secret_findings.unwrap_or_default(),
             secret_scan_status: outcome.secret_scan_status.unwrap_or_default(),
             subscribed_diffs: outcome.subscribed_diffs,
