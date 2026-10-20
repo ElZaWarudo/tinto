@@ -208,6 +208,7 @@ function renderPanel() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.removeItem("tinto:delivery-list-view");
   client.getDeliveryJobLog.mockResolvedValue({ entries: [], next_line: 0, stderr_tail: "" });
   client.getDeliveryRepoSettings.mockResolvedValue({
     worktree_root: null,
@@ -2575,6 +2576,76 @@ describe("DeliveryPanel", () => {
     expect(within(found).getByRole("link", { name: "PR #279" })).toBeInTheDocument();
     await user.click(within(found).getByRole("button", { name: "Desarchivar" }));
     await waitFor(() => expect(client.unarchiveDeliveryTask).toHaveBeenCalledWith("t9"));
+  });
+
+  it("shows one batch's tasks and folds the delivered ones", async () => {
+    const user = userEvent.setup();
+    const batch = (id: string, title: string) => ({
+      id,
+      repo: REPO,
+      title,
+      status: "active",
+      generation: 1,
+      owner: null,
+      created_at_ms: 1,
+      updated_at_ms: 1,
+    });
+    const delivered = phase({ kind: "delivered" }, "nobody");
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [batch("r1", "Lote A"), batch("r2", "Lote B")],
+        tasks: [
+          task({ id: "t1", key: "AGOS-1", run_id: "r1" }),
+          task({ id: "t2", key: "AGOS-2", run_id: "r1" }),
+          task({ id: "t3", key: "AGOS-3", run_id: "r2" }),
+        ],
+        phases: { t1: delivered, t2: NEXT_IMPLEMENTATION, t3: NEXT_IMPLEMENTATION },
+        jobs: [],
+      }),
+    );
+    renderPanel();
+    const list = await screen.findByRole("navigation", { name: "Tareas de Delivery" });
+    await within(list).findByText("AGOS-2");
+    const folded = within(list).getByRole("button", { name: /Entregadas/ });
+    expect(folded).toHaveAttribute("aria-expanded", "false");
+    expect(within(list).queryByText("AGOS-1")).toBeNull();
+    await user.click(folded);
+    expect(within(list).getByText("AGOS-1")).toBeInTheDocument();
+
+    await user.selectOptions(within(list).getByRole("combobox", { name: "Lote" }), "r2");
+    expect(within(list).getByText("AGOS-3")).toBeInTheDocument();
+    expect(within(list).queryByText("AGOS-1")).toBeNull();
+    expect(within(list).queryByText("AGOS-2")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("tinto:delivery-list-view")!)).toEqual({
+      lot: "r2",
+      folded: [],
+    });
+  });
+
+  it("archives every delivered task in one go", async () => {
+    const user = userEvent.setup();
+    const delivered = phase({ kind: "delivered" }, "nobody");
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [
+          task({ id: "t1", key: "AGOS-1" }),
+          task({ id: "t2", key: "AGOS-2" }),
+          task({ id: "t3", key: "AGOS-3" }),
+        ],
+        phases: { t1: delivered, t2: delivered, t3: NEXT_IMPLEMENTATION },
+        jobs: [],
+      }),
+    );
+    client.archiveDeliveryTask.mockResolvedValue(undefined);
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Archivar todas" }));
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining("Se archivan 2 tareas entregadas"),
+      expect.anything(),
+    );
+    await waitFor(() => expect(client.archiveDeliveryTask).toHaveBeenCalledTimes(2));
+    expect(client.archiveDeliveryTask).toHaveBeenCalledWith("t1");
+    expect(client.archiveDeliveryTask).toHaveBeenCalledWith("t2");
   });
 
   it("gives outside agents tinto.exe as their MCP server, which opens Tinto", async () => {

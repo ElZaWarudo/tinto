@@ -215,7 +215,11 @@ describe("taskStatus words the phase Tinto derives", () => {
     expect(status({ kind: "next_step", rung: "jira", stage: "after_merge" }).label).toBe(
       "Siguiente: Jira (merge)",
     );
-    expect(status({ kind: "delivered" })).toMatchObject({ tone: "ok", label: "Entregada" });
+    expect(status({ kind: "delivered" })).toMatchObject({
+      group: "delivered",
+      tone: "ok",
+      label: "Entregada",
+    });
     expect(status(null).label).toBe("Sin actividad");
   });
 

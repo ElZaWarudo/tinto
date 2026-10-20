@@ -76,7 +76,7 @@ export const TASK_STATE_LABEL: Record<string, string> = {
 /** `step`: a delivery step (commit, push, PR, merge, Jira) the user acts on,
  *  told apart from blockers (`attention`, `danger`). */
 export type Tone = "attention" | "step" | "danger" | "live" | "waiting" | "idle" | "ok";
-export type StatusGroup = "attention" | "running" | "waiting" | "idle";
+export type StatusGroup = "attention" | "running" | "waiting" | "idle" | "delivered";
 export type StatusIcon = "flag" | "x" | "alert" | "live" | "clock" | "ring" | "check";
 
 export interface TaskStatus {
@@ -91,6 +91,7 @@ export const GROUPS: { group: StatusGroup; label: string }[] = [
   { group: "running", label: "En marcha" },
   { group: "waiting", label: "En espera" },
   { group: "idle", label: "Sin actividad" },
+  { group: "delivered", label: "Entregadas" },
 ];
 
 export function stageLabel(role: string): string {
@@ -422,7 +423,7 @@ export function taskStatus(
         "x",
       );
     case "delivered":
-      return { group: "idle", tone: "ok", icon: "check", label: "Entregada" };
+      return { group: "delivered", tone: "ok", icon: "check", label: "Entregada" };
     case "pr": {
       const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
       if (!pr) return waiting("PR");

@@ -113,6 +113,7 @@ import {
   type DeliveryStep,
   stageLabel,
   taskStatus,
+  type StatusGroup,
   type StatusIcon,
   type TaskStatus,
   type Tone,
@@ -128,6 +129,25 @@ type Dialog =
   | { kind: "release"; name: string; note: string | null }
   | { kind: "archived" }
   | null;
+
+/** What the task list shows: one batch (null: all of them) and the groups
+ *  folded to their count. Delivered tasks start folded. */
+interface ListView {
+  lot: string | null;
+  folded: StatusGroup[];
+}
+
+const LIST_VIEW_KEY = "tinto:delivery-list-view";
+
+function savedListView(): ListView {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LIST_VIEW_KEY) ?? "null") as ListView | null;
+    if (saved) return saved;
+  } catch {
+    // Without storage the list opens as it does the first time.
+  }
+  return { lot: null, folded: ["delivered"] };
+}
 
 type IconName = Exclude<StatusIcon, "live"> | "more" | "down" | "right" | "gear" | "play";
 
@@ -337,6 +357,14 @@ export function DeliveryPanel() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
+  const [listView, setListView] = useState(savedListView);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIST_VIEW_KEY, JSON.stringify(listView));
+    } catch {
+      // It lasts until Tinto closes.
+    }
+  }, [listView]);
 
   const refresh = useCallback(
     () =>
@@ -423,18 +451,62 @@ export function DeliveryPanel() {
   const statuses = new Map(
     overview ? tasks.map((task) => [task.id, taskStatus(task, overview, now)] as const) : [],
   );
+  const activeRuns = (overview?.runs ?? []).filter((candidate) => candidate.status === "active");
+  // A batch that closed since, or the only one left, shows every task.
+  const lot =
+    activeRuns.length > 1 && activeRuns.some((candidate) => candidate.id === listView.lot)
+      ? listView.lot
+      : null;
+  const listed = lot ? tasks.filter((task) => task.run_id === lot) : tasks;
+  // What needs the user is never folded.
+  const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
   const groups = GROUPS.map((group) => ({
     ...group,
-    tasks: tasks.filter((task) => statuses.get(task.id)?.group === group.group),
+    tasks: listed.filter((task) => statuses.get(task.id)?.group === group.group),
   })).filter((group) => group.tasks.length > 0);
-  const ordered = groups.flatMap((group) => group.tasks);
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? ordered[0] ?? null;
+  const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
+  // With every group folded, the detail still shows a task.
+  const selectedTask =
+    tasks.find((task) => task.id === selectedTaskId) ?? ordered[0] ?? groups[0]?.tasks[0] ?? null;
   const shownTaskId = selectedTask?.id ?? null;
   // Keep showing the same task when its group changes (e.g. after answering
   // its decisions) instead of jumping to whatever is first in the list.
   if (shownTaskId && shownTaskId !== selectedTaskId) setSelectedTaskId(shownTaskId);
-  const needYou = groups.find((group) => group.group === "attention")?.tasks ?? [];
+  // Across every batch, whichever one the list shows.
+  const needYou = tasks.filter((task) => statuses.get(task.id)?.group === "attention");
   const multiRepo = new Set(tasks.map((task) => task.repo)).size > 1;
+  // Shows the task, leaving the batch filter when it is in another batch.
+  const reveal = (task: DeliveryTask) => {
+    if (lot && task.run_id !== lot) setListView((view) => ({ ...view, lot: null }));
+    setSelectedTaskId(task.id);
+  };
+  // A task the list stops showing gives the detail to the first one left.
+  const chooseLot = (next: string | null) => {
+    setListView((view) => ({ ...view, lot: next }));
+    if (next && selectedTask && selectedTask.run_id !== next) setSelectedTaskId(null);
+  };
+  // The delivered tasks the list shows go to "Archivadas…", as one by one.
+  const archiveDelivered = async (delivered: DeliveryTask[]) => {
+    const ok = await confirm(
+      `${delivered.length === 1 ? "Se archiva 1 tarea entregada" : `Se archivan ${delivered.length} tareas entregadas`}: se borran sus worktrees y ramas locales, todo está en GitHub. Puedes recuperarlas en "Archivadas…".`,
+      { title: "Archivar entregadas", okLabel: "Archivar" },
+    );
+    if (!ok) return false;
+    for (const task of delivered) await archiveDeliveryTask(task.id);
+    if (selectedTask && delivered.includes(selectedTask)) setSelectedTaskId(null);
+  };
+  const toggleGroup = (group: StatusGroup) => {
+    const folding = !listView.folded.includes(group);
+    setListView((view) => ({
+      ...view,
+      folded: folding
+        ? [...view.folded, group]
+        : view.folded.filter((candidate) => candidate !== group),
+    }));
+    if (folding && selectedTask && statuses.get(selectedTask.id)?.group === group) {
+      setSelectedTaskId(null);
+    }
+  };
 
   const jobs = overview?.jobs ?? [];
   const running = jobs.filter((job) => job.status === "pending" || job.status === "started");
@@ -444,7 +516,6 @@ export function DeliveryPanel() {
   const capacity = overview?.capacity ?? Math.max(1, capacitySetting);
   const qa = overview?.leases.find((lease) => lease.name === "qa");
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
-  const activeRuns = (overview?.runs ?? []).filter((candidate) => candidate.status === "active");
   const stalls = overview ? coordinatorStalls(overview, now) : [];
 
   // For what is not a button (a select, a menu item): its error goes to the
@@ -601,7 +672,7 @@ export function DeliveryPanel() {
               className="delivery-attention"
               onClick={() => {
                 setSettingsOpen(false);
-                setSelectedTaskId(needYou[0].id);
+                reveal(needYou[0]);
               }}
             >
               <Icon name="flag" />
@@ -723,31 +794,73 @@ export function DeliveryPanel() {
                   Crea una tarea para trabajar un issue en su propio worktree y rama.
                 </p>
               )}
+              {activeRuns.length > 1 && (
+                <label className="delivery-lot-filter">
+                  <span>Lote</span>
+                  <select
+                    value={lot ?? ""}
+                    onChange={(event) => chooseLot(event.target.value || null)}
+                  >
+                    <option value="">Todos los lotes ({tasks.length})</option>
+                    {activeRuns.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {`${batchName(candidate.title || candidate.id)} (${
+                          tasks.filter((task) => task.run_id === candidate.id).length
+                        })`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {groups.map((group) => (
                 <section key={group.group} className="delivery-task-group" aria-label={group.label}>
                   <h2>
-                    {group.label} <span>{group.tasks.length}</span>
+                    {group.group === "attention" ? (
+                      <>
+                        {group.label} <span>{group.tasks.length}</span>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-expanded={!isFolded(group.group)}
+                        onClick={() => toggleGroup(group.group)}
+                      >
+                        <Icon name={isFolded(group.group) ? "right" : "down"} />
+                        {group.label} <span>{group.tasks.length}</span>
+                      </button>
+                    )}
+                    {group.group === "delivered" && (
+                      <ActionButton
+                        className="delivery-task-group__action"
+                        onAction={() => archiveDelivered(group.tasks)}
+                      >
+                        Archivar todas
+                      </ActionButton>
+                    )}
                   </h2>
-                  {group.tasks.map((task) => (
-                    <button
-                      key={task.id}
-                      type="button"
-                      className="delivery-task-row"
-                      aria-current={selectedTask?.id === task.id ? "true" : undefined}
-                      onClick={() => setSelectedTaskId(task.id)}
-                    >
-                      <span className="delivery-task-row__key">
-                        {task.key}
-                        {multiRepo && (
-                          <span className="delivery-task-row__repo" title={task.repo}>
-                            {busStore.displayName(task.repo)}
-                          </span>
-                        )}
-                      </span>
-                      <span className="delivery-task-row__title">{task.title || task.branch}</span>
-                      <StatusLine status={statuses.get(task.id)!} />
-                    </button>
-                  ))}
+                  {!isFolded(group.group) &&
+                    group.tasks.map((task) => (
+                      <button
+                        key={task.id}
+                        type="button"
+                        className="delivery-task-row"
+                        aria-current={selectedTask?.id === task.id ? "true" : undefined}
+                        onClick={() => setSelectedTaskId(task.id)}
+                      >
+                        <span className="delivery-task-row__key">
+                          {task.key}
+                          {multiRepo && (
+                            <span className="delivery-task-row__repo" title={task.repo}>
+                              {busStore.displayName(task.repo)}
+                            </span>
+                          )}
+                        </span>
+                        <span className="delivery-task-row__title">
+                          {task.title || task.branch}
+                        </span>
+                        <StatusLine status={statuses.get(task.id)!} />
+                      </button>
+                    ))}
                 </section>
               ))}
             </nav>
@@ -819,7 +932,7 @@ export function DeliveryPanel() {
                 branch: values.branch.trim(),
                 runId: values.runId,
               });
-              setSelectedTaskId(task.id);
+              reveal(task);
               setDialog(null);
             }}
           />
@@ -900,7 +1013,7 @@ export function DeliveryPanel() {
             onUnarchive={async (taskId) => {
               const task = await unarchiveDeliveryTask(taskId);
               setDialog(null);
-              setSelectedTaskId(task.id);
+              reveal(task);
             }}
           />
         )}

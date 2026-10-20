@@ -204,6 +204,53 @@
   font-weight: 400;
   margin-left: 4px;
 }
+.delivery-panel .delivery-task-group h2 button {
+  gap: 4px;
+  margin-left: -4px;
+  padding: 0 4px 0 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+.delivery-panel .delivery-task-group h2 button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--fg);
+}
+.delivery-task-group h2 {
+  display: flex;
+  align-items: center;
+}
+.delivery-panel .delivery-task-group h2 .delivery-task-group__action {
+  margin: 0 0 0 auto;
+  padding: 0;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--accent-fg);
+}
+.delivery-lot-filter {
+  display: grid;
+  gap: 4px;
+  margin: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+.delivery-panel .delivery-lot-filter select {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  text-overflow: ellipsis;
+}
 .delivery-panel .delivery-task-row {
   display: grid;
   gap: 1px;
