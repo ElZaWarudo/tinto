@@ -849,6 +849,31 @@ describe("DeliveryPanel", () => {
     expect(group).toHaveTextContent("estos commits, en este orden,");
   });
 
+  it("folds a commit's long file list behind its count", async () => {
+    const user = userEvent.setup();
+    const paths = Array.from({ length: 7 }, (_, index) => `proto/gen/File${index}.ts`);
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [
+          commitStep({
+            commits: [
+              { message: "feat(proto): regenerate the bindings", paths },
+              { message: "test(proto): cover them", paths: ["proto/gen.test.ts"] },
+            ],
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    const group = await openStep("Revisar commit", "commit");
+    const long = within(group).getByText("7 archivos").closest("details")!;
+    const short = within(group).getByText("1 archivo").closest("details")!;
+    expect(long).not.toHaveAttribute("open");
+    expect(short).toHaveAttribute("open");
+    await user.click(within(group).getByText("7 archivos"));
+    expect(long).toHaveAttribute("open");
+  });
+
   it("prepares a plan of several commits without imposing a message", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(overview());

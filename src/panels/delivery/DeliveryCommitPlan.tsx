@@ -11,6 +11,13 @@ import { ActionButton } from "./ActionButton";
 /** Where a changed file goes: a commit's position, or this to stay uncommitted. */
 const LEFT_OUT = -1;
 
+/** A list of files longer than this starts folded, its count in sight. */
+const FILES_SHOWN = 5;
+
+function fileCount(count: number): string {
+  return count === 1 ? "1 archivo" : `${count} archivos`;
+}
+
 /** The plan of a commit approval, exactly as Tinto will run it. */
 export function CommitPlanView({ approval }: { approval: DeliveryApproval }) {
   const commits = approval.commits ?? [];
@@ -29,21 +36,27 @@ export function CommitPlanView({ approval }: { approval: DeliveryApproval }) {
       {commits.map((commit, index) => (
         <li key={index}>
           <pre className="delivery-banner__text">{commit.message}</pre>
-          <ul aria-label={`Archivos del commit ${index + 1}`}>
-            {commit.paths.map((path) => (
-              <li key={path}>
-                <code>{path}</code>
-              </li>
-            ))}
-          </ul>
+          <details
+            className="delivery-commit-plan__files"
+            open={commit.paths.length <= FILES_SHOWN}
+          >
+            <summary>{fileCount(commit.paths.length)}</summary>
+            <ul aria-label={`Archivos del commit ${index + 1}`}>
+              {commit.paths.map((path) => (
+                <li key={path}>
+                  <code>{path}</code>
+                </li>
+              ))}
+            </ul>
+          </details>
         </li>
       ))}
       <li className="delivery-commit-plan__rest">
         {leftOut.length === 0 ? (
           <span className="delivery-muted">No queda ningún cambio sin incluir.</span>
         ) : (
-          <>
-            <span>Quedan sin incluir, a propósito:</span>
+          <details className="delivery-commit-plan__files" open={leftOut.length <= FILES_SHOWN}>
+            <summary>Quedan sin incluir, a propósito: {fileCount(leftOut.length)}</summary>
             <ul aria-label="Archivos que quedan fuera">
               {leftOut.map((path) => (
                 <li key={path}>
@@ -51,7 +64,7 @@ export function CommitPlanView({ approval }: { approval: DeliveryApproval }) {
                 </li>
               ))}
             </ul>
-          </>
+          </details>
         )}
       </li>
     </ol>
