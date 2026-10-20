@@ -99,22 +99,7 @@ function navigateFile(api: DockviewApi, direction: 1 | -1): void {
 /** Close the active file in the active project. */
 function closeActiveFile(api: DockviewApi): void {
   const repo = getActiveRepo(api);
-  if (!repo) return;
-
-  const state = fileDock.getState(repo);
-  if (!state.active) return;
-
-  // The file panel ID is file:<path>
-  const panelId = `file:${state.active}`;
-  const entry = (
-    fileDock as unknown as { entries: Map<string, { api: DockviewApi | null }> }
-  ).entries.get(repo);
-  if (entry?.api) {
-    const panel = entry.api.getPanel(panelId);
-    if (panel) {
-      panel.api.close();
-    }
-  }
+  if (repo) fileDock.closeActive(repo);
 }
 
 /** Close the active project tab. */

@@ -254,6 +254,12 @@ class FileDock {
     e.preview = path;
     this.recompute(repo);
   }
+
+  /** Close the repo's active file, whether pinned or the preview. */
+  closeActive(repo: string) {
+    const panel = this.entries.get(repo)?.api?.activePanel;
+    if (panel && this.pathOf(panel)) panel.api.close();
+  }
 }
 
 export const fileDock = new FileDock();

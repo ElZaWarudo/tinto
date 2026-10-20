@@ -195,6 +195,21 @@ describe("shortcuts", () => {
       cleanup();
     });
 
+    it("closes the project's active file on Ctrl+W", () => {
+      const repo = "/r";
+      const apiRef = {
+        current: { activePanel: { params: { repo } }, panels: [] } as unknown as DockviewApi,
+      };
+      const closeActive = vi.spyOn(fileDock, "closeActive").mockImplementation(() => {});
+      const cleanup = installShortcuts(apiRef, mockActions);
+
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true }));
+
+      expect(closeActive).toHaveBeenCalledWith(repo);
+      vi.restoreAllMocks();
+      cleanup();
+    });
+
     it("calls file undo and redo on Ctrl+Z and Ctrl+Shift+Z", async () => {
       const undoSpy = vi.spyOn(deleteUndoManager, "undo").mockResolvedValue(null);
       const redoSpy = vi.spyOn(deleteUndoManager, "redo").mockResolvedValue(null);

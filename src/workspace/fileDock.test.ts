@@ -97,6 +97,18 @@ describe("fileDock", () => {
     expect(fileDock.getState(REPO).open).toContain("a.ts");
   });
 
+  it("closes the active file, the preview as well as a pinned one", () => {
+    const api = makeFakeApi();
+    fileDock.register(REPO, api as never);
+    fileDock.openFile(REPO, "a.ts", true);
+    fileDock.openFile(REPO, "b.ts", false); // the preview, active
+    fileDock.closeActive(REPO);
+    expect(api.getPanel(FILE_PREVIEW_ID)).toBeFalsy();
+    expect(fileDock.getState(REPO).open).toEqual(["a.ts"]);
+    fileDock.closeActive(REPO);
+    expect(fileDock.getState(REPO).open).toEqual([]);
+  });
+
   it("focuses an already-open pinned file instead of duplicating it", () => {
     const api = makeFakeApi();
     fileDock.register(REPO, api as never);
