@@ -6,6 +6,7 @@
 //! stdio MCP server ([`PROXY_FLAG`]) that forwards each message to it.
 
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
@@ -15,6 +16,16 @@ use super::model::DeliveryCoordinatorEndpoint;
 pub const SERVER_NAME: &str = "tinto-delivery";
 /// `tinto.exe --delivery-mcp-proxy <url> <token>` serves MCP on stdio.
 pub const PROXY_FLAG: &str = "--delivery-mcp-proxy";
+/// The proxy runs from its own copy of the executable, under this name and
+/// outside the install folder: installing Tinto closes every `tinto.exe`
+/// and would cut the coordinators' Delivery tools mid-call.
+const PROXY_EXE: &str = if cfg!(windows) {
+    "tinto-delivery-proxy.exe"
+} else {
+    "tinto-delivery-proxy"
+};
+/// The setting with the app's own executable, which the proxy opens.
+pub(super) const APP_EXE_SETTING: &str = "app_exe";
 
 static ENDPOINT: Mutex<Option<DeliveryCoordinatorEndpoint>> = Mutex::new(None);
 
@@ -71,7 +82,10 @@ fn server(wsl: bool) -> Option<Server> {
             session,
         });
     }
-    let exe = std::env::current_exe().ok()?;
+    let exe = match endpoint.command {
+        Some(command) => PathBuf::from(command),
+        None => std::env::current_exe().ok()?,
+    };
     let command = crate::wsl_agent::launcher::windows_path_to_wsl_mount(&exe).ok()?;
     let mut args = vec![PROXY_FLAG.to_string(), endpoint.url, endpoint.token];
     args.extend(session);
@@ -207,6 +221,39 @@ fn codex_args_for(server: &Server) -> Vec<String> {
         .collect()
 }
 
+/// Puts this executable at the proxy's path in `dir` when it is not there
+/// or is another version, and returns that path. A copy still running for
+/// some agent cannot be replaced but can be renamed: it moves aside, and is
+/// deleted on a later start, once nothing runs it.
+pub fn install_proxy(dir: &Path) -> std::io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin)?;
+    for entry in std::fs::read_dir(&bin)?.flatten() {
+        if entry.file_name().to_string_lossy().starts_with("old-") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let target = bin.join(PROXY_EXE);
+    if std::fs::read(&target).ok() == Some(std::fs::read(&exe)?) {
+        return Ok(target);
+    }
+    if target.exists() && std::fs::remove_file(&target).is_err() {
+        let aside = bin.join(format!("old-{}-{PROXY_EXE}", super::now_ms()));
+        std::fs::rename(&target, aside)?;
+    }
+    std::fs::copy(&exe, &target)?;
+    Ok(target)
+}
+
+/// The app the proxy opens when Tinto is closed: the one that last started
+/// the server, since the proxy itself runs from a copy.
+fn app_exe() -> Option<PathBuf> {
+    let store = super::store::DeliveryStore::open_default().ok()?;
+    let exe = store.setting::<String>(APP_EXE_SETTING).ok()??;
+    Some(PathBuf::from(exe)).filter(|exe| exe.is_file())
+}
+
 /// Where the proxy sends messages: the server's URL and its token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Target {
@@ -311,7 +358,7 @@ pub fn proxy_stdio(given: Option<(&str, &str)>, session: Option<&str>) -> i32 {
 /// Starts this same executable as the Tinto app, detached from the agent
 /// that runs the proxy, so closing the agent does not close Tinto.
 fn open_tinto() -> bool {
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) = app_exe().or_else(|| std::env::current_exe().ok()) else {
         return false;
     };
     let mut command = std::process::Command::new(exe);
@@ -386,6 +433,21 @@ fn proxy_error(request: &str, reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_proxy_runs_from_its_own_copy_kept_at_this_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        let copy = install_proxy(dir.path()).unwrap();
+        assert_eq!(copy, dir.path().join("bin").join(PROXY_EXE));
+        assert!(std::fs::read(&copy).unwrap() == exe);
+        // Another version is replaced; leftovers set aside earlier go.
+        std::fs::write(&copy, b"older").unwrap();
+        std::fs::write(dir.path().join("bin").join("old-1-proxy"), b"x").unwrap();
+        assert_eq!(install_proxy(dir.path()).unwrap(), copy);
+        assert!(std::fs::read(&copy).unwrap() == exe);
+        assert!(!dir.path().join("bin").join("old-1-proxy").exists());
+    }
 
     fn http() -> Server {
         Server::Http {

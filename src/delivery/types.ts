@@ -403,7 +403,8 @@ export interface DeliveryStageAgent {
 export interface DeliveryCoordinatorEndpoint {
   url: string;
   token: string;
-  /** tinto.exe, for agents outside Tinto to run as a stdio MCP server that opens Tinto. */
+  /** Tinto's MCP proxy, a copy of tinto.exe that updates leave running, for agents
+   *  outside Tinto to run as a stdio MCP server that opens Tinto. */
   command?: string | null;
 }
 

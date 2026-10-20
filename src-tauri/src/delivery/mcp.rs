@@ -49,13 +49,27 @@ pub fn start(service: DeliveryService) -> Result<DeliveryCoordinatorEndpoint, De
         .or_else(|_| TcpListener::bind(("127.0.0.1", 0)))
         .map_err(DeliveryError::io)?;
     let port = listener.local_addr().map_err(DeliveryError::io)?.port();
-    service.store()?.set_setting("mcp_port", &port)?;
+    let app = std::env::current_exe().ok();
+    {
+        let store = service.store()?;
+        store.set_setting("mcp_port", &port)?;
+        if let Some(app) = &app {
+            store.set_setting(
+                super::wiring::APP_EXE_SETTING,
+                &super::tasks::plain_path(app),
+            )?;
+        }
+    }
+    // Coordinators run the proxy from its own copy, which survives updates.
+    let proxy = crate::runtime_paths::tinto_config_dir()
+        .ok_or_else(|| std::io::Error::other("config directory unavailable"))
+        .and_then(|dir| super::wiring::install_proxy(&dir))
+        .map_err(|error| eprintln!("tinto: delivery could not copy its MCP proxy: {error}"))
+        .ok();
     let endpoint = DeliveryCoordinatorEndpoint {
         url: format!("http://127.0.0.1:{port}/mcp"),
         token: token.clone(),
-        command: std::env::current_exe()
-            .ok()
-            .map(|exe| super::tasks::plain_path(&exe)),
+        command: proxy.or(app).map(|exe| super::tasks::plain_path(&exe)),
     };
     if let Ok(mut slot) = service.inner.coordinator.lock() {
         *slot = Some(endpoint.clone());
