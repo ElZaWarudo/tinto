@@ -931,8 +931,9 @@ function TaskDetail({
   );
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
-  // What opens on top of the task: its pending decisions or QA's problems.
-  const [float, setFloat] = useState<"decisions" | "qa" | null>(null);
+  // What opens on top of the task: its pending decisions, QA's problems or an open step.
+  const [float, setFloat] = useState<"decisions" | "qa" | `approval:${string}` | null>(null);
+  const floating = openApprovals.find((approval) => float === `approval:${approval.id}`);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
   const openChanges = async () => {
@@ -1249,8 +1250,21 @@ function TaskDetail({
       <PendingSettingsProposals proposals={pendingSettingsProposals(overview, task)} />
 
       {openApprovals.map((approval) => (
-        <ApprovalBanner key={approval.id} task={task} approval={approval} pr={pr} />
+        <ApprovalBar
+          key={approval.id}
+          approval={approval}
+          onOpen={() => setFloat(`approval:${approval.id}`)}
+        />
       ))}
+      {floating && (
+        <TaskFloat
+          label={`Paso ${lower(stepOf(floating).label)}`}
+          closeLabel="Cerrar el paso"
+          onClose={() => setFloat(null)}
+        >
+          <ApprovalBanner task={task} approval={floating} pr={pr} />
+        </TaskFloat>
+      )}
 
       {rejected && openApprovals.length === 0 && (
         <RejectedStep task={task} approval={rejected} pr={pr} />
@@ -1951,6 +1965,33 @@ function RejectedStep({
           </div>
         </ActionGroup>
       )}
+    </div>
+  );
+}
+
+/** An open step as one line in the task; its text and buttons open on top. */
+function ApprovalBar({ approval, onOpen }: { approval: DeliveryApproval; onOpen: () => void }) {
+  const name = lower(stepOf(approval).label);
+  const pending = approval.status === "pending";
+  const commits = approval.commits ?? [];
+  const summary =
+    commits.length > 0
+      ? `${commits.length === 1 ? "1 commit" : `${commits.length} commits`} · ${files(commits.reduce((sum, commit) => sum + commit.paths.length, 0))}`
+      : approval.title;
+  return (
+    <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
+      <span className="delivery-pending-bar__text">
+        <strong>{pending ? `Aprobar ${name}` : `Esperando al coordinador: ${name}`}</strong>{" "}
+        <span className="delivery-muted">· {summary}</span>
+      </span>
+      <button
+        type="button"
+        className={pending ? "delivery-button--primary" : undefined}
+        aria-label={`${pending ? "Revisar" : "Ver"} ${name}`}
+        onClick={onOpen}
+      >
+        {pending ? "Revisar" : "Ver"}
+      </button>
     </div>
   );
 }

@@ -454,6 +454,18 @@
   border: 1px solid var(--warn);
   background: rgba(204, 167, 0, 0.08);
 }
+/* An open step (commit, push, PR…): the same line, its text and buttons on top. */
+.delivery-pending-bar--step {
+  border-color: var(--step);
+  background: color-mix(in srgb, var(--step) 7%, transparent);
+}
+.delivery-pending-bar__text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .delivery-float {
   position: fixed;
   top: 72px;

@@ -192,6 +192,12 @@ const actions: WorkspaceActions = {
   openAgentTerminal: vi.fn(),
 };
 
+/** An open step is one line in the task; its approval opens on top. */
+async function openStep(button: string, rung: string) {
+  await userEvent.click(await screen.findByRole("button", { name: button }));
+  return screen.getByRole("group", { name: `Aprobación ${rung}` });
+}
+
 function renderPanel() {
   return render(
     <WorkspaceActionsContext.Provider value={actions}>
@@ -790,7 +796,7 @@ describe("DeliveryPanel", () => {
     );
     client.decideDeliveryApproval.mockResolvedValue({ ...approval, status: "executed" });
     renderPanel();
-    const group = await screen.findByRole("group", { name: "Aprobación commit" });
+    const group = await openStep("Revisar commit", "commit");
     expect(within(group).getByText(/Parser now rejects empty input\./)).toBeInTheDocument();
     expect(within(group).getByText(/preparado por/)).toHaveTextContent("el coordinador coord");
     expect(within(group).getByText(/No publica nada/)).toBeInTheDocument();
@@ -826,7 +832,10 @@ describe("DeliveryPanel", () => {
   it("shows the whole commit plan and who prepared it", async () => {
     client.getDeliveryOverview.mockResolvedValue(overview({ approvals: [commitStep({})] }));
     renderPanel();
-    const group = await screen.findByRole("group", { name: "Aprobación commit" });
+    // The task shows one line; the plan opens on top.
+    expect(await screen.findByText("· 2 commits · 2 archivos")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Aprobación commit" })).not.toBeInTheDocument();
+    const group = await openStep("Revisar commit", "commit");
     expect(group).toHaveTextContent("preparado desde la interfaz de Tinto");
     const plan = within(group).getByRole("list", { name: "Plan de commits" });
     expect(plan).toHaveTextContent("feat(cli): add a");
@@ -1772,7 +1781,7 @@ describe("DeliveryPanel", () => {
     );
     client.completeDeliveryApproval.mockResolvedValue({});
     renderPanel();
-    const banner = await screen.findByRole("group", { name: "Aprobación pr" });
+    const banner = await openStep("Ver PR", "pr");
     expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
     const done = within(banner).getByRole("button", { name: "Marcar como hecho" });
     const outcome = within(banner).getByRole("textbox", { name: "Resultado del paso" });
@@ -1825,7 +1834,10 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const banner = await screen.findByRole("group", { name: "Aprobación pr" });
+    // Nothing opens by itself: the step is one line in the task.
+    await screen.findByRole("button", { name: "Ver PR" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const banner = await openStep("Ver PR", "pr");
     expect(within(banner).getByText("Esperando al coordinador: PR")).toBeInTheDocument();
     expect(within(banner).getByText(/Tinto no pudo abrir el PR/)).toBeInTheDocument();
     // Recording it by hand is a correction tucked away, not a prompt.
@@ -1834,7 +1846,6 @@ describe("DeliveryPanel", () => {
         .getByText("Lo hice fuera de Tinto: registrar el paso hecho")
         .closest("details"),
     ).not.toHaveAttribute("open");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     // Tinto can open it itself, with the approved text.
     await userEvent
       .setup()
@@ -1931,7 +1942,7 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const banner = await screen.findByRole("group", { name: "Aprobación push" });
+    const banner = await openStep("Revisar push", "push");
     expect(
       within(banner).getByText(/Rechazar no deshace los commits: siguen en .*, sin publicar\./),
     ).toBeInTheDocument();
@@ -1961,7 +1972,7 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const banner = await screen.findByRole("group", { name: "Aprobación commit" });
+    const banner = await openStep("Revisar commit", "commit");
     expect(
       within(banner).getByText("Un solo commit porque: the test only compiles with the change"),
     ).toBeInTheDocument();
@@ -2136,7 +2147,7 @@ describe("DeliveryPanel", () => {
     );
     client.decideDeliveryApproval.mockResolvedValue({});
     renderPanel();
-    const banner = await screen.findByRole("group", { name: "Aprobación jira" });
+    const banner = await openStep("Revisar Jira (PR)", "jira");
     // Approving asks for nothing: the coordinator does the step and reports it.
     expect(within(banner).queryByRole("textbox")).not.toBeInTheDocument();
     const approve = within(banner).getByRole("button", { name: "Aprobar" });
@@ -2407,7 +2418,7 @@ describe("DeliveryPanel", () => {
     client.getDeliveryPrReviewers.mockResolvedValueOnce(["ana", "luis"]);
     client.decideDeliveryApproval.mockResolvedValue({});
     renderPanel();
-    const banner = await screen.findByRole("group", { name: "Aprobación pr" });
+    const banner = await openStep("Revisar PR", "pr");
     const reviewers = within(banner).getByRole("group", { name: "Revisores" });
     const approve = within(banner).getByRole("button", { name: "Aprobar y abrir el PR" });
     await within(reviewers).findByRole("checkbox", { name: "ana" });
