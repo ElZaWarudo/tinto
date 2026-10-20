@@ -5,7 +5,7 @@
 
 import { useEffect, useRef } from "react";
 import { getDeliveryOverview, onDeliveryChanged } from "../../delivery/client";
-import type { DeliveryOverview } from "../../delivery/types";
+import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
 import { tauriNotificationAdapter, type NotificationAdapter } from "../../qol/notifications";
 import { useQualityState } from "../../qol/state";
 import { taskStatus } from "./taskStatus";
@@ -17,8 +17,39 @@ export interface DeliveryNeed {
   body: string;
 }
 
-/** The tasks that need the user, each with what it needs. */
+/** How long a coordinator may leave changes unread before Tinto says so:
+ *  long enough for one that is busy between two waits. */
+export const COORDINATOR_STALL_MS = 3 * 60_000;
+
+export interface CoordinatorStall {
+  run: DeliveryRun;
+  unread: number;
+  since: number;
+}
+
+/** Batches whose coordinator stopped waiting with changes it has not read:
+ *  nothing moves until someone tells it to go on. */
+export function coordinatorStalls(overview: DeliveryOverview, now: number): CoordinatorStall[] {
+  return (overview.coordinators ?? []).flatMap((state) => {
+    const run = overview.runs.find((candidate) => candidate.id === state.run_id);
+    const since = state.unread_since_ms;
+    if (!run || run.paused || state.waiting || state.unread === 0 || since === null) return [];
+    return now - since >= COORDINATOR_STALL_MS ? [{ run, unread: state.unread, since }] : [];
+  });
+}
+
+/** The tasks that need the user, each with what it needs, and the batches
+ *  whose coordinator stopped. */
 export function deliveryNeeds(overview: DeliveryOverview, now: number): DeliveryNeed[] {
+  const stalls = coordinatorStalls(overview, now).map(({ run, unread, since }) => ({
+    keys: [`${run.id}:coordinator:${since}`],
+    title: `Tinto: ${run.title || run.id}`,
+    body: `El coordinador no está esperando y tiene ${unread === 1 ? "1 cambio" : `${unread} cambios`} sin leer`,
+  }));
+  return [...stalls, ...taskNeeds(overview, now)];
+}
+
+function taskNeeds(overview: DeliveryOverview, now: number): DeliveryNeed[] {
   return overview.tasks.flatMap((task) => {
     const status = taskStatus(task, overview, now);
     if (status.group !== "attention") return [];
@@ -73,6 +104,8 @@ export function DeliveryNotificationWatcher({
         () => {},
       );
     void check();
+    // A coordinator stalls by time passing, with no change to announce it.
+    const clock = setInterval(() => void check(), 60_000);
     void onDeliveryChanged(() => {
       if (pending) return;
       // At most once a second: running agents change things all the time.
@@ -86,6 +119,7 @@ export function DeliveryNotificationWatcher({
     });
     return () => {
       active = false;
+      clearInterval(clock);
       unlisten?.();
       if (pending) clearTimeout(pending);
     };

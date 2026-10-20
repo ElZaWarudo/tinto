@@ -43,7 +43,6 @@ export function QaProblems({
   const [reason, setReason] = useState("");
   const [report, setReport] = useState("");
   const [reportPlace, setReportPlace] = useState("");
-  if (problems.length === 0) return null;
   const shown = showAll ? problems : problems.filter(current);
   const choiceOf = (problem: DeliveryQaProblem): Choice =>
     choices[problem.id] ?? {
@@ -85,6 +84,11 @@ export function QaProblems({
         </div>
       </header>
 
+      {shown.length === 0 && (
+        <p className="delivery-muted">
+          {problems.length === 0 ? "La QA no encontró problemas." : "Nada pendiente."}
+        </p>
+      )}
       {shown.map((problem) => {
         const open = problem.status === "open";
         const choice = choiceOf(problem);

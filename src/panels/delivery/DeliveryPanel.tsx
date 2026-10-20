@@ -73,11 +73,13 @@ import {
   NewTaskDialog,
   ReleaseLeaseDialog,
   SettingsDialog,
+  StageAgentRow,
   type CorrectableStep,
   type RepoChoice,
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { QaProblems } from "./DeliveryQaProblems";
+import { coordinatorStalls } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
@@ -441,6 +443,7 @@ export function DeliveryPanel() {
   const qa = overview?.leases.find((lease) => lease.name === "qa");
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
   const activeRuns = (overview?.runs ?? []).filter((candidate) => candidate.status === "active");
+  const stalls = overview ? coordinatorStalls(overview, now) : [];
 
   // For what is not a button (a select, a menu item): its error goes to the
   // panel's banner. Buttons are ActionButtons and say it themselves.
@@ -636,6 +639,20 @@ export function DeliveryPanel() {
             </button>
           </div>
         )}
+
+        {/* A coordinator Tinto could not wake: nothing moves until it goes on. */}
+        {stalls.map(({ run, unread, since }) => (
+          <div key={run.id} className="delivery-panel__warning" role="status">
+            <span>
+              {batchName(run.title || run.id)}: el coordinador
+              {run.owner && run.owner !== "user" ? ` (${run.owner})` : ""} no está esperando y tiene{" "}
+              {unread === 1 ? "1 cambio" : `${unread} cambios`} sin leer desde las{" "}
+              {new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
+              Pídele que siga con wait_run; si sus herramientas de Delivery fallan, que las
+              reconecte.
+            </span>
+          </div>
+        ))}
 
         {/* Only when it holds work back; otherwise the header and the task say it. */}
         {qa?.state === "quarantined" && qa.queue.length > 0 && (
@@ -914,18 +931,8 @@ function TaskDetail({
   );
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
-  const [decisionsOpen, setDecisionsOpen] = useState(false);
-  const decisionsPanel = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!decisionsOpen) return;
-    // Once, when it opens: later refreshes must not take focus from a card.
-    decisionsPanel.current?.focus();
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDecisionsOpen(false);
-    };
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, [decisionsOpen]);
+  // What opens on top of the task: its pending decisions or QA's problems.
+  const [float, setFloat] = useState<"decisions" | "qa" | null>(null);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
   const openChanges = async () => {
@@ -1077,23 +1084,37 @@ function TaskDetail({
                 Abrir PR #{pr.number} en GitHub ↗
               </ExternalLink>
             )}
-            {qaRecord?.visual_record && (
-              <ActionButton
-                className="delivery-task__record"
-                aria-label={
-                  qaProblemsToDecide > 0
-                    ? `Abrir registro visual de QA, ${qaProblemsToDecide} ${qaProblemsToDecide === 1 ? "problema" : "problemas"} por decidir`
-                    : "Abrir registro visual de QA"
-                }
-                title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
-                onAction={() => openDeliveryVisualRecord(qaRecord.id)}
-              >
-                Registro visual QA
-                {qaProblemsToDecide > 0 && (
-                  <span className="delivery-task__record-count">{qaProblemsToDecide} !</span>
-                )}{" "}
-                ↗
-              </ActionButton>
+            {(qaRecord?.visual_record || qaProblems.length > 0) && (
+              // The QA's record and its problems, as one split pill.
+              <span className="delivery-task__qa">
+                {qaRecord?.visual_record && (
+                  <ActionButton
+                    className="delivery-task__record"
+                    aria-label="Abrir registro visual de QA"
+                    title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
+                    onAction={() => openDeliveryVisualRecord(qaRecord.id)}
+                  >
+                    Registro visual QA ↗
+                  </ActionButton>
+                )}
+                <button
+                  type="button"
+                  className="delivery-task__record delivery-task__record--problems"
+                  aria-expanded={float === "qa"}
+                  aria-label={
+                    qaProblemsToDecide > 0
+                      ? `Problemas de la QA, ${qaProblemsToDecide} por decidir`
+                      : "Problemas de la QA"
+                  }
+                  onClick={() => setFloat(float === "qa" ? null : "qa")}
+                >
+                  Problemas
+                  {qaProblemsToDecide > 0 && (
+                    <span className="delivery-task__record-count">{qaProblemsToDecide} !</span>
+                  )}{" "}
+                  ▾
+                </button>
+              </span>
             )}
           </h2>
           <p className="delivery-task__meta">
@@ -1200,30 +1221,29 @@ function TaskDetail({
           <button
             type="button"
             className="delivery-button--primary"
-            onClick={() => setDecisionsOpen(true)}
+            onClick={() => setFloat("decisions")}
           >
             Responder
           </button>
         </div>
       )}
-      {blocked && decisionsOpen && (
-        <div
-          className="delivery-float"
-          role="dialog"
-          aria-label="Responder decisiones"
-          tabIndex={-1}
-          ref={decisionsPanel}
+      {blocked && float === "decisions" && (
+        <TaskFloat
+          label="Responder decisiones"
+          closeLabel="Cerrar decisiones"
+          onClose={() => setFloat(null)}
         >
-          <button
-            type="button"
-            className="delivery-float__close"
-            aria-label="Cerrar decisiones"
-            onClick={() => setDecisionsOpen(false)}
-          >
-            ×
-          </button>
           <PendingDecisions taskId={task.id} decisions={pendingDecisions} />
-        </div>
+        </TaskFloat>
+      )}
+      {float === "qa" && (
+        <TaskFloat
+          label="Problemas de la QA"
+          closeLabel="Cerrar problemas de la QA"
+          onClose={() => setFloat(null)}
+        >
+          <QaProblems taskId={task.id} problems={qaProblems} />
+        </TaskFloat>
       )}
 
       <PendingSettingsProposals proposals={pendingSettingsProposals(overview, task)} />
@@ -1276,8 +1296,6 @@ function TaskDetail({
         </div>
       )}
 
-      <QaProblems taskId={task.id} problems={qaProblems} />
-
       {qaRecord?.visual_record_error && !qaRecord.visual_record && (
         <div
           className="delivery-banner delivery-banner--danger"
@@ -1292,7 +1310,14 @@ function TaskDetail({
         </div>
       )}
 
-      <StageTrack jobs={jobs} approvals={approvals} pr={pr} next={next} onFocus={focusStage} />
+      <StageTrack
+        repo={task.repo}
+        jobs={jobs}
+        approvals={approvals}
+        pr={pr}
+        next={next}
+        onFocus={focusStage}
+      />
 
       <div className="delivery-actions">
         {next && !broken && (
@@ -1445,13 +1470,66 @@ function brokenVerb(job: DeliveryJob): string {
   return "está bloqueada";
 }
 
+/** Who runs a stage from now on in the task's repo: the same setting as
+ *  Ajustes › Agente de cada etapa, saved as soon as it changes. */
+function StageAgentEditor({ repo, role }: { repo: string; role: string }) {
+  const [settings, setSettings] = useState<DeliveryRepoSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const stage = role.toLowerCase();
+  useEffect(() => {
+    let live = true;
+    getDeliveryRepoSettings(repo).then(
+      (loaded) => live && setSettings(loaded),
+      (cause) => live && setError(errorText(cause)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [repo]);
+  const save = async (next: DeliveryStageAgent | null) => {
+    setError(null);
+    try {
+      // The latest settings, so nothing changed elsewhere is lost.
+      const current = await getDeliveryRepoSettings(repo);
+      const stages = { ...current.stages };
+      if (next) stages[stage] = next;
+      else delete stages[stage];
+      await setDeliveryRepoSettings(repo, { ...current, stages });
+      setSettings({ ...current, stages });
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  };
+  return (
+    <div className="delivery-stage-agent">
+      <p className="delivery-muted">
+        Para los próximos lanzamientos de {lower(stageLabel(role))} en este repositorio, tuyos o del
+        coordinador. Lo que ya corre no cambia.
+      </p>
+      {settings ? (
+        <StageAgentRow
+          label={stageLabel(role)}
+          value={settings.stages?.[stage]}
+          onChange={(next) => void save(next)}
+        />
+      ) : (
+        !error && <p className="delivery-muted">Leyendo los ajustes…</p>
+      )}
+      {error && <p className="delivery-tone--danger">{error}</p>}
+    </div>
+  );
+}
+
 function StageTrack({
+  repo,
   jobs,
   approvals,
   pr,
   next,
   onFocus,
 }: {
+  /** The task's repo, whose settings say who runs each stage. */
+  repo: string;
   jobs: DeliveryJob[];
   approvals: DeliveryApproval[];
   /** The PR step shows the followed PR's live state once it exists. */
@@ -1500,6 +1578,12 @@ function StageTrack({
                 ) : (
                   <div>{content}</div>
                 )}
+                <Menu
+                  label={`Agente, modelo y razonamiento de ${stageLabel(role)}`}
+                  trigger={<Icon name="down" />}
+                >
+                  {() => <StageAgentEditor repo={repo} role={role} />}
+                </Menu>
               </li>
             );
           })}
@@ -1637,6 +1721,45 @@ function StepChecks({
           {action && <ActionButton onAction={action.run}>{action.label}</ActionButton>}
         </p>
       ))}
+    </div>
+  );
+}
+
+/** A panel on top of the task, opened by the user: it takes the focus once
+ *  (later refreshes must not take it from a card) and closes on Escape. */
+function TaskFloat({
+  label,
+  closeLabel,
+  onClose,
+  children,
+}: {
+  label: string;
+  closeLabel: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panel.current?.focus();
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+    // Once, when it opens; onClose only closes it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <div className="delivery-float" role="dialog" aria-label={label} tabIndex={-1} ref={panel}>
+      <button
+        type="button"
+        className="delivery-float__close"
+        aria-label={closeLabel}
+        onClick={onClose}
+      >
+        ×
+      </button>
+      {children}
     </div>
   );
 }

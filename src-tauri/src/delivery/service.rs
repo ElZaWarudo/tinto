@@ -286,6 +286,7 @@ impl DeliveryService {
         if let Err(error) = self.reconcile_commits() {
             eprintln!("tinto: delivery could not check the commit steps: {error}");
         }
+        let coordinators = self.coordinator_states()?;
         let store = self.store()?;
         let tasks = store.tasks()?;
         let live: HashSet<&str> = tasks.iter().map(|task| task.id.as_str()).collect();
@@ -353,6 +354,7 @@ impl DeliveryService {
                 .lock()
                 .ok()
                 .and_then(|slot| slot.clone()),
+            coordinators,
             tasks,
         })
     }

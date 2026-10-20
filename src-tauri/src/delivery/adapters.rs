@@ -404,6 +404,7 @@ pub struct SandboxPlan {
 }
 
 /// Chooses the sandbox from the programs that failed to start in each one.
+#[cfg(any(windows, test))]
 fn sandbox_plan_from(configured: &[String], unelevated: &[String]) -> SandboxPlan {
     if configured.is_empty() {
         return SandboxPlan::default();
@@ -2343,8 +2344,7 @@ pub(crate) mod tests {
     #[test]
     fn the_platform_of_a_claude_job_can_be_forced() {
         let task = windows_task();
-        let dir = tempfile::tempdir().unwrap();
-        let paths = JobPaths::in_dir(dir.path().join("j1"));
+        let paths = JobPaths::in_dir(PathBuf::from(r"C:\cfg\jobs\j1"));
         let mut job = qa_job_with_permissions();
         // Not installed on Windows: never a quiet move to WSL (dispatch
         // gives the job to Codex instead).

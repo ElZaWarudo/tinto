@@ -82,6 +82,37 @@ describe("Delivery notifications", () => {
     ]);
   });
 
+  it("says when a batch's coordinator stopped waiting with changes it has not read", () => {
+    const now = 10 * 60_000;
+    const run = {
+      id: "run-1",
+      repo: "C:\\work\\agentos",
+      title: "Backlog",
+      status: "active",
+      generation: 1,
+      owner: "claude-coord-1",
+      created_at_ms: 1,
+      updated_at_ms: 1,
+    };
+    const state = { run_id: "run-1", waiting: false, unread: 1, unread_since_ms: now - 4 * 60_000 };
+    const with_ = (over: object, paused = false): DeliveryOverview => ({
+      ...overview([]),
+      runs: [{ ...run, paused }],
+      coordinators: [{ ...state, ...over }],
+    });
+    expect(deliveryNeeds(with_({}), now)).toEqual([
+      {
+        keys: [`run-1:coordinator:${now - 4 * 60_000}`],
+        title: "Tinto: Backlog",
+        body: "El coordinador no está esperando y tiene 1 cambio sin leer",
+      },
+    ]);
+    // Inside wait_run, busy only for a moment, or in a batch the user paused.
+    expect(deliveryNeeds(with_({ waiting: true }), now)).toEqual([]);
+    expect(deliveryNeeds(with_({ unread_since_ms: now - 60_000 }), now)).toEqual([]);
+    expect(deliveryNeeds(with_({}, true), now)).toEqual([]);
+  });
+
   it("notifies once per new need, and only when notifications are on", async () => {
     let changed = () => {};
     client.onDeliveryChanged.mockImplementation((callback: () => void) => {

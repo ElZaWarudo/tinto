@@ -304,8 +304,13 @@ impl DeliveryService {
                 .filter(|job| job.task_id == task.id && job.role == QA_ROLE)
                 .max_by_key(|job| job.created_at_ms);
             let Some(job) = latest else { continue };
-            let Some(page) = &job.visual_record else { continue };
-            if problems.iter().any(|problem| problem.job_id.as_deref() == Some(job.id.as_str())) {
+            let Some(page) = &job.visual_record else {
+                continue;
+            };
+            if problems
+                .iter()
+                .any(|problem| problem.job_id.as_deref() == Some(job.id.as_str()))
+            {
                 continue;
             }
             if let Ok(text) = std::fs::read_to_string(Path::new(page).with_extension("md")) {

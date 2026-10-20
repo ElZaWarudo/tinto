@@ -773,7 +773,7 @@ export function CorrectResultDialog({
 }
 
 /** One stage's agent in Ajustes: not fixed, or an agent with its model and reasoning. */
-function StageAgentRow({
+export function StageAgentRow({
   label,
   value,
   onChange,
@@ -1178,7 +1178,8 @@ export function SettingsDialog({
   const [jiraComment, setJiraComment] = useState(false);
   // The token is a credential: the dialog shows it masked and only the copy
   // buttons carry it.
-  // Through tinto.exe as a stdio server, which finds Tinto's server
+  // Through Tinto's proxy as a stdio server, which updates leave running,
+  // finds Tinto's server
   // wherever it listens (its port can change between launches) and opens
   // Tinto when it is closed; over HTTP only when the executable is unknown.
   const command = endpoint?.command;
@@ -1330,9 +1331,10 @@ export function SettingsDialog({
           <p className="file-op-modal__body">
             Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
             herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
-            fuera de Tinto: arrancan tinto.exe como servidor MCP, que abre Tinto si está cerrado y
-            lo encuentra aunque cambie de puerto. No hace falta abrirlo de otra forma ni
-            configurarlo de nuevo.
+            fuera de Tinto: arrancan el proxy de Tinto como servidor MCP, que sigue en marcha cuando
+            Tinto se actualiza, abre Tinto si está cerrado y lo encuentra aunque cambie de puerto.
+            Si lo añadiste antes con tinto.exe, vuelve a añadirlo con este comando: cada
+            actualización de Tinto corta esa conexión.
           </p>
           <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
           <CopySnippet

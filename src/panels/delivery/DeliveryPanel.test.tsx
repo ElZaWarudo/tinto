@@ -430,7 +430,12 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const section = await screen.findByRole("region", { name: "Problemas de la QA" });
+    // They open on top of the task from the QA pill in its header.
+    const pill = await screen.findByRole("button", { name: "Problemas de la QA, 2 por decidir" });
+    expect(pill.closest(".delivery-task__heading")).not.toBeNull();
+    await user.click(pill);
+    const float = screen.getByRole("dialog", { name: "Problemas de la QA" });
+    const section = within(float).getByRole("region", { name: "Problemas de la QA" });
     // What is settled hides until the user asks for everything.
     expect(within(section).queryByText("Old one")).toBeNull();
     const first = within(section).getByRole("article", { name: "Problema #1" });
@@ -556,6 +561,39 @@ describe("DeliveryPanel", () => {
     // The webview would not follow it: the system's browser opens it.
     await userEvent.click(link);
     expect(client.openDeliveryUrl).toHaveBeenCalledWith("https://jira.example.com/browse/AGOS-501");
+  });
+
+  it("changes who runs a stage from now on in the repo, from its card", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ jobs: [job({ role: "tests", reasoning: "high" })] }),
+    );
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      stages: { review: { agent: "codex", model: null, reasoning: null } },
+    });
+    renderPanel();
+    const track = await screen.findByRole("list", { name: "Agentes" });
+    await user.click(
+      within(track).getByRole("button", { name: "Agente, modelo y razonamiento de Tests" }),
+    );
+    await user.selectOptions(await screen.findByLabelText("Agente de Tests"), "claude");
+    await waitFor(() =>
+      expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
+        REPO,
+        expect.objectContaining({
+          stages: {
+            review: { agent: "codex", model: null, reasoning: null },
+            tests: expect.objectContaining({ agent: "claude" }),
+          },
+        }),
+      ),
+    );
+    // The model and reasoning come with it, to change right there.
+    expect(screen.getByLabelText("Modelo de Tests")).toBeInTheDocument();
+    expect(screen.getByLabelText("Razonamiento de Tests")).toBeInTheDocument();
   });
 
   it("names the model and reasoning each stage runs with, defaults included", async () => {
@@ -1054,6 +1092,33 @@ describe("DeliveryPanel", () => {
         "",
       ),
     );
+  });
+
+  it("warns when a batch's coordinator stopped waiting with changes unread", async () => {
+    const since = Date.now() - 10 * 60_000;
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        runs: [
+          {
+            id: "r1",
+            repo: REPO,
+            title: "Lote A",
+            status: "active",
+            generation: 1,
+            owner: "claude-coord-1",
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        ],
+        coordinators: [{ run_id: "r1", waiting: false, unread: 2, unread_since_ms: since }],
+      }),
+    );
+    renderPanel();
+    expect(
+      await screen.findByText(
+        /el coordinador \(claude-coord-1\) no está esperando y tiene 2 cambios sin leer/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows one batch inline and several behind a single button", async () => {
@@ -1996,10 +2061,12 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const button = await screen.findByRole("button", {
-      name: "Abrir registro visual de QA, 2 problemas por decidir",
-    });
-    expect(within(button).getByText("2 !")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Abrir registro visual de QA" }),
+    ).toBeEnabled();
+    const problems = screen.getByRole("button", { name: "Problemas de la QA, 2 por decidir" });
+    expect(within(problems).getByText("2 !")).toBeInTheDocument();
+    expect(problems).toHaveAttribute("aria-expanded", "false");
   });
 
   it("says when the QA's visual record could not be made", async () => {

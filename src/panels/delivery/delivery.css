@@ -323,8 +323,9 @@
 .delivery-task__pr:hover {
   background: #32383f;
 }
-/* The QA's visual record: Jira's and GitHub's pill, in Tinto's colour. */
-.delivery-task__record {
+/* The QA's visual record: Jira's and GitHub's pill, in Tinto's colour.
+   Above the panel's own button look. */
+.delivery-panel .delivery-task__record {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -340,11 +341,34 @@
   background: var(--accent);
   cursor: pointer;
 }
-.delivery-task__record:hover:not(:disabled) {
+.delivery-panel .delivery-task__record:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 80%, #ffffff);
+}
+/* The record and its problems: two halves of one pill. */
+.delivery-task__qa {
+  display: inline-flex;
+  margin-left: 6px;
+  vertical-align: middle;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.delivery-panel .delivery-task__qa .delivery-task__record {
+  margin-left: 0;
+  border-radius: 0;
+}
+.delivery-panel .delivery-task__qa .delivery-task__record + .delivery-task__record {
+  border-left-color: var(--bg);
+}
+.delivery-panel .delivery-task__record--problems,
+.delivery-panel .delivery-task__record--problems:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 75%, #000000);
+}
+.delivery-panel .delivery-task__record--problems[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 60%, #000000);
 }
 /* The QA's problems that wait on the user. */
 .delivery-task__record-count {
+  margin: 0 2px 0 5px;
   padding: 0 6px;
   border-radius: 999px;
   font-size: 11px;
@@ -352,7 +376,8 @@
   color: #ffffff;
   background: #d1242f;
 }
-.delivery-task__header h2 span {
+/* The task's title, not the spans inside the heading's links and buttons. */
+.delivery-task__header h2 > span {
   font-weight: 400;
   color: var(--fg-muted);
   margin-left: 6px;
@@ -442,7 +467,8 @@
   border-radius: 8px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
-.delivery-float > .delivery-banner {
+.delivery-float > .delivery-banner,
+.delivery-float > .delivery-qa-problems {
   border: 0;
 }
 .delivery-float__close {
@@ -588,7 +614,6 @@
 /* QA's problems, and what the user decides on each. */
 .delivery-qa-problems {
   border: 1px solid var(--border);
-  border-radius: 6px;
   background: var(--bg);
 }
 .delivery-qa-problems__head {
@@ -659,6 +684,12 @@
   align-items: start;
   font-size: 13px;
 }
+/* After the suggestion's text, apart from it, and never split. */
+.delivery-qa-problem__solutions .delivery-badge {
+  margin-left: 8px;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
 .delivery-qa-problem__solutions input {
   margin-top: 3px;
   accent-color: var(--step);
@@ -676,7 +707,6 @@
 .delivery-qa-chip {
   padding: 0 7px;
   border: 1px solid var(--border);
-  border-radius: 999px;
   font-size: 11px;
   color: var(--fg-muted);
 }
@@ -1081,6 +1111,7 @@
   border: 1px solid var(--border);
 }
 .delivery-node {
+  position: relative;
   min-width: 0;
   background: var(--bg);
   border-top: 2px solid var(--border);
@@ -1106,6 +1137,37 @@
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
+}
+/* Who runs the stage from now on: a small menu in the card's corner. */
+.delivery-node > .delivery-menu {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+.delivery-panel .delivery-node > .delivery-menu > button {
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+}
+.delivery-node > .delivery-menu .delivery-menu__list {
+  left: 0;
+  right: auto;
+}
+.delivery-node > div,
+.delivery-panel .delivery-node > button {
+  padding-right: 26px;
+}
+.delivery-stage-agent {
+  display: grid;
+  gap: 6px;
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  padding: 8px 12px;
+  white-space: normal;
+}
+.delivery-stage-agent p {
+  margin: 0;
 }
 .delivery-node small {
   max-width: 100%;
