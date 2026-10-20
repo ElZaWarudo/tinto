@@ -1153,9 +1153,9 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "3 lotes activos" }));
-    const dialog = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    const menu = screen.getByRole("menu");
     expect(
-      within(dialog).getAllByRole("button", { name: /^Tomar el control del lote/ }),
+      within(menu).getAllByRole("button", { name: /^Tomar el control del lote/ }),
     ).toHaveLength(3);
   });
 
@@ -1530,24 +1530,31 @@ describe("DeliveryPanel", () => {
       overview({ runs: [batch("r1", "Lote A", 1), batch("r2", "Lote B", 2)] }),
     );
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    // The batches are the header's, not settings.
+    await user.click(await screen.findByRole("button", { name: "2 lotes activos" }));
+    const batches = screen.getByRole("menu");
     expect(
-      within(settings).getByRole("button", { name: "Cerrar el lote Lote A" }),
+      within(batches).getByRole("button", { name: "Cerrar el lote Lote A" }),
     ).toBeInTheDocument();
     expect(
-      within(settings).getByRole("button", { name: "Cerrar el lote Lote B" }),
+      within(batches).getByRole("button", { name: "Cerrar el lote Lote B" }),
     ).toBeInTheDocument();
     expect(
-      within(settings).getByRole("button", { name: "Tomar el control del lote Lote A" }),
+      within(batches).getByRole("button", { name: "Tomar el control del lote Lote A" }),
     ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Ajustes de Delivery" }));
+    const settings = screen.getByRole("region", { name: "Ajustes de Delivery" });
+    expect(screen.queryByRole("navigation", { name: "Tareas de Delivery" })).toBeNull();
+    await user.click(within(settings).getByRole("button", { name: "Conectar un coordinador" }));
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
     );
     expect(await navigator.clipboard.readText()).toContain("Bearer secret");
     expect(within(settings).getByText("Copiado, con el token.")).toBeInTheDocument();
-    await user.click(within(settings).getByRole("button", { name: "Cerrar" }));
+    await user.click(within(settings).getByRole("button", { name: "← Volver a las tareas" }));
+    expect(screen.getByRole("navigation", { name: "Tareas de Delivery" })).toBeInTheDocument();
 
     // New tasks go to the repo's most recent active batch by default.
     await user.click(screen.getByRole("button", { name: "Nueva tarea" }));
@@ -1580,10 +1587,11 @@ describe("DeliveryPanel", () => {
       Promise.resolve(settings),
     );
     renderPanel();
-    await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    // The batch's policy and a new batch are in the header's batch menu.
+    await user.click(await screen.findByRole("button", { name: "Lote A" }));
+    const batches = screen.getByRole("menu");
 
-    const policy = within(settings).getByRole("combobox", {
+    const policy = within(batches).getByRole("combobox", {
       name: "Resultado de QA en Jira del lote Lote A",
     });
     expect(policy).toHaveValue("");
@@ -1593,22 +1601,26 @@ describe("DeliveryPanel", () => {
     );
 
     // The coordinator ends the brainstorm; the batch only shows where it is.
-    expect(within(settings).getByText("Brainstorm")).toBeInTheDocument();
+    expect(within(batches).getByText("Brainstorm")).toBeInTheDocument();
 
-    await user.type(within(settings).getByPlaceholderText("Lote de octubre"), "Lote B");
+    await user.type(within(batches).getByPlaceholderText("Lote de octubre"), "Lote B");
     await user.selectOptions(
-      within(settings).getByRole("combobox", {
+      within(batches).getByRole("combobox", {
         name: /^Resultado de QA en Jira.*El coordinador lo lee/,
       }),
       "yes",
     );
-    await user.click(within(settings).getByRole("button", { name: "Crear lote" }));
+    await user.click(within(batches).getByRole("button", { name: "Crear lote" }));
     await waitFor(() =>
       expect(client.createDeliveryRun).toHaveBeenCalledWith(REPO, "Lote B", true),
     );
 
-    const qa = within(settings).getByRole("region", { name: "Ajustes del repositorio" });
-    const save = await within(qa).findByRole("button", { name: /^Guardar los ajustes de/ });
+    // Each repo's setup is a section of the settings page.
+    await user.click(screen.getByRole("button", { name: "Ajustes de Delivery" }));
+    const settings = screen.getByRole("region", { name: "Ajustes de Delivery" });
+    await user.click(within(settings).getByRole("button", { name: "agentos" }));
+    const qa = within(settings).getByRole("region", { name: "Ajustes de agentos" });
+    const save = await within(qa).findByRole("button", { name: "Guardar" });
     await waitFor(() => expect(save).toBeEnabled());
     await user.type(
       within(qa).getByRole("textbox", { name: /Entorno de QA/ }),
@@ -1625,6 +1637,7 @@ describe("DeliveryPanel", () => {
       within(qa).getByRole("combobox", { name: "Modelo de Revisión" }),
       "opus",
     );
+    expect(within(qa).getByText("Cambios sin guardar.")).toBeInTheDocument();
     await user.click(save);
     await waitFor(() =>
       expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
@@ -2552,7 +2565,8 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
+    const settings = screen.getByRole("region", { name: "Ajustes de Delivery" });
+    await user.click(within(settings).getByRole("button", { name: "Conectar un coordinador" }));
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),

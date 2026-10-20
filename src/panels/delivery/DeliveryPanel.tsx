@@ -69,10 +69,11 @@ import type {
 import {
   DispatchDialog,
   ArchivedTasksDialog,
+  BatchList,
   CorrectResultDialog,
   NewTaskDialog,
   ReleaseLeaseDialog,
-  SettingsDialog,
+  SettingsPage,
   StageAgentRow,
   type CorrectableStep,
   type RepoChoice,
@@ -125,7 +126,6 @@ type Dialog =
   | { kind: "new-task" }
   | { kind: "dispatch"; task: DeliveryTask; role: string; prompt: string; source: string | null }
   | { kind: "release"; name: string; note: string | null }
-  | { kind: "settings" }
   | { kind: "archived" }
   | null;
 
@@ -332,6 +332,8 @@ export function DeliveryPanel() {
   const [overview, setOverview] = useState<DeliveryOverview | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  // The settings page, shown in place of the tasks.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
@@ -478,15 +480,50 @@ export function DeliveryPanel() {
     await takeoverDeliveryRun(target.id);
   };
 
+  // Every active batch with what can be done to it, and a new one.
+  const batches = (trigger: ReactNode) => (
+    <span className="delivery-batches-menu">
+      <Menu trigger={trigger}>
+        {() => (
+          <BatchList
+            runs={activeRuns}
+            repos={repos}
+            onCreateRun={(repo, title, qaJiraComment) =>
+              createDeliveryRun(repo, title, qaJiraComment)
+            }
+            onQaJiraComment={(target, post) =>
+              void run(() => setDeliveryRunQaJiraComment(target.id, post))
+            }
+            onPause={(target, paused) => setDeliveryRunPaused(target.id, paused)}
+            onTakeover={takeover}
+            onClose={async (target) => {
+              const ok = await confirm(
+                `Se cerrará el lote "${target.title}". Sus tareas siguen disponibles.`,
+                { title: "Cerrar lote", okLabel: "Cerrar" },
+              );
+              if (!ok) return false;
+              await closeDeliveryRun(target.id);
+            }}
+          />
+        )}
+      </Menu>
+    </span>
+  );
+
   return (
     <DeliveryRefreshContext.Provider value={refresh}>
       <div className="delivery-panel" data-testid="delivery-panel">
         <header className="delivery-panel__header">
           <h1>Delivery</h1>
           {activeRuns.length === 1 ? (
-            <span className="delivery-run" title={activeRuns[0].repo}>
-              <strong>{batchName(activeRuns[0].title || activeRuns[0].id)}</strong>
-              <span className="delivery-muted">
+            <span className="delivery-run">
+              {batches(
+                <>
+                  <strong>{batchName(activeRuns[0].title || activeRuns[0].id)}</strong>
+                  <Icon name="down" />
+                </>,
+              )}
+              <span className="delivery-muted" title={activeRuns[0].repo}>
                 {busStore.displayName(activeRuns[0].repo)} ·{" "}
                 {activeRuns[0].owner === "user"
                   ? "lo diriges tú"
@@ -550,15 +587,11 @@ export function DeliveryPanel() {
               </ActionButton>
             </span>
           ) : (
-            activeRuns.length > 1 && (
-              <button
-                type="button"
-                className="delivery-run"
-                title="Ver, tomar el control o cerrar los lotes"
-                onClick={() => setDialog({ kind: "settings" })}
-              >
-                {activeRuns.length} lotes activos
-              </button>
+            batches(
+              <>
+                {activeRuns.length > 1 ? `${activeRuns.length} lotes activos` : "Lotes"}
+                <Icon name="down" />
+              </>,
             )
           )}
           <span className="delivery-panel__spacer" />
@@ -566,7 +599,10 @@ export function DeliveryPanel() {
             <button
               type="button"
               className="delivery-attention"
-              onClick={() => setSelectedTaskId(needYou[0].id)}
+              onClick={() => {
+                setSettingsOpen(false);
+                setSelectedTaskId(needYou[0].id);
+              }}
             >
               <Icon name="flag" />
               {needYou.length === 1
@@ -616,8 +652,9 @@ export function DeliveryPanel() {
             type="button"
             className="delivery-icon-button"
             aria-label="Ajustes de Delivery"
+            aria-pressed={settingsOpen}
             title="Ajustes de Delivery"
-            onClick={() => setDialog({ kind: "settings" })}
+            onClick={() => setSettingsOpen(!settingsOpen)}
           >
             <Icon name="gear" />
           </button>
@@ -670,82 +707,95 @@ export function DeliveryPanel() {
           </div>
         )}
 
-        <div className="delivery-panel__body">
-          <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
-            {tasks.length === 0 && (
-              <p className="delivery-panel__empty">
-                Crea una tarea para trabajar un issue en su propio worktree y rama.
-              </p>
-            )}
-            {groups.map((group) => (
-              <section key={group.group} className="delivery-task-group" aria-label={group.label}>
-                <h2>
-                  {group.label} <span>{group.tasks.length}</span>
-                </h2>
-                {group.tasks.map((task) => (
-                  <button
-                    key={task.id}
-                    type="button"
-                    className="delivery-task-row"
-                    aria-current={selectedTask?.id === task.id ? "true" : undefined}
-                    onClick={() => setSelectedTaskId(task.id)}
-                  >
-                    <span className="delivery-task-row__key">
-                      {task.key}
-                      {multiRepo && (
-                        <span className="delivery-task-row__repo" title={task.repo}>
-                          {busStore.displayName(task.repo)}
-                        </span>
-                      )}
-                    </span>
-                    <span className="delivery-task-row__title">{task.title || task.branch}</span>
-                    <StatusLine status={statuses.get(task.id)!} />
-                  </button>
-                ))}
-              </section>
-            ))}
-          </nav>
+        {settingsOpen ? (
+          <SettingsPage
+            capacity={capacitySetting}
+            endpoint={overview?.coordinator ?? null}
+            repos={repos}
+            onCapacity={(value) => void run(() => updateDeliverySettings(value))}
+            onBack={() => setSettingsOpen(false)}
+          />
+        ) : (
+          <div className="delivery-panel__body">
+            <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
+              {tasks.length === 0 && (
+                <p className="delivery-panel__empty">
+                  Crea una tarea para trabajar un issue en su propio worktree y rama.
+                </p>
+              )}
+              {groups.map((group) => (
+                <section key={group.group} className="delivery-task-group" aria-label={group.label}>
+                  <h2>
+                    {group.label} <span>{group.tasks.length}</span>
+                  </h2>
+                  {group.tasks.map((task) => (
+                    <button
+                      key={task.id}
+                      type="button"
+                      className="delivery-task-row"
+                      aria-current={selectedTask?.id === task.id ? "true" : undefined}
+                      onClick={() => setSelectedTaskId(task.id)}
+                    >
+                      <span className="delivery-task-row__key">
+                        {task.key}
+                        {multiRepo && (
+                          <span className="delivery-task-row__repo" title={task.repo}>
+                            {busStore.displayName(task.repo)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="delivery-task-row__title">{task.title || task.branch}</span>
+                      <StatusLine status={statuses.get(task.id)!} />
+                    </button>
+                  ))}
+                </section>
+              ))}
+            </nav>
 
-          <main className="delivery-panel__detail">
-            {selectedTask && overview ? (
-              <TaskDetail
-                key={selectedTask.id}
-                task={selectedTask}
-                overview={overview}
-                now={now}
-                run={run}
-                onDispatch={(role, prompt, source) => {
-                  setRepoSettings(null);
-                  getDeliveryRepoSettings(selectedTask.repo).then(setRepoSettings, () =>
-                    setRepoSettings({ worktree_root: null, bootstrap: null, default_base: null }),
-                  );
-                  setDialog({ kind: "dispatch", task: selectedTask, role, prompt, source });
-                }}
-                onOpenConversation={async (agentType) => {
-                  await run(async () => {
-                    const conversation = await openDeliveryTaskInAgents(selectedTask.id, agentType);
+            <main className="delivery-panel__detail">
+              {selectedTask && overview ? (
+                <TaskDetail
+                  key={selectedTask.id}
+                  task={selectedTask}
+                  overview={overview}
+                  now={now}
+                  run={run}
+                  onDispatch={(role, prompt, source) => {
+                    setRepoSettings(null);
+                    getDeliveryRepoSettings(selectedTask.repo).then(setRepoSettings, () =>
+                      setRepoSettings({ worktree_root: null, bootstrap: null, default_base: null }),
+                    );
+                    setDialog({ kind: "dispatch", task: selectedTask, role, prompt, source });
+                  }}
+                  onOpenConversation={async (agentType) => {
+                    await run(async () => {
+                      const conversation = await openDeliveryTaskInAgents(
+                        selectedTask.id,
+                        agentType,
+                      );
+                      openAgentTerminal({
+                        sessionId: conversation.session_id,
+                        repo: conversation.repo,
+                        agentType: conversation.agent_type,
+                      });
+                    });
+                  }}
+                  onContinueJob={async (job) => {
+                    const conversation = await openDeliveryJobInAgents(job.id);
                     openAgentTerminal({
                       sessionId: conversation.session_id,
                       repo: conversation.repo,
                       agentType: conversation.agent_type,
                     });
-                  });
-                }}
-                onContinueJob={async (job) => {
-                  const conversation = await openDeliveryJobInAgents(job.id);
-                  openAgentTerminal({
-                    sessionId: conversation.session_id,
-                    repo: conversation.repo,
-                    agentType: conversation.agent_type,
-                  });
-                }}
-                onRemoved={() => setSelectedTaskId(null)}
-              />
-            ) : (
-              <p className="delivery-panel__empty">Sin tareas.</p>
-            )}
-          </main>
-        </div>
+                  }}
+                  onRemoved={() => setSelectedTaskId(null)}
+                />
+              ) : (
+                <p className="delivery-panel__empty">Sin tareas.</p>
+              )}
+            </main>
+          </div>
+        )}
 
         {dialog?.kind === "new-task" && (
           <NewTaskDialog
@@ -851,32 +901,6 @@ export function DeliveryPanel() {
               const task = await unarchiveDeliveryTask(taskId);
               setDialog(null);
               setSelectedTaskId(task.id);
-            }}
-          />
-        )}
-        {dialog?.kind === "settings" && (
-          <SettingsDialog
-            capacity={capacitySetting}
-            endpoint={overview?.coordinator ?? null}
-            runs={overview?.runs ?? []}
-            repos={repos}
-            onCancel={() => setDialog(null)}
-            onCapacity={(value) => void run(() => updateDeliverySettings(value))}
-            onCreateRun={(repo, title, qaJiraComment) =>
-              createDeliveryRun(repo, title, qaJiraComment)
-            }
-            onQaJiraComment={(target, post) =>
-              void run(() => setDeliveryRunQaJiraComment(target.id, post))
-            }
-            onPause={(target, paused) => setDeliveryRunPaused(target.id, paused)}
-            onTakeover={takeover}
-            onClose={async (target) => {
-              const ok = await confirm(
-                `Se cerrará el lote "${target.title}". Sus tareas siguen disponibles.`,
-                { title: "Cerrar lote", okLabel: "Cerrar" },
-              );
-              if (!ok) return false;
-              await closeDeliveryRun(target.id);
             }}
           />
         )}

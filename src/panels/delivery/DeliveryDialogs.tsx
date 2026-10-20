@@ -1,5 +1,5 @@
 // Delivery forms, rendered as in-app modals (same look as the confirm
-// dialog, and reachable by UI automation).
+// dialog, and reachable by UI automation), and the settings page.
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
@@ -845,8 +845,7 @@ export function StageAgentRow({
 
 /** What QA can use in a repo and who runs each stage, set once so
  *  coordinators read it instead of asking on every task. */
-function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
-  const [repo, setRepo] = useState(repos[0]?.path ?? "");
+function RepoSettings({ repo, label }: { repo: string; label: string }) {
   const [loaded, setLoaded] = useState<DeliveryRepoSettings | null>(null);
   const [browser, setBrowser] = useState(false);
   const [commands, setCommands] = useState("");
@@ -865,8 +864,9 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
   const [afterMerge, setAfterMerge] = useState("");
   const [jiraCheck, setJiraCheck] = useState("");
   const [status, setStatus] = useState("");
+  // Changed since it was read or saved: every field's change bubbles up to the section.
+  const [edited, setEdited] = useState(false);
   useEffect(() => {
-    if (!repo) return;
     let active = true;
     getDeliveryRepoSettings(repo).then(
       (settings) => {
@@ -893,6 +893,7 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
         setJiraToken("");
         setJiraCheck("");
         setStatus("");
+        setEdited(false);
       },
       () => active && setStatus("No se pudieron leer los ajustes de este repositorio."),
     );
@@ -900,27 +901,21 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
       active = false;
     };
   }, [repo]);
-  const label = repos.find((choice) => choice.path === repo)?.label ?? repo;
   return (
-    <section className="delivery-qa-settings" aria-label="Ajustes del repositorio">
-      <h3 className="delivery-dialog__subtitle">QA del repositorio</h3>
-      <p className="file-op-modal__body">
-        Lo que la QA puede usar en cada repositorio y quién corre cada etapa. Los coordinadores lo
+    <section
+      className="delivery-settings__section"
+      aria-label={`Ajustes de ${label}`}
+      onChange={() => {
+        setEdited(true);
+        setStatus("");
+      }}
+    >
+      <h2>{label}</h2>
+      <p className="delivery-settings__intro">
+        Lo que la QA puede usar en este repositorio y quién corre cada etapa. Los coordinadores lo
         leen aquí y no lo preguntan en cada tarea.
       </p>
-      <Field label="Repositorio">
-        <select
-          aria-label="Repositorio de la QA"
-          value={repo}
-          onChange={(event) => setRepo(event.target.value)}
-        >
-          {repos.map((choice) => (
-            <option key={choice.path} value={choice.path}>
-              {choice.label}
-            </option>
-          ))}
-        </select>
-      </Field>
+      <h3>QA</h3>
       <Field
         label="Entorno de QA"
         hint="Dónde se prueba en esta máquina: plataforma, ámbito, clientes. Por ejemplo: Windows, ámbito personal; Claude Code y Codex con mis sesiones."
@@ -942,14 +937,13 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
           placeholder="agentos skills install"
         />
       </Field>
-      <label className="delivery-check">
+      <Field label="Navegador para la QA">
         <input
           type="checkbox"
           checked={browser}
           onChange={(event) => setBrowser(event.target.checked)}
         />
-        <span>Navegador para la QA</span>
-      </label>
+      </Field>
       <Field
         label="Cómo se verifica"
         hint="Además de las etapas: pruebas de punta a punta, QA en navegador cuando hay interfaz, en qué entorno… Los coordinadores lo leen y no lo preguntan en cada issue."
@@ -968,6 +962,7 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
           <option value="no">No permitidas</option>
         </select>
       </Field>
+      <h3>Commits</h3>
       <Field
         label="Un solo commit, como mucho"
         hint="Un coordinador que proponga un único commit más grande, o que mezcle código, tests y documentación, debe justificarlo."
@@ -993,8 +988,27 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
           líneas
         </span>
       </Field>
-      <h3 className="delivery-dialog__subtitle">Jira</h3>
-      <p className="file-op-modal__body">
+      <h3>Agente de cada etapa</h3>
+      <p className="delivery-settings__intro">
+        Con qué agente, modelo y razonamiento corre cada etapa. El diálogo de lanzar etapa parte de
+        aquí y los coordinadores lo usan en lugar de elegir ellos.
+      </p>
+      {DELIVERY_ROLES.map((stage) => (
+        <StageAgentRow
+          key={stage.value}
+          label={stage.label}
+          value={stages[stage.value]}
+          onChange={(next) =>
+            setStages((current) => {
+              const rest = { ...current };
+              delete rest[stage.value];
+              return next ? { ...rest, [stage.value]: next } : rest;
+            })
+          }
+        />
+      ))}
+      <h3>Jira</h3>
+      <p className="delivery-settings__intro">
         Con Jira configurado, Tinto hace los pasos Jira al aprobarlos: enlaza el PR, lleva la issue
         por estos estados y comprueba el estado final. Sin él, los hace el coordinador.
       </p>
@@ -1029,9 +1043,8 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
       <Field label="Estados al fusionar el PR" hint="Por ejemplo: Cerrada">
         <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
       </Field>
-      <div className="delivery-actions">
+      <div className="delivery-actions delivery-settings__aside">
         <ActionButton
-          className="file-op-modal__button"
           disabled={!loaded?.jira?.has_token}
           title={loaded?.jira?.has_token ? undefined : "Guarda antes el host y el token."}
           onAction={() => {
@@ -1048,28 +1061,9 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
           {jiraCheck}
         </span>
       </div>
-      <h3 className="delivery-dialog__subtitle">Agente de cada etapa</h3>
-      <p className="file-op-modal__body">
-        Con qué agente, modelo y razonamiento corre cada etapa en este repositorio. El diálogo de
-        lanzar etapa parte de aquí y los coordinadores lo usan en lugar de elegir ellos.
-      </p>
-      {DELIVERY_ROLES.map((stage) => (
-        <StageAgentRow
-          key={stage.value}
-          label={stage.label}
-          value={stages[stage.value]}
-          onChange={(next) =>
-            setStages((current) => {
-              const rest = { ...current };
-              delete rest[stage.value];
-              return next ? { ...rest, [stage.value]: next } : rest;
-            })
-          }
-        />
-      ))}
-      <div className="delivery-actions">
+      <div className="delivery-settings__save">
         <ActionButton
-          className="file-op-modal__button"
+          className="delivery-button--primary"
           disabled={!loaded}
           onAction={async () =>
             loaded &&
@@ -1097,16 +1091,17 @@ function RepoQaSettings({ repos }: { repos: RepoChoice[] }) {
                 if (jiraToken.trim()) await setDeliveryJiraToken(repo, jiraToken);
                 setJiraToken("");
                 setLoaded(await getDeliveryRepoSettings(repo));
+                setEdited(false);
                 setStatus(`Guardado para ${label}.`);
                 return saved;
               })
               .catch((cause) => setStatus(`No se pudo guardar: ${String(cause?.message ?? cause)}`))
           }
         >
-          Guardar los ajustes de {label}
+          Guardar
         </ActionButton>
         <span className="delivery-field__hint" role="status">
-          {status}
+          {status || (edited ? "Cambios sin guardar." : "")}
         </span>
       </div>
     </section>
@@ -1148,35 +1143,25 @@ function CopySnippet({ label, shown, copied }: { label: string; shown: string; c
   );
 }
 
-export function SettingsDialog({
+/** Delivery's settings as a page in place of the tasks: one section at a
+ *  time, chosen in its own list. */
+export function SettingsPage({
   capacity,
   endpoint,
-  runs,
   repos,
   onCapacity,
-  onCreateRun,
-  onQaJiraComment,
-  onPause,
-  onTakeover,
-  onClose,
-  onCancel,
+  onBack,
 }: {
   capacity: number;
   endpoint: DeliveryCoordinatorEndpoint | null;
-  runs: DeliveryRun[];
   repos: RepoChoice[];
   onCapacity: (capacity: number) => void;
-  onCreateRun: (repo: string, title: string, qaJiraComment: boolean) => Promise<unknown>;
-  onQaJiraComment: (run: DeliveryRun, post: boolean) => void;
-  onPause: (run: DeliveryRun, paused: boolean) => Promise<unknown>;
-  onTakeover: (run: DeliveryRun) => Promise<unknown>;
-  onClose: (run: DeliveryRun) => Promise<unknown>;
-  onCancel: () => void;
+  onBack: () => void;
 }) {
-  const [repo, setRepo] = useState(repos[0]?.path ?? "");
-  const [title, setTitle] = useState("");
-  const [jiraComment, setJiraComment] = useState(false);
-  // The token is a credential: the dialog shows it masked and only the copy
+  // "general", "connect", or a repo's path.
+  const [section, setSection] = useState("general");
+  const repo = repos.find((choice) => choice.path === section);
+  // The token is a credential: the page shows it masked and only the copy
   // buttons carry it.
   // Through Tinto's proxy as a stdio server, which updates leave running,
   // finds Tinto's server
@@ -1197,31 +1182,117 @@ export function SettingsDialog({
       : command
         ? `[mcp_servers.tinto-delivery]\ncommand = '${command}'\nargs = ["--delivery-mcp-proxy"]`
         : `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`;
-  const activeRuns = runs.filter((run) => run.status === "active");
+  const item = (id: string, label: string) => (
+    <button
+      key={id}
+      type="button"
+      aria-current={section === id ? "page" : undefined}
+      onClick={() => setSection(id)}
+    >
+      {label}
+    </button>
+  );
   return (
-    <FormDialog title="Ajustes de Delivery" wide onCancel={onCancel}>
-      <Field
-        label="Agentes en paralelo"
-        hint="Automático: uno por cada tarea activa (cada issue), hasta 8. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
-      >
-        <select value={capacity} onChange={(event) => onCapacity(Number(event.target.value))}>
-          <option value={0}>Automático: uno por issue</option>
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-        </select>
-      </Field>
+    <div className="delivery-settings" role="region" aria-label="Ajustes de Delivery">
+      <nav className="delivery-settings__nav" aria-label="Secciones de los ajustes">
+        <button type="button" className="delivery-settings__back" onClick={onBack}>
+          ← Volver a las tareas
+        </button>
+        {item("general", "General")}
+        <h3>Repositorios</h3>
+        {repos.map((choice) => item(choice.path, choice.label))}
+        <h3>Integración</h3>
+        {item("connect", "Conectar un coordinador")}
+      </nav>
+      <div className="delivery-settings__page">
+        {section === "general" && (
+          <section className="delivery-settings__section" aria-label="General">
+            <h2>General</h2>
+            <Field
+              label="Agentes en paralelo"
+              hint="Automático: uno por cada tarea activa (cada issue), hasta 8. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
+            >
+              <select value={capacity} onChange={(event) => onCapacity(Number(event.target.value))}>
+                <option value={0}>Automático: uno por issue</option>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </section>
+        )}
+        {repo && <RepoSettings key={repo.path} repo={repo.path} label={repo.label} />}
+        {section === "connect" && (
+          <section className="delivery-settings__section" aria-label="Conectar un coordinador">
+            <h2>Conectar un coordinador</h2>
+            <p className="delivery-settings__intro">
+              Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante
+              MCP: crea tareas, lanza etapas y pide aprobaciones.
+            </p>
+            {endpoint ? (
+              <>
+                <p className="delivery-settings__intro">
+                  Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
+                  herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que
+                  corren fuera de Tinto: arrancan el proxy de Tinto como servidor MCP, que sigue en
+                  marcha cuando Tinto se actualiza, abre Tinto si está cerrado y lo encuentra aunque
+                  cambie de puerto. Si lo añadiste antes con tinto.exe, vuelve a añadirlo con este
+                  comando: cada actualización de Tinto corta esa conexión.
+                </p>
+                <CopySnippet
+                  label="Claude Code"
+                  shown={claude(MASK)}
+                  copied={claude(endpoint.token)}
+                />
+                <CopySnippet
+                  label="Codex (config.toml)"
+                  shown={codex(MASK)}
+                  copied={codex(endpoint.token)}
+                />
+              </>
+            ) : (
+              <p className="delivery-settings__intro">El API de coordinador no está disponible.</p>
+            )}
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
 
-      <h3 className="delivery-dialog__subtitle">Lotes activos</h3>
-      <p className="file-op-modal__body">
+/** The active batches, what can be done to each, and a new one: the
+ *  header's batch menu. */
+export function BatchList({
+  runs,
+  repos,
+  onCreateRun,
+  onQaJiraComment,
+  onPause,
+  onTakeover,
+  onClose,
+}: {
+  runs: DeliveryRun[];
+  repos: RepoChoice[];
+  onCreateRun: (repo: string, title: string, qaJiraComment: boolean) => Promise<unknown>;
+  onQaJiraComment: (run: DeliveryRun, post: boolean) => void;
+  onPause: (run: DeliveryRun, paused: boolean) => Promise<unknown>;
+  onTakeover: (run: DeliveryRun) => Promise<unknown>;
+  onClose: (run: DeliveryRun) => Promise<unknown>;
+}) {
+  const [repo, setRepo] = useState(repos[0]?.path ?? "");
+  const [title, setTitle] = useState("");
+  const [jiraComment, setJiraComment] = useState(false);
+  return (
+    <div className="delivery-batches">
+      <p className="delivery-muted">
         Un lote agrupa las tareas que dirige un coordinador. Las aprobaciones siempre las decides
         tú.
       </p>
-      {activeRuns.length === 0 && <p className="file-op-modal__body">Ninguno.</p>}
+      {runs.length === 0 && <p className="delivery-muted">Ningún lote activo.</p>}
       <ul className="delivery-run-list">
-        {activeRuns.map((run) => (
+        {runs.map((run) => (
           <li key={run.id}>
             <span>
               <strong>{run.title || run.id}</strong>
@@ -1278,7 +1349,19 @@ export function SettingsDialog({
           </li>
         ))}
       </ul>
-      <div className="delivery-field-row">
+      <form
+        className="delivery-batches__new"
+        aria-label="Nuevo lote"
+        // The submit button sends it, also on Enter.
+        onSubmit={(event) => event.preventDefault()}
+      >
+        <Field label="Nuevo lote">
+          <input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Lote de octubre"
+          />
+        </Field>
         <Field label="Repositorio">
           <select value={repo} onChange={(event) => setRepo(event.target.value)}>
             {repos.map((choice) => (
@@ -1288,64 +1371,30 @@ export function SettingsDialog({
             ))}
           </select>
         </Field>
-        <Field label="Nuevo lote">
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Lote de octubre"
-          />
-        </Field>
-      </div>
-      <Field
-        label="Resultado de QA en Jira"
-        hint="El coordinador lo lee aquí y no lo pregunta en cada tarea."
-      >
-        <select
-          value={jiraComment ? "yes" : "no"}
-          onChange={(event) => setJiraComment(event.target.value === "yes")}
+        <Field
+          label="Resultado de QA en Jira"
+          hint="El coordinador lo lee aquí y no lo pregunta en cada tarea."
         >
-          <option value="no">No publicar</option>
-          <option value="yes">Comentar en cada issue</option>
-        </select>
-      </Field>
-      <ActionButton
-        className="file-op-modal__button"
-        disabled={!repo || !title.trim()}
-        onAction={async () => {
-          await onCreateRun(repo, title.trim(), jiraComment);
-          setTitle("");
-        }}
-      >
-        Crear lote
-      </ActionButton>
-
-      <RepoQaSettings repos={repos} />
-
-      <h3 className="delivery-dialog__subtitle">Conectar un coordinador</h3>
-      <p className="file-op-modal__body">
-        Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante MCP:
-        crea tareas, lanza etapas y pide aprobaciones.
-      </p>
-      {endpoint ? (
-        <>
-          <p className="file-op-modal__body">
-            Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
-            herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
-            fuera de Tinto: arrancan el proxy de Tinto como servidor MCP, que sigue en marcha cuando
-            Tinto se actualiza, abre Tinto si está cerrado y lo encuentra aunque cambie de puerto.
-            Si lo añadiste antes con tinto.exe, vuelve a añadirlo con este comando: cada
-            actualización de Tinto corta esa conexión.
-          </p>
-          <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
-          <CopySnippet
-            label="Codex (config.toml)"
-            shown={codex(MASK)}
-            copied={codex(endpoint.token)}
-          />
-        </>
-      ) : (
-        <p className="file-op-modal__body">El API de coordinador no está disponible.</p>
-      )}
-    </FormDialog>
+          <select
+            value={jiraComment ? "yes" : "no"}
+            onChange={(event) => setJiraComment(event.target.value === "yes")}
+          >
+            <option value="no">No publicar</option>
+            <option value="yes">Comentar en cada issue</option>
+          </select>
+        </Field>
+        <ActionButton
+          type="submit"
+          className="delivery-button--primary"
+          disabled={!repo || !title.trim()}
+          onAction={async () => {
+            await onCreateRun(repo, title.trim(), jiraComment);
+            setTitle("");
+          }}
+        >
+          Crear lote
+        </ActionButton>
+      </form>
+    </div>
   );
 }
