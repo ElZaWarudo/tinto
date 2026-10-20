@@ -275,7 +275,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: tinto-windows-bundle
-          path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+          path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error

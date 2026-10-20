@@ -246,9 +246,10 @@ error categories.
 
 The installer is produced by Tauri's bundler. Because
 `tauri.conf.json` sets `bundle.targets` to `"all"`, the bundler picks the
-right format for the host OS:
+right format for the host OS, except on Windows, where
+`tauri.windows.conf.json` limits it to the NSIS installer:
 
-- **Windows**: `.msi` (WiX) and/or NSIS `.exe`
+- **Windows**: NSIS `.exe` (an `.msi` only with `--bundles msi`)
 - **Linux**:   `.deb`, `.AppImage`
 - **macOS**:   `.dmg` (and `.app`)
 
@@ -266,7 +267,10 @@ npm run tauri build
 If `src-tauri/resources/tinto-agent-linux-x86_64` is missing, the bundler
 will still succeed but the in-app WSL agent feature will be unavailable. CI
 produces this file in the `rust` job and downloads it into
-`src-tauri/resources/` before bundling. To reproduce locally:
+`src-tauri/resources/` before bundling. The file is ignored by Git and stays
+between local builds: rebuild it only when the WSL agent's code
+(`src-tauri/src/wsl_agent/` and the bus and git code it runs) or the Rust
+dependencies change. To reproduce locally:
 
 ```bash
 cd src-tauri
@@ -282,7 +286,7 @@ All installers are written under `src-tauri/target/release/bundle/`:
 
 ```
 src-tauri/target/release/bundle/
-├── msi/        # Windows .msi  (WiX)
+├── msi/        # Windows .msi  (WiX), only with --bundles msi
 ├── nsis/       # Windows NSIS .exe
 ├── deb/        # Debian/Ubuntu .deb
 ├── appimage/   # Linux AppImage
@@ -300,7 +304,7 @@ src-tauri/target/release/tinto(.exe)
 
 - **Building Windows installers from Linux/macOS** is not supported by
   Tauri's bundler. Use a Windows host (or a Windows VM/CI runner).
-- **Building `.msi` requires WiX 3.x**, **NSIS requires NSIS 3.x**. The
+- **NSIS requires NSIS 3.x** (and an `.msi`, built on request, WiX 3.x). The
   Tauri bundler downloads them on first run into
   `src-tauri/target/release/`. Make sure outbound HTTPS to
   `github.com` and `nsis.sourceforge.io` works the first time.
