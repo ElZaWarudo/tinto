@@ -94,6 +94,15 @@ fn fake_launcher() -> Launcher {
             if let Some(path) = &touch {
                 lines.push(format!("echo changed > '{}'", path.display()));
             }
+            // `children=1`: commands it leaves running, one in its process
+            // group and one in its own, as Codex runs them.
+            if spec.contains_key("children") {
+                let dir = paths.dir.display();
+                lines.push(format!("sleep 300 & echo $! > '{dir}/same.pid'"));
+                lines.push(format!(
+                    "perl -e 'setpgrp(0, 0); exec \"sleep\", \"300\"' & echo $! > '{dir}/own.pid'"
+                ));
+            }
             if sleep > 0 {
                 lines.push(format!("exec sleep {sleep}"));
             }
@@ -1722,6 +1731,60 @@ fn a_batch_with_an_invalid_decision_says_which_and_creates_none() {
     assert!(error.message.contains("Las otras 1 son válidas"));
     assert!(!error.message.contains("#1"));
     assert!(h.service.task_decisions(&task.id).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_a_job_stops_what_it_started() {
+    use std::process::Command;
+
+    let ps = |args: &[&str]| -> String {
+        Command::new("ps")
+            .args(args)
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap_or_default()
+    };
+    let h = harness();
+    let task = h.task("D-8");
+    let job = h.dispatch(&task, "tests", "events=none children=1 sleep=60");
+    h.wait_status(&job.id, DeliveryJobStatus::Started);
+    let dir = h._jobs.path().join(&job.id);
+    let started = |name: &str| -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(dir.join(name)) {
+                let pid = pid.trim().to_string();
+                if !pid.is_empty() {
+                    return pid;
+                }
+            }
+            assert!(Instant::now() < deadline, "{name} never appeared");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let commands = [started("same.pid"), started("own.pid")];
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while ps(&["-o", "pgid=", "-p", &commands[1]]) != commands[1] {
+        assert!(
+            Instant::now() < deadline,
+            "the command never left the job's group"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    h.service.cancel(&job.id).unwrap();
+    assert_eq!(h.wait(&job.id).status, DeliveryJobStatus::Cancelled);
+
+    // Gone, or a zombie waiting for init to reap it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while commands.iter().any(|pid| {
+        let stat = ps(&["-o", "stat=", "-p", pid]);
+        !stat.is_empty() && !stat.starts_with('Z')
+    }) {
+        assert!(Instant::now() < deadline, "a command outlived the cancel");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]

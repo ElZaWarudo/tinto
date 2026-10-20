@@ -1302,6 +1302,13 @@ impl DeliveryService {
         }
         #[cfg(target_os = "windows")]
         crate::windows_process::hide_console(&mut command);
+        // Its own group, so stopping the job reaches what it starts: `codex`
+        // installed with npm is a Node script that runs the native binary.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         let mut child = command.spawn().map_err(|error| {
             DeliveryError::new(
                 "spawn_failed",
@@ -1437,6 +1444,10 @@ impl DeliveryService {
                 if let Some(wsl_job) = &launch.wsl_job {
                     adapters::stop_wsl_job(wsl_job, "KILL");
                 }
+                // Killing the child alone orphans what it started, among them
+                // the commands Codex runs in process groups of their own.
+                #[cfg(unix)]
+                let _ = crate::agent_console::pty::kill_process_tree(child.id());
                 let _ = child.kill();
                 #[cfg(target_os = "windows")]
                 if let Some(tree) = &process_tree {
