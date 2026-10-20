@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { installShortcuts, SHORTCUTS } from "./shortcuts";
 import { deleteUndoManager } from "../panels/file/deleteUndo";
+import { fileDock } from "../workspace/fileDock";
 import type { DockviewApi } from "dockview-react";
 
 describe("shortcuts", () => {
@@ -28,6 +29,23 @@ describe("shortcuts", () => {
     it("groups shortcuts correctly", () => {
       const groups = new Set(SHORTCUTS.map((s) => s.group));
       expect(groups).toEqual(new Set(["Navegación", "Cerrar", "Vista", "Proyecto", "Archivos"]));
+    });
+
+    it("labels every shortcut with Ctrl outside macOS", () => {
+      expect(SHORTCUTS.every((s) => s.keys.startsWith("Ctrl "))).toBe(true);
+    });
+
+    it("labels ⌘ on macOS, except Control for switching files because ⌘Tab switches apps", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      vi.resetModules();
+      const mac = await import("./shortcuts");
+      platform.mockRestore();
+
+      const keys = new Map(mac.SHORTCUTS.map((s) => [s.action, s.keys]));
+      expect(mac.modKey).toBe("⌘");
+      expect(keys.get("Cerrar archivo")).toBe("⌘ W");
+      expect(keys.get("Siguiente archivo")).toBe("⌃ Tab");
+      expect(keys.get("Archivo anterior")).toBe("⌃ Shift Tab");
     });
   });
 
@@ -148,6 +166,32 @@ describe("shortcuts", () => {
       window.dispatchEvent(event);
 
       expect(mockActions.addRepo).toHaveBeenCalled();
+      cleanup();
+    });
+
+    it("switches files on Ctrl+Tab and Ctrl+Shift+Tab", () => {
+      const repo = "/r";
+      const apiRef = {
+        current: { activePanel: { params: { repo } }, panels: [] } as unknown as DockviewApi,
+      };
+      vi.spyOn(fileDock, "getState").mockReturnValue({
+        open: ["a.ts", "b.ts", "c.ts"],
+        active: "b.ts",
+        preview: null,
+      });
+      const openFile = vi.spyOn(fileDock, "openFile").mockImplementation(() => {});
+      const cleanup = installShortcuts(apiRef, mockActions);
+
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", ctrlKey: true }));
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", ctrlKey: true, shiftKey: true }),
+      );
+
+      expect(openFile.mock.calls).toEqual([
+        [repo, "c.ts", true],
+        [repo, "a.ts", true],
+      ]);
+      vi.restoreAllMocks();
       cleanup();
     });
 

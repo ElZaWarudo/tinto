@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
 import { enableNotifications, disableNotifications } from "../qol/notifications";
+import { modKey } from "../qol/shortcuts";
 import { qualityStore, useQualityState } from "../qol/state";
 import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
@@ -553,19 +554,19 @@ export function MenuBar() {
               />
               <div className="menu__sep" role="separator" />
               <MenuItem
-                label="Aumentar texto del archivo  (Ctrl +)"
+                label={`Aumentar texto del archivo  (${modKey} +)`}
                 testid="zoom-in"
                 close={close}
                 onSelect={() => zoomStore.zoomIn()}
               />
               <MenuItem
-                label="Reducir texto del archivo  (Ctrl −)"
+                label={`Reducir texto del archivo  (${modKey} −)`}
                 testid="zoom-out"
                 close={close}
                 onSelect={() => zoomStore.zoomOut()}
               />
               <MenuItem
-                label="Restablecer texto del archivo  (Ctrl 0)"
+                label={`Restablecer texto del archivo  (${modKey} 0)`}
                 testid="zoom-reset"
                 close={close}
                 onSelect={() => zoomStore.reset()}

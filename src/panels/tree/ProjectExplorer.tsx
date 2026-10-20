@@ -18,6 +18,7 @@ import {
 import type { PassiveSignal } from "../../bus/contract";
 import { busStore, getRepoSignals, useBusState } from "../../bus/store";
 import { filterTreeNodes, hasActiveFilters } from "../../qol/filters";
+import { modKey } from "../../qol/shortcuts";
 import { qualityStore, useQualityState } from "../../qol/state";
 import { repoTreeStore, useRepoTree } from "../../workspace/repoTreeStore";
 import { fileDock, useRepoDock } from "../../workspace/fileDock";
@@ -789,7 +790,7 @@ export function ProjectExplorer({
         : `Eliminar ${sources.length} elementos seleccionados del disco?`;
     if (
       !window.confirm(
-        `${confirmation}\n\nPuedes restaurarlo con Ctrl+Z mientras Tinto siga abierto.`,
+        `${confirmation}\n\nPuedes restaurarlo con ${modKey}+Z mientras Tinto siga abierto.`,
       )
     ) {
       return;

@@ -2,11 +2,8 @@
 // "Ayuda" menu. Close on backdrop click, Escape key, or the × button.
 
 import { useMemo } from "react";
-import { SHORTCUTS } from "../qol/shortcuts";
+import { SHORTCUTS, modKey } from "../qol/shortcuts";
 import { useAccessibleDialog } from "./useAccessibleDialog";
-
-const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-const mod = isMac ? "⌘" : "Ctrl";
 
 interface ShortcutGroup {
   title: string;
@@ -27,9 +24,9 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
 
     // Add zoom shortcuts to "Texto" group
     const zoomItems = [
-      { action: "Aumentar tamaño del texto", keys: `${mod} +` },
-      { action: "Reducir tamaño del texto", keys: `${mod} −` },
-      { action: "Restablecer tamaño del texto", keys: `${mod} 0` },
+      { action: "Aumentar tamaño del texto", keys: `${modKey} +` },
+      { action: "Reducir tamaño del texto", keys: `${modKey} −` },
+      { action: "Restablecer tamaño del texto", keys: `${modKey} 0` },
     ];
     byGroup.set("Texto", zoomItems);
 
