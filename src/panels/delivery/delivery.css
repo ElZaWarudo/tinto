@@ -1335,7 +1335,8 @@
 }
 .delivery-panel .delivery-job__summary {
   display: grid;
-  grid-template-columns: 14px minmax(140px, auto) minmax(0, 1fr) auto auto 64px;
+  /* The time fits its text: a running job reads "30 min 54 s de 45 min". */
+  grid-template-columns: 14px minmax(140px, auto) minmax(0, 1fr) auto auto minmax(64px, auto);
   align-items: center;
   gap: 10px;
   width: 100%;
