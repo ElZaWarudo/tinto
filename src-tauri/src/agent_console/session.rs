@@ -164,12 +164,17 @@ impl AgentSessionRecord {
             return Ok(());
         }
 
+        // Whatever code a stopped agent exits with (Claude Code exits 1 on
+        // SIGTERM), the user ended it: that is not a failure. One that had
+        // already exited on its own keeps what its exit code says.
+        let mut stopped = false;
         if let Some(process) = self.process.as_mut() {
             if let Some(provider_session_id) = process.provider_session_id() {
                 self.provider_session_id = Some(provider_session_id);
             }
             self.acp_runtime = process.acp_runtime();
             self.acp_permissions = process.acp_permissions();
+            stopped = !matches!(process.try_exit_code(), Ok(Some(_)));
             let kill_result = process.kill();
             if let Some(provider_session_id) = process.provider_session_id() {
                 self.provider_session_id = Some(provider_session_id);
@@ -194,9 +199,14 @@ impl AgentSessionRecord {
         }
 
         self.ended_at_ms = Some(now_ms());
-        self.status = status_from_exit_code(self.exit_code);
+        if stopped {
+            self.status = AgentSessionStatus::Completed;
+            self.error = None;
+        } else {
+            self.status = status_from_exit_code(self.exit_code);
+            self.error = self.exit_code.and_then(process_exit_error);
+        }
         self.process = None;
-        self.error = self.exit_code.and_then(process_exit_error);
         self.close_turn(now_ms())?;
         self.refresh_change_log()?;
         Ok(())
@@ -2427,6 +2437,76 @@ mod tests {
         let contract = session.to_contract();
         assert_eq!(contract.status, AgentSessionStatus::Completed);
         assert_eq!(contract.exit_code, Some(0));
+    }
+
+    /// Exits with `code` when killed, as Claude Code exits 1 on SIGTERM.
+    #[derive(Debug)]
+    struct ExitsOnKill {
+        code: i32,
+        exited: Option<i32>,
+    }
+
+    impl AgentProcess for ExitsOnKill {
+        fn pid(&self) -> Option<u32> {
+            Some(7)
+        }
+
+        fn try_exit_code(&mut self) -> Result<Option<i32>, AgentConsoleError> {
+            Ok(self.exited)
+        }
+
+        fn kill(&mut self) -> Result<(), AgentConsoleError> {
+            self.exited = self.exited.or(Some(self.code));
+            Ok(())
+        }
+
+        fn write_input(&mut self, _input: &[u8]) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), AgentConsoleError> {
+            Ok(())
+        }
+
+        fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_stop_the_user_asked_for_completes_whatever_the_exit_code() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        session
+            .start(Box::new(ExitsOnKill {
+                code: 1,
+                exited: None,
+            }))
+            .unwrap();
+
+        session.stop().unwrap();
+
+        let contract = session.to_contract();
+        assert_eq!(contract.status, AgentSessionStatus::Completed);
+        assert_eq!(contract.exit_code, Some(1));
+        assert!(contract.error.is_none());
+    }
+
+    #[test]
+    fn stopping_an_agent_that_already_failed_keeps_the_failure() {
+        let (_repo, _checkpoint_dir, mut session) = session_record();
+        session
+            .start(Box::new(ExitsOnKill {
+                code: 1,
+                exited: Some(2),
+            }))
+            .unwrap();
+
+        session.stop().unwrap();
+
+        let contract = session.to_contract();
+        assert_eq!(contract.status, AgentSessionStatus::Failed);
+        assert_eq!(contract.exit_code, Some(2));
+        assert_eq!(contract.error.unwrap().category, "agent_process_failed");
     }
 
     #[test]
