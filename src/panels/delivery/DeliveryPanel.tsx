@@ -2,11 +2,37 @@
 // background agent stages. A separate way to work from Agents; the two only
 // meet through "Abrir en Agents".
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
+import { createPortal } from "react-dom";
+import { DockviewReact, themeVisualStudio } from "dockview-react";
+import type {
+  DockviewApi,
+  DockviewReadyEvent,
+  IDockviewHeaderActionsProps,
+  IDockviewPanelHeaderProps,
+  IDockviewPanelProps,
+  SerializedDockview,
+} from "dockview-react";
 import { busStore, useBusState } from "../../bus/store";
 import { useAgentSessionState } from "../../agent/sessionStore";
 import { useWorkspaceActions } from "../../workspace/actions";
 import { setBaseView } from "../../workspace/baseView";
+import {
+  openDetachedPanelWindow,
+  watchDetachedPanelWindow,
+} from "../../workspace/detachPanelWindow";
+import { armExternalTabDetach } from "../../workspace/externalTabDetach";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
 import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
@@ -73,7 +99,8 @@ import {
   CorrectResultDialog,
   NewTaskDialog,
   ReleaseLeaseDialog,
-  SettingsPage,
+  DeliverySettingsDialog,
+  RepoSettingsPage,
   StageAgentRow,
   type CorrectableStep,
   type RepoChoice,
@@ -129,6 +156,7 @@ type Dialog =
   | { kind: "dispatch"; task: DeliveryTask; role: string; prompt: string; source: string | null }
   | { kind: "release"; name: string; note: string | null }
   | { kind: "archived" }
+  | { kind: "settings" }
   | null;
 
 /** What the task list shows: one batch (null: all of them) and the groups
@@ -211,25 +239,45 @@ function StatusLine({ status }: { status: TaskStatus }) {
   );
 }
 
-/** A button that opens a short list of actions; closes on outside click or Escape. */
+/** A button that opens a short list of actions; closes on outside click or Escape.
+ *  `floating` draws the list over the whole Delivery panel, for a button in a
+ *  strip that would cut it off (the repo tabs'). */
 function Menu({
   label,
   trigger,
   disabled,
+  floating,
   children,
 }: {
   label?: string;
   trigger: ReactNode;
   disabled?: boolean;
+  floating?: boolean;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState<{ host: Element; top: number; right: number } | null>(null);
+  const toggle = () => {
+    const host = floating ? ref.current?.closest(".delivery-panel") : null;
+    if (!open && host && ref.current) {
+      const button = ref.current.getBoundingClientRect();
+      const panel = host.getBoundingClientRect();
+      setPlace({ host, top: button.bottom - panel.top + 2, right: panel.right - button.right });
+    } else {
+      setPlace(null);
+    }
+    setOpen(!open);
+  };
   useEffect(() => {
     if (!open) return;
-    ref.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
+    (listRef.current ?? ref.current)
+      ?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')
+      ?.focus();
     const onPointer = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!ref.current?.contains(target) && !listRef.current?.contains(target)) setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
@@ -249,15 +297,28 @@ function Menu({
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         {trigger}
       </button>
-      {open && (
-        <div className="delivery-menu__list" role="menu">
-          {children(() => setOpen(false))}
-        </div>
-      )}
+      {open &&
+        (place ? (
+          createPortal(
+            <div
+              ref={listRef}
+              className="delivery-menu__list"
+              role="menu"
+              style={{ top: place.top, right: place.right }}
+            >
+              {children(() => setOpen(false))}
+            </div>,
+            place.host,
+          )
+        ) : (
+          <div ref={listRef} className="delivery-menu__list" role="menu">
+            {children(() => setOpen(false))}
+          </div>
+        ))}
     </span>
   );
 }
@@ -347,18 +408,107 @@ function lastStageAgent(jobs: DeliveryJob[], taskId: string): DeliveryStageAgent
   return last ? { agent: last.agent, model: last.model, reasoning: last.reasoning ?? null } : null;
 }
 
-export function DeliveryPanel() {
+/** The same repo whatever Windows prefix (`\\?\`), slashes or case its path carries. */
+function repoKey(path: string): string {
+  return path
+    .replace(/^\\\\\?\\/, "")
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+const repoPanelId = (repo: string) => `delivery:${repoKey(repo)}`;
+
+/** What every repo's tab reads from the panel that holds them. */
+interface DeliveryShared {
+  overview: DeliveryOverview | null;
+  now: number;
+  repos: RepoChoice[];
+  listView: ListView;
+  setListView: Dispatch<SetStateAction<ListView>>;
+  /** Each repo's shown task, by repoKey. */
+  selected: Record<string, string>;
+  select: (repo: string, taskId: string | null) => void;
+  reveal: (task: DeliveryTask) => void;
+  run: (action: () => Promise<unknown>) => Promise<boolean>;
+  dispatch: (task: DeliveryTask, role: string, prompt: string, source: string | null) => void;
+  openTaskInAgents: (task: DeliveryTask, agentType: string) => Promise<void>;
+  continueJob: (job: DeliveryJob) => Promise<void>;
+  takeover: (run: DeliveryRun) => Promise<false | undefined>;
+  /** Opens a repo's tab in the dock (from "+"). */
+  openRepo: (repo: string) => void;
+}
+
+const DeliveryContext = createContext<DeliveryShared | null>(null);
+
+function useDelivery(): DeliveryShared {
+  const shared = useContext(DeliveryContext);
+  if (!shared) throw new Error("Delivery context missing");
+  return shared;
+}
+
+const DOCK_KEY = "tinto:delivery-dock";
+const DETACHED_KEY = "tinto:delivery-detached";
+
+function savedDetached(): Record<string, string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DETACHED_KEY) ?? "null") as unknown;
+    if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+      return saved as Record<string, string>;
+    }
+  } catch {
+    // Nothing was out.
+  }
+  return {};
+}
+
+/** Delivery: one tab per repo, which can be reordered, split and taken out
+ *  to a window of its own. `only` shows a single repo, as a detached window
+ *  does. */
+export function DeliveryPanel({ only }: { only?: string } = {}) {
   const bus = useBusState();
   const { openAgentTerminal } = useWorkspaceActions();
   const [overview, setOverview] = useState<DeliveryOverview | null>(null);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Record<string, string>>({});
   const [dialog, setDialog] = useState<Dialog>(null);
-  // The settings page, shown in place of the tasks.
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [repoSettings, setRepoSettings] = useState<DeliveryRepoSettings | null>(null);
   const [listView, setListView] = useState(savedListView);
+  const dockRef = useRef<DockviewApi | null>(null);
+  const [dockReady, setDockReady] = useState(false);
+  // Repos whose tab is in a window of its own (repoKey → the path it opened
+  // with); it comes back when that closes. Saved, so a reload of this window
+  // leaves the tab out while its window is still open.
+  const [detached, setDetached] = useState(savedDetached);
+  useEffect(() => {
+    if (only) return;
+    try {
+      localStorage.setItem(DETACHED_KEY, JSON.stringify(detached));
+    } catch {
+      // A reload brings the tab back beside its window.
+    }
+  }, [only, detached]);
+  const attach = useCallback(
+    (key: string) =>
+      setDetached((current) => {
+        if (!(key in current)) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      }),
+    [],
+  );
+  // The windows that were out before a reload: the closed ones come back
+  // now, the open ones when they close.
+  useEffect(() => {
+    if (only) return;
+    for (const [key, repo] of Object.entries(savedDetached())) {
+      void watchDetachedPanelWindow({ kind: "delivery", repo }, () => attach(key)).then((open) => {
+        if (!open) attach(key);
+      });
+    }
+  }, [only, attach]);
   useEffect(() => {
     try {
       localStorage.setItem(LIST_VIEW_KEY, JSON.stringify(listView));
@@ -452,61 +602,113 @@ export function DeliveryPanel() {
   const statuses = new Map(
     overview ? tasks.map((task) => [task.id, taskStatus(task, overview, now)] as const) : [],
   );
-  const activeRuns = (overview?.runs ?? []).filter((candidate) => candidate.status === "active");
-  // A batch that closed since, or the only one left, shows every task.
-  const lot =
-    activeRuns.length > 1 && activeRuns.some((candidate) => candidate.id === listView.lot)
-      ? listView.lot
-      : null;
-  const listed = lot ? tasks.filter((task) => task.run_id === lot) : tasks;
-  // What needs the user is never folded.
-  const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
-  const groups = GROUPS.map((group) => ({
-    ...group,
-    tasks: listed.filter((task) => statuses.get(task.id)?.group === group.group),
-  })).filter((group) => group.tasks.length > 0);
-  const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
-  // With every group folded, the detail still shows a task.
-  const selectedTask =
-    tasks.find((task) => task.id === selectedTaskId) ?? ordered[0] ?? groups[0]?.tasks[0] ?? null;
-  const shownTaskId = selectedTask?.id ?? null;
-  // Keep showing the same task when its group changes (e.g. after answering
-  // its decisions) instead of jumping to whatever is first in the list.
-  if (shownTaskId && shownTaskId !== selectedTaskId) setSelectedTaskId(shownTaskId);
-  // Across every batch, whichever one the list shows.
+  // Across every repo, whichever tab is in front.
   const needYou = tasks.filter((task) => statuses.get(task.id)?.group === "attention");
-  const multiRepo = new Set(tasks.map((task) => task.repo)).size > 1;
-  // Shows the task, leaving the batch filter when it is in another batch.
+  // One path per repo with tasks, as its tasks name it.
+  const taskRepos = [
+    ...new Map(tasks.map((task) => [repoKey(task.repo), task.repo] as const)).values(),
+  ];
+
+  const select = useCallback((repo: string, taskId: string | null) => {
+    setSelected((current) => {
+      const key = repoKey(repo);
+      if ((current[key] ?? null) === taskId) return current;
+      const next = { ...current };
+      if (taskId) next[key] = taskId;
+      else delete next[key];
+      return next;
+    });
+  }, []);
+
+  const addRepoPanel = (api: DockviewApi, repo: string) => {
+    if (api.getPanel(repoPanelId(repo))) return;
+    api.addPanel({
+      id: repoPanelId(repo),
+      component: "deliveryRepo",
+      tabComponent: "deliveryRepoTab",
+      title: busStore.displayName(repo),
+      params: { repo },
+      // A tab that comes with new tasks leaves the one in front where it is.
+      inactive: api.panels.length > 0,
+    });
+  };
+
+  const openRepo = (repo: string) => {
+    const api = dockRef.current;
+    if (!api) return;
+    addRepoPanel(api, repo);
+    api.getPanel(repoPanelId(repo))?.api.setActive();
+  };
+
+  // Shows the task in its repo's tab, leaving a batch filter that hides it.
   const reveal = (task: DeliveryTask) => {
-    if (lot && task.run_id !== lot) setListView((view) => ({ ...view, lot: null }));
-    setSelectedTaskId(task.id);
-  };
-  // A task the list stops showing gives the detail to the first one left.
-  const chooseLot = (next: string | null) => {
-    setListView((view) => ({ ...view, lot: next }));
-    if (next && selectedTask && selectedTask.run_id !== next) setSelectedTaskId(null);
-  };
-  // The delivered tasks the list shows go to "Archivadas…", as one by one.
-  const archiveDelivered = async (delivered: DeliveryTask[]) => {
-    const ok = await confirm(
-      `${delivered.length === 1 ? "Se archiva 1 tarea entregada" : `Se archivan ${delivered.length} tareas entregadas`}: se borran sus worktrees y ramas locales, todo está en GitHub. Puedes recuperarlas en "Archivadas…".`,
-      { title: "Archivar entregadas", okLabel: "Archivar" },
-    );
-    if (!ok) return false;
-    for (const task of delivered) await archiveDeliveryTask(task.id);
-    if (selectedTask && delivered.includes(selectedTask)) setSelectedTaskId(null);
-  };
-  const toggleGroup = (group: StatusGroup) => {
-    const folding = !listView.folded.includes(group);
-    setListView((view) => ({
-      ...view,
-      folded: folding
-        ? [...view.folded, group]
-        : view.folded.filter((candidate) => candidate !== group),
-    }));
-    if (folding && selectedTask && statuses.get(selectedTask.id)?.group === group) {
-      setSelectedTaskId(null);
+    setListView((view) => (view.lot && view.lot !== task.run_id ? { ...view, lot: null } : view));
+    select(task.repo, task.id);
+    if (only) return;
+    const out = detached[repoKey(task.repo)];
+    if (out) {
+      void openDetachedPanelWindow({ kind: "delivery", repo: out });
+      return;
     }
+    openRepo(task.repo);
+  };
+
+  // Every repo with tasks has its tab, unless it is in a window of its own.
+  // A tab the saved layout brings for a repo that is out, or that is neither
+  // in the workbench nor has tasks, closes.
+  const taskRepoKeys = taskRepos.map(repoKey).join("\n");
+  const repoKeys = bus.config ? repos.map((repo) => repoKey(repo.path)).join("\n") : null;
+  useEffect(() => {
+    const api = dockRef.current;
+    if (!dockReady || !api) return;
+    const withTasks = taskRepos.map(repoKey);
+    for (const panel of [...api.panels]) {
+      const repo = (panel.params as { repo?: string } | undefined)?.repo;
+      if (!repo) continue;
+      const key = repoKey(repo);
+      const stray =
+        repoKeys !== null && !repoKeys.split("\n").includes(key) && !withTasks.includes(key);
+      if (key in detached || stray) panel.api.close();
+    }
+    for (const repo of taskRepos) {
+      if (!(repoKey(repo) in detached)) addRepoPanel(api, repo);
+    }
+    // The paths only matter through their keys.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dockReady, taskRepoKeys, repoKeys, detached]);
+
+  const onDockReady = (event: DockviewReadyEvent) => {
+    const api = event.api;
+    dockRef.current = api;
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem(DOCK_KEY) ?? "null",
+      ) as SerializedDockview | null;
+      if (saved) api.fromJSON(saved);
+    } catch {
+      // A layout from another version: the tabs open again in order.
+    }
+    api.onDidLayoutChange(() => {
+      try {
+        localStorage.setItem(DOCK_KEY, JSON.stringify(api.toJSON()));
+      } catch {
+        // The layout lasts until Tinto closes.
+      }
+    });
+    // A repo's tab dragged out of the window and released there opens in its
+    // own window; closing that window brings the tab back.
+    api.onWillDragPanel(({ panel, nativeEvent }) => {
+      const repo = (panel.params as { repo?: string } | undefined)?.repo;
+      if (!repo) return;
+      armExternalTabDetach(nativeEvent, async () => {
+        const key = repoKey(repo);
+        const opened = await openDetachedPanelWindow({ kind: "delivery", repo }, () => attach(key));
+        if (!opened) return;
+        setDetached((current) => ({ ...current, [key]: repo }));
+        panel.api.close();
+      });
+    });
+    setDockReady(true);
   };
 
   const jobs = overview?.jobs ?? [];
@@ -533,6 +735,446 @@ export function DeliveryPanel() {
     }
   };
 
+  const takeover = async (target: DeliveryRun) => {
+    const ok = await confirm(
+      `${target.owner} dejará de coordinar "${target.title}". Lo que envíe a partir de ahora se descarta.`,
+      { title: "Tomar el control", kind: "warning", okLabel: "Tomar el control" },
+    );
+    if (!ok) return false;
+    await takeoverDeliveryRun(target.id);
+  };
+
+  const shared: DeliveryShared = {
+    overview,
+    now,
+    repos,
+    listView,
+    setListView,
+    selected,
+    select,
+    reveal,
+    run,
+    dispatch: (task, role, prompt, source) => {
+      setRepoSettings(null);
+      getDeliveryRepoSettings(task.repo).then(setRepoSettings, () =>
+        setRepoSettings({ worktree_root: null, bootstrap: null, default_base: null }),
+      );
+      setDialog({ kind: "dispatch", task, role, prompt, source });
+    },
+    openTaskInAgents: async (task, agentType) => {
+      await run(async () => {
+        const conversation = await openDeliveryTaskInAgents(task.id, agentType);
+        openAgentTerminal({
+          sessionId: conversation.session_id,
+          repo: conversation.repo,
+          agentType: conversation.agent_type,
+        });
+      });
+    },
+    continueJob: async (job) => {
+      const conversation = await openDeliveryJobInAgents(job.id);
+      openAgentTerminal({
+        sessionId: conversation.session_id,
+        repo: conversation.repo,
+        agentType: conversation.agent_type,
+      });
+    },
+    takeover,
+    openRepo,
+  };
+
+  return (
+    <DeliveryRefreshContext.Provider value={refresh}>
+      <DeliveryContext.Provider value={shared}>
+        <div className="delivery-panel" data-testid="delivery-panel">
+          <header className="delivery-panel__header">
+            <h1>Delivery</h1>
+            {only && <span className="delivery-muted">{busStore.displayName(only)}</span>}
+            <span className="delivery-panel__spacer" />
+            {needYou.length > 0 && (
+              <button
+                type="button"
+                className="delivery-attention"
+                onClick={() => reveal(needYou[0])}
+              >
+                <Icon name="flag" />
+                {needYou.length === 1
+                  ? "1 tarea te necesita"
+                  : `${needYou.length} tareas te necesitan`}
+              </button>
+            )}
+            <span className="delivery-load">
+              Agentes
+              <span className="delivery-meter" aria-hidden>
+                {Array.from({ length: capacity }, (_, index) => (
+                  <i key={index} className={index < running.length ? "on" : undefined} />
+                ))}
+              </span>
+              {running.length} de {capacity}
+              {queued.length > 0 && (
+                <span className="delivery-muted">· {queued.length} en cola</span>
+              )}
+            </span>
+            {qa?.state === "quarantined" ? (
+              <button
+                type="button"
+                className="delivery-lease delivery-lease--quarantined"
+                title={qa.note ?? undefined}
+                onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
+              >
+                QA en cuarentena
+                {qa.queue.length > 0 && (
+                  <span className="delivery-muted">· {qa.queue.length} esperando</span>
+                )}
+              </button>
+            ) : (
+              qa && (
+                <span
+                  className={`delivery-lease delivery-lease--${qa.state}`}
+                  title={qa.note ?? undefined}
+                >
+                  {qa.state === "active" ? `QA: ${qaHolder?.key ?? "ocupado"}` : "QA libre"}
+                  {qa.queue.length > 0 && (
+                    <span className="delivery-muted">· {qa.queue.length} esperando</span>
+                  )}
+                </span>
+              )
+            )}
+            <button type="button" onClick={() => setDialog({ kind: "archived" })}>
+              Archivadas…
+            </button>
+            <button
+              type="button"
+              className="delivery-icon-button"
+              aria-label="Ajustes de Delivery"
+              title="Agentes en paralelo y conexión de coordinadores"
+              onClick={() => setDialog({ kind: "settings" })}
+            >
+              <Icon name="gear" />
+            </button>
+            <button
+              type="button"
+              className="delivery-button--primary"
+              disabled={repos.length === 0}
+              onClick={() => setDialog({ kind: "new-task" })}
+            >
+              Nueva tarea
+            </button>
+          </header>
+
+          {error && (
+            <div className="delivery-panel__error" role="alert">
+              <span>{error}</span>
+              <button type="button" aria-label="Descartar error" onClick={() => setError(null)}>
+                ×
+              </button>
+            </div>
+          )}
+
+          {/* A coordinator Tinto could not wake: nothing moves until it goes on. */}
+          {stalls.map(({ run, unread, since }) => (
+            <div key={run.id} className="delivery-panel__warning" role="status">
+              <span>
+                {batchName(run.title || run.id)}: el coordinador
+                {run.owner && run.owner !== "user" ? ` (${run.owner})` : ""} no está esperando y
+                tiene {unread === 1 ? "1 cambio" : `${unread} cambios`} sin leer desde las{" "}
+                {new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
+                Pídele que siga con wait_run; si sus herramientas de Delivery fallan, que las
+                reconecte.
+              </span>
+            </div>
+          ))}
+
+          {/* Only when it holds work back; otherwise the header and the task say it. */}
+          {qa?.state === "quarantined" && qa.queue.length > 0 && (
+            <div className="delivery-panel__warning" role="status">
+              <span title={qa.note ?? undefined}>
+                {qa.queue.length === 1 ? "Una QA espera" : `${qa.queue.length} QA esperan`} a que
+                liberes el recurso QA{qaHolder ? `, en cuarentena tras ${qaHolder.key}` : ""}.
+              </span>
+              <button
+                type="button"
+                onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
+              >
+                Liberar…
+              </button>
+            </div>
+          )}
+
+          {only ? (
+            <DeliveryRepoView repo={only} />
+          ) : (
+            <div className="delivery-dock">
+              {overview && tasks.length === 0 && (
+                <p className="delivery-panel__empty">
+                  Crea una tarea para trabajar un issue en su propio worktree y rama.
+                </p>
+              )}
+              <DockviewReact
+                theme={themeVisualStudio}
+                components={deliveryDockComponents}
+                tabComponents={deliveryDockTabs}
+                rightHeaderActionsComponent={DeliveryAddRepo}
+                dndStrategy="pointer"
+                onReady={onDockReady}
+              />
+            </div>
+          )}
+
+          {dialog?.kind === "settings" && (
+            <DeliverySettingsDialog
+              capacity={capacitySetting}
+              endpoint={overview?.coordinator ?? null}
+              onCapacity={(value) => void run(() => updateDeliverySettings(value))}
+              onClose={() => setDialog(null)}
+            />
+          )}
+          {dialog?.kind === "new-task" && (
+            <NewTaskDialog
+              repos={repos}
+              runs={overview?.runs ?? []}
+              onCancel={() => setDialog(null)}
+              onSubmit={async (values) => {
+                if (values.bootstrap.trim()) {
+                  const current = await getDeliveryRepoSettings(values.repo.path);
+                  await setDeliveryRepoSettings(values.repo.path, {
+                    ...current,
+                    bootstrap: values.bootstrap.trim(),
+                  });
+                }
+                const task = await createDeliveryTask({
+                  repo: values.repo.path,
+                  distro: values.repo.distro,
+                  key: values.key.trim(),
+                  title: values.title.trim(),
+                  base: values.base.trim(),
+                  branch: values.branch.trim(),
+                  runId: values.runId,
+                });
+                reveal(task);
+                setDialog(null);
+              }}
+            />
+          )}
+          {dialog?.kind === "dispatch" && (
+            <DispatchDialog
+              task={dialog.task}
+              settings={repoSettings}
+              lastAgent={lastStageAgent(jobs, dialog.task.id)}
+              initialRole={dialog.role}
+              initialPrompt={dialog.prompt}
+              promptSource={dialog.source}
+              onCancel={() => setDialog(null)}
+              onSubmit={async (values) => {
+                if (values.access === "full") {
+                  const ok = await confirm(
+                    `El agente podrá ejecutar comandos y modificar archivos fuera del worktree sin pedir aprobación.\n\nWorktree: ${dialog.task.worktree}`,
+                    {
+                      title: "Dar acceso completo",
+                      kind: "warning",
+                      okLabel: "Dar acceso completo",
+                    },
+                  );
+                  if (!ok) return false;
+                }
+                {
+                  // The stage keeps the agent it was launched with.
+                  const stage = values.role.toLowerCase();
+                  const current = await getDeliveryRepoSettings(dialog.task.repo);
+                  const fixed = current.stages?.[stage];
+                  const same =
+                    fixed?.agent === values.agent &&
+                    (fixed.model ?? "") === values.model &&
+                    (fixed.reasoning ?? "") === values.reasoning;
+                  if (values.settings || !same) {
+                    await setDeliveryRepoSettings(dialog.task.repo, {
+                      ...current,
+                      ...values.settings,
+                      stages: {
+                        ...current.stages,
+                        [stage]: {
+                          agent: values.agent,
+                          model: values.model || null,
+                          reasoning: values.reasoning || null,
+                        },
+                      },
+                    });
+                  }
+                  await dispatchDeliveryJob({
+                    taskId: dialog.task.id,
+                    role: values.role,
+                    agent: values.agent,
+                    model: values.model,
+                    reasoning: values.reasoning,
+                    access: values.access,
+                    prompt: values.prompt,
+                    platform: values.platform,
+                  });
+                }
+                setDialog(null);
+              }}
+            />
+          )}
+          {dialog?.kind === "release" && (
+            <ReleaseLeaseDialog
+              name={dialog.name}
+              note={dialog.note}
+              onCancel={() => setDialog(null)}
+              onSubmit={async (confirmation) => {
+                await releaseDeliveryLease(dialog.name, confirmation);
+                setDialog(null);
+              }}
+            />
+          )}
+          {dialog?.kind === "archived" && (
+            <ArchivedTasksDialog
+              onCancel={() => setDialog(null)}
+              onUnarchive={async (taskId) => {
+                const task = await unarchiveDeliveryTask(taskId);
+                setDialog(null);
+                reveal(task);
+              }}
+            />
+          )}
+        </div>
+      </DeliveryContext.Provider>
+    </DeliveryRefreshContext.Provider>
+  );
+}
+
+const deliveryDockComponents = {
+  deliveryRepo: ({ params }: IDockviewPanelProps<{ repo: string }>) => (
+    <DeliveryRepoView repo={params.repo} />
+  ),
+};
+
+/** A repo's tab: its name, how many tasks it has and whether one needs you.
+ *  A repo with no tasks left can be closed. */
+function DeliveryRepoTab({ params, api }: IDockviewPanelHeaderProps<{ repo: string }>) {
+  const { overview, now } = useDelivery();
+  const tasks = (overview?.tasks ?? []).filter(
+    (task) => repoKey(task.repo) === repoKey(params.repo),
+  );
+  const needs =
+    overview !== null &&
+    tasks.some((task) => taskStatus(task, overview, now).group === "attention");
+  return (
+    <span className="delivery-repo-tab" title={params.repo}>
+      {busStore.displayName(params.repo)}
+      <span className="delivery-repo-tab__count">{tasks.length}</span>
+      {needs && <span className="delivery-repo-tab__needs" aria-label="te necesita" />}
+      {tasks.length === 0 && (
+        <button
+          type="button"
+          className="delivery-repo-tab__close"
+          aria-label={`Cerrar ${busStore.displayName(params.repo)}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            api.close();
+          }}
+        >
+          ×
+        </button>
+      )}
+    </span>
+  );
+}
+
+const deliveryDockTabs = { deliveryRepoTab: DeliveryRepoTab };
+
+/** "+" beside the tabs: a repo of the workbench without its tab. */
+function DeliveryAddRepo({ containerApi }: IDockviewHeaderActionsProps) {
+  const { repos, openRepo } = useDelivery();
+  const missing = repos.filter((repo) => !containerApi.getPanel(repoPanelId(repo.path)));
+  if (missing.length === 0) return null;
+  return (
+    <Menu label="Abrir un repositorio" trigger="+" floating>
+      {(close) =>
+        missing.map((repo) => (
+          <button
+            key={repo.path}
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              close();
+              openRepo(repo.path);
+            }}
+          >
+            {repo.label}
+          </button>
+        ))
+      }
+    </Menu>
+  );
+}
+
+/** One repo's delivery: its batches, its tasks and its settings. */
+function DeliveryRepoView({ repo }: { repo: string }) {
+  const shared = useDelivery();
+  const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const key = repoKey(repo);
+  const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
+    path: repo,
+    distro: null,
+    label: busStore.displayName(repo),
+  };
+  const tasks = (overview?.tasks ?? []).filter((task) => repoKey(task.repo) === key);
+  const statuses = new Map(
+    overview ? tasks.map((task) => [task.id, taskStatus(task, overview, now)] as const) : [],
+  );
+  const activeRuns = (overview?.runs ?? []).filter(
+    (candidate) => candidate.status === "active" && repoKey(candidate.repo) === key,
+  );
+  // A batch that closed since, or the only one left, shows every task.
+  const lot =
+    activeRuns.length > 1 && activeRuns.some((candidate) => candidate.id === listView.lot)
+      ? listView.lot
+      : null;
+  const listed = lot ? tasks.filter((task) => task.run_id === lot) : tasks;
+  // What needs the user is never folded.
+  const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
+  const groups = GROUPS.map((group) => ({
+    ...group,
+    tasks: listed.filter((task) => statuses.get(task.id)?.group === group.group),
+  })).filter((group) => group.tasks.length > 0);
+  const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
+  // With every group folded, the detail still shows a task.
+  const selectedTask =
+    tasks.find((task) => task.id === selected[key]) ?? ordered[0] ?? groups[0]?.tasks[0] ?? null;
+  const shownTaskId = selectedTask?.id ?? null;
+  // Keep showing the same task when its group changes (e.g. after answering
+  // its decisions) instead of jumping to whatever is first in the list.
+  useEffect(() => {
+    if (shownTaskId && shownTaskId !== selected[key]) select(repo, shownTaskId);
+  }, [shownTaskId, selected, key, repo, select]);
+  const chooseLot = (next: string | null) => {
+    setListView((view) => ({ ...view, lot: next }));
+    if (next && selectedTask && selectedTask.run_id !== next) select(repo, null);
+  };
+  // The delivered tasks the list shows go to "Archivadas…", as one by one.
+  const archiveDelivered = async (delivered: DeliveryTask[]) => {
+    const ok = await confirm(
+      `${delivered.length === 1 ? "Se archiva 1 tarea entregada" : `Se archivan ${delivered.length} tareas entregadas`}: se borran sus worktrees y ramas locales, todo está en GitHub. Puedes recuperarlas en "Archivadas…".`,
+      { title: "Archivar entregadas", okLabel: "Archivar" },
+    );
+    if (!ok) return false;
+    for (const task of delivered) await archiveDeliveryTask(task.id);
+    if (selectedTask && delivered.includes(selectedTask)) select(repo, null);
+  };
+  const toggleGroup = (group: StatusGroup) => {
+    const folding = !listView.folded.includes(group);
+    setListView((view) => ({
+      ...view,
+      folded: folding
+        ? [...view.folded, group]
+        : view.folded.filter((candidate) => candidate !== group),
+    }));
+    if (folding && selectedTask && statuses.get(selectedTask.id)?.group === group) {
+      select(repo, null);
+    }
+  };
+
   // Running Agents conversations of the batch's repo, to hand it to one.
   const agentSessions = Object.values(useAgentSessionState().sessions);
   const handOverTargets = (target: DeliveryRun) =>
@@ -543,31 +1185,22 @@ export function DeliveryPanel() {
         samePath(session.repo, target.repo),
     );
 
-  const takeover = async (target: DeliveryRun) => {
-    const ok = await confirm(
-      `${target.owner} dejará de coordinar "${target.title}". Lo que envíe a partir de ahora se descarta.`,
-      { title: "Tomar el control", kind: "warning", okLabel: "Tomar el control" },
-    );
-    if (!ok) return false;
-    await takeoverDeliveryRun(target.id);
-  };
-
-  // Every active batch with what can be done to it, and a new one.
+  // The repo's active batches with what can be done to each, and a new one.
   const batches = (trigger: ReactNode) => (
     <span className="delivery-batches-menu">
       <Menu trigger={trigger}>
         {() => (
           <BatchList
             runs={activeRuns}
-            repos={repos}
-            onCreateRun={(repo, title, qaJiraComment) =>
-              createDeliveryRun(repo, title, qaJiraComment)
+            repos={[choice]}
+            onCreateRun={(path, title, qaJiraComment) =>
+              createDeliveryRun(path, title, qaJiraComment)
             }
             onQaJiraComment={(target, post) =>
               void run(() => setDeliveryRunQaJiraComment(target.id, post))
             }
             onPause={(target, paused) => setDeliveryRunPaused(target.id, paused)}
-            onTakeover={takeover}
+            onTakeover={shared.takeover}
             onClose={async (target) => {
               const ok = await confirm(
                 `Se cerrará el lote "${target.title}". Sus tareas siguen disponibles.`,
@@ -583,444 +1216,194 @@ export function DeliveryPanel() {
   );
 
   return (
-    <DeliveryRefreshContext.Provider value={refresh}>
-      <div className="delivery-panel" data-testid="delivery-panel">
-        <header className="delivery-panel__header">
-          <h1>Delivery</h1>
-          {activeRuns.length === 1 ? (
-            <span className="delivery-run">
-              {batches(
-                <>
-                  <strong>{batchName(activeRuns[0].title || activeRuns[0].id)}</strong>
-                  <Icon name="down" />
-                </>,
-              )}
-              <span className="delivery-muted" title={activeRuns[0].repo}>
-                {busStore.displayName(activeRuns[0].repo)} ·{" "}
-                {activeRuns[0].owner === "user"
-                  ? "lo diriges tú"
-                  : activeRuns[0].owner
-                    ? `coordina ${activeRuns[0].owner}`
-                    : "sin coordinador"}
-              </span>
-              {activeRuns[0].notified_at_ms && (
-                <span
-                  className="delivery-muted"
-                  title="Tinto le escribe en Agents lo que espera de él"
-                >
-                  · coordinador avisado {ago(activeRuns[0].notified_at_ms, now)}
-                </span>
-              )}
-              {activeRuns[0].owner && activeRuns[0].owner !== "user" && (
-                <ActionButton onAction={() => takeover(activeRuns[0])}>
-                  Tomar el control
-                </ActionButton>
-              )}
-              <Menu
-                trigger={
-                  <>
-                    Cambiar coordinador <Icon name="down" />
-                  </>
-                }
-              >
-                {(close) => {
-                  const targets = handOverTargets(activeRuns[0]);
-                  return targets.length === 0 ? (
-                    <span className="delivery-muted" role="menuitem" aria-disabled="true">
-                      Abre en Agents una conversación de este repositorio
-                    </span>
-                  ) : (
-                    targets.map((session) => (
-                      <button
-                        key={session.id}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          close();
-                          void run(() => handOverDeliveryRun(activeRuns[0].id, session.id));
-                        }}
-                      >
-                        {agentName(session.agent_type)} · {session.id.slice(0, 8)}
-                        {session.turn_status === "working" ? " (trabajando)" : ""}
-                      </button>
-                    ))
-                  );
-                }}
-              </Menu>
-              <ActionButton
-                title={
-                  activeRuns[0].paused
-                    ? "Lo que está en cola vuelve a arrancar"
-                    : "Lo que está en cola espera; lo que corre sigue (puedes pausar cada etapa)"
-                }
-                onAction={() => setDeliveryRunPaused(activeRuns[0].id, !activeRuns[0].paused)}
-              >
-                {activeRuns[0].paused ? "Reanudar lote" : "Pausar lote"}
-              </ActionButton>
-            </span>
-          ) : (
-            batches(
+    <div className="delivery-repo" aria-label={`Delivery de ${choice.label}`}>
+      <div className="delivery-repo__bar">
+        {activeRuns.length === 1 ? (
+          <span className="delivery-run">
+            {batches(
               <>
-                {activeRuns.length > 1 ? `${activeRuns.length} lotes activos` : "Lotes"}
+                <strong>{batchName(activeRuns[0].title || activeRuns[0].id)}</strong>
                 <Icon name="down" />
               </>,
-            )
-          )}
-          <span className="delivery-panel__spacer" />
-          {needYou.length > 0 && (
-            <button
-              type="button"
-              className="delivery-attention"
-              onClick={() => {
-                setSettingsOpen(false);
-                reveal(needYou[0]);
-              }}
-            >
-              <Icon name="flag" />
-              {needYou.length === 1
-                ? "1 tarea te necesita"
-                : `${needYou.length} tareas te necesitan`}
-            </button>
-          )}
-          <span className="delivery-load">
-            Agentes
-            <span className="delivery-meter" aria-hidden>
-              {Array.from({ length: capacity }, (_, index) => (
-                <i key={index} className={index < running.length ? "on" : undefined} />
-              ))}
+            )}
+            <span className="delivery-muted" title={activeRuns[0].repo}>
+              {activeRuns[0].owner === "user"
+                ? "lo diriges tú"
+                : activeRuns[0].owner
+                  ? `coordina ${activeRuns[0].owner}`
+                  : "sin coordinador"}
             </span>
-            {running.length} de {capacity}
-            {queued.length > 0 && <span className="delivery-muted">· {queued.length} en cola</span>}
-          </span>
-          {qa?.state === "quarantined" ? (
-            <button
-              type="button"
-              className="delivery-lease delivery-lease--quarantined"
-              title={qa.note ?? undefined}
-              onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
-            >
-              QA en cuarentena
-              {qa.queue.length > 0 && (
-                <span className="delivery-muted">· {qa.queue.length} esperando</span>
-              )}
-            </button>
-          ) : (
-            qa && (
+            {activeRuns[0].notified_at_ms && (
               <span
-                className={`delivery-lease delivery-lease--${qa.state}`}
-                title={qa.note ?? undefined}
+                className="delivery-muted"
+                title="Tinto le escribe en Agents lo que espera de él"
               >
-                {qa.state === "active" ? `QA: ${qaHolder?.key ?? "ocupado"}` : "QA libre"}
-                {qa.queue.length > 0 && (
-                  <span className="delivery-muted">· {qa.queue.length} esperando</span>
-                )}
+                · coordinador avisado {ago(activeRuns[0].notified_at_ms, now)}
               </span>
-            )
-          )}
-          <button type="button" onClick={() => setDialog({ kind: "archived" })}>
-            Archivadas…
-          </button>
-          <button
-            type="button"
-            className="delivery-icon-button"
-            aria-label="Ajustes de Delivery"
-            aria-pressed={settingsOpen}
-            title="Ajustes de Delivery"
-            onClick={() => setSettingsOpen(!settingsOpen)}
-          >
-            <Icon name="gear" />
-          </button>
-          <button
-            type="button"
-            className="delivery-button--primary"
-            disabled={repos.length === 0}
-            onClick={() => setDialog({ kind: "new-task" })}
-          >
-            Nueva tarea
-          </button>
-        </header>
-
-        {error && (
-          <div className="delivery-panel__error" role="alert">
-            <span>{error}</span>
-            <button type="button" aria-label="Descartar error" onClick={() => setError(null)}>
-              ×
-            </button>
-          </div>
-        )}
-
-        {/* A coordinator Tinto could not wake: nothing moves until it goes on. */}
-        {stalls.map(({ run, unread, since }) => (
-          <div key={run.id} className="delivery-panel__warning" role="status">
-            <span>
-              {batchName(run.title || run.id)}: el coordinador
-              {run.owner && run.owner !== "user" ? ` (${run.owner})` : ""} no está esperando y tiene{" "}
-              {unread === 1 ? "1 cambio" : `${unread} cambios`} sin leer desde las{" "}
-              {new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
-              Pídele que siga con wait_run; si sus herramientas de Delivery fallan, que las
-              reconecte.
-            </span>
-          </div>
-        ))}
-
-        {/* Only when it holds work back; otherwise the header and the task say it. */}
-        {qa?.state === "quarantined" && qa.queue.length > 0 && (
-          <div className="delivery-panel__warning" role="status">
-            <span title={qa.note ?? undefined}>
-              {qa.queue.length === 1 ? "Una QA espera" : `${qa.queue.length} QA esperan`} a que
-              liberes el recurso QA{qaHolder ? `, en cuarentena tras ${qaHolder.key}` : ""}.
-            </span>
-            <button
-              type="button"
-              onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
+            )}
+            {activeRuns[0].owner && activeRuns[0].owner !== "user" && (
+              <ActionButton onAction={() => shared.takeover(activeRuns[0])}>
+                Tomar el control
+              </ActionButton>
+            )}
+            <Menu
+              trigger={
+                <>
+                  Cambiar coordinador <Icon name="down" />
+                </>
+              }
             >
-              Liberar…
-            </button>
-          </div>
-        )}
-
-        {settingsOpen ? (
-          <SettingsPage
-            capacity={capacitySetting}
-            endpoint={overview?.coordinator ?? null}
-            repos={repos}
-            onCapacity={(value) => void run(() => updateDeliverySettings(value))}
-            onBack={() => setSettingsOpen(false)}
-          />
-        ) : (
-          <div className="delivery-panel__body">
-            <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
-              {tasks.length === 0 && (
-                <p className="delivery-panel__empty">
-                  Crea una tarea para trabajar un issue en su propio worktree y rama.
-                </p>
-              )}
-              {activeRuns.length > 1 && (
-                <label className="delivery-lot-filter">
-                  <span>Lote</span>
-                  <select
-                    value={lot ?? ""}
-                    onChange={(event) => chooseLot(event.target.value || null)}
-                  >
-                    <option value="">Todos los lotes ({tasks.length})</option>
-                    {activeRuns.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>
-                        {`${batchName(candidate.title || candidate.id)} (${
-                          tasks.filter((task) => task.run_id === candidate.id).length
-                        })`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {groups.map((group) => (
-                <section key={group.group} className="delivery-task-group" aria-label={group.label}>
-                  <h2>
-                    {group.group === "attention" ? (
-                      <>
-                        {group.label} <span>{group.tasks.length}</span>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        aria-expanded={!isFolded(group.group)}
-                        onClick={() => toggleGroup(group.group)}
-                      >
-                        <Icon name={isFolded(group.group) ? "right" : "down"} />
-                        {group.label} <span>{group.tasks.length}</span>
-                      </button>
-                    )}
-                    {group.group === "delivered" && (
-                      <ActionButton
-                        className="delivery-task-group__action"
-                        onAction={() => archiveDelivered(group.tasks)}
-                      >
-                        Archivar todas
-                      </ActionButton>
-                    )}
-                  </h2>
-                  {!isFolded(group.group) &&
-                    group.tasks.map((task) => (
-                      <button
-                        key={task.id}
-                        type="button"
-                        className="delivery-task-row"
-                        aria-current={selectedTask?.id === task.id ? "true" : undefined}
-                        onClick={() => setSelectedTaskId(task.id)}
-                      >
-                        <span className="delivery-task-row__key">
-                          {task.key}
-                          {multiRepo && (
-                            <span className="delivery-task-row__repo" title={task.repo}>
-                              {busStore.displayName(task.repo)}
-                            </span>
-                          )}
-                        </span>
-                        <span className="delivery-task-row__title">
-                          {task.title || task.branch}
-                        </span>
-                        <StatusLine status={statuses.get(task.id)!} />
-                      </button>
-                    ))}
-                </section>
-              ))}
-            </nav>
-
-            <main className="delivery-panel__detail">
-              {selectedTask && overview ? (
-                <TaskDetail
-                  key={selectedTask.id}
-                  task={selectedTask}
-                  overview={overview}
-                  now={now}
-                  run={run}
-                  onDispatch={(role, prompt, source) => {
-                    setRepoSettings(null);
-                    getDeliveryRepoSettings(selectedTask.repo).then(setRepoSettings, () =>
-                      setRepoSettings({ worktree_root: null, bootstrap: null, default_base: null }),
-                    );
-                    setDialog({ kind: "dispatch", task: selectedTask, role, prompt, source });
-                  }}
-                  onOpenConversation={async (agentType) => {
-                    await run(async () => {
-                      const conversation = await openDeliveryTaskInAgents(
-                        selectedTask.id,
-                        agentType,
-                      );
-                      openAgentTerminal({
-                        sessionId: conversation.session_id,
-                        repo: conversation.repo,
-                        agentType: conversation.agent_type,
-                      });
-                    });
-                  }}
-                  onContinueJob={async (job) => {
-                    const conversation = await openDeliveryJobInAgents(job.id);
-                    openAgentTerminal({
-                      sessionId: conversation.session_id,
-                      repo: conversation.repo,
-                      agentType: conversation.agent_type,
-                    });
-                  }}
-                  onRemoved={() => setSelectedTaskId(null)}
-                  onSelectTask={reveal}
-                />
-              ) : (
-                <p className="delivery-panel__empty">Sin tareas.</p>
-              )}
-            </main>
-          </div>
-        )}
-
-        {dialog?.kind === "new-task" && (
-          <NewTaskDialog
-            repos={repos}
-            runs={overview?.runs ?? []}
-            onCancel={() => setDialog(null)}
-            onSubmit={async (values) => {
-              if (values.bootstrap.trim()) {
-                const current = await getDeliveryRepoSettings(values.repo.path);
-                await setDeliveryRepoSettings(values.repo.path, {
-                  ...current,
-                  bootstrap: values.bootstrap.trim(),
-                });
-              }
-              const task = await createDeliveryTask({
-                repo: values.repo.path,
-                distro: values.repo.distro,
-                key: values.key.trim(),
-                title: values.title.trim(),
-                base: values.base.trim(),
-                branch: values.branch.trim(),
-                runId: values.runId,
-              });
-              reveal(task);
-              setDialog(null);
-            }}
-          />
-        )}
-        {dialog?.kind === "dispatch" && (
-          <DispatchDialog
-            task={dialog.task}
-            settings={repoSettings}
-            lastAgent={lastStageAgent(jobs, dialog.task.id)}
-            initialRole={dialog.role}
-            initialPrompt={dialog.prompt}
-            promptSource={dialog.source}
-            onCancel={() => setDialog(null)}
-            onSubmit={async (values) => {
-              if (values.access === "full") {
-                const ok = await confirm(
-                  `El agente podrá ejecutar comandos y modificar archivos fuera del worktree sin pedir aprobación.\n\nWorktree: ${dialog.task.worktree}`,
-                  {
-                    title: "Dar acceso completo",
-                    kind: "warning",
-                    okLabel: "Dar acceso completo",
-                  },
+              {(close) => {
+                const targets = handOverTargets(activeRuns[0]);
+                return targets.length === 0 ? (
+                  <span className="delivery-muted" role="menuitem" aria-disabled="true">
+                    Abre en Agents una conversación de este repositorio
+                  </span>
+                ) : (
+                  targets.map((session) => (
+                    <button
+                      key={session.id}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        void run(() => handOverDeliveryRun(activeRuns[0].id, session.id));
+                      }}
+                    >
+                      {agentName(session.agent_type)} · {session.id.slice(0, 8)}
+                      {session.turn_status === "working" ? " (trabajando)" : ""}
+                    </button>
+                  ))
                 );
-                if (!ok) return false;
+              }}
+            </Menu>
+            <ActionButton
+              title={
+                activeRuns[0].paused
+                  ? "Lo que está en cola vuelve a arrancar"
+                  : "Lo que está en cola espera; lo que corre sigue (puedes pausar cada etapa)"
               }
-              {
-                // The stage keeps the agent it was launched with.
-                const stage = values.role.toLowerCase();
-                const current = await getDeliveryRepoSettings(dialog.task.repo);
-                const fixed = current.stages?.[stage];
-                const same =
-                  fixed?.agent === values.agent &&
-                  (fixed.model ?? "") === values.model &&
-                  (fixed.reasoning ?? "") === values.reasoning;
-                if (values.settings || !same) {
-                  await setDeliveryRepoSettings(dialog.task.repo, {
-                    ...current,
-                    ...values.settings,
-                    stages: {
-                      ...current.stages,
-                      [stage]: {
-                        agent: values.agent,
-                        model: values.model || null,
-                        reasoning: values.reasoning || null,
-                      },
-                    },
-                  });
-                }
-                await dispatchDeliveryJob({
-                  taskId: dialog.task.id,
-                  role: values.role,
-                  agent: values.agent,
-                  model: values.model,
-                  reasoning: values.reasoning,
-                  access: values.access,
-                  prompt: values.prompt,
-                  platform: values.platform,
-                });
-              }
-              setDialog(null);
-            }}
-          />
+              onAction={() => setDeliveryRunPaused(activeRuns[0].id, !activeRuns[0].paused)}
+            >
+              {activeRuns[0].paused ? "Reanudar lote" : "Pausar lote"}
+            </ActionButton>
+          </span>
+        ) : (
+          batches(
+            <>
+              {activeRuns.length > 1 ? `${activeRuns.length} lotes activos` : "Lotes"}
+              <Icon name="down" />
+            </>,
+          )
         )}
-        {dialog?.kind === "release" && (
-          <ReleaseLeaseDialog
-            name={dialog.name}
-            note={dialog.note}
-            onCancel={() => setDialog(null)}
-            onSubmit={async (confirmation) => {
-              await releaseDeliveryLease(dialog.name, confirmation);
-              setDialog(null);
-            }}
-          />
-        )}
-        {dialog?.kind === "archived" && (
-          <ArchivedTasksDialog
-            onCancel={() => setDialog(null)}
-            onUnarchive={async (taskId) => {
-              const task = await unarchiveDeliveryTask(taskId);
-              setDialog(null);
-              reveal(task);
-            }}
-          />
-        )}
+        <span className="delivery-panel__spacer" />
+        <button
+          type="button"
+          className="delivery-icon-button"
+          aria-label={`Ajustes de ${choice.label}`}
+          aria-pressed={settingsOpen}
+          title={`Ajustes de ${choice.label}`}
+          onClick={() => setSettingsOpen(!settingsOpen)}
+        >
+          <Icon name="gear" />
+        </button>
       </div>
-    </DeliveryRefreshContext.Provider>
+
+      {settingsOpen ? (
+        <RepoSettingsPage repo={choice} onBack={() => setSettingsOpen(false)} />
+      ) : (
+        <div className="delivery-panel__body">
+          <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
+            {tasks.length === 0 && (
+              <p className="delivery-panel__empty">
+                Crea una tarea para trabajar un issue en su propio worktree y rama.
+              </p>
+            )}
+            {activeRuns.length > 1 && (
+              <label className="delivery-lot-filter">
+                <span>Lote</span>
+                <select
+                  value={lot ?? ""}
+                  onChange={(event) => chooseLot(event.target.value || null)}
+                >
+                  <option value="">Todos los lotes ({tasks.length})</option>
+                  {activeRuns.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {`${batchName(candidate.title || candidate.id)} (${
+                        tasks.filter((task) => task.run_id === candidate.id).length
+                      })`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {groups.map((group) => (
+              <section key={group.group} className="delivery-task-group" aria-label={group.label}>
+                <h2>
+                  {group.group === "attention" ? (
+                    <>
+                      {group.label} <span>{group.tasks.length}</span>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-expanded={!isFolded(group.group)}
+                      onClick={() => toggleGroup(group.group)}
+                    >
+                      <Icon name={isFolded(group.group) ? "right" : "down"} />
+                      {group.label} <span>{group.tasks.length}</span>
+                    </button>
+                  )}
+                  {group.group === "delivered" && (
+                    <ActionButton
+                      className="delivery-task-group__action"
+                      onAction={() => archiveDelivered(group.tasks)}
+                    >
+                      Archivar todas
+                    </ActionButton>
+                  )}
+                </h2>
+                {!isFolded(group.group) &&
+                  group.tasks.map((task) => (
+                    <button
+                      key={task.id}
+                      type="button"
+                      className="delivery-task-row"
+                      aria-current={selectedTask?.id === task.id ? "true" : undefined}
+                      onClick={() => select(repo, task.id)}
+                    >
+                      <span className="delivery-task-row__key">{task.key}</span>
+                      <span className="delivery-task-row__title">{task.title || task.branch}</span>
+                      <StatusLine status={statuses.get(task.id)!} />
+                    </button>
+                  ))}
+              </section>
+            ))}
+          </nav>
+
+          <main className="delivery-panel__detail">
+            {selectedTask && overview ? (
+              <TaskDetail
+                key={selectedTask.id}
+                task={selectedTask}
+                overview={overview}
+                now={now}
+                run={run}
+                onDispatch={(role, prompt, source) =>
+                  shared.dispatch(selectedTask, role, prompt, source)
+                }
+                onOpenConversation={(agentType) => shared.openTaskInAgents(selectedTask, agentType)}
+                onContinueJob={shared.continueJob}
+                onRemoved={() => select(repo, null)}
+                onSelectTask={reveal}
+              />
+            ) : (
+              <p className="delivery-panel__empty">Sin tareas.</p>
+            )}
+          </main>
+        </div>
+      )}
+    </div>
   );
 }
 

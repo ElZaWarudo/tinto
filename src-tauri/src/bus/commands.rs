@@ -1072,11 +1072,57 @@ pub async fn get_workbench_snapshot(
         .ok_or_else(|| CommandError::new("bus-unavailable", "el bus no está disponible"))
 }
 
+/// Las suscripciones de diffs de cada ventana; el bus sigue su unión. Una
+/// ventana de panel separada tiene su propio reconciliador, así que el
+/// conjunto de una ventana no debe reemplazar el de otra.
+#[derive(Default)]
+pub struct WindowSubscriptions(
+    std::sync::Mutex<std::collections::HashMap<String, Vec<SubscriptionTarget>>>,
+);
+
+impl WindowSubscriptions {
+    /// Guarda los objetivos de `label` (vacío olvida la ventana) y devuelve
+    /// la unión que debe seguir el bus.
+    pub fn update(&self, label: &str, targets: Vec<SubscriptionTarget>) -> Vec<SubscriptionTarget> {
+        let mut windows = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if targets.is_empty() {
+            windows.remove(label);
+        } else {
+            windows.insert(label.to_string(), targets);
+        }
+        merged_subscriptions(&windows)
+    }
+}
+
+/// La unión sin repetidos, primero las ventanas separadas: muestran un solo
+/// panel, que así sigue en vivo dentro del tope del bus.
+fn merged_subscriptions(
+    windows: &std::collections::HashMap<String, Vec<SubscriptionTarget>>,
+) -> Vec<SubscriptionTarget> {
+    let mut labels: Vec<&String> = windows.keys().collect();
+    labels.sort_by_key(|label| (label.as_str() == "main", label.as_str()));
+    let mut union: Vec<SubscriptionTarget> = Vec::new();
+    for label in labels {
+        for target in &windows[label] {
+            if !union.contains(target) {
+                union.push(target.clone());
+            }
+        }
+    }
+    union
+}
+
 #[tauri::command]
 pub async fn set_subscriptions(
+    window: tauri::Window,
     bus: State<'_, BusHandle>,
+    windows: State<'_, WindowSubscriptions>,
     targets: Vec<SubscriptionTarget>,
 ) -> Result<(), CommandError> {
+    let targets = windows.update(window.label(), targets);
     if bus.subscribe(targets).await {
         Ok(())
     } else {
@@ -1115,6 +1161,28 @@ pub async fn forget_repo(bus: State<'_, BusHandle>, repo: PathBuf) -> Result<(),
 mod tests {
     use super::*;
     use crate::git::test_fixtures::TempRepo;
+
+    #[test]
+    fn each_window_keeps_its_own_subscriptions() {
+        let target = |path: &str| SubscriptionTarget {
+            repo: PathBuf::from("/r"),
+            path: Some(PathBuf::from(path)),
+        };
+        let windows = WindowSubscriptions::default();
+        windows.update("main", vec![target("a.rs"), target("b.rs")]);
+        // A detached window's file comes first and does not drop the main window's.
+        assert_eq!(
+            windows.update("panel-1", vec![target("c.rs"), target("a.rs")]),
+            vec![target("c.rs"), target("a.rs"), target("b.rs")]
+        );
+        // The main window's next set leaves the detached one alone.
+        assert_eq!(
+            windows.update("main", vec![target("b.rs")]),
+            vec![target("c.rs"), target("a.rs"), target("b.rs")]
+        );
+        // A closed window is forgotten.
+        assert_eq!(windows.update("panel-1", Vec::new()), vec![target("b.rs")]);
+    }
 
     #[test]
     fn file_content_utf8_y_binario() {

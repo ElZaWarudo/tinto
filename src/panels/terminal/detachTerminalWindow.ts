@@ -1,5 +1,6 @@
 import type { TerminalPanelParams } from "./TerminalPanel";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openAppWindow } from "../../workspace/appWindow";
 
 const DETACHED_PARAM = "tintoDetachedTerminal";
 const DETACHED_CONSOLES_PARAM = "tintoDetachedConsoles";
@@ -127,78 +128,33 @@ export function consumeTerminalDetachedMarker(sessionId: string): boolean {
 }
 
 export async function openDetachedTerminalWindow(params: TerminalPanelParams): Promise<boolean> {
-  const label = detachedTerminalWindowLabel(params.sessionId);
-  const title = detachedTerminalWindowTitle(params);
-  try {
-    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-    const existing = await WebviewWindow.getByLabel(label);
-    if (existing) {
-      await existing.setFocus();
-      return true;
-    }
-
-    const webview = new WebviewWindow(label, {
-      url: detachedTerminalUrl(params),
-      title,
-      width: 980,
-      height: 680,
-      minWidth: 640,
-      minHeight: 420,
-      resizable: true,
-      focus: true,
-    });
-    return await new Promise<boolean>((resolve) => {
-      void webview.once("tauri://created", () => resolve(true));
-      void webview.once("tauri://error", (event) => {
-        console.error("Failed to create detached terminal window", event.payload);
-        resolve(false);
-      });
-    });
-  } catch (error) {
-    console.error("Failed to open detached terminal window", error);
-    const opened = window.open(detachedTerminalUrl(params), label, "width=980,height=680");
-    return !!opened;
-  }
+  return openAppWindow({
+    label: detachedTerminalWindowLabel(params.sessionId),
+    url: detachedTerminalUrl(params),
+    title: detachedTerminalWindowTitle(params),
+    width: 980,
+    height: 680,
+    minWidth: 640,
+    minHeight: 420,
+  });
 }
 
 export async function openDetachedConsolesWindow(
   params: TerminalPanelParams[] = [],
 ): Promise<boolean> {
-  const label = "consoles";
-  const url = detachedConsolesUrl(params);
-  try {
-    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-    const existing = await WebviewWindow.getByLabel(label);
-    if (existing) {
-      await existing.setFocus();
-      await Promise.all(
+  return openAppWindow({
+    label: "consoles",
+    url: detachedConsolesUrl(params),
+    title: "Agents",
+    width: 1100,
+    height: 720,
+    minWidth: 720,
+    minHeight: 460,
+    onExisting: (existing) =>
+      Promise.all(
         params.map((terminal) => existing.emit(DETACHED_CONSOLES_OPEN_TERMINAL_EVENT, terminal)),
-      );
-      return true;
-    }
-
-    const webview = new WebviewWindow(label, {
-      url,
-      title: "Agents",
-      width: 1100,
-      height: 720,
-      minWidth: 720,
-      minHeight: 460,
-      resizable: true,
-      focus: true,
-    });
-    return await new Promise<boolean>((resolve) => {
-      void webview.once("tauri://created", () => resolve(true));
-      void webview.once("tauri://error", (event) => {
-        console.error("Failed to create detached consoles window", event.payload);
-        resolve(false);
-      });
-    });
-  } catch (error) {
-    console.error("Failed to open detached consoles window", error);
-    const opened = window.open(url, label, "width=1100,height=720");
-    return !!opened;
-  }
+      ),
+  });
 }
 
 export async function sendTerminalToDetachedConsoles(

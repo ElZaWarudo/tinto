@@ -11,6 +11,8 @@
 
 import { useSyncExternalStore } from "react";
 import type { DockviewApi, SerializedDockview } from "dockview-react";
+import { openDetachedPanelWindow } from "./detachPanelWindow";
+import { armExternalTabDetach } from "./externalTabDetach";
 
 export const FILE_PREVIEW_ID = "__preview__";
 export const filePanelId = (path: string) => `file:${path}`;
@@ -135,7 +137,15 @@ class FileDock {
     });
     const d3 = api.onDidActivePanelChange(() => this.recompute(repo));
     const d4 = api.onDidLayoutChange(() => this.scheduleSave(repo));
-    e.disposers = [() => d1.dispose(), () => d2.dispose(), () => d3.dispose(), () => d4.dispose()];
+    // A file tab dragged out of the window and released there opens in its own window.
+    const d5 = api.onWillDragPanel(({ panel, nativeEvent }) => {
+      const path = this.pathOf(panel);
+      if (!path) return;
+      armExternalTabDetach(nativeEvent, async () => {
+        if (await openDetachedPanelWindow({ kind: "file", repo, path })) panel.api.close();
+      });
+    });
+    e.disposers = [d1, d2, d3, d4, d5].map((d) => () => d.dispose());
 
     // Restore the persisted file layout (open files + splits) from last session.
     const saved = loadLayout(repo);

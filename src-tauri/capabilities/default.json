@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main", "terminal-*", "consoles"],
+  "windows": ["main", "terminal-*", "consoles", "panel-*"],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview-window",

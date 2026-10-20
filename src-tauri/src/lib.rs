@@ -133,6 +133,7 @@ pub fn run() {
         .manage(std::sync::Mutex::new(agent_journal))
         .manage(delivery)
         .manage(bus_handle)
+        .manage(bus::commands::WindowSubscriptions::default())
         .invoke_handler(tauri::generate_handler![
             ping,
             delivery::commands::delivery_overview,
@@ -350,6 +351,24 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // Una ventana que se cierra deja de mantener en vivo sus diffs.
+            if let tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } = &event
+            {
+                if let (Some(windows), Some(bus)) = (
+                    app_handle.try_state::<bus::commands::WindowSubscriptions>(),
+                    app_handle.try_state::<bus::BusHandle>(),
+                ) {
+                    let targets = windows.update(label, Vec::new());
+                    let bus = bus.inner().clone();
+                    tauri::async_runtime::spawn(async move {
+                        bus.subscribe(targets).await;
+                    });
+                }
+            }
             // Salida limpia: el bus apaga el watcher (flush de lotes
             // pendientes) antes de morir el proceso.
             if let tauri::RunEvent::ExitRequested { .. } = event {

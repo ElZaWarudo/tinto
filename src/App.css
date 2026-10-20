@@ -347,6 +347,21 @@ select option:checked {
   cursor: pointer;
 }
 
+/* A detached second-level tab (a file, a repo's Delivery) fills its window. */
+.detached-panel-window {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+.detached-panel-window > * {
+  flex: 1;
+  min-height: 0;
+}
+
 .detached-terminal-window {
   width: 100vw;
   height: 100vh;

@@ -84,6 +84,14 @@ vi.mock("../../delivery/client", () => client);
 const confirmMock = vi.hoisted(() => vi.fn(() => Promise.resolve(true)));
 vi.mock("../../workbench/confirmDialog", () => ({ confirm: confirmMock }));
 
+const detachMock = vi.hoisted(() => ({
+  openDetachedPanelWindow: vi.fn(() => Promise.resolve(true)),
+  watchDetachedPanelWindow: vi.fn<(panel: unknown, onClosed: () => void) => Promise<boolean>>(() =>
+    Promise.resolve(false),
+  ),
+}));
+vi.mock("../../workspace/detachPanelWindow", () => detachMock);
+
 import { DeliveryPanel } from "./DeliveryPanel";
 
 const REPO = "C:\\work\\agentos";
@@ -211,6 +219,9 @@ function renderPanel() {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.removeItem("tinto:delivery-list-view");
+  localStorage.removeItem("tinto:delivery-dock");
+  localStorage.removeItem("tinto:delivery-detached");
+  detachMock.watchDetachedPanelWindow.mockResolvedValue(false);
   client.getDeliveryJobLog.mockResolvedValue({ entries: [], next_line: 0, stderr_tail: "" });
   client.getDeliveryRepoSettings.mockResolvedValue({
     worktree_root: null,
@@ -232,6 +243,93 @@ beforeEach(() => {
 });
 
 describe("DeliveryPanel", () => {
+  it("gives each repo its own tab with only its tasks", async () => {
+    const user = userEvent.setup();
+    const other = "C:\\work\\tinto";
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [
+          task(),
+          task({ id: "t2", repo: other, key: "TIN-7", worktree: "C:\\work\\tinto-wt\\TIN-7" }),
+        ],
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByRole("heading", { name: /AGOS-501/ })).toBeInTheDocument();
+    await user.click(screen.getByTitle(other));
+    const view = await screen.findByLabelText("Delivery de tinto");
+    const list = within(view).getByRole("navigation", { name: "Tareas de Delivery" });
+    expect(within(list).getByText("TIN-7")).toBeInTheDocument();
+    expect(within(list).queryByText("AGOS-501")).toBeNull();
+  });
+
+  it("leaves a repo's tab out while its window outlives a reload", async () => {
+    localStorage.setItem("tinto:delivery-detached", JSON.stringify({ "c:/work/agentos": REPO }));
+    let closeWindow = () => {};
+    detachMock.watchDetachedPanelWindow.mockImplementation((_panel, onClosed) => {
+      closeWindow = onClosed;
+      return Promise.resolve(true);
+    });
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    renderPanel();
+    await waitFor(() =>
+      expect(detachMock.watchDetachedPanelWindow).toHaveBeenCalledWith(
+        { kind: "delivery", repo: REPO },
+        expect.any(Function),
+      ),
+    );
+    expect(await screen.findByText("Archivadas…")).toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.queryByTitle(REPO)).toBeNull();
+
+    act(() => closeWindow());
+    expect(await screen.findByTitle(REPO)).toBeInTheDocument();
+    expect(localStorage.getItem("tinto:delivery-detached")).toBe("{}");
+  });
+
+  it("does not restore a saved tab for a repo outside the workbench", async () => {
+    const old = "C:\\work\\old";
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ tasks: [task(), task({ id: "t2", repo: old, key: "OLD-1" })] }),
+    );
+    const first = renderPanel();
+    expect(await screen.findByTitle(old)).toBeInTheDocument();
+    first.unmount();
+    expect(localStorage.getItem("tinto:delivery-dock")).toContain("c:/work/old");
+
+    // Its tasks are gone and it is not in the workbench.
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    renderPanel();
+    expect(await screen.findByTitle(REPO)).toBeInTheDocument();
+    expect(screen.queryByTitle(old)).toBeNull();
+  });
+
+  it("opens a workbench repo without tasks from the tabs' +", async () => {
+    const user = userEvent.setup();
+    const other = "C:\\work\\tinto";
+    act(() => {
+      busStore.setConfig({
+        version: 1,
+        active: "Work",
+        workbenches: [
+          {
+            name: "Work",
+            repos: [
+              { source: "local", path: REPO, alias: null, fs_watch: [] },
+              { source: "local", path: other, alias: null, fs_watch: [] },
+            ],
+          },
+        ],
+      });
+    });
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Abrir un repositorio" }));
+    await user.click(screen.getByRole("menuitem", { name: "tinto" }));
+    expect(await screen.findByTitle(other)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abrir un repositorio" })).toBeNull();
+  });
+
   it("lists tasks and shows a job's result, changes and candidate", async () => {
     client.getDeliveryOverview.mockResolvedValue(overview());
     renderPanel();
@@ -1089,7 +1187,7 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    expect(await screen.findByRole("status")).toHaveTextContent(
+    expect(await screen.findByText(/^Una QA espera/)).toHaveTextContent(
       "Una QA espera a que liberes el recurso QA, en cuarentena tras AGOS-501.",
     );
     expect(screen.getByRole("button", { name: "Liberar…" })).toBeInTheDocument();
@@ -1636,18 +1734,17 @@ describe("DeliveryPanel", () => {
       within(batches).getByRole("button", { name: "Tomar el control del lote Lote A" }),
     ).toBeInTheDocument();
 
+    // What applies to every repo is a dialog over the tasks.
     await user.click(screen.getByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("region", { name: "Ajustes de Delivery" });
-    expect(screen.queryByRole("navigation", { name: "Tareas de Delivery" })).toBeNull();
-    await user.click(within(settings).getByRole("button", { name: "Conectar un coordinador" }));
+    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),
     );
     expect(await navigator.clipboard.readText()).toContain("Bearer secret");
     expect(within(settings).getByText("Copiado, con el token.")).toBeInTheDocument();
-    await user.click(within(settings).getByRole("button", { name: "← Volver a las tareas" }));
-    expect(screen.getByRole("navigation", { name: "Tareas de Delivery" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Ajustes de Delivery" })).toBeNull();
 
     // New tasks go to the repo's most recent active batch by default.
     await user.click(screen.getByRole("button", { name: "Nueva tarea" }));
@@ -1708,11 +1805,10 @@ describe("DeliveryPanel", () => {
       expect(client.createDeliveryRun).toHaveBeenCalledWith(REPO, "Lote B", true),
     );
 
-    // Each repo's setup is a section of the settings page.
-    await user.click(screen.getByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("region", { name: "Ajustes de Delivery" });
-    await user.click(within(settings).getByRole("button", { name: "agentos" }));
-    const qa = within(settings).getByRole("region", { name: "Ajustes de agentos" });
+    // The repo's setup is behind its tab's gear, in place of its tasks.
+    await user.click(screen.getByRole("button", { name: "Ajustes de agentos" }));
+    expect(screen.queryByRole("navigation", { name: "Tareas de Delivery" })).toBeNull();
+    const qa = screen.getByRole("region", { name: "Ajustes de agentos" });
     const save = await within(qa).findByRole("button", { name: "Guardar" });
     await waitFor(() => expect(save).toBeEnabled());
     await user.type(
@@ -2728,8 +2824,7 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Ajustes de Delivery" }));
-    const settings = screen.getByRole("region", { name: "Ajustes de Delivery" });
-    await user.click(within(settings).getByRole("button", { name: "Conectar un coordinador" }));
+    const settings = screen.getByRole("dialog", { name: "Ajustes de Delivery" });
     expect(settings).not.toHaveTextContent("secret");
     await user.click(
       within(settings).getByRole("button", { name: "Copiar la configuración de Claude Code" }),

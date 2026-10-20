@@ -1145,22 +1145,34 @@ function CopySnippet({ label, shown, copied }: { label: string; shown: string; c
 
 /** Delivery's settings as a page in place of the tasks: one section at a
  *  time, chosen in its own list. */
-export function SettingsPage({
+/** One repo's settings, in place of its tasks: what QA can use, its
+ *  commits, who runs each stage and its Jira. */
+export function RepoSettingsPage({ repo, onBack }: { repo: RepoChoice; onBack: () => void }) {
+  return (
+    <div className="delivery-settings">
+      <div className="delivery-settings__page">
+        <button type="button" className="delivery-settings__back" onClick={onBack}>
+          ← Volver a las tareas
+        </button>
+        <RepoSettings key={repo.path} repo={repo.path} label={repo.label} />
+      </div>
+    </div>
+  );
+}
+
+/** What applies to Delivery in every repo: how many agents run at once and
+ *  how an outside coordinator connects. */
+export function DeliverySettingsDialog({
   capacity,
   endpoint,
-  repos,
   onCapacity,
-  onBack,
+  onClose,
 }: {
   capacity: number;
   endpoint: DeliveryCoordinatorEndpoint | null;
-  repos: RepoChoice[];
   onCapacity: (capacity: number) => void;
-  onBack: () => void;
+  onClose: () => void;
 }) {
-  // "general", "connect", or a repo's path.
-  const [section, setSection] = useState("general");
-  const repo = repos.find((choice) => choice.path === section);
   // The token is a credential: the page shows it masked and only the copy
   // buttons carry it.
   // Through Tinto's proxy as a stdio server, which updates leave running,
@@ -1182,83 +1194,47 @@ export function SettingsPage({
       : command
         ? `[mcp_servers.tinto-delivery]\ncommand = '${command}'\nargs = ["--delivery-mcp-proxy"]`
         : `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`;
-  const item = (id: string, label: string) => (
-    <button
-      key={id}
-      type="button"
-      aria-current={section === id ? "page" : undefined}
-      onClick={() => setSection(id)}
-    >
-      {label}
-    </button>
-  );
   return (
-    <div className="delivery-settings" role="region" aria-label="Ajustes de Delivery">
-      <nav className="delivery-settings__nav" aria-label="Secciones de los ajustes">
-        <button type="button" className="delivery-settings__back" onClick={onBack}>
-          ← Volver a las tareas
-        </button>
-        {item("general", "General")}
-        <h3>Repositorios</h3>
-        {repos.map((choice) => item(choice.path, choice.label))}
-        <h3>Integración</h3>
-        {item("connect", "Conectar un coordinador")}
-      </nav>
-      <div className="delivery-settings__page">
-        {section === "general" && (
-          <section className="delivery-settings__section" aria-label="General">
-            <h2>General</h2>
-            <Field
-              label="Agentes en paralelo"
-              hint="Automático: uno por cada tarea activa (cada issue), hasta 8. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
-            >
-              <select value={capacity} onChange={(event) => onCapacity(Number(event.target.value))}>
-                <option value={0}>Automático: uno por issue</option>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </section>
-        )}
-        {repo && <RepoSettings key={repo.path} repo={repo.path} label={repo.label} />}
-        {section === "connect" && (
-          <section className="delivery-settings__section" aria-label="Conectar un coordinador">
-            <h2>Conectar un coordinador</h2>
-            <p className="delivery-settings__intro">
-              Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante
-              MCP: crea tareas, lanza etapas y pide aprobaciones.
-            </p>
-            {endpoint ? (
-              <>
-                <p className="delivery-settings__intro">
-                  Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
-                  herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que
-                  corren fuera de Tinto: arrancan el proxy de Tinto como servidor MCP, que sigue en
-                  marcha cuando Tinto se actualiza, abre Tinto si está cerrado y lo encuentra aunque
-                  cambie de puerto. Si lo añadiste antes con tinto.exe, vuelve a añadirlo con este
-                  comando: cada actualización de Tinto corta esa conexión.
-                </p>
-                <CopySnippet
-                  label="Claude Code"
-                  shown={claude(MASK)}
-                  copied={claude(endpoint.token)}
-                />
-                <CopySnippet
-                  label="Codex (config.toml)"
-                  shown={codex(MASK)}
-                  copied={codex(endpoint.token)}
-                />
-              </>
-            ) : (
-              <p className="delivery-settings__intro">El API de coordinador no está disponible.</p>
-            )}
-          </section>
-        )}
-      </div>
-    </div>
+    <FormDialog title="Ajustes de Delivery" wide onCancel={onClose}>
+      <Field
+        label="Agentes en paralelo"
+        hint="Automático: uno por cada tarea activa (cada issue), hasta 8. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
+      >
+        <select value={capacity} onChange={(event) => onCapacity(Number(event.target.value))}>
+          <option value={0}>Automático: uno por issue</option>
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <h3 className="delivery-dialog__subtitle">Conectar un coordinador</h3>
+      <p className="delivery-settings__intro">
+        Un agente coordinador (por ejemplo la skill backlog-delivery) dirige Delivery mediante MCP:
+        crea tareas, lanza etapas y pide aprobaciones.
+      </p>
+      {endpoint ? (
+        <>
+          <p className="delivery-settings__intro">
+            Las conversaciones de Codex y Claude Code que abres en Agents ya tienen estas
+            herramientas, sin pedir permiso para usarlas. Lo de abajo es para agentes que corren
+            fuera de Tinto: arrancan el proxy de Tinto como servidor MCP, que sigue en marcha cuando
+            Tinto se actualiza, abre Tinto si está cerrado y lo encuentra aunque cambie de puerto.
+            Si lo añadiste antes con tinto.exe, vuelve a añadirlo con este comando: cada
+            actualización de Tinto corta esa conexión.
+          </p>
+          <CopySnippet label="Claude Code" shown={claude(MASK)} copied={claude(endpoint.token)} />
+          <CopySnippet
+            label="Codex (config.toml)"
+            shown={codex(MASK)}
+            copied={codex(endpoint.token)}
+          />
+        </>
+      ) : (
+        <p className="delivery-settings__intro">El API de coordinador no está disponible.</p>
+      )}
+    </FormDialog>
   );
 }
 

@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fileDock, FILE_PREVIEW_ID, filePanelId } from "./fileDock";
+import { armExternalTabDetach } from "./externalTabDetach";
+import { openDetachedPanelWindow } from "./detachPanelWindow";
+
+vi.mock("./externalTabDetach", () => ({ armExternalTabDetach: vi.fn() }));
+vi.mock("./detachPanelWindow", () => ({
+  openDetachedPanelWindow: vi.fn(() => Promise.resolve(true)),
+}));
 
 const REPO = "/r/api";
 
@@ -9,6 +16,7 @@ function makeFakeApi() {
   const removeCbs: Array<(p: { id: string }) => void> = [];
   const activeCbs: Array<() => void> = [];
   const layoutCbs: Array<() => void> = [];
+  const dragCbs: Array<(e: { panel: unknown; nativeEvent: unknown }) => void> = [];
   const panels: Array<{
     id: string;
     params: Record<string, unknown>;
@@ -59,6 +67,12 @@ function makeFakeApi() {
     onDidRemovePanel: (cb: (p: { id: string }) => void) => (removeCbs.push(cb), { dispose() {} }),
     onDidActivePanelChange: (cb: () => void) => (activeCbs.push(cb), { dispose() {} }),
     onDidLayoutChange: (cb: () => void) => (layoutCbs.push(cb), { dispose() {} }),
+    onWillDragPanel: (cb: (e: { panel: unknown; nativeEvent: unknown }) => void) => (
+      dragCbs.push(cb),
+      { dispose() {} }
+    ),
+    /** Starts dragging a panel's tab, as dockview reports it. */
+    drag: (panel: unknown) => dragCbs.forEach((cb) => cb({ panel, nativeEvent: "pointerdown" })),
     toJSON: () => ({ panels: Object.fromEntries(panels.map((p) => [p.id, { params: p.params }])) }),
     fromJSON: vi.fn(),
   };
@@ -107,6 +121,23 @@ describe("fileDock", () => {
     expect(fileDock.getState(REPO).open).toEqual(["a.ts"]);
     fileDock.closeActive(REPO);
     expect(fileDock.getState(REPO).open).toEqual([]);
+  });
+
+  it("opens a file tab dragged out of the window in its own window", async () => {
+    const api = makeFakeApi();
+    fileDock.register(REPO, api as never);
+    fileDock.openFile(REPO, "a.ts", true);
+    const panel = api.getPanel(filePanelId("a.ts"))!;
+    api.drag(panel);
+    // Released outside the window: the detach runs.
+    const detach = vi.mocked(armExternalTabDetach).mock.calls[0][1];
+    await detach();
+    expect(openDetachedPanelWindow).toHaveBeenCalledWith({
+      kind: "file",
+      repo: REPO,
+      path: "a.ts",
+    });
+    expect(panel.api.close).toHaveBeenCalled();
   });
 
   it("focuses an already-open pinned file instead of duplicating it", () => {

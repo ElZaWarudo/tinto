@@ -60,7 +60,7 @@ const components: PanelComponents = {
   [PANEL_TIMELINE]: TimelinePanel,
   [PANEL_AGENT_CONSOLES]: ConsoleDockPanel,
   [PANEL_AGENT_TERMINAL]: TerminalPanel,
-  [PANEL_DELIVERY]: DeliveryPanel,
+  [PANEL_DELIVERY]: () => <DeliveryPanel />,
 };
 
 const tabComponents: TabComponents = {
