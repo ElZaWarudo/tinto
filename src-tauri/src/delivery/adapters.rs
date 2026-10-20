@@ -404,6 +404,7 @@ pub struct SandboxPlan {
 }
 
 /// Chooses the sandbox from the programs that failed to start in each one.
+#[cfg(any(windows, test))]
 fn sandbox_plan_from(configured: &[String], unelevated: &[String]) -> SandboxPlan {
     if configured.is_empty() {
         return SandboxPlan::default();
