@@ -11,7 +11,10 @@ import { qualityStore } from "./state";
 import { retryRepo } from "../bus/client";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-const mod = isMac ? "⌘" : "Ctrl";
+/** The key the labels name for shortcuts: ⌘ on macOS, Ctrl elsewhere. */
+export const modKey = isMac ? "⌘" : "Ctrl";
+// macOS keeps ⌘Tab for switching apps; the handler also takes Control there.
+const fileNavKey = isMac ? "⌃" : "Ctrl";
 
 export interface ShortcutDef {
   action: string;
@@ -21,26 +24,26 @@ export interface ShortcutDef {
 
 export const SHORTCUTS: ShortcutDef[] = [
   // Navegación
-  { action: "Alternar árbol de archivos", keys: `${mod} B`, group: "Navegación" },
-  { action: "Siguiente proyecto", keys: `${mod} PageDown`, group: "Navegación" },
-  { action: "Proyecto anterior", keys: `${mod} PageUp`, group: "Navegación" },
-  { action: "Siguiente archivo", keys: `${mod} Tab`, group: "Navegación" },
-  { action: "Archivo anterior", keys: `${mod} Shift Tab`, group: "Navegación" },
+  { action: "Alternar árbol de archivos", keys: `${modKey} B`, group: "Navegación" },
+  { action: "Siguiente proyecto", keys: `${modKey} PageDown`, group: "Navegación" },
+  { action: "Proyecto anterior", keys: `${modKey} PageUp`, group: "Navegación" },
+  { action: "Siguiente archivo", keys: `${fileNavKey} Tab`, group: "Navegación" },
+  { action: "Archivo anterior", keys: `${fileNavKey} Shift Tab`, group: "Navegación" },
 
   // Cerrar
-  { action: "Cerrar archivo", keys: `${mod} W`, group: "Cerrar" },
-  { action: "Cerrar proyecto", keys: `${mod} Shift W`, group: "Cerrar" },
+  { action: "Cerrar archivo", keys: `${modKey} W`, group: "Cerrar" },
+  { action: "Cerrar proyecto", keys: `${modKey} Shift W`, group: "Cerrar" },
 
   // Vista
-  { action: "Vista rápida", keys: `${mod} Shift G`, group: "Vista" },
-  { action: "Abrir resumen", keys: `${mod} Shift D`, group: "Vista" },
-  { action: "Abrir cronología", keys: `${mod} Shift H`, group: "Vista" },
+  { action: "Vista rápida", keys: `${modKey} Shift G`, group: "Vista" },
+  { action: "Abrir resumen", keys: `${modKey} Shift D`, group: "Vista" },
+  { action: "Abrir cronología", keys: `${modKey} Shift H`, group: "Vista" },
 
   // Proyecto
-  { action: "Refrescar proyecto", keys: `${mod} R`, group: "Proyecto" },
-  { action: "Añadir proyecto", keys: `${mod} Shift A`, group: "Proyecto" },
-  { action: "Restaurar archivo eliminado", keys: `${mod} Z`, group: "Archivos" },
-  { action: "Rehacer eliminación de archivo", keys: `${mod} Shift Z`, group: "Archivos" },
+  { action: "Refrescar proyecto", keys: `${modKey} R`, group: "Proyecto" },
+  { action: "Añadir proyecto", keys: `${modKey} Shift A`, group: "Proyecto" },
+  { action: "Restaurar archivo eliminado", keys: `${modKey} Z`, group: "Archivos" },
+  { action: "Rehacer eliminación de archivo", keys: `${modKey} Shift Z`, group: "Archivos" },
 ];
 
 /** Get the currently active project repo path from the dockview api. */

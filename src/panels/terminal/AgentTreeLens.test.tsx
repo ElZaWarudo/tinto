@@ -87,6 +87,9 @@ describe("AgentTreeLens", () => {
     await user.keyboard("{ArrowDown}");
     const child = screen.getByRole("treeitem", { name: /Scout/ });
     expect(child).toHaveFocus();
+    // The tree focuses the node again on the next frame; typing before it
+    // lands sends the keys to the node instead of the message.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     const message = screen.getByPlaceholderText("Send a follow-up or steer...");
     await user.type(message, "Check this");
     await user.click(screen.getByRole("button", { name: "Follow-up" }));

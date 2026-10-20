@@ -23,6 +23,8 @@ pub mod delivery;
 pub(crate) static HOME_ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 pub mod file_ops;
 pub mod git;
+#[cfg(target_os = "macos")]
+mod macos_path;
 pub mod paths;
 mod runtime_paths;
 pub mod ui_state;
@@ -85,6 +87,10 @@ pub fn run() {
             return;
         }
     }
+
+    // Before any thread starts: it changes the process environment.
+    #[cfg(target_os = "macos")]
+    macos_path::adopt_login_shell_path();
 
     // Config corrupta o ilegible: la app arranca con config vacía en memoria
     // sin tocar el archivo (solo se sobreescribe si el usuario muta).
