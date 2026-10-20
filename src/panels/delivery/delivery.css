@@ -474,6 +474,9 @@
   width: min(620px, calc(100vw - 32px));
   max-height: calc(100vh - 96px);
   overflow: auto;
+  /* Room for the scrollbar from the start: opening a list that makes the
+     card scroll must not shift and rewrap what is already there. */
+  scrollbar-gutter: stable;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1637,12 +1640,17 @@
   margin: 0;
   padding-left: 20px;
   display: grid;
+  /* A long path must wrap, not widen the plan past its card. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 .delivery-commit-plan ul {
   margin: 4px 0 0;
   padding-left: 16px;
   font-size: 12px;
+}
+.delivery-commit-plan code {
+  overflow-wrap: anywhere;
 }
 .delivery-commit-plan__rest {
   list-style: none;
