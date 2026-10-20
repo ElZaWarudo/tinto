@@ -773,7 +773,7 @@ export function CorrectResultDialog({
 }
 
 /** One stage's agent in Ajustes: not fixed, or an agent with its model and reasoning. */
-function StageAgentRow({
+export function StageAgentRow({
   label,
   value,
   onChange,

@@ -73,6 +73,7 @@ import {
   NewTaskDialog,
   ReleaseLeaseDialog,
   SettingsDialog,
+  StageAgentRow,
   type CorrectableStep,
   type RepoChoice,
 } from "./DeliveryDialogs";
@@ -1309,7 +1310,14 @@ function TaskDetail({
         </div>
       )}
 
-      <StageTrack jobs={jobs} approvals={approvals} pr={pr} next={next} onFocus={focusStage} />
+      <StageTrack
+        repo={task.repo}
+        jobs={jobs}
+        approvals={approvals}
+        pr={pr}
+        next={next}
+        onFocus={focusStage}
+      />
 
       <div className="delivery-actions">
         {next && !broken && (
@@ -1462,13 +1470,66 @@ function brokenVerb(job: DeliveryJob): string {
   return "está bloqueada";
 }
 
+/** Who runs a stage from now on in the task's repo: the same setting as
+ *  Ajustes › Agente de cada etapa, saved as soon as it changes. */
+function StageAgentEditor({ repo, role }: { repo: string; role: string }) {
+  const [settings, setSettings] = useState<DeliveryRepoSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const stage = role.toLowerCase();
+  useEffect(() => {
+    let live = true;
+    getDeliveryRepoSettings(repo).then(
+      (loaded) => live && setSettings(loaded),
+      (cause) => live && setError(errorText(cause)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [repo]);
+  const save = async (next: DeliveryStageAgent | null) => {
+    setError(null);
+    try {
+      // The latest settings, so nothing changed elsewhere is lost.
+      const current = await getDeliveryRepoSettings(repo);
+      const stages = { ...current.stages };
+      if (next) stages[stage] = next;
+      else delete stages[stage];
+      await setDeliveryRepoSettings(repo, { ...current, stages });
+      setSettings({ ...current, stages });
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  };
+  return (
+    <div className="delivery-stage-agent">
+      <p className="delivery-muted">
+        Para los próximos lanzamientos de {lower(stageLabel(role))} en este repositorio, tuyos o del
+        coordinador. Lo que ya corre no cambia.
+      </p>
+      {settings ? (
+        <StageAgentRow
+          label={stageLabel(role)}
+          value={settings.stages?.[stage]}
+          onChange={(next) => void save(next)}
+        />
+      ) : (
+        !error && <p className="delivery-muted">Leyendo los ajustes…</p>
+      )}
+      {error && <p className="delivery-tone--danger">{error}</p>}
+    </div>
+  );
+}
+
 function StageTrack({
+  repo,
   jobs,
   approvals,
   pr,
   next,
   onFocus,
 }: {
+  /** The task's repo, whose settings say who runs each stage. */
+  repo: string;
   jobs: DeliveryJob[];
   approvals: DeliveryApproval[];
   /** The PR step shows the followed PR's live state once it exists. */
@@ -1517,6 +1578,12 @@ function StageTrack({
                 ) : (
                   <div>{content}</div>
                 )}
+                <Menu
+                  label={`Agente, modelo y razonamiento de ${stageLabel(role)}`}
+                  trigger={<Icon name="down" />}
+                >
+                  {() => <StageAgentEditor repo={repo} role={role} />}
+                </Menu>
               </li>
             );
           })}

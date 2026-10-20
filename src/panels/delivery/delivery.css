@@ -1111,6 +1111,7 @@
   border: 1px solid var(--border);
 }
 .delivery-node {
+  position: relative;
   min-width: 0;
   background: var(--bg);
   border-top: 2px solid var(--border);
@@ -1136,6 +1137,37 @@
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
+}
+/* Who runs the stage from now on: a small menu in the card's corner. */
+.delivery-node > .delivery-menu {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+.delivery-panel .delivery-node > .delivery-menu > button {
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+}
+.delivery-node > .delivery-menu .delivery-menu__list {
+  left: 0;
+  right: auto;
+}
+.delivery-node > div,
+.delivery-panel .delivery-node > button {
+  padding-right: 26px;
+}
+.delivery-stage-agent {
+  display: grid;
+  gap: 6px;
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  padding: 8px 12px;
+  white-space: normal;
+}
+.delivery-stage-agent p {
+  margin: 0;
 }
 .delivery-node small {
   max-width: 100%;

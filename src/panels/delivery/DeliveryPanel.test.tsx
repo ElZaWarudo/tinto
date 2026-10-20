@@ -563,6 +563,39 @@ describe("DeliveryPanel", () => {
     expect(client.openDeliveryUrl).toHaveBeenCalledWith("https://jira.example.com/browse/AGOS-501");
   });
 
+  it("changes who runs a stage from now on in the repo, from its card", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ jobs: [job({ role: "tests", reasoning: "high" })] }),
+    );
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      stages: { review: { agent: "codex", model: null, reasoning: null } },
+    });
+    renderPanel();
+    const track = await screen.findByRole("list", { name: "Agentes" });
+    await user.click(
+      within(track).getByRole("button", { name: "Agente, modelo y razonamiento de Tests" }),
+    );
+    await user.selectOptions(await screen.findByLabelText("Agente de Tests"), "claude");
+    await waitFor(() =>
+      expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
+        REPO,
+        expect.objectContaining({
+          stages: {
+            review: { agent: "codex", model: null, reasoning: null },
+            tests: expect.objectContaining({ agent: "claude" }),
+          },
+        }),
+      ),
+    );
+    // The model and reasoning come with it, to change right there.
+    expect(screen.getByLabelText("Modelo de Tests")).toBeInTheDocument();
+    expect(screen.getByLabelText("Razonamiento de Tests")).toBeInTheDocument();
+  });
+
   it("names the model and reasoning each stage runs with, defaults included", async () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
