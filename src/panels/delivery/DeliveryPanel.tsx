@@ -930,18 +930,8 @@ function TaskDetail({
   );
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
-  const [decisionsOpen, setDecisionsOpen] = useState(false);
-  const decisionsPanel = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!decisionsOpen) return;
-    // Once, when it opens: later refreshes must not take focus from a card.
-    decisionsPanel.current?.focus();
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDecisionsOpen(false);
-    };
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, [decisionsOpen]);
+  // What opens on top of the task: its pending decisions or QA's problems.
+  const [float, setFloat] = useState<"decisions" | "qa" | null>(null);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
   const openChanges = async () => {
@@ -1093,23 +1083,37 @@ function TaskDetail({
                 Abrir PR #{pr.number} en GitHub ↗
               </ExternalLink>
             )}
-            {qaRecord?.visual_record && (
-              <ActionButton
-                className="delivery-task__record"
-                aria-label={
-                  qaProblemsToDecide > 0
-                    ? `Abrir registro visual de QA, ${qaProblemsToDecide} ${qaProblemsToDecide === 1 ? "problema" : "problemas"} por decidir`
-                    : "Abrir registro visual de QA"
-                }
-                title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
-                onAction={() => openDeliveryVisualRecord(qaRecord.id)}
-              >
-                Registro visual QA
-                {qaProblemsToDecide > 0 && (
-                  <span className="delivery-task__record-count">{qaProblemsToDecide} !</span>
-                )}{" "}
-                ↗
-              </ActionButton>
+            {(qaRecord?.visual_record || qaProblems.length > 0) && (
+              // The QA's record and its problems, as one split pill.
+              <span className="delivery-task__qa">
+                {qaRecord?.visual_record && (
+                  <ActionButton
+                    className="delivery-task__record"
+                    aria-label="Abrir registro visual de QA"
+                    title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
+                    onAction={() => openDeliveryVisualRecord(qaRecord.id)}
+                  >
+                    Registro visual QA ↗
+                  </ActionButton>
+                )}
+                <button
+                  type="button"
+                  className="delivery-task__record delivery-task__record--problems"
+                  aria-expanded={float === "qa"}
+                  aria-label={
+                    qaProblemsToDecide > 0
+                      ? `Problemas de la QA, ${qaProblemsToDecide} por decidir`
+                      : "Problemas de la QA"
+                  }
+                  onClick={() => setFloat(float === "qa" ? null : "qa")}
+                >
+                  Problemas
+                  {qaProblemsToDecide > 0 && (
+                    <span className="delivery-task__record-count">{qaProblemsToDecide} !</span>
+                  )}{" "}
+                  ▾
+                </button>
+              </span>
             )}
           </h2>
           <p className="delivery-task__meta">
@@ -1216,30 +1220,29 @@ function TaskDetail({
           <button
             type="button"
             className="delivery-button--primary"
-            onClick={() => setDecisionsOpen(true)}
+            onClick={() => setFloat("decisions")}
           >
             Responder
           </button>
         </div>
       )}
-      {blocked && decisionsOpen && (
-        <div
-          className="delivery-float"
-          role="dialog"
-          aria-label="Responder decisiones"
-          tabIndex={-1}
-          ref={decisionsPanel}
+      {blocked && float === "decisions" && (
+        <TaskFloat
+          label="Responder decisiones"
+          closeLabel="Cerrar decisiones"
+          onClose={() => setFloat(null)}
         >
-          <button
-            type="button"
-            className="delivery-float__close"
-            aria-label="Cerrar decisiones"
-            onClick={() => setDecisionsOpen(false)}
-          >
-            ×
-          </button>
           <PendingDecisions taskId={task.id} decisions={pendingDecisions} />
-        </div>
+        </TaskFloat>
+      )}
+      {float === "qa" && (
+        <TaskFloat
+          label="Problemas de la QA"
+          closeLabel="Cerrar problemas de la QA"
+          onClose={() => setFloat(null)}
+        >
+          <QaProblems taskId={task.id} problems={qaProblems} />
+        </TaskFloat>
       )}
 
       <PendingSettingsProposals proposals={pendingSettingsProposals(overview, task)} />
@@ -1291,8 +1294,6 @@ function TaskDetail({
           </ActionGroup>
         </div>
       )}
-
-      <QaProblems taskId={task.id} problems={qaProblems} />
 
       {qaRecord?.visual_record_error && !qaRecord.visual_record && (
         <div
@@ -1653,6 +1654,45 @@ function StepChecks({
           {action && <ActionButton onAction={action.run}>{action.label}</ActionButton>}
         </p>
       ))}
+    </div>
+  );
+}
+
+/** A panel on top of the task, opened by the user: it takes the focus once
+ *  (later refreshes must not take it from a card) and closes on Escape. */
+function TaskFloat({
+  label,
+  closeLabel,
+  onClose,
+  children,
+}: {
+  label: string;
+  closeLabel: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panel.current?.focus();
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+    // Once, when it opens; onClose only closes it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <div className="delivery-float" role="dialog" aria-label={label} tabIndex={-1} ref={panel}>
+      <button
+        type="button"
+        className="delivery-float__close"
+        aria-label={closeLabel}
+        onClick={onClose}
+      >
+        ×
+      </button>
+      {children}
     </div>
   );
 }

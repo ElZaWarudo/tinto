@@ -430,7 +430,12 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const section = await screen.findByRole("region", { name: "Problemas de la QA" });
+    // They open on top of the task from the QA pill in its header.
+    const pill = await screen.findByRole("button", { name: "Problemas de la QA, 2 por decidir" });
+    expect(pill.closest(".delivery-task__heading")).not.toBeNull();
+    await user.click(pill);
+    const float = screen.getByRole("dialog", { name: "Problemas de la QA" });
+    const section = within(float).getByRole("region", { name: "Problemas de la QA" });
     // What is settled hides until the user asks for everything.
     expect(within(section).queryByText("Old one")).toBeNull();
     const first = within(section).getByRole("article", { name: "Problema #1" });
@@ -2023,10 +2028,12 @@ describe("DeliveryPanel", () => {
       }),
     );
     renderPanel();
-    const button = await screen.findByRole("button", {
-      name: "Abrir registro visual de QA, 2 problemas por decidir",
-    });
-    expect(within(button).getByText("2 !")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Abrir registro visual de QA" }),
+    ).toBeEnabled();
+    const problems = screen.getByRole("button", { name: "Problemas de la QA, 2 por decidir" });
+    expect(within(problems).getByText("2 !")).toBeInTheDocument();
+    expect(problems).toHaveAttribute("aria-expanded", "false");
   });
 
   it("says when the QA's visual record could not be made", async () => {
