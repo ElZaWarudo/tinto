@@ -514,6 +514,8 @@ pub struct PtyHandle {
     writer: Box<dyn Write + Send>,
     exit_code: Option<i32>,
     claude_hooks: Option<ClaudeHooks>,
+    /// Whether a message goes in as a bracketed paste; see `pasted_message`.
+    paste_messages: bool,
 }
 
 impl PtyHandle {
@@ -561,6 +563,8 @@ impl PtyHandle {
             .flatten();
         let mut handle = Self::spawn_command_builder(command)?;
         handle.claude_hooks = hooks;
+        // Windows is left as it was: there a typed message already sends.
+        handle.paste_messages = is_claude_binary(binary_path) && !cfg!(windows);
         Ok(handle)
     }
 
@@ -644,6 +648,7 @@ impl PtyHandle {
             writer,
             exit_code: None,
             claude_hooks: None,
+            paste_messages: false,
         })
     }
 
@@ -723,7 +728,8 @@ impl AgentProcess for PtyHandle {
     }
 
     fn write_input(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
-        self.write_input_pty(input)
+        let pasted = self.paste_messages.then(|| pasted_message(input)).flatten();
+        self.write_input_pty(pasted.as_deref().unwrap_or(input))
     }
 
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), AgentConsoleError> {
@@ -779,6 +785,20 @@ impl AgentProcess for PtyHandle {
             hooks.mark_interrupted();
         }
         Ok(())
+    }
+}
+
+/// A message for Claude Code as a bracketed paste followed by Enter. Typed in
+/// one write, Claude takes a long message for a paste and keeps its Enter as
+/// text, so the message sits unsent in its input. A single word stays typed:
+/// Claude's menus ignore pasted text, so a pasted `4` would leave the Enter to
+/// confirm the default choice instead.
+fn pasted_message(input: &[u8]) -> Option<Vec<u8>> {
+    match input.split_last() {
+        Some((b'\r', text)) if text.iter().any(u8::is_ascii_whitespace) => {
+            Some([b"\x1b[200~".as_slice(), text, b"\x1b[201~\r".as_slice()].concat())
+        }
+        _ => None,
     }
 }
 
@@ -1089,6 +1109,22 @@ mod tests {
         assert!(prompt.contains("- /tmp/screen.png"));
         assert!(prompt.contains("- /tmp/brief.pdf"));
         assert!(prompt.ends_with("review these"));
+    }
+
+    #[test]
+    fn claude_message_goes_in_as_a_bracketed_paste() {
+        assert_eq!(
+            pasted_message(b"create src/hello.py\nand run it\r").as_deref(),
+            Some(b"\x1b[200~create src/hello.py\nand run it\x1b[201~\r".as_slice())
+        );
+    }
+
+    #[test]
+    fn claude_menu_choices_and_keys_stay_typed() {
+        assert_eq!(pasted_message(b"4\r"), None);
+        assert_eq!(pasted_message(b"/compact\r"), None);
+        assert_eq!(pasted_message(b"\x1b[B\r"), None);
+        assert_eq!(pasted_message(b"half typed"), None);
     }
 
     #[test]
