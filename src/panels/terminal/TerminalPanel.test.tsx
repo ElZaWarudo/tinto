@@ -8,6 +8,7 @@ import type {
   AgentRuntimeCatalog,
   AgentSession,
   AgentSessionPermissionMode,
+  AgentSessionTimelineItem,
   FileDiff,
   McpInventory,
   McpProfileState,
@@ -4642,6 +4643,40 @@ describe("TerminalPanel", () => {
     const focusedSummary = screen.getByLabelText("Resumen de artefactos del turno seleccionado");
     expect(within(focusedSummary).getByText("Código 1")).toBeInTheDocument();
     expect(within(focusedSummary).getByText("Pruebas 1")).toBeInTheDocument();
+  });
+
+  it("counts and lists the commands that ran, not their output", async () => {
+    const user = userEvent.setup();
+    listAgentSessionsMock.mockResolvedValueOnce([sessionFixture()]);
+    render(<TerminalPanel {...props({ sessionId: "sess-1", repo: "/r/a", agentType: "codex" })} />);
+
+    await act(async () => {
+      const item = (id: string, kind: AgentSessionTimelineItem["kind"], text: string) =>
+        agentSessionStore.appendTimelineItem({
+          session_id: "sess-1",
+          id: `sess-1:${id}`,
+          kind,
+          text,
+          timestamp_ms: 1,
+        });
+      item("user:1", "user_message", "Crea hello.py y ejecútalo");
+      item("activity:2", "activity", "Ejecutando ls");
+      item("output:3", "command_output", "README.md");
+      item("activity:4", "activity", "Ejecutando cat README.md");
+      item("activity:5", "activity", "Ejecutando python3 hello.py");
+      item("output:6", "command_output", "hola");
+    });
+
+    const overview = await screen.findByLabelText("Resumen de la sesión de Agent");
+    expect(within(overview).getByLabelText("Comandos: 3")).toBeInTheDocument();
+    const lens = await screen.findByLabelText("Agent Lens");
+    await user.click(within(lens).getByRole("tab", { name: /Comandos/ }));
+    const commands = within(lens).getByLabelText("Salida de comandos");
+    expect([...commands.querySelectorAll("pre")].map((pre) => pre.textContent)).toEqual([
+      "python3 hello.py",
+      "cat README.md",
+      "ls",
+    ]);
   });
 
   it("uses Agent Lens as a files, commands, and timeline inspector", async () => {

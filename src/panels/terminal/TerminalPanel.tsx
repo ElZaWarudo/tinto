@@ -8460,6 +8460,7 @@ function agentTurnCommandSearchText(turn: AgentTurnView): string {
   const commandSummary = turnCommandSummaryText(turn);
   return [
     ...turn.commandText,
+    ...turn.events.filter((event) => event.kind === "command_output").map((event) => event.text),
     commandSummary ?? "",
     commandSummary ? `cmd ${commandSummary}` : "",
     commandSummary ? `recent command ${commandSummary}` : "",
@@ -8573,7 +8574,16 @@ function buildTurnsFromTimeline(timeline: AgentSessionTimelineItem[]): AgentTurn
     current.updatedAtMs = item.timestamp_ms;
     appendTimelineText(current, item, text);
   }
+  for (const turn of turns) turn.commandText = turnCommands(turn.events);
   return turns;
+}
+
+/** A turn's commands as the conversation groups them: each "Ejecutando …" activity
+ *  with the output after it, and output that came without one. */
+function turnCommands(events: AgentTurnEventView[]): string[] {
+  return groupThoughtEvents(visibleTurnEvents(events)).flatMap((item) =>
+    item.type === "command" ? [item.command ?? item.output] : [],
+  );
 }
 
 function appendTimelineText(turn: AgentTurnView, item: AgentSessionTimelineItem, text: string) {
@@ -8592,19 +8602,16 @@ function appendTimelineText(turn: AgentTurnView, item: AgentSessionTimelineItem,
     }
     return;
   }
+  // Command output stays in the events; the turn's commands are read from them.
   const target =
-    kind === "command_output"
-      ? turn.commandText
-      : kind === "lifecycle"
-        ? turn.systemText
-        : turn.agentText;
+    kind === "command_output" ? null : kind === "lifecycle" ? turn.systemText : turn.agentText;
   if (previousEvent?.kind === kind) {
     const separator =
       kind === "agent_message" ? "" : needsLineBreak(previousEvent.text, text) ? "\n" : "";
     previousEvent.text = `${previousEvent.text}${separator}${text}`;
-    target[target.length - 1] = previousEvent.text;
+    if (target) target[target.length - 1] = previousEvent.text;
   } else {
-    target.push(text);
+    target?.push(text);
     turn.events.push({ id: item.id, kind, text });
   }
 }
