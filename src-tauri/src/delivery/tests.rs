@@ -1787,6 +1787,208 @@ fn cancelling_a_job_stops_what_it_started() {
     }
 }
 
+/// A task of `run`, as a coordinator creates it.
+fn task_in(h: &Harness, run_id: &str, key: &str) -> DeliveryTask {
+    h.service
+        .create_task(NewTask {
+            repo: h.repo.path().to_path_buf(),
+            distro: None,
+            key: key.into(),
+            title: key.into(),
+            base: None,
+            branch: None,
+            run_id: Some(run_id.into()),
+        })
+        .unwrap()
+}
+
+fn executed_step(task_id: &str, rung: &str) -> super::model::DeliveryApproval {
+    serde_json::from_value(json!({
+        "id": format!("{task_id}-{rung}"), "task_id": task_id, "rung": rung, "title": "",
+        "body": "", "status": "executed", "requested_by": "coord", "requested_at_ms": 1,
+        "decided_at_ms": 2, "executed_at_ms": 3, "outcome": null,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_task_blocked_on_another_tasks_merge_waits_until_it_merges() {
+    use super::model::NewBlocker;
+    use super::phase::Waiter;
+
+    let h = harness();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", Some("coord".into()), None)
+        .unwrap();
+    let blocked = task_in(&h, &run.id, "AGOS-139");
+    let rag = task_in(&h, &run.id, "AGOS-580");
+    let phase = |task: &DeliveryTask| h.service.overview().unwrap().phases[&task.id].clone();
+    let idle = || -> Vec<String> {
+        h.service
+            .idle_tasks(&run.id)
+            .unwrap()
+            .iter()
+            .map(|task| task["key"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert!(idle().contains(&"AGOS-139".to_string()));
+
+    let task = h
+        .service
+        .set_blockers(
+            &blocked.id,
+            vec![NewBlocker::Task {
+                task: "agos-580".into(),
+                until: None,
+            }],
+            "needs the per-project RAG",
+        )
+        .unwrap();
+    assert_eq!(task.blockers[0].status, "sin PR");
+    assert_eq!(phase(&blocked).waits_on, Waiter::Dependency);
+    assert!(!idle().contains(&"AGOS-139".to_string()));
+    let refused = h
+        .service
+        .dispatch(NewJob {
+            task_id: blocked.id.clone(),
+            role: "tests".into(),
+            agent: DeliveryAgent::Codex,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=none".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+        })
+        .unwrap_err();
+    assert_eq!(refused.category, "task_blocked");
+    assert!(
+        refused.message.contains("AGOS-580 (fusionado)"),
+        "{}",
+        refused.message
+    );
+
+    // Its PR opening is not enough; the merge is.
+    h.service
+        .store()
+        .unwrap()
+        .put_approval(&executed_step(&rag.id, "pr"))
+        .unwrap();
+    assert_eq!(h.service.settle_blockers().unwrap(), 0);
+    assert_eq!(
+        h.service.task(&blocked.id).unwrap().blockers[0].status,
+        "PR abierto"
+    );
+    h.service
+        .store()
+        .unwrap()
+        .put_approval(&executed_step(&rag.id, "merge"))
+        .unwrap();
+    assert_eq!(h.service.settle_blockers().unwrap(), 1);
+
+    let (events, _) = h.service.coordinator_events(&run.id, 0).unwrap();
+    let cleared = events
+        .iter()
+        .find(|event| event["kind"] == "blocker_cleared")
+        .expect("a blocker_cleared event");
+    assert_eq!(cleared["key"], "AGOS-139");
+    assert_eq!(phase(&blocked).waits_on, Waiter::Coordinator);
+    assert!(idle().contains(&"AGOS-139".to_string()));
+}
+
+#[test]
+fn a_task_blocked_on_an_outside_pr_clears_once_github_says_merged() {
+    use super::model::NewBlocker;
+    use super::phase::Waiter;
+
+    let h = harness();
+    let github = FakeGitHub::new(json!({"state": "OPEN"}), json!([]));
+    h.service.set_github(github.clone());
+    let task = h.task("AGOS-463");
+    h.service
+        .set_blockers(
+            &task.id,
+            vec![NewBlocker::Pr {
+                url: "https://github.com/AIRInstitute/agentos/pull/305".into(),
+                until: None,
+            }],
+            "",
+        )
+        .unwrap();
+    assert_eq!(
+        h.service.overview().unwrap().phases[&task.id].waits_on,
+        Waiter::External
+    );
+
+    h.service.refresh_blocking_prs().unwrap();
+    let still = h.service.task(&task.id).unwrap();
+    assert!(still.blockers[0].is_open());
+    assert_eq!(still.blockers[0].status, "abierto");
+
+    *github.snapshot.lock().unwrap() = json!({"state": "MERGED"});
+    h.service.refresh_blocking_prs().unwrap();
+    let done = h.service.task(&task.id).unwrap();
+    assert!(!done.blockers[0].is_open());
+    assert_eq!(done.blockers[0].status, "fusionado");
+}
+
+#[test]
+fn blockers_survive_a_takeover_and_the_user_can_override_them() {
+    use super::model::NewBlocker;
+
+    let h = harness();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", Some("coord".into()), None)
+        .unwrap();
+    let task = task_in(&h, &run.id, "AGOS-1");
+    h.service
+        .set_blockers(
+            &task.id,
+            vec![NewBlocker::Note {
+                text: "waiting for the design (v2)".into(),
+            }],
+            "",
+        )
+        .unwrap();
+    h.service.takeover_run(&run.id, "coord-2", None, "the user asked").unwrap();
+    // Read back from the store, as after a restart.
+    let stored = h.service.store().unwrap().task(&task.id).unwrap().unwrap();
+    assert!(stored.blockers[0].is_open());
+
+    let cleared = h.service.clear_blockers(&task.id, None, true).unwrap();
+    assert!(!cleared.blockers[0].is_open());
+    let (events, _) = h.service.coordinator_events(&run.id, 0).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event["kind"] == "blockers_changed"));
+}
+
+#[test]
+fn a_state_label_says_how_long_it_may_be() {
+    let h = harness();
+    let task = h.task("AGOS-2");
+    let label = "blocked: waiting for AGOS-580 (project RAG)";
+    let error = h
+        .service
+        .update_task(&task.id, Some(label.into()), None, None)
+        .unwrap_err();
+    assert!(
+        error.message.contains("de 1 a 40 caracteres"),
+        "{}",
+        error.message
+    );
+    assert!(error.message.contains("tiene 43"), "{}", error.message);
+    let short = h
+        .service
+        .update_task(&task.id, Some("blocked (AGOS-580)".into()), None, None)
+        .unwrap();
+    assert_eq!(short.state, "blocked (AGOS-580)");
+}
+
 #[test]
 fn cancelling_qa_quarantines_its_resource_only_if_it_acted() {
     let h = harness();

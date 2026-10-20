@@ -75,6 +75,8 @@ const client = vi.hoisted(() => ({
   createDeliveryRun: vi.fn(),
   takeoverDeliveryRun: vi.fn(),
   closeDeliveryRun: vi.fn(),
+  addDeliveryBlocker: vi.fn(() => Promise.resolve({})),
+  clearDeliveryBlockers: vi.fn(() => Promise.resolve({})),
   onDeliveryChanged: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("../../delivery/client", () => client);
@@ -626,6 +628,70 @@ describe("DeliveryPanel", () => {
     expect(
       within(track).getByText("claude-opus-5-5 · razonamiento predeterminado"),
     ).toBeInTheDocument();
+  });
+
+  it("says what a blocked task waits for, linked, and lets the user remove, override or add", async () => {
+    const blocker = task({ id: "t2", key: "AGOS-580", branch: "delivery/agos-580" });
+    const blocked = task({
+      blockers: [
+        {
+          id: "b1",
+          type: "task",
+          task_id: "t2",
+          key: "AGOS-580",
+          until: "merged",
+          status: "PR abierto",
+          cleared_at_ms: null,
+        },
+        {
+          id: "b2",
+          type: "pr",
+          url: "https://github.com/acme/api/pull/305",
+          until: "merged",
+          state: "open",
+          status: "abierto",
+          cleared_at_ms: null,
+        },
+        { id: "b3", type: "note", text: "ya resuelto", status: "", cleared_at_ms: 5 },
+      ],
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [blocked, blocker],
+        phases: { t1: phase({ kind: "blocked", open: 2 }, "dependency"), t2: NEXT_IMPLEMENTATION },
+      }),
+    );
+    renderPanel();
+    const bar = await screen.findByRole("group", { name: "Bloqueos de la tarea" });
+    expect(within(bar).getByText(/PR abierto/)).toBeInTheDocument();
+    expect(within(bar).queryByText("ya resuelto")).not.toBeInTheDocument();
+    expect(
+      within(bar).getByRole("link", { name: "Abrir PR acme/api#305 en GitHub" }),
+    ).toHaveAttribute("href", "https://github.com/acme/api/pull/305");
+
+    await userEvent.click(
+      within(bar).getByRole("button", { name: "Quitar el bloqueo PR acme/api#305" }),
+    );
+    expect(client.clearDeliveryBlockers).toHaveBeenCalledWith("t1", ["b2"]);
+    await userEvent.click(within(bar).getByRole("button", { name: "Desbloquear" }));
+    await waitFor(() => expect(client.clearDeliveryBlockers).toHaveBeenLastCalledWith("t1"));
+
+    await userEvent.click(within(bar).getByRole("button", { name: "Añadir bloqueo" }));
+    const form = screen.getByRole("form", { name: "Añadir bloqueo" });
+    await userEvent.type(within(form).getByRole("textbox"), "AGOS-600");
+    await userEvent.selectOptions(within(form).getByLabelText("Hasta que"), "pr_opened");
+    await userEvent.click(within(form).getByRole("button", { name: "Bloquear" }));
+    expect(client.addDeliveryBlocker).toHaveBeenCalledWith("t1", {
+      type: "task",
+      task: "AGOS-600",
+      until: "pr_opened",
+    });
+
+    // The blocking task opens from its name.
+    await userEvent.click(
+      within(bar).getByRole("button", { name: "AGOS-580 (necesita: fusionado)" }),
+    );
+    expect(await screen.findByRole("heading", { name: /AGOS-580/ })).toBeInTheDocument();
   });
 
   it("creates a task in the chosen repository", async () => {

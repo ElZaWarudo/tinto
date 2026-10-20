@@ -456,6 +456,8 @@ impl DeliveryService {
             updated_at_ms: now,
             removed_at_ms: None,
             archived_at_ms: None,
+            blockers: Vec::new(),
+            blocked_reason: String::new(),
         };
         {
             let store = self.store()?;
@@ -575,10 +577,11 @@ impl DeliveryService {
     ) -> Result<DeliveryTask, DeliveryError> {
         let mut task = self.task(task_id)?;
         if let Some(state) = state.map(|state| state.trim().to_string()) {
-            if state.is_empty() || state.len() > 40 {
+            let length = state.chars().count();
+            if length == 0 || length > 40 {
                 return Err(DeliveryError::new(
                     "invalid_state",
-                    "estado de tarea inválido",
+                    format!("el estado de la tarea admite de 1 a 40 caracteres, de cualquier tipo (este tiene {length}); para un bloqueo usa set_task_blocked"),
                 ));
             }
             task.state = state;
@@ -666,6 +669,23 @@ impl DeliveryService {
                     ),
                 ));
             }
+        }
+        // A blocked task waits for its blockers before any stage.
+        let open: Vec<String> = task
+            .blockers
+            .iter()
+            .filter(|blocker| blocker.is_open())
+            .map(super::blockers::blocker_label)
+            .collect();
+        if !open.is_empty() {
+            return Err(DeliveryError::new(
+                "task_blocked",
+                format!(
+                    "{} está bloqueada por {}: quita el bloqueo antes de lanzar una etapa",
+                    task.key,
+                    open.join(", ")
+                ),
+            ));
         }
         let role = request.role.trim().to_ascii_lowercase();
         if role.is_empty() || role.len() > 40 {

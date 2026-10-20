@@ -5,6 +5,7 @@
 
 import type {
   DeliveryApproval,
+  DeliveryBlocker,
   DeliveryJob,
   DeliveryOverview,
   DeliveryPr,
@@ -313,6 +314,40 @@ export function pendingSettingsProposals(
   );
 }
 
+const MILESTONE_LABEL: Record<string, string> = {
+  pr_opened: "PR abierto",
+  merged: "fusionado",
+  delivered: "entregada",
+  closed: "cerrado",
+};
+
+/** The PR's repo and number from its URL: "owner/repo#305". */
+export function prRef(url: string): string | null {
+  const match = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/i.exec(url);
+  return match ? `${match[1]}#${match[2]}` : null;
+}
+
+/** A blocker in a few words: "AGOS-580 (necesita: fusionado)", "PR owner/repo#305". */
+export function blockerLabel(blocker: DeliveryBlocker): string {
+  switch (blocker.type) {
+    case "task":
+      return `${blocker.key} (necesita: ${MILESTONE_LABEL[blocker.until] ?? blocker.until})`;
+    case "pr": {
+      const ref = prRef(blocker.url) ?? blocker.url;
+      return blocker.until === "closed" ? `PR ${ref} (necesita: cerrado)` : `PR ${ref}`;
+    }
+    case "decision":
+      return `una decisión de ${blocker.key}`;
+    case "note":
+      return blocker.text;
+  }
+}
+
+/** The blockers the task still waits for. */
+export function openBlockers(task: DeliveryTask): DeliveryBlocker[] {
+  return (task.blockers ?? []).filter((blocker) => !blocker.cleared_at_ms);
+}
+
 /** The ladder step a phase names. */
 function phaseStep(rung: DeliveryRung, stage: string | null): DeliveryStep {
   return (
@@ -417,6 +452,14 @@ export function taskStatus(
       return danger(`${phase.lease.toUpperCase()} en cuarentena`);
     case "settings_proposal":
       return attention("Aprobar cambio de ajustes");
+    case "blocked": {
+      const open = openBlockers(task);
+      return waiting(
+        open.length === 1
+          ? `Bloqueada por ${blockerLabel(open[0])}`
+          : `Bloqueada · ${phase.open} bloqueos`,
+      );
+    }
     case "broken":
       return danger(
         `${phase.blocked ? "Bloqueada en" : "Falló"} ${lower(stageLabel(phase.role))} · intento ${phase.attempt}`,

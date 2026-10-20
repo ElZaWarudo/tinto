@@ -71,7 +71,33 @@ export interface DeliveryTask {
   removed_at_ms?: number | null;
   /** A delivered task put away; it can be brought back. */
   archived_at_ms?: number | null;
+  /** What the task waits for; cleared ones stay, with `cleared_at_ms`. */
+  blockers?: DeliveryBlocker[];
+  /** Why it is blocked, in the coordinator's words. */
+  blocked_reason?: string;
 }
+
+export type DeliveryTaskMilestone = "pr_opened" | "merged" | "delivered";
+export type DeliveryPrMilestone = "merged" | "closed";
+
+/** Something a blocked task waits for (src-tauri/src/delivery/model.rs). */
+export type DeliveryBlocker = {
+  id: string;
+  /** Where it stands now, in a few words ("PR abierto", "fusionado"). */
+  status: string;
+  cleared_at_ms: number | null;
+} & (
+  | { type: "task"; task_id: string; key: string; until: DeliveryTaskMilestone }
+  | { type: "pr"; url: string; until: DeliveryPrMilestone; state?: string | null }
+  | { type: "decision"; decision_id: string; key: string }
+  | { type: "note"; text: string }
+);
+
+/** A blocker to add: a task by id or key, a PR by URL, or a note. */
+export type NewDeliveryBlocker =
+  | { type: "task"; task: string; until?: DeliveryTaskMilestone }
+  | { type: "pr"; url: string; until?: DeliveryPrMilestone }
+  | { type: "note"; text: string };
 
 export interface DeliveryCheck {
   command: string;
@@ -437,7 +463,8 @@ export interface DeliverySettingsProposal {
 }
 
 /** Who has to act for a task to move. */
-export type DeliveryWaiter = "user" | "coordinator" | "agent" | "queue" | "reviewers" | "nobody";
+export type DeliveryWaiter =
+  "user" | "coordinator" | "agent" | "queue" | "reviewers" | "dependency" | "external" | "nobody";
 
 /** Where a task is, as Tinto derives it (src-tauri/src/delivery/phase.rs). */
 export type DeliveryPhase =
@@ -448,6 +475,7 @@ export type DeliveryPhase =
   | { kind: "queued"; job_id: string; role: string; lease: string | null; position: number }
   | { kind: "quarantined"; lease: string }
   | { kind: "settings_proposal" }
+  | { kind: "blocked"; open: number }
   | { kind: "broken"; job_id: string; role: string; attempt: number; blocked: boolean }
   | { kind: "delivered" }
   | { kind: "pr"; number: number }

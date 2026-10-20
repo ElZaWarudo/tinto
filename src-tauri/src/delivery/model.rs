@@ -31,6 +31,95 @@ pub struct DeliveryTask {
     /// (all of it is on GitHub) and it can be brought back.
     #[serde(default)]
     pub archived_at_ms: Option<u64>,
+    /// What the task waits for before it can go on. While one is open the
+    /// task is blocked: no stage starts on it.
+    #[serde(default)]
+    pub blockers: Vec<DeliveryBlocker>,
+    /// Why it is blocked, in the coordinator's words.
+    #[serde(default)]
+    pub blocked_reason: String,
+}
+
+/// Something a blocked task waits for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryBlocker {
+    pub id: String,
+    #[serde(flatten)]
+    pub kind: DeliveryBlockerKind,
+    /// Where it stands now, in a few words ("PR abierto", "fusionado").
+    #[serde(default)]
+    pub status: String,
+    /// When it cleared; until then it blocks the task.
+    #[serde(default)]
+    pub cleared_at_ms: Option<u64>,
+}
+
+impl DeliveryBlocker {
+    pub fn is_open(&self) -> bool {
+        self.cleared_at_ms.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DeliveryBlockerKind {
+    /// Another task, in this batch or another, reaching `until`.
+    Task {
+        task_id: String,
+        key: String,
+        until: DeliveryTaskMilestone,
+    },
+    /// A GitHub PR, Tinto's or someone else's, merged (or just closed).
+    Pr {
+        url: String,
+        until: DeliveryPrMilestone,
+        /// Its state as GitHub last reported it: `open`, `merged`, `closed`.
+        #[serde(default)]
+        state: Option<String>,
+    },
+    /// A decision of another task, waiting on the user.
+    Decision { decision_id: String, key: String },
+    /// Anything else: the user clears it by hand.
+    Note { text: String },
+}
+
+/// How far another task got, in delivery order.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryTaskMilestone {
+    PrOpened,
+    Merged,
+    Delivered,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryPrMilestone {
+    Merged,
+    Closed,
+}
+
+/// A blocker as a coordinator or the user asks for it: a task by id or
+/// issue key, a PR by URL, a decision by id, or a note.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NewBlocker {
+    Task {
+        task: String,
+        #[serde(default)]
+        until: Option<DeliveryTaskMilestone>,
+    },
+    Pr {
+        url: String,
+        #[serde(default)]
+        until: Option<DeliveryPrMilestone>,
+    },
+    Decision {
+        decision_id: String,
+    },
+    Note {
+        text: String,
+    },
 }
 
 /// An archived task as a search finds it.

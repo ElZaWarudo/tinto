@@ -1765,6 +1765,8 @@ pub(crate) mod tests {
             updated_at_ms: 1,
             removed_at_ms: None,
             archived_at_ms: None,
+            blockers: Vec::new(),
+            blocked_reason: String::new(),
         }
     }
 

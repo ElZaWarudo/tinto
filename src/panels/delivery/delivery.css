@@ -2080,3 +2080,30 @@
     max-height: 30vh;
   }
 }
+
+/* A blocked task: what it waits for, each linked, with the user's ways out. */
+.delivery-blocked__list {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.delivery-blocked__list ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+.delivery-blocked__list li .delivery-link-button:last-child {
+  margin-left: 8px;
+}
+.delivery-blocked__list p {
+  margin: 2px 0 0;
+}
+.delivery-add-blocker {
+  display: grid;
+  gap: 8px;
+}
+.delivery-add-blocker h3 {
+  margin: 0;
+}
+.delivery-add-blocker label {
+  display: grid;
+  gap: 2px;
+}

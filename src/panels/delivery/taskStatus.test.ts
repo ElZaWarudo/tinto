@@ -158,6 +158,29 @@ describe("taskStatus words the phase Tinto derives", () => {
     expect(status({ kind: "settings_proposal" }).label).toBe("Aprobar cambio de ajustes");
   });
 
+  it("names what a blocked task waits for, and waits instead of idling", () => {
+    const blocked = {
+      ...task,
+      blockers: [
+        {
+          id: "b1",
+          type: "pr" as const,
+          url: "https://github.com/acme/api/pull/305",
+          until: "merged" as const,
+          status: "abierto",
+          cleared_at_ms: null,
+        },
+      ],
+    };
+    const phases = {
+      t1: { kind: "blocked" as const, open: 1, waits_on: "external" as const, next_stage: null },
+    };
+    expect(taskStatus(blocked, overview({ phases }), 0)).toMatchObject({
+      group: "waiting",
+      label: "Bloqueada por PR acme/api#305",
+    });
+  });
+
   it("shows a running stage with its clock, and when its agent went quiet", () => {
     const running = job({
       id: "run",

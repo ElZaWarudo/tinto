@@ -26,6 +26,7 @@ import type {
   DeliverySettingsChanges,
   DeliverySettingsProposal,
   DeliveryTask,
+  NewDeliveryBlocker,
 } from "./types";
 
 export const EVENT_DELIVERY_CHANGED = "tinto://delivery-changed";
@@ -78,6 +79,14 @@ export const updateDeliveryTask = (
     contractVersion: changes.contractVersion ?? null,
     title: changes.title ?? null,
   });
+
+/** Adds a blocker to the task; Tinto clears it when it resolves. */
+export const addDeliveryBlocker = (taskId: string, blocker: NewDeliveryBlocker) =>
+  invoke<DeliveryTask>("delivery_add_blocker", { taskId, blocker });
+
+/** Clears the given blockers, or every open one: the user's override. */
+export const clearDeliveryBlockers = (taskId: string, blockerIds?: string[]) =>
+  invoke<DeliveryTask>("delivery_clear_blockers", { taskId, blockerIds: blockerIds ?? null });
 
 export interface NewDeliveryJob {
   taskId: string;

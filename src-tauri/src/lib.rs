@@ -162,6 +162,8 @@ pub fn run() {
             delivery::commands::delivery_archived_tasks,
             delivery::commands::delivery_unarchive_task,
             delivery::commands::delivery_update_task,
+            delivery::commands::delivery_add_blocker,
+            delivery::commands::delivery_clear_blockers,
             delivery::commands::delivery_dispatch_job,
             delivery::commands::delivery_cancel_job,
             delivery::commands::delivery_pause_job,
@@ -294,6 +296,7 @@ pub fn run() {
                 }
                 delivery_for_setup.set_github(std::sync::Arc::new(delivery::prs::GhCli));
                 delivery_for_setup.start_pr_watch();
+                delivery_for_setup.start_blocker_watch();
                 agent_console::commands::start_delivery_waker(
                     app.handle().clone(),
                     delivery_for_setup.clone(),

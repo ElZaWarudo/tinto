@@ -730,7 +730,7 @@ impl DeliveryService {
         self.github()
     }
 
-    fn github(&self) -> Arc<dyn GitHub> {
+    pub(super) fn github(&self) -> Arc<dyn GitHub> {
         self.inner
             .github
             .lock()
@@ -880,6 +880,8 @@ impl DeliveryService {
 
     /// One pass of the watch. Returns how long to wait before the next one.
     pub fn watch_prs_once(&self, etag: &mut Option<String>) -> Duration {
+        // PRs outside Tinto that block a task are read every pass.
+        let _ = self.refresh_blocking_prs();
         let open: Vec<DeliveryPr> = match self.store().and_then(|store| store.prs()) {
             Ok(prs) => prs.into_iter().filter(DeliveryPr::is_open).collect(),
             Err(_) => return Duration::from_secs(60),

@@ -7,6 +7,7 @@
 //! machinery: a job ends when its process exits, never on a turn marker.
 
 pub mod adapters;
+pub mod blockers;
 pub mod commands;
 pub mod coordination;
 pub mod decisions;

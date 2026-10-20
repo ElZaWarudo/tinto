@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 
 use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
 use super::model::{
-    DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryDecision,
-    DeliveryDecisionStatus, DeliveryJob, DeliveryJobStatus, DeliveryLease, DeliveryLeaseState,
-    DeliveryResultState, DeliveryRun, DeliveryRung, DeliverySettingsProposal, DeliveryTask,
+    DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
+    DeliveryDecision, DeliveryDecisionStatus, DeliveryJob, DeliveryJobStatus, DeliveryLease,
+    DeliveryLeaseState, DeliveryResultState, DeliveryRun, DeliveryRung, DeliverySettingsProposal,
+    DeliveryTask,
 };
 use super::prs::DeliveryPr;
 
@@ -44,6 +45,10 @@ pub enum Waiter {
     Queue,
     /// People review its PR.
     Reviewers,
+    /// Another task or a decision in Tinto it is blocked by.
+    Dependency,
+    /// Something outside Tinto it is blocked by: someone else's PR, a note.
+    External,
     Nobody,
 }
 
@@ -101,6 +106,10 @@ pub enum Phase {
     },
     /// The settings change this task asked for waits on the user.
     SettingsProposal,
+    /// Blocked until its open blockers clear (see the task's `blockers`).
+    Blocked {
+        open: usize,
+    },
     /// Its latest stage failed or was blocked.
     Broken {
         job_id: String,
@@ -237,6 +246,17 @@ fn latest_step<'a>(
         .rev()
         .find(|approval| step_matches(approval, rung, stage))
         .copied()
+}
+
+/// Whether the step was done: its latest request executed.
+pub fn step_done(approvals: &[&DeliveryApproval], rung: DeliveryRung) -> bool {
+    latest_step(approvals, rung, None)
+        .is_some_and(|step| step.status == DeliveryApprovalStatus::Executed)
+}
+
+/// Every ladder step done: the task is delivered.
+pub fn is_delivered(approvals: &[&DeliveryApproval]) -> bool {
+    next_step(approvals).is_none()
 }
 
 /// The first ladder step not done; `None` once every step is.
@@ -501,6 +521,23 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         .any(|proposal| proposal.task_id == task.id)
     {
         return phase(Phase::SettingsProposal, Waiter::User);
+    }
+    let open: Vec<&DeliveryBlocker> = task.blockers.iter().filter(|b| b.is_open()).collect();
+    if !open.is_empty() {
+        let inside = open.iter().any(|blocker| {
+            matches!(
+                blocker.kind,
+                DeliveryBlockerKind::Task { .. } | DeliveryBlockerKind::Decision { .. }
+            )
+        });
+        return phase(
+            Phase::Blocked { open: open.len() },
+            if inside {
+                Waiter::Dependency
+            } else {
+                Waiter::External
+            },
+        );
     }
     let latest = jobs
         .iter()

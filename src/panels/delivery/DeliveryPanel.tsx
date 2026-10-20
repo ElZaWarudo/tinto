@@ -80,6 +80,7 @@ import {
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { QaProblems } from "./DeliveryQaProblems";
+import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { coordinatorStalls } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
@@ -902,6 +903,7 @@ export function DeliveryPanel() {
                     });
                   }}
                   onRemoved={() => setSelectedTaskId(null)}
+                  onSelectTask={reveal}
                 />
               ) : (
                 <p className="delivery-panel__empty">Sin tareas.</p>
@@ -1031,6 +1033,7 @@ function TaskDetail({
   onOpenConversation,
   onContinueJob,
   onRemoved,
+  onSelectTask,
 }: {
   task: DeliveryTask;
   overview: DeliveryOverview;
@@ -1040,6 +1043,7 @@ function TaskDetail({
   onOpenConversation: (agentType: string) => Promise<void>;
   onContinueJob: (job: DeliveryJob) => Promise<void>;
   onRemoved: () => void;
+  onSelectTask: (task: DeliveryTask) => void;
 }) {
   const jobs = jobsOf(overview, task.id);
   // The latest QA's visual changes page: what the user reviews before the PR.
@@ -1069,7 +1073,9 @@ function TaskDetail({
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
   // What opens on top of the task: its pending decisions, QA's problems or an open step.
-  const [float, setFloat] = useState<"decisions" | "qa" | `approval:${string}` | null>(null);
+  const [float, setFloat] = useState<"decisions" | "qa" | "blocker" | `approval:${string}` | null>(
+    null,
+  );
   const floating = openApprovals.find((approval) => float === `approval:${approval.id}`);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
@@ -1301,6 +1307,17 @@ function TaskDetail({
               <button
                 type="button"
                 role="menuitem"
+                disabled={delivered}
+                onClick={() => {
+                  close();
+                  setFloat("blocker");
+                }}
+              >
+                Añadir bloqueo…
+              </button>
+              <button
+                type="button"
+                role="menuitem"
                 disabled={correctable.length === 0}
                 title={
                   correctable.length === 0
@@ -1372,6 +1389,21 @@ function TaskDetail({
           onClose={() => setFloat(null)}
         >
           <PendingDecisions taskId={task.id} decisions={pendingDecisions} />
+        </TaskFloat>
+      )}
+      <BlockedBar
+        task={task}
+        tasks={overview.tasks}
+        onSelectTask={onSelectTask}
+        onAdd={() => setFloat("blocker")}
+      />
+      {float === "blocker" && (
+        <TaskFloat
+          label="Añadir bloqueo"
+          closeLabel="Cerrar añadir bloqueo"
+          onClose={() => setFloat(null)}
+        >
+          <AddBlocker task={task} onDone={() => setFloat(null)} />
         </TaskFloat>
       )}
       {float === "qa" && (

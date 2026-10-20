@@ -46,6 +46,8 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "run_takeover",
     "run_closed",
     "qa_problems_sent",
+    "blocker_cleared",
+    "blockers_changed",
 ];
 
 /// Changes are sent to the coordinator's conversation once they have been
@@ -375,6 +377,8 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         "task_archived" => "el usuario archivó la tarea".to_string(),
         "task_unarchived" => "el usuario recuperó la tarea".to_string(),
         "task_updated" => "el usuario editó la tarea".to_string(),
+        "blocker_cleared" => format!("se despejó el bloqueo {detail}"),
+        "blockers_changed" => format!("el usuario cambió los bloqueos: {detail}"),
         "run_policy" if detail.ends_with("paused") => "el usuario pausó el lote".to_string(),
         "run_policy" if detail.ends_with("resumed") => "el usuario reanudó el lote".to_string(),
         "run_takeover" => "otro coordinador tomó el lote".to_string(),

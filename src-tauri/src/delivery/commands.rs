@@ -149,6 +149,30 @@ pub fn delivery_update_task(
         .map_err(CommandError::from)
 }
 
+/// The user blocks a task on something more.
+#[tauri::command]
+pub fn delivery_add_blocker(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+    blocker: super::model::NewBlocker,
+) -> Result<DeliveryTask, CommandError> {
+    service
+        .add_blocker(&task_id, blocker)
+        .map_err(CommandError::from)
+}
+
+/// The user clears some blockers, or overrides the block (`None`: all).
+#[tauri::command]
+pub fn delivery_clear_blockers(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+    blocker_ids: Option<Vec<String>>,
+) -> Result<DeliveryTask, CommandError> {
+    service
+        .clear_blockers(&task_id, blocker_ids.as_deref(), true)
+        .map_err(CommandError::from)
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn delivery_dispatch_job(
