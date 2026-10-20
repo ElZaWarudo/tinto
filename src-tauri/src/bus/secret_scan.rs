@@ -737,7 +737,11 @@ fn extract_binary_from_zip(bytes: &[u8]) -> Result<Vec<u8>, String> {
         let mut file = archive
             .by_index(index)
             .map_err(|error| format!("entrada ZIP inválida: {error}"))?;
-        let Some(name) = Path::new(file.name())
+        let entry_name = file
+            .name()
+            .map_err(|error| format!("entrada ZIP inválida: {error}"))?
+            .into_owned();
+        let Some(name) = Path::new(&entry_name)
             .file_name()
             .map(|file_name| file_name.to_string_lossy().to_string())
         else {
