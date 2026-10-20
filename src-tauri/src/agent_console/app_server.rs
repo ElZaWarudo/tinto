@@ -47,7 +47,7 @@ const MAX_TRACKED_THREAD_STATES: usize = MAX_DISCOVERED_CHILDREN + 1;
 const MAX_DISCOVERY_CURSOR_CHARS: usize = 512;
 const MAX_SUBAGENT_ID_CHARS: usize = 256;
 
-type PendingControlRequests = Arc<Mutex<HashMap<u64, Sender<Result<(), AgentConsoleError>>>>>;
+type PendingControlRequests = Arc<Mutex<HashMap<u64, Sender<Result<Value, AgentConsoleError>>>>>;
 
 #[derive(Debug, Clone)]
 struct PendingDiscovery {
@@ -110,6 +110,8 @@ pub struct CodexAppServerHandle {
     thread_id: Arc<Mutex<Option<String>>>,
     active_turn_id: Arc<Mutex<Option<String>>>,
     active_turn_ids: Arc<Mutex<HashMap<String, String>>>,
+    /// The command items the root thread's current turn started.
+    turn_commands: Arc<Mutex<Vec<String>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
     runtime_catalog: Arc<Mutex<AgentRuntimeCatalog>>,
@@ -224,6 +226,7 @@ impl CodexAppServerHandle {
         let active_turn_id = Arc::new(Mutex::new(None));
         let completed_agent_messages = Arc::new(Mutex::new(HashMap::new()));
         let active_turn_ids = Arc::new(Mutex::new(HashMap::new()));
+        let turn_commands = Arc::new(Mutex::new(Vec::new()));
         let pending_turns = Arc::new(Mutex::new(VecDeque::new()));
         let pending_goal_updates = Arc::new(Mutex::new(VecDeque::new()));
         let runtime_catalog = Arc::new(Mutex::new(AgentRuntimeCatalog {
@@ -260,6 +263,7 @@ impl CodexAppServerHandle {
                 thread_id: Arc::clone(&thread_id),
                 active_turn_id: Arc::clone(&active_turn_id),
                 active_turn_ids: Arc::clone(&active_turn_ids),
+                turn_commands: Arc::clone(&turn_commands),
                 completed_agent_messages: Arc::clone(&completed_agent_messages),
                 pending_turns: Arc::clone(&pending_turns),
                 pending_goal_updates: Arc::clone(&pending_goal_updates),
@@ -289,6 +293,7 @@ impl CodexAppServerHandle {
             thread_id,
             active_turn_id,
             active_turn_ids,
+            turn_commands,
             pending_turns,
             pending_goal_updates,
             runtime_catalog,
@@ -640,11 +645,21 @@ impl AgentProcess for CodexAppServerHandle {
                 AgentConsoleError::new("interrupt_unavailable", "Codex aún está iniciando")
             })?;
         let turn_id = self.wait_for_active_turn_id()?;
+        // Read before the turn ends, which starts the next list empty.
+        let commands = self
+            .turn_commands
+            .lock()
+            .map(|commands| commands.clone())
+            .unwrap_or_default();
         let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
         self.send_control_request(
             request_id,
             turn_interrupt_message(request_id, &thread_id, &turn_id),
-        )
+        )?;
+        if !commands.is_empty() {
+            self.stop_turn_terminals(&thread_id, &commands);
+        }
+        Ok(())
     }
 
     fn supports_context_compaction(&self) -> bool {
@@ -839,6 +854,31 @@ impl CodexAppServerHandle {
         request_id: u64,
         message: Value,
     ) -> Result<(), AgentConsoleError> {
+        self.control_request(request_id, message).map(drop)
+    }
+
+    /// A command still running when its turn is interrupted goes on as a
+    /// background terminal. Stops those this turn started, best effort,
+    /// leaving what earlier turns left running (a dev server) alone.
+    fn stop_turn_terminals(&self, thread_id: &str, commands: &[String]) {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        let Ok(listed) = self.control_request(
+            request_id,
+            background_terminals_list_message(request_id, thread_id),
+        ) else {
+            return;
+        };
+        for process_id in turn_terminals(&listed, commands) {
+            let request_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+            let _ = self.control_request(
+                request_id,
+                background_terminal_terminate_message(request_id, thread_id, &process_id),
+            );
+        }
+    }
+
+    /// Sends a request and waits for Codex's answer, its `result`.
+    fn control_request(&self, request_id: u64, message: Value) -> Result<Value, AgentConsoleError> {
         let (result_tx, result_rx) = mpsc::channel();
         let mut pending = self.pending_control_requests.lock().map_err(|_| {
             AgentConsoleError::new(
@@ -1037,6 +1077,7 @@ struct ServerRuntimeContext {
     thread_id: Arc<Mutex<Option<String>>>,
     active_turn_id: Arc<Mutex<Option<String>>>,
     active_turn_ids: Arc<Mutex<HashMap<String, String>>>,
+    turn_commands: Arc<Mutex<Vec<String>>>,
     completed_agent_messages: Arc<Mutex<HashMap<String, Vec<String>>>>,
     pending_turns: Arc<Mutex<VecDeque<PendingTurn>>>,
     pending_goal_updates: Arc<Mutex<VecDeque<PendingGoalUpdate>>>,
@@ -1203,6 +1244,9 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
     match method {
         "item/started" => {
             if let Some(item) = message.pointer("/params/item") {
+                if is_root_thread {
+                    note_turn_command(context, item);
+                }
                 emit_subagent_collaboration(context, item, false);
                 if let Some(text) = activity_text_from_item(item, false) {
                     let _ = context.output_tx.send(timeline_frame_for_thread(
@@ -1400,6 +1444,9 @@ fn handle_server_message(message: &Value, context: &ServerRuntimeContext) {
                 if is_root_thread {
                     if let Ok(mut active_turn_id) = context.active_turn_id.lock() {
                         *active_turn_id = Some(turn_id.to_string());
+                    }
+                    if let Ok(mut turn_commands) = context.turn_commands.lock() {
+                        turn_commands.clear();
                     }
                 }
                 if let Some(thread_id) = target_thread_id.as_deref().filter(|_| !is_root_thread) {
@@ -2413,7 +2460,7 @@ fn handle_control_response(message: &Value, context: &ServerRuntimeContext) -> b
         .and_then(|value| provider_string(Some(value), 4_000))
     {
         Some(error) => Err(AgentConsoleError::new("provider_control_failed", error)),
-        None => Ok(()),
+        None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
     };
     let _ = sender.send(result);
     true
@@ -3266,6 +3313,57 @@ fn turn_interrupt_message(request_id: u64, thread_id: &str, turn_id: &str) -> Va
     })
 }
 
+fn background_terminals_list_message(request_id: u64, thread_id: &str) -> Value {
+    json!({
+        "method": "thread/backgroundTerminals/list",
+        "id": request_id,
+        "params": { "threadId": thread_id, "limit": 100 }
+    })
+}
+
+fn background_terminal_terminate_message(
+    request_id: u64,
+    thread_id: &str,
+    process_id: &str,
+) -> Value {
+    json!({
+        "method": "thread/backgroundTerminals/terminate",
+        "id": request_id,
+        "params": { "threadId": thread_id, "processId": process_id }
+    })
+}
+
+/// The processes of the background terminals that `commands` (item ids) started.
+fn turn_terminals(listed: &Value, commands: &[String]) -> Vec<String> {
+    listed
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|terminal| {
+            terminal
+                .get("itemId")
+                .and_then(Value::as_str)
+                .is_some_and(|item| commands.iter().any(|command| command == item))
+        })
+        .filter_map(|terminal| terminal.get("processId").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Notes a command item the root thread's turn starts.
+fn note_turn_command(context: &ServerRuntimeContext, item: &Value) {
+    if normalized_item_type(item).as_deref() != Some("commandexecution") {
+        return;
+    }
+    if let (Some(id), Ok(mut commands)) = (
+        item.get("id").and_then(Value::as_str),
+        context.turn_commands.lock(),
+    ) {
+        commands.push(id.to_string());
+    }
+}
+
 fn thread_compact_start_message(request_id: u64, thread_id: &str) -> Value {
     json!({
         "method": "thread/compact/start",
@@ -3373,6 +3471,7 @@ mod tests {
             thread_id: Arc::new(Mutex::new(Some("t".into()))),
             active_turn_id: Arc::new(Mutex::new(None)),
             active_turn_ids: Arc::new(Mutex::new(HashMap::new())),
+            turn_commands: Arc::new(Mutex::new(Vec::new())),
             completed_agent_messages: Arc::new(Mutex::new(HashMap::new())),
             pending_turns: Arc::new(Mutex::new(VecDeque::new())),
             pending_goal_updates: Arc::new(Mutex::new(VecDeque::new())),
@@ -3596,6 +3695,50 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_notes_only_the_commands_it_starts() {
+        let (tx, _rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::channel();
+        let context = dummy_context(tx, event_tx);
+        let started = |item: Value| {
+            handle_server_message(
+                &json!({"method":"item/started","params":{"threadId":"t","turnId":"u","item":item}}),
+                &context,
+            );
+        };
+        handle_server_message(
+            &json!({"method":"turn/started","params":{"threadId":"t","turn":{"id":"u"}}}),
+            &context,
+        );
+        started(json!({"type":"commandExecution","id":"cmd-1","command":"sleep 120"}));
+        started(json!({"type":"agentMessage","id":"msg-1","text":"Esperando"}));
+        assert_eq!(*context.turn_commands.lock().unwrap(), vec!["cmd-1"]);
+
+        handle_server_message(
+            &json!({"method":"turn/started","params":{"threadId":"t","turn":{"id":"v"}}}),
+            &context,
+        );
+        assert!(context.turn_commands.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_interrupted_turn_stops_only_the_terminals_it_started() {
+        let listed = json!({"data": [
+            {"itemId": "cmd-1", "processId": "p1", "command": "sleep 120"},
+            {"itemId": "dev-server", "processId": "p0", "command": "npm run dev"},
+            {"itemId": "cmd-2", "processId": null, "command": "ls"},
+        ], "nextCursor": null});
+        let commands = vec!["cmd-1".to_string(), "cmd-2".to_string()];
+        assert_eq!(turn_terminals(&listed, &commands), vec!["p1"]);
+
+        let list = background_terminals_list_message(105, "thread-1");
+        assert_eq!(list["method"], "thread/backgroundTerminals/list");
+        assert_eq!(list["params"]["threadId"], "thread-1");
+        let terminate = background_terminal_terminate_message(106, "thread-1", "p1");
+        assert_eq!(terminate["method"], "thread/backgroundTerminals/terminate");
+        assert_eq!(terminate["params"]["processId"], "p1");
+    }
+
+    #[test]
     fn interrupt_message_targets_the_active_thread_and_turn() {
         let message = turn_interrupt_message(102, "thread-1", "turn-7");
         assert_eq!(message["method"], "turn/interrupt");
@@ -3624,7 +3767,7 @@ mod tests {
 
         handle_server_message(&json!({"id": 103, "result": {}}), &context);
 
-        assert_eq!(result_rx.recv().unwrap(), Ok(()));
+        assert_eq!(result_rx.recv().unwrap(), Ok(json!({})));
         assert!(context.pending_control_requests.lock().unwrap().is_empty());
     }
 
