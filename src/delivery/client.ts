@@ -225,6 +225,10 @@ export const sendDeliveryQaProblems = (
 ) => invoke<DeliveryQaProblem[]>("delivery_send_qa_problems", { taskId, choices });
 
 /** Asks the Agents conversation `sessionId` to take the batch over. */
+/** Stops or allows new tasks in a batch: create_task refuses them while stopped. */
+export const setDeliveryRunNoNewTasks = (runId: string, noNewTasks: boolean) =>
+  invoke<DeliveryRun>("delivery_set_run_no_new_tasks", { runId, noNewTasks });
+
 export const handOverDeliveryRun = (runId: string, sessionId: string) =>
   invoke<void>("hand_over_delivery_run", { runId, sessionId });
 

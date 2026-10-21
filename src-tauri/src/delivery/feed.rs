@@ -381,6 +381,12 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         "blockers_changed" => format!("el usuario cambió los bloqueos: {detail}"),
         "run_policy" if detail.ends_with("paused") => "el usuario pausó el lote".to_string(),
         "run_policy" if detail.ends_with("resumed") => "el usuario reanudó el lote".to_string(),
+        "run_policy" if detail.ends_with("no_new_tasks") => {
+            "el usuario pidió no crear más tareas en el lote: termina las que tiene (create_task las rechaza)".to_string()
+        }
+        "run_policy" if detail.ends_with("new_tasks_allowed") => {
+            "el usuario volvió a permitir tareas nuevas en el lote".to_string()
+        }
         "run_takeover" => "otro coordinador tomó el lote".to_string(),
         "run_closed" => "el lote se cerró".to_string(),
         "qa_problems_sent" => format!(

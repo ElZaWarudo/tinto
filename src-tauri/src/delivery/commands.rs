@@ -294,6 +294,18 @@ pub fn delivery_set_run_paused(
         .map_err(CommandError::from)
 }
 
+/// The user stops or allows new tasks in a batch.
+#[tauri::command]
+pub fn delivery_set_run_no_new_tasks(
+    service: State<'_, DeliveryService>,
+    run_id: String,
+    no_new_tasks: bool,
+) -> Result<DeliveryRun, CommandError> {
+    service
+        .set_run_no_new_tasks(&run_id, no_new_tasks)
+        .map_err(CommandError::from)
+}
+
 #[tauri::command]
 pub fn delivery_retry_job(
     service: State<'_, DeliveryService>,

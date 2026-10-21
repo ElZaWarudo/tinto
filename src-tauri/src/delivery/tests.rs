@@ -734,6 +734,41 @@ fn a_paused_stage_can_be_given_up_and_a_paused_batch_starts_nothing() {
 }
 
 #[test]
+fn a_batch_closed_to_new_tasks_refuses_them_until_the_user_allows_them() {
+    let h = harness();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", None, None)
+        .unwrap();
+    let new_task = |key: &str| NewTask {
+        repo: h.repo.path().to_path_buf(),
+        distro: None,
+        key: key.into(),
+        title: "x".into(),
+        base: None,
+        branch: None,
+        run_id: Some(run.id.clone()),
+    };
+    h.service.create_task(new_task("N-1")).unwrap();
+
+    assert!(
+        h.service
+            .set_run_no_new_tasks(&run.id, true)
+            .unwrap()
+            .no_new_tasks
+    );
+    let refused = h.service.create_task(new_task("N-2")).unwrap_err();
+    assert_eq!(refused.category, "run_no_new_tasks");
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.kind == "run_policy" && event.detail.ends_with("no_new_tasks")));
+
+    h.service.set_run_no_new_tasks(&run.id, false).unwrap();
+    h.service.create_task(new_task("N-2")).unwrap();
+}
+
+#[test]
 fn the_qa_resource_is_exclusive_fifo_and_quarantined_after_a_crash() {
     let h = harness();
     let a = h.task("K-7");
@@ -1954,7 +1989,9 @@ fn blockers_survive_a_takeover_and_the_user_can_override_them() {
             "",
         )
         .unwrap();
-    h.service.takeover_run(&run.id, "coord-2", None, "the user asked").unwrap();
+    h.service
+        .takeover_run(&run.id, "coord-2", None, "the user asked")
+        .unwrap();
     // Read back from the store, as after a restart.
     let stored = h.service.store().unwrap().task(&task.id).unwrap().unwrap();
     assert!(stored.blockers[0].is_open());
@@ -1987,6 +2024,25 @@ fn a_state_label_says_how_long_it_may_be() {
         .update_task(&task.id, Some("blocked (AGOS-580)".into()), None, None)
         .unwrap();
     assert_eq!(short.state, "blocked (AGOS-580)");
+}
+
+#[test]
+fn a_block_named_only_in_the_label_points_to_set_task_blocked() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("AGOS-3");
+    let labelled = coordinator.write(
+        "set_task_state",
+        json!({"task_id": task_id, "state": "blocked: waiting for AGOS-580"}),
+    );
+    assert!(labelled["structuredContent"]["notice"]
+        .as_str()
+        .is_some_and(|notice| notice.contains("set_task_blocked")));
+    let plain = coordinator.write(
+        "set_task_state",
+        json!({"task_id": task_id, "state": "implementation"}),
+    );
+    assert!(plain["structuredContent"]["notice"].is_null());
 }
 
 #[test]

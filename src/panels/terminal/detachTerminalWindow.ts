@@ -127,8 +127,12 @@ export function consumeTerminalDetachedMarker(sessionId: string): boolean {
   }
 }
 
-export async function openDetachedTerminalWindow(params: TerminalPanelParams): Promise<boolean> {
+export async function openDetachedTerminalWindow(
+  params: TerminalPanelParams,
+  onClosed?: () => void,
+): Promise<boolean> {
   return openAppWindow({
+    onClosed,
     label: detachedTerminalWindowLabel(params.sessionId),
     url: detachedTerminalUrl(params),
     title: detachedTerminalWindowTitle(params),

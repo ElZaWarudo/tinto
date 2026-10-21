@@ -108,7 +108,8 @@ import {
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
 import { QaProblems } from "./DeliveryQaProblems";
 import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
-import { coordinatorStalls } from "./DeliveryNotifications";
+import { CoordinatorDock } from "./DeliveryCoordinator";
+import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
@@ -178,7 +179,19 @@ function savedListView(): ListView {
   return { lot: null, folded: ["delivered"] };
 }
 
-type IconName = Exclude<StatusIcon, "live"> | "more" | "down" | "right" | "gear" | "play";
+type IconName =
+  | Exclude<StatusIcon, "live">
+  | "more"
+  | "down"
+  | "right"
+  | "gear"
+  | "play"
+  | "pause"
+  | "ticket"
+  | "pull"
+  | "merge"
+  | "photo"
+  | "bug";
 
 const ICONS: Record<IconName, ReactNode> = {
   flag: <path d="M4 14V2.5M4 3h7.5l-1.8 2.6L11.5 8.2H4" />,
@@ -202,6 +215,38 @@ const ICONS: Record<IconName, ReactNode> = {
     </>
   ),
   play: <path d="M5 3.5l7 4.5-7 4.5z" />,
+  pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
+  ticket: (
+    <path d="M2.5 5V3.5h11V5a1.5 1.5 0 0 0 0 3v0a1.5 1.5 0 0 0 0 3v1.5h-11V11a1.5 1.5 0 0 0 0-3 1.5 1.5 0 0 0 0-3zM9.5 4v8" />
+  ),
+  pull: (
+    <>
+      <circle cx="4.5" cy="3.5" r="1.5" />
+      <circle cx="4.5" cy="12.5" r="1.5" />
+      <circle cx="11.5" cy="12.5" r="1.5" />
+      <path d="M4.5 5v6M11.5 11V6.5A2 2 0 0 0 9.5 4.5H8" />
+    </>
+  ),
+  merge: (
+    <>
+      <circle cx="4.5" cy="3.5" r="1.5" />
+      <circle cx="4.5" cy="12.5" r="1.5" />
+      <circle cx="11.5" cy="8" r="1.5" />
+      <path d="M4.5 5v6M4.5 5c0 2.5 2 3 5.5 3" />
+    </>
+  ),
+  photo: (
+    <>
+      <rect x="2.5" y="3.5" width="11" height="9" rx="1" />
+      <path d="M2.5 11l3.5-3.5 3 3 2-2 2.5 2.5" />
+    </>
+  ),
+  bug: (
+    <>
+      <rect x="5" y="5" width="6" height="8" rx="3" />
+      <path d="M6 5a2 2 0 0 1 4 0M2.5 9H5M11 9h2.5M3 5.5l2 1.5M13 5.5l-2 1.5M3 12.5l2-1.5M13 12.5l-2-1.5" />
+    </>
+  ),
 };
 
 function Icon({ name }: { name: IconName }) {
@@ -437,6 +482,9 @@ interface DeliveryShared {
   takeover: (run: DeliveryRun) => Promise<false | undefined>;
   /** Opens a repo's tab in the dock (from "+"). */
   openRepo: (repo: string) => void;
+  /** Coordinators that stopped with changes unread, minus the ones the user hid. */
+  stalls: CoordinatorStall[];
+  hideStall: (stall: CoordinatorStall) => void;
 }
 
 const DeliveryContext = createContext<DeliveryShared | null>(null);
@@ -449,6 +497,21 @@ function useDelivery(): DeliveryShared {
 
 const DOCK_KEY = "tinto:delivery-dock";
 const DETACHED_KEY = "tinto:delivery-detached";
+const HIDDEN_STALLS_KEY = "tinto:delivery-hidden-stalls";
+
+/** A stall is one stop: the same coordinator stopping again is a new one. */
+function stallKey(stall: CoordinatorStall): string {
+  return `${stall.run.id}:${stall.since}`;
+}
+
+function savedHiddenStalls(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HIDDEN_STALLS_KEY) ?? "[]") as unknown;
+    return Array.isArray(saved) ? saved.filter((key) => typeof key === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 function savedDetached(): Record<string, string> {
   try {
@@ -640,17 +703,22 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     api.getPanel(repoPanelId(repo))?.api.setActive();
   };
 
-  // Shows the task in its repo's tab, leaving a batch filter that hides it.
-  const reveal = (task: DeliveryTask) => {
-    setListView((view) => (view.lot && view.lot !== task.run_id ? { ...view, lot: null } : view));
-    select(task.repo, task.id);
+  // Brings the repo forward: its tab, or its window when it has one.
+  const showRepo = (repo: string) => {
     if (only) return;
-    const out = detached[repoKey(task.repo)];
+    const out = detached[repoKey(repo)];
     if (out) {
       void openDetachedPanelWindow({ kind: "delivery", repo: out });
       return;
     }
-    openRepo(task.repo);
+    openRepo(repo);
+  };
+
+  // Shows the task in its repo's tab, leaving a batch filter that hides it.
+  const reveal = (task: DeliveryTask) => {
+    setListView((view) => (view.lot && view.lot !== task.run_id ? { ...view, lot: null } : view));
+    select(task.repo, task.id);
+    showRepo(task.repo);
   };
 
   // Every repo with tasks has its tab, unless it is in a window of its own.
@@ -719,7 +787,31 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const capacity = overview?.capacity ?? Math.max(1, capacitySetting);
   const qa = overview?.leases.find((lease) => lease.name === "qa");
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
-  const stalls = overview ? coordinatorStalls(overview, now) : [];
+  const allStalls = overview ? coordinatorStalls(overview, now) : [];
+  const [hiddenStalls, setHiddenStalls] = useState(savedHiddenStalls);
+  const stalls = allStalls.filter((stall) => !hiddenStalls.includes(stallKey(stall)));
+  // Hidden until the coordinator stops again; keys of stalls gone are dropped.
+  const hideStall = (stall: CoordinatorStall) => {
+    const live = allStalls.map(stallKey);
+    const next = [...hiddenStalls.filter((key) => live.includes(key)), stallKey(stall)];
+    setHiddenStalls(next);
+    try {
+      localStorage.setItem(HIDDEN_STALLS_KEY, JSON.stringify(next));
+    } catch {
+      // Hidden until Tinto closes.
+    }
+  };
+  const needsCount = needYou.length + stalls.length;
+  const needsLabel = [
+    needYou.length === 1 ? "1 tarea" : needYou.length > 1 ? `${needYou.length} tareas` : "",
+    stalls.length === 1
+      ? "1 coordinador"
+      : stalls.length > 1
+        ? `${stalls.length} coordinadores`
+        : "",
+  ]
+    .filter(Boolean)
+    .join(" y ");
 
   // For what is not a button (a select, a menu item): its error goes to the
   // panel's banner. Buttons are ActionButtons and say it themselves.
@@ -781,6 +873,8 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
     },
     takeover,
     openRepo,
+    stalls,
+    hideStall,
   };
 
   return (
@@ -791,16 +885,16 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             <h1>Delivery</h1>
             {only && <span className="delivery-muted">{busStore.displayName(only)}</span>}
             <span className="delivery-panel__spacer" />
-            {needYou.length > 0 && (
+            {needsCount > 0 && (
               <button
                 type="button"
                 className="delivery-attention"
-                onClick={() => reveal(needYou[0])}
+                onClick={() =>
+                  needYou.length > 0 ? reveal(needYou[0]) : showRepo(stalls[0].run.repo)
+                }
               >
                 <Icon name="flag" />
-                {needYou.length === 1
-                  ? "1 tarea te necesita"
-                  : `${needYou.length} tareas te necesitan`}
+                {needsLabel} {needsCount === 1 ? "te necesita" : "te necesitan"}
               </button>
             )}
             <span className="delivery-load">
@@ -870,20 +964,6 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
               </button>
             </div>
           )}
-
-          {/* A coordinator Tinto could not wake: nothing moves until it goes on. */}
-          {stalls.map(({ run, unread, since }) => (
-            <div key={run.id} className="delivery-panel__warning" role="status">
-              <span>
-                {batchName(run.title || run.id)}: el coordinador
-                {run.owner && run.owner !== "user" ? ` (${run.owner})` : ""} no está esperando y
-                tiene {unread === 1 ? "1 cambio" : `${unread} cambios`} sin leer desde las{" "}
-                {new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
-                Pídele que siga con wait_run; si sus herramientas de Delivery fallan, que las
-                reconecte.
-              </span>
-            </div>
-          ))}
 
           {/* Only when it holds work back; otherwise the header and the task say it. */}
           {qa?.state === "quarantined" && qa.queue.length > 0 && (
@@ -1051,13 +1131,14 @@ const deliveryDockComponents = {
 /** A repo's tab: its name, how many tasks it has and whether one needs you.
  *  A repo with no tasks left can be closed. */
 function DeliveryRepoTab({ params, api }: IDockviewPanelHeaderProps<{ repo: string }>) {
-  const { overview, now } = useDelivery();
+  const { overview, now, stalls } = useDelivery();
   const tasks = (overview?.tasks ?? []).filter(
     (task) => repoKey(task.repo) === repoKey(params.repo),
   );
   const needs =
-    overview !== null &&
-    tasks.some((task) => taskStatus(task, overview, now).group === "attention");
+    (overview !== null &&
+      tasks.some((task) => taskStatus(task, overview, now).group === "attention")) ||
+    stalls.some((stall) => repoKey(stall.run.repo) === repoKey(params.repo));
   return (
     <span className="delivery-repo-tab" title={params.repo}>
       {busStore.displayName(params.repo)}
@@ -1081,6 +1162,86 @@ function DeliveryRepoTab({ params, api }: IDockviewPanelHeaderProps<{ repo: stri
 }
 
 const deliveryDockTabs = { deliveryRepoTab: DeliveryRepoTab };
+
+/** A batch whose coordinator stopped with changes unread: a chip that opens
+ *  what to tell it, its conversation when it runs in Tinto, and a way to hide
+ *  this stop. */
+function CoordinatorStallChip({
+  stall,
+  named,
+  onOpenCoordinator,
+}: {
+  stall: CoordinatorStall;
+  named?: boolean;
+  onOpenCoordinator: () => void;
+}) {
+  const { hideStall } = useDelivery();
+  const { run, unread, since } = stall;
+  const batch = batchName(run.title || run.id);
+  const changes = unread === 1 ? "1 cambio" : `${unread} cambios`;
+  const at = new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const message = `Sigue con wait_run de Tinto Delivery: tienes ${changes} sin leer desde las ${at}. Si las herramientas de Delivery fallan, reconéctalas.`;
+  return (
+    <span className="delivery-stall">
+      <Menu
+        label={`Coordinador parado${named ? ` en ${batch}` : ""}, ${changes} sin leer`}
+        trigger={
+          <>
+            <Icon name="pause" />
+            {named ? `${batch}: coordinador parado` : "Coordinador parado"} · {unread}
+          </>
+        }
+        floating
+      >
+        {(close) => (
+          <div className="delivery-stall__card">
+            <p>
+              <strong>El coordinador no está esperando</strong>
+            </p>
+            <p className="delivery-muted">
+              {run.owner && run.owner !== "user" ? run.owner : "Su coordinador"} tiene {changes} sin
+              leer desde las {at}. Pídele que siga con wait_run; si sus herramientas de Delivery
+              fallan, que las reconecte.
+            </p>
+            <div className="delivery-actions">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  void navigator.clipboard?.writeText(message).catch(() => {});
+                }}
+              >
+                Copiar mensaje
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  onOpenCoordinator();
+                }}
+              >
+                Abrir coordinador
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                title="Vuelve a avisar si se para otra vez"
+                onClick={() => {
+                  close();
+                  hideStall(stall);
+                }}
+              >
+                Ocultar
+              </button>
+            </div>
+          </div>
+        )}
+      </Menu>
+    </span>
+  );
+}
 
 /** "+" beside the tabs: a repo of the workbench without its tab. */
 function DeliveryAddRepo({ containerApi }: IDockviewHeaderActionsProps) {
@@ -1126,6 +1287,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const activeRuns = (overview?.runs ?? []).filter(
     (candidate) => candidate.status === "active" && repoKey(candidate.repo) === key,
   );
+  const repoStalls = shared.stalls.filter((stall) => repoKey(stall.run.repo) === key);
+  const [coordinatorOpen, setCoordinatorOpen] = useState(false);
   // A batch that closed since, or the only one left, shows every task.
   const lot =
     activeRuns.length > 1 && activeRuns.some((candidate) => candidate.id === listView.lot)
@@ -1241,6 +1404,13 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                 · coordinador avisado {ago(activeRuns[0].notified_at_ms, now)}
               </span>
             )}
+            {repoStalls.map((stall) => (
+              <CoordinatorStallChip
+                key={stall.run.id}
+                stall={stall}
+                onOpenCoordinator={() => setCoordinatorOpen(true)}
+              />
+            ))}
             {activeRuns[0].owner && activeRuns[0].owner !== "user" && (
               <ActionButton onAction={() => shared.takeover(activeRuns[0])}>
                 Tomar el control
@@ -1289,12 +1459,22 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             </ActionButton>
           </span>
         ) : (
-          batches(
-            <>
-              {activeRuns.length > 1 ? `${activeRuns.length} lotes activos` : "Lotes"}
-              <Icon name="down" />
-            </>,
-          )
+          <>
+            {batches(
+              <>
+                {activeRuns.length > 1 ? `${activeRuns.length} lotes activos` : "Lotes"}
+                <Icon name="down" />
+              </>,
+            )}
+            {repoStalls.map((stall) => (
+              <CoordinatorStallChip
+                key={stall.run.id}
+                stall={stall}
+                named
+                onOpenCoordinator={() => setCoordinatorOpen(true)}
+              />
+            ))}
+          </>
         )}
         <span className="delivery-panel__spacer" />
         <button
@@ -1364,19 +1544,33 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                   )}
                 </h2>
                 {!isFolded(group.group) &&
-                  group.tasks.map((task) => (
-                    <button
-                      key={task.id}
-                      type="button"
-                      className="delivery-task-row"
-                      aria-current={selectedTask?.id === task.id ? "true" : undefined}
-                      onClick={() => select(repo, task.id)}
-                    >
-                      <span className="delivery-task-row__key">{task.key}</span>
-                      <span className="delivery-task-row__title">{task.title || task.branch}</span>
-                      <StatusLine status={statuses.get(task.id)!} />
-                    </button>
-                  ))}
+                  group.tasks.map((task) => {
+                    const pr = (overview?.prs ?? []).find(
+                      (candidate) => candidate.task_id === task.id,
+                    );
+                    return (
+                      <button
+                        key={task.id}
+                        type="button"
+                        className="delivery-task-row"
+                        aria-current={selectedTask?.id === task.id ? "true" : undefined}
+                        onClick={() => select(repo, task.id)}
+                      >
+                        <span className="delivery-task-row__key">
+                          {task.key}
+                          {pr && (
+                            <span className="delivery-task-row__pr" title={`PR #${pr.number}`}>
+                              #{pr.number}
+                            </span>
+                          )}
+                        </span>
+                        <span className="delivery-task-row__title">
+                          {task.title || task.branch}
+                        </span>
+                        <StatusLine status={statuses.get(task.id)!} />
+                      </button>
+                    );
+                  })}
               </section>
             ))}
           </nav>
@@ -1402,6 +1596,15 @@ function DeliveryRepoView({ repo }: { repo: string }) {
             )}
           </main>
         </div>
+      )}
+      {overview && activeRuns.length > 0 && (
+        <CoordinatorDock
+          runs={lot ? activeRuns.filter((candidate) => candidate.id === lot) : activeRuns}
+          overview={overview}
+          stalled={repoStalls.map((stall) => stall.run.id)}
+          open={coordinatorOpen}
+          onOpenChange={setCoordinatorOpen}
+        />
       )}
     </div>
   );
@@ -1593,40 +1796,48 @@ function TaskDetail({
           <h2>
             {task.key}
             {task.title && <span> {task.title}</span>}
-            {issueUrl && (
-              <ExternalLink
-                className="delivery-task__issue"
-                href={issueUrl}
-                label={`Abrir ${task.key} en Jira`}
-              >
-                Abrir en Jira ↗
-              </ExternalLink>
-            )}
-            {pr && (
-              <ExternalLink
-                className="delivery-task__pr"
-                href={pr.url}
-                label={`Abrir el PR #${pr.number} en GitHub`}
-              >
-                Abrir PR #{pr.number} en GitHub ↗
-              </ExternalLink>
-            )}
-            {(qaRecord?.visual_record || qaProblems.length > 0) && (
-              // The QA's record and its problems, as one split pill.
-              <span className="delivery-task__qa">
-                {qaRecord?.visual_record && (
-                  <ActionButton
-                    className="delivery-task__record"
-                    aria-label="Abrir registro visual de QA"
-                    title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
-                    onAction={() => openDeliveryVisualRecord(qaRecord.id)}
-                  >
-                    Registro visual QA ↗
-                  </ActionButton>
-                )}
+          </h2>
+          {(issueUrl || pr || qaRecord?.visual_record || qaProblems.length > 0) && (
+            // Where the task goes outside its card: one quiet look for each.
+            <div className="delivery-task__links">
+              {issueUrl && (
+                <ExternalLink
+                  className="delivery-link-chip"
+                  href={issueUrl}
+                  label={`Abrir ${task.key} en Jira`}
+                >
+                  <Icon name="ticket" />
+                  Jira
+                </ExternalLink>
+              )}
+              {pr && (
+                <ExternalLink
+                  className="delivery-link-chip"
+                  href={pr.url}
+                  label={`Abrir el PR #${pr.number} en GitHub`}
+                >
+                  <Icon name={pr.state === "merged" ? "merge" : "pull"} />
+                  PR #{pr.number}
+                  <span className={pr.state === "merged" ? "delivery-tone--ok" : "delivery-muted"}>
+                    · {lower(prSummary(pr).label)}
+                  </span>
+                </ExternalLink>
+              )}
+              {qaRecord?.visual_record && (
+                <ActionButton
+                  className="delivery-link-chip"
+                  aria-label="Abrir registro visual de QA"
+                  title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
+                  onAction={() => openDeliveryVisualRecord(qaRecord.id)}
+                >
+                  <Icon name="photo" />
+                  Registro QA
+                </ActionButton>
+              )}
+              {qaProblems.length > 0 && (
                 <button
                   type="button"
-                  className="delivery-task__record delivery-task__record--problems"
+                  className="delivery-link-chip"
                   aria-expanded={float === "qa"}
                   aria-label={
                     qaProblemsToDecide > 0
@@ -1635,15 +1846,15 @@ function TaskDetail({
                   }
                   onClick={() => setFloat(float === "qa" ? null : "qa")}
                 >
+                  <Icon name="bug" />
                   Problemas
                   {qaProblemsToDecide > 0 && (
-                    <span className="delivery-task__record-count">{qaProblemsToDecide} !</span>
-                  )}{" "}
-                  ▾
+                    <span className="delivery-task__record-count">{qaProblemsToDecide}</span>
+                  )}
                 </button>
-              </span>
-            )}
-          </h2>
+              )}
+            </div>
+          )}
           <p className="delivery-task__meta">
             <span>
               <code title={task.worktree}>{task.branch}</code> desde {task.base_ref} (

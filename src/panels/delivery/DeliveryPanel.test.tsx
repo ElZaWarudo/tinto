@@ -664,7 +664,7 @@ describe("DeliveryPanel", () => {
     renderPanel();
     const link = await screen.findByRole("link", { name: "Abrir AGOS-501 en Jira" });
     expect(link).toHaveAttribute("href", "https://jira.example.com/browse/AGOS-501");
-    expect(screen.getByRole("heading", { name: /AGOS-501/ })).toContainElement(link);
+    expect(link).toHaveTextContent("Jira");
     expect(client.getDeliveryIssueUrl).toHaveBeenCalledWith("t1");
     // The webview would not follow it: the system's browser opens it.
     await userEvent.click(link);
@@ -1296,7 +1296,7 @@ describe("DeliveryPanel", () => {
     );
   });
 
-  it("warns when a batch's coordinator stopped waiting with changes unread", async () => {
+  it("shows a stopped coordinator as a chip that copies the nudge and hides this stop", async () => {
     const since = Date.now() - 10 * 60_000;
     client.getDeliveryOverview.mockResolvedValue(
       overview({
@@ -1315,12 +1315,33 @@ describe("DeliveryPanel", () => {
         coordinators: [{ run_id: "r1", waiting: false, unread: 2, unread_since_ms: since }],
       }),
     );
+    const user = userEvent.setup();
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    localStorage.removeItem("tinto:delivery-hidden-stalls");
     renderPanel();
     expect(
-      await screen.findByText(
-        /el coordinador \(claude-coord-1\) no está esperando y tiene 2 cambios sin leer/,
-      ),
+      await screen.findByRole("button", { name: /1 coordinador te necesita/ }),
     ).toBeInTheDocument();
+    // A chip in the batch bar, not a line across the panel.
+    expect(screen.queryByText(/no está esperando y tiene/)).not.toBeInTheDocument();
+    const chip = "Coordinador parado, 2 cambios sin leer";
+    await user.click(await screen.findByRole("button", { name: chip }));
+    const card = screen.getByRole("menu");
+    expect(within(card).getByText(/claude-coord-1 tiene 2 cambios sin leer/)).toBeInTheDocument();
+    await user.click(within(card).getByRole("menuitem", { name: "Copiar mensaje" }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^Sigue con wait_run/));
+
+    // Hidden, it stays hidden for this stop.
+    await user.click(screen.getByRole("button", { name: chip }));
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Ocultar" }));
+    expect(screen.queryByRole("button", { name: chip })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /coordinador te necesita/ }),
+    ).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("tinto:delivery-hidden-stalls") ?? "[]")).toEqual([
+      `r1:${since}`,
+    ]);
   });
 
   it("shows one batch inline and several behind a single button", async () => {
@@ -2113,6 +2134,9 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     const notice = await screen.findByRole("group", { name: "Paso rechazado" });
+    // The task's row in the list names its PR.
+    const list = screen.getByRole("navigation", { name: "Tareas de Delivery" });
+    expect(within(list).getByTitle("PR #299")).toHaveTextContent("#299");
     expect(
       within(notice).getByText(
         "El PR #299 sigue abierto en GitHub; rechazar este paso solo evita los cambios en Jira.",
@@ -2280,7 +2304,7 @@ describe("DeliveryPanel", () => {
       await screen.findByRole("button", { name: "Abrir registro visual de QA" }),
     ).toBeEnabled();
     const problems = screen.getByRole("button", { name: "Problemas de la QA, 2 por decidir" });
-    expect(within(problems).getByText("2 !")).toBeInTheDocument();
+    expect(within(problems).getByText("2")).toBeInTheDocument();
     expect(problems).toHaveAttribute("aria-expanded", "false");
   });
 

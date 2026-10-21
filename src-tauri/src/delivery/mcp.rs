@@ -313,12 +313,23 @@ fn run_tool(
             let run_id = fence()?;
             let task_id = text("task_id")?;
             task_in_run(&run_id, &task_id)?;
-            to_json(&service.update_task(
+            let task = service.update_task(
                 &task_id,
                 optional("state"),
                 args["contract_version"].as_u64().map(|value| value as u32),
                 None,
-            )?)
+            )?;
+            let mut result = to_json(&task)?;
+            // A block named only in the label is one Tinto neither shows nor clears.
+            let label = task.state.to_lowercase();
+            if (label.starts_with("blocked") || label.starts_with("bloquead"))
+                && !task.blockers.iter().any(|blocker| blocker.is_open())
+            {
+                result["notice"] = json!(
+                    "el estado solo es una etiqueta: para que Tinto muestre la tarea como bloqueada, la saque de las inactivas y la desbloquee sola, usa set_task_blocked con lo que espera"
+                );
+            }
+            Ok(result)
         }
         "set_task_blocked" => {
             let run_id = fence()?;

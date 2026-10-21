@@ -174,6 +174,7 @@ pub fn run() {
             delivery::commands::delivery_task_changes,
             delivery::commands::delivery_resume_job,
             delivery::commands::delivery_set_run_paused,
+            delivery::commands::delivery_set_run_no_new_tasks,
             delivery::commands::delivery_retry_job,
             delivery::commands::delivery_undo_job,
             delivery::commands::delivery_job_log,

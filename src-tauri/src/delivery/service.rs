@@ -411,6 +411,12 @@ impl DeliveryService {
                         "la ejecución está cerrada",
                     ));
                 }
+                if run.no_new_tasks {
+                    return Err(DeliveryError::new(
+                        "run_no_new_tasks",
+                        "el usuario pidió no crear más tareas en este lote: termina las que tiene",
+                    ));
+                }
             }
             store.repo_settings(&request.repo)?
         };

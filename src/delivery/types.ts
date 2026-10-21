@@ -376,6 +376,8 @@ export interface DeliveryRun {
   unattended?: boolean;
   /** The user paused the batch: its queued jobs wait. */
   paused?: boolean;
+  /** The user asked the coordinator to create no more tasks in the batch. */
+  no_new_tasks?: boolean;
 }
 
 export interface DeliverySettings {

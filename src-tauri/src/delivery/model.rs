@@ -807,6 +807,10 @@ pub struct DeliveryRun {
     /// The user paused the batch: its queued jobs wait, the running ones go on.
     #[serde(default)]
     pub paused: bool,
+    /// The user asked the coordinator to create no more tasks in the batch:
+    /// it finishes the ones it has, and create_task refuses new ones.
+    #[serde(default)]
+    pub no_new_tasks: bool,
     /// The Agents conversation coordinating the batch, as its Delivery
     /// tool calls say: Tinto wakes it when something waits on it.
     #[serde(default)]

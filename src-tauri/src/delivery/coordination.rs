@@ -494,6 +494,7 @@ impl DeliveryService {
             qa_jira_comment,
             unattended: false,
             paused: false,
+            no_new_tasks: false,
             coordinator_session: None,
             coordinator_cursor: 0,
             notified_cursor: 0,
@@ -584,6 +585,28 @@ impl DeliveryService {
             if paused { "paused" } else { "resumed" },
         )?;
         self.tick();
+        Ok(run)
+    }
+
+    /// The user stops or allows new tasks in the batch; the coordinator hears
+    /// it in wait_run, and create_task refuses while it is stopped.
+    pub fn set_run_no_new_tasks(
+        &self,
+        run_id: &str,
+        no_new_tasks: bool,
+    ) -> Result<DeliveryRun, DeliveryError> {
+        let mut run = self.run(run_id)?;
+        run.no_new_tasks = no_new_tasks;
+        run.updated_at_ms = now_ms();
+        self.save_run(
+            &run,
+            "run_policy",
+            if no_new_tasks {
+                "no_new_tasks"
+            } else {
+                "new_tasks_allowed"
+            },
+        )?;
         Ok(run)
     }
 

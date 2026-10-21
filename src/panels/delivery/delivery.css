@@ -274,6 +274,11 @@
   width: 100%;
   font-weight: 600;
 }
+/* The task's PR, once it has one. */
+.delivery-task-row__pr {
+  font-weight: 400;
+  color: var(--fg-muted);
+}
 .delivery-task-row__repo {
   font-weight: 400;
   font-size: 11px;
@@ -341,88 +346,45 @@
   margin: 0;
   font-size: 15px;
 }
-/* The issue's page, right by its key. */
-.delivery-task__issue,
-.delivery-task__pr {
-  display: inline-block;
-  margin-left: 10px;
-  padding: 1px 8px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 500;
-  vertical-align: middle;
-  text-decoration: none;
+/* Where the task goes outside its card (Jira, its PR, QA's record and
+   problems): one quiet, square look for all of them. */
+.delivery-task__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
 }
-/* Each service in its own colours, so the link says where it goes. */
-.delivery-task__issue {
-  color: #ffffff;
-  background: #0052cc;
-}
-.delivery-task__issue:hover {
-  background: #0065ff;
-}
-.delivery-task__pr {
-  margin-left: 6px;
-  color: #ffffff;
-  background: #24292f;
-  border-color: #6e7681;
-}
-.delivery-task__pr:hover {
-  background: #32383f;
-}
-/* The QA's visual record: Jira's and GitHub's pill, in Tinto's colour.
-   Above the panel's own button look. */
-.delivery-panel .delivery-task__record {
+.delivery-panel .delivery-link-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-left: 6px;
-  padding: 1px 8px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 0;
   font: inherit;
   font-size: 12px;
-  font-weight: 500;
-  vertical-align: middle;
-  color: #ffffff;
-  background: var(--accent);
+  color: var(--fg);
+  background: transparent;
+  text-decoration: none;
   cursor: pointer;
 }
-.delivery-panel .delivery-task__record:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 80%, #ffffff);
+.delivery-panel .delivery-link-chip:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--fg-muted);
 }
-/* The record and its problems: two halves of one pill. */
-.delivery-task__qa {
-  display: inline-flex;
-  margin-left: 6px;
-  vertical-align: middle;
-  border-radius: 999px;
-  overflow: hidden;
+.delivery-panel .delivery-link-chip[aria-expanded="true"] {
+  background: var(--active);
 }
-.delivery-panel .delivery-task__qa .delivery-task__record {
-  margin-left: 0;
-  border-radius: 0;
-}
-.delivery-panel .delivery-task__qa .delivery-task__record + .delivery-task__record {
-  border-left-color: var(--bg);
-}
-.delivery-panel .delivery-task__record--problems,
-.delivery-panel .delivery-task__record--problems:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 75%, #000000);
-}
-.delivery-panel .delivery-task__record--problems[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--accent) 60%, #000000);
+.delivery-link-chip svg {
+  color: var(--fg-muted);
 }
 /* The QA's problems that wait on the user. */
 .delivery-task__record-count {
-  margin: 0 2px 0 5px;
   padding: 0 6px;
-  border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
-  color: #ffffff;
-  background: #d1242f;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
 }
 /* The task's title, not the spans inside the heading's links and buttons. */
 .delivery-task__header h2 > span {
@@ -1989,6 +1951,7 @@
   color: var(--fg-muted);
 }
 .delivery-repo {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -2135,4 +2098,105 @@
 .delivery-add-blocker label {
   display: grid;
   gap: 2px;
+}
+
+/* A coordinator that stopped: a small chip in its repo's batch bar. */
+.delivery-panel .delivery-stall > .delivery-menu > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  background: rgba(204, 167, 0, 0.08);
+}
+.delivery-stall__card {
+  display: grid;
+  gap: 6px;
+  width: min(340px, calc(100vw - 48px));
+  padding: 4px 6px;
+  white-space: normal;
+}
+.delivery-stall__card p {
+  margin: 0;
+}
+
+/* The batch's coordinator: a floating button that unfolds its conversation. */
+.delivery-panel .delivery-coordinator-button {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.delivery-coordinator-button__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.delivery-coordinator-button--waiting .delivery-coordinator-button__dot {
+  background: var(--added);
+}
+.delivery-coordinator-button--working .delivery-coordinator-button__dot {
+  background: var(--accent-fg);
+}
+.delivery-coordinator-button--stalled .delivery-coordinator-button__dot {
+  background: var(--warn);
+}
+.delivery-coordinator {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 92%);
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.3);
+}
+.delivery-coordinator__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.delivery-coordinator__chat {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.delivery-coordinator__chat > * {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.delivery-coordinator__start {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 16px;
+}
+.delivery-coordinator__start p {
+  margin: 0;
+}
+.delivery-coordinator__start label {
+  display: grid;
+  gap: 2px;
+}
+.delivery-coordinator__error {
+  margin: 0;
+  padding: 6px 10px;
+  color: var(--danger);
 }
