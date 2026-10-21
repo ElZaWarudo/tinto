@@ -2007,7 +2007,7 @@ describe("DeliveryPanel", () => {
       within(model)
         .getAllByRole("option")
         .map((option) => option.textContent),
-    ).toEqual(["Predeterminado", "Opus", "Sonnet", "Fable"]);
+    ).toEqual(["Predeterminado", "Opus", "Sonnet", "Fable", "Haiku"]);
     expect(reasoning).toHaveValue("medium");
     await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "codex");
     await user.type(

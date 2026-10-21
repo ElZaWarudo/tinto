@@ -259,6 +259,7 @@ const CLAUDE_MODELS: Choice[] = [
   { value: "opus", label: "Opus" },
   { value: "sonnet", label: "Sonnet" },
   { value: "fable", label: "Fable" },
+  { value: "haiku", label: "Haiku" },
 ];
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const CODEX_FALLBACK_EFFORTS = ["low", "medium", "high"];
