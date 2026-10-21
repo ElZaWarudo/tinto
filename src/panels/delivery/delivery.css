@@ -347,39 +347,43 @@
   font-size: 15px;
 }
 /* Where the task goes outside its card (Jira, its PR, QA's record and
-   problems): one quiet, square look for all of them. */
+   problems): one row of quiet, borderless links that light up on hover. The
+   row starts where the title's text does. */
 .delivery-task__links {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 2px;
+  margin: 4px 0 0 -6px;
 }
-.delivery-panel .delivery-link-chip {
+.delivery-panel .delivery-link-chip,
+.delivery-panel .delivery-link-chip .delivery-action__label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 0;
+}
+.delivery-panel .delivery-link-chip {
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
   font: inherit;
   font-size: 12px;
-  color: var(--fg);
+  line-height: 1;
+  color: var(--fg-muted);
   background: transparent;
   text-decoration: none;
   cursor: pointer;
 }
 .delivery-panel .delivery-link-chip:hover:not(:disabled) {
+  color: var(--fg);
   background: var(--hover);
-  border-color: var(--fg-muted);
 }
 .delivery-panel .delivery-link-chip[aria-expanded="true"] {
+  color: var(--fg);
   background: var(--active);
 }
-.delivery-link-chip svg {
-  color: var(--fg-muted);
-}
-/* The QA's problems that wait on the user. */
-.delivery-task__record-count {
+/* The QA's problems that wait on the user, and a stopped coordinator's unread changes. */
+.delivery-task__record-count,
+.delivery-stall__count {
   padding: 0 6px;
   font-size: 11px;
   font-weight: 600;
@@ -2194,15 +2198,34 @@
 }
 
 /* A coordinator that stopped: a small chip in its repo's batch bar. */
+/* A stopped coordinator: a quiet line in the bar, its dot and count in warn. */
+.delivery-stall {
+  min-width: 0;
+}
 .delivery-panel .delivery-stall > .delivery-menu > button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 8px;
-  border: 1px solid var(--warn);
-  border-radius: 999px;
-  color: var(--warn);
-  background: rgb(from var(--warn) r g b / 0.08);
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 0;
+  font-size: 12px;
+  background: transparent;
+  white-space: nowrap;
+}
+.delivery-panel .delivery-stall > .delivery-menu > button:hover,
+.delivery-panel .delivery-stall > .delivery-menu > button[aria-expanded="true"] {
+  background: var(--hover);
+}
+.delivery-panel .delivery-stall .delivery-dot {
+  margin: 0;
+}
+.delivery-dot--warn {
+  background: var(--warn);
+}
+.delivery-stall__batch {
+  min-width: 0;
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .delivery-stall__card {
   display: grid;

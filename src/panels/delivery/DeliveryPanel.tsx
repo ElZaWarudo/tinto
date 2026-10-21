@@ -198,7 +198,6 @@ type IconName =
   | "right"
   | "gear"
   | "play"
-  | "pause"
   | "ticket"
   | "pull"
   | "merge"
@@ -227,7 +226,6 @@ const ICONS: Record<IconName, ReactNode> = {
     </>
   ),
   play: <path d="M5 3.5l7 4.5-7 4.5z" />,
-  pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
   ticket: (
     <path d="M2.5 5V3.5h11V5a1.5 1.5 0 0 0 0 3v0a1.5 1.5 0 0 0 0 3v1.5h-11V11a1.5 1.5 0 0 0 0-3 1.5 1.5 0 0 0 0-3zM9.5 4v8" />
   ),
@@ -1232,13 +1230,23 @@ function CoordinatorStallChip({
   const at = new Date(since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const message = `Sigue con wait_run de Tinto Delivery: tienes ${changes} sin leer desde las ${at}. Si las herramientas de Delivery fallan, reconéctalas.`;
   return (
-    <span className="delivery-stall">
+    <span
+      className="delivery-stall"
+      title={`${named ? `${batch}: c` : "C"}oordinador parado, ${changes} sin leer desde las ${at}`}
+    >
       <Menu
         label={`Coordinador parado${named ? ` en ${batch}` : ""}, ${changes} sin leer`}
         trigger={
           <>
-            <Icon name="pause" />
-            {named ? `${batch}: coordinador parado` : "Coordinador parado"} · {unread}
+            <span className="delivery-dot delivery-dot--warn" />
+            {/* The batch's own name: "Lote" is already said by the bar. */}
+            {named && (
+              <span className="delivery-stall__batch">{batch.replace(/^lote\s+/i, "")}</span>
+            )}
+            <span className="delivery-muted">
+              {named ? "coordinador parado" : "Coordinador parado"}
+            </span>
+            <span className="delivery-stall__count">{unread}</span>
           </>
         }
         floating
