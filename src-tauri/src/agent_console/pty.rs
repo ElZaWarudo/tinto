@@ -3,6 +3,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -547,12 +548,41 @@ pub struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     reader: Option<Box<dyn Read + Send>>,
-    writer: Box<dyn Write + Send>,
+    /// Shared with the reader, which answers the console's cursor query.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     exit_code: Option<i32>,
     claude_hooks: Option<ClaudeHooks>,
     /// Whether the agent has been seen reading keys (see `wait_until_reading_keys`).
     #[cfg(unix)]
     reads_keys: bool,
+}
+
+/// Windows' console host asks the terminal where its cursor is (`ESC[6n`)
+/// when an agent starts, and holds the agent until it hears back. No
+/// terminal of Tinto's answers it (its views do not send keys), so Claude
+/// Code sat silent forever: the reader answers with the top-left corner.
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+const CURSOR_REPLY: &[u8] = b"\x1b[1;1R";
+
+struct AnswersCursorQuery {
+    inner: Box<dyn Read + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+impl Read for AnswersCursorQuery {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        if buf[..read]
+            .windows(CURSOR_QUERY.len())
+            .any(|window| window == CURSOR_QUERY)
+        {
+            if let Ok(mut writer) = self.writer.lock() {
+                let _ = writer.write_all(CURSOR_REPLY);
+                let _ = writer.flush();
+            }
+        }
+        Ok(read)
+    }
 }
 
 /// The pause between a message and the Enter that sends it.
@@ -697,10 +727,19 @@ impl PtyHandle {
             .master
             .try_clone_reader()
             .map_err(|e| spawn_error(e.to_string()))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| spawn_error(e.to_string()))?;
+        let writer = Arc::new(Mutex::new(
+            pair.master
+                .take_writer()
+                .map_err(|e| spawn_error(e.to_string()))?,
+        ));
+        let reader: Box<dyn Read + Send> = if cfg!(windows) {
+            Box::new(AnswersCursorQuery {
+                inner: reader,
+                writer: Arc::clone(&writer),
+            })
+        } else {
+            reader
+        };
 
         Ok(Self {
             master: pair.master,
@@ -727,7 +766,11 @@ impl PtyHandle {
 
     fn write_input_pty(&mut self, input: &[u8]) -> Result<(), AgentConsoleError> {
         self.wait_until_reading_keys();
-        write_with_separate_enter(&mut self.writer, input, ENTER_DELAY)
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| AgentConsoleError::new("pty_write_failed", "terminal bloqueada"))?;
+        write_with_separate_enter(&mut **writer, input, ENTER_DELAY)
             .map_err(|e| AgentConsoleError::new("pty_write_failed", e.to_string()))
     }
 
@@ -1234,6 +1277,32 @@ mod tests {
     use super::*;
     use std::ffi::{OsStr, OsString};
     use std::sync::Mutex;
+
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_reader_answers_the_console_cursor_query_and_passes_output_on() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let writer: Box<dyn Write + Send> = Box::new(Shared(Arc::clone(&sent)));
+        let mut reader = AnswersCursorQuery {
+            inner: Box::new(std::io::Cursor::new(b"\x1b[6nClaude Code".to_vec())),
+            writer: Arc::new(Mutex::new(writer)),
+        };
+        let mut output = String::new();
+        reader.read_to_string(&mut output).unwrap();
+        assert_eq!(output, "\x1b[6nClaude Code");
+        assert_eq!(sent.lock().unwrap().as_slice(), CURSOR_REPLY);
+    }
 
     static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
