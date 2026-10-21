@@ -20,7 +20,7 @@ use super::model::{
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
     DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview,
     DeliveryPlatform, DeliveryResultState, DeliverySettings, DeliverySettingsProposalStatus,
-    DeliveryTask,
+    DeliveryTask, DeliveryTiming,
 };
 use super::prs::{self, GitHub};
 use super::store::DeliveryStore;
@@ -276,6 +276,8 @@ impl DeliveryService {
             let retry = retry_on_restart && not_retried.is_none();
             job.status = DeliveryJobStatus::Interrupted;
             job.ended_at_ms = Some(now);
+            job.current_command = None;
+            job.current_command_at_ms = None;
             job.error = Some(match &not_retried {
                 Some(reason) => {
                     format!("Tinto se cerró mientras el trabajo corría. No se reintenta: {reason}.")
@@ -914,6 +916,9 @@ impl DeliveryService {
             resumes: resumes.map(|paused| paused.id.clone()),
             activity: None,
             activity_at_ms: None,
+            current_command: None,
+            current_command_at_ms: None,
+            timing: None,
             plan: Vec::new(),
             usage: None,
             visual_record: None,
@@ -1541,9 +1546,10 @@ impl DeliveryService {
         let service = self.clone();
         let stdout_job = job.id.clone();
         let stdout_reader = std::thread::spawn(move || {
-            let Some(stdout) = stdout else { return };
+            let mut clock = adapters::JobClock::default();
+            let Some(stdout) = stdout else { return clock };
             let Ok(mut file) = std::fs::File::create(&events_path) else {
-                return;
+                return clock;
             };
             let mut session_recorded = session_known;
             // A Claude session says in its first event which model it runs,
@@ -1566,12 +1572,14 @@ impl DeliveryService {
                 }
                 // Agents write one line per message or tool call, so each
                 // is saved: the view always knows when the agent last did
-                // something.
-                let seen = adapters::observe(agent, &line);
+                // something, and which command it waits on.
+                let mut seen = adapters::observe(agent, &line);
+                seen.command = clock.line(agent, &line, now_ms());
                 if seen != adapters::Observation::default() {
                     service.record_observation(&stdout_job, seen);
                 }
             }
+            clock
         });
         let stderr_path = paths.stderr.clone();
         let stderr_reader = std::thread::spawn(move || {
@@ -1636,8 +1644,9 @@ impl DeliveryService {
         };
         #[cfg(target_os = "windows")]
         drop(process_tree);
-        let _ = stdout_reader.join();
+        let clock = stdout_reader.join().unwrap_or_default();
         let _ = stderr_reader.join();
+        let timing = (job.agent != DeliveryAgent::Shell).then(|| clock.timing(now_ms()));
 
         let events = std::fs::read_to_string(&paths.events).unwrap_or_default();
         let result_file = std::fs::read_to_string(&paths.result).ok();
@@ -1658,7 +1667,7 @@ impl DeliveryService {
             touched: !cancelled || adapters::acted(&job, &events),
         };
         let stderr_text = std::fs::read_to_string(&paths.stderr).unwrap_or_default();
-        self.finish(&job.id, ending, outcome, end, &stderr_text)?;
+        self.finish(&job.id, ending, outcome, timing, end, &stderr_text)?;
         // QA's visual changes record becomes one page the user opens.
         let record = paths.qa_output.join(format!("{}.md", task.key));
         if job.role == QA_ROLE && record.is_file() {
@@ -1763,6 +1772,12 @@ impl DeliveryService {
                 if let Some(usage) = seen.usage {
                     job.usage = Some(usage);
                 }
+                if let Some(command) = seen.command {
+                    // A command that ends is the agent's turn again.
+                    job.activity_at_ms = Some(now_ms());
+                    job.current_command_at_ms = command.as_ref().map(|(_, at)| *at);
+                    job.current_command = command.map(|(command, _)| command);
+                }
                 let _ = store.put_job(&job);
             }
         }
@@ -1784,6 +1799,7 @@ impl DeliveryService {
         job_id: &str,
         ending: Ending,
         outcome: JobOutcome,
+        timing: Option<DeliveryTiming>,
         end: Option<WorktreeSnapshot>,
         stderr: &str,
     ) -> Result<(), DeliveryError> {
@@ -1794,6 +1810,9 @@ impl DeliveryService {
         let task = store.task(&job.task_id)?;
         job.ended_at_ms = Some(now_ms());
         job.exit_code = ending.exit_code;
+        job.current_command = None;
+        job.current_command_at_ms = None;
+        job.timing = timing;
         if outcome.provider_session_id.is_some() {
             job.provider_session_id = outcome.provider_session_id.clone();
         }
@@ -1884,6 +1903,8 @@ impl DeliveryService {
         let touched = job.status == DeliveryJobStatus::Started;
         job.status = DeliveryJobStatus::Failed;
         job.ended_at_ms = Some(now_ms());
+        job.current_command = None;
+        job.current_command_at_ms = None;
         job.error = Some(message.to_string());
         store.put_job(&job)?;
         settle_lease(&store, &job, touched)?;

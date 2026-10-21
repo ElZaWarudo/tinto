@@ -654,6 +654,53 @@ fn a_running_job_shows_what_it_does_and_what_it_used() {
             cost_micro_usd: None,
         })
     );
+    // Once it ends, nothing runs and it says where its time went.
+    assert_eq!(job.current_command, None);
+    let timing = job.timing.expect("timing");
+    assert_eq!(
+        timing.slowest[0].command,
+        "Set-Content greeting.txt 'hello from a delivery job.'"
+    );
+    assert_eq!(timing.slowest[0].runs, 1);
+    assert_eq!(timing.model_ms, None);
+}
+
+#[test]
+fn a_finished_claude_job_tells_model_time_turns_and_commands() {
+    let h = harness();
+    let task = h.task("O-2");
+    let job = h
+        .service
+        .dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "review".into(),
+            agent: DeliveryAgent::Claude,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=claude-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
+        })
+        .unwrap();
+    let job = h.wait(&job.id);
+    assert_eq!(job.current_command, None);
+    let timing = job.timing.expect("timing");
+    assert_eq!(timing.model_ms, Some(5100));
+    assert_eq!(timing.turns, Some(4));
+    let commands: Vec<&str> = timing
+        .slowest
+        .iter()
+        .map(|slow| slow.command.as_str())
+        .collect();
+    assert!(
+        commands.contains(&"printf 'goodbye from claude' > farewell.txt"),
+        "{commands:?}"
+    );
 }
 
 #[test]

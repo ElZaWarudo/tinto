@@ -92,6 +92,7 @@ import type {
   DeliveryRun,
   DeliveryStageAgent,
   DeliveryTask,
+  DeliveryTiming,
   DeliveryUsage,
 } from "../../delivery/types";
 import {
@@ -401,6 +402,37 @@ function ago(ms: number | null | undefined, now: number): string {
   if (!ms) return "";
   const seconds = Math.max(0, Math.round((now - ms) / 1000));
   return seconds < 60 ? `hace ${seconds} s` : `hace ${Math.floor(seconds / 60)} min`;
+}
+
+/** "45 s", "31 min": how long something took. */
+function lasted(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
+}
+
+/** Where a job's time went: "Modelo 5 min · Comandos 78 min · 37 turnos ·
+ *  más lento: npm run preflight ×5 (31 min, 2 al límite de 10 min)". */
+function timingLabel(timing: DeliveryTiming): string {
+  const slowest = timing.slowest.map((slow) => {
+    const runs = slow.runs > 1 ? ` ×${slow.runs}` : "";
+    const ceiling =
+      slow.at_ceiling === 0
+        ? ""
+        : slow.runs === 1
+          ? ", al límite de 10 min"
+          : `, ${slow.at_ceiling} al límite de 10 min`;
+    return `${slow.command}${runs} (${lasted(slow.total_ms)}${ceiling})`;
+  });
+  return [
+    timing.model_ms === null ? null : `Modelo ${lasted(timing.model_ms)}`,
+    `Comandos ${lasted(timing.commands_ms)}`,
+    timing.turns === null ? null : timing.turns === 1 ? "1 turno" : `${timing.turns} turnos`,
+    slowest.length === 0
+      ? null
+      : `${slowest.length === 1 ? "más lento" : "más lentos"}: ${slowest.join(", ")}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function tokens(count: number): string {
@@ -3281,12 +3313,33 @@ function JobRow({
           )}
         </span>
       </button>
-      {job.status === "started" && job.activity && (
+      {job.status === "started" && (job.current_command || job.activity) && (
         <p className="delivery-job__activity" aria-label={`Actividad de ${stageLabel(job.role)}`}>
-          <span>{job.activity}</span>
-          <small className={quiet ? "delivery-tone--attention" : "delivery-muted"}>
-            {quiet ?? ago(job.activity_at_ms, now)}
-          </small>
+          {job.current_command ? (
+            <>
+              <small>ejecutando</small>{" "}
+              <span title={job.current_command}>{job.current_command}</span>{" "}
+              <small className="delivery-muted">
+                {lasted(now - (job.current_command_at_ms ?? now))}
+              </small>
+            </>
+          ) : (
+            <>
+              <span>{job.activity}</span>
+              <small className={quiet ? "delivery-tone--attention" : "delivery-muted"}>
+                {quiet ?? ago(job.activity_at_ms, now)}
+              </small>
+            </>
+          )}
+        </p>
+      )}
+      {job.timing && (job.timing.model_ms !== null || job.timing.commands_ms > 0) && (
+        <p
+          className="delivery-job__timing"
+          aria-label={`Tiempo de ${stageLabel(job.role)}`}
+          title={timingLabel(job.timing)}
+        >
+          {timingLabel(job.timing)}
         </p>
       )}
       {expanded && (

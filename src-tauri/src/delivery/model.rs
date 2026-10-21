@@ -327,6 +327,15 @@ pub struct DeliveryJob {
     pub activity: Option<String>,
     #[serde(default)]
     pub activity_at_ms: Option<u64>,
+    /// The command or tool call running now, and since when: a long command
+    /// is not a quiet agent.
+    #[serde(default)]
+    pub current_command: Option<String>,
+    #[serde(default)]
+    pub current_command_at_ms: Option<u64>,
+    /// Where the job's time went, once it ended.
+    #[serde(default)]
+    pub timing: Option<DeliveryTiming>,
     /// The agent's own task list, as it last wrote it.
     #[serde(default)]
     pub plan: Vec<DeliveryPlanItem>,
@@ -366,6 +375,28 @@ pub struct DeliveryUsage {
     pub output_tokens: u64,
     /// Millionths of a dollar (Claude Code reports the cost; Codex does not).
     pub cost_micro_usd: Option<u64>,
+}
+
+/// Where a job's time went, from its agent's output.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryTiming {
+    /// Time in model calls, when the agent says it (Claude Code).
+    pub model_ms: Option<u64>,
+    /// Time with at least one command or tool call running.
+    pub commands_ms: u64,
+    /// The agent's turns, when it says them (Claude Code).
+    pub turns: Option<u32>,
+    /// The commands that took longest, all their runs added up.
+    pub slowest: Vec<DeliverySlowCommand>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliverySlowCommand {
+    pub command: String,
+    pub total_ms: u64,
+    pub runs: u32,
+    /// Runs Claude Code's Bash left at its 10-minute ceiling.
+    pub at_ceiling: u32,
 }
 
 /// A script as named in a permission and the frozen copy a job runs instead.
