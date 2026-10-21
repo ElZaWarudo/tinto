@@ -422,6 +422,8 @@ impl DeliveryService {
                 if let Err(error) = service.retarget_packages() {
                     eprintln!("tinto: delivery could not retarget packages: {error}");
                 }
+                // Jobs waiting on the environment start once it answers.
+                service.check_due_environments();
                 let (count, changed) = &service.inner.changes;
                 let Ok(guard) = count.lock() else { return };
                 let Ok((guard, _)) =

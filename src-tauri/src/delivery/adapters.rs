@@ -2078,6 +2078,7 @@ pub(crate) mod tests {
             blockers: Vec::new(),
             blocked_reason: String::new(),
             checks: Vec::new(),
+            setup: Vec::new(),
         }
     }
 
@@ -2117,6 +2118,8 @@ pub(crate) mod tests {
             qa_followup: Vec::new(),
             qa_environment: String::new(),
             task_checks: Vec::new(),
+            needs_environment: false,
+            waits_environment: None,
             reasoning: None,
             platform: None,
             ran_on: None,

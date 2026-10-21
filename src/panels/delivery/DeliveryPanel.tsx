@@ -126,6 +126,7 @@ import {
   TASK_STATE_LABEL,
   attemptOutcome,
   batchName,
+  byCommand,
   historyKey,
   isBroken,
   isDelivered,
@@ -3355,7 +3356,7 @@ function JobRow({
       >
         <Icon name={expanded ? "down" : "right"} />
         <span className="delivery-job__role">
-          {stageLabel(job.role)} {job.role === "checks" && <code>{job.prompt}</code>}{" "}
+          {stageLabel(job.role)} {byCommand(job) && <code>{job.prompt}</code>}{" "}
           <small>· intento {job.attempt}</small>
         </span>
         <span className="delivery-job__agent">
@@ -3409,6 +3410,12 @@ function JobRow({
       {expanded && (
         <div className="delivery-job__detail">
           {job.error && <p className="delivery-job__error">{job.error}</p>}
+          {job.status === "queued" && job.waits_environment && (
+            <p className="delivery-job__note">
+              Espera al entorno; Tinto lo comprueba cada minuto y la lanza cuando responda:{" "}
+              {job.waits_environment}
+            </p>
+          )}
           {job.result_note && <p className="delivery-job__note">{job.result_note}</p>}
           {job.substituted && <p className="delivery-muted">{job.substituted}</p>}
           {job.retry_of && (

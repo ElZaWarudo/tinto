@@ -19,7 +19,7 @@ use super::model::{
     DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
 use super::prs::DeliveryPr;
-use super::service::CHECKS_ROLE;
+use super::service::{CHECKS_ROLE, SETUP_ROLE};
 
 /// The built-in stages, in flow order.
 pub const STAGES: [&str; 4] = ["tests", "implementation", "review", "qa"];
@@ -93,6 +93,19 @@ pub enum Phase {
     WaitsQuarantine {
         job_id: String,
         lease: String,
+    },
+    /// One of its setup commands failed: no stage starts until it is
+    /// retried.
+    SetupFailed {
+        job_id: String,
+        command: String,
+    },
+    /// Its job needs the repo's environment, which does not answer: it
+    /// starts once Tinto's periodic "Entorno" check passes.
+    WaitsEnvironment {
+        job_id: String,
+        role: String,
+        problem: String,
     },
     Queued {
         job_id: String,
@@ -253,6 +266,24 @@ pub fn current_checks<'a>(jobs: &[&'a DeliveryJob]) -> Vec<&'a DeliveryJob> {
     latest
 }
 
+/// The latest run of each of the task's setup commands, in its order. A
+/// command that never ran has none.
+pub fn current_setup<'a>(setup: &[String], jobs: &[&'a DeliveryJob]) -> Vec<&'a DeliveryJob> {
+    setup
+        .iter()
+        .filter_map(|command| {
+            jobs.iter()
+                .rev()
+                .find(|job| {
+                    job.agent == DeliveryAgent::Shell
+                        && job.role == SETUP_ROLE
+                        && &job.prompt == command
+                })
+                .copied()
+        })
+        .collect()
+}
+
 /// The paused job no later job resumes.
 fn paused_job<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
     let resumed: HashSet<&str> = jobs
@@ -331,13 +362,23 @@ fn stage_of(approval: &DeliveryApproval) -> Option<String> {
 }
 
 /// The stage to run next: none while a stage or Tinto's checks run, wait
-/// or are paused, nor once the task was committed after its last stage;
-/// implementation while a sync step's merge waits on its conflicts;
-/// else retry a broken one, go back to implementation after findings or a
-/// failed check, or the first built-in stage without a passing (or
-/// answered) attempt that still stands.
-pub fn next_stage(jobs: &[&DeliveryJob], approvals: &[&DeliveryApproval]) -> Option<String> {
+/// or are paused, while the task's setup has not passed, nor once the task
+/// was committed after its last stage; implementation while a sync step's
+/// merge waits on its conflicts; else retry a broken one, go back to
+/// implementation after findings or a failed check, or the first built-in
+/// stage without a passing (or answered) attempt that still stands.
+pub fn next_stage(
+    setup: &[String],
+    jobs: &[&DeliveryJob],
+    approvals: &[&DeliveryApproval],
+) -> Option<String> {
     if paused_job(jobs).is_some() {
+        return None;
+    }
+    if current_setup(setup, jobs)
+        .iter()
+        .any(|job| job.status != DeliveryJobStatus::Finished)
+    {
         return None;
     }
     let agent_jobs: Vec<&DeliveryJob> = jobs
@@ -504,7 +545,7 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         .iter()
         .filter(|approval| approval.task_id == task.id)
         .collect();
-    let next = next_stage(&jobs, &approvals);
+    let next = next_stage(&task.setup, &jobs, &approvals);
     let ladder = steps_for(task);
     let steps: Vec<DeliveryStep> = if ladder.len() == STEPS.len() {
         Vec::new()
@@ -594,10 +635,32 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
             Waiter::User,
         );
     }
+    if let Some(job) = current_setup(&task.setup, &jobs)
+        .into_iter()
+        .find(|job| !job.status.is_open() && job.status != DeliveryJobStatus::Finished)
+    {
+        return phase(
+            Phase::SetupFailed {
+                job_id: job.id.clone(),
+                command: job.prompt.clone(),
+            },
+            Waiter::Coordinator,
+        );
+    }
     if let Some(job) = jobs
         .iter()
         .find(|job| job.status == DeliveryJobStatus::Queued)
     {
+        if let Some(problem) = &job.waits_environment {
+            return phase(
+                Phase::WaitsEnvironment {
+                    job_id: job.id.clone(),
+                    role: job.role.clone(),
+                    problem: problem.clone(),
+                },
+                Waiter::User,
+            );
+        }
         let run_paused = facts
             .runs
             .iter()

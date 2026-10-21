@@ -802,6 +802,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
   const [loaded, setLoaded] = useState<DeliveryRepoSettings | null>(null);
   const [browser, setBrowser] = useState(false);
   const [commands, setCommands] = useState("");
+  const [setup, setSetup] = useState("");
   // `NAME=value` lines.
   const [checkEnv, setCheckEnv] = useState("");
   const [environment, setEnvironment] = useState("");
@@ -831,6 +832,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         setLoaded(settings);
         setBrowser(settings.qa_browser ?? false);
         setCommands((settings.qa_commands ?? []).join("\n"));
+        setSetup((settings.setup ?? []).join("\n"));
         setCheckEnv(
           Object.entries(settings.check_env ?? {})
             .map(([name, value]) => `${name}=${value}`)
@@ -938,6 +940,17 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         </select>
       </Field>
       <h3>Entorno</h3>
+      <Field
+        label="Comandos de preparación"
+        hint="Uno por línea: instalaciones y generadores que una tarea necesita antes de compilar y probar (cada paquete, los bindings…). El coordinador elige los de cada tarea y Tinto los corre en su worktree antes de las etapas, fuera de cualquier sandbox."
+      >
+        <textarea
+          value={setup}
+          onChange={(event) => setSetup(event.target.value)}
+          rows={3}
+          placeholder="npm --prefix frontend ci"
+        />
+      </Field>
       <label className="delivery-check">
         <input
           type="checkbox"
@@ -1093,6 +1106,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
               ...loaded,
               qa_browser: browser,
               qa_commands: parseChecks(commands),
+              setup: parseChecks(setup),
               check_env: parseEnv(checkEnv),
               qa_environment: environment.trim(),
               verification: verification.trim(),

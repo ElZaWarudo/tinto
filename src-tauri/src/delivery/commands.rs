@@ -206,6 +206,7 @@ pub fn delivery_dispatch_job(
             reasoning,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .map_err(CommandError::from)
 }
@@ -394,15 +395,9 @@ pub async fn delivery_check_environment(
     repo: PathBuf,
     distro: Option<String>,
 ) -> Result<Vec<super::environment::DeliveryEnvironmentCheck>, CommandError> {
-    let settings = service.store()?.repo_settings(&repo)?;
-    blocking(move || {
-        Ok(super::environment::check(
-            &repo,
-            distro.as_deref(),
-            &settings,
-        ))
-    })
-    .await
+    let service = service.inner().clone();
+    // Jobs waiting on the environment start at once when it answers.
+    blocking(move || service.check_environment(&repo, distro.as_deref())).await
 }
 
 /// Archives a delivered task: its worktree and local branch go.
@@ -495,6 +490,11 @@ pub fn delivery_set_repo_settings(
         checks,
         qa_commands: settings
             .qa_commands
+            .into_iter()
+            .filter_map(|command| clean(Some(command)))
+            .collect(),
+        setup: settings
+            .setup
             .into_iter()
             .filter_map(|command| clean(Some(command)))
             .collect(),

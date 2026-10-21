@@ -111,15 +111,20 @@ export const GROUPS: { group: StatusGroup; label: string }[] = [
 ];
 
 export function stageLabel(role: string): string {
-  if (role === "bootstrap") return "Preparación";
+  if (role === "bootstrap" || role === "setup") return "Preparación";
   if (role === "checks") return "Comprobaciones";
   return STAGES.find((stage) => stage.role === role)?.label ?? role;
 }
 
+/** Tinto's own shell jobs that share a role: each is told by its command. */
+export function byCommand(job: DeliveryJob): boolean {
+  return job.role === "checks" || job.role === "setup";
+}
+
 /** The history row a job belongs to: its stage, or each of Tinto's checks
- *  by its command, since they share a role. */
+ *  and setup commands by its command, since they share a role. */
 export function historyKey(job: DeliveryJob): string {
-  return job.role === "checks" ? `checks ${job.prompt}` : job.role;
+  return byCommand(job) ? `${job.role} ${job.prompt}` : job.role;
 }
 
 /** "Implementación" → "implementación", but keep "QA", "PR" and "Jira…" as written. */
@@ -538,6 +543,11 @@ export function taskStatus(
       return waiting("Lote en pausa");
     case "waits_quarantine":
       return danger(`Espera ${phase.lease.toUpperCase()}, en cuarentena`);
+    case "setup_failed":
+      return danger(`Falló la preparación: ${phase.command}`, "x");
+    case "waits_environment":
+      // Starting Docker or a database is the user's; Tinto checks again by itself.
+      return attention(`${stageLabel(phase.role)} espera al entorno`);
     case "queued":
       return waiting(
         phase.lease

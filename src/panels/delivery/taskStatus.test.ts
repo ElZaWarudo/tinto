@@ -230,6 +230,18 @@ describe("taskStatus words the phase Tinto derives", () => {
     expect(status({ kind: "quarantined", lease: "qa" }).label).toBe("QA en cuarentena");
   });
 
+  it("flags a failed setup command and a job waiting on the environment", () => {
+    expect(status({ kind: "setup_failed", job_id: "j", command: "npm ci" })).toEqual({
+      group: "attention",
+      tone: "danger",
+      icon: "x",
+      label: "Falló la preparación: npm ci",
+    });
+    expect(
+      status({ kind: "waits_environment", job_id: "j", role: "qa", problem: "Docker: no" }),
+    ).toMatchObject({ group: "attention", label: "QA espera al entorno" });
+  });
+
   it("flags a broken stage and names what comes next", () => {
     expect(
       status({ kind: "broken", job_id: "j", role: "implementation", attempt: 2, blocked: false }),
@@ -424,6 +436,13 @@ describe("Tinto's checks in the history", () => {
     expect(historyKey({ ...lint, attempt: 2 })).toBe(historyKey(lint));
     expect(historyKey(job({ role: "review" }))).toBe("review");
     expect(stageLabel("checks")).toBe("Comprobaciones");
+  });
+
+  it("and so are the setup commands, apart from a check with the same command", () => {
+    const install = job({ role: "setup", agent: "shell", prompt: "npm ci" });
+    expect(historyKey(install)).not.toBe(historyKey({ ...install, role: "checks" }));
+    expect(historyKey(install)).not.toBe(historyKey({ ...install, prompt: "make bindings" }));
+    expect(stageLabel("setup")).toBe("Preparación");
   });
 });
 
