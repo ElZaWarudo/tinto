@@ -163,7 +163,9 @@ export const startAgentSession = (
   repo: string,
   agentType: string,
   permissionMode: AgentSessionPermissionMode = "workspace",
-) => invoke<string>("start_agent_session", { repo, agentType, permissionMode });
+  /** The model and reasoning it starts on; the agent's defaults when left out. */
+  runtimeOptions?: AgentSessionRuntimeOptions,
+) => invoke<string>("start_agent_session", { repo, agentType, permissionMode, runtimeOptions });
 
 export const stopAgentSession = (sessionId: string) => invoke("stop_agent_session", { sessionId });
 

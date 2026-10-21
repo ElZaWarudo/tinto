@@ -58,15 +58,23 @@ function Dock({ runs, open = true }: { runs: DeliveryRun[]; open?: boolean }) {
 beforeEach(() => {
   vi.clearAllMocks();
   sessions.value = {};
+  localStorage.removeItem("tinto:delivery-coordinator-agent");
 });
 
 describe("CoordinatorDock", () => {
-  it("shows the batch's coordinator conversation and its state", () => {
+  it("shows the batch's coordinator, its state, and its conversation folded", async () => {
+    const user = userEvent.setup();
     sessions.value = { s1: session("s1", "working") };
     render(<Dock runs={[run({ coordinator_session: "s1", owner: "claude-1" })]} />);
     expect(
       screen.getByRole("button", { name: "Coordinador de Lote A: trabajando" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("· Claude Code")).toBeInTheDocument();
+    // The conversation stays out of the way until the user opens it.
+    const fold = screen.getByRole("button", { name: "Conversación" });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Conversación s1")).toBeNull();
+    await user.click(fold);
     expect(screen.getByText("Conversación s1")).toBeInTheDocument();
   });
 
@@ -74,30 +82,53 @@ describe("CoordinatorDock", () => {
     const user = userEvent.setup();
     const { rerender } = render(<Dock runs={[run()]} />);
     await user.click(screen.getByRole("button", { name: "Iniciar coordinador" }));
-    expect(bus.startAgentSession).toHaveBeenCalledWith("C:\\work\\agentos", "claude", "workspace");
+    expect(bus.startAgentSession).toHaveBeenCalledWith(run().repo, "claude", "workspace", {
+      reasoning_effort: "medium",
+    });
     expect(client.handOverDeliveryRun).not.toHaveBeenCalled();
 
     sessions.value = { "s-new": session("s-new", "waiting") };
     rerender(<Dock runs={[run()]} />);
     await waitFor(() => expect(client.handOverDeliveryRun).toHaveBeenCalledWith("r1", "s-new"));
-    expect(screen.getByText("Conversación s-new")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Conversación" })).toBeInTheDocument();
   });
 
   it("says when the batch is coordinated outside Tinto", () => {
     render(<Dock runs={[run({ owner: "claude-coord-1" })]} />);
-    expect(screen.getByText(/Lo coordina claude-coord-1 fuera de Tinto/)).toBeInTheDocument();
+    expect(screen.getByText("Fuera de Tinto")).toBeInTheDocument();
+    expect(screen.getByText("· claude-coord-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Iniciar coordinador" })).toBeInTheDocument();
   });
 
   it("stops new tasks and detaches the conversation", async () => {
     const user = userEvent.setup();
     sessions.value = { s1: session("s1", "waiting") };
     render(<Dock runs={[run({ coordinator_session: "s1" })]} />);
-    await user.click(screen.getByRole("button", { name: "No crear más tareas" }));
+    const policy = screen.getByRole("switch", { name: "Crear tareas nuevas" });
+    expect(policy).toHaveAttribute("aria-checked", "true");
+    await user.click(policy);
     expect(client.setDeliveryRunNoNewTasks).toHaveBeenCalledWith("r1", true);
     await user.click(screen.getByRole("button", { name: "Abrir el coordinador en otra ventana" }));
     expect(windows.openDetachedTerminalWindow).toHaveBeenCalledWith(
       { sessionId: "s1", repo: "C:\\work\\agentos", agentType: "claude" },
       expect.any(Function),
     );
+  });
+
+  it("starts the coordinator on the chosen model and reasoning, and remembers them per repo", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<Dock runs={[run()]} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Modelo" }), "opus");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Razonamiento" }), "high");
+    await user.click(screen.getByRole("button", { name: "Iniciar coordinador" }));
+    expect(bus.startAgentSession).toHaveBeenCalledWith(run().repo, "claude", "workspace", {
+      model: "opus",
+      reasoning_effort: "high",
+    });
+    unmount();
+
+    render(<Dock runs={[run({ id: "r2" })]} />);
+    expect(screen.getByRole("combobox", { name: "Modelo" })).toHaveValue("opus");
+    expect(screen.getByRole("combobox", { name: "Razonamiento" })).toHaveValue("high");
   });
 });

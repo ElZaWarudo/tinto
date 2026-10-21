@@ -92,6 +92,7 @@ pub async fn start_agent_session(
     repo: PathBuf,
     agent_type: String,
     permission_mode: Option<AgentSessionPermissionMode>,
+    runtime_options: Option<AgentSessionRuntimeOptions>,
 ) -> Result<String, CommandError> {
     let resolved = ensure_known_agent_repo(&bus, &repo).await?;
     let permission_mode = permission_mode.unwrap_or_default();
@@ -99,7 +100,25 @@ pub async fn start_agent_session(
     if permission_mode == AgentSessionPermissionMode::FullAccess {
         confirm_full_access_launch(&app, &resolved.path, &agent_type).await?;
     }
-    start_resolved_agent_session(&app, &registry, resolved, agent_type, permission_mode)
+    let runtime_options = runtime_options.filter(|options| !options.is_empty());
+    let id = super::pty::with_launch_options(runtime_options.clone(), || {
+        start_resolved_agent_session(&app, &registry, resolved, agent_type, permission_mode)
+    })?;
+    // Codex and Muse take the model and reasoning with each turn: the
+    // conversation keeps them for the turns Tinto sends it.
+    if let Some(options) = runtime_options {
+        lock_registry(&registry)?
+            .set_session_runtime_options(&id, options)
+            .map_err(CommandError::from)?;
+    }
+    Ok(id)
+}
+
+/// The model and reasoning a conversation started with, for the turns Tinto
+/// writes to it. Only Codex and Muse take them per turn.
+fn tinto_turn_options(session: &AgentSession) -> Option<AgentSessionRuntimeOptions> {
+    let per_turn = matches!(session.agent_type.as_str(), "codex" | "muse");
+    (per_turn && !session.runtime_options.is_empty()).then(|| session.runtime_options.clone())
 }
 
 async fn confirm_full_access_launch(
@@ -3994,7 +4013,7 @@ pub fn hand_over_delivery_run(
         ));
     }
     registry
-        .write_session_turn(&session_id, &text, &[], None)
+        .write_session_turn(&session_id, &text, &[], tinto_turn_options(&session))
         .map_err(CommandError::from)?;
     drop(registry);
     emit_timeline_item(
@@ -4018,15 +4037,14 @@ fn wake_coordinator(app: &AppHandle, wakeup: &crate::delivery::feed::Coordinator
     let Ok(mut registry) = registry.lock() else {
         return false;
     };
-    let idle = registry
-        .get_session(&wakeup.session_id)
-        .is_some_and(|session| {
-            session.status == AgentSessionStatus::Running
-                && session.turn_status == AgentSessionTurnStatus::Waiting
-        });
+    let Some(session) = registry.get_session(&wakeup.session_id) else {
+        return false;
+    };
+    let idle = session.status == AgentSessionStatus::Running
+        && session.turn_status == AgentSessionTurnStatus::Waiting;
     if !idle
         || registry
-            .write_session_turn(&wakeup.session_id, &wakeup.text, &[], None)
+            .write_session_turn(&wakeup.session_id, &wakeup.text, &[], tinto_turn_options(&session))
             .is_err()
     {
         return false;

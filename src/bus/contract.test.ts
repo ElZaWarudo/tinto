@@ -541,6 +541,17 @@ describe("RDM-008 client wrappers", () => {
       permissionMode: "workspace",
     });
 
+    void startAgentSession("/r/api", "claude", "workspace", {
+      model: "opus",
+      reasoning_effort: "high",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
+      repo: "/r/api",
+      agentType: "claude",
+      permissionMode: "workspace",
+      runtimeOptions: { model: "opus", reasoning_effort: "high" },
+    });
+
     void prepareAgentInstall("/r/api", "codex", "full_access");
     expect(invokeMock).toHaveBeenCalledWith("prepare_agent_install", {
       repo: "/r/api",

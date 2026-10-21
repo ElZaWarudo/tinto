@@ -8,11 +8,25 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { useAgentSessionState } from "../../agent/sessionStore";
 import { startAgentSession } from "../../bus/client";
 import { handOverDeliveryRun, setDeliveryRunNoNewTasks } from "../../delivery/client";
-import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
+import type { AgentSessionRuntimeOptions } from "../../bus/contract";
+import type {
+  DeliveryAgent,
+  DeliveryOverview,
+  DeliveryRun,
+  DeliveryStageAgent,
+} from "../../delivery/types";
 import { TerminalPanel, type TerminalPanelParams } from "../terminal/TerminalPanel";
 import { openDetachedTerminalWindow } from "../terminal/detachTerminalWindow";
+import { lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
 
 import { ActionButton } from "./ActionButton";
+import {
+  agentChoice,
+  effortChoices,
+  modelChoices,
+  withModel,
+  type AgentChoice,
+} from "./agentChoice";
 import { batchName } from "./taskStatus";
 
 type CoordinatorState = "waiting" | "working" | "stalled" | "outside" | "none";
@@ -24,6 +38,15 @@ const STATE_LABEL: Record<CoordinatorState, string> = {
   outside: "fuera de Tinto",
   none: "sin coordinador",
 };
+
+const AGENT_LABEL: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  muse: "Muse Code",
+};
+
+/** The coordinator last started in each repo, by repo path. */
+const CHOICE_KEY = "tinto:delivery-coordinator-agent";
 
 // The conversation view outside the dock: always active.
 const drawerApi = {
@@ -57,7 +80,9 @@ export function CoordinatorDock({
   const [started, setStarted] = useState<{ runId: string; sessionId: string } | null>(null);
   const handedOver = useRef<string | null>(null);
   const [detached, setDetached] = useState<string | null>(null);
-  const [agentType, setAgentType] = useState("claude");
+  const [choice, setChoice] = useState<AgentChoice | null>(null);
+  // The conversation stays folded until the user opens it.
+  const [chatShown, setChatShown] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const sessionId =
@@ -103,10 +128,13 @@ export function CoordinatorDock({
             ? "outside"
             : "none";
   const isDetached = session !== undefined && detached === session.id;
+  // What the start form shows: what the user picked, else the last start in this repo.
+  const shown = choice ?? rememberedChoice(run.repo);
 
   const start = async () => {
     setError(null);
-    const id = await startAgentSession(run.repo, agentType, "workspace");
+    const id = await startAgentSession(run.repo, shown.agent, "workspace", runtimeOptions(shown));
+    rememberChoice(run.repo, shown);
     setStarted({ runId: run.id, sessionId: id });
   };
 
@@ -134,6 +162,19 @@ export function CoordinatorDock({
     onOpenChange(!open);
   };
 
+  // Who coordinates, after its state: the conversation's agent here, the
+  // owner's name outside Tinto.
+  const who = session
+    ? [AGENT_LABEL[session.agent_type] ?? session.agent_type, session.runtime_options?.model]
+        .filter(Boolean)
+        .join(" · ")
+    : state === "outside"
+      ? run.owner
+      : null;
+  const models = modelChoices(shown.agent);
+  const efforts = effortChoices(shown.agent, shown.model);
+  const chatOpen = params !== null && chatShown;
+
   return (
     <>
       <button
@@ -147,55 +188,71 @@ export function CoordinatorDock({
         Coordinador · {STATE_LABEL[state]}
       </button>
       {open && (
-        <aside className="delivery-coordinator" aria-label="Coordinador del lote">
+        <aside
+          className={`delivery-coordinator${chatOpen ? " delivery-coordinator--chat" : ""}`}
+          aria-label="Coordinador del lote"
+        >
           <header className="delivery-coordinator__header">
-            {runs.length > 1 ? (
-              <select
-                aria-label="Lote"
-                value={run.id}
-                onChange={(event) => setRunId(event.target.value)}
-              >
-                {runs.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {batchName(candidate.title || candidate.id)}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <strong>{batchName(run.title || run.id)}</strong>
-            )}
-            <span className="delivery-muted">{STATE_LABEL[state]}</span>
-            <span className="delivery-panel__spacer" />
-            <ActionButton
-              aria-pressed={run.no_new_tasks ?? false}
-              title={
-                run.no_new_tasks
-                  ? "El coordinador puede volver a crear tareas en este lote"
-                  : "El coordinador termina las tareas que tiene y no crea más"
-              }
-              onAction={() => setDeliveryRunNoNewTasks(run.id, !run.no_new_tasks)}
-            >
-              {run.no_new_tasks ? "Permitir tareas nuevas" : "No crear más tareas"}
-            </ActionButton>
-            {session && (
+            <div className="delivery-coordinator__title">
+              {runs.length > 1 ? (
+                <select
+                  aria-label="Lote"
+                  value={run.id}
+                  onChange={(event) => setRunId(event.target.value)}
+                >
+                  {runs.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {batchName(candidate.title || candidate.id)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <strong>{batchName(run.title || run.id)}</strong>
+              )}
+              {session && (
+                <button
+                  type="button"
+                  className="delivery-icon-button"
+                  aria-label="Abrir el coordinador en otra ventana"
+                  title="Abrir en otra ventana"
+                  onClick={() => void detach()}
+                >
+                  ↗
+                </button>
+              )}
               <button
                 type="button"
                 className="delivery-icon-button"
-                aria-label="Abrir el coordinador en otra ventana"
-                title="Abrir en otra ventana"
-                onClick={() => void detach()}
+                aria-label="Cerrar el coordinador"
+                onClick={() => onOpenChange(false)}
               >
-                ↗
+                ×
               </button>
-            )}
-            <button
-              type="button"
-              className="delivery-icon-button"
-              aria-label="Cerrar el coordinador"
-              onClick={() => onOpenChange(false)}
-            >
-              ×
-            </button>
+            </div>
+            <div className="delivery-coordinator__status">
+              <span
+                className={`delivery-coordinator-button__dot delivery-coordinator-button--${state}`}
+                aria-hidden
+              />
+              <span>{STATE_LABEL[state][0].toUpperCase() + STATE_LABEL[state].slice(1)}</span>
+              {who && <span className="delivery-muted">· {who}</span>}
+              <span className="delivery-panel__spacer" />
+              <ActionButton
+                role="switch"
+                className="delivery-switch"
+                aria-checked={!run.no_new_tasks}
+                aria-label="Crear tareas nuevas"
+                title={
+                  run.no_new_tasks
+                    ? "Apagado: el coordinador termina las tareas que tiene y no crea más"
+                    : "Encendido: el coordinador puede crear tareas nuevas en este lote"
+                }
+                onAction={() => setDeliveryRunNoNewTasks(run.id, !run.no_new_tasks)}
+              >
+                <span className="delivery-switch__track" aria-hidden />
+                Tareas nuevas
+              </ActionButton>
+            </div>
           </header>
           {error && (
             <p className="delivery-coordinator__error" role="alert">
@@ -203,30 +260,126 @@ export function CoordinatorDock({
             </p>
           )}
           {params ? (
-            <div className="delivery-coordinator__chat">
-              <TerminalPanel {...params} />
-            </div>
+            <>
+              <button
+                type="button"
+                className="delivery-coordinator__fold"
+                aria-expanded={chatShown}
+                onClick={() => setChatShown(!chatShown)}
+              >
+                <span aria-hidden>{chatShown ? "▾" : "▸"}</span>
+                Conversación
+              </button>
+              {chatShown && (
+                <div className="delivery-coordinator__chat">
+                  <TerminalPanel {...params} />
+                </div>
+              )}
+            </>
           ) : (
             <div className="delivery-coordinator__start">
-              <p>
+              <p className="delivery-muted">
                 {state === "outside"
-                  ? `Lo coordina ${run.owner} fuera de Tinto. Puedes seguir así, o iniciar aquí un coordinador que tome el lote.`
-                  : "Este lote no tiene coordinador. Inicia uno aquí: tomará el lote y seguirá con sus tareas."}
+                  ? "Puedes seguir así o iniciar aquí un coordinador que tome el lote."
+                  : "Inicia aquí un coordinador: tomará el lote y seguirá con sus tareas."}
               </p>
-              <label>
-                Agente
-                <select value={agentType} onChange={(event) => setAgentType(event.target.value)}>
-                  <option value="claude">Claude Code</option>
-                  <option value="codex">Codex</option>
-                </select>
-              </label>
-              <ActionButton className="delivery-button--primary" onAction={start}>
-                Iniciar coordinador
-              </ActionButton>
+              <div className="delivery-coordinator__pick">
+                <label>
+                  Agente
+                  <select
+                    value={shown.agent}
+                    onChange={(event) =>
+                      setChoice(
+                        agentChoice({
+                          agent: event.target.value as DeliveryAgent,
+                          model: null,
+                          reasoning: null,
+                        }),
+                      )
+                    }
+                  >
+                    {Object.entries(AGENT_LABEL).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Modelo
+                  <select
+                    value={shown.model}
+                    onChange={(event) => setChoice(withModel(shown, event.target.value))}
+                  >
+                    {models.choices.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Razonamiento
+                  <select
+                    value={shown.reasoning}
+                    onChange={(event) => setChoice({ ...shown, reasoning: event.target.value })}
+                  >
+                    {efforts.choices.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <ActionButton className="delivery-button--primary" onAction={start}>
+                  Iniciar coordinador
+                </ActionButton>
+              </div>
             </div>
           )}
         </aside>
       )}
     </>
   );
+}
+
+/** The coordinator last started for a repo, to start the next one the same way. */
+function rememberedChoice(repo: string): AgentChoice {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? "{}") as Record<
+      string,
+      DeliveryStageAgent
+    >;
+    if (saved[repo]) return agentChoice(saved[repo]);
+  } catch {
+    // Unreadable storage starts on the defaults.
+  }
+  return agentChoice({ agent: "claude", model: null, reasoning: null });
+}
+
+function rememberChoice(repo: string, choice: AgentChoice) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? "{}") as Record<
+      string,
+      DeliveryStageAgent
+    >;
+    saved[repo] = { agent: choice.agent, model: choice.model, reasoning: choice.reasoning };
+    localStorage.setItem(CHOICE_KEY, JSON.stringify(saved));
+  } catch {
+    // Not remembered: the next start offers the defaults.
+  }
+}
+
+/** What the conversation starts on: Codex and Muse name a model by the
+ *  catalog's id; "" is the agent's own default. */
+function runtimeOptions(choice: AgentChoice): AgentSessionRuntimeOptions {
+  const options: AgentSessionRuntimeOptions = {};
+  if (choice.model) {
+    const catalog =
+      choice.agent === "codex" || choice.agent === "muse" ? lastRuntimeCatalog(choice.agent) : null;
+    options.model =
+      catalog?.models?.find((model) => model.model === choice.model)?.id ?? choice.model;
+  }
+  if (choice.reasoning) options.reasoning_effort = choice.reasoning;
+  return options;
 }
