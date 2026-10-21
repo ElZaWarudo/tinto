@@ -2137,8 +2137,6 @@ fn to_changes(snapshot: &WorktreeSnapshot) -> Vec<DeliveryChange> {
         .collect()
 }
 
-/// A new attempt with the job's assignment.
-
 /// Why a job a restart interrupted must not run again on its own, if so:
 /// what it did may have half-happened where a new attempt cannot see it.
 /// An agent with workspace access only changes its worktree (no network
