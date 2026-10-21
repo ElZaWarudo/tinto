@@ -4084,7 +4084,7 @@ fn a_commit_whose_parents_alone_were_fixed_outside_tinto_stays_done() {
     h.service.overview().unwrap();
     let step = h.service.approval(&asked.id).unwrap();
     assert_eq!(step.status, DeliveryApprovalStatus::Executed);
-    assert_eq!(step.created, [fixed.clone()]);
+    assert_eq!(step.created, std::slice::from_ref(&fixed));
     // Nothing stops the push.
     let push = h.service.request_approval(NewApproval {
         task_id: task.id.clone(),

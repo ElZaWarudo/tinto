@@ -4044,7 +4044,12 @@ fn wake_coordinator(app: &AppHandle, wakeup: &crate::delivery::feed::Coordinator
         && session.turn_status == AgentSessionTurnStatus::Waiting;
     if !idle
         || registry
-            .write_session_turn(&wakeup.session_id, &wakeup.text, &[], tinto_turn_options(&session))
+            .write_session_turn(
+                &wakeup.session_id,
+                &wakeup.text,
+                &[],
+                tinto_turn_options(&session),
+            )
             .is_err()
     {
         return false;

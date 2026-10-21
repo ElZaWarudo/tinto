@@ -2014,7 +2014,7 @@ fn reparented(place: Place<'_>, worktree: &std::path::Path, created: &[String]) 
     // An amend keeps the parents: that is a rewrite, not a fix.
     let only_parents = tree == old_tree
         && parents != old_parents
-        && parents.first().is_some()
+        && !parents.is_empty()
         && parents.first() == old_parents.first();
     only_parents
         .then(|| tasks::head(place, worktree).ok())
