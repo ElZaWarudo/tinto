@@ -293,6 +293,8 @@ export interface DeliveryApproval {
   single_commit_reason?: string | null;
   /** `commit`: changed files the plan leaves uncommitted on purpose. */
   left_out?: string[];
+  /** `commit`: the commit being merged when the step concludes a merge in progress. */
+  merge_head?: string | null;
   /** `commit`: the commits Tinto created. */
   created?: string[];
   /** What Tinto noticed checking the step against git and GitHub. */

@@ -3711,6 +3711,232 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
     );
 }
 
+/// `main` gains a rename and a new file, then the task's branch gets a
+/// commit of its own touching `README.md` the way `main` does when
+/// `conflict` is set.
+fn diverge_from_main(h: &Harness, task: &DeliveryTask, conflict: bool) {
+    let repo = h.repo.path();
+    git(repo, &["mv", "README.md", "GUIDE.md"]);
+    std::fs::write(repo.join("base.txt"), "base\n").unwrap();
+    if conflict {
+        std::fs::write(repo.join("shared.txt"), "main\n").unwrap();
+    }
+    git(repo, &["add", "--all"]);
+    git(repo, &["commit", "-q", "-m", "main moves on"]);
+    write_files(task, &["a.txt"]);
+    if conflict {
+        std::fs::write(task.worktree.join("shared.txt"), "task\n").unwrap();
+    }
+    git(&task.worktree, &["add", "--all"]);
+    git(&task.worktree, &["commit", "-q", "-m", "task work"]);
+}
+
+/// Starts merging `main` into the task's branch without concluding it, as a
+/// coordinator did in its shell; true when git stopped on conflicts.
+fn start_merge(task: &DeliveryTask) -> bool {
+    !std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+        .arg(&task.worktree)
+        .args(["merge", "--no-ff", "--no-commit", "-q", "main"])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+fn parents(task: &DeliveryTask) -> Vec<String> {
+    in_worktree(task, &["rev-list", "--parents", "-1", "HEAD"])
+        .split_whitespace()
+        .skip(1)
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn a_commit_step_concludes_a_merge_in_progress_with_both_parents() {
+    let h = harness();
+    let task = h.task("M-1");
+    diverge_from_main(&h, &task, false);
+    let head = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let main = in_worktree(&task, &["rev-parse", "main"]);
+    assert!(!start_merge(&task));
+    // Both sides of the rename are changed files.
+    assert_eq!(changed(&task), ["GUIDE.md", "README.md", "base.txt"]);
+
+    // A merge is one commit with everything: neither a split plan nor files
+    // left out.
+    let refused = |plan: NewApproval| h.service.request_approval(plan).unwrap_err().message;
+    assert!(refused(commit_plan(
+        &task,
+        vec![
+            commit("merge a", &["GUIDE.md"]),
+            commit("merge b", &["base.txt"])
+        ],
+        &[],
+    ))
+    .contains("un único commit de merge"));
+    assert!(refused(commit_plan(
+        &task,
+        vec![commit("Merge main", &[])],
+        &["base.txt"]
+    ))
+    .contains("no deja archivos fuera"));
+
+    // Its paths are not needed, renames included.
+    let asked = h
+        .service
+        .request_approval(commit_plan(
+            &task,
+            vec![commit("Merge branch 'main' into delivery/m-1", &[])],
+            &[],
+        ))
+        .unwrap();
+    assert_eq!(asked.merge_head.as_deref(), Some(main.as_str()));
+    assert_eq!(asked.title, "Merge branch 'main' into delivery/m-1");
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(parents(&task), [head.clone(), main.clone()]);
+    assert_eq!(done.created, [in_worktree(&task, &["rev-parse", "HEAD"])]);
+    assert_eq!(
+        in_worktree(&task, &["rev-list", "--count", "HEAD..main"]),
+        "0"
+    );
+    assert!(changed(&task).is_empty());
+    assert!(task.worktree.join("GUIDE.md").exists());
+    assert!(!task.worktree.join("README.md").exists());
+
+    // Undone, the branch is back on its own commit.
+    h.service.undo_commit(&asked.id).unwrap();
+    assert_eq!(in_worktree(&task, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn a_merge_commit_waits_for_its_conflicts_and_a_plan_from_before_the_merge_is_not_run() {
+    let h = harness();
+    let task = h.task("M-2");
+    diverge_from_main(&h, &task, true);
+    let head = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let main = in_worktree(&task, &["rev-parse", "main"]);
+    write_files(&task, &["late.txt"]);
+    // Prepared before the merge started.
+    let stale = h
+        .service
+        .request_approval(commit_plan(
+            &task,
+            vec![commit("feat: late", &["late.txt"])],
+            &[],
+        ))
+        .unwrap();
+    std::fs::remove_file(task.worktree.join("late.txt")).unwrap();
+    assert!(start_merge(&task));
+    let failed = h.service.decide_approval(&stale.id, true, None).unwrap();
+    assert_eq!(failed.status, DeliveryApprovalStatus::Failed);
+    assert!(failed
+        .outcome
+        .unwrap()
+        .contains("hay un merge en curso que este plan no contemplaba"));
+    // The merge is still there for the step that concludes it.
+    assert!(super::tasks::merge_head(super::tasks::Place::Native, &task.worktree).is_some());
+
+    let merge = || commit_plan(&task, vec![commit("Merge main", &[])], &[]);
+    let error = h.service.request_approval(merge()).unwrap_err();
+    assert_eq!(error.category, "merge_conflicts");
+    assert!(error.message.contains("shared.txt"), "{error}");
+
+    // The job resolves the file without staging it.
+    std::fs::write(task.worktree.join("shared.txt"), "task and main\n").unwrap();
+    let asked = h.service.request_approval(merge()).unwrap();
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(parents(&task), [head, main]);
+    assert_eq!(
+        std::fs::read_to_string(task.worktree.join("shared.txt")).unwrap(),
+        "task and main\n"
+    );
+    assert!(changed(&task).is_empty());
+}
+
+#[test]
+fn a_commit_whose_parents_alone_were_fixed_outside_tinto_stays_done() {
+    let h = harness();
+    let task = h.task("M-3");
+    diverge_from_main(&h, &task, false);
+    let main = in_worktree(&task, &["rev-parse", "main"]);
+    // What happened before Tinto knew merges: the merge's changes committed
+    // with one parent.
+    git(&task.worktree, &["merge", "--squash", "-q", "main"]);
+    let mut plan = commit_plan(
+        &task,
+        vec![commit("Merge main", &["GUIDE.md", "README.md", "base.txt"])],
+        &[],
+    );
+    plan.single_commit_reason = Some("main's changes".into());
+    let asked = h.service.request_approval(plan).unwrap();
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(done.status, DeliveryApprovalStatus::Executed);
+    let single = done.created[0].clone();
+    assert_eq!(parents(&task).len(), 1);
+
+    // The coordinator restores the second parent by hand, same tree.
+    let tree = format!("{single}^{{tree}}");
+    let first = format!("{single}^");
+    let fixed = in_worktree(
+        &task,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &first,
+            "-p",
+            &main,
+            "-m",
+            "Merge main",
+        ],
+    );
+    git(&task.worktree, &["reset", "-q", "--soft", &fixed]);
+    h.service.overview().unwrap();
+    let step = h.service.approval(&asked.id).unwrap();
+    assert_eq!(step.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(step.created, [fixed.clone()]);
+    // Nothing stops the push.
+    let push = h.service.request_approval(NewApproval {
+        task_id: task.id.clone(),
+        rung: DeliveryRung::Push,
+        title: "Publish".into(),
+        body: String::new(),
+        requested_by: "user".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        single_commit_reason: None,
+        merge_method: None,
+        stage: None,
+        jira_statuses: Vec::new(),
+    });
+    assert!(push.is_ok(), "{push:?}");
+
+    // A different tree is a rewrite: the step is undone.
+    let other = in_worktree(
+        &task,
+        &["commit-tree", "HEAD~1^{tree}", "-p", &first, "-m", "x"],
+    );
+    git(&task.worktree, &["reset", "-q", "--soft", &other]);
+    h.service.overview().unwrap();
+    assert_eq!(
+        h.service.approval(&asked.id).unwrap().status,
+        DeliveryApprovalStatus::Undone
+    );
+}
+
 #[test]
 fn a_coordinator_sends_a_commit_plan_over_mcp() {
     let h = harness();

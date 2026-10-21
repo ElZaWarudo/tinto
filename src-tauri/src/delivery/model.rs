@@ -548,7 +548,9 @@ impl DeliveryApprovalStatus {
 pub struct DeliveryCommit {
     /// The exact message: subject, then an optional body after a blank line.
     pub message: String,
-    /// The files it includes, relative to the worktree, with `/`.
+    /// The files it includes, relative to the worktree, with `/`. A commit
+    /// that concludes a merge takes every change and needs none.
+    #[serde(default)]
     pub paths: Vec<String>,
 }
 
@@ -601,6 +603,11 @@ pub struct DeliveryApproval {
     /// areas or is large, which the user reads with the plan.
     #[serde(default)]
     pub single_commit_reason: Option<String>,
+    /// `commit` only: the commit being merged when the step concludes a
+    /// merge in progress. Tinto then makes one commit of the whole merge,
+    /// with the branch and this commit as parents.
+    #[serde(default)]
+    pub merge_head: Option<String>,
     /// `commit` only: the commits Tinto created, in order.
     #[serde(default)]
     pub created: Vec<String>,

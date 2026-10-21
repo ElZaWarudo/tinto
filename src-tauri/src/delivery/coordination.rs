@@ -205,6 +205,60 @@ fn check_plan(
     }
 }
 
+/// The one commit that concludes a merge in progress. Its paths are not
+/// asked: it takes every change (a rename would need both of its sides),
+/// and they are recorded to notice if the worktree changes before it runs.
+fn merge_commit(
+    place: Place<'_>,
+    worktree: &std::path::Path,
+    request: &NewApproval,
+    title: &str,
+    body: &str,
+) -> Result<DeliveryCommit, DeliveryError> {
+    let message = match request.commits.as_slice() {
+        [] => match body.trim() {
+            "" => title.to_string(),
+            body => format!("{title}\n\n{body}"),
+        },
+        [only] => only.message.trim().to_string(),
+        _ => {
+            return Err(invalid_plan(
+                "hay un merge en curso: se confirma entero, en un único commit de merge",
+            ))
+        }
+    };
+    if message.is_empty() {
+        return Err(invalid_plan("el commit de merge no tiene mensaje"));
+    }
+    if !request.leave_out.is_empty() {
+        return Err(invalid_plan(
+            "hay un merge en curso: el commit de merge lo incluye todo y no deja archivos fuera",
+        ));
+    }
+    check_conflicts_resolved(place, worktree)?;
+    Ok(DeliveryCommit {
+        message,
+        paths: tasks::changed_files(place, worktree)?,
+    })
+}
+
+fn check_conflicts_resolved(
+    place: Place<'_>,
+    worktree: &std::path::Path,
+) -> Result<(), DeliveryError> {
+    let unresolved = tasks::unresolved_conflicts(place, worktree);
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+    Err(DeliveryError::new(
+        "merge_conflicts",
+        format!(
+            "el merge aún tiene conflictos sin resolver en: {}",
+            unresolved.join(", ")
+        ),
+    ))
+}
+
 /// The commits Tinto created for a commit step. Steps from before plans
 /// existed only recorded "Commit <short hash>" as their outcome.
 fn created_commits(approval: &DeliveryApproval) -> Vec<String> {
@@ -253,6 +307,7 @@ pub(super) fn found_step(
         commits: Vec::new(),
         left_out: Vec::new(),
         single_commit_reason: None,
+        merge_head: None,
         created: Vec::new(),
         before: None,
         tip: None,
@@ -934,11 +989,23 @@ impl DeliveryService {
             rung_prerequisites(&task, request.rung)?;
         }
         let mut title = request.title.trim().to_string();
-        let mut body = request.body;
+        let mut body = request.body.clone();
         let mut commits = Vec::new();
         let mut left_out = Vec::new();
         let mut single_commit_reason = None;
+        let merge_head = match request.rung {
+            DeliveryRung::Commit => tasks::merge_head(place, &task.worktree),
+            _ => None,
+        };
         match request.rung {
+            // A merge in progress is concluded whole, so the commit keeps the
+            // merged branch as its second parent.
+            DeliveryRung::Commit if merge_head.is_some() => {
+                let commit = merge_commit(place, &task.worktree, &request, &title, &body)?;
+                title = subject(&commit.message).to_string();
+                body = String::new();
+                commits = vec![commit];
+            }
             DeliveryRung::Commit => {
                 let changed = tasks::changed_files(place, &task.worktree)?;
                 commits = if planned {
@@ -1017,6 +1084,7 @@ impl DeliveryService {
             commits,
             left_out,
             single_commit_reason,
+            merge_head,
             created: Vec::new(),
             before: None,
             tip: None,
@@ -1443,6 +1511,17 @@ impl DeliveryService {
         {
             return Ok(false);
         }
+        // Only the parents of the last commit were put right outside Tinto
+        // (a merge's second parent restored): the branch has the same
+        // content in the same place, so the step stands on the new commit.
+        if let Some(head) = reparented(place, &task.worktree, &created) {
+            approval.created = created;
+            if let Some(last) = approval.created.last_mut() {
+                *last = head;
+            }
+            self.save_approval(&approval, "commit_reparented")?;
+            return Ok(false);
+        }
         approval.status = DeliveryApprovalStatus::Undone;
         approval.outcome = Some(format!(
             "Los commits que hizo Tinto ({}) ya no están en la rama: se deshicieron o reescribieron fuera de Tinto (reset, amend o rebase). Hay que volver a preparar el commit.",
@@ -1681,6 +1760,14 @@ fn run_commit_plan(
             paths: changed.clone(),
         }];
     }
+    // Unstaging would end a merge in progress: it is concluded only by the
+    // step prepared for it.
+    if tasks::merge_head(place, &task.worktree) != approval.merge_head {
+        return Err(invalid_plan(match approval.merge_head {
+            Some(_) => "No se creó ningún commit: el merge en curso cuando se preparó el commit ya no está. Prepáralo de nuevo.",
+            None => "No se creó ningún commit: hay un merge en curso que este plan no contemplaba. Prepara de nuevo el commit, que concluirá el merge.",
+        }));
+    }
     check_plan(&changed, &approval.commits, &approval.left_out).map_err(|error| {
         invalid_plan(format!(
             "No se creó ningún commit: el worktree cambió desde que se preparó el plan ({}). Prepáralo de nuevo.",
@@ -1688,6 +1775,21 @@ fn run_commit_plan(
         ))
     })?;
     approval.before = Some(tasks::head(place, &task.worktree)?);
+    if approval.merge_head.is_some() {
+        check_conflicts_resolved(place, &task.worktree)?;
+        let message = &approval.commits[0].message;
+        let created = tasks::commit_merge(place, &task.worktree, message).map_err(|error| {
+            DeliveryError::new(
+                "commit_failed",
+                format!(
+                    "El commit de merge falló: {}. El merge sigue en curso en el worktree.",
+                    error.message
+                ),
+            )
+        })?;
+        approval.created.push(created);
+        return Ok(format!("Commit de merge {}", shorts(&approval.created)));
+    }
     tasks::unstage_all(place, &task.worktree)?;
     let total = approval.commits.len();
     for (index, commit) in approval.commits.iter().enumerate() {
@@ -1729,6 +1831,35 @@ fn run_commit_plan(
         ));
     }
     Ok(outcome)
+}
+
+/// The branch's HEAD when it replaces the last of `created` with the same
+/// tree on the same first parent (only its other parents differ), and the
+/// rest of `created` is still on the branch.
+fn reparented(place: Place<'_>, worktree: &std::path::Path, created: &[String]) -> Option<String> {
+    let (last, earlier) = created.split_last()?;
+    if !earlier
+        .iter()
+        .all(|commit| tasks::on_branch(place, worktree, commit))
+    {
+        return None;
+    }
+    // Tree, then parents.
+    let shape = |commit: &str| -> Option<(String, Vec<String>)> {
+        let text = tasks::git(place, worktree, &["show", "-s", "--format=%T %P", commit]).ok()?;
+        let mut ids = text.split_whitespace().map(str::to_string);
+        Some((ids.next()?, ids.collect()))
+    };
+    let (tree, parents) = shape("HEAD")?;
+    let (old_tree, old_parents) = shape(last)?;
+    // An amend keeps the parents: that is a rewrite, not a fix.
+    let only_parents = tree == old_tree
+        && parents != old_parents
+        && parents.first().is_some()
+        && parents.first() == old_parents.first();
+    only_parents
+        .then(|| tasks::head(place, worktree).ok())
+        .flatten()
 }
 
 fn shorts(commits: &[String]) -> String {

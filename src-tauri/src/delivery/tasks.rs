@@ -427,6 +427,45 @@ pub fn commit_paths(
     head(place, worktree)
 }
 
+/// The commit being merged while a merge is in progress (`MERGE_HEAD`).
+pub fn merge_head(place: Place<'_>, worktree: &Path) -> Option<String> {
+    git(
+        place,
+        worktree,
+        &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+    )
+    .ok()
+    .filter(|commit| !commit.is_empty())
+}
+
+/// Files of the merge in progress that git left conflicted and that still
+/// have conflict markers.
+pub fn unresolved_conflicts(place: Place<'_>, worktree: &Path) -> Vec<String> {
+    let conflicted =
+        git(place, worktree, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+    if conflicted.is_empty() {
+        return Vec::new();
+    }
+    let mut args = vec!["grep", "-l", "-E", "^(<<<<<<<|>>>>>>>)( |$)", "--"];
+    args.extend(conflicted.lines());
+    // Exits 1 when no file has markers.
+    git(place, worktree, &args)
+        .map(|files| files.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Concludes the merge in progress as it is in the worktree: every change,
+/// with exactly `message`. The commit keeps both parents.
+pub fn commit_merge(
+    place: Place<'_>,
+    worktree: &Path,
+    message: &str,
+) -> Result<String, DeliveryError> {
+    git(place, worktree, &["add", "--all"])?;
+    git(place, worktree, &["commit", "--quiet", "-m", message])?;
+    head(place, worktree)
+}
+
 /// Whether `commit` is still part of the branch checked out in `worktree`.
 pub fn on_branch(place: Place<'_>, worktree: &Path, commit: &str) -> bool {
     git_ok(
