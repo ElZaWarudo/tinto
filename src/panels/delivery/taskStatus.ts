@@ -41,6 +41,18 @@ export const STEPS: DeliveryStep[] = [
   { rung: "jira", stage: "after_merge", label: "Jira (merge)" },
 ];
 
+/** Merging the base into the branch: asked only when needed, and as often,
+ *  so it is not a step every task climbs. */
+export const SYNC_STEP: DeliveryStep = { rung: "sync", label: "Sync con la base" };
+
+/** The ladder as the track shows it: with the sync after the commit once the
+ *  task has one. */
+export function trackSteps(steps: DeliveryStep[], approvals: DeliveryApproval[]): DeliveryStep[] {
+  if (!approvals.some((approval) => approval.rung === "sync")) return steps;
+  const at = steps.findIndex((step) => step.rung === "commit") + 1;
+  return [...steps.slice(0, at), SYNC_STEP, ...steps.slice(at)];
+}
+
 function isStep(approval: DeliveryApproval, step: DeliveryStep): boolean {
   return (
     approval.rung === step.rung &&
@@ -51,7 +63,10 @@ function isStep(approval: DeliveryApproval, step: DeliveryStep): boolean {
 /** The ladder step an approval is for. */
 export function stepOf(approval: DeliveryApproval): DeliveryStep {
   return (
-    STEPS.find((step) => isStep(approval, step)) ?? { rung: approval.rung, label: approval.rung }
+    [...STEPS, SYNC_STEP].find((step) => isStep(approval, step)) ?? {
+      rung: approval.rung,
+      label: approval.rung,
+    }
   );
 }
 

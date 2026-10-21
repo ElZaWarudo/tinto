@@ -154,6 +154,7 @@ import {
   type DeliveryStep,
   stageLabel,
   taskStatus,
+  trackSteps,
   type StatusGroup,
   type StatusIcon,
   type TaskStatus,
@@ -2236,7 +2237,7 @@ function TaskDetail({
         repo={task.repo}
         jobs={jobs}
         approvals={approvals}
-        steps={ladder}
+        steps={trackSteps(ladder, approvals)}
         pr={pr}
         next={next}
         onFocus={focusStage}
@@ -2566,6 +2567,13 @@ function rungStep(approval: DeliveryApproval | undefined): {
     case "approved":
       return { tone: "waiting", icon: "clock", label: "Lo hace el coordinador" };
     case "executed":
+      if (approval.conflicts?.length)
+        return {
+          tone: "attention",
+          icon: "alert",
+          label: `Conflictos en ${approval.conflicts.join(", ")}`,
+          title: approval.outcome ?? undefined,
+        };
       return {
         tone: "ok",
         icon: "check",
@@ -2830,6 +2838,8 @@ function rejectionScope(
   switch (approval.rung) {
     case "commit":
       return `Rechazar no toca los cambios: siguen sin commit en ${task.branch}.`;
+    case "sync":
+      return `Rechazar no toca la rama: ${task.branch} sigue sin la base.`;
     case "push":
       return `Rechazar no deshace los commits: siguen en ${task.branch}, sin publicar.`;
     case "pr":
@@ -2943,17 +2953,19 @@ function ApprovalBanner({
   const consequence =
     approval.rung === "commit"
       ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
-      : approval.rung === "push"
-        ? `Al aprobar, Tinto publica la rama ${task.branch}.`
-        : approval.rung === "pr"
-          ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar.`
-          : approval.rung === "merge"
-            ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
-            : approval.jira_link_only
-              ? `Al aprobar, Tinto enlaza este PR en ${task.key} sin cambiar su estado: otro paquete del issue ya lo movió.`
-              : approval.jira_statuses?.length
-                ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
-                : "Al aprobar, el coordinador hace estas operaciones en Jira y las informa; no tienes que hacer nada más.";
+      : approval.rung === "sync"
+        ? `Al aprobar, Tinto trae la base y la fusiona en ${task.branch} con este mensaje: un commit de merge, sin publicar. Si hay conflictos, el merge queda en curso, un job de implementación los resuelve y el paso commit lo concluye.`
+        : approval.rung === "push"
+          ? `Al aprobar, Tinto publica la rama ${task.branch}.`
+          : approval.rung === "pr"
+            ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar.`
+            : approval.rung === "merge"
+              ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
+              : approval.jira_link_only
+                ? `Al aprobar, Tinto enlaza este PR en ${task.key} sin cambiar su estado: otro paquete del issue ya lo movió.`
+                : approval.jira_statuses?.length
+                  ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
+                  : "Al aprobar, el coordinador hace estas operaciones en Jira y las informa; no tienes que hacer nada más.";
   return (
     <div
       className="delivery-banner delivery-banner--step"
@@ -3046,13 +3058,15 @@ function ApprovalBanner({
             >
               {approval.rung === "commit"
                 ? "Aprobar y hacer commit"
-                : approval.rung === "push"
-                  ? "Aprobar y publicar"
-                  : approval.rung === "merge"
-                    ? "Aprobar y fusionar"
-                    : approval.rung === "pr"
-                      ? "Aprobar y abrir el PR"
-                      : "Aprobar"}
+                : approval.rung === "sync"
+                  ? "Aprobar y sincronizar"
+                  : approval.rung === "push"
+                    ? "Aprobar y publicar"
+                    : approval.rung === "merge"
+                      ? "Aprobar y fusionar"
+                      : approval.rung === "pr"
+                        ? "Aprobar y abrir el PR"
+                        : "Aprobar"}
             </ActionButton>
             <ActionButton
               title={rejectionScope(approval, task, pr)}

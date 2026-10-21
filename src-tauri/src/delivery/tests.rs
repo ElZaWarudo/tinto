@@ -3866,6 +3866,169 @@ fn a_merge_commit_waits_for_its_conflicts_and_a_plan_from_before_the_merge_is_no
     assert!(changed(&task).is_empty());
 }
 
+fn step(task: &DeliveryTask, rung: DeliveryRung, title: &str) -> NewApproval {
+    NewApproval {
+        task_id: task.id.clone(),
+        rung,
+        title: title.into(),
+        body: String::new(),
+        requested_by: "user".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        single_commit_reason: None,
+        merge_method: None,
+        stage: None,
+        jira_statuses: Vec::new(),
+    }
+}
+
+#[test]
+fn a_sync_step_merges_the_fetched_base_and_the_push_checks_it_is_still_merged() {
+    let h = harness();
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    let origin_path = plain_path(origin.path());
+    git(h.repo.path(), &["remote", "add", "origin", &origin_path]);
+    let task = h.task("S-1");
+    diverge_from_main(&h, &task, false);
+    // The base moves on in origin only: the sync has to fetch it.
+    git(h.repo.path(), &["push", "-q", "origin", "main"]);
+    git(
+        h.repo.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD~1"],
+    );
+    let head = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let main = in_worktree(&task, &["rev-parse", "main"]);
+
+    write_files(&task, &["wip.txt"]);
+    let dirty = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Sync, "Merge main"))
+        .unwrap_err();
+    assert_eq!(dirty.category, "worktree_dirty");
+    std::fs::remove_file(task.worktree.join("wip.txt")).unwrap();
+
+    let message = "Merge remote-tracking branch 'origin/main' into delivery/s-1";
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Sync, message))
+        .unwrap();
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert!(done.conflicts.is_empty());
+    assert_eq!(done.merge_head.as_deref(), Some(main.as_str()));
+    assert_eq!(parents(&task), [head.clone(), main.clone()]);
+    assert_eq!(done.created, [in_worktree(&task, &["rev-parse", "HEAD"])]);
+    assert_eq!(in_worktree(&task, &["log", "-1", "--format=%B"]), message);
+    assert!(changed(&task).is_empty());
+    // Nothing more to bring in.
+    assert_eq!(
+        h.service
+            .request_approval(step(&task, DeliveryRung::Sync, "Merge main"))
+            .unwrap_err()
+            .category,
+        "base_merged"
+    );
+
+    let push = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    let pushed = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(
+        pushed.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        pushed.outcome
+    );
+
+    // A branch rebuilt without the merge is not published.
+    git(&task.worktree, &["reset", "-q", "--hard", &head]);
+    write_files(&task, &["more.txt"]);
+    git(&task.worktree, &["add", "--all"]);
+    git(&task.worktree, &["commit", "-q", "-m", "more"]);
+    let refused = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .unwrap_err();
+    assert_eq!(refused.category, "base_unmerged", "{refused}");
+}
+
+#[test]
+fn a_sync_with_conflicts_goes_back_to_implementation_and_a_commit_concludes_it() {
+    let h = harness();
+    let task = h.task("S-2");
+    diverge_from_main(&h, &task, true);
+    let head = in_worktree(&task, &["rev-parse", "HEAD"]);
+    let main = in_worktree(&task, &["rev-parse", "main"]);
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Sync, "Merge main"))
+        .unwrap();
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.outcome
+    );
+    assert_eq!(done.conflicts, ["shared.txt"]);
+    assert!(done.created.is_empty());
+    assert!(done.outcome.unwrap().contains("shared.txt"));
+    // The merge stays in progress, with the base's rename in it.
+    assert!(super::tasks::merge_head(super::tasks::Place::Native, &task.worktree).is_some());
+    assert!(task.worktree.join("GUIDE.md").exists());
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(phase.next_stage.as_deref(), Some("implementation"));
+    // Nothing is published while it lasts, and no second sync starts.
+    for (rung, category) in [
+        (DeliveryRung::Push, "merge_in_progress"),
+        (DeliveryRung::Sync, "merge_in_progress"),
+    ] {
+        let error = h
+            .service
+            .request_approval(step(&task, rung, "x"))
+            .unwrap_err();
+        assert_eq!(error.category, category, "{error}");
+    }
+
+    // The implementation job is told what to resolve.
+    let job = h.dispatch(&task, "implementation", "events=codex-ok");
+    let conflicts = job.merge_conflicts.clone().unwrap();
+    assert_eq!(conflicts.base, "main");
+    assert_eq!(conflicts.files, ["shared.txt"]);
+    let paths = super::adapters::JobPaths::in_dir(h.repo.path().join("job"));
+    let prompt = super::adapters::job_prompt(&job, &task, &paths, false, &[]);
+    assert!(
+        prompt.contains("Tinto is merging main into this branch and the merge stopped on conflicts in: shared.txt"),
+        "{prompt}"
+    );
+    h.wait(&job.id);
+    // It resolves the file; the commit step concludes the merge.
+    std::fs::write(task.worktree.join("shared.txt"), "task and main\n").unwrap();
+    let commit = h
+        .service
+        .request_approval(commit_plan(&task, vec![commit("Merge main", &[])], &[]))
+        .unwrap();
+    let concluded = h.service.decide_approval(&commit.id, true, None).unwrap();
+    assert_eq!(
+        concluded.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        concluded.outcome
+    );
+    assert_eq!(parents(&task), [head, main]);
+    assert!(h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .is_ok());
+}
+
 #[test]
 fn a_commit_whose_parents_alone_were_fixed_outside_tinto_stays_done() {
     let h = harness();

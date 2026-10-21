@@ -2329,6 +2329,85 @@ describe("DeliveryPanel", () => {
     expect(screen.getByText("Estado: Entrada")).toBeInTheDocument();
   });
 
+  it("shows a sync with the base in the ladder only once the task has one", async () => {
+    const step = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
+      id: "a1",
+      task_id: "t1",
+      rung: "commit",
+      title: "x",
+      body: "",
+      status: "executed",
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: 2,
+      executed_at_ms: 3,
+      outcome: "Commit abc1234",
+      ...over,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({ tasks: [task({ state: "intake" })], approvals: [step({})] }),
+    );
+    const { unmount } = renderPanel();
+    let ladder = await screen.findByRole("list", { name: "Entrega" });
+    expect(within(ladder).queryByText("Sync con la base")).toBeNull();
+    unmount();
+
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          step({}),
+          step({
+            id: "a2",
+            rung: "sync",
+            title: "Merge develop",
+            outcome: "origin/develop (abc1234) tiene conflictos con la rama en: shared.txt.",
+            conflicts: ["shared.txt"],
+          }),
+          step({ id: "a3", rung: "sync", status: "pending", executed_at_ms: null, outcome: null }),
+        ],
+      }),
+    );
+    renderPanel();
+    ladder = await screen.findByRole("list", { name: "Entrega" });
+    const names = within(ladder)
+      .getAllByRole("listitem")
+      .map((item) => item.querySelector(".delivery-node__name")?.textContent);
+    expect(names.slice(0, 3)).toEqual(["Commit", "Sync con la base", "Push"]);
+    // The latest sync is the one shown: it waits on the user.
+    expect(within(ladder).getByText("Tu aprobación")).toBeInTheDocument();
+    const banner = await openStep("Revisar sync con la base", "sync");
+    expect(within(banner).getByRole("button", { name: "Aprobar y sincronizar" })).toBeEnabled();
+    expect(within(banner).getByText(/el merge queda en curso/)).toBeInTheDocument();
+  });
+
+  it("marks a sync stopped on conflicts in the ladder", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ state: "intake" })],
+        approvals: [
+          {
+            id: "a2",
+            task_id: "t1",
+            rung: "sync",
+            title: "Merge develop",
+            body: "",
+            status: "executed",
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_at_ms: 2,
+            executed_at_ms: 3,
+            outcome: "conflictos",
+            conflicts: ["shared.txt", "a.ts"],
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const ladder = await screen.findByRole("list", { name: "Entrega" });
+    expect(within(ladder).getByText("Conflictos en shared.txt, a.ts")).toBeInTheDocument();
+  });
+
   it("waits on the coordinator after a PR step is approved, without holding the user", async () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({

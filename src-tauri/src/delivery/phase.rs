@@ -332,6 +332,7 @@ fn stage_of(approval: &DeliveryApproval) -> Option<String> {
 
 /// The stage to run next: none while a stage or Tinto's checks run, wait
 /// or are paused, nor once the task was committed after its last stage;
+/// implementation while a sync step's merge waits on its conflicts;
 /// else retry a broken one, go back to implementation after findings or a
 /// failed check, or the first built-in stage without a passing (or
 /// answered) attempt that still stands.
@@ -350,12 +351,25 @@ pub fn next_stage(jobs: &[&DeliveryJob], approvals: &[&DeliveryApproval]) -> Opt
     }
     let latest = agent_jobs.last();
     let last_end = latest.and_then(|job| job.ended_at_ms).unwrap_or(0);
-    let delivering = approvals.iter().any(|approval| {
-        approval.rung == DeliveryRung::Commit
-            && approval.status == DeliveryApprovalStatus::Executed
-            && approval.executed_at_ms.unwrap_or(0) > last_end
-    });
-    if delivering {
+    let committed_after = |at: u64| {
+        approvals.iter().any(|approval| {
+            approval.rung == DeliveryRung::Commit
+                && approval.status == DeliveryApprovalStatus::Executed
+                && approval.executed_at_ms.unwrap_or(0) > at
+        })
+    };
+    // A sync stopped on conflicts: an implementation job resolves them,
+    // unless one already ran since or a commit concluded the merge.
+    let conflicted = latest_step(approvals, DeliveryRung::Sync, None)
+        .filter(|sync| {
+            sync.status == DeliveryApprovalStatus::Executed && !sync.conflicts.is_empty()
+        })
+        .and_then(|sync| sync.executed_at_ms)
+        .is_some_and(|at| at > last_end && !committed_after(at));
+    if conflicted {
+        return Some("implementation".into());
+    }
+    if committed_after(last_end) {
         return None;
     }
     if let Some(latest) = latest {

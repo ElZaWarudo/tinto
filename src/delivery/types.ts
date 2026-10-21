@@ -51,7 +51,7 @@ export type DeliveryAgent = "codex" | "claude" | "muse" | "shell";
 export type DeliveryAccess = "workspace" | "full";
 export type DeliveryResultState = "accepted" | "stale" | "invalid";
 export type DeliveryLeaseState = "free" | "active" | "quarantined";
-export type DeliveryRung = "commit" | "push" | "pr" | "merge" | "jira";
+export type DeliveryRung = "commit" | "sync" | "push" | "pr" | "merge" | "jira";
 export type DeliveryApprovalStatus =
   /** `undone`: a commit step whose commits were taken back; it is pending again.
    *  `drifted`: a done step git or GitHub no longer bear out; `notice` says why. */
@@ -293,8 +293,10 @@ export interface DeliveryApproval {
   single_commit_reason?: string | null;
   /** `commit`: changed files the plan leaves uncommitted on purpose. */
   left_out?: string[];
-  /** `commit`: the commit being merged when the step concludes a merge in progress. */
+  /** `commit`: the commit being merged when the step concludes a merge in progress; `sync`: the base commit it merged. */
   merge_head?: string | null;
+  /** `sync`: files left in conflict; the merge stays in progress until a commit concludes it. */
+  conflicts?: string[];
   /** `commit`: the commits Tinto created. */
   created?: string[];
   /** What Tinto noticed checking the step against git and GitHub. */

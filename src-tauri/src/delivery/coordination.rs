@@ -11,14 +11,18 @@
 //! - The commit rung is a plan: one or more commits, each with its exact
 //!   message and files. Tinto creates them as written (it adds no trailers
 //!   or signatures), can undo them until they are pushed, and notices when
-//!   they are no longer on the branch.
-//! - Once the coordinator ends a run's brainstorm, its commit and push rungs
-//!   are approved as they are asked; the PR and Jira rungs still wait.
+//!   they are no longer on the branch. While a merge is in progress the
+//!   plan is one commit of the whole merge, which keeps both parents.
+//! - The sync rung, asked when needed, merges the task's base into its
+//!   branch (jobs cannot run git merge). Conflicts leave the merge in
+//!   progress for an implementation job, and a commit step concludes it.
+//! - Once the coordinator ends a run's brainstorm, its commit, sync and push
+//!   rungs are approved as they are asked; the PR and Jira rungs still wait.
 
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus, DeliveryRun,
-    DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask, SINGLE_COMMIT_MAX_FILES,
-    SINGLE_COMMIT_MAX_LINES,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus,
+    DeliveryMergeConflicts, DeliveryRun, DeliveryRung, DeliverySettingsProposalStatus,
+    DeliveryTask, SINGLE_COMMIT_MAX_FILES, SINGLE_COMMIT_MAX_LINES,
 };
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
@@ -308,6 +312,7 @@ pub(super) fn found_step(
         left_out: Vec::new(),
         single_commit_reason: None,
         merge_head: None,
+        conflicts: Vec::new(),
         created: Vec::new(),
         before: None,
         tip: None,
@@ -1067,6 +1072,10 @@ impl DeliveryService {
                     "los commits que hizo Tinto ya no están en la rama; hay que volver a preparar el commit",
                 ));
             }
+            DeliveryRung::Push => self.check_base_merged(&task)?,
+            DeliveryRung::Sync => {
+                self.sync_prerequisites(&task)?;
+            }
             DeliveryRung::Merge => {
                 self.merge_prerequisites(&task, request.merge_method.as_deref())?
             }
@@ -1085,6 +1094,7 @@ impl DeliveryService {
             left_out,
             single_commit_reason,
             merge_head,
+            conflicts: Vec::new(),
             created: Vec::new(),
             before: None,
             tip: None,
@@ -1115,8 +1125,10 @@ impl DeliveryService {
         self.notify();
         // Past the brainstorm the branch is committed and published without
         // stopping; opening the PR still waits for the user.
-        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push)
-            && self.unattended(&task)?
+        if matches!(
+            approval.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+        ) && self.unattended(&task)?
         {
             return self.decide_approval(&approval.id, true, None);
         }
@@ -1204,18 +1216,25 @@ impl DeliveryService {
                 }
             }
         }
-        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push) {
+        if matches!(
+            approval.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+        ) {
             let task = self.task(&approval.task_id)?;
             let place = Place::of(task.distro.as_deref());
             let executed = match approval.rung {
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
+                DeliveryRung::Sync => self.run_sync(&task, &mut approval),
                 _ if self.commits_lost(&task)? => Err(DeliveryError::new(
                     "commit_missing",
                     "No se publicó: los commits que hizo Tinto ya no están en la rama. Vuelve a preparar el commit.",
                 )),
-                _ => tasks::push_branch(place, &task.worktree, &task.branch).map(|upstream| {
-                    approval.tip = tasks::head(place, &task.worktree).ok();
-                    format!("Publicado en {upstream}")
+                // Right before publishing: the base synced is still merged.
+                _ => self.check_base_merged(&task).and_then(|()| {
+                    tasks::push_branch(place, &task.worktree, &task.branch).map(|upstream| {
+                        approval.tip = tasks::head(place, &task.worktree).ok();
+                        format!("Publicado en {upstream}")
+                    })
                 }),
             };
             approval.executed_at_ms = Some(now_ms());
@@ -1386,9 +1405,12 @@ impl DeliveryService {
         if outcome.trim().is_empty() {
             return refuse("el resultado corregido no puede quedar vacío");
         }
-        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push) {
+        if matches!(
+            approval.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+        ) {
             return refuse(
-                "el commit y el push los comprueba Tinto con git; no se corrigen a mano",
+                "el commit, el sync y el push los comprueba Tinto con git; no se corrigen a mano",
             );
         }
         if !approval.status.was_done() {
@@ -1483,6 +1505,143 @@ impl DeliveryService {
         ));
         self.save_approval(&approval, "commit_undone")?;
         Ok(approval)
+    }
+
+    /// The branch the task's PR merges into: its PR's base once GitHub has
+    /// it (a package retargeted), else the task's.
+    fn sync_base(&self, task: &DeliveryTask) -> Result<String, DeliveryError> {
+        Ok(self
+            .task_pr(&task.id)?
+            .and_then(|pr| pr.base)
+            .unwrap_or_else(|| task.base_ref.clone()))
+    }
+
+    /// A sync starts from a clean worktree no job is changing, with no merge
+    /// in progress and a base, fetched now, that is not merged yet. Returns
+    /// the base's name and commit.
+    fn sync_prerequisites(&self, task: &DeliveryTask) -> Result<(String, String), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let refuse = |category: &str, message: &str| Err(DeliveryError::new(category, message));
+        if tasks::merge_head(place, &task.worktree).is_some() {
+            return refuse(
+                "merge_in_progress",
+                "ya hay un merge en curso en el worktree; se concluye con el paso commit",
+            );
+        }
+        if tasks::worktree_state(place, &task.worktree, &task.base_commit)?.dirty {
+            return refuse(
+                "worktree_dirty",
+                "el worktree tiene cambios sin confirmar: confírmalos antes de sincronizar",
+            );
+        }
+        if self
+            .store()?
+            .task_jobs(&task.id)?
+            .iter()
+            .any(|job| job.status.is_open())
+        {
+            return refuse(
+                "job_running",
+                "un job de la tarea está en curso; sincroniza cuando termine",
+            );
+        }
+        let base = self.sync_base(task)?;
+        let (name, commit) = tasks::base_tip(place, &task.worktree, &base, true)?;
+        if tasks::on_branch(place, &task.worktree, &commit) {
+            return Err(DeliveryError::new(
+                "base_merged",
+                format!(
+                    "la rama ya incluye {name} ({}): no hay nada que sincronizar",
+                    short(&commit)
+                ),
+            ));
+        }
+        Ok((name, commit))
+    }
+
+    /// Fetches the task's base and merges it into the branch. Without
+    /// conflicts the step leaves a merge commit; with them it leaves the
+    /// merge in progress for an implementation job to resolve and a commit
+    /// step to conclude.
+    fn run_sync(
+        &self,
+        task: &DeliveryTask,
+        approval: &mut DeliveryApproval,
+    ) -> Result<String, DeliveryError> {
+        let (name, commit) = self.sync_prerequisites(task)?;
+        let place = Place::of(task.distro.as_deref());
+        approval.merge_head = Some(commit.clone());
+        let message = match approval.body.trim() {
+            "" => approval.title.clone(),
+            body => format!("{}\n\n{body}", approval.title),
+        };
+        match tasks::merge_base(place, &task.worktree, &commit, &message)? {
+            tasks::Merged::Commit(merge) => {
+                approval.created = vec![merge.clone()];
+                Ok(format!(
+                    "{name} ({}) fusionada en la rama: commit de merge {}",
+                    short(&commit),
+                    short(&merge)
+                ))
+            }
+            tasks::Merged::Conflicts(files) => {
+                let outcome = format!(
+                    "{name} ({}) tiene conflictos con la rama en: {}. El merge queda en curso: un job de implementación los resuelve y el paso commit lo concluye.",
+                    short(&commit),
+                    files.join(", ")
+                );
+                approval.conflicts = files;
+                Ok(outcome)
+            }
+        }
+    }
+
+    /// The conflicts a merge in progress still has in the task's worktree.
+    pub(super) fn merge_conflicts(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Option<DeliveryMergeConflicts>, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        if tasks::merge_head(place, &task.worktree).is_none() {
+            return Ok(None);
+        }
+        let files = tasks::unresolved_conflicts(place, &task.worktree);
+        if files.is_empty() {
+            return Ok(None);
+        }
+        let base = self.sync_base(task)?;
+        let base =
+            tasks::base_tip(place, &task.worktree, &base, false).map_or(base, |(name, _)| name);
+        Ok(Some(DeliveryMergeConflicts { base, files }))
+    }
+
+    /// Before a push: no merge left in progress, and the base the latest
+    /// sync merged still in the branch (a commit made over the merge must
+    /// keep it as a parent).
+    pub(super) fn check_base_merged(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        if tasks::merge_head(place, &task.worktree).is_some() {
+            return Err(DeliveryError::new(
+                "merge_in_progress",
+                "hay un merge en curso en el worktree: concluye con el paso commit antes de publicar",
+            ));
+        }
+        let synced = self
+            .latest_approval(&task.id, DeliveryRung::Sync)?
+            .filter(|sync| sync.status == DeliveryApprovalStatus::Executed)
+            .and_then(|sync| sync.merge_head);
+        match synced {
+            Some(base) if !tasks::on_branch(place, &task.worktree, &base) => {
+                Err(DeliveryError::new(
+                    "base_unmerged",
+                    format!(
+                        "la base que se sincronizó ({}) ya no está en la rama: sincroniza de nuevo antes de publicar",
+                        short(&base)
+                    ),
+                ))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Whether the commits of the task's commit step are gone from its
@@ -1902,8 +2061,8 @@ fn rung_prerequisites(task: &DeliveryTask, rung: DeliveryRung) -> Result<(), Del
                 ));
             }
         }
-        // Checked against the followed PR, which needs the service.
-        DeliveryRung::Merge | DeliveryRung::Jira => {}
+        // Checked with the service: the followed PR, or the task's jobs.
+        DeliveryRung::Merge | DeliveryRung::Jira | DeliveryRung::Sync => {}
     }
     Ok(())
 }

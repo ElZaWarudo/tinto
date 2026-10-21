@@ -466,6 +466,64 @@ pub fn commit_merge(
     head(place, worktree)
 }
 
+/// Where the task's base is: `origin/<base>` when the repo has an origin,
+/// else the local branch. `fetch` brings the remote one up to date first.
+pub fn base_tip(
+    place: Place<'_>,
+    worktree: &Path,
+    base: &str,
+    fetch: bool,
+) -> Result<(String, String), DeliveryError> {
+    let base = base.trim_start_matches("origin/");
+    let has_origin = origin_url(place, worktree).is_some();
+    if fetch && has_origin {
+        let refspec = format!("+refs/heads/{base}:refs/remotes/origin/{base}");
+        git(place, worktree, &["fetch", "--quiet", "origin", &refspec])?;
+    }
+    let name = if has_origin {
+        format!("origin/{base}")
+    } else {
+        base.to_string()
+    };
+    let commit = verify_commit(place, worktree, &name).ok_or_else(|| {
+        DeliveryError::new("base_not_found", format!("no se encontró la base {name}"))
+    })?;
+    Ok((name, commit))
+}
+
+/// The result of merging the base into a task's branch.
+pub enum Merged {
+    /// The merge commit, with the branch and the base as parents.
+    Commit(String),
+    /// The files git left in conflict; the merge stays in progress.
+    Conflicts(Vec<String>),
+}
+
+/// Merges `commit` into the branch checked out in `worktree` with exactly
+/// `message`, always as a merge commit.
+pub fn merge_base(
+    place: Place<'_>,
+    worktree: &Path,
+    commit: &str,
+    message: &str,
+) -> Result<Merged, DeliveryError> {
+    let merged = git(
+        place,
+        worktree,
+        &["merge", "--no-ff", "--quiet", "-m", message, commit],
+    );
+    match (merged, merge_head(place, worktree)) {
+        (Ok(_), _) => head(place, worktree).map(Merged::Commit),
+        (Err(_), Some(_)) => Ok(Merged::Conflicts(
+            git(place, worktree, &["diff", "--name-only", "--diff-filter=U"])?
+                .lines()
+                .map(str::to_string)
+                .collect(),
+        )),
+        (Err(error), None) => Err(error),
+    }
+}
+
 /// Whether `commit` is still part of the branch checked out in `worktree`.
 pub fn on_branch(place: Place<'_>, worktree: &Path, commit: &str) -> bool {
     git_ok(

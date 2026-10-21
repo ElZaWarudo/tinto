@@ -32,42 +32,50 @@ export function CommitPlanView({ approval }: { approval: DeliveryApproval }) {
     );
   }
   return (
-    <ol className="delivery-commit-plan" aria-label="Plan de commits">
-      {commits.map((commit, index) => (
-        <li key={index}>
-          <pre className="delivery-banner__text">{commit.message}</pre>
-          <details
-            className="delivery-commit-plan__files"
-            open={commit.paths.length <= FILES_SHOWN}
-          >
-            <summary>{fileCount(commit.paths.length)}</summary>
-            <ul aria-label={`Archivos del commit ${index + 1}`}>
-              {commit.paths.map((path) => (
-                <li key={path}>
-                  <code>{path}</code>
-                </li>
-              ))}
-            </ul>
-          </details>
+    <>
+      {approval.merge_head && (
+        <p className="delivery-job__note">
+          Concluye el merge en curso de {approval.merge_head.slice(0, 7)}: un único commit con todos
+          los cambios y dos padres, la rama y lo fusionado.
+        </p>
+      )}
+      <ol className="delivery-commit-plan" aria-label="Plan de commits">
+        {commits.map((commit, index) => (
+          <li key={index}>
+            <pre className="delivery-banner__text">{commit.message}</pre>
+            <details
+              className="delivery-commit-plan__files"
+              open={commit.paths.length <= FILES_SHOWN}
+            >
+              <summary>{fileCount(commit.paths.length)}</summary>
+              <ul aria-label={`Archivos del commit ${index + 1}`}>
+                {commit.paths.map((path) => (
+                  <li key={path}>
+                    <code>{path}</code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </li>
+        ))}
+        <li className="delivery-commit-plan__rest">
+          {leftOut.length === 0 ? (
+            <span className="delivery-muted">No queda ningún cambio sin incluir.</span>
+          ) : (
+            <details className="delivery-commit-plan__files" open={leftOut.length <= FILES_SHOWN}>
+              <summary>Quedan sin incluir, a propósito: {fileCount(leftOut.length)}</summary>
+              <ul aria-label="Archivos que quedan fuera">
+                {leftOut.map((path) => (
+                  <li key={path}>
+                    <code>{path}</code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </li>
-      ))}
-      <li className="delivery-commit-plan__rest">
-        {leftOut.length === 0 ? (
-          <span className="delivery-muted">No queda ningún cambio sin incluir.</span>
-        ) : (
-          <details className="delivery-commit-plan__files" open={leftOut.length <= FILES_SHOWN}>
-            <summary>Quedan sin incluir, a propósito: {fileCount(leftOut.length)}</summary>
-            <ul aria-label="Archivos que quedan fuera">
-              {leftOut.map((path) => (
-                <li key={path}>
-                  <code>{path}</code>
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </li>
-    </ol>
+      </ol>
+    </>
   );
 }
 
