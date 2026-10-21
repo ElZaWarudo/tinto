@@ -178,15 +178,24 @@ fn run(mut command: Command, timeout: Duration) -> (bool, String) {
         Ok(child) => child,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let program = command.get_program().to_string_lossy().to_string();
-            return (false, format!("{program} no está instalado en este equipo."));
+            return (
+                false,
+                format!("{program} no está instalado en este equipo."),
+            );
         }
         Err(error) => return (false, format!("No se pudo ejecutar: {error}")),
     };
     // Read as it prints, so a full pipe never holds the command.
     let (sender, received) = mpsc::channel();
     for stream in [
-        child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
-        child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
+        child
+            .stdout
+            .take()
+            .map(|out| Box::new(out) as Box<dyn Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|err| Box::new(err) as Box<dyn Read + Send>),
     ]
     .into_iter()
     .flatten()
@@ -220,9 +229,9 @@ fn run(mut command: Command, timeout: Duration) -> (bool, String) {
     match status {
         Some(status) if status.success() => (true, printed),
         Some(status) => {
-            let code = status
-                .code()
-                .map_or("sin código".to_string(), |code| format!("con código {code}"));
+            let code = status.code().map_or("sin código".to_string(), |code| {
+                format!("con código {code}")
+            });
             let what = if printed.is_empty() {
                 "sin salida".to_string()
             } else {
@@ -299,7 +308,11 @@ mod tests {
     #[test]
     fn docker_is_checked_only_when_the_repo_uses_it() {
         let repo = tempfile::tempdir().unwrap();
-        assert!(!uses_docker(repo.path(), None, &settings(&["npm test"], &[])));
+        assert!(!uses_docker(
+            repo.path(),
+            None,
+            &settings(&["npm test"], &[])
+        ));
         assert!(uses_docker(
             repo.path(),
             None,
