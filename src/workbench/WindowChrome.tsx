@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import tintoWordmarkDark from "../assets/brand/tinto-wordmark-dark.png";
+import tintoWordmarkLight from "../assets/brand/tinto-wordmark-light.png";
+import { useResolvedTheme } from "../qol/theme";
 
 function inTauriRuntime(): boolean {
   return Boolean((globalThis as typeof globalThis & { isTauri?: boolean }).isTauri);
@@ -13,11 +15,12 @@ function runWindowAction(action: () => Promise<void>): void {
 }
 
 export function WindowBrand({ decorative = false }: { decorative?: boolean }) {
+  const theme = useResolvedTheme();
   return (
     <span className="menu-bar__brand" data-tauri-drag-region>
       <img
         className="menu-bar__brand-img"
-        src={tintoWordmarkDark}
+        src={theme === "light" ? tintoWordmarkLight : tintoWordmarkDark}
         alt={decorative ? "" : "Tinto"}
         data-tauri-drag-region
         onError={(event) => {

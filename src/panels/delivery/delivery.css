@@ -42,7 +42,7 @@
 .delivery-panel .delivery-button--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .delivery-panel .delivery-button--primary:hover:not(:disabled) {
   background: var(--accent);
@@ -170,11 +170,11 @@
 }
 .delivery-panel__error {
   color: var(--danger);
-  background: rgba(241, 76, 76, 0.08);
+  background: rgb(from var(--danger) r g b / 0.08);
 }
 .delivery-panel__warning {
   color: var(--warn);
-  background: rgba(204, 167, 0, 0.08);
+  background: rgb(from var(--warn) r g b / 0.08);
 }
 
 /* ---------- Task list ---------- */
@@ -385,12 +385,12 @@
   font-size: 12px;
   font-weight: 500;
   vertical-align: middle;
-  color: #ffffff;
+  color: var(--on-accent);
   background: var(--accent);
   cursor: pointer;
 }
 .delivery-panel .delivery-task__record:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 80%, #ffffff);
+  background: color-mix(in srgb, var(--accent) 80%, var(--wash));
 }
 /* The record and its problems: two halves of one pill. */
 .delivery-task__qa {
@@ -489,7 +489,7 @@
   gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--warn);
-  background: rgba(204, 167, 0, 0.08);
+  background: rgb(from var(--warn) r g b / 0.08);
 }
 /* Pending decisions: one line in the task, the cards in a floating panel. */
 .delivery-pending-bar {
@@ -500,7 +500,7 @@
   gap: 6px 12px;
   padding: 6px 12px;
   border: 1px solid var(--warn);
-  background: rgba(204, 167, 0, 0.08);
+  background: rgb(from var(--warn) r g b / 0.08);
 }
 /* An open step (commit, push, PR…): the same line, its text and buttons on top. */
 .delivery-pending-bar--step {
@@ -546,7 +546,7 @@
 }
 .delivery-banner--danger {
   border-color: var(--danger);
-  background: rgba(241, 76, 76, 0.07);
+  background: rgb(from var(--danger) r g b / 0.07);
 }
 .delivery-banner--step {
   border-color: var(--step);
@@ -786,8 +786,8 @@
   border-color: color-mix(in srgb, var(--accent-fg) 50%, transparent);
 }
 .delivery-qa-chip--verified {
-  color: #3fb950;
-  border-color: #2a6b35;
+  color: var(--success);
+  border-color: var(--success-deep);
 }
 .delivery-qa-chip--failing {
   color: var(--danger);
@@ -830,10 +830,10 @@
   margin: 2px 0 6px;
 }
 .delivery-thread {
-  border: 1px solid #3d444d;
+  border: 1px solid color-mix(in srgb, var(--line) 35%, var(--bg-deep));
   border-radius: 6px;
   overflow: hidden;
-  background: #0d1117;
+  background: color-mix(in srgb, var(--info-deep) 4%, var(--bg-deep));
 }
 .delivery-thread__head {
   display: flex;
@@ -841,8 +841,8 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: #151b23;
-  border-bottom: 1px solid #3d444d;
+  background: color-mix(in srgb, var(--info) 7%, var(--bg-deep));
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 35%, var(--bg-deep));
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
   font-size: 12px;
   cursor: pointer;
@@ -863,26 +863,26 @@
   transform: rotate(90deg);
 }
 .delivery-thread__path {
-  color: #e6edf3;
+  color: color-mix(in srgb, var(--sky) 6%, var(--fg-strong));
 }
 .delivery-thread__tag {
   padding: 0 6px;
-  border: 1px solid #3d444d;
+  border: 1px solid color-mix(in srgb, var(--line) 35%, var(--bg-deep));
   border-radius: 999px;
   font-family: system-ui, sans-serif;
   font-size: 11px;
   color: var(--fg-muted);
 }
 .delivery-thread__tag--outdated {
-  color: #d29922;
-  border-color: #9e6a03;
+  color: color-mix(in srgb, var(--warn-bright) 80%, var(--bg-deep));
+  border-color: color-mix(in srgb, var(--warn-wash) 64%, var(--bg-deep));
 }
 .delivery-thread__spacer {
   flex: 1;
 }
 .delivery-thread__link {
   font-family: system-ui, sans-serif;
-  color: #4493f8;
+  color: color-mix(in srgb, var(--info) 86%, var(--fg-strong));
   text-decoration: none;
 }
 .delivery-thread__diff {
@@ -900,43 +900,43 @@
   width: 1%;
   min-width: 40px;
   text-align: right;
-  color: #9198a1;
+  color: color-mix(in srgb, var(--info) 8%, var(--fg-muted));
   user-select: none;
 }
 .delivery-thread__sign {
   width: 1%;
   padding: 0 4px 0 2px !important;
-  color: #9198a1;
+  color: color-mix(in srgb, var(--info) 8%, var(--fg-muted));
   user-select: none;
 }
 .delivery-thread__code {
-  color: #e6edf3;
+  color: color-mix(in srgb, var(--sky) 6%, var(--fg-strong));
   white-space: pre-wrap;
   word-break: break-word;
 }
 .delivery-thread__line--del td {
-  background: rgba(248, 81, 73, 0.15);
+  background: rgb(from var(--danger) r g b / 0.15);
 }
 .delivery-thread__line--del .delivery-thread__num {
-  background: rgba(248, 81, 73, 0.3);
+  background: rgb(from var(--danger) r g b / 0.3);
 }
 .delivery-thread__line--add td {
-  background: rgba(46, 160, 67, 0.15);
+  background: rgb(from color-mix(in srgb, var(--success) 82%, var(--bg-deep)) r g b / 0.15);
 }
 .delivery-thread__line--add .delivery-thread__num {
-  background: rgba(46, 160, 67, 0.3);
+  background: rgb(from color-mix(in srgb, var(--success) 82%, var(--bg-deep)) r g b / 0.3);
 }
 .delivery-thread__line--target td {
   box-shadow:
-    inset 0 1px 0 #d29922,
-    inset 0 -1px 0 #d29922;
+    inset 0 1px 0 color-mix(in srgb, var(--warn-bright) 80%, var(--bg-deep)),
+    inset 0 -1px 0 color-mix(in srgb, var(--warn-bright) 80%, var(--bg-deep));
 }
 .delivery-thread__comment {
   display: grid;
   grid-template-columns: 28px 1fr;
   gap: 10px;
   padding: 10px 12px;
-  border-top: 1px solid #3d444d;
+  border-top: 1px solid color-mix(in srgb, var(--line) 35%, var(--bg-deep));
 }
 .delivery-thread__avatar {
   display: grid;
@@ -944,33 +944,33 @@
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #e3b341;
-  color: #0d1117;
+  background: color-mix(in srgb, var(--warn-bright) 75%, var(--fg-muted));
+  color: color-mix(in srgb, var(--info-deep) 4%, var(--bg-deep));
   font-size: 12px;
   font-weight: 700;
 }
 .delivery-thread__who {
   margin: 0;
-  color: #e6edf3;
+  color: color-mix(in srgb, var(--sky) 6%, var(--fg-strong));
   font-weight: 600;
   font-size: 13px;
 }
 .delivery-thread__who span,
 .delivery-thread__replies {
-  color: #9198a1;
+  color: color-mix(in srgb, var(--info) 8%, var(--fg-muted));
   font-weight: 400;
   font-size: 12px;
 }
 .delivery-thread__body {
   margin: 4px 0 0;
-  color: #d1d7e0;
+  color: color-mix(in srgb, var(--line) 36%, var(--fg-strong));
   font-size: 13px;
   white-space: pre-wrap;
 }
 .delivery-thread__body code {
   padding: 1px 5px;
   border-radius: 4px;
-  background: #262c36;
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-elev));
   font-size: 12px;
 }
 .delivery-thread__replies {
@@ -980,7 +980,7 @@
 .delivery-thread__missing {
   margin: 0;
   padding: 8px 12px;
-  border-top: 1px solid #3d444d;
+  border-top: 1px solid color-mix(in srgb, var(--line) 35%, var(--bg-deep));
   color: var(--fg-muted);
   font-size: 12px;
 }
@@ -1610,7 +1610,7 @@
 .file-op-modal__button.delivery-dialog__submit {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .delivery-run-list {
   list-style: none;
@@ -1879,7 +1879,7 @@
   }
 }
 .delivery-action--failed {
-  box-shadow: 0 0 0 1px #d1242f;
+  box-shadow: 0 0 0 1px var(--danger);
   animation: delivery-action-shake 0.3s;
 }
 @keyframes delivery-action-shake {
@@ -1893,7 +1893,7 @@
 .delivery-action__error {
   margin-left: 8px;
   font-size: 12px;
-  color: #ff8182;
+  color: color-mix(in srgb, var(--danger-soft) 90%, var(--fg-strong));
 }
 
 /* ---------- Batch menu: the batches and a new one, wider than a menu ---------- */
