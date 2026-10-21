@@ -5593,7 +5593,6 @@ fn busy_batch(h: &Harness) -> Vec<DeliveryTask> {
             None,
         )
         .unwrap();
-    let store = h.service.store().unwrap();
     let long = |what: &str, chars: usize| what.repeat(chars / what.len() + 1)[..chars].to_string();
     let commands: Vec<String> = (0..80)
         .map(|n| format!("npm run test -- src/module{n}/feature.test.ts"))
@@ -5605,6 +5604,8 @@ fn busy_batch(h: &Harness) -> Vec<DeliveryTask> {
     let mut at = 1_000u64;
     for n in 0..12 {
         let task = task_in(h, &run.id, &format!("AGOS-{n}"));
+        // Taken after the task exists: creating one needs the store too.
+        let store = h.service.store().unwrap();
         let roles = [
             "tests",
             "implementation",
