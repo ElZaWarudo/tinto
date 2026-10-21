@@ -223,6 +223,16 @@ pub fn delivery_issue_url(
     service.issue_url(&task_id).map_err(CommandError::from)
 }
 
+/// The task's Jira issue, read from the repo's Jira set in Tinto.
+#[tauri::command]
+pub async fn delivery_issue(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<super::jira::DeliveryIssue, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.issue(&task_id)).await
+}
+
 /// Opens a QA job's visual changes page with the system's default browser.
 #[tauri::command]
 pub fn delivery_open_visual_record(

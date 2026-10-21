@@ -106,6 +106,7 @@ import {
   type RepoChoice,
 } from "./DeliveryDialogs";
 import { CommitPlanForm, CommitPlanView } from "./DeliveryCommitPlan";
+import { JiraIssue } from "./DeliveryIssue";
 import { QaProblems } from "./DeliveryQaProblems";
 import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { coordinatorStalls } from "./DeliveryNotifications";
@@ -1455,10 +1456,11 @@ function TaskDetail({
   );
   const step = openApprovals.length === 0 ? nextStep(approvals) : null;
   const [requesting, setRequesting] = useState(false);
-  // What opens on top of the task: its pending decisions, QA's problems or an open step.
-  const [float, setFloat] = useState<"decisions" | "qa" | "blocker" | `approval:${string}` | null>(
-    null,
-  );
+  // What opens on top of the task: its pending decisions, QA's problems, its
+  // Jira issue or an open step.
+  const [float, setFloat] = useState<
+    "decisions" | "qa" | "blocker" | "issue" | `approval:${string}` | null
+  >(null);
   const floating = openApprovals.find((approval) => float === `approval:${approval.id}`);
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
@@ -1594,13 +1596,15 @@ function TaskDetail({
             {task.key}
             {task.title && <span> {task.title}</span>}
             {issueUrl && (
-              <ExternalLink
+              <button
+                type="button"
                 className="delivery-task__issue"
-                href={issueUrl}
-                label={`Abrir ${task.key} en Jira`}
+                aria-expanded={float === "issue"}
+                aria-label={`Ver ${task.key} de Jira`}
+                onClick={() => setFloat(float === "issue" ? null : "issue")}
               >
-                Abrir en Jira ↗
-              </ExternalLink>
+                Jira
+              </button>
             )}
             {pr && (
               <ExternalLink
@@ -1796,6 +1800,15 @@ function TaskDetail({
           onClose={() => setFloat(null)}
         >
           <QaProblems taskId={task.id} problems={qaProblems} />
+        </TaskFloat>
+      )}
+      {float === "issue" && issueUrl && (
+        <TaskFloat
+          label={`Incidencia ${task.key} de Jira`}
+          closeLabel="Cerrar la incidencia"
+          onClose={() => setFloat(null)}
+        >
+          <JiraIssue key={task.id} taskId={task.id} issueUrl={issueUrl} />
         </TaskFloat>
       )}
 
