@@ -22,6 +22,7 @@ use super::model::{
     DeliveryPlatform, DeliveryResultState, DeliverySettings, DeliverySettingsProposalStatus,
     DeliveryTask, DeliveryTiming,
 };
+use super::phase::{current_checks, last_change};
 use super::prs::{self, GitHub};
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
@@ -54,6 +55,12 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 /// and, when the repo enables it, a browser.
 pub const QA_ROLE: &str = "qa";
 
+/// One of the task's checks, run by Tinto itself as a shell job.
+pub const CHECKS_ROLE: &str = "checks";
+
+/// The end of a failed check's output its next stage reads.
+const CHECK_TAIL_CHARS: usize = 2_000;
+
 /// Roles of the built-in flow (backlog-delivery's stages) and their defaults.
 pub fn role_defaults(role: &str) -> (bool, Option<&'static str>, u32) {
     match role {
@@ -62,6 +69,7 @@ pub fn role_defaults(role: &str) -> (bool, Option<&'static str>, u32) {
         "review" => (false, None, 30),
         QA_ROLE => (false, Some("qa"), 60),
         "bootstrap" => (true, None, 30),
+        CHECKS_ROLE => (false, None, 30),
         _ => (true, None, 60),
     }
 }
@@ -502,6 +510,7 @@ impl DeliveryService {
             archived_at_ms: None,
             blockers: Vec::new(),
             blocked_reason: String::new(),
+            checks: Vec::new(),
         };
         {
             let store = self.store()?;
@@ -672,6 +681,46 @@ impl DeliveryService {
             Some(&task.id),
             None,
             &changes.join(", "),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(task)
+    }
+
+    /// The checks Tinto runs on what the task's stages change. Each must be
+    /// one of the repo's checks as the user wrote it: Tinto runs them outside
+    /// any agent sandbox.
+    pub fn set_task_checks(
+        &self,
+        task_id: &str,
+        checks: Vec<String>,
+    ) -> Result<DeliveryTask, DeliveryError> {
+        let mut task = self.task(task_id)?;
+        let store = self.store()?;
+        let allowed = store.repo_settings(&task.repo)?.checks;
+        let mut chosen: Vec<String> = Vec::new();
+        for check in checks.iter().map(|check| check.trim()) {
+            if !allowed.iter().any(|allowed| allowed.trim() == check) {
+                return Err(DeliveryError::new(
+                    "unknown_check",
+                    format!(
+                        "«{check}» no es una de las comprobaciones del repositorio (read_settings: checks); elige entre ellas tal cual"
+                    ),
+                ));
+            }
+            if !chosen.iter().any(|chosen| chosen == check) {
+                chosen.push(check.to_string());
+            }
+        }
+        task.checks = chosen;
+        task.updated_at_ms = now_ms();
+        store.put_task(&task)?;
+        store.record_event(
+            task.updated_at_ms,
+            "task_state_set",
+            Some(&task.id),
+            None,
+            &format!("comprobaciones: {}", task.checks.join("; ")),
         )?;
         drop(store);
         self.notify();
@@ -858,10 +907,11 @@ impl DeliveryService {
         } else {
             String::new()
         };
+        // Each check counts its own attempts.
         let attempt = store
             .task_jobs(&task.id)?
             .iter()
-            .filter(|job| job.role == role)
+            .filter(|job| job.role == role && (role != CHECKS_ROLE || job.prompt == request.prompt))
             .map(|job| job.attempt)
             .max()
             .unwrap_or(0)
@@ -905,6 +955,7 @@ impl DeliveryService {
             decisions: decision_notes,
             qa_followup,
             qa_environment,
+            task_checks: Vec::new(),
             reasoning,
             platform: request.platform,
             ran_on: None,
@@ -1452,6 +1503,7 @@ impl DeliveryService {
         // starts still says which code it found.
         if let Some(start) = &start {
             job.start_candidate = Some(start.candidate_id());
+            job.task_checks = self.checks_note(&task, &job)?;
             self.store()?.put_job(&job)?;
         }
         let paths = (self.inner.paths_for)(&job.id)?;
@@ -1685,6 +1737,9 @@ impl DeliveryService {
                 store.put_job(&done)?;
             }
         }
+        // A task Tinto cannot queue checks on now (blocked, paused) goes on
+        // without them.
+        let _ = self.queue_checks(&job.id);
         Ok(())
     }
 
@@ -1794,6 +1849,126 @@ impl DeliveryService {
         self.notify();
     }
 
+    /// After a stage that changed the task's code and passed, Tinto runs the
+    /// task's checks on that code, one shell job each, ahead of anything
+    /// dispatched later. Not after the tests stage: its new tests are meant
+    /// to fail until the implementation.
+    fn queue_checks(&self, job_id: &str) -> Result<(), DeliveryError> {
+        let job = self.job(job_id)?;
+        let passed = job.status == DeliveryJobStatus::Finished
+            && job.result_state == Some(DeliveryResultState::Accepted)
+            && job
+                .result
+                .as_ref()
+                .is_some_and(|result| result.status == "pass");
+        if job.agent == DeliveryAgent::Shell
+            || job.role == "tests"
+            || job.changes.is_empty()
+            || !passed
+        {
+            return Ok(());
+        }
+        for check in self.task(&job.task_id)?.checks {
+            self.dispatch(NewJob {
+                task_id: job.task_id.clone(),
+                role: CHECKS_ROLE.to_string(),
+                agent: DeliveryAgent::Shell,
+                model: None,
+                access: DeliveryAccess::Workspace,
+                prompt: check,
+                writes: None,
+                lease: None,
+                timeout_minutes: None,
+                reasoning: None,
+                platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// What an agent job is told about the task's checks: that Tinto runs
+    /// them, and how they did when they ran on the code it starts from.
+    fn checks_note(
+        &self,
+        task: &DeliveryTask,
+        job: &DeliveryJob,
+    ) -> Result<Vec<String>, DeliveryError> {
+        if task.checks.is_empty() || job.agent == DeliveryAgent::Shell {
+            return Ok(Vec::new());
+        }
+        let jobs = self.store()?.task_jobs(&task.id)?;
+        let jobs: Vec<&DeliveryJob> = jobs.iter().filter(|other| other.id != job.id).collect();
+        let listed: Vec<String> = task
+            .checks
+            .iter()
+            .map(|check| format!("`{check}`"))
+            .collect();
+        let mut lines = vec![format!(
+            "Tinto runs this task's checks itself on what each stage changes: {}.",
+            listed.join("; ")
+        )];
+        if job.role == "tests" {
+            lines.push("Run only the tests you write or change: Tinto runs the full checks once the implementation makes them pass.".to_string());
+        } else if job.writes {
+            lines.push("While you work, run only the tests of what you change, not these checks in full: Tinto runs them on your result when you finish.".to_string());
+        }
+        let same_code = last_change(&jobs).is_some_and(|change| {
+            change.end_candidate.is_some() && change.end_candidate == job.start_candidate
+        });
+        let checks = current_checks(&jobs);
+        if !same_code || checks.is_empty() {
+            return Ok(lines);
+        }
+        let failed: Vec<&&DeliveryJob> = checks
+            .iter()
+            .filter(|check| check.status == DeliveryJobStatus::Failed)
+            .collect();
+        if failed.is_empty() {
+            if checks
+                .iter()
+                .all(|check| check.status == DeliveryJobStatus::Finished)
+            {
+                lines.push(
+                    "They all passed on the code you start from: do not run them again."
+                        .to_string(),
+                );
+            }
+            return Ok(lines);
+        }
+        lines.push("These failed on the code you start from:".to_string());
+        for check in failed {
+            lines.push(format!(
+                "- `{}`: {}\n  Its output ends with:\n{}",
+                check.prompt,
+                check.error.as_deref().unwrap_or("falló"),
+                self.check_output_tail(&check.id)
+            ));
+        }
+        Ok(lines)
+    }
+
+    /// The end of a check's output, stdout then stderr.
+    fn check_output_tail(&self, job_id: &str) -> String {
+        let Ok(paths) = (self.inner.paths_for)(job_id) else {
+            return String::new();
+        };
+        let read = |path: &Path| std::fs::read_to_string(path).unwrap_or_default();
+        let output = format!(
+            "{}\n{}",
+            read(&paths.events).trim_end(),
+            read(&paths.stderr).trim_end()
+        );
+        let output = output.trim();
+        let start = output
+            .char_indices()
+            .rev()
+            .nth(CHECK_TAIL_CHARS - 1)
+            .map_or(0, |(at, _)| at);
+        output[start..].to_string()
+    }
+
     fn finish(
         &self,
         job_id: &str,
@@ -1880,13 +2055,20 @@ impl DeliveryService {
         store.put_job(&job)?;
         settle_lease(&store, &job, ending.touched)?;
         let detail = format!("{:?}", job.status).to_ascii_lowercase();
+        // The coordinator hears of the task's checks once, when all ended.
+        let check = job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE;
         store.record_event(
             now_ms(),
-            "job_ended",
+            if check { "check_ended" } else { "job_ended" },
             Some(&job.task_id),
             Some(&job.id),
             &detail,
         )?;
+        if let Some(task) = task.as_ref().filter(|_| check) {
+            if let Some(outcome) = checks_outcome(&task.checks, &store.task_jobs(&task.id)?) {
+                store.record_event(now_ms(), "checks_ended", Some(&job.task_id), None, &outcome)?;
+            }
+        }
         Ok(())
     }
 
@@ -2186,11 +2368,46 @@ fn to_changes(snapshot: &WorktreeSnapshot) -> Vec<DeliveryChange> {
 /// An agent with workspace access only changes its worktree (no network
 /// outside QA, no push, no merge), and a new attempt starts from what the
 /// first one left there.
+/// How the task's latest checks went, once each of `wanted` ran to its end.
+fn checks_outcome(wanted: &[String], jobs: &[DeliveryJob]) -> Option<String> {
+    let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
+    let checks = current_checks(&jobs);
+    let ended = |command: &String| {
+        checks
+            .iter()
+            .any(|check| &check.prompt == command && !check.status.is_open())
+    };
+    if !wanted.iter().all(ended) || checks.iter().any(|check| check.status.is_open()) {
+        return None;
+    }
+    let named = |failed: bool| -> Vec<String> {
+        checks
+            .iter()
+            .filter(|check| check.status != DeliveryJobStatus::Finished)
+            .filter(|check| (check.status == DeliveryJobStatus::Failed) == failed)
+            .map(|check| format!("`{}`", check.prompt))
+            .collect()
+    };
+    let mut parts = Vec::new();
+    if !named(true).is_empty() {
+        parts.push(format!("fallaron {}", named(true).join(", ")));
+    }
+    if !named(false).is_empty() {
+        parts.push(format!("no terminaron {}", named(false).join(", ")));
+    }
+    Some(if parts.is_empty() {
+        "pasaron".to_string()
+    } else {
+        parts.join("; ")
+    })
+}
+
 fn not_safe_to_repeat(job: &DeliveryJob) -> Option<String> {
     if job.retry_of.is_some() {
         return Some("ya era el reintento automático de otro trabajo interrumpido".to_string());
     }
-    if job.agent == DeliveryAgent::Shell {
+    // A check only reads the code, so it can run again.
+    if job.agent == DeliveryAgent::Shell && job.role != CHECKS_ROLE {
         return Some(
             "es un comando de shell, que pudo quedar a medias haciendo cualquier cosa".to_string(),
         );

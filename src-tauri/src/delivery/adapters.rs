@@ -269,6 +269,7 @@ pub fn job_prompt(
             lines.push(format!("The repo's checks: {}.", commands.join("; ")));
         }
     }
+    lines.extend(job.task_checks.iter().cloned());
     if job.role == QA_ROLE && !job.qa_followup.is_empty() {
         lines.push("Problems from earlier QA the user decided on:".to_string());
         lines.extend(job.qa_followup.iter().map(|note| format!("- {note}")));
@@ -2006,6 +2007,7 @@ pub(crate) mod tests {
             archived_at_ms: None,
             blockers: Vec::new(),
             blocked_reason: String::new(),
+            checks: Vec::new(),
         }
     }
 
@@ -2044,6 +2046,7 @@ pub(crate) mod tests {
             decisions: Vec::new(),
             qa_followup: Vec::new(),
             qa_environment: String::new(),
+            task_checks: Vec::new(),
             reasoning: None,
             platform: None,
             ran_on: None,

@@ -123,6 +123,7 @@ import {
   TASK_STATE_LABEL,
   attemptOutcome,
   batchName,
+  historyKey,
   isBroken,
   isDelivered,
   isOpen,
@@ -1888,7 +1889,7 @@ function TaskDetail({
   };
 
   // Stages with the most recent activity first; older attempts fold under the latest.
-  const historyRoles = [...new Set(newestFirst.map((job) => job.role))];
+  const historyKeys = [...new Set(newestFirst.map(historyKey))];
 
   return (
     <article className="delivery-task" aria-label={`Tarea ${task.key}`}>
@@ -2320,13 +2321,15 @@ function TaskDetail({
           <p className="delivery-panel__empty">Todavía no se ha lanzado ninguna etapa.</p>
         )}
         <ul className="delivery-jobs">
-          {historyRoles.map((role) => {
-            const current = latestOfRole(jobs, role)!;
-            const older = newestFirst.filter((job) => job.role === role && job !== current);
+          {historyKeys.map((key, index) => {
+            const ofKey = jobs.filter((job) => historyKey(job) === key);
+            const current = latestOfRole(ofKey, ofKey[0].role)!;
+            const older = newestFirst.filter((job) => historyKey(job) === key && job !== current);
             return (
               <StageHistory
-                key={role}
-                id={`delivery-stage-${task.id}-${role}`}
+                key={key}
+                // The stage track scrolls to a stage; a check has no node there.
+                id={`delivery-stage-${task.id}-${key === current.role ? key : `check-${index}`}`}
                 current={current}
                 older={older}
                 jobs={jobs}
@@ -3292,7 +3295,8 @@ function JobRow({
       >
         <Icon name={expanded ? "down" : "right"} />
         <span className="delivery-job__role">
-          {stageLabel(job.role)} <small>· intento {job.attempt}</small>
+          {stageLabel(job.role)} {job.role === "checks" && <code>{job.prompt}</code>}{" "}
+          <small>· intento {job.attempt}</small>
         </span>
         <span className="delivery-job__agent">
           {agentName(job.agent)}
@@ -3442,6 +3446,12 @@ function JobRow({
             <summary>Instrucciones</summary>
             <pre>{job.prompt}</pre>
           </details>
+          {(job.task_checks?.length ?? 0) > 0 && (
+            <details className="delivery-job__fold">
+              <summary>Comprobaciones de Tinto al empezar</summary>
+              <pre>{job.task_checks?.join("\n")}</pre>
+            </details>
+          )}
           <details className="delivery-job__fold">
             <summary>Detalles técnicos</summary>
             <dl className="delivery-job__facts">

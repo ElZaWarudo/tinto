@@ -366,6 +366,7 @@ mod tests {
             archived_at_ms: None,
             blockers: Vec::new(),
             blocked_reason: String::new(),
+            checks: Vec::new(),
         }
     }
 

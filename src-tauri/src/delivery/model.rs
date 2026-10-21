@@ -38,6 +38,10 @@ pub struct DeliveryTask {
     /// Why it is blocked, in the coordinator's words.
     #[serde(default)]
     pub blocked_reason: String,
+    /// The repo's checks Tinto runs on what each stage changes (the tests
+    /// stage aside), as the coordinator chose them for this issue.
+    #[serde(default)]
+    pub checks: Vec<String>,
 }
 
 /// Something a blocked task waits for.
@@ -288,6 +292,10 @@ pub struct DeliveryJob {
     /// QA jobs only: the repo's QA environment when the job was dispatched.
     #[serde(default)]
     pub qa_environment: String,
+    /// The task's checks when the job started and how they did on the code
+    /// it started from, as the job's instructions state them.
+    #[serde(default)]
+    pub task_checks: Vec<String>,
     /// Reasoning effort passed to the CLI; its default when `None`.
     #[serde(default)]
     pub reasoning: Option<String>,

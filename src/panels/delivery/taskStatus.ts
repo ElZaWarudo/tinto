@@ -97,7 +97,14 @@ export const GROUPS: { group: StatusGroup; label: string }[] = [
 
 export function stageLabel(role: string): string {
   if (role === "bootstrap") return "Preparación";
+  if (role === "checks") return "Comprobaciones";
   return STAGES.find((stage) => stage.role === role)?.label ?? role;
+}
+
+/** The history row a job belongs to: its stage, or each of Tinto's checks
+ *  by its command, since they share a role. */
+export function historyKey(job: DeliveryJob): string {
+  return job.role === "checks" ? `checks ${job.prompt}` : job.role;
 }
 
 /** "Implementación" → "implementación", but keep "QA", "PR" and "Jira…" as written. */
