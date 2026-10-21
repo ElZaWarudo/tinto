@@ -35,7 +35,11 @@ import {
 import { armExternalTabDetach } from "../../workspace/externalTabDetach";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
-import { codexReasoningLabel, lastRuntimeCatalog } from "../terminal/agentRuntimeCatalog";
+import {
+  codexReasoningLabel,
+  lastRuntimeCatalog,
+  tellDelivery,
+} from "../terminal/agentRuntimeCatalog";
 import {
   archiveDeliveryTask,
   cancelDeliveryJob,
@@ -71,7 +75,6 @@ import {
   removeDeliveryTask,
   requestDeliveryApproval,
   retryDeliveryJob,
-  setDeliveryCodexModel,
   setDeliveryRepoSettings,
   setDeliveryRunQaJiraComment,
   takeoverDeliveryRun,
@@ -630,10 +633,13 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   );
 
   useEffect(() => {
-    // Codex jobs that name no model (e.g. from a coordinator) use the
-    // account's default from the last model catalog Tinto loaded.
-    const model = lastRuntimeCatalog()?.default_model;
-    if (model) setDeliveryCodexModel(model).catch(() => {});
+    // The last model catalogs Tinto loaded: Codex jobs that name no model
+    // (e.g. from a coordinator) use the account's default, and the models a
+    // stage or a coordinator names are checked against them.
+    for (const provider of ["codex", "muse"] as const) {
+      const catalog = lastRuntimeCatalog(provider);
+      if (catalog) tellDelivery(provider, catalog);
+    }
   }, []);
 
   useEffect(() => {
@@ -1116,6 +1122,10 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                           agent: values.agent,
                           model: values.model || null,
                           reasoning: values.reasoning || null,
+                          // Its time limit stays.
+                          ...(fixed?.timeout_minutes
+                            ? { timeout_minutes: fixed.timeout_minutes }
+                            : {}),
                         },
                       },
                     });

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRuntimeCatalog } from "../../bus/contract";
 
-const setDeliveryCodexModel = vi.fn(() => Promise.resolve());
-vi.mock("../../delivery/client", () => ({ setDeliveryCodexModel }));
+const setDeliveryModelCatalog = vi.fn(() => Promise.resolve());
+vi.mock("../../delivery/client", () => ({ setDeliveryModelCatalog }));
 
 const { lastRuntimeCatalog, MUSE_CATALOG_SOURCE, rememberRuntimeCatalog } =
   await import("./agentRuntimeCatalog");
@@ -31,18 +31,20 @@ function catalog(source: string, defaultModel: string): AgentRuntimeCatalog {
 describe("runtime catalogs", () => {
   beforeEach(() => {
     localStorage.clear();
-    setDeliveryCodexModel.mockClear();
+    setDeliveryModelCatalog.mockClear();
   });
 
-  it("keeps Muse Code's catalog apart from Codex's", async () => {
+  it("keeps Muse Code's catalog apart from Codex's and tells Delivery each one", async () => {
     rememberRuntimeCatalog(catalog("codex_app_server", "gpt-6.1-sol"));
     rememberRuntimeCatalog(catalog(MUSE_CATALOG_SOURCE, "muse-spark-1.3"));
     await Promise.resolve();
 
     expect(lastRuntimeCatalog()?.default_model).toBe("gpt-6.1-sol");
     expect(lastRuntimeCatalog("muse")?.default_model).toBe("muse-spark-1.3");
-    // Only Codex's default becomes Delivery's default Codex model.
-    expect(setDeliveryCodexModel).toHaveBeenCalledTimes(1);
-    expect(setDeliveryCodexModel).toHaveBeenCalledWith("gpt-6.1-sol");
+    // Delivery checks the models stages and coordinators name against them.
+    expect(setDeliveryModelCatalog).toHaveBeenCalledWith("codex", "gpt-6.1-sol", ["gpt-6.1-sol"]);
+    expect(setDeliveryModelCatalog).toHaveBeenCalledWith("muse", "muse-spark-1.3", [
+      "muse-spark-1.3",
+    ]);
   });
 });

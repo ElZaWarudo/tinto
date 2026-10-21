@@ -20,7 +20,7 @@ use super::model::{
     DeliveryRepoSettings, DeliverySettingsChanges, DeliverySettingsProposal,
     DeliverySettingsProposalStatus, DeliveryTask,
 };
-use super::service::DeliveryService;
+use super::service::{valid_env_name, DeliveryService};
 use super::tasks::plain_path;
 use super::{now_ms, DeliveryError};
 
@@ -46,6 +46,11 @@ fn clean(changes: &DeliverySettingsChanges) -> DeliverySettingsChanges {
             .verification
             .as_deref()
             .map(|text| text.trim().to_string()),
+        check_env: changes
+            .check_env
+            .iter()
+            .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
+            .collect(),
     }
 }
 
@@ -56,6 +61,7 @@ fn is_empty(changes: &DeliverySettingsChanges) -> bool {
         && changes.bootstrap.is_none()
         && changes.qa_browser.is_none()
         && changes.verification.is_none()
+        && changes.check_env.is_empty()
 }
 
 /// Why a command agents would run cannot be proposed, if it cannot.
@@ -140,6 +146,15 @@ fn problems(
     {
         problems.push("verification: está vacío".to_string());
     }
+    for (name, value) in &changes.check_env {
+        if !valid_env_name(name) {
+            problems.push(format!(
+                "check_env «{name}»: no es un nombre de variable (letras, dígitos y _, sin empezar por dígito)"
+            ));
+        } else if settings.check_env.get(name) == Some(value) {
+            problems.push(format!("check_env «{name}»: ya tiene ese valor"));
+        }
+    }
     problems
 }
 
@@ -152,6 +167,10 @@ fn is_part_of(part: &DeliverySettingsChanges, whole: &DeliverySettingsChanges) -
         && (part.bootstrap.is_none() || part.bootstrap == whole.bootstrap)
         && (part.qa_browser.is_none() || part.qa_browser == whole.qa_browser)
         && (part.verification.is_none() || part.verification == whole.verification)
+        && part
+            .check_env
+            .iter()
+            .all(|(name, value)| whole.check_env.get(name) == Some(value))
 }
 
 /// The settings with the changes applied. Adding what is already there or
@@ -179,6 +198,7 @@ fn apply(settings: &mut DeliveryRepoSettings, changes: &DeliverySettingsChanges)
     if let Some(verification) = &changes.verification {
         settings.verification = verification.clone();
     }
+    settings.check_env.extend(changes.check_env.clone());
 }
 
 impl DeliveryService {
@@ -361,6 +381,7 @@ mod tests {
             base_commit: "abc".into(),
             state: "tests".into(),
             contract_version: 1,
+            read_dirs: Vec::new(),
             created_at_ms: 0,
             updated_at_ms: 0,
             removed_at_ms: None,
@@ -464,6 +485,7 @@ mod tests {
                 bootstrap: Some("npm ci".into()),
                 qa_browser: Some(true),
                 verification: Some("e2e".into()),
+                check_env: [("DB".to_string(), "mongodb://h/agos{task}".to_string())].into(),
             },
         );
         assert_eq!(settings.checks, ["npm test", "new"]);
@@ -471,5 +493,37 @@ mod tests {
         assert_eq!(settings.bootstrap.as_deref(), Some("npm ci"));
         assert!(settings.qa_browser);
         assert_eq!(settings.verification, "e2e");
+        assert_eq!(settings.check_env["DB"], "mongodb://h/agos{task}");
+    }
+
+    #[test]
+    fn variables_for_checks_need_a_valid_name_and_a_new_value() {
+        let settings = DeliveryRepoSettings {
+            check_env: [("DB".to_string(), "mongodb://h/agos".to_string())].into(),
+            ..Default::default()
+        };
+        let changes = DeliverySettingsChanges {
+            check_env: [
+                ("DB".to_string(), "mongodb://h/agos".to_string()),
+                ("1DB".to_string(), "x".to_string()),
+                ("TEST_DB".to_string(), "mongodb://h/agos{task}".to_string()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let found = problems(&changes, &settings, &task());
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].contains("1DB") && found[0].contains("nombre"));
+        assert!(found[1].contains("«DB»") && found[1].contains("ya tiene ese valor"));
+        let part = DeliverySettingsChanges {
+            check_env: [("TEST_DB".to_string(), "mongodb://h/agos{task}".to_string())].into(),
+            ..Default::default()
+        };
+        assert!(is_part_of(&part, &changes));
+        let changed = DeliverySettingsChanges {
+            check_env: [("TEST_DB".to_string(), "other".to_string())].into(),
+            ..Default::default()
+        };
+        assert!(!is_part_of(&changed, &changes));
     }
 }

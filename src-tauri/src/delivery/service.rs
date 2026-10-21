@@ -47,6 +47,16 @@ pub type SandboxPlanner =
 pub type Installed = Arc<dyn Fn(DeliveryAgent) -> bool + Send + Sync>;
 
 const CODEX_MODEL_SETTING: &str = "codex_model";
+
+/// Where the models of an agent's catalog, as the view last saw it, are kept.
+fn catalog_setting(agent: DeliveryAgent) -> Option<&'static str> {
+    match agent {
+        DeliveryAgent::Codex => Some("codex_models"),
+        DeliveryAgent::Muse => Some("muse_models"),
+        DeliveryAgent::Claude | DeliveryAgent::Shell => None,
+    }
+}
+
 /// Written next to a WSL job's files so a restart can stop what is left.
 const WSL_JOB_FILE: &str = "wsl-job.json";
 /// How long a WSL job gets to exit after `TERM` before it is killed.
@@ -62,12 +72,17 @@ pub const CHECKS_ROLE: &str = "checks";
 /// The end of a failed check's output its next stage reads.
 const CHECK_TAIL_CHARS: usize = 2_000;
 
+/// The longest time limit a job can have, in minutes.
+pub const MAX_TIMEOUT_MINUTES: u32 = 24 * 60;
+
 /// Roles of the built-in flow (backlog-delivery's stages) and their defaults.
 pub fn role_defaults(role: &str) -> (bool, Option<&'static str>, u32) {
     match role {
         "tests" => (true, None, 45),
         "implementation" => (true, None, 60),
         "review" => (false, None, 30),
+        // Scoping: reads the code and hands its findings back.
+        "explore" => (false, None, 30),
         QA_ROLE => (false, Some("qa"), 60),
         "bootstrap" => (true, None, 30),
         CHECKS_ROLE => (false, None, 30),
@@ -111,6 +126,8 @@ pub struct NewTask {
     pub distro: Option<String>,
     pub key: String,
     pub title: String,
+    /// Folders in the main checkout every job of the task may read.
+    pub read_dirs: Vec<String>,
     pub base: Option<String>,
     pub branch: Option<String>,
     pub run_id: Option<String>,
@@ -439,11 +456,59 @@ impl DeliveryService {
         Ok(settings)
     }
 
-    pub fn set_codex_model(&self, model: Option<String>) -> Result<(), DeliveryError> {
-        let model = model
+    /// The model catalog of Codex or Muse Code as the view last saw it for
+    /// the account: its models and its default, which Codex jobs that name
+    /// no model use.
+    pub fn set_model_catalog(
+        &self,
+        agent: DeliveryAgent,
+        default_model: Option<String>,
+        models: Vec<String>,
+    ) -> Result<(), DeliveryError> {
+        let setting = catalog_setting(agent).ok_or_else(|| {
+            DeliveryError::new(
+                "invalid_arguments",
+                "solo Codex y Muse Code tienen catálogo de modelos",
+            )
+        })?;
+        let mut known: Vec<String> = Vec::new();
+        for model in models.iter().map(|model| model.trim()) {
+            if !model.is_empty() && !known.iter().any(|seen| seen == model) {
+                known.push(model.to_string());
+            }
+        }
+        let store = self.store()?;
+        store.set_setting(setting, &known)?;
+        let default_model = default_model
             .map(|model| model.trim().to_string())
             .filter(|model| !model.is_empty());
-        self.store()?.set_setting(CODEX_MODEL_SETTING, &model)
+        if agent == DeliveryAgent::Codex && default_model.is_some() {
+            store.set_setting(CODEX_MODEL_SETTING, &default_model)?;
+        }
+        Ok(())
+    }
+
+    /// Refuses a Codex or Muse Code model the account's catalog, as Tinto
+    /// last saw it, does not have, naming the ones it has. Claude Code's
+    /// models are a fixed list, and before any catalog is seen nothing is
+    /// refused.
+    pub fn check_model(&self, agent: DeliveryAgent, model: &str) -> Result<(), DeliveryError> {
+        let Some(setting) = catalog_setting(agent) else {
+            return Ok(());
+        };
+        let known: Vec<String> = self.store()?.setting(setting)?.unwrap_or_default();
+        let model = model.trim();
+        if known.is_empty() || known.iter().any(|known| known == model) {
+            return Ok(());
+        }
+        Err(DeliveryError::new(
+            "model_unavailable",
+            format!(
+                "{} no ofrece el modelo «{model}» a esta cuenta (según el catálogo que Tinto vio por última vez); elige uno de estos: {}",
+                agent_name(agent),
+                known.join(", ")
+            ),
+        ))
     }
 
     // ---- tasks ----
@@ -547,6 +612,13 @@ impl DeliveryService {
             None => key.clone(),
         };
         let worktree = tasks::join_place(place, &root, &leaf);
+        // Checked before anything is created.
+        let read_dirs = readable_dirs(
+            &request.read_dirs,
+            &request.repo,
+            &worktree,
+            request.distro.as_deref(),
+        )?;
         // A package built on another starts from that package's branch.
         let base = match &builds_on {
             Some(other) => Some(other.branch.as_str()),
@@ -588,6 +660,7 @@ impl DeliveryService {
             base_commit: start_commit,
             state: "intake".to_string(),
             contract_version: 1,
+            read_dirs,
             created_at_ms: now,
             updated_at_ms: now,
             removed_at_ms: None,
@@ -824,6 +897,30 @@ impl DeliveryService {
         Ok(task)
     }
 
+    /// Replaces the folders every job of the task may read besides its
+    /// worktree. The coordinator's own edit: it does not wake it.
+    pub fn set_task_read_dirs(
+        &self,
+        task_id: &str,
+        dirs: &[String],
+    ) -> Result<DeliveryTask, DeliveryError> {
+        let mut task = self.task(task_id)?;
+        task.read_dirs = readable_dirs(dirs, &task.repo, &task.worktree, task.distro.as_deref())?;
+        task.updated_at_ms = now_ms();
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(
+            task.updated_at_ms,
+            "task_state_set",
+            Some(&task.id),
+            None,
+            &format!("carpetas de lectura: {}", task.read_dirs.join(", ")),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(task)
+    }
+
     // ---- jobs ----
 
     pub fn dispatch(&self, request: NewJob) -> Result<DeliveryJob, DeliveryError> {
@@ -962,9 +1059,13 @@ impl DeliveryService {
             .iter()
             .filter(|decision| qa && allowed_permission(decision))
             .collect();
-        // A Claude job may run these and nothing else. Codex's sandbox lets
-        // it run anything, so for it they say which programs that sandbox
-        // must be able to start.
+        // The time limit given, else the stage's, else the role's.
+        let timeout = request
+            .timeout_minutes
+            .or_else(|| settings.stages.get(&role)?.timeout_minutes)
+            .unwrap_or(timeout);
+        // The checks the job is given. Codex's sandbox must also be
+        // able to start their programs.
         let allowed_commands = match (request.agent, request.access) {
             (DeliveryAgent::Claude | DeliveryAgent::Codex, DeliveryAccess::Workspace) => {
                 let mut commands = settings.checks;
@@ -988,13 +1089,26 @@ impl DeliveryService {
                 read_dirs.push(dir.clone());
             }
         }
-        // The coordinator's, such as the issue's contracts in the main
-        // checkout. A retry passes the permissions' again: already there.
-        for dir in &request.read_dirs {
+        // The task's and the coordinator's, such as the issue's planning
+        // folder in the main checkout. A retry passes them again (and the
+        // permissions'): already there.
+        for dir in task.read_dirs.iter().chain(&request.read_dirs) {
             if !read_dirs.contains(dir) {
-                read_dirs.push(readable_dir(dir, &task)?);
+                read_dirs.push(readable_dir(
+                    dir,
+                    &task.repo,
+                    &task.worktree,
+                    task.distro.as_deref(),
+                )?);
             }
         }
+        // `{task}` gives each task its own value, such as a test database.
+        let slug = task_slug(&task.key);
+        let check_env = settings
+            .check_env
+            .into_iter()
+            .map(|(name, value)| (name, value.replace("{task}", &slug)))
+            .collect();
         let mut decision_notes: Vec<String> = decisions
             .iter()
             .filter_map(decisions::decision_note)
@@ -1038,7 +1152,7 @@ impl DeliveryService {
                 .lease
                 .filter(|lease| !lease.trim().is_empty())
                 .or_else(|| lease.map(str::to_string)),
-            timeout_minutes: request.timeout_minutes.unwrap_or(timeout).clamp(1, 24 * 60),
+            timeout_minutes: timeout.clamp(1, MAX_TIMEOUT_MINUTES),
             status: DeliveryJobStatus::Queued,
             created_at_ms: now,
             started_at_ms: None,
@@ -1066,10 +1180,11 @@ impl DeliveryService {
             ran_on: None,
             read_dirs,
             stage_default: request.stage_default,
-            check_env: settings.check_env,
+            check_env,
             write_dirs,
             frozen_scripts: Vec::new(),
             resumes: resumes.map(|paused| paused.id.clone()),
+            resume_note: resumes.and_then(continue_note),
             activity: None,
             activity_at_ms: None,
             current_command: None,
@@ -1146,25 +1261,7 @@ impl DeliveryService {
                 "no se sabe la sesión del agente; cancélalo y lanza la etapa de nuevo",
             ));
         }
-        self.dispatch_job(
-            NewJob {
-                task_id: paused.task_id.clone(),
-                role: paused.role.clone(),
-                agent: paused.agent,
-                model: paused.model.clone(),
-                access: paused.access,
-                prompt: paused.prompt.clone(),
-                writes: Some(paused.writes),
-                lease: paused.lease.clone(),
-                timeout_minutes: Some(paused.timeout_minutes),
-                reasoning: paused.reasoning.clone(),
-                platform: paused.platform,
-                read_dirs: paused.read_dirs.clone(),
-                stage_default: paused.stage_default,
-            },
-            Some(&paused),
-            None,
-        )
+        self.dispatch_job(in_same_session(&paused), Some(&paused), None)
     }
 
     pub fn job(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
@@ -1238,8 +1335,12 @@ impl DeliveryService {
     }
 
     /// A new attempt with the same assignment, on the task's current
-    /// contract version.
-    pub fn retry(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
+    /// contract version, and with another time limit if given.
+    pub fn retry(
+        &self,
+        job_id: &str,
+        timeout_minutes: Option<u32>,
+    ) -> Result<DeliveryJob, DeliveryError> {
         let job = self.job(job_id)?;
         if job.status.is_open() {
             return Err(DeliveryError::new(
@@ -1247,8 +1348,63 @@ impl DeliveryService {
                 "el trabajo todavía no terminó",
             ));
         }
-        let assignment = self.same_assignment(job)?;
+        let mut assignment = self.same_assignment(job)?;
+        if timeout_minutes.is_some() {
+            assignment.timeout_minutes = timeout_minutes;
+        }
         self.dispatch(assignment)
+    }
+
+    /// Goes on with a job that ran out of time or that a restart cut off, in
+    /// its agent session: the agent is told why it stopped and keeps what it
+    /// left in the worktree. With another time limit if given.
+    pub fn continue_job(
+        &self,
+        job_id: &str,
+        timeout_minutes: Option<u32>,
+    ) -> Result<DeliveryJob, DeliveryError> {
+        let stopped = self.job(job_id)?;
+        if continue_note(&stopped).is_none() {
+            return Err(DeliveryError::new(
+                "job_not_continuable",
+                "solo se continúa un trabajo que se quedó sin tiempo o que Tinto interrumpió al cerrarse; para otro, usa retry_job",
+            ));
+        }
+        let later = self
+            .store()?
+            .task_jobs(&stopped.task_id)?
+            .iter()
+            .any(|job| job.role == stopped.role && job.attempt > stopped.attempt);
+        if later {
+            return Err(DeliveryError::new(
+                "job_superseded",
+                format!(
+                    "{} ya tiene un intento posterior: continúa ese",
+                    stopped.role
+                ),
+            ));
+        }
+        // Its session exists only once the agent started it, as its own
+        // output says.
+        let started = (self.inner.paths_for)(&stopped.id)
+            .ok()
+            .and_then(|paths| std::fs::read_to_string(paths.events).ok())
+            .is_some_and(|events| {
+                events
+                    .lines()
+                    .any(|line| adapters::session_id_from_line(stopped.agent, line).is_some())
+            });
+        if stopped.provider_session_id.is_none() || !started {
+            return Err(DeliveryError::new(
+                "session_unknown",
+                "la sesión del agente no se puede reanudar (no llegó a empezar): usa retry_job",
+            ));
+        }
+        let mut assignment = in_same_session(&stopped);
+        if timeout_minutes.is_some() {
+            assignment.timeout_minutes = timeout_minutes;
+        }
+        self.dispatch_job(assignment, Some(&stopped), None)
     }
 
     /// A job's assignment again, for a retry. A job on the stage's settings
@@ -2149,10 +2305,7 @@ impl DeliveryService {
             job.error = Some("Cancelado por el usuario.".to_string());
         } else if ending.timed_out {
             job.status = DeliveryJobStatus::Failed;
-            job.error = Some(format!(
-                "Se agotó el tiempo máximo de {} minutos.",
-                job.timeout_minutes
-            ));
+            job.error = Some(format!("{TIMED_OUT} de {} minutos.", job.timeout_minutes));
         } else if !ending.exit_ok {
             job.status = DeliveryJobStatus::Failed;
             job.error = Some(outcome.error.clone().unwrap_or_else(|| {
@@ -2427,9 +2580,7 @@ pub(super) fn clean_check_env(
     env.into_iter()
         .map(|(name, value)| {
             let name = name.trim().to_string();
-            let valid = name.chars().next().is_some_and(|c| !c.is_ascii_digit())
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-            if !valid {
+            if !valid_env_name(&name) {
                 return Err(DeliveryError::new(
                     "invalid_check_env",
                     format!("variable de entorno no válida: «{name}» (letras, dígitos y _, sin empezar por dígito)"),
@@ -2440,8 +2591,29 @@ pub(super) fn clean_check_env(
         .collect()
 }
 
-/// A folder a coordinator lets a job read: an existing folder inside the
-/// repo's main checkout or the task's worktree, by absolute path.
+/// A name a shell can export: letters, digits and `_`, not starting with a digit.
+pub(super) fn valid_env_name(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| !c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Folders a coordinator lets a task's jobs read, each checked, once each.
+fn readable_dirs(
+    dirs: &[String],
+    repo: &Path,
+    worktree: &Path,
+    distro: Option<&str>,
+) -> Result<Vec<String>, DeliveryError> {
+    let mut readable: Vec<String> = Vec::new();
+    for dir in dirs {
+        let dir = readable_dir(dir, repo, worktree, distro)?;
+        if !readable.contains(&dir) {
+            readable.push(dir);
+        }
+    }
+    Ok(readable)
+}
+
 fn validate_package(package: &NewPackage) -> Result<(), DeliveryError> {
     let invalid = |message: String| DeliveryError::new("invalid_package", message);
     if !(2..=20).contains(&package.of) {
@@ -2466,10 +2638,17 @@ fn validate_package(package: &NewPackage) -> Result<(), DeliveryError> {
     Ok(())
 }
 
-fn readable_dir(dir: &str, task: &DeliveryTask) -> Result<String, DeliveryError> {
+/// A folder a coordinator lets a job read: an existing folder inside the
+/// repo's main checkout or the task's worktree, by absolute path.
+fn readable_dir(
+    dir: &str,
+    repo: &Path,
+    worktree: &Path,
+    distro: Option<&str>,
+) -> Result<String, DeliveryError> {
     let dir = dir.trim();
     let normalized = decisions::norm(dir);
-    let inside = [&task.repo, &task.worktree]
+    let inside = [repo, worktree]
         .iter()
         .any(|root| decisions::within(&normalized, &decisions::norm(&plain_path(root))));
     let refused =
@@ -2483,7 +2662,7 @@ fn readable_dir(dir: &str, task: &DeliveryTask) -> Result<String, DeliveryError>
         ));
     }
     // A WSL repo's folders are reached through the distro's network share.
-    let local = match task.distro.as_deref() {
+    let local = match distro {
         Some(distro) if cfg!(windows) && dir.starts_with('/') => PathBuf::from(format!(
             r"\\wsl.localhost\{distro}{}",
             dir.replace('/', "\\")
@@ -2592,7 +2771,64 @@ fn not_safe_to_repeat(job: &DeliveryJob) -> Option<String> {
     None
 }
 
-fn agent_name(agent: DeliveryAgent) -> &'static str {
+/// The start of the error of a job that ran out of time.
+const TIMED_OUT: &str = "Se agotó el tiempo máximo";
+
+/// A stopped job's assignment again, to go on in its agent session.
+fn in_same_session(job: &DeliveryJob) -> NewJob {
+    NewJob {
+        task_id: job.task_id.clone(),
+        role: job.role.clone(),
+        agent: job.agent,
+        model: job.model.clone(),
+        access: job.access,
+        prompt: job.prompt.clone(),
+        writes: Some(job.writes),
+        lease: job.lease.clone(),
+        timeout_minutes: Some(job.timeout_minutes),
+        reasoning: job.reasoning.clone(),
+        platform: job.platform,
+        read_dirs: job.read_dirs.clone(),
+        stage_default: job.stage_default,
+    }
+}
+
+/// What an agent that goes on with `stopped` in its session is told, when
+/// the job stopped on its own (time limit, restart) rather than paused.
+fn continue_note(stopped: &DeliveryJob) -> Option<String> {
+    let why = match stopped.status {
+        _ if stopped.agent == DeliveryAgent::Shell => return None,
+        DeliveryJobStatus::Interrupted => "Tinto se cerró mientras corría".to_string(),
+        DeliveryJobStatus::Failed
+            if stopped
+                .error
+                .as_deref()
+                .is_some_and(|error| error.starts_with(TIMED_OUT)) =>
+        {
+            format!(
+                "se agotó su tiempo máximo de {} minutos",
+                stopped.timeout_minutes
+            )
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "La ejecución anterior de esta etapa se detuvo antes de terminar: {why}. El worktree conserva los cambios que hiciste. Sigue desde donde lo dejaste, con las mismas instrucciones, sin rehacer lo que ya está hecho, y termina entregando el resultado con el formato pedido."
+    ))
+}
+
+/// A task's key as `{task}` gives it in the variables for checks: lowercase,
+/// with `_` for anything not a letter or digit (`AGOS-474` → `agos_474`).
+fn task_slug(key: &str) -> String {
+    key.chars()
+        .map(|c| match c.is_ascii_alphanumeric() {
+            true => c.to_ascii_lowercase(),
+            false => '_',
+        })
+        .collect()
+}
+
+pub(super) fn agent_name(agent: DeliveryAgent) -> &'static str {
     match agent {
         DeliveryAgent::Codex => "Codex",
         DeliveryAgent::Claude => "Claude Code",

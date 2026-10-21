@@ -502,6 +502,8 @@ export interface DeliveryStageAgent {
   agent: DeliveryAgent;
   model: string | null;
   reasoning: string | null;
+  /** The stage's time limit in minutes; null keeps the role's default. */
+  timeout_minutes?: number | null;
 }
 
 export interface DeliveryCoordinatorEndpoint {
@@ -520,6 +522,8 @@ export interface DeliverySettingsChanges {
   bootstrap?: string | null;
   qa_browser?: boolean | null;
   verification?: string | null;
+  /** Variables for checks, by name, each set to the value given. */
+  check_env?: Record<string, string>;
 }
 
 /** Settings changes a coordinator asks for; nothing changes until the user approves. */

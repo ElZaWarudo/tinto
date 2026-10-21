@@ -784,7 +784,7 @@ export function CorrectResultDialog({
   );
 }
 
-/** One stage's agent in Ajustes: not fixed, or an agent with its model and reasoning. */
+/** One stage's agent in Ajustes: not fixed, or an agent with its model, reasoning and time limit. */
 export function StageAgentRow({
   label,
   value,
@@ -795,8 +795,14 @@ export function StageAgentRow({
   onChange: (next: DeliveryStageAgent | null) => void;
 }) {
   const shown = value ? agentChoice(value) : null;
-  const set = (next: AgentChoice) =>
-    onChange({ agent: next.agent, model: next.model || null, reasoning: next.reasoning || null });
+  const timeout = value?.timeout_minutes ?? null;
+  const set = (next: AgentChoice, timeoutMinutes = timeout) =>
+    onChange({
+      agent: next.agent,
+      model: next.model || null,
+      reasoning: next.reasoning || null,
+      timeout_minutes: timeoutMinutes,
+    });
   return (
     <div className="delivery-field-row">
       <Field label={label}>
@@ -848,6 +854,22 @@ export function StageAgentRow({
                 </option>
               ))}
             </select>
+          </Field>
+          <Field label="Tiempo máximo (min)">
+            {/* Saved when the field is left, not on every key; shows the saved limit again
+                when it changes. */}
+            <input
+              key={timeout ?? ""}
+              type="number"
+              min={1}
+              aria-label={`Tiempo máximo de ${label}`}
+              placeholder="El del rol"
+              defaultValue={timeout ?? ""}
+              onBlur={(event) => {
+                const next = positive(event.target.value);
+                if (next !== timeout) set(shown, next);
+              }}
+            />
           </Field>
         </>
       )}
@@ -962,13 +984,13 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
       </Field>
       <Field
         label="Variables de entorno de verificación y QA"
-        hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. Son ajustes de prueba, no secretos: se ven tal cual."
+        hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. {task} en un valor se cambia por la clave de la tarea (AGOS-474 → agos_474), así cada tarea tiene la suya. Son ajustes de prueba, no secretos: se ven tal cual."
       >
         <textarea
           value={checkEnv}
           onChange={(event) => setCheckEnv(event.target.value)}
           rows={2}
-          placeholder="TEST_DB_MONGO_URL=mongodb://localhost:27017/tinto_test"
+          placeholder="TEST_DB_MONGO_URL=mongodb://localhost:27017/tinto_{task}"
         />
       </Field>
       <Field label="Navegador para la QA">
