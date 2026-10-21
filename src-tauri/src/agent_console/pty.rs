@@ -24,6 +24,42 @@ use crate::{
     wsl_agent::shell_env::agent_console_script,
 };
 
+thread_local! {
+    static LAUNCH_OPTIONS: std::cell::RefCell<Option<AgentSessionRuntimeOptions>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `spawn` with the model and reasoning a new conversation starts on.
+/// Claude Code takes them as launch flags; Codex and Muse take them per turn.
+pub fn with_launch_options<T>(
+    options: Option<AgentSessionRuntimeOptions>,
+    spawn: impl FnOnce() -> T,
+) -> T {
+    LAUNCH_OPTIONS.with(|slot| *slot.borrow_mut() = options);
+    let spawned = spawn();
+    LAUNCH_OPTIONS.with(|slot| *slot.borrow_mut() = None);
+    spawned
+}
+
+/// `--model` and `--effort` for the Claude Code conversation being launched.
+fn claude_launch_args() -> Vec<String> {
+    let mut args = Vec::new();
+    let Some(options) = LAUNCH_OPTIONS.with(|slot| slot.borrow().clone()) else {
+        return args;
+    };
+    if let Some(model) = options.model.as_deref().filter(|model| !model.is_empty()) {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(effort) = options
+        .reasoning_effort
+        .as_deref()
+        .filter(|effort| !effort.is_empty())
+    {
+        args.extend(["--effort".to_string(), effort.to_string()]);
+    }
+    args
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTurnAttachment {
     pub path: PathBuf,
@@ -895,6 +931,9 @@ pub(crate) fn build_agent_command_with_permission(
         for arg in crate::delivery::wiring::claude_args(false) {
             command.arg(arg);
         }
+        for arg in claude_launch_args() {
+            command.arg(arg);
+        }
     }
     apply_terminal_env(&mut command);
     command
@@ -953,6 +992,9 @@ pub(crate) fn build_wsl_agent_command(
     );
     if agent_type.eq_ignore_ascii_case("claude") {
         for arg in crate::delivery::wiring::claude_args(true) {
+            command.arg(arg);
+        }
+        for arg in claude_launch_args() {
             command.arg(arg);
         }
     }
@@ -1465,6 +1507,37 @@ mod tests {
                 OsString::from("danger-full-access"),
             ]
         );
+    }
+
+    #[test]
+    fn claude_starts_on_the_chosen_model_and_reasoning() {
+        let options = AgentSessionRuntimeOptions {
+            model: Some("opus".into()),
+            reasoning_effort: Some("high".into()),
+            speed: None,
+        };
+        let command = with_launch_options(Some(options), || {
+            build_agent_command_with_permission(
+                Path::new("claude"),
+                Path::new("/tmp/repo"),
+                AgentSessionPermissionMode::Workspace,
+            )
+        });
+        let argv = command.get_argv();
+        assert!(argv.ends_with(&[
+            OsString::from("--model"),
+            OsString::from("opus"),
+            OsString::from("--effort"),
+            OsString::from("high"),
+        ]));
+
+        // Only the conversation launched inside: the next one starts on the defaults.
+        let next = build_agent_command_with_permission(
+            Path::new("claude"),
+            Path::new("/tmp/repo"),
+            AgentSessionPermissionMode::Workspace,
+        );
+        assert!(!next.get_argv().contains(&OsString::from("--model")));
     }
 
     #[test]

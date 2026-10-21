@@ -493,7 +493,7 @@
   scrollbar-gutter: stable;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 .delivery-float > .delivery-banner,
@@ -857,7 +857,7 @@
 }
 .delivery-thread {
   border: 1px solid color-mix(in srgb, var(--line) 35%, var(--bg-deep));
-  border-radius: 6px;
+  border-radius: 0;
   overflow: hidden;
   background: color-mix(in srgb, var(--info-deep) 4%, var(--bg-deep));
 }
@@ -894,7 +894,7 @@
 .delivery-thread__tag {
   padding: 0 6px;
   border: 1px solid color-mix(in srgb, var(--line) 35%, var(--bg-deep));
-  border-radius: 999px;
+  border-radius: 0;
   font-family: system-ui, sans-serif;
   font-size: 11px;
   color: var(--fg-muted);
@@ -2238,55 +2238,157 @@
   margin: 0;
 }
 
-/* The batch's coordinator: a floating button that unfolds its conversation. */
+/* The batch's coordinator: a floating button that unfolds a small square
+   sheet above it — the batch, who coordinates and how, its controls — and,
+   when the user opens it, the conversation. */
 .delivery-panel .delivery-coordinator-button {
   position: absolute;
   right: 16px;
   bottom: 16px;
   z-index: 30;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
   background: var(--bg-elev);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 .delivery-coordinator-button__dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
+  flex: none;
   border-radius: 50%;
   background: var(--fg-muted);
 }
-.delivery-coordinator-button--waiting .delivery-coordinator-button__dot {
+.delivery-coordinator-button--waiting .delivery-coordinator-button__dot,
+.delivery-coordinator-button__dot.delivery-coordinator-button--waiting {
   background: var(--added);
 }
-.delivery-coordinator-button--working .delivery-coordinator-button__dot {
+.delivery-coordinator-button--working .delivery-coordinator-button__dot,
+.delivery-coordinator-button__dot.delivery-coordinator-button--working {
   background: var(--accent-fg);
 }
-.delivery-coordinator-button--stalled .delivery-coordinator-button__dot {
+.delivery-coordinator-button--stalled .delivery-coordinator-button__dot,
+.delivery-coordinator-button__dot.delivery-coordinator-button--stalled {
   background: var(--warn);
 }
 .delivery-coordinator {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  right: 16px;
+  bottom: 50px;
   z-index: 35;
   display: flex;
   flex-direction: column;
-  width: min(480px, 92%);
-  border-left: 1px solid var(--border);
+  width: min(460px, calc(100% - 32px));
+  max-height: calc(100% - 66px);
+  border: 1px solid var(--border);
   background: var(--bg);
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+/* With the conversation open, the sheet takes the height it needs. */
+.delivery-coordinator--chat {
+  height: calc(100% - 66px);
 }
 .delivery-coordinator__header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-  padding: 6px 10px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 8px 8px 12px;
   border-bottom: 1px solid var(--border);
+}
+.delivery-coordinator__title {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.delivery-coordinator__title > strong,
+.delivery-coordinator__title > select {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delivery-panel .delivery-coordinator__title .delivery-icon-button {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+}
+.delivery-panel .delivery-coordinator__title .delivery-icon-button:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.delivery-coordinator__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+.delivery-coordinator__status > span {
+  flex: none;
+  white-space: nowrap;
+}
+.delivery-coordinator__status > .delivery-muted {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* An on/off policy of the batch: a square switch with a short label. */
+.delivery-panel .delivery-switch {
+  padding: 2px 4px;
+  border: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: transparent;
+  white-space: nowrap;
+}
+.delivery-panel .delivery-switch:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--hover);
+}
+.delivery-switch .delivery-action__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.delivery-switch__track {
+  position: relative;
+  width: 22px;
+  height: 12px;
+  border: 1px solid var(--fg-muted);
+}
+.delivery-switch__track::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 8px;
+  height: 8px;
+  background: var(--fg-muted);
+}
+.delivery-switch[aria-checked="true"] .delivery-switch__track {
+  border-color: var(--accent-fg);
+}
+.delivery-switch[aria-checked="true"] .delivery-switch__track::after {
+  left: 11px;
+  background: var(--accent-fg);
+}
+.delivery-panel .delivery-coordinator__fold {
+  justify-content: flex-start;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: transparent;
+}
+.delivery-panel .delivery-coordinator__fold:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.delivery-panel .delivery-coordinator__fold[aria-expanded="false"] {
+  border-bottom: 0;
 }
 .delivery-coordinator__chat {
   flex: 1 1 0;
@@ -2300,16 +2402,44 @@
 }
 .delivery-coordinator__start {
   display: grid;
-  gap: 10px;
-  align-content: start;
-  padding: 16px;
+  gap: 8px;
+  padding: 10px 12px 12px;
 }
 .delivery-coordinator__start p {
   margin: 0;
+  font-size: 12px;
 }
-.delivery-coordinator__start label {
+.delivery-coordinator__pick {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 6px;
+}
+.delivery-coordinator__pick label {
   display: grid;
   gap: 2px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.delivery-coordinator__pick select {
+  min-width: 0;
+  padding: 3px 4px;
+  font-size: 12px;
+}
+.delivery-panel .delivery-coordinator__pick .delivery-button--primary {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .delivery-coordinator__pick {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .delivery-panel .delivery-coordinator__pick .delivery-button--primary {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
 }
 .delivery-coordinator__error {
   margin: 0;

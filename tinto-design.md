@@ -15,6 +15,7 @@ El usuario no edita código en Tinto. Su rol es de **supervisor**: ver qué toca
 - **Liviano.** Pensado para estar abierto todo el día mirando. Bajo consumo de RAM y CPU.
 - **Local.** Solo repos en el sistema de archivos local. Sin remoto, sin nube, sin agentes que reporten.
 - **Sin interpretación.** No genera resúmenes en lenguaje natural de los cambios. Muestra los hechos (diffs, eventos), no opiniones sobre ellos.
+- **Sin contenedores redondeados.** Paneles, tarjetas, botones, chips, menús e interruptores son rectangulares: sin esquinas redondeadas ni píldoras. Solo los puntos de estado son círculos.
 
 ### Plataformas
 
