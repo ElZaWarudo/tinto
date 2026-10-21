@@ -19,8 +19,9 @@ use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
     DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview,
-    DeliveryPlatform, DeliveryResultState, DeliverySettings, DeliverySettingsProposalStatus,
-    DeliveryTask, DeliveryTiming,
+    DeliveryPackage, DeliveryPlatform, DeliveryResultState, DeliverySettings,
+    DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
+    NewBlocker,
 };
 use super::phase::{current_checks, last_change};
 use super::prs::{self, GitHub};
@@ -113,6 +114,20 @@ pub struct NewTask {
     pub base: Option<String>,
     pub branch: Option<String>,
     pub run_id: Option<String>,
+    /// One of the ordered pull requests of a split issue.
+    pub package: Option<NewPackage>,
+}
+
+/// A package as a coordinator asks for it. With `builds_on` (a package
+/// index) it starts from that package's branch and is blocked until that
+/// one reaches `until` (its PR opened, by default).
+#[derive(Debug, Clone)]
+pub struct NewPackage {
+    pub index: u32,
+    pub of: u32,
+    pub title: String,
+    pub builds_on: Option<u32>,
+    pub until: Option<DeliveryTaskMilestone>,
 }
 
 #[derive(Debug, Clone)]
@@ -382,7 +397,14 @@ impl DeliveryService {
             .iter()
             .map(|task| (task.id.clone(), super::phase::task_phase(task, &facts)))
             .collect();
+        let archived_packages: Vec<DeliveryTask> = store
+            .removed_tasks()?
+            .into_iter()
+            .filter(|task| task.package.is_some() && task.archived_at_ms.is_some())
+            .collect();
+        let issues = super::phase::split_issues(&tasks, &archived_packages, &phases, &facts);
         Ok(DeliveryOverview {
+            issues,
             phases,
             runs,
             jobs,
@@ -433,20 +455,66 @@ impl DeliveryService {
         let key = tasks::validate_key(&request.key)?;
         let place = Place::of(request.distro.as_deref());
         let repo_text = plain_path(&request.repo);
-        let settings = {
+        let package = request.package.as_ref();
+        if let Some(package) = package {
+            validate_package(package)?;
+        }
+        let (settings, builds_on) = {
             let store = self.store()?;
-            if let Some(existing) = store.tasks()?.into_iter().find(|task| {
-                plain_path(&task.repo) == repo_text && task.key.eq_ignore_ascii_case(&key)
-            }) {
+            let same_issue: Vec<DeliveryTask> = store
+                .tasks()?
+                .into_iter()
+                .filter(|task| {
+                    plain_path(&task.repo) == repo_text && task.key.eq_ignore_ascii_case(&key)
+                })
+                .collect();
+            // Packages of one issue live side by side; anything else is one
+            // task per issue.
+            if let Some(existing) = same_issue
+                .iter()
+                .find(|task| match (&task.package, package) {
+                    (Some(existing), Some(wanted)) => existing.index == wanted.index,
+                    _ => true,
+                })
+            {
                 return Err(DeliveryError::new(
                     "task_exists",
                     format!(
                         "{} ya está en curso en {}",
-                        key,
+                        existing.label(),
                         plain_path(&existing.worktree)
                     ),
                 ));
             }
+            if let (Some(wanted), Some(other)) = (
+                package,
+                same_issue.iter().find_map(|task| task.package.as_ref()),
+            ) {
+                if other.of != wanted.of {
+                    return Err(DeliveryError::new(
+                        "invalid_package",
+                        format!(
+                            "los paquetes de {key} son {}: este dice {}",
+                            other.of, wanted.of
+                        ),
+                    ));
+                }
+            }
+            let builds_on = match package.and_then(|package| package.builds_on) {
+                None => None,
+                Some(index) => Some(
+                    same_issue
+                        .iter()
+                        .find(|task| task.package.as_ref().is_some_and(|p| p.index == index))
+                        .cloned()
+                        .ok_or_else(|| {
+                            DeliveryError::new(
+                                "invalid_package",
+                                format!("{key} no tiene en curso el paquete {index} sobre el que construir"),
+                            )
+                        })?,
+                ),
+            };
             if let Some(run_id) = request.run_id.as_deref() {
                 let run = store
                     .run(run_id)?
@@ -464,7 +532,7 @@ impl DeliveryService {
                     ));
                 }
             }
-            store.repo_settings(&request.repo)?
+            (store.repo_settings(&request.repo)?, builds_on)
         };
         let root = match (&settings.worktree_root, place) {
             (Some(root), _) => root.clone(),
@@ -473,18 +541,33 @@ impl DeliveryService {
                 PathBuf::from(format!("{}-wt", repo_text.trim_end_matches('/')))
             }
         };
-        let worktree = tasks::join_place(place, &root, &key);
-        let (base_ref, base_commit) = tasks::resolve_base(
-            place,
-            &request.repo,
-            request.base.as_deref(),
-            settings.default_base.as_deref(),
-        )?;
+        // A package's worktree and branch carry its number: `AGOS-432-2`.
+        let leaf = match package {
+            Some(package) => format!("{key}-{}", package.index),
+            None => key.clone(),
+        };
+        let worktree = tasks::join_place(place, &root, &leaf);
+        // A package built on another starts from that package's branch.
+        let base = match &builds_on {
+            Some(other) => Some(other.branch.as_str()),
+            None => request.base.as_deref(),
+        };
+        let (base_ref, base_commit) =
+            tasks::resolve_base(place, &request.repo, base, settings.default_base.as_deref())?;
         let branch = request
             .branch
             .filter(|branch| !branch.trim().is_empty())
             .map(|branch| branch.trim().to_string())
-            .unwrap_or_else(|| tasks::default_branch(&key));
+            .unwrap_or_else(|| tasks::default_branch(&leaf));
+        let until = package
+            .and_then(|package| package.until)
+            .unwrap_or(DeliveryTaskMilestone::PrOpened);
+        let package = request.package.map(|package| DeliveryPackage {
+            index: package.index,
+            of: package.of,
+            title: package.title.trim().to_string(),
+            builds_on: builds_on.as_ref().map(|other| other.id.clone()),
+        });
         if place == Place::Native {
             std::fs::create_dir_all(&root).map_err(DeliveryError::io)?;
         }
@@ -498,6 +581,7 @@ impl DeliveryService {
             distro: request.distro,
             key,
             title: request.title.trim().to_string(),
+            package,
             worktree,
             branch,
             base_ref,
@@ -538,6 +622,19 @@ impl DeliveryService {
             })?;
         } else {
             self.notify();
+        }
+        // Its stages wait for the package it builds on (after the bootstrap:
+        // a blocked task takes no job).
+        if let Some(other) = builds_on {
+            let index = other.package.as_ref().map_or(0, |package| package.index);
+            return self.set_blockers(
+                &task.id,
+                vec![NewBlocker::Task {
+                    task: other.id,
+                    until: Some(until),
+                }],
+                &format!("espera al paquete {index}"),
+            );
         }
         Ok(task)
     }
@@ -835,6 +932,7 @@ impl DeliveryService {
         } else {
             Vec::new()
         };
+        let shared_decisions = self.package_decisions(&task.id)?;
         let store = self.store()?;
         let model = match request.model.filter(|model| !model.trim().is_empty()) {
             None if request.agent == DeliveryAgent::Codex => store
@@ -897,10 +995,17 @@ impl DeliveryService {
                 read_dirs.push(readable_dir(dir, &task)?);
             }
         }
-        let decision_notes = decisions
+        let mut decision_notes: Vec<String> = decisions
             .iter()
             .filter_map(decisions::decision_note)
             .collect();
+        // The issue's product choices and approved texts hold for each of
+        // its packages; permissions stay with the package they were asked for.
+        for (package, decision) in &shared_decisions {
+            if let Some(note) = decisions::decision_note(decision) {
+                decision_notes.push(format!("{note} (decided for {package})"));
+            }
+        }
         let qa_browser = qa && settings.qa_browser;
         let qa_environment = if qa {
             settings.qa_environment.clone()
@@ -1483,6 +1588,11 @@ impl DeliveryService {
     fn run_job_inner(&self, job_id: &str) -> Result<(), DeliveryError> {
         let mut job = self.job(job_id)?;
         let task = self.task(&job.task_id)?;
+        let task = if job.agent == DeliveryAgent::Shell {
+            task
+        } else {
+            self.catch_up_package(task)?
+        };
         let start = if job.agent == DeliveryAgent::Shell {
             None
         } else {
@@ -1741,6 +1851,38 @@ impl DeliveryService {
         // without them.
         let _ = self.queue_checks(&job.id);
         Ok(())
+    }
+
+    /// A package built on another starts from that package's latest work:
+    /// until it has anything of its own, its branch moves up to that one's.
+    fn catch_up_package(&self, mut task: DeliveryTask) -> Result<DeliveryTask, DeliveryError> {
+        let Some(other_id) = task.package.as_ref().and_then(|p| p.builds_on.clone()) else {
+            return Ok(task);
+        };
+        let Some(other) = self.store()?.task(&other_id)? else {
+            return Ok(task);
+        };
+        if other.removed_at_ms.is_some() || task.base_ref != other.branch {
+            return Ok(task);
+        }
+        let place = Place::of(task.distro.as_deref());
+        let Some(head) =
+            tasks::fast_forward_untouched(place, &task.worktree, &task.base_commit, &other.branch)
+        else {
+            return Ok(task);
+        };
+        task.base_commit = head;
+        task.updated_at_ms = now_ms();
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(
+            task.updated_at_ms,
+            "package_caught_up",
+            Some(&task.id),
+            None,
+            &format!("al día con {}", other.label()),
+        )?;
+        Ok(task)
     }
 
     /// Before a QA job starts: refuses it when a permission that runs the
@@ -2300,6 +2442,30 @@ pub(super) fn clean_check_env(
 
 /// A folder a coordinator lets a job read: an existing folder inside the
 /// repo's main checkout or the task's worktree, by absolute path.
+fn validate_package(package: &NewPackage) -> Result<(), DeliveryError> {
+    let invalid = |message: String| DeliveryError::new("invalid_package", message);
+    if !(2..=20).contains(&package.of) {
+        return Err(invalid("un issue se reparte en 2 a 20 paquetes".into()));
+    }
+    if !(1..=package.of).contains(&package.index) {
+        return Err(invalid(format!("los paquetes van del 1 al {}", package.of)));
+    }
+    if package
+        .builds_on
+        .is_some_and(|other| other < 1 || other >= package.index)
+    {
+        return Err(invalid(
+            "un paquete solo construye sobre uno anterior".into(),
+        ));
+    }
+    if package.title.trim().chars().count() > 60 {
+        return Err(invalid(
+            "el título del paquete admite hasta 60 caracteres".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn readable_dir(dir: &str, task: &DeliveryTask) -> Result<String, DeliveryError> {
     let dir = dir.trim();
     let normalized = decisions::norm(dir);

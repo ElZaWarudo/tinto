@@ -80,6 +80,8 @@ export interface DeliveryTask {
   distro: string | null;
   key: string;
   title: string;
+  /** One of the ordered pull requests its issue is delivered in. */
+  package?: DeliveryPackage | null;
   worktree: string;
   branch: string;
   base_ref: string;
@@ -97,6 +99,33 @@ export interface DeliveryTask {
   blocked_reason?: string;
   /** The repo checks Tinto runs on what each stage changes (the tests stage aside). */
   checks?: string[];
+}
+
+/** A task's place among its issue's pull requests: "2 of 3". */
+export interface DeliveryPackage {
+  index: number;
+  of: number;
+  /** What it delivers ("Backend", "UI"). */
+  title: string;
+  /** The package (task id) whose branch it starts from. */
+  builds_on?: string | null;
+}
+
+/** An issue split into packages, as far as its packages got. */
+export interface DeliverySplitIssue {
+  repo: string;
+  key: string;
+  of: number;
+  packages: {
+    task_id: string;
+    index: number;
+    title: string;
+    merged: boolean;
+    delivered: boolean;
+    /** Put away once delivered: no longer among the tasks. */
+    archived: boolean;
+  }[];
+  delivered: boolean;
 }
 
 export type DeliveryTaskMilestone = "pr_opened" | "merged" | "delivered";
@@ -247,6 +276,8 @@ export interface DeliveryApproval {
   reviewers?: string[];
   /** `jira` only: statuses Tinto walks the issue through; empty when the coordinator does it. */
   jira_statuses?: string[];
+  /** `jira` only: links the PR to an issue another package already moved. */
+  jira_link_only?: boolean;
   reviewers_requested?: boolean;
   title: string;
   body: string;
@@ -533,6 +564,8 @@ export type DeliveryTaskPhase = DeliveryPhase & {
   waits_on: DeliveryWaiter;
   /** The stage to run next, when one is due. */
   next_stage: string | null;
+  /** The delivery steps this task climbs, when not the whole ladder (a middle package ends at merge). */
+  steps?: { rung: DeliveryRung; stage: string | null }[];
 };
 
 export interface DeliveryOverview {
@@ -556,6 +589,8 @@ export interface DeliveryOverview {
   coordinator: DeliveryCoordinatorEndpoint | null;
   /** What each active batch's coordinator has not read yet. */
   coordinators?: DeliveryCoordinatorState[];
+  /** Issues delivered in several packages, each across its packages. */
+  issues?: DeliverySplitIssue[];
 }
 
 /** Whether a batch's coordinator keeps up with its changes. */
@@ -621,6 +656,8 @@ export interface DeliveryPr {
   merge_commit?: string | null;
   /** Reviewers whose latest review approves it. */
   approved_by?: string[];
+  /** The branch it merges into, as GitHub last said. */
+  base?: string | null;
 }
 
 /** An archived task as a search finds it. */

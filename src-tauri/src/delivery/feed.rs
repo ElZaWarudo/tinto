@@ -41,6 +41,7 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "settings_approved",
     "settings_rejected",
     "pr_changed",
+    "package_retargeted",
     "task_removed",
     "task_archived",
     "task_unarchived",
@@ -112,7 +113,7 @@ impl DeliveryService {
             .tasks()?
             .into_iter()
             .filter(|task| task.run_id.as_deref() == Some(run_id))
-            .map(|task| (task.id, task.key))
+            .map(|task| (task.id.clone(), task.label()))
             .collect();
         let events = store.events_after(after)?;
         let cursor = events.last().map(|event| event.seq).unwrap_or(after);
@@ -207,7 +208,7 @@ impl DeliveryService {
             .tasks()?
             .into_iter()
             .filter(|task| task.run_id.as_deref() == Some(run_id))
-            .map(|task| (task.id, task.key))
+            .map(|task| (task.id.clone(), task.label()))
             .collect();
         Ok(store
             .jobs()?
@@ -389,6 +390,7 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         "settings_approved" => "el usuario aprobó un cambio de ajustes".to_string(),
         "settings_rejected" => "el usuario rechazó un cambio de ajustes".to_string(),
         "pr_changed" => format!("el PR cambió: {detail}"),
+        "package_retargeted" => format!("Tinto cambió la base de su PR: {detail}"),
         "task_removed" => "el usuario eliminó la tarea".to_string(),
         "task_archived" => "el usuario archivó la tarea".to_string(),
         "task_unarchived" => "el usuario recuperó la tarea".to_string(),

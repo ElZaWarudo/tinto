@@ -605,6 +605,25 @@ impl DeliveryService {
         self.store()?.task_decisions(task_id)
     }
 
+    /// The choices and texts of the other packages of the task's issue,
+    /// with the package each was asked for: they hold for this one too.
+    pub fn package_decisions(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<(String, DeliveryDecision)>, DeliveryError> {
+        let task = self.task(task_id)?;
+        let store = self.store()?;
+        let mut shared = Vec::new();
+        for other in store.tasks()?.iter().filter(|other| task.is_sibling(other)) {
+            for decision in store.task_decisions(&other.id)? {
+                if decision.kind != DeliveryDecisionKind::Permission {
+                    shared.push((other.label(), decision));
+                }
+            }
+        }
+        Ok(shared)
+    }
+
     /// The user's answer: an option's label, the final text, or
     /// [`ALLOWED`]/[`DENIED`].
     pub fn answer_decision(

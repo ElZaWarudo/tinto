@@ -55,16 +55,16 @@ fn same_pr(pr: &DeliveryPr, url: &str) -> bool {
 fn blocker_state(blocker: &DeliveryBlocker, world: &World<'_>) -> (String, bool) {
     match &blocker.kind {
         DeliveryBlockerKind::Task { task_id, until, .. } => {
-            if !world.tasks.iter().any(|task| task.id == *task_id) {
+            let Some(other) = world.tasks.iter().find(|task| task.id == *task_id) else {
                 return ("tarea no encontrada".into(), false);
-            }
+            };
             let approvals: Vec<&DeliveryApproval> = world
                 .approvals
                 .iter()
                 .filter(|approval| approval.task_id == *task_id)
                 .collect();
             let pr = world.prs.iter().find(|pr| pr.task_id == *task_id);
-            let reached = if is_delivered(&approvals) {
+            let reached = if is_delivered(other, &approvals) {
                 Some(DeliveryTaskMilestone::Delivered)
             } else if step_done(&approvals, DeliveryRung::Merge)
                 || pr.is_some_and(|pr| pr.state == "merged")
@@ -135,7 +135,11 @@ impl DeliveryService {
                     .tasks()?
                     .into_iter()
                     .filter(|other| other.removed_at_ms.is_none())
-                    .filter(|other| other.id == wanted || other.key.eq_ignore_ascii_case(wanted))
+                    // By key, another package of the issue, never this one.
+                    .filter(|other| {
+                        other.id == wanted
+                            || (other.id != task.id && other.key.eq_ignore_ascii_case(wanted))
+                    })
                     .collect();
                 // The live task before an archived one of the same key.
                 candidates.sort_by_key(|other| {
@@ -152,8 +156,8 @@ impl DeliveryService {
                     return Err(invalid("una tarea no puede bloquearse a sí misma".into()));
                 }
                 DeliveryBlockerKind::Task {
+                    key: other.label(),
                     task_id: other.id,
-                    key: other.key,
                     until: until.unwrap_or(DeliveryTaskMilestone::Merged),
                 }
             }
@@ -413,6 +417,10 @@ impl DeliveryService {
             loop {
                 if let Err(error) = service.settle_blockers() {
                     eprintln!("tinto: delivery could not settle the blocked tasks: {error}");
+                }
+                // A merged package lets the one built on it merge where it did.
+                if let Err(error) = service.retarget_packages() {
+                    eprintln!("tinto: delivery could not retarget packages: {error}");
                 }
                 let (count, changed) = &service.inner.changes;
                 let Ok(guard) = count.lock() else { return };

@@ -143,6 +143,10 @@ import {
   quietFor,
   rolesOf,
   stepKey,
+  stepsOf,
+  taskLabel,
+  issueProgress,
+  clusterPackages,
   stepOf,
   type DeliveryStep,
   stageLabel,
@@ -1397,9 +1401,10 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const listed = lot ? tasks.filter((task) => task.run_id === lot) : tasks;
   // What needs the user is never folded.
   const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
+  // A split issue's packages sit together within each group, in order.
   const groups = GROUPS.map((group) => ({
     ...group,
-    tasks: listed.filter((task) => statuses.get(task.id)?.group === group.group),
+    tasks: clusterPackages(listed.filter((task) => statuses.get(task.id)?.group === group.group)),
   })).filter((group) => group.tasks.length > 0);
   const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
   // With every group folded, the detail still shows a task.
@@ -1649,6 +1654,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                     const pr = (overview?.prs ?? []).find(
                       (candidate) => candidate.task_id === task.id,
                     );
+                    const progress = overview ? issueProgress(overview, task) : null;
                     return (
                       <button
                         key={task.id}
@@ -1658,7 +1664,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                         onClick={() => select(repo, task.id)}
                       >
                         <span className="delivery-task-row__key">
-                          {task.key}
+                          {taskLabel(task)}
                           {pr && (
                             <span className="delivery-task-row__pr" title={`PR #${pr.number}`}>
                               #{pr.number}
@@ -1666,8 +1672,15 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                           )}
                         </span>
                         <span className="delivery-task-row__title">
-                          {task.title || task.branch}
+                          {[task.package?.title, task.title || task.branch]
+                            .filter(Boolean)
+                            .join(" · ")}
                         </span>
+                        {progress && (
+                          <span className="delivery-task-row__title" title="El issue, por paquetes">
+                            {progress}
+                          </span>
+                        )}
                         <StatusLine status={statuses.get(task.id)!} />
                       </button>
                     );
@@ -1757,7 +1770,10 @@ function TaskDetail({
   const openApprovals = approvals.filter(
     (approval) => approval.status === "pending" || approval.status === "approved",
   );
-  const step = openApprovals.length === 0 ? nextStep(approvals) : null;
+  // A middle package of a split issue ends at its merge.
+  const ladder = stepsOf(overview, task.id);
+  const progress = issueProgress(overview, task);
+  const step = openApprovals.length === 0 ? nextStep(approvals, ladder) : null;
   const [requesting, setRequesting] = useState(false);
   // What opens on top of the task: its pending decisions, QA's problems, its
   // Jira issue or an open step.
@@ -1809,7 +1825,7 @@ function TaskDetail({
     blocked || openApprovals.some((approval) => approval.status === "pending") || broken !== null;
   const rejected = rejectedStep(approvals);
   // The coordinator's label stops at the stages; the delivery is Tinto's to know.
-  const delivered = isDelivered(approvals);
+  const delivered = isDelivered(approvals, ladder);
   const stateLabel = delivered ? "Entregada" : (TASK_STATE_LABEL[task.state] ?? task.state);
   // The task's code as its latest stage found or left it.
   const withCode = newestFirst.find((job) => job.end_candidate ?? job.start_candidate);
@@ -1892,11 +1908,12 @@ function TaskDetail({
   const historyKeys = [...new Set(newestFirst.map(historyKey))];
 
   return (
-    <article className="delivery-task" aria-label={`Tarea ${task.key}`}>
+    <article className="delivery-task" aria-label={`Tarea ${taskLabel(task)}`}>
       <header className="delivery-task__header">
         <div className="delivery-task__heading">
           <h2>
-            {task.key}
+            {taskLabel(task)}
+            {task.package?.title && <span> {task.package.title} ·</span>}
             {task.title && <span> {task.title}</span>}
           </h2>
           {(issueUrl || pr || qaRecord?.visual_record || qaProblems.length > 0) && (
@@ -1965,6 +1982,11 @@ function TaskDetail({
               {shortCommit(task.base_commit)})
             </span>
             {taskRun && <span>{batchName(taskRun.title || taskRun.id)}</span>}
+            {progress && (
+              <span title="El issue, por paquetes">
+                {task.key}: {progress}
+              </span>
+            )}
             <span title={delivered ? undefined : "Lo fija quien coordina la tarea"}>
               Estado: {stateLabel}
             </span>
@@ -2204,6 +2226,7 @@ function TaskDetail({
         repo={task.repo}
         jobs={jobs}
         approvals={approvals}
+        steps={ladder}
         pr={pr}
         next={next}
         onFocus={focusStage}
@@ -2416,6 +2439,7 @@ function StageTrack({
   repo,
   jobs,
   approvals,
+  steps,
   pr,
   next,
   onFocus,
@@ -2424,6 +2448,8 @@ function StageTrack({
   repo: string;
   jobs: DeliveryJob[];
   approvals: DeliveryApproval[];
+  /** The delivery steps the task climbs. */
+  steps: DeliveryStep[];
   /** The PR step shows the followed PR's live state once it exists. */
   pr: DeliveryPr | undefined;
   next: string | null;
@@ -2484,7 +2510,7 @@ function StageTrack({
       <div className="delivery-track__part delivery-track__part--rungs">
         <h3 id="delivery-track-rungs">Entrega</h3>
         <ol aria-labelledby="delivery-track-rungs">
-          {STEPS.map((ladder) => {
+          {steps.map((ladder) => {
             const { rung, label } = ladder;
             const live = rung === "pr" && pr ? prSummary(pr) : null;
             const approval = latestStep(approvals, ladder);
@@ -2913,9 +2939,11 @@ function ApprovalBanner({
           ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar.`
           : approval.rung === "merge"
             ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
-            : approval.jira_statuses?.length
-              ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
-              : "Al aprobar, el coordinador hace estas operaciones en Jira y las informa; no tienes que hacer nada más.";
+            : approval.jira_link_only
+              ? `Al aprobar, Tinto enlaza este PR en ${task.key} sin cambiar su estado: otro paquete del issue ya lo movió.`
+              : approval.jira_statuses?.length
+                ? `Al aprobar, Tinto ${approval.stage === "after_merge" ? "" : "enlaza el PR en la issue y "}lleva ${task.key} a ${approval.jira_statuses.join(" → ")} en Jira, y comprueba el estado final.`
+                : "Al aprobar, el coordinador hace estas operaciones en Jira y las informa; no tienes que hacer nada más.";
   return (
     <div
       className="delivery-banner delivery-banner--step"

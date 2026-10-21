@@ -172,7 +172,7 @@ pub fn job_prompt(
 ) -> String {
     let mut lines = vec![
         "You are running as a background job in Tinto Delivery mode.".to_string(),
-        format!("Task: {} — {}", task.key, task.title),
+        format!("Task: {} — {}", task.label(), task.title),
         format!(
             "Role: {} (attempt {}, contract v{})",
             job.role, job.attempt, job.contract_version
@@ -184,6 +184,16 @@ pub fn job_prompt(
         ),
         "Other agents and the user may be working in other worktrees. Do not touch anything outside this directory, and preserve changes you did not make.".to_string(),
     ];
+    if let Some(package) = &task.package {
+        let part = match package.title.trim() {
+            "" => String::new(),
+            title => format!(" ({title})"),
+        };
+        lines.push(format!(
+            "This is package {} of {} of issue {}{part}: deliver only this package's part; the other packages are separate tasks with their own pull requests.",
+            package.index, package.of, task.key
+        ));
+    }
     if !job.writes {
         lines.push("This job is read-only: do not modify, create or delete files.".to_string());
         if job.role != QA_ROLE {
@@ -1995,6 +2005,7 @@ pub(crate) mod tests {
             distro: None,
             key: "K-1".into(),
             title: "Do the thing".into(),
+            package: None,
             worktree: PathBuf::from("/repo-wt/K-1"),
             branch: "delivery/k-1".into(),
             base_ref: "main".into(),

@@ -8,7 +8,7 @@ import { getDeliveryOverview, onDeliveryChanged } from "../../delivery/client";
 import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
 import { tauriNotificationAdapter, type NotificationAdapter } from "../../qol/notifications";
 import { useQualityState } from "../../qol/state";
-import { taskStatus } from "./taskStatus";
+import { taskLabel, taskStatus } from "./taskStatus";
 
 export interface DeliveryNeed {
   /** What the task is waiting for. It is announced again only when one is new. */
@@ -67,7 +67,7 @@ function taskNeeds(overview: DeliveryOverview, now: number): DeliveryNeed[] {
         : approvals.length > 0
           ? approvals
           : [`${task.id}:${status.label}`];
-    return [{ keys, title: `Tinto: ${task.key}`, body: status.label }];
+    return [{ keys, title: `Tinto: ${taskLabel(task)}`, body: status.label }];
   });
 }
 

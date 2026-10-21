@@ -286,14 +286,89 @@ export function latestStep(
   return [...approvals].reverse().find((approval) => isStep(approval, step));
 }
 
-/** Delivered once every step is done: commit, push, PR, merge and both Jira. */
-export function isDelivered(approvals: DeliveryApproval[]): boolean {
-  return nextStep(approvals) === null;
+/** Delivered once every step of its ladder is done: commit, push, PR, merge and its Jira. */
+export function isDelivered(approvals: DeliveryApproval[], steps = STEPS): boolean {
+  return nextStep(approvals, steps) === null;
 }
 
 /** First step not done; null once every step is. */
-export function nextStep(approvals: DeliveryApproval[]): DeliveryStep | null {
-  return STEPS.find((step) => latestStep(approvals, step)?.status !== "executed") ?? null;
+export function nextStep(approvals: DeliveryApproval[], steps = STEPS): DeliveryStep | null {
+  return steps.find((step) => latestStep(approvals, step)?.status !== "executed") ?? null;
+}
+
+/** The ladder the task climbs, as Tinto says: a middle package of a split issue ends at merge. */
+export function stepsOf(overview: DeliveryOverview, taskId: string): DeliveryStep[] {
+  const steps = phaseOf(overview, taskId)?.steps;
+  if (!steps?.length) return STEPS;
+  return STEPS.filter((step) =>
+    steps.some((wanted) => wanted.rung === step.rung && (wanted.stage ?? undefined) === step.stage),
+  );
+}
+
+/** "AGOS-432 · 2/3" for a package of a split issue, the key otherwise. */
+export function taskLabel(task: DeliveryTask): string {
+  return task.package ? `${task.key} · ${task.package.index}/${task.package.of}` : task.key;
+}
+
+/** Where a package stands, in a word or two. */
+function packageWhere(overview: DeliveryOverview, taskId: string): string {
+  const phase = phaseOf(overview, taskId);
+  switch (phase?.kind) {
+    case "running":
+      return `en ${lower(stageLabel(phase.role))}`;
+    case "queued":
+      return "en cola";
+    case "blocked":
+      return "bloqueado";
+    case "decisions":
+      return "con decisiones";
+    case "pr":
+      return "PR abierto";
+    default:
+      return "en curso";
+  }
+}
+
+/** "1/2 fusionado · 2/2 en QA": where each package of the task's split
+ *  issue stands; null for a task that is a whole issue. */
+export function issueProgress(overview: DeliveryOverview, task: DeliveryTask): string | null {
+  const issue = overview.issues?.find((candidate) =>
+    candidate.packages.some((pkg) => pkg.task_id === task.id),
+  );
+  if (!issue) return null;
+  const parts = [];
+  for (let index = 1; index <= issue.of; index++) {
+    const pkg = issue.packages.find((candidate) => candidate.index === index);
+    const where = !pkg
+      ? "sin crear"
+      : pkg.delivered
+        ? "entregado"
+        : pkg.merged
+          ? "fusionado"
+          : packageWhere(overview, pkg.task_id);
+    parts.push(`${index}/${issue.of} ${where}`);
+  }
+  return parts.join(" · ");
+}
+
+/** The tasks with each split issue's packages together, in order, where
+ *  its first package stands. */
+export function clusterPackages(tasks: DeliveryTask[]): DeliveryTask[] {
+  const issueOf = (task: DeliveryTask) => `${task.repo}\n${task.key.toLowerCase()}`;
+  const first = new Map<string, number>();
+  tasks.forEach((task, at) => {
+    if (task.package && !first.has(issueOf(task))) first.set(issueOf(task), at);
+  });
+  const place = (task: DeliveryTask, at: number) =>
+    task.package ? (first.get(issueOf(task)) ?? at) : at;
+  return tasks
+    .map((task, at) => ({ task, at }))
+    .sort(
+      (a, b) =>
+        place(a.task, a.at) - place(b.task, b.at) ||
+        (a.task.package?.index ?? 0) - (b.task.package?.index ?? 0),
+    )
+    .map(({ task }) => task);
 }
 
 function clock(job: DeliveryJob, now: number): string {
@@ -478,7 +553,10 @@ export function taskStatus(
     case "pr": {
       const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
       if (!pr) return waiting("PR");
-      const next = nextStep(overview.approvals.filter((approval) => approval.task_id === task.id));
+      const next = nextStep(
+        overview.approvals.filter((approval) => approval.task_id === task.id),
+        stepsOf(overview, task.id),
+      );
       const then = next ? ` · siguiente: ${lower(next.label)}` : "";
       if (pr.state === "merged") return idle(`PR fusionado${then}`);
       const summary = prSummary(pr);

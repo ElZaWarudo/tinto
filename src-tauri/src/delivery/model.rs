@@ -16,6 +16,10 @@ pub struct DeliveryTask {
     pub distro: Option<String>,
     pub key: String,
     pub title: String,
+    /// One of the ordered pull requests its issue is delivered in, when the
+    /// issue is split; other tasks of the same key are the other packages.
+    #[serde(default)]
+    pub package: Option<DeliveryPackage>,
     pub worktree: PathBuf,
     pub branch: String,
     pub base_ref: String,
@@ -42,6 +46,50 @@ pub struct DeliveryTask {
     /// stage aside), as the coordinator chose them for this issue.
     #[serde(default)]
     pub checks: Vec<String>,
+}
+
+/// A task's place among the pull requests of its issue: "2 of 3".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryPackage {
+    /// From 1, in delivery order.
+    pub index: u32,
+    /// How many packages the issue has.
+    pub of: u32,
+    /// What this package delivers ("Backend", "UI").
+    #[serde(default)]
+    pub title: String,
+    /// The package (task id) whose branch this one starts from; its PR
+    /// targets that branch until that package merges.
+    #[serde(default)]
+    pub builds_on: Option<String>,
+}
+
+impl DeliveryPackage {
+    pub fn is_last(&self) -> bool {
+        self.index >= self.of
+    }
+}
+
+impl DeliveryTask {
+    /// "AGOS-432 · 2/3" for a package, the key otherwise.
+    pub fn label(&self) -> String {
+        match &self.package {
+            Some(package) => format!("{} · {}/{}", self.key, package.index, package.of),
+            None => self.key.clone(),
+        }
+    }
+
+    /// Another package of the same issue.
+    pub fn is_sibling(&self, other: &DeliveryTask) -> bool {
+        match (&self.package, &other.package) {
+            (Some(mine), Some(theirs)) => {
+                mine.index != theirs.index
+                    && self.repo == other.repo
+                    && self.key.eq_ignore_ascii_case(&other.key)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Something a blocked task waits for.
@@ -523,6 +571,10 @@ pub struct DeliveryApproval {
     /// step and reports it.
     #[serde(default)]
     pub jira_statuses: Vec<String>,
+    /// `jira` only: the step links the PR to an issue another package of it
+    /// already moved, without changing the issue's status.
+    #[serde(default)]
+    pub jira_link_only: bool,
     /// `pr` only: the GitHub logins the user chose to review it. Tinto asks
     /// them on GitHub once the PR is linked.
     #[serde(default)]
@@ -1038,6 +1090,33 @@ pub struct DeliveryOverview {
     /// What each active batch's coordinator has not read yet.
     #[serde(default)]
     pub coordinators: Vec<DeliveryCoordinatorState>,
+    /// Issues delivered in several packages, each across its packages.
+    #[serde(default)]
+    pub issues: Vec<DeliverySplitIssue>,
+}
+
+/// An issue split into packages, as far as its packages got.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliverySplitIssue {
+    pub repo: String,
+    pub key: String,
+    /// How many packages it has, created or not.
+    pub of: u32,
+    /// The packages Tinto has, in order.
+    pub packages: Vec<DeliveryIssuePackage>,
+    /// Every package delivered.
+    pub delivered: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryIssuePackage {
+    pub task_id: String,
+    pub index: u32,
+    pub title: String,
+    pub merged: bool,
+    pub delivered: bool,
+    /// Put away once delivered: it is no longer among the tasks.
+    pub archived: bool,
 }
 
 /// Whether a batch's coordinator keeps up with its changes.

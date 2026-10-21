@@ -16,7 +16,7 @@ use super::model::{
     DeliveryRepoSettings, DeliveryResultState, DeliveryRung, DeliverySettings,
     DeliverySettingsChanges, DeliverySettingsProposalStatus, DeliveryStageAgent, DeliveryTask,
 };
-use super::service::{DeliveryService, Launcher, NewJob, NewTask};
+use super::service::{DeliveryService, Launcher, NewJob, NewPackage, NewTask};
 use super::store::DeliveryStore;
 use super::tasks::plain_path;
 use super::tasks::test_support::{git, repo_with_commit};
@@ -192,6 +192,7 @@ impl Harness {
                 base: None,
                 branch: None,
                 run_id: None,
+                package: None,
             })
             .unwrap()
     }
@@ -492,6 +493,7 @@ fn waiting_on_one_issue_never_leaves_the_rest_of_the_batch_idle() {
                 base: None,
                 branch: None,
                 run_id: Some(run.id.clone()),
+                package: None,
             })
             .unwrap()
     };
@@ -782,6 +784,7 @@ fn a_paused_stage_can_be_given_up_and_a_paused_batch_starts_nothing() {
             base: None,
             branch: None,
             run_id: Some(run.id.clone()),
+            package: None,
         })
         .unwrap();
     let running = h.dispatch(&task, "tests", "events=codex-ok sleep=30");
@@ -817,6 +820,7 @@ fn a_batch_closed_to_new_tasks_refuses_them_until_the_user_allows_them() {
         base: None,
         branch: None,
         run_id: Some(run.id.clone()),
+        package: None,
     };
     h.service.create_task(new_task("N-1")).unwrap();
 
@@ -955,6 +959,7 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
                 base: None,
                 branch: None,
                 run_id: Some(run.id.clone()),
+                package: None,
             })
             .unwrap()
     };
@@ -1164,6 +1169,7 @@ fn a_task_key_is_unique_per_repository() {
             base: None,
             branch: Some("other".to_string()),
             run_id: None,
+            package: None,
         })
         .unwrap_err();
     assert_eq!(error.category, "task_exists");
@@ -2023,6 +2029,7 @@ fn past_the_brainstorm_qa_neither_waits_on_a_stale_permission_nor_on_a_quarantin
             base: None,
             branch: None,
             run_id: Some(run.id.clone()),
+            package: None,
         })
         .unwrap();
     let release = |note: &str| {
@@ -2203,8 +2210,246 @@ fn task_in(h: &Harness, run_id: &str, key: &str) -> DeliveryTask {
             base: None,
             branch: None,
             run_id: Some(run_id.into()),
+            package: None,
         })
         .unwrap()
+}
+
+/// Package `index` of 2 of issue `key`.
+fn package(
+    h: &Harness,
+    key: &str,
+    index: u32,
+    builds_on: Option<u32>,
+) -> Result<DeliveryTask, super::DeliveryError> {
+    h.service.create_task(NewTask {
+        repo: h.repo.path().to_path_buf(),
+        distro: None,
+        key: key.to_string(),
+        title: format!("Task {key}"),
+        base: None,
+        branch: None,
+        run_id: None,
+        package: Some(NewPackage {
+            index,
+            of: 2,
+            title: format!("Parte {index}"),
+            builds_on,
+            until: None,
+        }),
+    })
+}
+
+#[test]
+fn a_package_starts_from_the_one_it_builds_on_and_waits_for_its_pr() {
+    let h = harness();
+    let first = package(&h, "K-60", 1, None).unwrap();
+    assert!(first.worktree.ends_with("K-60-1"), "{:?}", first.worktree);
+    assert_eq!(first.branch, "delivery/k-60-1");
+    assert_eq!(first.base_ref, "main");
+    // One task per package: the same package twice, or the issue as a
+    // whole next to its packages, is refused.
+    assert_eq!(
+        package(&h, "K-60", 1, None).unwrap_err().category,
+        "task_exists"
+    );
+    let whole = h.service.create_task(NewTask {
+        repo: h.repo.path().to_path_buf(),
+        distro: None,
+        key: "K-60".into(),
+        title: "Task K-60".into(),
+        base: None,
+        branch: None,
+        run_id: None,
+        package: None,
+    });
+    assert_eq!(whole.unwrap_err().category, "task_exists");
+
+    let second = package(&h, "K-60", 2, Some(1)).unwrap();
+    assert_eq!(second.base_ref, first.branch);
+    assert_eq!(
+        second.package.as_ref().unwrap().builds_on.as_deref(),
+        Some(first.id.as_str())
+    );
+    assert_eq!(second.blocked_reason, "espera al paquete 1");
+    // Blocked on package 1, so not the coordinator's to move.
+    let phase = h.service.overview().unwrap().phases[&second.id].clone();
+    assert_eq!(phase.waits_on, super::phase::Waiter::Dependency);
+    let refused = h.service.dispatch(NewJob {
+        task_id: second.id.clone(),
+        role: "tests".into(),
+        agent: DeliveryAgent::Codex,
+        model: None,
+        access: DeliveryAccess::Workspace,
+        prompt: "events=codex-ok".into(),
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+        reasoning: None,
+        platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
+    });
+    assert_eq!(refused.unwrap_err().category, "task_blocked");
+
+    // Package 1 commits its work and opens its PR; package 2's first stage
+    // starts from that work.
+    let first_tree = PathBuf::from(plain_path(&first.worktree));
+    std::fs::write(first_tree.join("backend.txt"), "api\n").unwrap();
+    git(&first_tree, &["add", "."]);
+    git(&first_tree, &["commit", "-q", "-m", "backend"]);
+    put_step(&h, &first, "k60-pr", "pr", "executed", "PR abierto");
+    h.service.settle_blockers().unwrap();
+    let job = h.dispatch(&second, "tests", "events=codex-ok");
+    assert_eq!(h.wait(&job.id).status, DeliveryJobStatus::Finished);
+    let second_tree = PathBuf::from(plain_path(&second.worktree));
+    assert!(second_tree.join("backend.txt").exists());
+    assert_ne!(
+        h.service.task(&second.id).unwrap().base_commit,
+        second.base_commit
+    );
+
+    let issues = h.service.overview().unwrap().issues;
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].of, 2);
+    assert_eq!(
+        issues[0]
+            .packages
+            .iter()
+            .map(|package| package.task_id.as_str())
+            .collect::<Vec<_>>(),
+        [first.id.as_str(), second.id.as_str()]
+    );
+    assert!(!issues[0].delivered);
+}
+
+#[test]
+fn a_split_issue_moves_in_jira_once_and_closes_with_its_last_package() {
+    let h = harness();
+    let first = package(&h, "K-61", 1, None).unwrap();
+    let last = package(&h, "K-61", 2, None).unwrap();
+    let jira = |task: &DeliveryTask, stage: &str| NewApproval {
+        task_id: task.id.clone(),
+        rung: DeliveryRung::Jira,
+        title: "Jira".into(),
+        body: String::new(),
+        requested_by: "coord".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        single_commit_reason: None,
+        merge_method: None,
+        stage: Some(stage.into()),
+        jira_statuses: Vec::new(),
+    };
+    // A middle package's ladder ends at its merge; the last climbs the whole
+    // one, which the phase leaves unsaid.
+    let steps = |task: &DeliveryTask| h.service.overview().unwrap().phases[&task.id].steps.len();
+    assert_eq!((steps(&first), steps(&last)), (5, 0));
+    assert_eq!(
+        h.service
+            .request_approval(jira(&first, "after_merge"))
+            .unwrap_err()
+            .category,
+        "invalid_approval"
+    );
+    // Package 1 moves the issue: package 2 then only links its PR.
+    let mut moved = h
+        .service
+        .request_approval(jira(&first, "after_pr"))
+        .unwrap();
+    assert!(!moved.jira_link_only);
+    moved.status = DeliveryApprovalStatus::Executed;
+    moved.executed_at_ms = Some(3);
+    h.service.store().unwrap().put_approval(&moved).unwrap();
+    assert!(
+        h.service
+            .request_approval(jira(&last, "after_pr"))
+            .unwrap()
+            .jira_link_only
+    );
+    // The issue closes with the last package, once every package merged.
+    assert_eq!(
+        h.service
+            .request_approval(jira(&last, "after_merge"))
+            .unwrap_err()
+            .category,
+        "packages_unmerged"
+    );
+    for rung in ["commit", "push", "pr", "merge"] {
+        put_step(
+            &h,
+            &first,
+            &format!("k61-{rung}"),
+            rung,
+            "executed",
+            "hecho",
+        );
+    }
+    h.service
+        .request_approval(jira(&last, "after_merge"))
+        .unwrap();
+    let overview = h.service.overview().unwrap();
+    assert_eq!(
+        overview.phases[&first.id].phase,
+        super::phase::Phase::Delivered
+    );
+    assert!(!overview.issues[0].delivered);
+}
+
+#[test]
+fn a_package_merges_after_the_one_it_builds_on_into_that_ones_base() {
+    let h = harness();
+    github_origin(&h);
+    let github = FakeGitHub::new(
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "statusCheckRollup": [], "reviews": [], "comments": [],
+            "baseRefName": "delivery/k-62-1"
+        }),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let first = package(&h, "K-62", 1, None).unwrap();
+    let second = package(&h, "K-62", 2, Some(1)).unwrap();
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/51").unwrap();
+    h.service.link_pr(&second.id, &reference).unwrap();
+    h.service.refresh_pr(&second.id, Duration::ZERO).unwrap();
+    let merge = NewApproval {
+        task_id: second.id.clone(),
+        rung: DeliveryRung::Merge,
+        title: "K-62: UI (#51)".into(),
+        body: String::new(),
+        requested_by: "coord".into(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        single_commit_reason: None,
+        merge_method: Some("merge".into()),
+        stage: None,
+        jira_statuses: Vec::new(),
+    };
+    // Its PR goes into package 1's branch: merging it now would land there.
+    let refused = h.service.request_approval(merge.clone()).unwrap_err();
+    assert_eq!(refused.category, "pr_not_ready");
+    assert!(
+        refused.message.contains("va a la rama de K-62 · 1/2"),
+        "{}",
+        refused.message
+    );
+
+    // Package 1 merges: package 2's PR goes where package 1 went.
+    put_step(&h, &first, "k62-merge", "merge", "executed", "fusionado");
+    assert_eq!(h.service.retarget_packages().unwrap(), 1);
+    assert!(github
+        .actions
+        .lock()
+        .unwrap()
+        .contains(&"base https://github.com/o/r/pull/51 main".to_string()));
+    assert_eq!(h.service.task(&second.id).unwrap().base_ref, "main");
+    assert_eq!(h.service.retarget_packages().unwrap(), 0);
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    assert!(events.iter().any(|event| event.kind == "package_retargeted"
+        && event.task_id.as_deref() == Some(second.id.as_str())));
+    h.service.request_approval(merge).unwrap();
 }
 
 fn executed_step(task_id: &str, rung: &str) -> super::model::DeliveryApproval {
@@ -2478,6 +2723,7 @@ fn coordinators_read_what_the_user_configured() {
             base: None,
             branch: None,
             run_id: Some(run.id.clone()),
+            package: None,
         })
         .unwrap();
     let read = super::mcp::handle_message(
@@ -3272,6 +3518,14 @@ impl super::prs::GitHub for FakeGitHub {
     fn close_pr(&self, url: &str) -> Result<(), super::DeliveryError> {
         self.actions.lock().unwrap().push(format!("close {url}"));
         self.snapshot.lock().unwrap()["state"] = json!("CLOSED");
+        Ok(())
+    }
+    fn set_pr_base(&self, url: &str, base: &str) -> Result<(), super::DeliveryError> {
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("base {url} {base}"));
+        self.snapshot.lock().unwrap()["baseRefName"] = json!(base);
         Ok(())
     }
     fn pr_review_comments(
