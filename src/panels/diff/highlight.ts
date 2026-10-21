@@ -15,11 +15,13 @@ export type { HighlighterCore };
 export const MAX_HIGHLIGHT_BYTES = 256 * 1024;
 
 /** The Shiki theme for each app theme: VS Code's Dark+ for Oscuro (matching
- * dockview's themeVisualStudio), Material Palenight for Morado oscuro and
- * VS Code's Light+ for Claro. */
+ * dockview's themeVisualStudio), Material Palenight for Morado oscuro,
+ * Catppuccin Mocha for Ciruela (its token colours stay readable on the plum
+ * surface; only comments fall under 4.5:1) and VS Code's Light+ for Claro. */
 const SHIKI_THEME: Record<Theme, string> = {
   dark: "dark-plus",
   purple: "material-theme-palenight",
+  plum: "catppuccin-mocha",
   light: "light-plus",
 };
 
@@ -61,6 +63,7 @@ export function loadHighlighter(): Promise<HighlighterCore | null> {
       themes: [
         import("shiki/themes/dark-plus.mjs"),
         import("shiki/themes/material-theme-palenight.mjs"),
+        import("shiki/themes/catppuccin-mocha.mjs"),
         import("shiki/themes/light-plus.mjs"),
       ],
       langs: [

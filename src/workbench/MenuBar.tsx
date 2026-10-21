@@ -9,7 +9,6 @@ import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
 import { enableNotifications, disableNotifications } from "../qol/notifications";
 import { modKey } from "../qol/shortcuts";
 import { qualityStore, useQualityState } from "../qol/state";
-import { THEME_OPTIONS, themeStore, useThemeSetting } from "../qol/theme";
 import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
 import { autodetectFlow, switchWorkbench } from "./operations";
@@ -17,6 +16,7 @@ import { visibleWorkbenchNames } from "./recentWorkbenches";
 import { AddonsManager } from "./AddonsManager";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { ManageWorkbenchesDialog } from "./ManageWorkbenchesDialog";
+import { ThemePicker } from "./ThemePicker";
 import { WindowBrand, WindowControls, WindowDragRegion } from "./WindowChrome";
 
 type MenuId = "workbench" | "repos" | "projects" | "view" | "addons" | "help";
@@ -73,10 +73,10 @@ export function MenuBar() {
   const state = useBusState();
   const { config, watching } = state;
   const quality = useQualityState();
-  const themeSetting = useThemeSetting();
   const { openTimeline, openDashboard, openDelivery, openRepo, addRepo } = useWorkspaceActions();
   const [open, setOpen] = useState<MenuId | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showThemes, setShowThemes] = useState(false);
   const [showAddons, setShowAddons] = useState(false);
   const [showManage, setShowManage] = useState(false);
   const [feedback, setFeedback] = useState<MenuFeedback | null>(null);
@@ -583,17 +583,12 @@ export function MenuBar() {
                 onSelect={() => qualityStore.setGlanceMode(!quality.glanceMode)}
               />
               <div className="menu__sep" role="separator" />
-              {THEME_OPTIONS.map((option) => (
-                <MenuItem
-                  key={option.value}
-                  label={`Tema: ${option.label}`}
-                  testid={`theme-${option.value}`}
-                  checked={themeSetting === option.value}
-                  checkRole="radio"
-                  close={close}
-                  onSelect={() => themeStore.set(option.value)}
-                />
-              ))}
+              <MenuItem
+                label="Tema…"
+                testid="open-theme-picker"
+                close={close}
+                onSelect={() => setShowThemes(true)}
+              />
               <div className="menu__sep" role="separator" />
               <MenuItem
                 label="Notificaciones"
@@ -703,6 +698,8 @@ export function MenuBar() {
           {quality.notificationStatus === "denied" ? "Notificaciones bloqueadas" : "Sin avisos"}
         </span>
       ) : null}
+
+      <ThemePicker open={showThemes} onOpenChange={setShowThemes} />
 
       <span
         className={watching.available ? "watch watch--ok" : "watch watch--bad"}
