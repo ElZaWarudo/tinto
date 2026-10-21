@@ -10,12 +10,17 @@ import type {
 import {
   attemptOutcome,
   batchName,
+  clusterPackages,
+  isDelivered,
+  issueProgress,
   isSuperseded,
   lastHandoff,
   latestOfRole,
   nextStageOf,
   nextStep,
   prSummary,
+  stepsOf,
+  taskLabel,
   taskStatus,
   type TaskStatus,
 } from "./taskStatus";
@@ -418,5 +423,86 @@ describe("latestOfRole and batchName", () => {
     expect(batchName("Lote de octubre")).toBe("Lote de octubre");
     expect(batchName("Octubre")).toBe("Lote Octubre");
     expect(batchName("Loteria")).toBe("Lote Loteria");
+  });
+});
+
+describe("an issue delivered in packages", () => {
+  const backend: DeliveryTask = {
+    ...task,
+    id: "p1",
+    key: "AGOS-432",
+    package: { index: 1, of: 2, title: "Backend" },
+  };
+  const ui: DeliveryTask = {
+    ...backend,
+    id: "p2",
+    package: { index: 2, of: 2, title: "UI", builds_on: "p1" },
+  };
+  // A middle package's ladder, as Tinto sends it: no Jira after the merge.
+  const middle = ["commit", "push", "pr", "jira", "merge"].map((rung) => ({
+    rung: rung as DeliveryApproval["rung"],
+    stage: rung === "jira" ? "after_pr" : null,
+  }));
+  const split = overview({
+    tasks: [ui, task, backend],
+    phases: {
+      p1: { kind: "delivered", waits_on: "nobody", next_stage: null, steps: middle },
+      p2: { kind: "running", job_id: "j", role: "qa", waits_on: "agent", next_stage: null },
+    },
+    issues: [
+      {
+        repo: backend.repo,
+        key: "AGOS-432",
+        of: 2,
+        packages: [
+          {
+            task_id: "p1",
+            index: 1,
+            title: "Backend",
+            merged: true,
+            delivered: false,
+            archived: false,
+          },
+          {
+            task_id: "p2",
+            index: 2,
+            title: "UI",
+            merged: false,
+            delivered: false,
+            archived: false,
+          },
+        ],
+        delivered: false,
+      },
+    ],
+  });
+
+  it("names each package and says where the issue's packages stand", () => {
+    expect(taskLabel(ui)).toBe("AGOS-432 · 2/2");
+    expect(taskLabel(task)).toBe("AGOS-501");
+    expect(issueProgress(split, ui)).toBe("1/2 fusionado · 2/2 en QA");
+    expect(issueProgress(split, task)).toBeNull();
+  });
+
+  it("ends a middle package's ladder at its merge", () => {
+    const steps = stepsOf(split, "p1");
+    expect(steps.map((step) => step.label)).toEqual(["Commit", "Push", "PR", "Jira (PR)", "Merge"]);
+    const done = steps.map((step, at) =>
+      approval({
+        id: `s${at}`,
+        task_id: "p1",
+        rung: step.rung,
+        stage: step.stage,
+        status: "executed",
+      }),
+    );
+    expect(isDelivered(done, steps)).toBe(true);
+    expect(isDelivered(done)).toBe(false);
+    // Without Tinto's steps, the whole ladder.
+    expect(stepsOf(split, "p2")).toHaveLength(6);
+  });
+
+  it("keeps an issue's packages together, in order", () => {
+    expect(clusterPackages([ui, task, backend]).map((one) => one.id)).toEqual(["p1", "p2", "t1"]);
   });
 });

@@ -267,6 +267,59 @@ describe("DeliveryPanel", () => {
     expect(within(list).queryByText("AGOS-501")).toBeNull();
   });
 
+  it("lists an issue's packages together and ends a middle package at its merge", async () => {
+    const user = userEvent.setup();
+    const backend = task({
+      key: "AGOS-432",
+      title: "Relaciones",
+      package: { index: 1, of: 2, title: "Backend" },
+      worktree: "C:\\work\\agentos-wt\\AGOS-432-1",
+      branch: "delivery/agos-432-1",
+    });
+    const ui = task({
+      ...backend,
+      id: "t2",
+      package: { index: 2, of: 2, title: "UI", builds_on: "t1" },
+      worktree: "C:\\work\\agentos-wt\\AGOS-432-2",
+      branch: "delivery/agos-432-2",
+    });
+    // Package 1's ladder as Tinto sends it: no Jira after its merge.
+    const middle = (["commit", "push", "pr", "jira", "merge"] as const).map((rung) => ({
+      rung,
+      stage: rung === "jira" ? "after_pr" : null,
+    }));
+    const packages = [backend, ui].map((one) => ({
+      task_id: one.id,
+      index: one.package!.index,
+      title: one.package!.title,
+      merged: false,
+      delivered: false,
+      archived: false,
+    }));
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [ui, backend],
+        jobs: [],
+        phases: {
+          t1: { ...NEXT_IMPLEMENTATION, steps: middle },
+          t2: phase({ kind: "blocked", open: 1 }, "dependency"),
+        },
+        issues: [{ repo: REPO, key: "AGOS-432", of: 2, packages, delivered: false }],
+      }),
+    );
+    renderPanel();
+    const list = await screen.findByRole("navigation", { name: "Tareas de Delivery" });
+    expect(await within(list).findByText("AGOS-432 · 2/2")).toBeInTheDocument();
+    expect(within(list).getByText("Backend · Relaciones")).toBeInTheDocument();
+    expect(within(list).getAllByText("1/2 en curso · 2/2 bloqueado")).toHaveLength(2);
+
+    await user.click(within(list).getByText("AGOS-432 · 1/2"));
+    expect(await screen.findByRole("heading", { name: /AGOS-432 · 1\/2/ })).toBeInTheDocument();
+    const ladder = screen.getByRole("list", { name: "Entrega" });
+    expect(within(ladder).getByText("Merge")).toBeInTheDocument();
+    expect(within(ladder).queryByText("Jira (merge)")).toBeNull();
+  });
+
   it("leaves a repo's tab out while its window outlives a reload", async () => {
     localStorage.setItem("tinto:delivery-detached", JSON.stringify({ "c:/work/agentos": REPO }));
     let closeWindow = () => {};
