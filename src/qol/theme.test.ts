@@ -52,6 +52,10 @@ describe("theme", () => {
     expect(rootTheme()).toBe("purple");
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("purple");
 
+    themeStore.set("plum");
+    expect(rootTheme()).toBe("plum");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("plum");
+
     themeStore.set("light");
     expect(rootTheme()).toBe("light");
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 
 const ops = vi.hoisted(() => ({
   switchWorkbench: vi.fn(),
@@ -187,6 +187,18 @@ describe("MenuBar", () => {
     expect(screen.getByText(/Reducir texto del archivo/)).toBeInTheDocument();
     expect(screen.getByText(/Restablecer texto del archivo/)).toBeInTheDocument();
     expect(screen.getByTestId("qol-glance")).toHaveAttribute("role", "menuitemcheckbox");
+  });
+
+  it("keeps the theme picker in the bar and opens it from Ver too", async () => {
+    act(() => busStore.setConfig(config));
+    render(<MenuBar />);
+
+    expect(screen.getByTestId("theme-picker-trigger")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("menu-view"));
+    fireEvent.click(screen.getByTestId("open-theme-picker"));
+    expect(screen.queryByRole("menu", { name: "Ver" })).not.toBeInTheDocument();
+    const group = screen.getByRole("radiogroup", { name: "Tema" });
+    await waitFor(() => expect(within(group).getByRole("radio", { checked: true })).toHaveFocus());
   });
 
   it("switches the open menu when the pointer moves to another top-level item", () => {
