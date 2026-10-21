@@ -2374,12 +2374,12 @@ pub(crate) mod tests {
         assert_eq!(observe(DeliveryAgent::Codex, "{}"), Observation::default());
     }
 
+    /// The running command (and since when) after a line changed it.
+    type CommandChange = (usize, Option<(String, u64)>);
+
     /// Feeds `events` one line a second; returns the running command at
     /// each change (by line) and the clock.
-    fn clocked(
-        agent: DeliveryAgent,
-        events: &str,
-    ) -> (Vec<(usize, Option<(String, u64)>)>, JobClock) {
+    fn clocked(agent: DeliveryAgent, events: &str) -> (Vec<CommandChange>, JobClock) {
         let mut clock = JobClock::default();
         let changes = events
             .lines()
