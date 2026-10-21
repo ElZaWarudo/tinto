@@ -136,6 +136,24 @@ cd src-tauri
 cargo fmt
 ```
 
+#### Linux checks from a Windows checkout
+
+Unix-only code (`#[cfg(unix)]`, the WSL agent runtime) compiles only on
+Linux, so check it in WSL too. `scripts/check-linux.sh` copies the working
+tree, uncommitted changes included, to WSL's own disk (`~/tinto-linux`).
+It syncs only what changed, then runs clippy and the tests there with
+incremental builds. That is much faster than building from `/mnt/c`. From
+PowerShell:
+
+```powershell
+wsl -d Ubuntu-24.04 -- bash -l /mnt/c/<path-to-checkout>/scripts/check-linux.sh              # clippy + all tests
+wsl -d Ubuntu-24.04 -- bash -l /mnt/c/<path-to-checkout>/scripts/check-linux.sh delivery::   # clippy + only matching tests
+wsl -d Ubuntu-24.04 -- bash -l /mnt/c/<path-to-checkout>/scripts/check-linux.sh --no-clippy delivery::
+```
+
+It needs Rust and `rsync` inside WSL. Builds go to `~/tinto-target`, which
+keeps them apart from the Windows build.
+
 ---
 
 ## Build the frontend
