@@ -6,6 +6,7 @@
 //!
 //! The job ends when the process exits; nothing here depends on turns.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,8 @@ use serde_json::Value;
 
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry,
-    DeliveryPlanItem, DeliveryPlatform, DeliveryTask, DeliveryUsage,
+    DeliveryPlanItem, DeliveryPlatform, DeliverySlowCommand, DeliveryTask, DeliveryTiming,
+    DeliveryUsage,
 };
 use super::service::QA_ROLE;
 use super::tasks::{git, plain_path, Place};
@@ -1349,6 +1351,9 @@ pub struct Observation {
     /// The agent's task list, when the line rewrites it.
     pub plan: Option<Vec<DeliveryPlanItem>>,
     pub usage: Option<DeliveryUsage>,
+    /// The command running now and since when, when that changed: `Some(None)`
+    /// once none runs. Set from a [`JobClock`].
+    pub command: Option<Option<(String, u64)>>,
 }
 
 pub fn observe(agent: DeliveryAgent, line: &str) -> Observation {
@@ -1451,7 +1456,202 @@ pub fn observe(agent: DeliveryAgent, line: &str) -> Observation {
         activity,
         plan,
         usage,
+        command: None,
     }
+}
+
+/// Claude Code's Bash stops waiting for a command after 10 minutes.
+const CLAUDE_BASH_CEILING_MS: u64 = 600_000;
+
+/// Pairs each top-level tool call's start with its end as the output
+/// arrives: the view shows the one running and, once the job ends, where its
+/// time went. Times are when Tinto reads each line: Codex lines carry none,
+/// and a job in WSL may keep a clock apart from the view's.
+#[derive(Debug, Default)]
+pub struct JobClock {
+    /// The calls running now, oldest first: id, command, start.
+    open: Vec<(String, String, u64)>,
+    /// When `open` last stopped being empty.
+    busy_since: u64,
+    commands_ms: u64,
+    commands: HashMap<String, DeliverySlowCommand>,
+    model_ms: Option<u64>,
+    turns: Option<u32>,
+}
+
+impl JobClock {
+    /// Reads one line, received at `at_ms`. Returns the command to show as
+    /// running when it changed.
+    pub fn line(
+        &mut self,
+        agent: DeliveryAgent,
+        line: &str,
+        at_ms: u64,
+    ) -> Option<Option<(String, u64)>> {
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        let before = self.running();
+        match agent {
+            DeliveryAgent::Claude if value["parent_tool_use_id"].is_null() => {
+                let blocks = value
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten();
+                match value["type"].as_str() {
+                    Some("assistant") => {
+                        for block in blocks.filter(|block| {
+                            block["type"] == "tool_use" && block["name"] != "StructuredOutput"
+                        }) {
+                            let command = match block["input"]["command"].as_str() {
+                                Some(command) => command.to_string(),
+                                None => claude_tool_summary(block),
+                            };
+                            self.start(block["id"].as_str().unwrap_or_default(), &command, at_ms);
+                        }
+                    }
+                    Some("user") => {
+                        let at_ceiling = value
+                            .pointer("/tool_use_result/timedOutAfterMs")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|ms| ms >= CLAUDE_BASH_CEILING_MS);
+                        for block in blocks.filter(|block| block["type"] == "tool_result") {
+                            let id = block["tool_use_id"].as_str().unwrap_or_default();
+                            self.end(id, at_ms, at_ceiling);
+                        }
+                    }
+                    Some("result") => {
+                        self.model_ms = value["duration_api_ms"].as_u64();
+                        self.turns = value["num_turns"]
+                            .as_u64()
+                            .and_then(|turns| u32::try_from(turns).ok());
+                    }
+                    _ => {}
+                }
+            }
+            DeliveryAgent::Codex => {
+                let item = &value["item"];
+                let id = item["id"].as_str().unwrap_or_default();
+                match value["type"].as_str() {
+                    Some("item.started") => {
+                        let command = match item["type"].as_str() {
+                            Some("command_execution") => {
+                                without_shell(item["command"].as_str().unwrap_or_default())
+                            }
+                            Some("mcp_tool_call") => item["tool"].as_str().unwrap_or("mcp"),
+                            other => other.unwrap_or("herramienta"),
+                        };
+                        self.start(id, command, at_ms);
+                    }
+                    Some("item.completed") => self.end(id, at_ms, false),
+                    _ => {}
+                }
+            }
+            DeliveryAgent::Muse => {
+                let (kind, body) = muse_record(&value);
+                let id = body["effect_id"].as_str().unwrap_or_default();
+                match kind {
+                    "tool_batch.effect.started" => {
+                        let tool = body["tool_name"].as_str().unwrap_or("herramienta");
+                        self.start(id, tool, at_ms);
+                    }
+                    "tool_batch.effect.terminal" => self.end(id, at_ms, false),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        let after = self.running();
+        (after != before).then_some(after)
+    }
+
+    fn running(&self) -> Option<(String, u64)> {
+        self.open
+            .first()
+            .map(|(_, command, at)| (command.clone(), *at))
+    }
+
+    fn start(&mut self, id: &str, command: &str, at_ms: u64) {
+        if self.open.is_empty() {
+            self.busy_since = at_ms;
+        }
+        // One line, so it reads in the view and repeats group together; a
+        // leading `cd <worktree> &&` only hides the command.
+        let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
+        let command = command
+            .strip_prefix("cd ")
+            .and_then(|rest| rest.split_once(" && "))
+            .map_or(command.as_str(), |(_, rest)| rest);
+        let command = command.chars().take(160).collect();
+        self.open.push((id.to_string(), command, at_ms));
+    }
+
+    fn end(&mut self, id: &str, at_ms: u64, at_ceiling: bool) {
+        let Some(index) = self.open.iter().position(|(open, ..)| open == id) else {
+            return;
+        };
+        let (_, command, started) = self.open.remove(index);
+        let slow = self
+            .commands
+            .entry(command.clone())
+            .or_insert_with(|| DeliverySlowCommand {
+                command,
+                ..DeliverySlowCommand::default()
+            });
+        slow.total_ms += at_ms.saturating_sub(started);
+        slow.runs += 1;
+        slow.at_ceiling += u32::from(at_ceiling);
+        if self.open.is_empty() {
+            self.commands_ms += at_ms.saturating_sub(self.busy_since);
+        }
+    }
+
+    /// Where the job's time went; the calls still running end at `at_ms`.
+    pub fn timing(mut self, at_ms: u64) -> DeliveryTiming {
+        let open: Vec<String> = self.open.iter().map(|(id, ..)| id.clone()).collect();
+        for id in open {
+            self.end(&id, at_ms, false);
+        }
+        let mut slowest: Vec<DeliverySlowCommand> = self.commands.into_values().collect();
+        slowest.sort_by(|a, b| {
+            b.total_ms
+                .cmp(&a.total_ms)
+                .then_with(|| a.command.cmp(&b.command))
+        });
+        slowest.truncate(3);
+        DeliveryTiming {
+            model_ms: self.model_ms,
+            commands_ms: self.commands_ms,
+            turns: self.turns,
+            slowest,
+        }
+    }
+}
+
+/// A command as Codex ran it, without the shell it wraps each one in
+/// (`powershell.exe -Command '…'`, `bash -lc '…'`).
+fn without_shell(command: &str) -> &str {
+    for flag in [" -Command ", " -lc ", " -c "] {
+        let Some((program, rest)) = command.split_once(flag) else {
+            continue;
+        };
+        let name = program
+            .trim_matches('"')
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(
+            name.trim_end_matches(".exe"),
+            "powershell" | "pwsh" | "bash" | "sh" | "zsh"
+        ) {
+            let rest = rest.trim();
+            return ['\'', '"']
+                .into_iter()
+                .find_map(|quote| rest.strip_prefix(quote)?.strip_suffix(quote))
+                .unwrap_or(rest);
+        }
+    }
+    command
 }
 
 /// The model a Claude Code session says it runs, in its `init` event.
@@ -1855,6 +2055,9 @@ pub(crate) mod tests {
             resumes: None,
             activity: None,
             activity_at_ms: None,
+            current_command: None,
+            current_command_at_ms: None,
+            timing: None,
             plan: Vec::new(),
             usage: None,
             visual_record: None,
@@ -2155,6 +2358,173 @@ pub(crate) mod tests {
             ("completed", "pending")
         );
         assert_eq!(observe(DeliveryAgent::Codex, "{}"), Observation::default());
+    }
+
+    /// Feeds `events` one line a second; returns the running command at
+    /// each change (by line) and the clock.
+    fn clocked(
+        agent: DeliveryAgent,
+        events: &str,
+    ) -> (Vec<(usize, Option<(String, u64)>)>, JobClock) {
+        let mut clock = JobClock::default();
+        let changes = events
+            .lines()
+            .enumerate()
+            .filter_map(|(at, line)| Some((at, clock.line(agent, line, at as u64 * 1000)?)))
+            .collect();
+        (changes, clock)
+    }
+
+    fn slow(command: &str, total_ms: u64, runs: u32, at_ceiling: u32) -> DeliverySlowCommand {
+        DeliverySlowCommand {
+            command: command.into(),
+            total_ms,
+            runs,
+            at_ceiling,
+        }
+    }
+
+    #[test]
+    fn claude_tool_calls_tell_the_running_command_and_where_the_time_went() {
+        let (changes, clock) = clocked(DeliveryAgent::Claude, CLAUDE_OK);
+        let first = "printf 'goodbye from claude' > farewell.txt && git status --short";
+        let second = "printf 'goodbye from claude' > farewell.txt";
+        // The final answer is not a command.
+        assert_eq!(
+            changes,
+            vec![
+                (1, Some((first.to_string(), 1000))),
+                (3, None),
+                (4, Some((second.to_string(), 4000))),
+                (5, None),
+            ]
+        );
+        assert_eq!(
+            clock.timing(9000),
+            DeliveryTiming {
+                model_ms: Some(5100),
+                commands_ms: 3000,
+                turns: Some(4),
+                slowest: vec![slow(first, 2000, 1, 0), slow(second, 1000, 1, 0)],
+            }
+        );
+    }
+
+    #[test]
+    fn claude_commands_repeat_overlap_and_hit_the_bash_ceiling() {
+        let mut clock = JobClock::default();
+        let call = |id: &str, name: &str, input: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"{id}","name":"{name}","input":{input}}}]}},"parent_tool_use_id":null}}"#
+            )
+        };
+        let done = |id: &str, extra: &str| {
+            format!(
+                r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}"}}]}},"parent_tool_use_id":null{extra}}}"#
+            )
+        };
+        let preflight = r#"{"command":"npm run preflight\n  2>&1 | tail -40"}"#;
+        let both = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"npm run preflight\n  2>&1 | tail -40"}},{"type":"tool_use","id":"b","name":"Read","input":{"file_path":"x.ts"}}]},"parent_tool_use_id":null}"#;
+        let running = |command: &str, at: u64| Some(Some((command.to_string(), at)));
+        let preflight_line = "npm run preflight 2>&1 | tail -40";
+        assert_eq!(
+            clock.line(DeliveryAgent::Claude, both, 0),
+            running(preflight_line, 0)
+        );
+        // A subagent's calls are its own.
+        let inner = call("c", "Bash", r#"{"command":"ls"}"#).replace(
+            r#""parent_tool_use_id":null"#,
+            r#""parent_tool_use_id":"b""#,
+        );
+        assert_eq!(clock.line(DeliveryAgent::Claude, &inner, 500), None);
+        // Another call ending leaves the oldest one shown.
+        assert_eq!(
+            clock.line(DeliveryAgent::Claude, &done("b", ""), 1000),
+            None
+        );
+        let ceiling = r#","tool_use_result":{"stdout":"","timedOutAfterMs":600000}"#;
+        assert_eq!(
+            clock.line(DeliveryAgent::Claude, &done("a", ceiling), 600_000),
+            Some(None)
+        );
+        clock.line(
+            DeliveryAgent::Claude,
+            &call("d", "Bash", preflight),
+            700_000,
+        );
+        clock.line(DeliveryAgent::Claude, &done("d", ""), 760_000);
+        let test = call("e", "Bash", r#"{"command":"cd /repo-wt/K-1 && npm test"}"#);
+        assert_eq!(
+            clock.line(DeliveryAgent::Claude, &test, 800_000),
+            running("npm test", 800_000)
+        );
+        // Still running when the job ends: it counts until then.
+        assert_eq!(
+            clock.timing(1_000_000),
+            DeliveryTiming {
+                model_ms: None,
+                commands_ms: 600_000 + 60_000 + 200_000,
+                turns: None,
+                slowest: vec![
+                    slow(preflight_line, 660_000, 2, 1),
+                    slow("npm test", 200_000, 1, 0),
+                    slow("Read: x.ts", 1000, 1, 0),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn codex_items_tell_the_running_command_without_its_shell() {
+        let (changes, clock) = clocked(DeliveryAgent::Codex, CODEX_OK);
+        let command = "Set-Content greeting.txt 'hello from a delivery job.'";
+        assert_eq!(
+            changes,
+            vec![(4, Some((command.to_string(), 4000))), (5, None)]
+        );
+        assert_eq!(
+            clock.timing(8000),
+            DeliveryTiming {
+                model_ms: None,
+                commands_ms: 1000,
+                turns: None,
+                slowest: vec![slow(command, 1000, 1, 0)],
+            }
+        );
+        assert_eq!(
+            without_shell(
+                r#""C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'npm run check-lint'"#
+            ),
+            "npm run check-lint"
+        );
+        assert_eq!(without_shell("/bin/bash -lc 'npm test'"), "npm test");
+        assert_eq!(
+            without_shell("git -c core.quotepath=off status"),
+            "git -c core.quotepath=off status"
+        );
+    }
+
+    #[test]
+    fn muse_tool_effects_tell_the_running_tool() {
+        let (changes, clock) = clocked(DeliveryAgent::Muse, MUSE_OK);
+        assert_eq!(
+            changes,
+            vec![
+                (4, Some(("read_file".to_string(), 4000))),
+                (5, None),
+                (6, Some(("write_file".to_string(), 6000))),
+                (7, None),
+            ]
+        );
+        let timing = clock.timing(10_000);
+        assert_eq!(timing.commands_ms, 2000);
+        assert_eq!(
+            timing.slowest,
+            vec![
+                slow("read_file", 1000, 1, 0),
+                slow("write_file", 1000, 1, 0)
+            ]
+        );
     }
 
     #[test]

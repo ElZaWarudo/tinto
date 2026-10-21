@@ -198,6 +198,9 @@ describe("taskStatus words the phase Tinto derives", () => {
     const quiet = { ...running, activity_at_ms: 1_000 };
     expect(status(phase, { jobs: [quiet] }).label).not.toContain("sin actividad");
     expect(status(phase, { jobs: [quiet] }, 421_000).label).toContain("sin actividad hace 7 min");
+    // A long command is the agent working, not a quiet agent.
+    const busy = { ...quiet, current_command: "npm run lint", current_command_at_ms: 1_000 };
+    expect(status(phase, { jobs: [busy] }, 421_000).label).not.toContain("sin actividad");
   });
 
   it("says what a task waits for: a pause, the batch, a queue or a quarantine", () => {

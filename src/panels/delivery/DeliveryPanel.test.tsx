@@ -389,6 +389,56 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.pauseDeliveryJob).toHaveBeenCalledWith("j1"));
   });
 
+  it("shows the command a running agent waits on, and how long, instead of a quiet agent", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({
+            status: "started",
+            started_at_ms: Date.now() - 20 * 60_000,
+            ended_at_ms: null,
+            result: null,
+            activity: "Bash: npm --prefix frontend run lint",
+            activity_at_ms: Date.now() - 8 * 60_000,
+            current_command: "npm --prefix frontend run lint",
+            current_command_at_ms: Date.now() - 8 * 60_000,
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    const activity = await screen.findByLabelText("Actividad de Tests");
+    expect(activity).toHaveTextContent("ejecutando npm --prefix frontend run lint 8 min");
+    expect(activity).not.toHaveTextContent("sin actividad");
+  });
+
+  it("says where a finished job's time went", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({
+            timing: {
+              model_ms: 5 * 60_000,
+              commands_ms: 78 * 60_000,
+              turns: 37,
+              slowest: [
+                { command: "npm run preflight", total_ms: 31 * 60_000, runs: 5, at_ceiling: 2 },
+                { command: "npm test", total_ms: 10 * 60_000, runs: 1, at_ceiling: 1 },
+                { command: "git status", total_ms: 4_000, runs: 3, at_ceiling: 0 },
+              ],
+            },
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByLabelText("Tiempo de Tests")).toHaveTextContent(
+      "Modelo 5 min · Comandos 78 min · 37 turnos · más lentos: " +
+        "npm run preflight ×5 (31 min, 2 al límite de 10 min), " +
+        "npm test (10 min, al límite de 10 min), git status ×3 (4 s)",
+    );
+  });
+
   it("resumes a paused stage and pauses the batch", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(

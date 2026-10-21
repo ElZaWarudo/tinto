@@ -27,6 +27,26 @@ export interface DeliveryUsage {
   cost_micro_usd: number | null;
 }
 
+/** Where a job's time went, from its agent's output. */
+export interface DeliveryTiming {
+  /** Time in model calls, when the agent says it (Claude Code). */
+  model_ms: number | null;
+  /** Time with at least one command or tool call running. */
+  commands_ms: number;
+  /** The agent's turns, when it says them (Claude Code). */
+  turns: number | null;
+  /** The commands that took longest, all their runs added up. */
+  slowest: DeliverySlowCommand[];
+}
+
+export interface DeliverySlowCommand {
+  command: string;
+  total_ms: number;
+  runs: number;
+  /** Runs Claude Code's Bash left at its 10-minute ceiling. */
+  at_ceiling: number;
+}
+
 export type DeliveryAgent = "codex" | "claude" | "muse" | "shell";
 export type DeliveryAccess = "workspace" | "full";
 export type DeliveryResultState = "accepted" | "stale" | "invalid";
@@ -178,6 +198,11 @@ export interface DeliveryJob {
   /** What the agent did last, and when. */
   activity?: string | null;
   activity_at_ms?: number | null;
+  /** The command or tool call running now, and since when. */
+  current_command?: string | null;
+  current_command_at_ms?: number | null;
+  /** Where the job's time went, once it ended. */
+  timing?: DeliveryTiming | null;
   /** The agent's own task list, as it last wrote it. */
   plan?: DeliveryPlanItem[];
   /** What the job used, once the agent reports it. */

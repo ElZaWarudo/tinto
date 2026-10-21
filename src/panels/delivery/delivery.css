@@ -1440,6 +1440,15 @@
 .delivery-job__activity > small {
   flex: none;
 }
+.delivery-job__timing {
+  margin: 0;
+  padding: 0 10px 6px 30px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
 .delivery-plan {
   margin: 0;
   padding: 0;

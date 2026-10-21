@@ -116,10 +116,11 @@ export function pausedJob(jobs: DeliveryJob[]): DeliveryJob | undefined {
   );
 }
 
-/** How long the agent has been quiet, once it is long enough to say. */
+/** How long the agent has been quiet, once it is long enough to say. A
+ *  command it waits on is not quiet. */
 export function quietFor(job: DeliveryJob, now: number): string | null {
   const since = job.activity_at_ms ?? job.started_at_ms;
-  if (job.status !== "started" || !since) return null;
+  if (job.status !== "started" || !since || job.current_command) return null;
   const minutes = Math.floor((now - since) / 60_000);
   return minutes >= 5 ? `sin actividad hace ${minutes} min` : null;
 }
