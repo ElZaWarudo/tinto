@@ -202,6 +202,8 @@ pub fn delivery_dispatch_job(
             lease,
             timeout_minutes,
             reasoning,
+            read_dirs: Vec::new(),
+            stage_default: false,
         })
         .map_err(CommandError::from)
 }
@@ -445,6 +447,7 @@ pub fn delivery_set_repo_settings(
             .into_iter()
             .filter_map(|command| clean(Some(command)))
             .collect(),
+        check_env: super::service::clean_check_env(settings.check_env)?,
         qa_browser: settings.qa_browser,
         qa_environment: settings.qa_environment.trim().to_string(),
         verification: settings.verification.trim().to_string(),

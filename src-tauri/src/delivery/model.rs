@@ -298,10 +298,18 @@ pub struct DeliveryJob {
     /// Where the job ran, as the stage shows it (`Windows`, `WSL · Ubuntu`).
     #[serde(default)]
     pub ran_on: Option<String>,
-    /// QA jobs only: folders outside the worktree the user's permissions
-    /// let the job read and list.
+    /// Folders outside the worktree the job may read and list: the ones its
+    /// coordinator named and, for QA, the ones the user's permissions name.
     #[serde(default)]
     pub read_dirs: Vec<String>,
+    /// Whether the model and reasoning came from the stage's settings (the
+    /// coordinator named no model): a retry takes the stage's current ones.
+    #[serde(default)]
+    pub stage_default: bool,
+    /// The repo's environment variables for checks when the job was
+    /// dispatched; the agent's process runs with them.
+    #[serde(default)]
+    pub check_env: BTreeMap<String, String>,
     /// QA jobs only: folders outside the worktree the user's permissions
     /// let the job write in.
     #[serde(default)]
@@ -871,6 +879,10 @@ pub struct DeliveryRepoSettings {
     /// More commands QA jobs may run, such as the CLI an issue changes.
     #[serde(default)]
     pub qa_commands: Vec<String>,
+    /// Environment variables, by name, that jobs run the checks and QA
+    /// commands with (e.g. a test database's URL). Test settings, not secrets.
+    #[serde(default)]
+    pub check_env: BTreeMap<String, String>,
     /// Whether QA jobs get a browser.
     #[serde(default)]
     pub qa_browser: bool,

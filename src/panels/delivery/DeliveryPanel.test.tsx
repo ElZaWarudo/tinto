@@ -1796,6 +1796,12 @@ describe("DeliveryPanel", () => {
     );
     client.createDeliveryRun.mockResolvedValue({});
     client.setDeliveryRunQaJiraComment.mockResolvedValue({});
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      check_env: { DB_NAME: "agentos_test" },
+    });
     client.setDeliveryRepoSettings.mockImplementation((_repo, settings) =>
       Promise.resolve(settings),
     );
@@ -1839,6 +1845,11 @@ describe("DeliveryPanel", () => {
       "Windows, ámbito personal",
     );
     await user.click(within(qa).getByRole("checkbox", { name: "Navegador para la QA" }));
+    // The checks' environment shows as plain text, one variable per line.
+    const env = within(qa).getByRole("textbox", { name: /Variables de entorno/ });
+    expect(env).toHaveValue("DB_NAME=agentos_test");
+    await user.click(env);
+    await user.paste("\nTEST_DB_MONGO_URL = mongodb://localhost:27017/test");
     // Each stage's agent is fixed here too.
     expect(within(qa).queryByRole("combobox", { name: "Modelo de Revisión" })).toBeNull();
     await user.selectOptions(
@@ -1857,6 +1868,10 @@ describe("DeliveryPanel", () => {
         expect.objectContaining({
           qa_environment: "Windows, ámbito personal",
           qa_browser: true,
+          check_env: {
+            DB_NAME: "agentos_test",
+            TEST_DB_MONGO_URL: "mongodb://localhost:27017/test",
+          },
           stages: { review: { agent: "claude", model: "opus", reasoning: "medium" } },
         }),
       ),

@@ -27,7 +27,7 @@ const CODEX_FAILED: &str = include_str!("fixtures/codex-failed.jsonl");
 const CLAUDE_OK: &str = include_str!("fixtures/claude-ok.jsonl");
 
 /// Prompt directives for the fake agent: `events=codex-ok touch=a.txt
-/// exit=0 sleep=0`.
+/// exit=0 sleep=0`; `env=NAME` writes that variable's value to `env.txt`.
 fn fake_launcher() -> Launcher {
     Arc::new(|job: &DeliveryJob, task: &DeliveryTask, paths: &JobPaths| {
         let spec: HashMap<&str, &str> = job
@@ -72,6 +72,12 @@ fn fake_launcher() -> Launcher {
             if let Some(path) = &touch {
                 lines.push(format!("echo changed>\"{}\"", path.display()));
             }
+            if let Some(name) = spec.get("env") {
+                lines.push(format!(
+                    "echo %{name}%>\"{}\"",
+                    worktree.join("env.txt").display()
+                ));
+            }
             if sleep > 0 {
                 lines.push(format!("ping -n {} 127.0.0.1 >NUL", sleep + 1));
             }
@@ -93,6 +99,12 @@ fn fake_launcher() -> Launcher {
             let mut lines = vec![format!("cat '{}'", events_file.display())];
             if let Some(path) = &touch {
                 lines.push(format!("echo changed > '{}'", path.display()));
+            }
+            if let Some(name) = spec.get("env") {
+                lines.push(format!(
+                    "echo \"${name}\" > '{}'",
+                    worktree.join("env.txt").display()
+                ));
             }
             // `children=1`: commands it leaves running, one in its process
             // group and one in its own, as Codex runs them.
@@ -198,6 +210,8 @@ impl Harness {
                 timeout_minutes: None,
                 reasoning: None,
                 platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
             })
             .unwrap()
     }
@@ -306,6 +320,8 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
         timeout_minutes: None,
         reasoning: None,
         platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
     };
     let claude = h
         .service
@@ -356,6 +372,8 @@ fn only_qa_jobs_get_the_qa_commands_and_the_browser() {
         timeout_minutes: None,
         reasoning: None,
         platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
     };
     let review = h.service.dispatch(new_job("review")).unwrap();
     assert_eq!(review.allowed_commands, vec!["npm test".to_string()]);
@@ -564,6 +582,8 @@ fn an_agent_missing_on_this_machine_gives_way_to_the_other_never_to_wsl() {
         timeout_minutes: None,
         reasoning: Some(reasoning.into()),
         platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
     };
     // Claude Code is not installed: Codex runs it, with its own model.
     h.service
@@ -675,6 +695,8 @@ fn a_paused_stage_holds_its_task_and_resource_until_it_resumes_in_its_session() 
             timeout_minutes: None,
             reasoning: None,
             platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
         })
         .unwrap_err();
     assert_eq!(refused.category, "job_paused");
@@ -1172,11 +1194,49 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
         .unwrap()
         .set_repo_settings(h.repo.path(), &settings)
         .unwrap();
-    let fixed = call(10, "tools/call", review)["result"]["structuredContent"].clone();
+    let fixed = call(10, "tools/call", review.clone())["result"]["structuredContent"].clone();
     assert_eq!(fixed["agent"], "codex", "{fixed}");
     assert_eq!(fixed["model"], "gpt-6-sol");
     assert_eq!(fixed["reasoning"], "high");
     h.wait(fixed["id"].as_str().unwrap());
+    // A retry follows the stage as the user left it after a model failed;
+    // a model the coordinator chose is kept.
+    let set_stage_model = |model: &str| {
+        let mut settings = settings.clone();
+        settings.stages.get_mut("review").unwrap().model = Some(model.into());
+        h.service
+            .store()
+            .unwrap()
+            .set_repo_settings(h.repo.path(), &settings)
+            .unwrap();
+    };
+    let retry = |id: u64, job: &serde_json::Value| {
+        call(
+            id,
+            "tools/call",
+            json!({"name": "retry_job", "arguments": {"run_id": run_id, "owner": "coord", "generation": 1, "job_id": job["id"]}}),
+        )["result"]["structuredContent"]
+            .clone()
+    };
+    set_stage_model("gpt-6-pro");
+    let retried = retry(11, &fixed);
+    assert_eq!(retried["model"], "gpt-6-pro", "{retried}");
+    assert_eq!(retried["stage_default"], true);
+    h.wait(retried["id"].as_str().unwrap());
+    let mut chosen = review.clone();
+    chosen["arguments"]["model"] = json!("gpt-5.5");
+    let chosen = call(12, "tools/call", chosen)["result"]["structuredContent"].clone();
+    h.wait(chosen["id"].as_str().unwrap());
+    set_stage_model("gpt-6-mini");
+    let retried = retry(13, &chosen);
+    assert_eq!(retried["model"], "gpt-5.5", "{retried}");
+    h.wait(retried["id"].as_str().unwrap());
+    // Folders to read must be inside the main checkout or the worktree.
+    let mut outside = review.clone();
+    outside["arguments"]["read_dirs"] = json!([plain_path(&std::env::temp_dir())]);
+    let refused = call(14, "tools/call", outside);
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert!(refused.to_string().contains("read_dirs"), "{refused}");
     let unknown = call(8, "nope", json!({}));
     assert_eq!(unknown["error"]["code"], -32601);
 }
@@ -1212,6 +1272,96 @@ fn bootstrap_runs_as_a_shell_job_in_new_worktrees() {
     assert_eq!(bootstrap.agent, DeliveryAgent::Shell);
     assert_eq!(bootstrap.role, "bootstrap");
     assert_eq!(h.wait(&bootstrap.id).status, DeliveryJobStatus::Finished);
+}
+
+#[test]
+fn a_job_reads_existing_folders_of_the_main_checkout_or_its_worktree_only() {
+    let h = harness();
+    let task = h.task("R-1");
+    let contracts = task.repo.join("docs").join("contracts");
+    std::fs::create_dir_all(&contracts).unwrap();
+    let dispatch = |read_dirs: Vec<String>| {
+        h.service.dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "implementation".into(),
+            agent: DeliveryAgent::Claude,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=claude-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+            read_dirs,
+            stage_default: false,
+        })
+    };
+    let job = dispatch(vec![plain_path(&contracts), plain_path(&task.worktree)]).unwrap();
+    assert_eq!(
+        job.read_dirs,
+        [plain_path(&contracts), plain_path(&task.worktree)]
+    );
+    h.wait(&job.id);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let missing = task.repo.join("docs").join("nope");
+    let escape = format!("{}/docs/../..", plain_path(&task.repo));
+    for dir in [
+        plain_path(elsewhere.path()),
+        plain_path(&missing),
+        escape,
+        "docs".into(),
+    ] {
+        assert_eq!(
+            dispatch(vec![dir.clone()]).unwrap_err().category,
+            "invalid_read_dir",
+            "{dir}"
+        );
+    }
+}
+
+#[test]
+fn jobs_run_with_the_repos_environment_for_checks() {
+    let h = harness();
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.check_env.insert(
+        "TEST_DB_MONGO_URL".into(),
+        "mongodb://localhost:27017/tinto_test".into(),
+    );
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let task = h.task("E-1");
+    let job = h.dispatch(&task, "tests", "events=codex-ok env=TEST_DB_MONGO_URL");
+    assert_eq!(job.check_env, settings.check_env);
+    h.wait(&job.id);
+    let seen = std::fs::read_to_string(task.worktree.join("env.txt")).unwrap();
+    assert_eq!(seen.trim(), "mongodb://localhost:27017/tinto_test");
+}
+
+#[test]
+fn check_variables_are_names_a_shell_can_export() {
+    let clean = |name: &str| {
+        super::service::clean_check_env([(name.to_string(), " v ".to_string())].into())
+    };
+    assert_eq!(
+        clean(" TEST_DB_MONGO_URL ").unwrap(),
+        [("TEST_DB_MONGO_URL".to_string(), "v".to_string())].into()
+    );
+    for name in ["", "1DB", "TEST-DB", "A B", "X;rm"] {
+        assert_eq!(
+            clean(name).unwrap_err().category,
+            "invalid_check_env",
+            "{name}"
+        );
+    }
 }
 
 fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDecision {
@@ -1317,6 +1467,8 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             timeout_minutes: None,
             reasoning: None,
             platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
         })
         .unwrap_err();
     assert_eq!(blocked.category, "decisions_pending");
@@ -1369,6 +1521,8 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             timeout_minutes: None,
             reasoning: None,
             platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
         })
         .unwrap();
     assert!(qa
@@ -1524,6 +1678,8 @@ fn claude_qa(task: &DeliveryTask, prompt: &str) -> NewJob {
         timeout_minutes: None,
         reasoning: None,
         platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
     }
 }
 
@@ -1897,6 +2053,8 @@ fn a_task_blocked_on_another_tasks_merge_waits_until_it_merges() {
             timeout_minutes: None,
             reasoning: None,
             platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
         })
         .unwrap_err();
     assert_eq!(refused.category, "task_blocked");
@@ -2143,6 +2301,8 @@ fn coordinators_read_what_the_user_configured() {
             timeout_minutes: None,
             reasoning: None,
             platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
         })
         .unwrap();
     assert_eq!(
@@ -4267,6 +4427,8 @@ fn a_coordinator_proposes_settings_and_the_next_job_runs_what_the_user_approved(
             timeout_minutes: None,
             reasoning: None,
             platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
         })
         .unwrap();
     assert!(job

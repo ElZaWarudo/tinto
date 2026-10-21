@@ -5,7 +5,7 @@
 //! the worktree when it starts and when it ends, and ends when its process
 //! exits. There are no turns.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -119,6 +119,11 @@ pub struct NewJob {
     pub reasoning: Option<String>,
     /// Where a Claude job on a Windows repo runs; Tinto chooses when `None`.
     pub platform: Option<DeliveryPlatform>,
+    /// Folders the job may read besides its worktree: absolute paths inside
+    /// the repo's main checkout or the task's worktree.
+    pub read_dirs: Vec<String>,
+    /// The model and reasoning come from the stage's settings.
+    pub stage_default: bool,
 }
 
 /// How a job's process ended, before its result is evaluated.
@@ -486,6 +491,8 @@ impl DeliveryService {
                 timeout_minutes: None,
                 reasoning: None,
                 platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
             })?;
         } else {
             self.notify();
@@ -780,6 +787,13 @@ impl DeliveryService {
                 read_dirs.push(dir.clone());
             }
         }
+        // The coordinator's, such as the issue's contracts in the main
+        // checkout. A retry passes the permissions' again: already there.
+        for dir in &request.read_dirs {
+            if !read_dirs.contains(dir) {
+                read_dirs.push(readable_dir(dir, &task)?);
+            }
+        }
         let decision_notes = decisions
             .iter()
             .filter_map(decisions::decision_note)
@@ -841,6 +855,8 @@ impl DeliveryService {
             platform: request.platform,
             ran_on: None,
             read_dirs,
+            stage_default: request.stage_default,
+            check_env: settings.check_env,
             write_dirs,
             frozen_scripts: Vec::new(),
             resumes: resumes.map(|paused| paused.id.clone()),
@@ -929,6 +945,8 @@ impl DeliveryService {
                 timeout_minutes: Some(paused.timeout_minutes),
                 reasoning: paused.reasoning.clone(),
                 platform: paused.platform,
+                read_dirs: paused.read_dirs.clone(),
+                stage_default: paused.stage_default,
             },
             Some(&paused),
         )
@@ -1014,18 +1032,29 @@ impl DeliveryService {
                 "el trabajo todavía no terminó",
             ));
         }
+        // A job on the stage's settings follows them as they are now: the
+        // user may have changed a model that failed.
+        let (mut agent, mut model, mut reasoning) = (job.agent, job.model, job.reasoning);
+        if job.stage_default {
+            let repo = self.task(&job.task_id)?.repo;
+            if let Some(stage) = self.store()?.repo_settings(&repo)?.stages.remove(&job.role) {
+                (agent, model, reasoning) = (stage.agent, stage.model, stage.reasoning);
+            }
+        }
         self.dispatch(NewJob {
             task_id: job.task_id,
             role: job.role,
-            agent: job.agent,
-            model: job.model,
+            agent,
+            model,
             access: job.access,
             prompt: job.prompt,
             writes: Some(job.writes),
             lease: job.lease,
             timeout_minutes: Some(job.timeout_minutes),
-            reasoning: job.reasoning,
+            reasoning,
             platform: job.platform,
+            read_dirs: job.read_dirs,
+            stage_default: job.stage_default,
         })
     }
 
@@ -1318,8 +1347,11 @@ impl DeliveryService {
         }
         let launch = (self.inner.launcher)(&job, &task, &paths)?;
         let mut command = Command::new(&launch.program);
+        // The repo's variables for checks reach every command the agent
+        // runs; a WSL job exports them in its script instead.
         command
             .args(&launch.args)
+            .envs(&job.check_env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1920,6 +1952,59 @@ impl DeliveryService {
 fn allowed_permission(decision: &DeliveryDecision) -> bool {
     decision.kind == DeliveryDecisionKind::Permission
         && decision.answer.as_deref() == Some(decisions::ALLOWED)
+}
+
+/// The repo's environment variables for checks as saved: names a shell can
+/// export (`TEST_DB_MONGO_URL`), values trimmed.
+pub(super) fn clean_check_env(
+    env: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, DeliveryError> {
+    env.into_iter()
+        .map(|(name, value)| {
+            let name = name.trim().to_string();
+            let valid = name.chars().next().is_some_and(|c| !c.is_ascii_digit())
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !valid {
+                return Err(DeliveryError::new(
+                    "invalid_check_env",
+                    format!("variable de entorno no válida: «{name}» (letras, dígitos y _, sin empezar por dígito)"),
+                ));
+            }
+            Ok((name, value.trim().to_string()))
+        })
+        .collect()
+}
+
+/// A folder a coordinator lets a job read: an existing folder inside the
+/// repo's main checkout or the task's worktree, by absolute path.
+fn readable_dir(dir: &str, task: &DeliveryTask) -> Result<String, DeliveryError> {
+    let dir = dir.trim();
+    let normalized = decisions::norm(dir);
+    let inside = [&task.repo, &task.worktree]
+        .iter()
+        .any(|root| decisions::within(&normalized, &decisions::norm(&plain_path(root))));
+    let refused =
+        |why: &str| DeliveryError::new("invalid_read_dir", format!("read_dirs: {dir} {why}"));
+    if !decisions::is_absolute(&normalized) || normalized.split('/').any(|part| part == "..") {
+        return Err(refused("debe ser una ruta absoluta, sin `..`"));
+    }
+    if !inside {
+        return Err(refused(
+            "debe estar dentro del checkout principal del repositorio o del worktree de la tarea",
+        ));
+    }
+    // A WSL repo's folders are reached through the distro's network share.
+    let local = match task.distro.as_deref() {
+        Some(distro) if cfg!(windows) && dir.starts_with('/') => PathBuf::from(format!(
+            r"\\wsl.localhost\{distro}{}",
+            dir.replace('/', "\\")
+        )),
+        _ => PathBuf::from(dir),
+    };
+    if !local.is_dir() {
+        return Err(refused("no existe o no es una carpeta"));
+    }
+    Ok(dir.to_string())
 }
 
 /// Where a job ran, as its stage shows it.

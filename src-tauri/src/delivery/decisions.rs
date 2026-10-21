@@ -87,7 +87,7 @@ pub(super) fn client_home(client: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Whether `inner` is `outer` or inside it; both normalized.
-fn within(inner: &str, outer: &str) -> bool {
+pub(super) fn within(inner: &str, outer: &str) -> bool {
     let outer = outer.trim_end_matches('/');
     inner == outer || inner.starts_with(&format!("{outer}/"))
 }
