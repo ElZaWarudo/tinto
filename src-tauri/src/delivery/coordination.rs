@@ -11,14 +11,18 @@
 //! - The commit rung is a plan: one or more commits, each with its exact
 //!   message and files. Tinto creates them as written (it adds no trailers
 //!   or signatures), can undo them until they are pushed, and notices when
-//!   they are no longer on the branch.
-//! - Once the coordinator ends a run's brainstorm, its commit and push rungs
-//!   are approved as they are asked; the PR and Jira rungs still wait.
+//!   they are no longer on the branch. While a merge is in progress the
+//!   plan is one commit of the whole merge, which keeps both parents.
+//! - The sync rung, asked when needed, merges the task's base into its
+//!   branch (jobs cannot run git merge). Conflicts leave the merge in
+//!   progress for an implementation job, and a commit step concludes it.
+//! - Once the coordinator ends a run's brainstorm, its commit, sync and push
+//!   rungs are approved as they are asked; the PR and Jira rungs still wait.
 
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus, DeliveryRun,
-    DeliveryRung, DeliverySettingsProposalStatus, DeliveryTask, SINGLE_COMMIT_MAX_FILES,
-    SINGLE_COMMIT_MAX_LINES,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus,
+    DeliveryMergeConflicts, DeliveryRun, DeliveryRung, DeliverySettingsProposalStatus,
+    DeliveryTask, SINGLE_COMMIT_MAX_FILES, SINGLE_COMMIT_MAX_LINES,
 };
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
@@ -205,6 +209,60 @@ fn check_plan(
     }
 }
 
+/// The one commit that concludes a merge in progress. Its paths are not
+/// asked: it takes every change (a rename would need both of its sides),
+/// and they are recorded to notice if the worktree changes before it runs.
+fn merge_commit(
+    place: Place<'_>,
+    worktree: &std::path::Path,
+    request: &NewApproval,
+    title: &str,
+    body: &str,
+) -> Result<DeliveryCommit, DeliveryError> {
+    let message = match request.commits.as_slice() {
+        [] => match body.trim() {
+            "" => title.to_string(),
+            body => format!("{title}\n\n{body}"),
+        },
+        [only] => only.message.trim().to_string(),
+        _ => {
+            return Err(invalid_plan(
+                "hay un merge en curso: se confirma entero, en un único commit de merge",
+            ))
+        }
+    };
+    if message.is_empty() {
+        return Err(invalid_plan("el commit de merge no tiene mensaje"));
+    }
+    if !request.leave_out.is_empty() {
+        return Err(invalid_plan(
+            "hay un merge en curso: el commit de merge lo incluye todo y no deja archivos fuera",
+        ));
+    }
+    check_conflicts_resolved(place, worktree)?;
+    Ok(DeliveryCommit {
+        message,
+        paths: tasks::changed_files(place, worktree)?,
+    })
+}
+
+fn check_conflicts_resolved(
+    place: Place<'_>,
+    worktree: &std::path::Path,
+) -> Result<(), DeliveryError> {
+    let unresolved = tasks::unresolved_conflicts(place, worktree);
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+    Err(DeliveryError::new(
+        "merge_conflicts",
+        format!(
+            "el merge aún tiene conflictos sin resolver en: {}",
+            unresolved.join(", ")
+        ),
+    ))
+}
+
 /// The commits Tinto created for a commit step. Steps from before plans
 /// existed only recorded "Commit <short hash>" as their outcome.
 fn created_commits(approval: &DeliveryApproval) -> Vec<String> {
@@ -253,6 +311,8 @@ pub(super) fn found_step(
         commits: Vec::new(),
         left_out: Vec::new(),
         single_commit_reason: None,
+        merge_head: None,
+        conflicts: Vec::new(),
         created: Vec::new(),
         before: None,
         tip: None,
@@ -934,11 +994,23 @@ impl DeliveryService {
             rung_prerequisites(&task, request.rung)?;
         }
         let mut title = request.title.trim().to_string();
-        let mut body = request.body;
+        let mut body = request.body.clone();
         let mut commits = Vec::new();
         let mut left_out = Vec::new();
         let mut single_commit_reason = None;
+        let merge_head = match request.rung {
+            DeliveryRung::Commit => tasks::merge_head(place, &task.worktree),
+            _ => None,
+        };
         match request.rung {
+            // A merge in progress is concluded whole, so the commit keeps the
+            // merged branch as its second parent.
+            DeliveryRung::Commit if merge_head.is_some() => {
+                let commit = merge_commit(place, &task.worktree, &request, &title, &body)?;
+                title = subject(&commit.message).to_string();
+                body = String::new();
+                commits = vec![commit];
+            }
             DeliveryRung::Commit => {
                 let changed = tasks::changed_files(place, &task.worktree)?;
                 commits = if planned {
@@ -1000,6 +1072,10 @@ impl DeliveryService {
                     "los commits que hizo Tinto ya no están en la rama; hay que volver a preparar el commit",
                 ));
             }
+            DeliveryRung::Push => self.check_base_merged(&task)?,
+            DeliveryRung::Sync => {
+                self.sync_prerequisites(&task)?;
+            }
             DeliveryRung::Merge => {
                 self.merge_prerequisites(&task, request.merge_method.as_deref())?
             }
@@ -1017,6 +1093,8 @@ impl DeliveryService {
             commits,
             left_out,
             single_commit_reason,
+            merge_head,
+            conflicts: Vec::new(),
             created: Vec::new(),
             before: None,
             tip: None,
@@ -1047,8 +1125,10 @@ impl DeliveryService {
         self.notify();
         // Past the brainstorm the branch is committed and published without
         // stopping; opening the PR still waits for the user.
-        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push)
-            && self.unattended(&task)?
+        if matches!(
+            approval.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+        ) && self.unattended(&task)?
         {
             return self.decide_approval(&approval.id, true, None);
         }
@@ -1136,18 +1216,25 @@ impl DeliveryService {
                 }
             }
         }
-        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push) {
+        if matches!(
+            approval.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+        ) {
             let task = self.task(&approval.task_id)?;
             let place = Place::of(task.distro.as_deref());
             let executed = match approval.rung {
                 DeliveryRung::Commit => run_commit_plan(&task, &mut approval),
+                DeliveryRung::Sync => self.run_sync(&task, &mut approval),
                 _ if self.commits_lost(&task)? => Err(DeliveryError::new(
                     "commit_missing",
                     "No se publicó: los commits que hizo Tinto ya no están en la rama. Vuelve a preparar el commit.",
                 )),
-                _ => tasks::push_branch(place, &task.worktree, &task.branch).map(|upstream| {
-                    approval.tip = tasks::head(place, &task.worktree).ok();
-                    format!("Publicado en {upstream}")
+                // Right before publishing: the base synced is still merged.
+                _ => self.check_base_merged(&task).and_then(|()| {
+                    tasks::push_branch(place, &task.worktree, &task.branch).map(|upstream| {
+                        approval.tip = tasks::head(place, &task.worktree).ok();
+                        format!("Publicado en {upstream}")
+                    })
                 }),
             };
             approval.executed_at_ms = Some(now_ms());
@@ -1318,9 +1405,12 @@ impl DeliveryService {
         if outcome.trim().is_empty() {
             return refuse("el resultado corregido no puede quedar vacío");
         }
-        if matches!(approval.rung, DeliveryRung::Commit | DeliveryRung::Push) {
+        if matches!(
+            approval.rung,
+            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+        ) {
             return refuse(
-                "el commit y el push los comprueba Tinto con git; no se corrigen a mano",
+                "el commit, el sync y el push los comprueba Tinto con git; no se corrigen a mano",
             );
         }
         if !approval.status.was_done() {
@@ -1417,6 +1507,143 @@ impl DeliveryService {
         Ok(approval)
     }
 
+    /// The branch the task's PR merges into: its PR's base once GitHub has
+    /// it (a package retargeted), else the task's.
+    fn sync_base(&self, task: &DeliveryTask) -> Result<String, DeliveryError> {
+        Ok(self
+            .task_pr(&task.id)?
+            .and_then(|pr| pr.base)
+            .unwrap_or_else(|| task.base_ref.clone()))
+    }
+
+    /// A sync starts from a clean worktree no job is changing, with no merge
+    /// in progress and a base, fetched now, that is not merged yet. Returns
+    /// the base's name and commit.
+    fn sync_prerequisites(&self, task: &DeliveryTask) -> Result<(String, String), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let refuse = |category: &str, message: &str| Err(DeliveryError::new(category, message));
+        if tasks::merge_head(place, &task.worktree).is_some() {
+            return refuse(
+                "merge_in_progress",
+                "ya hay un merge en curso en el worktree; se concluye con el paso commit",
+            );
+        }
+        if tasks::worktree_state(place, &task.worktree, &task.base_commit)?.dirty {
+            return refuse(
+                "worktree_dirty",
+                "el worktree tiene cambios sin confirmar: confírmalos antes de sincronizar",
+            );
+        }
+        if self
+            .store()?
+            .task_jobs(&task.id)?
+            .iter()
+            .any(|job| job.status.is_open())
+        {
+            return refuse(
+                "job_running",
+                "un job de la tarea está en curso; sincroniza cuando termine",
+            );
+        }
+        let base = self.sync_base(task)?;
+        let (name, commit) = tasks::base_tip(place, &task.worktree, &base, true)?;
+        if tasks::on_branch(place, &task.worktree, &commit) {
+            return Err(DeliveryError::new(
+                "base_merged",
+                format!(
+                    "la rama ya incluye {name} ({}): no hay nada que sincronizar",
+                    short(&commit)
+                ),
+            ));
+        }
+        Ok((name, commit))
+    }
+
+    /// Fetches the task's base and merges it into the branch. Without
+    /// conflicts the step leaves a merge commit; with them it leaves the
+    /// merge in progress for an implementation job to resolve and a commit
+    /// step to conclude.
+    fn run_sync(
+        &self,
+        task: &DeliveryTask,
+        approval: &mut DeliveryApproval,
+    ) -> Result<String, DeliveryError> {
+        let (name, commit) = self.sync_prerequisites(task)?;
+        let place = Place::of(task.distro.as_deref());
+        approval.merge_head = Some(commit.clone());
+        let message = match approval.body.trim() {
+            "" => approval.title.clone(),
+            body => format!("{}\n\n{body}", approval.title),
+        };
+        match tasks::merge_base(place, &task.worktree, &commit, &message)? {
+            tasks::Merged::Commit(merge) => {
+                approval.created = vec![merge.clone()];
+                Ok(format!(
+                    "{name} ({}) fusionada en la rama: commit de merge {}",
+                    short(&commit),
+                    short(&merge)
+                ))
+            }
+            tasks::Merged::Conflicts(files) => {
+                let outcome = format!(
+                    "{name} ({}) tiene conflictos con la rama en: {}. El merge queda en curso: un job de implementación los resuelve y el paso commit lo concluye.",
+                    short(&commit),
+                    files.join(", ")
+                );
+                approval.conflicts = files;
+                Ok(outcome)
+            }
+        }
+    }
+
+    /// The conflicts a merge in progress still has in the task's worktree.
+    pub(super) fn merge_conflicts(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Option<DeliveryMergeConflicts>, DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        if tasks::merge_head(place, &task.worktree).is_none() {
+            return Ok(None);
+        }
+        let files = tasks::unresolved_conflicts(place, &task.worktree);
+        if files.is_empty() {
+            return Ok(None);
+        }
+        let base = self.sync_base(task)?;
+        let base =
+            tasks::base_tip(place, &task.worktree, &base, false).map_or(base, |(name, _)| name);
+        Ok(Some(DeliveryMergeConflicts { base, files }))
+    }
+
+    /// Before a push: no merge left in progress, and the base the latest
+    /// sync merged still in the branch (a commit made over the merge must
+    /// keep it as a parent).
+    pub(super) fn check_base_merged(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        if tasks::merge_head(place, &task.worktree).is_some() {
+            return Err(DeliveryError::new(
+                "merge_in_progress",
+                "hay un merge en curso en el worktree: concluye con el paso commit antes de publicar",
+            ));
+        }
+        let synced = self
+            .latest_approval(&task.id, DeliveryRung::Sync)?
+            .filter(|sync| sync.status == DeliveryApprovalStatus::Executed)
+            .and_then(|sync| sync.merge_head);
+        match synced {
+            Some(base) if !tasks::on_branch(place, &task.worktree, &base) => {
+                Err(DeliveryError::new(
+                    "base_unmerged",
+                    format!(
+                        "la base que se sincronizó ({}) ya no está en la rama: sincroniza de nuevo antes de publicar",
+                        short(&base)
+                    ),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Whether the commits of the task's commit step are gone from its
     /// branch (reset, amend or rebase done outside Tinto). The step then
     /// counts as undone, so the commit is prepared again before any push.
@@ -1441,6 +1668,17 @@ impl DeliveryService {
                 .iter()
                 .all(|commit| tasks::on_branch(place, &task.worktree, commit))
         {
+            return Ok(false);
+        }
+        // Only the parents of the last commit were put right outside Tinto
+        // (a merge's second parent restored): the branch has the same
+        // content in the same place, so the step stands on the new commit.
+        if let Some(head) = reparented(place, &task.worktree, &created) {
+            approval.created = created;
+            if let Some(last) = approval.created.last_mut() {
+                *last = head;
+            }
+            self.save_approval(&approval, "commit_reparented")?;
             return Ok(false);
         }
         approval.status = DeliveryApprovalStatus::Undone;
@@ -1681,6 +1919,14 @@ fn run_commit_plan(
             paths: changed.clone(),
         }];
     }
+    // Unstaging would end a merge in progress: it is concluded only by the
+    // step prepared for it.
+    if tasks::merge_head(place, &task.worktree) != approval.merge_head {
+        return Err(invalid_plan(match approval.merge_head {
+            Some(_) => "No se creó ningún commit: el merge en curso cuando se preparó el commit ya no está. Prepáralo de nuevo.",
+            None => "No se creó ningún commit: hay un merge en curso que este plan no contemplaba. Prepara de nuevo el commit, que concluirá el merge.",
+        }));
+    }
     check_plan(&changed, &approval.commits, &approval.left_out).map_err(|error| {
         invalid_plan(format!(
             "No se creó ningún commit: el worktree cambió desde que se preparó el plan ({}). Prepáralo de nuevo.",
@@ -1688,6 +1934,21 @@ fn run_commit_plan(
         ))
     })?;
     approval.before = Some(tasks::head(place, &task.worktree)?);
+    if approval.merge_head.is_some() {
+        check_conflicts_resolved(place, &task.worktree)?;
+        let message = &approval.commits[0].message;
+        let created = tasks::commit_merge(place, &task.worktree, message).map_err(|error| {
+            DeliveryError::new(
+                "commit_failed",
+                format!(
+                    "El commit de merge falló: {}. El merge sigue en curso en el worktree.",
+                    error.message
+                ),
+            )
+        })?;
+        approval.created.push(created);
+        return Ok(format!("Commit de merge {}", shorts(&approval.created)));
+    }
     tasks::unstage_all(place, &task.worktree)?;
     let total = approval.commits.len();
     for (index, commit) in approval.commits.iter().enumerate() {
@@ -1731,6 +1992,35 @@ fn run_commit_plan(
     Ok(outcome)
 }
 
+/// The branch's HEAD when it replaces the last of `created` with the same
+/// tree on the same first parent (only its other parents differ), and the
+/// rest of `created` is still on the branch.
+fn reparented(place: Place<'_>, worktree: &std::path::Path, created: &[String]) -> Option<String> {
+    let (last, earlier) = created.split_last()?;
+    if !earlier
+        .iter()
+        .all(|commit| tasks::on_branch(place, worktree, commit))
+    {
+        return None;
+    }
+    // Tree, then parents.
+    let shape = |commit: &str| -> Option<(String, Vec<String>)> {
+        let text = tasks::git(place, worktree, &["show", "-s", "--format=%T %P", commit]).ok()?;
+        let mut ids = text.split_whitespace().map(str::to_string);
+        Some((ids.next()?, ids.collect()))
+    };
+    let (tree, parents) = shape("HEAD")?;
+    let (old_tree, old_parents) = shape(last)?;
+    // An amend keeps the parents: that is a rewrite, not a fix.
+    let only_parents = tree == old_tree
+        && parents != old_parents
+        && parents.first().is_some()
+        && parents.first() == old_parents.first();
+    only_parents
+        .then(|| tasks::head(place, worktree).ok())
+        .flatten()
+}
+
 fn shorts(commits: &[String]) -> String {
     commits
         .iter()
@@ -1771,8 +2061,8 @@ fn rung_prerequisites(task: &DeliveryTask, rung: DeliveryRung) -> Result<(), Del
                 ));
             }
         }
-        // Checked against the followed PR, which needs the service.
-        DeliveryRung::Merge | DeliveryRung::Jira => {}
+        // Checked with the service: the followed PR, or the task's jobs.
+        DeliveryRung::Merge | DeliveryRung::Jira | DeliveryRung::Sync => {}
     }
     Ok(())
 }

@@ -290,6 +290,20 @@ pub fn job_prompt(
             lines.push(format!("The repo's checks: {}.", commands.join("; ")));
         }
     }
+    if let Some(merge) = &job.merge_conflicts {
+        let files = merge.files.join(", ");
+        lines.push(if job.writes {
+            format!(
+                "Tinto is merging {} into this branch and the merge stopped on conflicts in: {files}. Resolve each one first: edit the file so it keeps what both sides meant, and remove every conflict marker (<<<<<<<, =======, >>>>>>>). Do not run git merge, git add, git commit, git reset or git checkout: the merge stays in progress and Tinto concludes it with the commit step.",
+                merge.base
+            )
+        } else {
+            format!(
+                "Tinto is merging {} into this branch; it still has conflicts in: {files}.",
+                merge.base
+            )
+        });
+    }
     lines.extend(job.task_checks.iter().cloned());
     if job.role == QA_ROLE && !job.qa_followup.is_empty() {
         lines.push("Problems from earlier QA the user decided on:".to_string());
@@ -2113,6 +2127,7 @@ pub(crate) mod tests {
             frozen_scripts: Vec::new(),
             resumes: None,
             resume_note: None,
+            merge_conflicts: None,
             activity: None,
             activity_at_ms: None,
             current_command: None,

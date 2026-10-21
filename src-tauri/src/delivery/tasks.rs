@@ -427,6 +427,103 @@ pub fn commit_paths(
     head(place, worktree)
 }
 
+/// The commit being merged while a merge is in progress (`MERGE_HEAD`).
+pub fn merge_head(place: Place<'_>, worktree: &Path) -> Option<String> {
+    git(
+        place,
+        worktree,
+        &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+    )
+    .ok()
+    .filter(|commit| !commit.is_empty())
+}
+
+/// Files of the merge in progress that git left conflicted and that still
+/// have conflict markers.
+pub fn unresolved_conflicts(place: Place<'_>, worktree: &Path) -> Vec<String> {
+    let conflicted =
+        git(place, worktree, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+    if conflicted.is_empty() {
+        return Vec::new();
+    }
+    let mut args = vec!["grep", "-l", "-E", "^(<<<<<<<|>>>>>>>)( |$)", "--"];
+    args.extend(conflicted.lines());
+    // Exits 1 when no file has markers.
+    git(place, worktree, &args)
+        .map(|files| files.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Concludes the merge in progress as it is in the worktree: every change,
+/// with exactly `message`. The commit keeps both parents.
+pub fn commit_merge(
+    place: Place<'_>,
+    worktree: &Path,
+    message: &str,
+) -> Result<String, DeliveryError> {
+    git(place, worktree, &["add", "--all"])?;
+    git(place, worktree, &["commit", "--quiet", "-m", message])?;
+    head(place, worktree)
+}
+
+/// Where the task's base is: `origin/<base>` when the repo has an origin,
+/// else the local branch. `fetch` brings the remote one up to date first.
+pub fn base_tip(
+    place: Place<'_>,
+    worktree: &Path,
+    base: &str,
+    fetch: bool,
+) -> Result<(String, String), DeliveryError> {
+    let base = base.trim_start_matches("origin/");
+    let has_origin = origin_url(place, worktree).is_some();
+    if fetch && has_origin {
+        let refspec = format!("+refs/heads/{base}:refs/remotes/origin/{base}");
+        git(place, worktree, &["fetch", "--quiet", "origin", &refspec])?;
+    }
+    let name = if has_origin {
+        format!("origin/{base}")
+    } else {
+        base.to_string()
+    };
+    let commit = verify_commit(place, worktree, &name).ok_or_else(|| {
+        DeliveryError::new("base_not_found", format!("no se encontró la base {name}"))
+    })?;
+    Ok((name, commit))
+}
+
+/// The result of merging the base into a task's branch.
+pub enum Merged {
+    /// The merge commit, with the branch and the base as parents.
+    Commit(String),
+    /// The files git left in conflict; the merge stays in progress.
+    Conflicts(Vec<String>),
+}
+
+/// Merges `commit` into the branch checked out in `worktree` with exactly
+/// `message`, always as a merge commit.
+pub fn merge_base(
+    place: Place<'_>,
+    worktree: &Path,
+    commit: &str,
+    message: &str,
+) -> Result<Merged, DeliveryError> {
+    let merged = git(
+        place,
+        worktree,
+        &["merge", "--no-ff", "--quiet", "-m", message, commit],
+    );
+    match (merged, merge_head(place, worktree)) {
+        (Ok(_), _) => head(place, worktree).map(Merged::Commit),
+        (Err(_), Some(_)) => Ok(Merged::Conflicts(
+            git(place, worktree, &["diff", "--name-only", "--diff-filter=U"])?
+                .lines()
+                .map(str::to_string)
+                .collect(),
+        )),
+        (Err(error), None) => Err(error),
+    }
+}
+
 /// Whether `commit` is still part of the branch checked out in `worktree`.
 pub fn on_branch(place: Place<'_>, worktree: &Path, commit: &str) -> bool {
     git_ok(

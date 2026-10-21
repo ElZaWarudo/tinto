@@ -386,6 +386,11 @@ pub struct DeliveryJob {
     /// ran out, Tinto restarted); `None` when the user resumed a pause.
     #[serde(default)]
     pub resume_note: Option<String>,
+    /// A writing job that starts while a sync step's merge is stopped on
+    /// conflicts: the base being merged and the files to resolve, which
+    /// its instructions name.
+    #[serde(default)]
+    pub merge_conflicts: Option<DeliveryMergeConflicts>,
     /// What the agent did last, as its log says it, and when: the view
     /// shows it while the job runs and tells when it has gone quiet.
     #[serde(default)]
@@ -512,6 +517,8 @@ pub struct DeliveryLease {
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryRung {
     Commit,
+    /// Merge the task's base into its branch, in its worktree.
+    Sync,
     Push,
     Pr,
     /// Merge the PR on GitHub and delete its branch there.
@@ -543,12 +550,22 @@ impl DeliveryApprovalStatus {
     }
 }
 
+/// A merge of the task's base stopped on conflicts, as a job is told.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryMergeConflicts {
+    /// The base branch being merged, such as `origin/develop`.
+    pub base: String,
+    pub files: Vec<String>,
+}
+
 /// One commit of a commit step's plan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryCommit {
     /// The exact message: subject, then an optional body after a blank line.
     pub message: String,
-    /// The files it includes, relative to the worktree, with `/`.
+    /// The files it includes, relative to the worktree, with `/`. A commit
+    /// that concludes a merge takes every change and needs none.
+    #[serde(default)]
     pub paths: Vec<String>,
 }
 
@@ -601,7 +618,17 @@ pub struct DeliveryApproval {
     /// areas or is large, which the user reads with the plan.
     #[serde(default)]
     pub single_commit_reason: Option<String>,
-    /// `commit` only: the commits Tinto created, in order.
+    /// `commit`: the commit being merged when the step concludes a merge in
+    /// progress; Tinto then makes one commit of the whole merge, with the
+    /// branch and this commit as parents. `sync`: the base commit it merged.
+    #[serde(default)]
+    pub merge_head: Option<String>,
+    /// `sync` only: the files left in conflict, when the merge stopped on
+    /// them. The merge stays in progress until a commit step concludes it.
+    #[serde(default)]
+    pub conflicts: Vec<String>,
+    /// `commit`: the commits Tinto created, in order. `sync`: its merge
+    /// commit, when the merge had no conflicts.
     #[serde(default)]
     pub created: Vec<String>,
     /// `commit` only: where the branch was before them, to undo the step.

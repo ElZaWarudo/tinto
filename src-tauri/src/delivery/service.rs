@@ -1030,6 +1030,11 @@ impl DeliveryService {
             Vec::new()
         };
         let shared_decisions = self.package_decisions(&task.id)?;
+        // A sync stopped on conflicts: the job is told which files to resolve.
+        let merge_conflicts = match request.agent {
+            DeliveryAgent::Shell => None,
+            _ => self.merge_conflicts(&task)?,
+        };
         let store = self.store()?;
         let model = match request.model.filter(|model| !model.trim().is_empty()) {
             None if request.agent == DeliveryAgent::Codex => store
@@ -1185,6 +1190,7 @@ impl DeliveryService {
             frozen_scripts: Vec::new(),
             resumes: resumes.map(|paused| paused.id.clone()),
             resume_note: resumes.and_then(continue_note),
+            merge_conflicts,
             activity: None,
             activity_at_ms: None,
             current_command: None,
