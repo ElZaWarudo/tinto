@@ -56,6 +56,9 @@ const client = vi.hoisted(() => ({
   rejectDeliverySettingsProposal: vi.fn(),
   refreshDeliveryPr: vi.fn(() => Promise.resolve(null)),
   checkDeliveryTask: vi.fn(() => Promise.resolve(null)),
+  checkDeliveryEnvironment: vi.fn((): Promise<{ name: string; ok: boolean; output: string }[]> =>
+    Promise.resolve([]),
+  ),
   findDeliveryPr: vi.fn(() => Promise.resolve(null)),
   closeDeliveryPr: vi.fn(() => Promise.resolve(null)),
   sendDeliveryQaProblems: vi.fn(() => Promise.resolve([])),
@@ -1877,6 +1880,65 @@ describe("DeliveryPanel", () => {
       ),
     );
     expect(await within(qa).findByText(/^Guardado para/)).toBeInTheDocument();
+  });
+
+  it("checks the repo's environment when its view opens and again on demand", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.checkDeliveryEnvironment
+      .mockResolvedValueOnce([
+        { name: "Docker", ok: true, output: "Docker 27.1.1 responde." },
+        { name: "pg_isready -h localhost", ok: false, output: "localhost:5432 - no response" },
+      ])
+      .mockResolvedValueOnce([
+        { name: "Docker", ok: true, output: "Docker 27.1.1 responde." },
+        { name: "pg_isready -h localhost", ok: true, output: "accepting connections" },
+      ]);
+    renderPanel();
+    const failing = await screen.findByRole("button", {
+      name: "Entorno: falla pg_isready -h localhost. Comprobar de nuevo",
+    });
+    expect(client.checkDeliveryEnvironment).toHaveBeenCalledWith(REPO, null);
+    expect(failing).toHaveClass("delivery-env--fail");
+    expect(failing.title).toContain("✗ pg_isready -h localhost\nlocalhost:5432 - no response");
+    expect(failing.title).toContain("✓ Docker");
+
+    await user.click(failing);
+    const ok = await screen.findByRole("button", { name: "Entorno: bien. Comprobar de nuevo" });
+    expect(ok).toHaveClass("delivery-env--ok");
+    expect(client.checkDeliveryEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it("sets retrying on restart and marks verification commands as environment probes", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(overview());
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      checks: ["npm test", "pg_isready -h localhost"],
+    });
+    client.setDeliveryRepoSettings.mockImplementation((_repo, settings) =>
+      Promise.resolve(settings),
+    );
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Ajustes de agentos" }));
+    const settings = screen.getByRole("region", { name: "Ajustes de agentos" });
+    const save = await within(settings).findByRole("button", { name: "Guardar" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(within(settings).getByRole("checkbox", { name: /^Reintentar al reiniciar/ }));
+    await user.click(within(settings).getByRole("checkbox", { name: "pg_isready -h localhost" }));
+    expect(within(settings).getByRole("checkbox", { name: "npm test" })).not.toBeChecked();
+    await user.click(save);
+    await waitFor(() =>
+      expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
+        REPO,
+        expect.objectContaining({
+          retry_on_restart: true,
+          environment_probes: ["pg_isready -h localhost"],
+        }),
+      ),
+    );
   });
 
   it("picks the model and reasoning from selectors, Sol 6.1 at medium by default", async () => {

@@ -76,6 +76,10 @@ pub(super) struct Inner {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Jobs being stopped to be paused rather than cancelled.
     pausing: Mutex<HashSet<String>>,
+    /// Jobs interrupted by the last restart that "Reintentar al reiniciar"
+    /// queues again (see [`DeliveryService::retry_interrupted`]), with what
+    /// is left of each in WSL.
+    restart_retries: Mutex<Vec<(String, Option<adapters::WslJob>)>>,
     notify: Mutex<Option<Notify>>,
     /// Counts every change; wait_run sleeps on it until the next one.
     pub(super) changes: (Mutex<u64>, Condvar),
@@ -198,6 +202,7 @@ impl DeliveryService {
                 store: Mutex::new(store),
                 cancels: Mutex::new(HashMap::new()),
                 pausing: Mutex::new(HashSet::new()),
+                restart_retries: Mutex::new(Vec::new()),
                 notify: Mutex::new(None),
                 changes: (Mutex::new(0), Condvar::new()),
                 waiting: Mutex::new(HashMap::new()),
@@ -247,19 +252,36 @@ impl DeliveryService {
     }
 
     /// Jobs that were running when Tinto stopped died with it (KTD9). They
-    /// become `interrupted`, never restarted on their own, and any resource
-    /// they held is quarantined until the user releases it.
+    /// become `interrupted` and any resource they held is quarantined until
+    /// the user releases it. With "Reintentar al reiniciar" in their repo,
+    /// the ones safe to repeat are queued again once the app is wired.
     fn reconcile(&self) -> Result<(), DeliveryError> {
         let store = self.store()?;
         let now = now_ms();
         let mut leftovers = Vec::new();
+        let mut retries = Vec::new();
         for mut job in store.jobs()? {
             if !job.status.is_active() {
                 continue;
             }
+            let retry_on_restart = match store.task(&job.task_id)? {
+                Some(task) => store.repo_settings(&task.repo)?.retry_on_restart,
+                None => false,
+            };
+            let not_retried = if retry_on_restart {
+                not_safe_to_repeat(&job)
+            } else {
+                None
+            };
+            let retry = retry_on_restart && not_retried.is_none();
             job.status = DeliveryJobStatus::Interrupted;
             job.ended_at_ms = Some(now);
-            job.error = Some("Tinto se cerró mientras el trabajo corría.".to_string());
+            job.error = Some(match &not_retried {
+                Some(reason) => {
+                    format!("Tinto se cerró mientras el trabajo corría. No se reintenta: {reason}.")
+                }
+                None => "Tinto se cerró mientras el trabajo corría.".to_string(),
+            });
             store.put_job(&job)?;
             settle_lease(&store, &job, true)?;
             store.record_event(
@@ -267,13 +289,22 @@ impl DeliveryService {
                 "job_interrupted",
                 Some(&job.task_id),
                 Some(&job.id),
-                "",
+                &not_retried
+                    .map(|reason| format!("no se reintenta: {reason}"))
+                    .unwrap_or_default(),
             )?;
             let wsl_job = (self.inner.paths_for)(&job.id)
                 .ok()
                 .and_then(|paths| std::fs::read(paths.dir.join(WSL_JOB_FILE)).ok())
                 .and_then(|data| serde_json::from_slice::<adapters::WslJob>(&data).ok());
-            leftovers.extend(wsl_job);
+            if retry {
+                retries.push((job.id.clone(), wsl_job));
+            } else {
+                leftovers.extend(wsl_job);
+            }
+        }
+        if let Ok(mut slot) = self.inner.restart_retries.lock() {
+            *slot = retries;
         }
         // WSL jobs outlive Tinto; stop what is left without delaying startup.
         if !leftovers.is_empty() {
@@ -629,14 +660,16 @@ impl DeliveryService {
     // ---- jobs ----
 
     pub fn dispatch(&self, request: NewJob) -> Result<DeliveryJob, DeliveryError> {
-        self.dispatch_job(request, None)
+        self.dispatch_job(request, None, None)
     }
 
-    /// `resumes` is the paused job the new one continues in its session.
+    /// `resumes` is the paused job the new one continues in its session;
+    /// `retry_of` the interrupted job it repeats after a restart.
     fn dispatch_job(
         &self,
         mut request: NewJob,
         resumes: Option<&DeliveryJob>,
+        retry_of: Option<&str>,
     ) -> Result<DeliveryJob, DeliveryError> {
         let task = self.task(&request.task_id)?;
         // On a Windows repo agents run as installed on Windows, never in WSL
@@ -867,6 +900,7 @@ impl DeliveryService {
             visual_record: None,
             visual_record_error: None,
             substituted,
+            retry_of: retry_of.map(str::to_string),
         };
         store.put_job(&job)?;
         store.record_event(
@@ -949,6 +983,7 @@ impl DeliveryService {
                 stage_default: paused.stage_default,
             },
             Some(&paused),
+            None,
         )
     }
 
@@ -1032,8 +1067,14 @@ impl DeliveryService {
                 "el trabajo todavía no terminó",
             ));
         }
-        // A job on the stage's settings follows them as they are now: the
-        // user may have changed a model that failed.
+        let assignment = self.same_assignment(job)?;
+        self.dispatch(assignment)
+    }
+
+    /// A job's assignment again, for a retry. A job on the stage's settings
+    /// follows them as they are now: the user may have changed a model that
+    /// failed.
+    fn same_assignment(&self, job: DeliveryJob) -> Result<NewJob, DeliveryError> {
         let (mut agent, mut model, mut reasoning) = (job.agent, job.model, job.reasoning);
         if job.stage_default {
             let repo = self.task(&job.task_id)?.repo;
@@ -1041,7 +1082,7 @@ impl DeliveryService {
                 (agent, model, reasoning) = (stage.agent, stage.model, stage.reasoning);
             }
         }
-        self.dispatch(NewJob {
+        Ok(NewJob {
             task_id: job.task_id,
             role: job.role,
             agent,
@@ -1056,6 +1097,62 @@ impl DeliveryService {
             read_dirs: job.read_dirs,
             stage_default: job.stage_default,
         })
+    }
+
+    /// "Reintentar al reiniciar": queues again, once, each job the restart
+    /// interrupted that is safe to repeat, as a retry of it. Called once the
+    /// app is wired; it waits for what a WSL job left to stop first. The
+    /// coordinator hears of each retry, or why it could not be queued.
+    pub fn retry_interrupted(&self) {
+        let retries = self
+            .inner
+            .restart_retries
+            .lock()
+            .map(|mut slot| std::mem::take(&mut *slot))
+            .unwrap_or_default();
+        for (job_id, wsl_job) in retries {
+            if let Some(wsl_job) = wsl_job {
+                adapters::stop_wsl_job(&wsl_job, "KILL");
+            }
+            if let Err(error) = self.retry_after_restart(&job_id) {
+                eprintln!("tinto: delivery could not retry job {job_id}: {error}");
+            }
+        }
+    }
+
+    fn retry_after_restart(&self, job_id: &str) -> Result<(), DeliveryError> {
+        let mut job = self.job(job_id)?;
+        let queued = self
+            .same_assignment(job.clone())
+            .and_then(|assignment| self.dispatch_job(assignment, None, Some(&job.id)));
+        let store = self.store()?;
+        let note = match &queued {
+            Ok(retry) => {
+                store.record_event(
+                    now_ms(),
+                    "job_retried",
+                    Some(&retry.task_id),
+                    Some(&retry.id),
+                    &job.id,
+                )?;
+                "Se reintentó al reiniciar Tinto.".to_string()
+            }
+            Err(error) => {
+                store.record_event(
+                    now_ms(),
+                    "job_not_retried",
+                    Some(&job.task_id),
+                    Some(&job.id),
+                    &error.message,
+                )?;
+                format!("No se pudo reintentar al reiniciar: {}.", error.message)
+            }
+        };
+        job.error = Some(format!("{} {note}", job.error.unwrap_or_default()).trim().to_string());
+        store.put_job(&job)?;
+        drop(store);
+        self.notify();
+        Ok(())
     }
 
     /// Restores the files a job changed to how they were when it started.
@@ -2038,6 +2135,36 @@ fn to_changes(snapshot: &WorktreeSnapshot) -> Vec<DeliveryChange> {
             .to_string(),
         })
         .collect()
+}
+
+/// A new attempt with the job's assignment.
+
+/// Why a job a restart interrupted must not run again on its own, if so:
+/// what it did may have half-happened where a new attempt cannot see it.
+/// An agent with workspace access only changes its worktree (no network
+/// outside QA, no push, no merge), and a new attempt starts from what the
+/// first one left there.
+fn not_safe_to_repeat(job: &DeliveryJob) -> Option<String> {
+    if job.retry_of.is_some() {
+        return Some("ya era el reintento automático de otro trabajo interrumpido".to_string());
+    }
+    if job.agent == DeliveryAgent::Shell {
+        return Some(
+            "es un comando de shell, que pudo quedar a medias haciendo cualquier cosa".to_string(),
+        );
+    }
+    if job.access == DeliveryAccess::Full {
+        return Some(
+            "corría con acceso completo y pudo dejar a medias algo fuera del worktree (un push, un merge, datos de prueba)"
+                .to_string(),
+        );
+    }
+    if let Some(lease) = &job.lease {
+        return Some(format!(
+            "tenía el recurso «{lease}», que quedó en cuarentena: revisa el entorno y libéralo antes de repetirla"
+        ));
+    }
+    None
 }
 
 fn agent_name(agent: DeliveryAgent) -> &'static str {

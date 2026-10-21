@@ -19,6 +19,7 @@ import type {
   DeliveryLease,
   DeliveryOverview,
   DeliveryPlatform,
+  DeliveryEnvironmentCheck,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryRung,
@@ -167,6 +168,10 @@ export const setDeliveryRepoSettings = (repo: string, settings: DeliveryRepoSett
 /** Saves the repo's Jira token apart from its settings; empty forgets it. */
 export const setDeliveryJiraToken = (repo: string, token: string) =>
   invoke<void>("delivery_set_jira_token", { repo, token });
+
+/** "Entorno": whether Docker (when the repo uses it) and its probes answer now. */
+export const checkDeliveryEnvironment = (repo: string, distro: string | null) =>
+  invoke<DeliveryEnvironmentCheck[]>("delivery_check_environment", { repo, distro });
 
 /** "Comprobar Jira": the token owner's name, as Jira sees it. */
 export const checkDeliveryJira = (repo: string) => invoke<string>("delivery_check_jira", { repo });

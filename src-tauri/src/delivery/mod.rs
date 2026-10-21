@@ -11,6 +11,7 @@ pub mod blockers;
 pub mod commands;
 pub mod coordination;
 pub mod decisions;
+pub mod environment;
 pub mod feed;
 pub mod jira;
 pub mod mcp;

@@ -182,6 +182,7 @@ pub fn run() {
             delivery::commands::delivery_set_codex_model,
             delivery::commands::delivery_repo_settings,
             delivery::commands::delivery_set_repo_settings,
+            delivery::commands::delivery_check_environment,
             delivery::commands::delivery_set_jira_token,
             delivery::commands::delivery_check_jira,
             delivery::commands::delivery_release_lease,
@@ -304,6 +305,9 @@ pub fn run() {
                     delivery_for_setup.clone(),
                 );
                 delivery_for_setup.tick();
+                // Stopping what WSL jobs left can take a while: not on startup's path.
+                let retrying = delivery_for_setup.clone();
+                std::thread::spawn(move || retrying.retry_interrupted());
             }
             #[cfg(feature = "e2e-wdio")]
             {

@@ -21,6 +21,8 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "job_ended",
     "job_cancelled",
     "job_interrupted",
+    "job_retried",
+    "job_not_retried",
     "job_undone",
     "approval_approved",
     "approval_rejected",
@@ -355,7 +357,14 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
     let what = match event.kind.as_str() {
         "job_ended" => format!("la etapa {stage} terminó ({detail})"),
         "job_cancelled" => format!("la etapa {stage} se canceló"),
-        "job_interrupted" => format!("la etapa {stage} se interrumpió"),
+        "job_interrupted" if detail.is_empty() => format!("la etapa {stage} se interrumpió"),
+        "job_interrupted" => format!("la etapa {stage} se interrumpió al cerrarse Tinto; {detail}"),
+        "job_retried" => format!(
+            "Tinto reintentó la etapa {stage} al reiniciar (se había interrumpido al cerrarse); el trabajo nuevo está en cola"
+        ),
+        "job_not_retried" => {
+            format!("la etapa {stage} interrumpida no se pudo reintentar al reiniciar: {detail}")
+        }
         "job_undone" => format!("el usuario deshizo los cambios de la etapa {stage}"),
         "approval_approved" => format!("el usuario aprobó el paso {detail}"),
         "approval_rejected" => format!("el usuario rechazó el paso {detail}"),
