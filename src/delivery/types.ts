@@ -391,6 +391,8 @@ export interface DeliveryRepoSettings {
   checks?: string[];
   /** More commands QA jobs may run (e.g. the CLI an issue changes). */
   qa_commands?: string[];
+  /** Environment variables jobs run the checks and QA commands with, by name. */
+  check_env?: Record<string, string>;
   /** Whether QA jobs get a headless browser. */
   qa_browser?: boolean;
   /** Where QA runs on this machine, in the user's words. */

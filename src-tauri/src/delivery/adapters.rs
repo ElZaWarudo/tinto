@@ -220,7 +220,7 @@ pub fn job_prompt(
             .map(|dir| agent_path(dir, from_wsl))
             .collect();
         lines.push(format!(
-            "The user also lets you read and list these folders outside the worktree: {}.",
+            "You may also read and list these folders outside the worktree, without changing them: {}.",
             dirs.join("; ")
         ));
     }
@@ -945,8 +945,9 @@ const GIT_READS: [&str; 7] = [
 /// Commands a Claude job without full access may run besides the read-only
 /// ones Claude Code already allows: the repo's verification commands (each
 /// with any arguments) and read-only git, also as `git -C <worktree> …`,
-/// which Claude Code would otherwise ask about. A QA job may also write in
-/// its own QA folder, where its evidence goes.
+/// which Claude Code would otherwise ask about. It may read the folders its
+/// coordinator named; a QA job may also write in its own QA folder, where
+/// its evidence goes.
 fn claude_allowed_tools(
     job: &DeliveryJob,
     task: &DeliveryTask,
@@ -963,6 +964,13 @@ fn claude_allowed_tools(
         .chain(job_commands(job, from_wsl))
         .map(|command| format!("Bash({command}:*)"))
         .collect();
+    // Folders it may read only: a rule, not `--add-dir`, which would let a
+    // job that accepts edits change them too.
+    tools.extend(
+        job.read_dirs
+            .iter()
+            .map(|dir| format!("Read({}/**)", claude_rule_path(&agent_path(dir, from_wsl)))),
+    );
     if job.role == QA_ROLE {
         let writable = [qa_folder(paths, from_wsl)]
             .into_iter()
@@ -1160,8 +1168,15 @@ fn wsl_launch(
         distro: distro.to_string(),
         job_id: job.id.clone(),
     };
+    // Windows' environment does not cross into WSL: the repo's variables
+    // for checks are exported here.
+    let check_env: String = job
+        .check_env
+        .iter()
+        .map(|(name, value)| format!(" {name}={}", sh_quote(value)))
+        .collect();
     let leader = format!(
-        r#"export TINTO_DELIVERY_JOB={}; eval "$1""#,
+        r#"export TINTO_DELIVERY_JOB={}{check_env}; eval "$1""#,
         sh_quote(&wsl_job.job_id)
     );
     Ok(JobLaunch {
@@ -1810,6 +1825,8 @@ pub(crate) mod tests {
             ran_on: None,
             read_dirs: Vec::new(),
             write_dirs: Vec::new(),
+            stage_default: false,
+            check_env: Default::default(),
             frozen_scripts: Vec::new(),
             resumes: None,
             activity: None,
@@ -2156,6 +2173,43 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_writing_job_reads_the_named_folders_and_gets_the_check_variables() {
+        let mut task = sample_task();
+        task.distro = Some("Ubuntu".into());
+        let paths = JobPaths::in_dir(PathBuf::from(
+            r"C:\Users\me\AppData\Roaming\tinto\delivery\jobs\j1",
+        ));
+        let mut job = sample_job(DeliveryAgent::Claude);
+        job.read_dirs = vec!["/repo/docs/contracts".into()];
+        job.check_env = [(
+            "TEST_DB_MONGO_URL".to_string(),
+            "mongodb://localhost:27017/test".to_string(),
+        )]
+        .into();
+        let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
+        let script = launch.args.last().unwrap();
+        // Read only: a rule, never a working directory it could edit.
+        assert!(
+            script.contains(" 'Read(//repo/docs/contracts/**)'"),
+            "{script}"
+        );
+        assert!(!script.contains("--add-dir"), "{script}");
+        assert!(launch.stdin.contains(
+            "read and list these folders outside the worktree, without changing them: /repo/docs/contracts."
+        ));
+        // Windows' environment does not reach WSL: the script exports them.
+        assert!(
+            launch.args.iter().any(|arg| {
+                arg.starts_with(
+                "export TINTO_DELIVERY_JOB='j1' TEST_DB_MONGO_URL='mongodb://localhost:27017/test';"
+            )
+            }),
+            "{:?}",
+            launch.args
+        );
+    }
+
+    #[test]
     #[cfg(windows)]
     fn qa_jobs_get_network_the_main_checkout_and_the_browser() {
         let mut task = sample_task();
@@ -2339,7 +2393,7 @@ pub(crate) mod tests {
             .stdin
             .contains("you can run only: bash C:/cfg/jobs/j1/frozen/1/run.sh."));
         assert!(launch.stdin.contains(
-            "read and list these folders outside the worktree: C:/Users/me/.claude/skills."
+            "read and list these folders outside the worktree, without changing them: C:/Users/me/.claude/skills."
         ));
     }
 

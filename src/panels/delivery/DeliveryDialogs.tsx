@@ -360,6 +360,17 @@ function parseChecks(text: string): string[] {
     .filter(Boolean);
 }
 
+/** `NAME=value` lines as variables by name; lines without a name are dropped. */
+function parseEnv(text: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const at = line.indexOf("=");
+    const name = (at < 0 ? line : line.slice(0, at)).trim();
+    if (name) env[name] = at < 0 ? "" : line.slice(at + 1).trim();
+  }
+  return env;
+}
+
 export function DispatchDialog({
   task,
   settings,
@@ -849,6 +860,8 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
   const [loaded, setLoaded] = useState<DeliveryRepoSettings | null>(null);
   const [browser, setBrowser] = useState(false);
   const [commands, setCommands] = useState("");
+  // `NAME=value` lines.
+  const [checkEnv, setCheckEnv] = useState("");
   const [environment, setEnvironment] = useState("");
   const [verification, setVerification] = useState("");
   // "yes", "no", or "" while the user has not set it.
@@ -874,6 +887,11 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         setLoaded(settings);
         setBrowser(settings.qa_browser ?? false);
         setCommands((settings.qa_commands ?? []).join("\n"));
+        setCheckEnv(
+          Object.entries(settings.check_env ?? {})
+            .map(([name, value]) => `${name}=${value}`)
+            .join("\n"),
+        );
         setEnvironment(settings.qa_environment ?? "");
         setVerification(settings.verification ?? "");
         setMaxFiles(settings.single_commit_max_files?.toString() ?? "");
@@ -935,6 +953,17 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
           onChange={(event) => setCommands(event.target.value)}
           rows={2}
           placeholder="agentos skills install"
+        />
+      </Field>
+      <Field
+        label="Variables de entorno de verificación y QA"
+        hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. Son ajustes de prueba, no secretos: se ven tal cual."
+      >
+        <textarea
+          value={checkEnv}
+          onChange={(event) => setCheckEnv(event.target.value)}
+          rows={2}
+          placeholder="TEST_DB_MONGO_URL=mongodb://localhost:27017/tinto_test"
         />
       </Field>
       <Field label="Navegador para la QA">
@@ -1071,6 +1100,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
               ...loaded,
               qa_browser: browser,
               qa_commands: parseChecks(commands),
+              check_env: parseEnv(checkEnv),
               qa_environment: environment.trim(),
               verification: verification.trim(),
               paid_model_calls: paidCalls === "" ? null : paidCalls === "yes",
