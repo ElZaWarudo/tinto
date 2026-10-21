@@ -22,10 +22,10 @@ use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApprovalStatus, DeliveryCommit,
     DeliveryCoordinatorEndpoint, DeliveryDecisionKind, DeliveryDecisionOption, DeliveryJob,
     DeliveryOverview, DeliveryPlatform, DeliveryRung, DeliverySettingsChanges,
-    DeliverySettingsProposalStatus,
+    DeliverySettingsProposalStatus, DeliveryTaskMilestone,
 };
 use super::phase::Phase;
-use super::service::{DeliveryService, NewJob, NewTask, QA_ROLE};
+use super::service::{DeliveryService, NewJob, NewPackage, NewTask, QA_ROLE};
 use super::DeliveryError;
 
 const PREFERRED_PORT: u16 = 47920;
@@ -173,7 +173,7 @@ pub fn handle_message_from(
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "tinto-delivery", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. You coordinate every task of the batch at once, not one issue after another: keep each task's next stage running up to the capacity, and while one task waits (a job, QA, the user), move the others; wait_run returns as soon as anything needs you (a job ends, the user answers, approves or rejects, the PR moves), lists the idle tasks and does not wait while they can run; never end your turn while the batch has open tasks, call wait_run again with its cursor. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are."
+            "instructions": "Tinto Delivery: create a run, create tasks (each gets its own worktree and branch), ask the user for the decisions a task needs with request_decisions, dispatch jobs and wait for their results. You coordinate every task of the batch at once, not one issue after another: keep each task's next stage running up to the capacity, and while one task waits (a job, QA, the user), move the others; wait_run returns as soon as anything needs you (a job ends, the user answers, approves or rejects, the PR moves), lists the idle tasks and does not wait while they can run; never end your turn while the batch has open tasks, call wait_run again with its cursor. Pass your run owner and generation on every write. Decisions and the approvals for commit, push, PR and Jira are answered by the user in Tinto, not in chat. A tool whose result is a list (read_decisions, request_decisions) or null (read_pr without a PR) returns it as structuredContent.result; objects come as they are. An issue too large for one PR is delivered in packages: one task per package, created with create_task's `package` (see its description)."
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
@@ -316,6 +316,7 @@ fn run_tool(
                 base: optional("base"),
                 branch: optional("branch"),
                 run_id: Some(run_id),
+                package: parse_package(&args["package"])?,
             })?)
         }
         "set_task_state" => {
@@ -628,7 +629,19 @@ fn run_tool(
             let decisions = parse_decisions(&args["decisions"])?;
             to_json(&service.request_decisions(&task_id, decisions, &text("owner")?)?)
         }
-        "read_decisions" => to_json(&service.task_decisions(&text("task_id")?)?),
+        "read_decisions" => {
+            let task_id = text("task_id")?;
+            let mut decisions = to_json(&service.task_decisions(&task_id)?)?;
+            // The issue's other packages share their choices and texts.
+            if let Some(list) = decisions.as_array_mut() {
+                for (package, decision) in service.package_decisions(&task_id)? {
+                    let mut value = to_json(&decision)?;
+                    value["from_package"] = json!(package);
+                    list.push(value);
+                }
+            }
+            Ok(decisions)
+        }
         "read_qa_problems" => to_json(&service.task_qa_problems(&text("task_id")?)?),
         "update_qa_problems" => {
             let run_id = fence()?;
@@ -794,6 +807,36 @@ fn run_tool(
             format!("herramienta desconocida: {name}"),
         )),
     }
+}
+
+fn parse_package(value: &Value) -> Result<Option<NewPackage>, DeliveryError> {
+    #[derive(serde::Deserialize)]
+    struct Package {
+        index: u32,
+        of: u32,
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        builds_on: Option<u32>,
+        #[serde(default)]
+        until: Option<DeliveryTaskMilestone>,
+    }
+    if value.is_null() {
+        return Ok(None);
+    }
+    let package: Package = serde_json::from_value(value.clone()).map_err(|_| {
+        DeliveryError::new(
+            "invalid_arguments",
+            "package: index y of son números; title, builds_on (un índice) y until (pr_opened o merged) son opcionales",
+        )
+    })?;
+    Ok(Some(NewPackage {
+        index: package.index,
+        of: package.of,
+        title: package.title,
+        builds_on: package.builds_on,
+        until: package.until,
+    }))
 }
 
 fn parse_decisions(value: &Value) -> Result<Vec<NewDecision>, DeliveryError> {
@@ -1008,7 +1051,7 @@ fn tool_definitions() -> Value {
         { "name": "acquire_run", "description": "Take a run nobody coordinates, or confirm you hold it. When another coordinator holds it, it is refused with run_locked: then, if the user asked you to coordinate it, use takeover_run.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}}), json!(["run_id", "owner"])) },
         { "name": "takeover_run", "description": "Become the run's coordinator in place of the one holding it. Do it when the user asks you to coordinate (or take over) the batch, which is enough: you need not check on the other coordinator; also when that coordinator stopped. The generation increases, so whatever the previous coordinator still sends is refused (fenced), and its wait_run hands it a run_takeover event. Pass `expect_generation` (the generation you read) to make sure nobody took it in between; without it the current one is taken. `reason` says why (default: asked by the user). Then call wait_run without a cursor and go on with the batch from delivery_overview.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "expect_generation": {"type": "integer"}, "reason": {"type": "string"}}), json!(["run_id", "owner"])) },
         { "name": "release_run", "description": "Release the run lock when you stop.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "generation": {"type": "integer"}}), json!(["run_id", "owner", "generation"])) },
-        { "name": "create_task", "description": "Create a task: its own worktree and branch from a verified base.", "inputSchema": fenced(json!({"properties": {"repo": {"type": "string"}, "distro": {"type": "string"}, "key": {"type": "string"}, "title": {"type": "string"}, "base": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "key", "title"]})) },
+        { "name": "create_task", "description": "Create a task: its own worktree and branch from a verified base. An issue too large for one PR is delivered in packages: one task per package, all with the issue's key and a `package`, each with its own worktree (`<KEY>-<n>`), branch, contract, jobs, approvals and PR. A package with `builds_on` starts from that package's branch, its PR targets that branch, and it is blocked until that package reaches `until` (`pr_opened` by default, or `merged`); until it has changes of its own, each stage starts from that package's latest commits. When that package merges, Tinto points this one's PR at the base it merged into. Jira moves once per issue: the first package's after_pr moves the issue and the others only link their PR; only the last package has after_merge, refused until every package merged; a middle package is delivered once merged. Decisions answered on one package reach the jobs of all.", "inputSchema": fenced(json!({"properties": {"repo": {"type": "string"}, "distro": {"type": "string"}, "key": {"type": "string"}, "title": {"type": "string"}, "base": {"type": "string"}, "branch": {"type": "string"}, "package": {"type": "object", "description": "This task is package `index` of `of` of the issue (`title` says what it delivers, e.g. Backend, UI). Only a different index of the same key is accepted next to an active task of that key.", "properties": {"index": {"type": "integer"}, "of": {"type": "integer"}, "title": {"type": "string"}, "builds_on": {"type": "integer", "description": "An earlier package's index; it must be active. Its branch replaces `base`."}, "until": {"type": "string", "enum": ["pr_opened", "merged"]}}, "required": ["index", "of"]}}, "required": ["repo", "key", "title"]})) },
         { "name": "set_task_blocked", "description": "Block a task until what it waits for happens, in place of a state label: its phase becomes `blocked`, waiting on `dependency` (another task or a decision in Tinto) or `external` (a PR outside Tinto, a note); it leaves wait_run's `idle` list, so idle_ok is not needed for it, and dispatch_job on it is refused with task_blocked. Each blocker is one of: {\"type\":\"task\",\"task\":\"<task id or issue key>\",\"until\":\"pr_opened\"|\"merged\"|\"delivered\"} (default merged), {\"type\":\"pr\",\"url\":\"https://github.com/o/r/pull/N\",\"until\":\"merged\"|\"closed\"} (default merged), {\"type\":\"decision\",\"decision_id\":\"…\"}, {\"type\":\"note\",\"text\":\"…\"} (the user clears it in Tinto). Tinto follows them (other tasks' steps, PRs on GitHub) and wait_run reports `blocker_cleared` as each one resolves; once none is open the task is back in its previous phase. It replaces the task's blockers; the task's `blockers` (in delivery_overview) give each one's `status` and `cleared_at_ms`.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "blockers": {"type": "array", "items": {"type": "object"}}, "reason": {"type": "string"}}, "required": ["task_id", "blockers"]})) },
         { "name": "clear_task_blocked", "description": "Clear a task's blockers: those in `blocker_ids`, or all of them. The task goes back to its previous phase.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "blocker_ids": {"type": "array", "items": {"type": "string"}}}, "required": ["task_id"]})) },
         { "name": "set_task_state", "description": "Set a task's stage label and/or raise its contract version (older results become stale). The label takes 1 to 40 characters of any kind; to say a task waits for something, use set_task_blocked.", "inputSchema": fenced(json!({"properties": {"task_id": {"type": "string"}, "state": {"type": "string"}, "contract_version": {"type": "integer"}}, "required": ["task_id"]})) },

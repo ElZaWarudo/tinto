@@ -187,6 +187,9 @@ pub struct DeliveryPr {
     /// Who approved it: reviewers whose latest review is an approval.
     #[serde(default)]
     pub approved_by: Vec<String>,
+    /// The branch it merges into, as GitHub last said.
+    #[serde(default)]
+    pub base: Option<String>,
 }
 
 impl DeliveryPr {
@@ -212,6 +215,7 @@ impl DeliveryPr {
             merged_at: None,
             merge_commit: None,
             approved_by: Vec::new(),
+            base: None,
         }
     }
 
@@ -231,7 +235,7 @@ impl DeliveryPr {
 
 /// `gh pr view --json` fields Tinto reads.
 pub const PR_FIELDS: &str =
-    "title,body,state,isDraft,mergeable,reviewDecision,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit";
+    "title,body,state,isDraft,mergeable,reviewDecision,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName";
 
 fn check_state(check: &Value) -> &'static str {
     // Check runs carry status + conclusion; commit statuses carry state.
@@ -270,6 +274,9 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
     pr.merged_by = text(&snapshot["mergedBy"]["login"]);
     pr.merged_at = text(&snapshot["mergedAt"]);
     pr.merge_commit = text(&snapshot["mergeCommit"]["oid"]);
+    if let Some(base) = text(&snapshot["baseRefName"]) {
+        pr.base = Some(base);
+    }
     pr.draft = snapshot["isDraft"].as_bool().unwrap_or(false);
     pr.conflicts = snapshot["mergeable"].as_str() == Some("CONFLICTING");
     pr.review_decision = snapshot["reviewDecision"]
@@ -404,6 +411,10 @@ pub trait GitHub: Send + Sync {
     }
     /// Sets the PR's title and body.
     fn edit_pr(&self, _url: &str, _title: &str, _body: &str) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
+    /// Points the PR at another base branch.
+    fn set_pr_base(&self, _url: &str, _base: &str) -> Result<(), DeliveryError> {
         Err(offline())
     }
     /// Closes the PR without merging it.
@@ -631,6 +642,14 @@ impl GitHub for GhCli {
         Self::act(&["pr", "close", url], "gh no pudo cerrar el PR").map(|_| ())
     }
 
+    fn set_pr_base(&self, url: &str, base: &str) -> Result<(), DeliveryError> {
+        Self::act(
+            &["pr", "edit", url, "--base", base],
+            "gh no pudo cambiar la base del PR",
+        )
+        .map(|_| ())
+    }
+
     fn pr_review_comments(&self, repo: &str, number: u64) -> Result<Value, DeliveryError> {
         let path = format!("repos/{repo}/pulls/{number}/comments");
         // One comment per line, across every page.
@@ -736,6 +755,102 @@ impl DeliveryService {
             .lock()
             .map(|slot| slot.clone())
             .unwrap_or_else(|_| Arc::new(Offline))
+    }
+
+    /// Once the package a package builds on has merged, the package's PR
+    /// merges where that one did: Tinto points it there (GitHub may have
+    /// done it already, deleting the merged branch). With merge commits the
+    /// PR then shows only its own commits; after a squash or rebase merge it
+    /// would need a rebase, which Tinto leaves to the user.
+    pub fn retarget_packages(&self) -> Result<usize, DeliveryError> {
+        let tasks = self.store()?.tasks()?;
+        let mut moved = 0;
+        for task in &tasks {
+            let Some(other_id) = task.package.as_ref().and_then(|p| p.builds_on.as_deref()) else {
+                continue;
+            };
+            let Some(other) = self.store()?.task(other_id)? else {
+                continue;
+            };
+            if task.base_ref == other.base_ref || !self.task_merged(&other)? {
+                continue;
+            }
+            let squashed = self
+                .latest_approval(&other.id, DeliveryRung::Merge)?
+                .and_then(|merge| merge.merge_method)
+                .is_some_and(|method| method != "merge");
+            if squashed {
+                continue;
+            }
+            let target = other.base_ref.clone();
+            let branch = target.trim_start_matches("origin/").to_string();
+            let pr = self.task_pr(&task.id)?.filter(DeliveryPr::is_open);
+            if let Some(pr) = &pr {
+                if pr.base.as_deref() != Some(branch.as_str()) {
+                    if let Err(error) = self.github().set_pr_base(&pr.url, &branch) {
+                        eprintln!("tinto: delivery could not retarget {}: {error}", pr.url);
+                        continue;
+                    }
+                }
+            }
+            let store = self.store()?;
+            let mut moved_task = task.clone();
+            moved_task.base_ref = target;
+            moved_task.updated_at_ms = now_ms();
+            store.put_task(&moved_task)?;
+            if let Some(mut pr) = pr {
+                pr.base = Some(branch.clone());
+                store.put_pr(&pr)?;
+            }
+            store.record_event(
+                now_ms(),
+                "package_retargeted",
+                Some(&task.id),
+                None,
+                &format!(
+                    "{} se fusionó: este paquete va ahora a {branch}",
+                    other.label()
+                ),
+            )?;
+            moved += 1;
+        }
+        if moved > 0 {
+            self.notify();
+        }
+        Ok(moved)
+    }
+
+    /// Why a package's PR cannot merge yet: it still goes into the branch of
+    /// the package it builds on.
+    pub(super) fn package_merge_refusal(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Option<String>, DeliveryError> {
+        let Some(other_id) = task.package.as_ref().and_then(|p| p.builds_on.as_deref()) else {
+            return Ok(None);
+        };
+        let Some(other) = self.store()?.task(other_id)? else {
+            return Ok(None);
+        };
+        if task.base_ref != other.branch {
+            return Ok(None);
+        }
+        let squashed = self
+            .latest_approval(&other.id, DeliveryRung::Merge)?
+            .and_then(|merge| merge.merge_method)
+            .filter(|method| method != "merge");
+        Ok(Some(match squashed {
+            Some(method) => format!(
+                "sigue sobre {}, que se fusionó con {method}: rebasa este paquete sobre {} antes de fusionarlo (Tinto no lo hace)",
+                other.label(),
+                other.base_ref
+            ),
+            None => format!(
+                "va a la rama de {}: se fusiona después de ese paquete, cuando Tinto lo apunta a {}",
+                other.label(),
+                other.base_ref.trim_start_matches("origin/")
+            ),
+        }))
     }
 
     pub fn task_pr(&self, task_id: &str) -> Result<Option<DeliveryPr>, DeliveryError> {

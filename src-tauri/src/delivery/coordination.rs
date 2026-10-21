@@ -247,6 +247,7 @@ pub(super) fn found_step(
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
+        jira_link_only: false,
         reviewers: Vec::new(),
         reviewers_requested: false,
         commits: Vec::new(),
@@ -276,29 +277,83 @@ impl DeliveryService {
     }
 
     /// The Jira step a request is for: the one asked, else the next one the
-    /// task has not done (`after_pr`, then `after_merge`).
-    fn jira_stage(&self, task_id: &str, asked: Option<&str>) -> Result<String, DeliveryError> {
-        if let Some(asked) = asked {
-            return match asked {
-                JIRA_AFTER_PR | JIRA_AFTER_MERGE => Ok(asked.to_string()),
-                other => Err(DeliveryError::new(
+    /// task has not done (`after_pr`, then `after_merge`). A middle package
+    /// has no `after_merge`: the issue closes with its last package.
+    fn jira_stage(
+        &self,
+        task: &DeliveryTask,
+        asked: Option<&str>,
+    ) -> Result<String, DeliveryError> {
+        let stage = match asked {
+            Some(JIRA_AFTER_PR) | Some(JIRA_AFTER_MERGE) => asked.unwrap_or_default(),
+            Some(other) => {
+                return Err(DeliveryError::new(
                     "invalid_approval",
                     format!("momento de Jira desconocido: {other} (after_pr o after_merge)"),
-                )),
-            };
+                ))
+            }
+            None if self.jira_done(&task.id)? => JIRA_AFTER_MERGE,
+            None => JIRA_AFTER_PR,
+        };
+        if let Some(package) = task
+            .package
+            .as_ref()
+            .filter(|package| stage == JIRA_AFTER_MERGE && !package.is_last())
+        {
+            return Err(DeliveryError::new(
+                "invalid_approval",
+                format!(
+                    "{} es un paquete intermedio: no cierra el issue, lo cierra el paquete {}/{} cuando se fusionen todos",
+                    task.label(),
+                    package.of,
+                    package.of
+                ),
+            ));
         }
-        let done_after_pr = self.store()?.approvals()?.iter().any(|approval| {
+        Ok(stage.to_string())
+    }
+
+    /// Whether the task's Jira step after its PR was done.
+    fn jira_done(&self, task_id: &str) -> Result<bool, DeliveryError> {
+        Ok(self.store()?.approvals()?.iter().any(|approval| {
             approval.task_id == task_id
                 && approval.rung == DeliveryRung::Jira
                 && approval.stage.as_deref() == Some(JIRA_AFTER_PR)
                 && approval.status == DeliveryApprovalStatus::Executed
-        });
-        Ok(if done_after_pr {
-            JIRA_AFTER_MERGE
-        } else {
-            JIRA_AFTER_PR
+        }))
+    }
+
+    /// The other packages of the task's issue, archived ones included.
+    pub(super) fn packages_of(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Vec<DeliveryTask>, DeliveryError> {
+        let store = self.store()?;
+        let archived = store
+            .removed_tasks()?
+            .into_iter()
+            .filter(|other| other.archived_at_ms.is_some());
+        Ok(store
+            .tasks()?
+            .into_iter()
+            .chain(archived)
+            .filter(|other| task.is_sibling(other))
+            .collect())
+    }
+
+    /// Whether the task's PR was merged: by its merge step, on GitHub, or
+    /// archived once delivered.
+    pub(super) fn task_merged(&self, task: &DeliveryTask) -> Result<bool, DeliveryError> {
+        if task.archived_at_ms.is_some() {
+            return Ok(true);
         }
-        .to_string())
+        let merge_done = self
+            .latest_approval(&task.id, DeliveryRung::Merge)?
+            .is_some_and(|merge| merge.status == DeliveryApprovalStatus::Executed);
+        Ok(merge_done
+            || self
+                .task_pr(&task.id)?
+                .is_some_and(|pr| pr.state == "merged"))
     }
 
     /// Jira steps from when a task had a single one get their moment: done
@@ -330,29 +385,18 @@ impl DeliveryService {
         Ok(())
     }
 
-    /// Every delivery step done: commit, push, PR, merge and both Jira.
+    /// Every step of the task's ladder done: commit, push, PR, merge and its
+    /// Jira steps.
     pub(super) fn delivered(&self, task_id: &str) -> Result<bool, DeliveryError> {
+        let task = self.task(task_id)?;
         let approvals: Vec<DeliveryApproval> = self
             .store()?
             .approvals()?
             .into_iter()
             .filter(|approval| approval.task_id == task_id)
             .collect();
-        let done = |rung: DeliveryRung, stage: Option<&str>| {
-            approvals
-                .iter()
-                .rev()
-                .find(|approval| {
-                    approval.rung == rung && (stage.is_none() || approval.stage.as_deref() == stage)
-                })
-                .is_some_and(|approval| approval.status == DeliveryApprovalStatus::Executed)
-        };
-        Ok(done(DeliveryRung::Commit, None)
-            && done(DeliveryRung::Push, None)
-            && done(DeliveryRung::Pr, None)
-            && done(DeliveryRung::Merge, None)
-            && done(DeliveryRung::Jira, Some(JIRA_AFTER_PR))
-            && done(DeliveryRung::Jira, Some(JIRA_AFTER_MERGE)))
+        let approvals: Vec<&DeliveryApproval> = approvals.iter().collect();
+        Ok(super::phase::is_delivered(&task, &approvals))
     }
 
     /// Archives a delivered task: its worktree and local branch go (what it
@@ -363,7 +407,7 @@ impl DeliveryService {
         if !self.delivered(task_id)? {
             return Err(DeliveryError::new(
                 "task_not_delivered",
-                "solo se archiva una tarea entregada: con el merge y los dos pasos Jira hechos",
+                "solo se archiva una tarea entregada: con el merge y sus pasos de Jira hechos",
             ));
         }
         self.remove_task(task_id, true)?;
@@ -421,13 +465,16 @@ impl DeliveryService {
             .task(task_id)?
             .filter(|task| task.archived_at_ms.is_some())
             .ok_or_else(|| DeliveryError::not_found("la tarea archivada", task_id))?;
+        // Another package of the issue may be active; the same one may not.
         let active = self.store()?.tasks()?.into_iter().any(|other| {
-            other.key == task.key && tasks::plain_path(&other.repo) == tasks::plain_path(&task.repo)
+            other.key == task.key
+                && tasks::plain_path(&other.repo) == tasks::plain_path(&task.repo)
+                && !task.is_sibling(&other)
         });
         if active {
             return Err(DeliveryError::new(
                 "task_exists",
-                format!("ya hay una tarea {} activa en el repositorio", task.key),
+                format!("ya hay una tarea {} activa en el repositorio", task.label()),
             ));
         }
         let place = Place::of(task.distro.as_deref());
@@ -688,7 +735,7 @@ impl DeliveryService {
                 (phase.waits_on == super::phase::Waiter::Coordinator).then(|| {
                     serde_json::json!({
                         "task_id": task.id,
-                        "key": task.key,
+                        "key": task.label(),
                         "state": task.state,
                         "phase": phase,
                     })
@@ -790,13 +837,51 @@ impl DeliveryService {
             ));
         }
         let stage = match request.rung {
-            DeliveryRung::Jira => Some(self.jira_stage(&task.id, request.stage.as_deref())?),
+            DeliveryRung::Jira => Some(self.jira_stage(&task, request.stage.as_deref())?),
             _ => None,
         };
+        // A split issue moves in Jira once: the first package to open its
+        // PR moves it, the others only link their PR, and the last one
+        // closes it once every package has merged.
+        let mut link_only = false;
+        if request.rung == DeliveryRung::Jira && task.package.is_some() {
+            let packages = self.packages_of(&task)?;
+            if stage.as_deref() == Some(JIRA_AFTER_MERGE) {
+                let of = task.package.as_ref().map_or(0, |package| package.of);
+                let mut missing = Vec::new();
+                for index in 1..of {
+                    let merged = match packages
+                        .iter()
+                        .find(|other| other.package.as_ref().is_some_and(|p| p.index == index))
+                    {
+                        Some(other) => self.task_merged(other)?,
+                        None => false,
+                    };
+                    if !merged {
+                        missing.push(format!("{index}/{of}"));
+                    }
+                }
+                if !missing.is_empty() {
+                    return Err(DeliveryError::new(
+                        "packages_unmerged",
+                        format!(
+                            "{} se cierra en Jira cuando se fusionen todos sus paquetes: falta {}",
+                            task.key,
+                            missing.join(", ")
+                        ),
+                    ));
+                }
+            } else {
+                for other in &packages {
+                    link_only |= self.jira_done(&other.id)?;
+                }
+            }
+        }
         // With the repo's Jira set in Tinto, Tinto runs the step: the
         // statuses asked, else the repo's for this moment.
         let mut jira_statuses: Vec<String> = Vec::new();
-        if request.rung == DeliveryRung::Jira && self.jira_site(&task.repo)?.is_some() {
+        if request.rung == DeliveryRung::Jira && !link_only && self.jira_site(&task.repo)?.is_some()
+        {
             jira_statuses = request
                 .jira_statuses
                 .iter()
@@ -926,6 +1011,7 @@ impl DeliveryService {
                 .filter(|_| request.rung == DeliveryRung::Merge),
             stage,
             jira_statuses,
+            jira_link_only: link_only,
             reviewers: Vec::new(),
             reviewers_requested: false,
             commits,
@@ -997,7 +1083,12 @@ impl DeliveryService {
             return Ok(approval);
         }
         approval.status = DeliveryApprovalStatus::Approved;
-        if approval.rung == DeliveryRung::Jira && !approval.jira_statuses.is_empty() {
+        let tinto_runs_jira = !approval.jira_statuses.is_empty()
+            || (approval.jira_link_only
+                && self
+                    .jira_site(&self.task(&approval.task_id)?.repo)?
+                    .is_some());
+        if approval.rung == DeliveryRung::Jira && tinto_runs_jira {
             let executed = self.run_jira_step(&approval);
             approval.executed_at_ms = Some(now_ms());
             match executed {
@@ -1481,11 +1572,16 @@ impl DeliveryService {
                 error.category = "pr_missing".to_string();
                 error
             })?;
+        // A package merged before it may have just freed this one.
+        self.retarget_packages()?;
+        let task = &self.task(&task.id)?;
         let blocker = if pr.state != "open" {
             Some(format!(
                 "el PR #{} no está abierto ({})",
                 pr.number, pr.state
             ))
+        } else if let Some(why) = self.package_merge_refusal(task)? {
+            Some(format!("el PR #{} {why}", pr.number))
         } else if !pr.is_approved() {
             Some(format!(
                 "el PR #{} no tiene una revisión aprobada",

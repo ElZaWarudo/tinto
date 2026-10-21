@@ -67,6 +67,7 @@ pub async fn delivery_create_task(
             base,
             branch,
             run_id,
+            package: None,
         })
     })
     .await

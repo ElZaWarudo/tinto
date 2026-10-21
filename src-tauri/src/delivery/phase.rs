@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
-    DeliveryDecision, DeliveryDecisionStatus, DeliveryJob, DeliveryJobStatus, DeliveryLease,
-    DeliveryLeaseState, DeliveryResultState, DeliveryRun, DeliveryRung, DeliverySettingsProposal,
-    DeliveryTask,
+    DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
+    DeliveryLease, DeliveryLeaseState, DeliveryResultState, DeliveryRun, DeliveryRung,
+    DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 
@@ -139,6 +139,17 @@ pub struct DeliveryTaskPhase {
     pub waits_on: Waiter,
     /// The stage to run next, when one is due (whatever the phase).
     pub next_stage: Option<String>,
+    /// The delivery steps this task climbs, in order, when they are not the
+    /// whole ladder (a middle package of a split issue); empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<DeliveryStep>,
+}
+
+/// One rung of a task's ladder (Jira with its moment).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryStep {
+    pub rung: DeliveryRung,
+    pub stage: Option<String>,
 }
 
 /// Everything the phase of a task depends on, as the overview has it.
@@ -254,14 +265,32 @@ pub fn step_done(approvals: &[&DeliveryApproval], rung: DeliveryRung) -> bool {
         .is_some_and(|step| step.status == DeliveryApprovalStatus::Executed)
 }
 
-/// Every ladder step done: the task is delivered.
-pub fn is_delivered(approvals: &[&DeliveryApproval]) -> bool {
-    next_step(approvals).is_none()
+/// The ladder the task climbs. A middle package of a split issue ends at
+/// its merge: the issue closes in Jira with its last package.
+pub fn steps_for(task: &DeliveryTask) -> Vec<(DeliveryRung, Option<&'static str>)> {
+    let middle = task
+        .package
+        .as_ref()
+        .is_some_and(|package| !package.is_last());
+    STEPS
+        .into_iter()
+        .filter(|(rung, stage)| {
+            !(middle && *rung == DeliveryRung::Jira && *stage == Some(JIRA_AFTER_MERGE))
+        })
+        .collect()
+}
+
+/// Every step of the task's ladder done: the task is delivered.
+pub fn is_delivered(task: &DeliveryTask, approvals: &[&DeliveryApproval]) -> bool {
+    next_step(task, approvals).is_none()
 }
 
 /// The first ladder step not done; `None` once every step is.
-fn next_step(approvals: &[&DeliveryApproval]) -> Option<(DeliveryRung, Option<&'static str>)> {
-    STEPS.into_iter().find(|(rung, stage)| {
+fn next_step(
+    task: &DeliveryTask,
+    approvals: &[&DeliveryApproval],
+) -> Option<(DeliveryRung, Option<&'static str>)> {
+    steps_for(task).into_iter().find(|(rung, stage)| {
         latest_step(approvals, *rung, *stage)
             .is_none_or(|step| step.status != DeliveryApprovalStatus::Executed)
     })
@@ -329,6 +358,75 @@ pub fn next_stage(jobs: &[&DeliveryJob], approvals: &[&DeliveryApproval]) -> Opt
         .map(|stage| stage.to_string())
 }
 
+/// Each issue delivered in packages, across the packages Tinto has of it:
+/// the live tasks (with their phases) and the archived ones, all delivered.
+pub fn split_issues(
+    tasks: &[DeliveryTask],
+    archived: &[DeliveryTask],
+    phases: &std::collections::BTreeMap<String, DeliveryTaskPhase>,
+    facts: &Facts<'_>,
+) -> Vec<DeliverySplitIssue> {
+    let mut issues: Vec<DeliverySplitIssue> = Vec::new();
+    for (task, live) in tasks
+        .iter()
+        .map(|task| (task, true))
+        .chain(archived.iter().map(|task| (task, false)))
+    {
+        let Some(package) = &task.package else {
+            continue;
+        };
+        let repo = super::tasks::plain_path(&task.repo);
+        let delivered = !live
+            || phases
+                .get(&task.id)
+                .is_some_and(|phase| phase.phase == Phase::Delivered);
+        let approvals: Vec<&DeliveryApproval> = facts
+            .approvals
+            .iter()
+            .filter(|approval| approval.task_id == task.id)
+            .collect();
+        let merged = delivered
+            || step_done(&approvals, DeliveryRung::Merge)
+            || facts
+                .prs
+                .iter()
+                .any(|pr| pr.task_id == task.id && pr.state == "merged");
+        let entry = DeliveryIssuePackage {
+            task_id: task.id.clone(),
+            index: package.index,
+            title: package.title.clone(),
+            merged,
+            delivered,
+            archived: !live,
+        };
+        match issues
+            .iter_mut()
+            .find(|issue| issue.repo == repo && issue.key.eq_ignore_ascii_case(&task.key))
+        {
+            Some(issue) => issue.packages.push(entry),
+            None => issues.push(DeliverySplitIssue {
+                repo,
+                key: task.key.clone(),
+                of: package.of,
+                packages: vec![entry],
+                delivered: false,
+            }),
+        }
+    }
+    for issue in &mut issues {
+        issue.packages.sort_by_key(|package| package.index);
+        issue.delivered = (1..=issue.of).all(|index| {
+            issue
+                .packages
+                .iter()
+                .any(|package| package.index == index && package.delivered)
+        });
+    }
+    // Only issues with something live: an all-archived one is history.
+    issues.retain(|issue| issue.packages.iter().any(|package| !package.archived));
+    issues
+}
+
 /// Who a followed PR waits on: the user when it has news or trouble, the
 /// coordinator once approved or merged (the next step), else its reviewers.
 fn pr_waits_on(pr: &DeliveryPr) -> Waiter {
@@ -360,10 +458,23 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         .filter(|approval| approval.task_id == task.id)
         .collect();
     let next = next_stage(&jobs, &approvals);
+    let ladder = steps_for(task);
+    let steps: Vec<DeliveryStep> = if ladder.len() == STEPS.len() {
+        Vec::new()
+    } else {
+        ladder
+            .into_iter()
+            .map(|(rung, stage)| DeliveryStep {
+                rung,
+                stage: stage.map(str::to_string),
+            })
+            .collect()
+    };
     let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
         phase,
         waits_on,
         next_stage: next.clone(),
+        steps: steps.clone(),
     };
 
     let decisions = facts
@@ -554,7 +665,7 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
             Waiter::Coordinator,
         );
     }
-    let step = next_step(&approvals);
+    let step = next_step(task, &approvals);
     let Some((rung, stage)) = step else {
         return phase(Phase::Delivered, Waiter::Nobody);
     };

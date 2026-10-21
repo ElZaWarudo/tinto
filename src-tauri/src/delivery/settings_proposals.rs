@@ -354,6 +354,7 @@ mod tests {
             distro: None,
             key: "AGOS-474".into(),
             title: "AGOS-474".into(),
+            package: None,
             worktree: PathBuf::from("C:/code/agentos-wt/AGOS-474"),
             branch: "fix/AGOS-474".into(),
             base_ref: "develop".into(),

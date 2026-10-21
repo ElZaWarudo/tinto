@@ -169,6 +169,24 @@ fn verify_commit(place: Place<'_>, repo: &Path, reference: &str) -> Option<Strin
         .filter(|commit| !commit.is_empty())
 }
 
+/// Moves a worktree that has nothing of its own yet (no changes and no
+/// commit past `base_commit`) up to `reference`, when that only adds
+/// commits. Returns the new HEAD when it moved.
+pub fn fast_forward_untouched(
+    place: Place<'_>,
+    worktree: &Path,
+    base_commit: &str,
+    reference: &str,
+) -> Option<String> {
+    let head = git(place, worktree, &["rev-parse", "HEAD"]).ok()?;
+    let clean = git(place, worktree, &["status", "--porcelain"]).ok()?;
+    let target = verify_commit(place, worktree, reference)?;
+    if head != base_commit || !clean.trim().is_empty() || target == head {
+        return None;
+    }
+    git_ok(place, worktree, &["merge", "--ff-only", "--quiet", &target]).then_some(target)
+}
+
 /// Creates the worktree on a new branch, or on the existing branch when one
 /// with that name already exists (resuming a task). Returns the commit the
 /// worktree starts from.
