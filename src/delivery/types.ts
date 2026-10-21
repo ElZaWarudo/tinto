@@ -75,6 +75,8 @@ export interface DeliveryTask {
   blockers?: DeliveryBlocker[];
   /** Why it is blocked, in the coordinator's words. */
   blocked_reason?: string;
+  /** The repo checks Tinto runs on what each stage changes (the tests stage aside). */
+  checks?: string[];
 }
 
 export type DeliveryTaskMilestone = "pr_opened" | "merged" | "delivered";
@@ -159,6 +161,8 @@ export interface DeliveryJob {
   qa_browser?: boolean;
   /** The task's answered decisions as the job received them. */
   decisions?: string[];
+  /** What the job was told about the task's checks when it started. */
+  task_checks?: string[];
   /** Where a Claude job on a Windows repo was asked to run; Tinto chose when null. */
   platform?: DeliveryPlatform | null;
   /** Where the job ran ("Windows", "WSL · Ubuntu"…), once started. */

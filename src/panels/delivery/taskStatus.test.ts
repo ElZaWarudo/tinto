@@ -10,12 +10,14 @@ import type {
 import {
   attemptOutcome,
   batchName,
+  historyKey,
   isSuperseded,
   lastHandoff,
   latestOfRole,
   nextStageOf,
   nextStep,
   prSummary,
+  stageLabel,
   taskStatus,
   type TaskStatus,
 } from "./taskStatus";
@@ -403,6 +405,17 @@ describe("lastHandoff", () => {
       from: tests,
     });
     expect(lastHandoff([{ ...tests, result_state: "stale" }])).toBeNull();
+  });
+});
+
+describe("Tinto's checks in the history", () => {
+  it("are one row per command, under their own name", () => {
+    const lint = job({ role: "checks", agent: "shell", prompt: "npm run lint" });
+    const test = job({ role: "checks", agent: "shell", prompt: "npm test" });
+    expect(historyKey(lint)).not.toBe(historyKey(test));
+    expect(historyKey({ ...lint, attempt: 2 })).toBe(historyKey(lint));
+    expect(historyKey(job({ role: "review" }))).toBe("review");
+    expect(stageLabel("checks")).toBe("Comprobaciones");
   });
 });
 

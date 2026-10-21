@@ -389,6 +389,48 @@ describe("DeliveryPanel", () => {
     await waitFor(() => expect(client.pauseDeliveryJob).toHaveBeenCalledWith("j1"));
   });
 
+  it("lists each of Tinto's checks by its command, with its own earlier runs", async () => {
+    const user = userEvent.setup();
+    const check = (id: string, prompt: string, over: Partial<DeliveryJob> = {}) =>
+      job({
+        id,
+        role: "checks",
+        agent: "shell",
+        model: null,
+        prompt,
+        provider_session_id: null,
+        start_candidate: null,
+        end_candidate: null,
+        changes: [],
+        result: null,
+        ...over,
+      });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({
+            id: "j1",
+            role: "implementation",
+            task_checks: ["Tinto runs this task's checks itself on what each stage changes."],
+          }),
+          check("c1", "npm run lint", { status: "failed", exit_code: 1, created_at_ms: 2 }),
+          check("c2", "npm test", { created_at_ms: 3 }),
+          check("c3", "npm run lint", { attempt: 2, created_at_ms: 4 }),
+        ],
+      }),
+    );
+    renderPanel();
+    const history = await screen.findByRole("region", { name: "Historial" });
+    expect(within(history).getByText("npm test")).toBeInTheDocument();
+    // The earlier, failed lint run folds under the current one.
+    expect(within(history).getAllByText("npm run lint", { selector: "code" })).toHaveLength(1);
+    expect(
+      within(history).getByRole("button", { name: /^1 intento anterior\s*· falló/ }),
+    ).toBeInTheDocument();
+    await user.click(within(history).getByRole("button", { name: /^Implementación/ }));
+    expect(within(history).getByText("Comprobaciones de Tinto al empezar")).toBeInTheDocument();
+  });
+
   it("resumes a paused stage and pauses the batch", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(
