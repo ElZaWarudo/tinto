@@ -574,6 +574,8 @@ describe("RepoCard", () => {
     const { onOpen, onLaunch } = renderCard();
 
     const button = await screen.findByRole("button", { name: "Iniciar Codex en api" });
+    // It stays disabled until the agent's availability check answers.
+    await waitFor(() => expect(button).toBeEnabled());
     fireEvent.click(button);
 
     expect(onLaunch).toHaveBeenCalledWith("codex", "workspace");
@@ -584,6 +586,7 @@ describe("RepoCard", () => {
     const { onLaunch } = renderCard();
     await screen.findByRole("button", { name: "Iniciar Codex en api" });
     expect(screen.queryByLabelText("Permisos de Codex para api")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("agent-launch")).toBeEnabled());
     fireEvent.click(screen.getByTestId("agent-launch"));
 
     expect(onLaunch).toHaveBeenCalledWith("codex", "workspace");
