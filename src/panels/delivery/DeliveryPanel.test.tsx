@@ -44,7 +44,7 @@ const client = vi.hoisted(() => ({
   getDeliveryJobLog: vi.fn(),
   getDeliveryRepoSettings: vi.fn(),
   setDeliveryRepoSettings: vi.fn(),
-  setDeliveryCodexModel: vi.fn(() => Promise.resolve()),
+  setDeliveryModelCatalog: vi.fn(() => Promise.resolve()),
   openDeliveryTaskInAgents: vi.fn(),
   openDeliveryJobInAgents: vi.fn(),
   completeDeliveryApproval: vi.fn(),
@@ -1081,18 +1081,22 @@ describe("DeliveryPanel", () => {
     );
   });
 
-  it("reports the catalog's default model for Codex jobs that name none", async () => {
+  it("reports the catalog and its default model for Codex jobs that name none", async () => {
     localStorage.setItem(
       "tinto.agents.lastRuntimeCatalog",
       JSON.stringify({
         status: "ready",
-        models: [{ id: "gpt-6-astra" }],
+        models: [{ id: "gpt-6-astra", model: "gpt-6-astra" }],
         default_model: "gpt-6-astra",
       }),
     );
     client.getDeliveryOverview.mockResolvedValue(overview());
     renderPanel();
-    await waitFor(() => expect(client.setDeliveryCodexModel).toHaveBeenCalledWith("gpt-6-astra"));
+    await waitFor(() =>
+      expect(client.setDeliveryModelCatalog).toHaveBeenCalledWith("codex", "gpt-6-astra", [
+        "gpt-6-astra",
+      ]),
+    );
     localStorage.removeItem("tinto.agents.lastRuntimeCatalog");
   });
 
@@ -1673,6 +1677,60 @@ describe("DeliveryPanel", () => {
     );
   });
 
+  it("shows the variables for checks a coordinator proposes and approves the ones left checked", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      check_env: { DB_NAME: "agos" },
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        phases: { t1: phase({ kind: "settings_proposal" }) },
+        settings_proposals: [
+          {
+            id: "p1",
+            repo: REPO,
+            task_id: "t1",
+            run_id: "r1",
+            reason: "Cada tarea necesita su propia base de datos de pruebas",
+            changes: {
+              check_env: {
+                DB_NAME: "agos_test",
+                TEST_DB_MONGO_URL: "mongodb://127.0.0.1:27419/agos{task}",
+              },
+            },
+            status: "pending",
+            approved: null,
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_by: null,
+            decided_at_ms: null,
+          },
+        ],
+      }),
+    );
+    client.approveDeliverySettingsProposal.mockResolvedValue({});
+    renderPanel();
+
+    const card = await screen.findByRole("region", { name: "Cambios de ajustes por aprobar" });
+    await waitFor(() => expect(card).toHaveTextContent("Variable DB_NAME: agos → agos_test"));
+    expect(card).toHaveTextContent(
+      "Variable TEST_DB_MONGO_URL: (sin definir) → mongodb://127.0.0.1:27419/agos{task}",
+    );
+    await user.click(within(card).getByRole("checkbox", { name: "Cambiar la variable DB_NAME" }));
+    await user.click(within(card).getByRole("button", { name: "Aprobar 1 de 2" }));
+    await waitFor(() =>
+      expect(client.approveDeliverySettingsProposal).toHaveBeenCalledWith("p1", {
+        checks_add: [],
+        checks_remove: [],
+        qa_commands_add: [],
+        check_env: { TEST_DB_MONGO_URL: "mongodb://127.0.0.1:27419/agos{task}" },
+      }),
+    );
+  });
+
   it("shows exactly what a permission lets QA run and renews it for new code", async () => {
     const user = userEvent.setup();
     const permission = (over: Partial<DeliveryDecision>): DeliveryDecision => ({
@@ -2015,6 +2073,11 @@ describe("DeliveryPanel", () => {
       within(qa).getByRole("combobox", { name: "Modelo de Revisión" }),
       "opus",
     );
+    // And its time limit, for a long suite; empty keeps the role's.
+    const limit = within(qa).getByRole("spinbutton", { name: "Tiempo máximo de Revisión" });
+    expect(limit).toHaveValue(null);
+    await user.type(limit, "90");
+    await user.tab();
     expect(within(qa).getByText("Cambios sin guardar.")).toBeInTheDocument();
     await user.click(save);
     await waitFor(() =>
@@ -2027,7 +2090,9 @@ describe("DeliveryPanel", () => {
             DB_NAME: "agentos_test",
             TEST_DB_MONGO_URL: "mongodb://localhost:27017/test",
           },
-          stages: { review: { agent: "claude", model: "opus", reasoning: "medium" } },
+          stages: {
+            review: { agent: "claude", model: "opus", reasoning: "medium", timeout_minutes: 90 },
+          },
         }),
       ),
     );

@@ -1,5 +1,5 @@
 import type { AgentRuntimeCatalog, AgentRuntimeModel } from "../../bus/contract";
-import { setDeliveryCodexModel } from "../../delivery/client";
+import { setDeliveryModelCatalog } from "../../delivery/client";
 
 export type CodexModelSelection = string;
 export type CodexReasoningSelection = string;
@@ -87,7 +87,7 @@ export function catalogProvider(catalog: AgentRuntimeCatalog): RuntimeCatalogPro
 
 /**
  * Remembers each provider's last ready model catalog so archived sessions and Delivery can offer
- * the same choices, and tells Delivery Codex's default, which Codex jobs that name no model use.
+ * the same choices, and tells Delivery about it.
  */
 export function rememberRuntimeCatalog(catalog: AgentRuntimeCatalog): void {
   if (catalog.status !== "ready" || !catalog.models?.length) return;
@@ -97,12 +97,18 @@ export function rememberRuntimeCatalog(catalog: AgentRuntimeCatalog): void {
   } catch {
     // Storage may be unavailable; the catalog is only a convenience here.
   }
-  const model = catalog.default_model;
-  if (model && provider === "codex") {
-    Promise.resolve()
-      .then(() => setDeliveryCodexModel(model))
-      .catch(() => {});
-  }
+  tellDelivery(provider, catalog);
+}
+
+/**
+ * Tells Delivery a provider's catalog: the models its stages and coordinators may name, and the
+ * default Codex jobs that name no model use.
+ */
+export function tellDelivery(provider: RuntimeCatalogProvider, catalog: AgentRuntimeCatalog): void {
+  const models = (catalog.models ?? []).map((model) => model.model);
+  Promise.resolve()
+    .then(() => setDeliveryModelCatalog(provider, catalog.default_model ?? null, models))
+    .catch(() => {});
 }
 
 export function lastRuntimeCatalog(

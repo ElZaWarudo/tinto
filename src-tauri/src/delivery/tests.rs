@@ -189,6 +189,7 @@ impl Harness {
                 distro: None,
                 key: key.to_string(),
                 title: format!("Task {key}"),
+                read_dirs: Vec::new(),
                 base: None,
                 branch: None,
                 run_id: None,
@@ -290,7 +291,11 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
     let h = harness();
     let task = h.task("K-9");
     h.service
-        .set_codex_model(Some(" gpt-6-astra ".into()))
+        .set_model_catalog(
+            DeliveryAgent::Codex,
+            Some(" gpt-6-astra ".into()),
+            vec!["gpt-6-astra".into()],
+        )
         .unwrap();
     let codex = h.dispatch(&task, "tests", "events=codex-ok");
     assert_eq!(codex.model.as_deref(), Some("gpt-6-astra"));
@@ -426,9 +431,10 @@ fn a_failed_agent_reports_its_reason() {
     let job = h.dispatch(&task, "implementation", "events=codex-failed exit=1");
     let job = h.wait(&job.id);
     assert_eq!(job.status, DeliveryJobStatus::Failed);
+    // A model the account cannot use is said plainly, with the provider's words.
     assert_eq!(
         job.error.as_deref(),
-        Some("The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.")
+        Some("El modelo de la etapa no está disponible para esta cuenta de Codex: cámbialo en Ajustes. (The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.)")
     );
     assert_eq!(job.exit_code, Some(1));
 }
@@ -490,6 +496,7 @@ fn waiting_on_one_issue_never_leaves_the_rest_of_the_batch_idle() {
                 distro: None,
                 key: key.into(),
                 title: "x".into(),
+                read_dirs: Vec::new(),
                 base: None,
                 branch: None,
                 run_id: Some(run.id.clone()),
@@ -781,6 +788,7 @@ fn a_paused_stage_can_be_given_up_and_a_paused_batch_starts_nothing() {
             distro: None,
             key: "P-2".into(),
             title: "x".into(),
+            read_dirs: Vec::new(),
             base: None,
             branch: None,
             run_id: Some(run.id.clone()),
@@ -817,6 +825,7 @@ fn a_batch_closed_to_new_tasks_refuses_them_until_the_user_allows_them() {
         distro: None,
         key: key.into(),
         title: "x".into(),
+        read_dirs: Vec::new(),
         base: None,
         branch: None,
         run_id: Some(run.id.clone()),
@@ -956,6 +965,7 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
                 distro: None,
                 key: key.into(),
                 title: "x".into(),
+                read_dirs: Vec::new(),
                 base: None,
                 branch: None,
                 run_id: Some(run.id.clone()),
@@ -1166,6 +1176,7 @@ fn a_task_key_is_unique_per_repository() {
             distro: None,
             key: "k-12".to_string(),
             title: "again".to_string(),
+            read_dirs: Vec::new(),
             base: None,
             branch: Some("other".to_string()),
             run_id: None,
@@ -1407,6 +1418,7 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
             agent: DeliveryAgent::Codex,
             model: Some("gpt-6-sol".into()),
             reasoning: Some("high".into()),
+            timeout_minutes: None,
         },
     );
     h.service
@@ -1551,19 +1563,27 @@ fn jobs_run_with_the_repos_environment_for_checks() {
         .unwrap();
     settings.check_env.insert(
         "TEST_DB_MONGO_URL".into(),
-        "mongodb://localhost:27017/tinto_test".into(),
+        "mongodb://localhost:27017/agos{task}".into(),
     );
+    settings
+        .check_env
+        .insert("TEST_DB_NAME".into(), "tinto_test".into());
     h.service
         .store()
         .unwrap()
         .set_repo_settings(h.repo.path(), &settings)
         .unwrap();
-    let task = h.task("E-1");
+    let task = h.task("AGOS-474");
     let job = h.dispatch(&task, "tests", "events=codex-ok env=TEST_DB_MONGO_URL");
-    assert_eq!(job.check_env, settings.check_env);
+    // `{task}` gives each task its own value, such as its own test database.
+    assert_eq!(
+        job.check_env["TEST_DB_MONGO_URL"],
+        "mongodb://localhost:27017/agosagos_474"
+    );
+    assert_eq!(job.check_env["TEST_DB_NAME"], "tinto_test");
     h.wait(&job.id);
     let seen = std::fs::read_to_string(task.worktree.join("env.txt")).unwrap();
-    assert_eq!(seen.trim(), "mongodb://localhost:27017/tinto_test");
+    assert_eq!(seen.trim(), "mongodb://localhost:27017/agosagos_474");
 }
 
 #[test]
@@ -1582,6 +1602,340 @@ fn check_variables_are_names_a_shell_can_export() {
             "{name}"
         );
     }
+}
+
+/// A Delivery tool called as a coordinator calls it: the reply's `result`.
+fn tool(h: &Harness, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+    super::mcp::handle_message(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+    )
+    .unwrap()["result"]
+        .clone()
+}
+
+/// A run held by `coord` at generation 1, and the fence its writes carry.
+fn coordinated_run(h: &Harness) -> serde_json::Value {
+    let run = tool(
+        h,
+        "create_run",
+        json!({"repo": plain_path(h.repo.path()), "title": "B", "owner": "coord"}),
+    );
+    json!({"run_id": run["structuredContent"]["id"], "owner": "coord", "generation": 1})
+}
+
+fn with(fence: &serde_json::Value, extra: serde_json::Value) -> serde_json::Value {
+    let mut arguments = fence.clone();
+    for (key, value) in extra.as_object().unwrap() {
+        arguments[key] = value.clone();
+    }
+    arguments
+}
+
+#[test]
+fn a_tasks_planning_folders_reach_every_job_and_are_checked_when_set() {
+    let h = harness();
+    let repo = plain_path(h.repo.path());
+    let issue = h.repo.path().join(".agent/backlog-delivery/issues/P-1");
+    let context = h.repo.path().join(".agent/backlog-delivery/context");
+    std::fs::create_dir_all(&issue).unwrap();
+    std::fs::create_dir_all(&context).unwrap();
+    let (issue, context) = (plain_path(&issue), plain_path(&context));
+    let fence = coordinated_run(&h);
+    let new_task = |read_dirs: serde_json::Value| {
+        tool(
+            &h,
+            "create_task",
+            with(
+                &fence,
+                json!({"repo": repo, "key": "P-1", "title": "x", "read_dirs": read_dirs}),
+            ),
+        )
+    };
+    // A folder outside the main checkout is refused before anything is made.
+    let outside = new_task(json!([plain_path(&std::env::temp_dir())]));
+    assert_eq!(outside["isError"], true, "{outside}");
+    assert!(h.service.overview().unwrap().tasks.is_empty());
+
+    let created = new_task(json!([issue, context]));
+    assert_eq!(
+        created["structuredContent"]["read_dirs"],
+        json!([issue, context]),
+        "{created}"
+    );
+    let task_id = created["structuredContent"]["id"].clone();
+    // Every job of the task reads them, a writing stage too, unasked.
+    let job = tool(
+        &h,
+        "dispatch_job",
+        with(
+            &fence,
+            json!({"task_id": task_id, "role": "implementation", "agent": "codex", "prompt": "events=codex-ok"}),
+        ),
+    );
+    assert_eq!(
+        job["structuredContent"]["read_dirs"],
+        json!([issue, context]),
+        "{job}"
+    );
+    h.wait(job["structuredContent"]["id"].as_str().unwrap());
+
+    // set_task_state replaces them, checked the same way.
+    let refused = tool(
+        &h,
+        "set_task_state",
+        with(&fence, json!({"task_id": task_id, "read_dirs": ["docs"]})),
+    );
+    assert_eq!(refused["isError"], true, "{refused}");
+    let set = tool(
+        &h,
+        "set_task_state",
+        with(&fence, json!({"task_id": task_id, "read_dirs": [issue]})),
+    );
+    assert_eq!(
+        set["structuredContent"]["read_dirs"],
+        json!([issue]),
+        "{set}"
+    );
+    assert_eq!(set["structuredContent"]["state"], "intake");
+}
+
+#[test]
+fn a_stages_time_limit_applies_when_its_dispatch_gives_none_and_a_retry_can_change_it() {
+    let h = harness();
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.stages.insert(
+        "tests".into(),
+        DeliveryStageAgent {
+            agent: DeliveryAgent::Codex,
+            model: None,
+            reasoning: None,
+            timeout_minutes: Some(120),
+        },
+    );
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    let task = h.task("L-1");
+    let dispatch = |role: &str, timeout_minutes: Option<u32>| {
+        let job = h
+            .service
+            .dispatch(NewJob {
+                task_id: task.id.clone(),
+                role: role.into(),
+                agent: DeliveryAgent::Codex,
+                model: None,
+                access: DeliveryAccess::Workspace,
+                prompt: "events=codex-ok".into(),
+                writes: None,
+                lease: None,
+                timeout_minutes,
+                reasoning: None,
+                platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
+            })
+            .unwrap();
+        h.wait(&job.id)
+    };
+    assert_eq!(dispatch("tests", None).timeout_minutes, 120);
+    let given = dispatch("tests", Some(7));
+    assert_eq!(given.timeout_minutes, 7);
+    assert_eq!(dispatch("implementation", None).timeout_minutes, 60);
+    // Scoping reads the code and writes nothing.
+    let explore = dispatch("explore", None);
+    assert!(!explore.writes);
+    assert_eq!(explore.timeout_minutes, 30);
+    assert_eq!(explore.result_state, Some(DeliveryResultState::Accepted));
+
+    let longer = h.service.retry(&given.id, Some(200)).unwrap();
+    assert_eq!(longer.timeout_minutes, 200);
+    h.wait(&longer.id);
+    let same = h.service.retry(&given.id, None).unwrap();
+    assert_eq!(same.timeout_minutes, 7);
+    h.wait(&same.id);
+}
+
+#[test]
+fn a_job_that_ran_out_of_time_or_was_cut_off_goes_on_in_its_session() {
+    let h = harness();
+    let task = h.task("C-1");
+    let first = h.wait(&h.dispatch(&task, "implementation", "events=codex-ok").id);
+    assert!(first.provider_session_id.is_some());
+    // A job that finished is retried, not continued.
+    assert_eq!(
+        h.service
+            .continue_job(&first.id, None)
+            .unwrap_err()
+            .category,
+        "job_not_continuable"
+    );
+    // As if its time had run out.
+    let mut stopped = first.clone();
+    stopped.status = DeliveryJobStatus::Failed;
+    stopped.error = Some("Se agotó el tiempo máximo de 60 minutos.".into());
+    h.service.store().unwrap().put_job(&stopped).unwrap();
+    let continued = h.service.continue_job(&stopped.id, Some(120)).unwrap();
+    assert_eq!(continued.resumes.as_deref(), Some(stopped.id.as_str()));
+    assert_eq!(continued.provider_session_id, stopped.provider_session_id);
+    assert_eq!(continued.prompt, stopped.prompt);
+    assert_eq!((continued.attempt, continued.timeout_minutes), (2, 120));
+    let note = continued.resume_note.clone().unwrap();
+    assert!(
+        note.contains("se agotó su tiempo máximo de 60 minutos")
+            && note.contains("El worktree conserva los cambios"),
+        "{note}"
+    );
+    h.wait(&continued.id);
+    // Only the latest attempt of the stage goes on.
+    assert_eq!(
+        h.service
+            .continue_job(&stopped.id, None)
+            .unwrap_err()
+            .category,
+        "job_superseded"
+    );
+
+    // Cut off by a restart: the same, with its time limit kept.
+    let mut cut = h.wait(&h.dispatch(&task, "review", "events=codex-ok").id);
+    cut.status = DeliveryJobStatus::Interrupted;
+    cut.error = Some("Tinto se cerró mientras el trabajo corría.".into());
+    h.service.store().unwrap().put_job(&cut).unwrap();
+    let continued = h.service.continue_job(&cut.id, None).unwrap();
+    assert_eq!(continued.timeout_minutes, cut.timeout_minutes);
+    assert!(continued
+        .resume_note
+        .as_deref()
+        .unwrap()
+        .contains("Tinto se cerró"));
+    h.wait(&continued.id);
+
+    // An agent that never started its session has none to go on in.
+    let mut silent = h.wait(&h.dispatch(&task, "tests", "events=none").id);
+    silent.status = DeliveryJobStatus::Interrupted;
+    silent.provider_session_id = Some("never-started".into());
+    h.service.store().unwrap().put_job(&silent).unwrap();
+    assert_eq!(
+        h.service
+            .continue_job(&silent.id, None)
+            .unwrap_err()
+            .category,
+        "session_unknown"
+    );
+}
+
+#[test]
+fn models_are_checked_against_the_catalog_tinto_last_saw() {
+    let h = harness();
+    // Before any catalog is seen, nothing is refused.
+    h.service
+        .check_model(DeliveryAgent::Codex, "gpt-9")
+        .unwrap();
+    h.service
+        .set_model_catalog(
+            DeliveryAgent::Codex,
+            Some("gpt-6.1-sol".into()),
+            vec!["gpt-6.1-sol".into(), " gpt-6-astra ".into(), "".into()],
+        )
+        .unwrap();
+    h.service
+        .check_model(DeliveryAgent::Codex, "gpt-6-astra")
+        .unwrap();
+    let refused = h
+        .service
+        .check_model(DeliveryAgent::Codex, "gpt-9")
+        .unwrap_err();
+    assert_eq!(refused.category, "model_unavailable");
+    assert!(
+        refused.message.ends_with("gpt-6.1-sol, gpt-6-astra"),
+        "{}",
+        refused.message
+    );
+    // Muse Code has its own catalog; Claude Code's models are a fixed list.
+    h.service
+        .set_model_catalog(DeliveryAgent::Muse, None, vec!["muse-spark-1.3".into()])
+        .unwrap();
+    assert_eq!(
+        h.service
+            .check_model(DeliveryAgent::Muse, "gpt-6-astra")
+            .unwrap_err()
+            .category,
+        "model_unavailable"
+    );
+    h.service
+        .check_model(DeliveryAgent::Claude, "opus")
+        .unwrap();
+
+    // A coordinator naming a model the account lacks is told the valid ones.
+    let fence = coordinated_run(&h);
+    let task = tool(
+        &h,
+        "create_task",
+        with(
+            &fence,
+            json!({"repo": plain_path(h.repo.path()), "key": "M-2", "title": "x"}),
+        ),
+    );
+    let dispatched = tool(
+        &h,
+        "dispatch_job",
+        with(
+            &fence,
+            json!({"task_id": task["structuredContent"]["id"], "role": "tests", "agent": "codex", "model": "gpt-9", "prompt": "events=codex-ok"}),
+        ),
+    );
+    assert_eq!(dispatched["isError"], true, "{dispatched}");
+    let text = dispatched["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("model_unavailable") && text.contains("gpt-6-astra"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_coordinator_proposes_variables_for_checks_and_the_user_approves_them() {
+    let h = harness();
+    let fence = coordinated_run(&h);
+    let task = tool(
+        &h,
+        "create_task",
+        with(
+            &fence,
+            json!({"repo": plain_path(h.repo.path()), "key": "V-1", "title": "x"}),
+        ),
+    );
+    let proposed = tool(
+        &h,
+        "propose_settings",
+        with(
+            &fence,
+            json!({"task_id": task["structuredContent"]["id"], "reason": "una base de datos por tarea", "check_env": {"TEST_DB_MONGO_URL": "mongodb://127.0.0.1:27419/agos{task}"}}),
+        ),
+    );
+    let proposal = &proposed["structuredContent"];
+    assert_eq!(proposal["status"], "pending", "{proposed}");
+    let changes: DeliverySettingsChanges =
+        serde_json::from_value(proposal["changes"].clone()).unwrap();
+    h.service
+        .approve_settings_proposal(proposal["id"].as_str().unwrap(), changes, "user")
+        .unwrap();
+    let settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    assert_eq!(
+        settings.check_env["TEST_DB_MONGO_URL"],
+        "mongodb://127.0.0.1:27419/agos{task}"
+    );
 }
 
 fn choice(question: &str, recommended: Option<usize>) -> super::decisions::NewDecision {
@@ -2026,6 +2380,7 @@ fn past_the_brainstorm_qa_neither_waits_on_a_stale_permission_nor_on_a_quarantin
             distro: None,
             key: "D-8".into(),
             title: "x".into(),
+            read_dirs: Vec::new(),
             base: None,
             branch: None,
             run_id: Some(run.id.clone()),
@@ -2207,6 +2562,7 @@ fn task_in(h: &Harness, run_id: &str, key: &str) -> DeliveryTask {
             distro: None,
             key: key.into(),
             title: key.into(),
+            read_dirs: Vec::new(),
             base: None,
             branch: None,
             run_id: Some(run_id.into()),
@@ -2227,6 +2583,7 @@ fn package(
         distro: None,
         key: key.to_string(),
         title: format!("Task {key}"),
+        read_dirs: Vec::new(),
         base: None,
         branch: None,
         run_id: None,
@@ -2258,6 +2615,7 @@ fn a_package_starts_from_the_one_it_builds_on_and_waits_for_its_pr() {
         distro: None,
         key: "K-60".into(),
         title: "Task K-60".into(),
+        read_dirs: Vec::new(),
         base: None,
         branch: None,
         run_id: None,
@@ -2720,6 +3078,7 @@ fn coordinators_read_what_the_user_configured() {
             distro: None,
             key: "D-5".into(),
             title: "x".into(),
+            read_dirs: Vec::new(),
             base: None,
             branch: None,
             run_id: Some(run.id.clone()),

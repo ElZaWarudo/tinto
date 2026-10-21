@@ -64,6 +64,7 @@ pub async fn delivery_create_task(
             distro,
             key,
             title,
+            read_dirs: Vec::new(),
             base,
             branch,
             run_id,
@@ -324,7 +325,7 @@ pub fn delivery_retry_job(
     service: State<'_, DeliveryService>,
     job_id: String,
 ) -> Result<DeliveryJob, CommandError> {
-    service.retry(&job_id).map_err(CommandError::from)
+    service.retry(&job_id, None).map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -357,14 +358,19 @@ pub fn delivery_update_settings(
         .map_err(CommandError::from)
 }
 
-/// The model Codex jobs use when they do not name one: the default of the
-/// account's model catalog, reported by the view.
+/// The account's model catalog of Codex or Muse Code, as the view last saw
+/// it: the models a stage or a coordinator may name, and the default Codex
+/// jobs that name none use.
 #[tauri::command]
-pub fn delivery_set_codex_model(
+pub fn delivery_set_model_catalog(
     service: State<'_, DeliveryService>,
-    model: Option<String>,
+    agent: DeliveryAgent,
+    default_model: Option<String>,
+    models: Vec<String>,
 ) -> Result<(), CommandError> {
-    service.set_codex_model(model).map_err(CommandError::from)
+    service
+        .set_model_catalog(agent, default_model, models)
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -461,6 +467,11 @@ pub fn delivery_set_repo_settings(
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
     };
+    let saved = service
+        .store()
+        .and_then(|store| store.repo_settings(&repo))
+        .map_err(CommandError::from)?
+        .stages;
     let checks: Vec<String> = settings
         .checks
         .into_iter()
@@ -500,14 +511,31 @@ pub fn delivery_set_repo_settings(
             .into_iter()
             .filter(|(_, stage)| stage.agent != DeliveryAgent::Shell)
             .map(|(role, stage)| {
+                let role = role.trim().to_ascii_lowercase();
+                let model = clean(stage.model);
+                // A model chosen now that the account does not offer would
+                // fail every job; one saved before is left to the user.
+                let unchanged = saved
+                    .get(&role)
+                    .is_some_and(|old| old.agent == stage.agent && old.model == model);
+                if let Some(model) = model.as_ref().filter(|_| !unchanged) {
+                    service.check_model(stage.agent, model).map_err(|error| {
+                        CommandError::new(error.category, format!("{role}: {}", error.message))
+                    })?;
+                }
                 let stage = DeliveryStageAgent {
                     agent: stage.agent,
-                    model: clean(stage.model),
+                    model,
                     reasoning: clean(stage.reasoning),
+                    // Zero means no limit was set: the role's default applies.
+                    timeout_minutes: stage
+                        .timeout_minutes
+                        .filter(|limit| *limit > 0)
+                        .map(|limit| limit.min(super::service::MAX_TIMEOUT_MINUTES)),
                 };
-                (role.trim().to_ascii_lowercase(), stage)
+                Ok((role, stage))
             })
-            .collect(),
+            .collect::<Result<_, CommandError>>()?,
         jira: match settings.jira {
             Some(jira) if !jira.host.trim().is_empty() => {
                 let statuses = |list: Vec<String>| -> Vec<String> {

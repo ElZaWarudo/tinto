@@ -27,6 +27,10 @@ pub struct DeliveryTask {
     /// Free-form stage label (`intake`, `tests`, `review`, `qa_ready`…).
     pub state: String,
     pub contract_version: u32,
+    /// Folders outside the worktree every job of the task may read and list,
+    /// such as the issue's planning folder in the main checkout.
+    #[serde(default)]
+    pub read_dirs: Vec<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     #[serde(default)]
@@ -224,7 +228,8 @@ pub enum DeliveryAgent {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryAccess {
-    /// Codex `workspace-write`; Claude `acceptEdits` (cannot run commands).
+    /// Codex `workspace-write`; Claude any command but Tinto's own steps
+    /// (`acceptEdits` for jobs that write).
     #[default]
     Workspace,
     /// Codex `danger-full-access`; Claude `bypassPermissions`.
@@ -320,10 +325,10 @@ pub struct DeliveryJob {
     pub result_state: Option<DeliveryResultState>,
     pub result_note: Option<String>,
     pub undone_at_ms: Option<u64>,
-    /// Shell commands a Claude job without full access may run, taken from
-    /// the repo's verification commands (and, for QA, its QA commands and
-    /// the user's permissions) when the job was dispatched. A Codex job gets
-    /// the verification commands: its sandbox must reach their programs.
+    /// The checks a job without full access is given, taken from the
+    /// repo's verification commands (and, for QA, its QA commands and the
+    /// user's permissions) when the job was dispatched. A Codex job's
+    /// sandbox must reach their programs.
     #[serde(default)]
     pub allowed_commands: Vec<String>,
     /// QA jobs only: a browser through Playwright's MCP server.
@@ -377,6 +382,10 @@ pub struct DeliveryJob {
     /// The paused job this one continues, in the same agent session.
     #[serde(default)]
     pub resumes: Option<String>,
+    /// What the agent is told when it continues a job that stopped (its time
+    /// ran out, Tinto restarted); `None` when the user resumed a pause.
+    #[serde(default)]
+    pub resume_note: Option<String>,
     /// What the agent did last, as its log says it, and when: the view
     /// shows it while the job runs and tells when it has gone quiet.
     #[serde(default)]
@@ -854,6 +863,9 @@ pub struct DeliverySettingsChanges {
     pub qa_browser: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<String>,
+    /// Variables for checks, by name, each set to the value given.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub check_env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -968,8 +980,8 @@ pub struct DeliveryRepoSettings {
     pub bootstrap: Option<String>,
     /// Base ref for new tasks; default the repo's integration branch.
     pub default_base: Option<String>,
-    /// Commands jobs use to verify their work (e.g. `npm test`). Claude jobs
-    /// without full access may run these and nothing else.
+    /// Commands jobs use to verify their work (e.g. `npm test`): jobs are
+    /// given them, and a Codex job's sandbox must reach their programs.
     #[serde(default)]
     pub checks: Vec<String>,
     /// More commands QA jobs may run, such as the CLI an issue changes.
@@ -977,6 +989,8 @@ pub struct DeliveryRepoSettings {
     pub qa_commands: Vec<String>,
     /// Environment variables, by name, that jobs run the checks and QA
     /// commands with (e.g. a test database's URL). Test settings, not secrets.
+    /// `{task}` in a value becomes the job's task key, lowercase with `_` for
+    /// the rest (`agos_474`), so each task can have its own test database.
     #[serde(default)]
     pub check_env: BTreeMap<String, String>,
     /// Whether QA jobs get a browser.
@@ -1052,6 +1066,10 @@ pub struct DeliveryStageAgent {
     pub model: Option<String>,
     #[serde(default)]
     pub reasoning: Option<String>,
+    /// The stage's time limit, for a dispatch that gives none; the role's
+    /// default when `None`.
+    #[serde(default)]
+    pub timeout_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

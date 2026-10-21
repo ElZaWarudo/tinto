@@ -225,15 +225,26 @@ pub fn job_prompt(
             lines.push(visual_record_instructions(&task.key));
         }
     }
-    if !job.read_dirs.is_empty() {
-        let dirs: Vec<String> = job
-            .read_dirs
-            .iter()
-            .map(|dir| agent_path(dir, from_wsl))
-            .collect();
+    // The task's planning folders, which every stage reads, apart from the
+    // other folders it may read.
+    let (planning, other): (Vec<&String>, Vec<&String>) = job
+        .read_dirs
+        .iter()
+        .partition(|dir| task.read_dirs.contains(dir));
+    let named = |dirs: Vec<&String>| -> String {
+        let dirs: Vec<String> = dirs.iter().map(|dir| agent_path(dir, from_wsl)).collect();
+        dirs.join("; ")
+    };
+    if !planning.is_empty() {
+        lines.push(format!(
+            "The task's planning folders, outside the worktree (its contract and context): read what they say about this task before you start, and do not change them: {}.",
+            named(planning)
+        ));
+    }
+    if !other.is_empty() {
         lines.push(format!(
             "You may also read and list these folders outside the worktree, without changing them: {}.",
-            dirs.join("; ")
+            named(other)
         ));
     }
     if !job.write_dirs.is_empty() {
@@ -555,6 +566,14 @@ The user decides on each problem in Tinto, by its label: write each so it can be
 /// What a resumed agent is told: the session already has its instructions.
 const RESUME_PROMPT: &str = "El usuario pausó esta etapa y ahora la reanuda. Continúa exactamente donde lo dejaste, con las mismas instrucciones, y termina entregando el resultado con el formato pedido.";
 
+/// Why a resumed agent goes on: the user's pause, or the note of a job that
+/// stopped on its own.
+fn resume_prompt(job: &DeliveryJob) -> String {
+    job.resume_note
+        .clone()
+        .unwrap_or_else(|| RESUME_PROMPT.to_string())
+}
+
 /// The session a job continues, when it resumes a paused one.
 fn resumed_session(job: &DeliveryJob) -> Result<Option<&str>, DeliveryError> {
     match (&job.resumes, job.provider_session_id.as_deref()) {
@@ -587,7 +606,7 @@ fn codex_launch(
     // its working directory and takes the sandbox as an override.
     let resume = resumed_session(job)?;
     let prompt = match resume {
-        Some(_) => RESUME_PROMPT.to_string(),
+        Some(_) => resume_prompt(job),
         None => job_prompt(job, task, paths, task.distro.is_some(), &plan.obstacles),
     };
     match task.distro.as_deref() {
@@ -693,7 +712,7 @@ fn muse_launch(
         .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
     let from_wsl = native.is_none();
     let prompt = match resume {
-        Some(_) => RESUME_PROMPT.to_string(),
+        Some(_) => resume_prompt(job),
         None => job_prompt(job, task, paths, from_wsl, &[]),
     };
     std::fs::write(&paths.prompt, prompt).map_err(DeliveryError::io)?;
@@ -822,7 +841,7 @@ fn claude_launch(
         "--session-id"
     };
     let prompt = match resume {
-        Some(_) => RESUME_PROMPT.to_string(),
+        Some(_) => resume_prompt(job),
         None => job_prompt(job, task, paths, from_wsl, &[]),
     };
     if let Some(program) = native {
@@ -1932,6 +1951,7 @@ pub fn read_outcome(agent: DeliveryAgent, events: &str, result_file: Option<&str
             DeliveryAgent::Shell => {}
         }
     }
+    outcome.error = outcome.error.map(|error| model_unavailable(agent, error));
     let candidate = final_value
         .or_else(|| result_file.and_then(json_object_in))
         .or_else(|| last_message.as_deref().and_then(json_object_in));
@@ -1974,6 +1994,30 @@ fn json_object_in(text: &str) -> Option<Value> {
         .filter(Value::is_object)
 }
 
+/// A provider's refusal of the model asked for, said plainly: the account
+/// cannot use the stage's model. Any other error stays as it is.
+fn model_unavailable(agent: DeliveryAgent, error: String) -> String {
+    let lower = error.to_lowercase();
+    let refused = lower.contains("model")
+        && [
+            "not supported",
+            "does not exist",
+            "may not exist",
+            "not have access",
+            "model_not_found",
+            "model not found",
+        ]
+        .iter()
+        .any(|phrase| lower.contains(phrase));
+    if !refused {
+        return error;
+    }
+    format!(
+        "El modelo de la etapa no está disponible para esta cuenta de {}: cámbialo en Ajustes. ({error})",
+        super::service::agent_name(agent)
+    )
+}
+
 /// Codex wraps API errors as JSON text; keep the human-readable message.
 fn provider_error_reason(error: &str) -> String {
     serde_json::from_str::<Value>(error)
@@ -2012,6 +2056,7 @@ pub(crate) mod tests {
             base_commit: "abc".into(),
             state: "intake".into(),
             contract_version: 1,
+            read_dirs: Vec::new(),
             created_at_ms: 1,
             updated_at_ms: 1,
             removed_at_ms: None,
@@ -2067,6 +2112,7 @@ pub(crate) mod tests {
             check_env: Default::default(),
             frozen_scripts: Vec::new(),
             resumes: None,
+            resume_note: None,
             activity: None,
             activity_at_ms: None,
             current_command: None,
@@ -2097,13 +2143,33 @@ pub(crate) mod tests {
     #[test]
     fn codex_failure_reports_the_api_reason() {
         let outcome = read_outcome(DeliveryAgent::Codex, CODEX_FAILED, None);
-        assert_eq!(
-            outcome.error.as_deref(),
-            Some(
-                "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."
-            )
+        let error = outcome.error.expect("error");
+        assert!(
+            error.starts_with("El modelo de la etapa no está disponible para esta cuenta de Codex: cámbialo en Ajustes.")
+                && error.contains("The 'gpt-6.1-sol' model is not supported"),
+            "{error}"
         );
         assert!(outcome.result.is_none());
+    }
+
+    #[test]
+    fn a_model_the_account_lacks_is_said_plainly_and_other_errors_stay() {
+        let claude = r#"{"type":"result","subtype":"success","is_error":true,"result":"There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it. Run --model to pick a different model."}"#;
+        let error = read_outcome(DeliveryAgent::Claude, claude, None)
+            .error
+            .expect("error");
+        assert!(
+            error.contains("cuenta de Claude Code: cámbialo en Ajustes"),
+            "{error}"
+        );
+        assert!(error.contains("claude-nope"), "{error}");
+        let other = r#"{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 overloaded"}"#;
+        assert_eq!(
+            read_outcome(DeliveryAgent::Claude, other, None)
+                .error
+                .as_deref(),
+            Some("API Error: 529 overloaded")
+        );
     }
 
     // A real `muse exec --json` run the provider refused.
@@ -2344,9 +2410,35 @@ pub(crate) mod tests {
         assert!(script.contains("--resume 'session-1'"), "{script}");
         assert!(!script.contains("--session-id"), "{script}");
         assert_eq!(launch.stdin, RESUME_PROMPT);
+        // A job that stopped on its own goes on with why it stopped.
+        claude.resume_note = Some("Se agotó su tiempo: sigue.".into());
+        let launch = claude_launch(&claude, &task, &paths, None, None).unwrap();
+        assert_eq!(launch.stdin, "Se agotó su tiempo: sigue.");
 
         claude.provider_session_id = None;
         assert!(claude_launch(&claude, &task, &paths, None, None).is_err());
+    }
+
+    #[test]
+    fn every_stage_is_told_to_read_the_tasks_planning_folders() {
+        let mut task = sample_task();
+        let issue = "C:/repo/.agent/backlog-delivery/issues/K-1".to_string();
+        task.read_dirs = vec![issue.clone()];
+        let paths = JobPaths::in_dir(PathBuf::from(r"C:\jobs\j1"));
+        let mut job = sample_job(DeliveryAgent::Codex);
+        job.read_dirs = vec![issue.clone(), "C:/repo/docs".into()];
+        assert!(job.writes);
+        let prompt = job_prompt(&job, &task, &paths, false, &[]);
+        assert!(
+            prompt.contains(&format!(
+                "The task's planning folders, outside the worktree (its contract and context): read what they say about this task before you start, and do not change them: {issue}."
+            )),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("You may also read and list these folders outside the worktree, without changing them: C:/repo/docs."),
+            "{prompt}"
+        );
     }
 
     #[test]

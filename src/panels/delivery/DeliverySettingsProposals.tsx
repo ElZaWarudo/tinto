@@ -28,6 +28,7 @@ function changeKeys(changes: DeliverySettingsChanges): string[] {
   if (changes.bootstrap != null) keys.push(key("bootstrap", ""));
   if (changes.qa_browser != null) keys.push(key("qa_browser", ""));
   if (changes.verification != null) keys.push(key("verification", ""));
+  for (const name of Object.keys(changes.check_env ?? {})) keys.push(key("check_env", name));
   return keys;
 }
 
@@ -52,6 +53,10 @@ function accepted(
   if (changes.verification != null && selected.has(key("verification", ""))) {
     part.verification = changes.verification;
   }
+  const env = Object.entries(changes.check_env ?? {}).filter(([name]) =>
+    selected.has(key("check_env", name)),
+  );
+  if (env.length > 0) part.check_env = Object.fromEntries(env);
   return part;
 }
 
@@ -239,6 +244,19 @@ function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
           toggle={toggle}
         />
       )}
+      {Object.entries(changes.check_env ?? {}).map(([name, value]) => (
+        <label key={name} className="delivery-settings-diff__value">
+          <Toggle
+            label={`Cambiar la variable ${name}`}
+            checked={selected.has(key("check_env", name))}
+            onChange={() => toggle(key("check_env", name))}
+          />
+          <span>
+            <strong>Variable {name}</strong>: {current?.check_env?.[name] || "(sin definir)"} →{" "}
+            {value || "(vacío)"}
+          </span>
+        </label>
+      ))}
       <ActionGroup>
         <div className="delivery-actions">
           <ActionButton

@@ -160,9 +160,13 @@ export const getDeliveryJobLog = (jobId: string, fromLine = 0) =>
 export const updateDeliverySettings = (capacity: number) =>
   invoke<DeliverySettings>("delivery_update_settings", { capacity });
 
-/** The model Codex jobs use when they name none (the catalog's default). */
-export const setDeliveryCodexModel = (model: string | null) =>
-  invoke<void>("delivery_set_codex_model", { model });
+/** The account's model catalog of Codex or Muse Code, as Agents last loaded it: the models
+ *  stages and coordinators may name, and the default Codex jobs that name none use. */
+export const setDeliveryModelCatalog = (
+  agent: "codex" | "muse",
+  defaultModel: string | null,
+  models: string[],
+) => invoke<void>("delivery_set_model_catalog", { agent, defaultModel, models });
 
 export const getDeliveryRepoSettings = (repo: string) =>
   invoke<DeliveryRepoSettings>("delivery_repo_settings", { repo });
