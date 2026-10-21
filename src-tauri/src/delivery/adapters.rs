@@ -1819,6 +1819,7 @@ pub(crate) mod tests {
             visual_record: None,
             visual_record_error: None,
             substituted: None,
+            retry_of: None,
         }
     }
 

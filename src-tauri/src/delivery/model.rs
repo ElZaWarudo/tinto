@@ -335,6 +335,11 @@ pub struct DeliveryJob {
     /// not installed on this machine).
     #[serde(default)]
     pub substituted: Option<String>,
+    /// The interrupted job this one repeats, queued by Tinto when it
+    /// restarted ("Reintentar al reiniciar"). Such a retry is never repeated
+    /// again.
+    #[serde(default)]
+    pub retry_of: Option<String>,
 }
 
 /// One item of an agent's task list.
@@ -899,6 +904,14 @@ pub struct DeliveryRepoSettings {
     /// [`SINGLE_COMMIT_MAX_LINES`].
     #[serde(default)]
     pub single_commit_max_lines: Option<u32>,
+    /// "Reintentar al reiniciar": when Tinto starts, a job it interrupted is
+    /// queued again once, unless repeating it is not safe.
+    #[serde(default)]
+    pub retry_on_restart: bool,
+    /// The verification commands (`checks`) the user marked as environment
+    /// probes: the "Entorno" check runs them (e.g. a database ping).
+    #[serde(default)]
+    pub environment_probes: Vec<String>,
 }
 
 pub const SINGLE_COMMIT_MAX_FILES: u32 = 5;

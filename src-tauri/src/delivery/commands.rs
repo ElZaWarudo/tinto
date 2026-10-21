@@ -355,6 +355,25 @@ pub fn delivery_repo_settings(
     Ok(settings)
 }
 
+/// "Entorno": whether Docker (when the repo uses it) and the repo's
+/// environment probes answer now, where its jobs run.
+#[tauri::command]
+pub async fn delivery_check_environment(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+    distro: Option<String>,
+) -> Result<Vec<super::environment::DeliveryEnvironmentCheck>, CommandError> {
+    let settings = service.store()?.repo_settings(&repo)?;
+    blocking(move || {
+        Ok(super::environment::check(
+            &repo,
+            distro.as_deref(),
+            &settings,
+        ))
+    })
+    .await
+}
+
 /// Archives a delivered task: its worktree and local branch go.
 #[tauri::command]
 pub async fn delivery_archive_task(
@@ -417,17 +436,27 @@ pub fn delivery_set_repo_settings(
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
     };
+    let checks: Vec<String> = settings
+        .checks
+        .into_iter()
+        .filter_map(|check| clean(Some(check)))
+        .collect();
+    // A probe is one of the verification commands, marked.
+    let environment_probes = settings
+        .environment_probes
+        .into_iter()
+        .filter_map(|probe| clean(Some(probe)))
+        .filter(|probe| checks.contains(probe))
+        .collect();
     let settings = DeliveryRepoSettings {
+        retry_on_restart: settings.retry_on_restart,
+        environment_probes,
         worktree_root: settings
             .worktree_root
             .filter(|root| !root.as_os_str().is_empty()),
         bootstrap: clean(settings.bootstrap),
         default_base: clean(settings.default_base),
-        checks: settings
-            .checks
-            .into_iter()
-            .filter_map(|check| clean(Some(check)))
-            .collect(),
+        checks,
         qa_commands: settings
             .qa_commands
             .into_iter()

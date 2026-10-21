@@ -2002,6 +2002,30 @@
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
+/* "Entorno": the dot's colour goes with the words that say it. */
+.delivery-env {
+  display: inline-flex;
+  align-items: center;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.delivery-env:disabled {
+  cursor: progress;
+}
+.delivery-env--ok .delivery-dot {
+  background: var(--accent-fg);
+}
+.delivery-env--fail {
+  color: var(--danger);
+}
+.delivery-env--fail .delivery-dot {
+  background: var(--danger);
+}
 
 /* ---------- Repo settings: a page in place of the tasks ---------- */
 .delivery-settings {

@@ -857,6 +857,8 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
   const [maxFiles, setMaxFiles] = useState("");
   const [maxLines, setMaxLines] = useState("");
   const [stages, setStages] = useState<Record<string, DeliveryStageAgent>>({});
+  const [retryOnRestart, setRetryOnRestart] = useState(false);
+  const [probes, setProbes] = useState<string[]>([]);
   const [jiraHost, setJiraHost] = useState("");
   const [jiraProject, setJiraProject] = useState("");
   const [jiraToken, setJiraToken] = useState("");
@@ -886,6 +888,8 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
               : "",
         );
         setStages(settings.stages ?? {});
+        setRetryOnRestart(settings.retry_on_restart ?? false);
+        setProbes(settings.environment_probes ?? []);
         setJiraHost(settings.jira?.host ?? "");
         setJiraProject(settings.jira?.project ?? "");
         setAfterPr((settings.jira?.after_pr ?? []).join(", "));
@@ -962,6 +966,53 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
           <option value="no">No permitidas</option>
         </select>
       </Field>
+      <h3>Entorno</h3>
+      <label className="delivery-check">
+        <input
+          type="checkbox"
+          checked={retryOnRestart}
+          onChange={(event) => setRetryOnRestart(event.target.checked)}
+        />
+        <span>
+          Reintentar al reiniciar
+          <small>
+            Si Tinto se cierra con etapas en marcha, al abrirse las vuelve a poner en cola una vez,
+            con el mismo encargo. Nunca las que pudieron dejar algo a medias fuera del worktree
+            (acceso completo, comandos de shell, la QA con su recurso en cuarentena): esas quedan
+            interrumpidas con el motivo.
+          </small>
+        </span>
+      </label>
+      <div className="delivery-field">
+        <span className="delivery-field__label">Sondas de entorno</span>
+        {(loaded?.checks ?? []).length === 0 ? (
+          <small className="delivery-field__hint">
+            Sin comandos de verificación todavía: se añaden al lanzar una etapa.
+          </small>
+        ) : (
+          (loaded?.checks ?? []).map((check) => (
+            <label key={check} className="delivery-check">
+              <input
+                type="checkbox"
+                checked={probes.includes(check)}
+                onChange={(event) =>
+                  setProbes((current) =>
+                    event.target.checked
+                      ? [...current, check]
+                      : current.filter((probe) => probe !== check),
+                  )
+                }
+              />
+              <code>{check}</code>
+            </label>
+          ))
+        )}
+        <small className="delivery-field__hint">
+          Los comandos de verificación marcados se corren en «Entorno», en la barra del lote, junto
+          con Docker si el repositorio lo usa. Marca solo los rápidos que dicen si el entorno
+          responde (por ejemplo, un ping a la base de datos).
+        </small>
+      </div>
       <h3>Commits</h3>
       <Field
         label="Un solo commit, como mucho"
@@ -1077,6 +1128,8 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
               single_commit_max_files: positive(maxFiles),
               single_commit_max_lines: positive(maxLines),
               stages,
+              retry_on_restart: retryOnRestart,
+              environment_probes: probes,
               jira: jiraHost.trim()
                 ? {
                     host: jiraHost.trim(),

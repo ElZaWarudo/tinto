@@ -165,6 +165,8 @@ export interface DeliveryJob {
   ran_on?: string | null;
   /** Why it runs with another agent than the one asked for (not installed here). */
   substituted?: string | null;
+  /** The interrupted job this one repeats, queued by Tinto when it restarted. */
+  retry_of?: string | null;
   /** QA jobs: folders outside the worktree the permissions let it read. */
   read_dirs?: string[];
   /** QA jobs: folders outside the worktree the permissions let it write in. */
@@ -406,6 +408,18 @@ export interface DeliveryRepoSettings {
   stages?: Record<string, DeliveryStageAgent>;
   /** The repo's Jira, for Tinto to run the Jira steps; the token is kept apart. */
   jira?: DeliveryJiraSettings | null;
+  /** "Reintentar al reiniciar": jobs a restart interrupted run again once, when safe. */
+  retry_on_restart?: boolean;
+  /** The checks the user marked as environment probes, run by the "Entorno" check. */
+  environment_probes?: string[];
+}
+
+/** One line of a repo's "Entorno" check: Docker or a probe. */
+export interface DeliveryEnvironmentCheck {
+  name: string;
+  ok: boolean;
+  /** What it printed (its end), or why it failed. */
+  output: string;
 }
 
 export interface DeliveryJiraSettings {

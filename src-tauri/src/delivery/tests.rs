@@ -823,6 +823,163 @@ fn a_restart_marks_running_jobs_interrupted_and_quarantines_their_resource() {
 }
 
 #[test]
+fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coordinator() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let store = h.service.store().unwrap();
+    let settings = DeliveryRepoSettings {
+        retry_on_restart: true,
+        ..store.repo_settings(h.repo.path()).unwrap()
+    };
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+    drop(store);
+    h.service
+        .update_settings(DeliverySettings { capacity: 3 })
+        .unwrap();
+    let run = h
+        .service
+        .create_run(h.repo.path().to_path_buf(), "B", Some("coord".into()), None)
+        .unwrap();
+    let task = |key: &str| {
+        h.service
+            .create_task(NewTask {
+                repo: h.repo.path().to_path_buf(),
+                distro: None,
+                key: key.into(),
+                title: "x".into(),
+                base: None,
+                branch: None,
+                run_id: Some(run.id.clone()),
+            })
+            .unwrap()
+    };
+    let (coding, testing) = (task("R-1"), task("R-2"));
+    let implementation = h.dispatch(&coding, "implementation", "sleep=30");
+    // QA holds the `qa` resource, which a restart leaves in quarantine.
+    let qa = h.dispatch(&testing, "qa", "sleep=30");
+    h.wait_status(&implementation.id, DeliveryJobStatus::Started);
+    h.wait_status(&qa.id, DeliveryJobStatus::Started);
+    let cursor = h.service.store().unwrap().last_event_seq().unwrap();
+
+    let jobs = tempfile::tempdir().unwrap();
+    let jobs_dir = jobs.path().to_path_buf();
+    let restart = || {
+        let jobs_dir = jobs_dir.clone();
+        DeliveryService::with_parts(
+            DeliveryStore::open(&path).unwrap(),
+            fake_launcher(),
+            Arc::new(move |id: &str| Ok(JobPaths::in_dir(jobs_dir.join(id)))),
+            CheckpointConfig::default(),
+        )
+        .unwrap()
+    };
+    let restarted = restart();
+    restarted.retry_interrupted();
+    let interrupted = restarted.job(&implementation.id).unwrap();
+    assert_eq!(interrupted.status, DeliveryJobStatus::Interrupted);
+    assert!(
+        interrupted
+            .error
+            .as_deref()
+            .unwrap()
+            .ends_with("Se reintentó al reiniciar Tinto."),
+        "{:?}",
+        interrupted.error
+    );
+    let jobs_now = restarted.overview().unwrap().jobs;
+    let retry = jobs_now
+        .iter()
+        .find(|job| job.retry_of.as_deref() == Some(implementation.id.as_str()))
+        .expect("the implementation is queued again");
+    assert_eq!(retry.task_id, coding.id);
+    assert_eq!(retry.prompt, implementation.prompt);
+    assert_eq!(retry.attempt, 2);
+    let skipped = restarted.job(&qa.id).unwrap();
+    assert_eq!(skipped.status, DeliveryJobStatus::Interrupted);
+    assert!(
+        skipped.error.as_deref().unwrap().contains("No se reintenta")
+            && skipped.error.as_deref().unwrap().contains("cuarentena"),
+        "{:?}",
+        skipped.error
+    );
+    assert!(!jobs_now
+        .iter()
+        .any(|job| job.task_id == testing.id && job.id != qa.id));
+
+    let waited = restarted
+        .wait_run(&run.id, Some(cursor), Duration::from_secs(1), true)
+        .unwrap();
+    let texts: Vec<&str> = waited["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["text"].as_str())
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("R-1: Tinto reintentó la etapa implementation")),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.starts_with("R-2: la etapa qa se interrumpió")
+            && text.contains("no se reintenta")),
+        "{texts:?}"
+    );
+
+    // The retry itself is cut off by another restart: not repeated again.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while restarted.job(&retry.id).unwrap().status != DeliveryJobStatus::Started {
+        assert!(Instant::now() < deadline, "the retry did not start");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let again = restart();
+    again.retry_interrupted();
+    let cut = again.job(&retry.id).unwrap();
+    assert_eq!(cut.status, DeliveryJobStatus::Interrupted);
+    assert!(cut.error.as_deref().unwrap().contains("ya era el reintento"));
+    assert!(!again
+        .overview()
+        .unwrap()
+        .jobs
+        .iter()
+        .any(|job| job.retry_of.as_deref() == Some(retry.id.as_str())));
+
+    for service in [&h.service, &restarted] {
+        for job in service.overview().unwrap().jobs {
+            let _ = service.cancel(&job.id);
+        }
+    }
+}
+
+#[test]
+fn without_retry_on_restart_an_interrupted_job_stays_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let task = h.task("R-3");
+    let job = h.dispatch(&task, "implementation", "sleep=30");
+    h.wait_status(&job.id, DeliveryJobStatus::Started);
+
+    let restarted = DeliveryService::with_parts(
+        DeliveryStore::open(&path).unwrap(),
+        fake_launcher(),
+        Arc::new(|id: &str| Ok(JobPaths::in_dir(std::env::temp_dir().join(id)))),
+        CheckpointConfig::default(),
+    )
+    .unwrap();
+    restarted.retry_interrupted();
+    let jobs = restarted.overview().unwrap().jobs;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(
+        jobs[0].error.as_deref(),
+        Some("Tinto se cerró mientras el trabajo corría.")
+    );
+    let _ = h.service.cancel(&job.id);
+}
+
+#[test]
 fn removing_a_task_protects_unsaved_work() {
     let h = harness();
     let task = h.task("K-11");

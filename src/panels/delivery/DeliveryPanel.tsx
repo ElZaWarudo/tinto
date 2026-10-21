@@ -46,6 +46,7 @@ import {
   resumeDeliveryJob,
   setDeliveryRunPaused,
   checkDeliveryTask,
+  checkDeliveryEnvironment,
   closeDeliveryRun,
   closeDeliveryPr,
   handOverDeliveryRun,
@@ -82,6 +83,7 @@ import {
 } from "../../delivery/client";
 import type {
   DeliveryApproval,
+  DeliveryEnvironmentCheck,
   DeliveryJob,
   DeliveryJobLog,
   DeliveryOverview,
@@ -1108,6 +1110,70 @@ function DeliveryAddRepo({ containerApi }: IDockviewHeaderActionsProps) {
   );
 }
 
+/** "Entorno": whether Docker (when the repo uses it) and the repo's
+ *  environment probes answer, checked when the view opens and on click;
+ *  each failure's output on hover. */
+function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | null }) {
+  // Each click asks for a new round; a round's answer is shown once it comes.
+  const [round, setRound] = useState(0);
+  const asked = `${repo}|${distro ?? ""}|${round}`;
+  const [answer, setAnswer] = useState<{
+    asked: string;
+    checks: DeliveryEnvironmentCheck[] | null;
+    failure: string;
+  } | null>(null);
+  useEffect(() => {
+    let current = true;
+    checkDeliveryEnvironment(repo, distro).then(
+      (checks) => current && setAnswer({ asked, checks, failure: "" }),
+      (cause) =>
+        current && setAnswer({ asked, checks: null, failure: String(cause?.message ?? cause) }),
+    );
+    return () => {
+      current = false;
+    };
+  }, [repo, distro, asked]);
+  const checking = answer?.asked !== asked;
+  const checks = checking ? null : (answer?.checks ?? null);
+  const failure = checking ? "" : (answer?.failure ?? "");
+  const check = () => setRound((value) => value + 1);
+  const failed = (checks ?? []).filter((item) => !item.ok);
+  const state = checking
+    ? "comprobando…"
+    : failure
+      ? "no se pudo comprobar"
+      : checks?.length === 0
+        ? "nada que comprobar"
+        : failed.length === 0
+          ? "bien"
+          : failed.length === 1
+            ? `falla ${failed[0].name}`
+            : `${failed.length} fallos`;
+  const tone = checking || checks?.length === 0 ? "" : failure || failed.length ? "fail" : "ok";
+  const details = failure
+    ? failure
+    : checks?.length === 0
+      ? "Docker no se usa en este repositorio y no hay sondas marcadas (en los ajustes del repositorio)."
+      : (checks ?? [])
+          .map(
+            (item) => `${item.ok ? "✓" : "✗"} ${item.name}${item.output ? `\n${item.output}` : ""}`,
+          )
+          .join("\n\n");
+  return (
+    <button
+      type="button"
+      className={`delivery-env${tone ? ` delivery-env--${tone}` : ""}`}
+      title={`${details}\n\nClic para comprobar de nuevo.`.trim()}
+      aria-label={`Entorno: ${state}. Comprobar de nuevo`}
+      disabled={checking}
+      onClick={check}
+    >
+      <span className="delivery-dot" />
+      Entorno: {state}
+    </button>
+  );
+}
+
 /** One repo's delivery: its batches, its tasks and its settings. */
 function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
@@ -1297,6 +1363,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           )
         )}
         <span className="delivery-panel__spacer" />
+        <EnvironmentStatus repo={choice.path} distro={choice.distro} />
         <button
           type="button"
           className="delivery-icon-button"
@@ -3003,6 +3070,11 @@ function JobRow({
           {job.error && <p className="delivery-job__error">{job.error}</p>}
           {job.result_note && <p className="delivery-job__note">{job.result_note}</p>}
           {job.substituted && <p className="delivery-muted">{job.substituted}</p>}
+          {job.retry_of && (
+            <p className="delivery-muted">
+              Reintento automático: Tinto se cerró mientras corría el intento anterior.
+            </p>
+          )}
           {job.visual_record_error && (
             <p className="delivery-job__note">
               No se pudo generar el registro visual: {job.visual_record_error}
