@@ -9,6 +9,7 @@ import { busStore, sortedRepoPaths, useBusState } from "../bus/store";
 import { enableNotifications, disableNotifications } from "../qol/notifications";
 import { modKey } from "../qol/shortcuts";
 import { qualityStore, useQualityState } from "../qol/state";
+import { THEME_OPTIONS, themeStore, useThemeSetting } from "../qol/theme";
 import { zoomStore } from "../qol/zoom";
 import { useWorkspaceActions } from "../workspace/actions";
 import { autodetectFlow, switchWorkbench } from "./operations";
@@ -72,6 +73,7 @@ export function MenuBar() {
   const state = useBusState();
   const { config, watching } = state;
   const quality = useQualityState();
+  const themeSetting = useThemeSetting();
   const { openTimeline, openDashboard, openDelivery, openRepo, addRepo } = useWorkspaceActions();
   const [open, setOpen] = useState<MenuId | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -580,6 +582,18 @@ export function MenuBar() {
                 close={close}
                 onSelect={() => qualityStore.setGlanceMode(!quality.glanceMode)}
               />
+              <div className="menu__sep" role="separator" />
+              {THEME_OPTIONS.map((option) => (
+                <MenuItem
+                  key={option.value}
+                  label={`Tema: ${option.label}`}
+                  testid={`theme-${option.value}`}
+                  checked={themeSetting === option.value}
+                  checkRole="radio"
+                  close={close}
+                  onSelect={() => themeStore.set(option.value)}
+                />
+              ))}
               <div className="menu__sep" role="separator" />
               <MenuItem
                 label="Notificaciones"

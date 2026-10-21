@@ -7,14 +7,21 @@
 
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createOnigurumaEngine } from "shiki/engine/oniguruma";
+import type { Theme } from "../../qol/theme";
 
 export type { HighlighterCore };
 
 /** Above this many bytes, skip highlighting (large-file responsiveness, R13). */
 export const MAX_HIGHLIGHT_BYTES = 256 * 1024;
 
-/** The theme that matches dockview's themeVisualStudio dark aesthetic. */
-const THEME = "dark-plus";
+/** The Shiki theme for each app theme: VS Code's Dark+ for Oscuro (matching
+ * dockview's themeVisualStudio), Material Palenight for Morado oscuro and
+ * VS Code's Light+ for Claro. */
+const SHIKI_THEME: Record<Theme, string> = {
+  dark: "dark-plus",
+  purple: "material-theme-palenight",
+  light: "light-plus",
+};
 
 // Extension → Shiki language id. A deliberately small set for the prototype;
 // anything not here renders plain (still correct, just unstyled).
@@ -51,7 +58,11 @@ let highlighterPromise: Promise<HighlighterCore | null> | null = null;
 export function loadHighlighter(): Promise<HighlighterCore | null> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighterCore({
-      themes: [import("shiki/themes/dark-plus.mjs")],
+      themes: [
+        import("shiki/themes/dark-plus.mjs"),
+        import("shiki/themes/material-theme-palenight.mjs"),
+        import("shiki/themes/light-plus.mjs"),
+      ],
       langs: [
         import("shiki/langs/typescript.mjs"),
         import("shiki/langs/tsx.mjs"),
@@ -85,10 +96,11 @@ export function highlightLine(
   highlighter: HighlighterCore,
   line: string,
   lang: string,
+  theme: Theme,
 ): HlToken[] | null {
   if (!highlighter.getLoadedLanguages().includes(lang)) return null;
   try {
-    const { tokens } = highlighter.codeToTokens(line, { lang, theme: THEME });
+    const { tokens } = highlighter.codeToTokens(line, { lang, theme: SHIKI_THEME[theme] });
     // Single line in → at most one row of tokens out.
     return (tokens[0] ?? []).map((t) => ({ content: t.content, color: t.color }));
   } catch {
