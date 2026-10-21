@@ -568,14 +568,18 @@ impl DeliveryService {
         Ok(())
     }
 
+    /// Edits the task. The user's edits wake the coordinator; its own
+    /// (`set_task_state`) are recorded apart and do not.
     pub fn update_task(
         &self,
         task_id: &str,
         state: Option<String>,
         contract_version: Option<u32>,
         title: Option<String>,
+        by_user: bool,
     ) -> Result<DeliveryTask, DeliveryError> {
         let mut task = self.task(task_id)?;
+        let before = task.clone();
         if let Some(state) = state.map(|state| state.trim().to_string()) {
             let length = state.chars().count();
             if length == 0 || length > 40 {
@@ -598,15 +602,30 @@ impl DeliveryService {
         if let Some(title) = title {
             task.title = title.trim().to_string();
         }
+        // What changed, as the coordinator reads it.
+        let mut changes = Vec::new();
+        if task.state != before.state {
+            changes.push(format!("estado «{}»", task.state));
+        }
+        if task.title != before.title {
+            changes.push(format!("título «{}»", task.title));
+        }
+        if task.contract_version != before.contract_version {
+            changes.push(format!("contrato v{}", task.contract_version));
+        }
         task.updated_at_ms = now_ms();
         let store = self.store()?;
         store.put_task(&task)?;
         store.record_event(
             task.updated_at_ms,
-            "task_updated",
+            if by_user {
+                "task_updated"
+            } else {
+                "task_state_set"
+            },
             Some(&task.id),
             None,
-            &task.state,
+            &changes.join(", "),
         )?;
         drop(store);
         self.notify();

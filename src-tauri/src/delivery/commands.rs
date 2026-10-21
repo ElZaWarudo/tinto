@@ -145,7 +145,7 @@ pub fn delivery_update_task(
     title: Option<String>,
 ) -> Result<DeliveryTask, CommandError> {
     service
-        .update_task(&task_id, state, contract_version, title)
+        .update_task(&task_id, state, contract_version, title, true)
         .map_err(CommandError::from)
 }
 

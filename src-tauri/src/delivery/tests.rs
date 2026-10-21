@@ -788,13 +788,13 @@ fn results_from_superseded_attempts_or_older_contracts_are_stale() {
     let review = h.dispatch(&task, "review", "events=codex-ok sleep=2");
     h.wait_status(&review.id, DeliveryJobStatus::Started);
     h.service
-        .update_task(&task.id, None, Some(2), None)
+        .update_task(&task.id, None, Some(2), None, true)
         .unwrap();
     let review = h.wait(&review.id);
     assert_eq!(review.result_state, Some(DeliveryResultState::Stale));
     assert!(h
         .service
-        .update_task(&task.id, None, Some(1), None)
+        .update_task(&task.id, None, Some(1), None, true)
         .is_err());
 }
 
@@ -1954,7 +1954,9 @@ fn blockers_survive_a_takeover_and_the_user_can_override_them() {
             "",
         )
         .unwrap();
-    h.service.takeover_run(&run.id, "coord-2", None, "the user asked").unwrap();
+    h.service
+        .takeover_run(&run.id, "coord-2", None, "the user asked")
+        .unwrap();
     // Read back from the store, as after a restart.
     let stored = h.service.store().unwrap().task(&task.id).unwrap().unwrap();
     assert!(stored.blockers[0].is_open());
@@ -1974,7 +1976,7 @@ fn a_state_label_says_how_long_it_may_be() {
     let label = "blocked: waiting for AGOS-580 (project RAG)";
     let error = h
         .service
-        .update_task(&task.id, Some(label.into()), None, None)
+        .update_task(&task.id, Some(label.into()), None, None, false)
         .unwrap_err();
     assert!(
         error.message.contains("de 1 a 40 caracteres"),
@@ -1984,7 +1986,13 @@ fn a_state_label_says_how_long_it_may_be() {
     assert!(error.message.contains("tiene 43"), "{}", error.message);
     let short = h
         .service
-        .update_task(&task.id, Some("blocked (AGOS-580)".into()), None, None)
+        .update_task(
+            &task.id,
+            Some("blocked (AGOS-580)".into()),
+            None,
+            None,
+            false,
+        )
         .unwrap();
     assert_eq!(short.state, "blocked (AGOS-580)");
 }
@@ -5098,4 +5106,285 @@ fn a_qa_problem_is_dismissed_without_saying_why() {
         h.service.qa_followup(&task_id).unwrap(),
         ["Do not report «The header is too tall» again: the user decided it is not a problem."]
     );
+}
+
+/// A batch the size of a real one: delivered and active tasks, jobs with
+/// long prompts, ~80 allowed commands and long results, redone steps.
+fn busy_batch(h: &Harness) -> Vec<DeliveryTask> {
+    use super::model::{DeliveryApproval, DeliveryDecision};
+
+    let run = h
+        .service
+        .create_run(
+            h.repo.path().to_path_buf(),
+            "Lote",
+            Some("coord".into()),
+            None,
+        )
+        .unwrap();
+    let store = h.service.store().unwrap();
+    let long = |what: &str, chars: usize| what.repeat(chars / what.len() + 1)[..chars].to_string();
+    let commands: Vec<String> = (0..80)
+        .map(|n| format!("npm run test -- src/module{n}/feature.test.ts"))
+        .collect();
+    let files: Vec<String> = (0..15)
+        .map(|file| format!("src/feature/file{file}.ts"))
+        .collect();
+    let mut tasks = Vec::new();
+    let mut at = 1_000u64;
+    for n in 0..12 {
+        let task = task_in(h, &run.id, &format!("AGOS-{n}"));
+        let roles = [
+            "tests",
+            "implementation",
+            "review",
+            "implementation",
+            "review",
+            "qa",
+            "qa",
+        ];
+        for (index, role) in roles.iter().enumerate() {
+            at += 1;
+            let job: DeliveryJob = serde_json::from_value(json!({
+                "id": format!("job-{n}-{index}"), "task_id": task.id, "role": role,
+                "attempt": 1, "agent": "claude", "access": "workspace",
+                "prompt": long("Implementa la incidencia siguiendo el contrato. ", 2400),
+                "contract_version": 1, "writes": true, "timeout_minutes": 60,
+                "status": "finished", "created_at_ms": at, "started_at_ms": at, "ended_at_ms": at,
+                "allowed_commands": commands,
+                "decisions": vec![long("Decisión contestada por el usuario. ", 280); 10],
+                "changes": files.iter().map(|path| json!({"path": path, "kind": "modified"})).collect::<Vec<_>>(),
+                "result": {
+                    "status": "pass", "summary": long("Cambios hechos y verificados. ", 800),
+                    "changed_paths": files,
+                    "checks": vec![json!({"command": "npm test", "result": long("ok ", 150)}); 6],
+                    "findings": vec![long("Hallazgo de la revisión. ", 170); 8],
+                    "handoff": long("Siguiente paso. ", 650), "blocked_by": "none",
+                },
+            }))
+            .unwrap();
+            store.put_job(&job).unwrap();
+        }
+        for index in 0..5 {
+            let decision: DeliveryDecision = serde_json::from_value(json!({
+                "id": format!("decision-{n}-{index}"), "task_id": task.id, "kind": "choice",
+                "question": long("¿Qué hacemos con el aviso? ", 90),
+                "detail": long("Detalle técnico de la decisión. ", 320),
+                "options": [
+                    {"label": "Sí", "consequence": long("Consecuencia. ", 140), "recommended": true},
+                    {"label": "No", "consequence": long("Consecuencia. ", 140), "recommended": false},
+                ],
+                "status": "answered", "answer": "Sí", "requested_by": "coord",
+                "requested_at_ms": at, "decided_by": "user", "decided_at_ms": at,
+            }))
+            .unwrap();
+            store.put_decision(&decision).unwrap();
+        }
+        // The first six are delivered; every task redid its commit step.
+        let mut steps = vec![("commit", None), ("commit", None), ("push", None)];
+        if n < 6 {
+            steps.extend([
+                ("pr", None),
+                ("jira", Some("after_pr")),
+                ("merge", None),
+                ("jira", Some("after_merge")),
+            ]);
+        }
+        for (index, (rung, stage)) in steps.into_iter().enumerate() {
+            at += 1;
+            let approval: DeliveryApproval = serde_json::from_value(json!({
+                "id": format!("approval-{n}-{index}"), "task_id": task.id, "rung": rung, "stage": stage,
+                "title": "feat: la incidencia", "body": long("Cuerpo del paso. ", 500),
+                "status": "executed", "requested_by": "coord", "requested_at_ms": at,
+                "decided_at_ms": at, "executed_at_ms": at, "outcome": "hecho",
+                "commits": [{"message": "feat: la incidencia", "paths": files}],
+            }))
+            .unwrap();
+            store.put_approval(&approval).unwrap();
+        }
+        tasks.push(task);
+    }
+    tasks
+}
+
+fn mcp_tool(h: &Harness, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+    super::mcp::handle_message(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+    )
+    .unwrap()["result"]["structuredContent"]
+        .clone()
+}
+
+#[test]
+fn the_coordinator_reads_a_compact_overview_and_jobs_without_their_instructions() {
+    let h = harness();
+    let tasks = busy_batch(&h);
+    let (delivered, active) = (&tasks[0], &tasks[6]);
+    let full = mcp_tool(&h, "delivery_overview", json!({"compact": false}));
+    let compact = mcp_tool(&h, "delivery_overview", json!({}));
+    let (full_size, compact_size) = (full.to_string().len(), compact.to_string().len());
+    println!("delivery_overview: {full_size} bytes in full, {compact_size} compact");
+    assert!(
+        compact_size * 5 < full_size,
+        "{full_size} -> {compact_size}"
+    );
+    assert_eq!(compact["phases"][&delivered.id]["kind"], "delivered");
+    assert_eq!(full["jobs"][0]["prompt"].as_str().unwrap().len(), 2400);
+
+    let find = |list: &str, id: &str| -> serde_json::Value {
+        compact[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    // A finished job of a delivered task: its id, to read it if needed.
+    assert_eq!(
+        find("jobs", "job-0-2"),
+        json!({"id": "job-0-2", "task_id": delivered.id, "role": "review", "attempt": 1, "status": "finished"})
+    );
+    // An active task's job: what it is, without instructions or long text.
+    let current = find("jobs", "job-6-2");
+    assert_eq!(current["role"], "review");
+    for key in ["prompt", "allowed_commands", "decisions", "changes"] {
+        assert!(current.get(key).is_none(), "{key}: {current}");
+    }
+    assert_eq!(
+        current["result"],
+        json!({"status": "pass", "summary": current["result"]["summary"], "blocked_by": "none"})
+    );
+    assert!(current["result"]["summary"]
+        .as_str()
+        .unwrap()
+        .ends_with('…'));
+    // A redone commit step keeps only the id of the one it replaced.
+    let replaced = find("approvals", "approval-6-0");
+    assert_eq!(replaced["status"], "executed");
+    assert!(replaced.get("body").is_none());
+    assert!(find("approvals", "approval-6-1").get("body").is_some());
+    assert!(find("approvals", "approval-0-6").get("body").is_some());
+    // Decisions: settled for the delivered task, whole for the active one.
+    assert!(find("decisions", "decision-0-0").get("question").is_none());
+    assert!(find("decisions", "decision-6-0").get("question").is_some());
+
+    // read_job leaves the instructions out unless asked.
+    let read = mcp_tool(&h, "read_job", json!({"job_id": "job-6-2"}));
+    assert!(read.get("prompt").is_none() && read.get("allowed_commands").is_none());
+    assert_eq!(read["result"]["findings"].as_array().unwrap().len(), 8);
+    assert_eq!(read["task_id"], active.id.as_str());
+    let whole = mcp_tool(&h, "read_job", json!({"job_id": "job-6-2", "full": true}));
+    assert_eq!(whole["allowed_commands"].as_array().unwrap().len(), 80);
+    assert!(whole["prompt"].as_str().is_some());
+}
+
+#[test]
+fn the_coordinator_is_not_told_of_its_own_task_edits_but_is_of_the_users() {
+    let h = harness();
+    let run = h
+        .service
+        .create_run(
+            h.repo.path().to_path_buf(),
+            "Lote",
+            Some("coord".into()),
+            None,
+        )
+        .unwrap();
+    let task = task_in(&h, &run.id, "AGOS-7");
+    super::mcp::handle_message_from(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "set_task_state", "arguments": {
+            "run_id": run.id, "owner": "coord", "generation": run.generation,
+            "task_id": task.id, "state": "en revisión", "contract_version": 2,
+        }}}),
+        Some("session-1"),
+    )
+    .unwrap();
+    assert_eq!(h.service.task(&task.id).unwrap().state, "en revisión");
+    let (events, _) = h.service.coordinator_events(&run.id, 0).unwrap();
+    assert_eq!(events, Vec::<serde_json::Value>::new());
+    let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
+    assert!(h.service.pending_wakeups(later).unwrap().is_empty());
+
+    h.service
+        .update_task(&task.id, Some("esperando diseño".into()), None, None, true)
+        .unwrap();
+    let (events, _) = h.service.coordinator_events(&run.id, 0).unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["kind"], "task_updated");
+    assert_eq!(
+        events[0]["text"],
+        "AGOS-7: el usuario editó la tarea: estado «esperando diseño»"
+    );
+    let wakeups = h.service.pending_wakeups(later).unwrap();
+    assert_eq!(wakeups.len(), 1);
+    assert!(wakeups[0].text.contains("el usuario editó la tarea"));
+}
+
+#[test]
+#[ignore]
+fn zz_measure_live_copy() {
+    let path = std::env::var("LIVE_DB").unwrap();
+    let h = harness_with_store(DeliveryStore::open(std::path::Path::new(&path)).unwrap());
+    let full = mcp_tool(&h, "delivery_overview", json!({"compact": false}));
+    let compact = mcp_tool(&h, "delivery_overview", json!({}));
+    println!(
+        "LIVE full={} compact={}",
+        full.to_string().len(),
+        compact.to_string().len()
+    );
+    let pretty = |value: &serde_json::Value| serde_json::to_string_pretty(value).unwrap().len();
+    println!(
+        "LIVE pretty full={} compact={}",
+        pretty(&full),
+        pretty(&compact)
+    );
+    for key in [
+        "jobs",
+        "approvals",
+        "decisions",
+        "tasks",
+        "phases",
+        "prs",
+        "qa_problems",
+        "settings_proposals",
+        "runs",
+    ] {
+        println!(
+            "LIVE {key}: {} -> {}",
+            full[key].to_string().len(),
+            compact[key].to_string().len()
+        );
+    }
+}
+
+#[test]
+#[ignore]
+fn zz_measure_replies() {
+    let reply = |h: &Harness, compact: bool| {
+        super::mcp::handle_message(
+            &h.service,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "delivery_overview", "arguments": {"compact": compact}}}),
+        )
+        .unwrap()
+        .to_string()
+        .len()
+    };
+    let h = harness();
+    busy_batch(&h);
+    println!(
+        "FIXTURE reply full={} compact={}",
+        reply(&h, false),
+        reply(&h, true)
+    );
+    if let Ok(path) = std::env::var("LIVE_DB") {
+        let h = harness_with_store(DeliveryStore::open(std::path::Path::new(&path)).unwrap());
+        println!(
+            "LIVE reply full={} compact={}",
+            reply(&h, false),
+            reply(&h, true)
+        );
+    }
 }
