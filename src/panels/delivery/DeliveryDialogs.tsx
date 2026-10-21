@@ -538,8 +538,8 @@ export function DispatchDialog({
       )}
       {limitedClaude && (
         <Field
-          label="Comandos que puede ejecutar"
-          hint="Uno por línea, con cualquier argumento. Además puede ejecutar comandos de solo lectura (ls, grep, git status…); el resto se le deniega. Se guardan para este repositorio y también los usan los trabajos del coordinador."
+          label="Comprobaciones del repositorio"
+          hint="Uno por línea: los comandos que verifican el trabajo. Claude puede ejecutar cualquier comando, también encadenado, salvo los pasos de Tinto (commit, push, merge, rebase, checkout…) y las instalaciones globales. Se guardan para este repositorio y también los usan los trabajos del coordinador."
         >
           <textarea
             value={shownChecks}

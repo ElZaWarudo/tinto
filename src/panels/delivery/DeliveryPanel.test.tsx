@@ -858,10 +858,12 @@ describe("DeliveryPanel", () => {
     await user.click(await screen.findByRole("button", { name: "Otra etapa…" }));
     const dialog = screen.getByRole("dialog", { name: "Lanzar etapa en AGOS-501" });
     expect(
-      within(dialog).queryByRole("textbox", { name: /Comandos que puede ejecutar/ }),
+      within(dialog).queryByRole("textbox", { name: /Comprobaciones del repositorio/ }),
     ).toBeNull();
     await user.selectOptions(within(dialog).getByRole("combobox", { name: "Agente" }), "claude");
-    const commands = within(dialog).getByRole("textbox", { name: /Comandos que puede ejecutar/ });
+    const commands = within(dialog).getByRole("textbox", {
+      name: /Comprobaciones del repositorio/,
+    });
     await waitFor(() => expect(commands).toHaveValue("npm test"));
     await user.type(commands, "\nnpm run lint");
     await user.type(

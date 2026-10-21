@@ -258,20 +258,14 @@ pub fn job_prompt(
         }
     }
     if job.agent == DeliveryAgent::Claude && job.access == DeliveryAccess::Workspace {
-        let commands = job_commands(job, from_wsl);
-        if commands.is_empty() {
-            lines.push("You can run read-only shell commands only; list the checks you could not run in the result.".to_string());
-        } else {
-            lines.push(format!(
-                "Besides read-only shell commands, you can run only: {}. List any other check you could not run in the result.",
-                commands.join("; ")
-            ));
-        }
         lines.push(format!(
-            "Read-only git ({}) runs without asking from the working directory, or as `git -C {} …` with exactly that spelling of the path. Run one command per call, without pipes or `;`.",
-            GIT_READS.join(", "),
-            agent_path(&plain_path(&task.worktree), from_wsl)
+            "You can run any shell command, compound ones included (pipes, `&&`, `$(…)`). Tinto refuses only these, which are its own steps or reach beyond your task: {}.",
+            CLAUDE_DENIED.join(", ")
         ));
+        let commands = job_commands(job, from_wsl);
+        if !commands.is_empty() {
+            lines.push(format!("The repo's checks: {}.", commands.join("; ")));
+        }
     }
     if job.role == QA_ROLE && !job.qa_followup.is_empty() {
         lines.push("Problems from earlier QA the user decided on:".to_string());
@@ -803,6 +797,7 @@ fn claude_launch(
     };
     let from_wsl = native.is_none();
     let allowed = claude_allowed_tools(job, task, paths, from_wsl);
+    let denied = claude_denied_tools(job, task, from_wsl);
     // A resumed job goes on in the paused session; a new one names its own.
     let resume = resumed_session(job)?;
     let session_id = resume
@@ -850,6 +845,10 @@ fn claude_launch(
             args.push("--allowedTools".to_string());
             args.extend(allowed);
         }
+        if !denied.is_empty() {
+            args.push("--disallowedTools".to_string());
+            args.extend(denied);
+        }
         return Ok(JobLaunch {
             program,
             args,
@@ -890,6 +889,12 @@ fn claude_launch(
         let tools: Vec<String> = allowed.iter().map(|tool| sh_quote(tool)).collect();
         format!(" --allowedTools {}", tools.join(" "))
     };
+    let denied = if denied.is_empty() {
+        String::new()
+    } else {
+        let tools: Vec<String> = denied.iter().map(|tool| sh_quote(tool)).collect();
+        format!(" --disallowedTools {}", tools.join(" "))
+    };
     // A Windows checkout read by git inside WSL: without Windows' line-ending
     // setting, every CRLF file would look modified.
     let line_endings = match task.distro {
@@ -924,45 +929,44 @@ fn claude_launch(
     .map(|value| format!(" {}", sh_quote(value)))
     .collect();
     let script = format!(
-        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema \"$(cat {})\"{model}{effort}{qa}{allowed}",
+        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema \"$(cat {})\"{model}{effort}{qa}{allowed}{denied}",
         sh_quote(&session_id),
         sh_quote(&wsl_path(&paths.schema)?)
     );
     wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)
 }
 
-/// Git commands that only read; a job may always run them on its worktree.
-const GIT_READS: [&str; 7] = [
-    "status",
-    "diff",
-    "log",
-    "show",
-    "rev-parse",
-    "ls-files",
-    "branch --show-current",
+/// Commands a Claude job without full access may not run, whatever it
+/// chains them with: Tinto's own steps (commit, push, merge) and what reaches
+/// beyond the task's worktree and branch. Claude Code checks each part of a
+/// compound command against them.
+const CLAUDE_DENIED: [&str; 11] = [
+    "git commit",
+    "git push",
+    "git merge",
+    "git rebase",
+    "git reset --hard",
+    "git clean",
+    "git checkout",
+    "git switch",
+    "npm install -g",
+    "npm i -g",
+    "cargo install",
 ];
 
-/// Commands a Claude job without full access may run besides the read-only
-/// ones Claude Code already allows: the repo's verification commands (each
-/// with any arguments) and read-only git, also as `git -C <worktree> …`,
-/// which Claude Code would otherwise ask about. A QA job may also write in
-/// its own QA folder, where its evidence goes.
+/// What a Claude job without full access may use: any shell command (the
+/// deny list in [`claude_denied_tools`] still applies). A QA job may also
+/// write in its own QA folder, where its evidence goes.
 fn claude_allowed_tools(
     job: &DeliveryJob,
-    task: &DeliveryTask,
+    _task: &DeliveryTask,
     paths: &JobPaths,
     from_wsl: bool,
 ) -> Vec<String> {
     if job.access == DeliveryAccess::Full {
         return Vec::new();
     }
-    let worktree = agent_path(&plain_path(&task.worktree), from_wsl);
-    let mut tools: Vec<String> = GIT_READS
-        .iter()
-        .flat_map(|read| [format!("git {read}"), format!("git -C {worktree} {read}")])
-        .chain(job_commands(job, from_wsl))
-        .map(|command| format!("Bash({command}:*)"))
-        .collect();
+    let mut tools = vec!["Bash".to_string()];
     if job.role == QA_ROLE {
         let writable = [qa_folder(paths, from_wsl)]
             .into_iter()
@@ -973,6 +977,26 @@ fn claude_allowed_tools(
         tools.push(format!("mcp__{BROWSER_SERVER}"));
     }
     tools
+}
+
+/// The deny list for a Claude job without full access, also as
+/// `git -C <worktree> …`, which would otherwise slip past it.
+fn claude_denied_tools(job: &DeliveryJob, task: &DeliveryTask, from_wsl: bool) -> Vec<String> {
+    if job.access == DeliveryAccess::Full {
+        return Vec::new();
+    }
+    let worktree = agent_path(&plain_path(&task.worktree), from_wsl);
+    CLAUDE_DENIED
+        .iter()
+        .flat_map(|command| {
+            let mut forms = vec![command.to_string()];
+            if let Some(rest) = command.strip_prefix("git ") {
+                forms.push(format!("git -C {worktree} {rest}"));
+            }
+            forms
+        })
+        .map(|command| format!("Bash({command}:*)"))
+        .collect()
 }
 
 /// Wraps Playwright MCP for QA jobs (see the file's header).
@@ -2116,7 +2140,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn claude_without_full_access_runs_only_allowed_commands() {
+    fn claude_without_full_access_runs_any_command_but_tintos_steps() {
         let mut task = sample_task();
         task.distro = Some("Ubuntu".into());
         let paths = JobPaths::in_dir(PathBuf::from(
@@ -2127,18 +2151,17 @@ pub(crate) mod tests {
         let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(script.contains("--permission-mode acceptEdits"), "{script}");
-        assert!(
-            script.contains(" --allowedTools 'Bash(git status:*)' 'Bash(git -C /repo-wt/K-1 status:*)' 'Bash(git diff:*)'"),
-            "{script}"
-        );
-        assert!(
-            script.ends_with(" 'Bash(git -C /repo-wt/K-1 branch --show-current:*)' 'Bash(npm test:*)' 'Bash(cargo test:*)'"),
-            "{script}"
-        );
+        // Any command, compound ones too, but Tinto's own steps, also
+        // spelled with `git -C <worktree>`.
+        assert!(script.contains(" --allowedTools 'Bash' --disallowedTools 'Bash(git commit:*)' 'Bash(git -C /repo-wt/K-1 commit:*)' 'Bash(git push:*)'"), "{script}");
+        assert!(script.ends_with(" 'Bash(cargo install:*)'"), "{script}");
         assert!(launch
             .stdin
-            .contains("you can run only: npm test; cargo test."));
-        assert!(launch.stdin.contains("`git -C /repo-wt/K-1 …`"));
+            .contains("You can run any shell command, compound ones included"));
+        assert!(launch.stdin.contains("refuses only these"));
+        assert!(launch
+            .stdin
+            .contains("The repo's checks: npm test; cargo test."));
         // A stage that writes cannot reach the main checkout.
         assert!(!script.contains("--add-dir"), "{script}");
 
@@ -2150,9 +2173,17 @@ pub(crate) mod tests {
         // A read-only stage reads the main checkout, where the contract is.
         assert!(script.contains(" '--add-dir' '/repo'"), "{script}");
         assert!(launch.stdin.contains("read the main checkout at /repo "));
-        assert!(launch
-            .stdin
-            .contains("You can run read-only shell commands only"));
+        assert!(
+            script.contains(" --allowedTools 'Bash' --disallowedTools"),
+            "{script}"
+        );
+        assert!(!launch.stdin.contains("The repo's checks"));
+
+        // With full access nothing is listed either way.
+        job.access = DeliveryAccess::Full;
+        let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
+        let script = launch.args.last().unwrap();
+        assert!(!script.contains("--disallowedTools"), "{script}");
     }
 
     #[test]
@@ -2181,10 +2212,10 @@ pub(crate) mod tests {
         );
         assert!(script.contains(r#""args":["/c","node","#), "{script}");
         assert!(script.contains(r#""@playwright/mcp@0.0.82"]"#), "{script}");
-        // Read-only in the worktree, but its evidence goes in its QA folder.
+        // Its evidence goes in its QA folder.
         assert!(
-            script.ends_with(&format!(
-                " 'Bash(agentos skills install:*)' 'Edit(/{qa_output}/**)' 'mcp__playwright'"
+            script.contains(&format!(
+                " --allowedTools 'Bash' 'Edit(/{qa_output}/**)' 'mcp__playwright' --disallowedTools"
             )),
             "{script}"
         );
@@ -2317,11 +2348,11 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(launch.args[add_dir + 1], r"C:\work\repo");
         assert_eq!(launch.args[add_dir + 3], "C:/Users/me/.claude/skills");
-        // Read-only git on the worktree and the frozen copy, never the original.
+        // Any command; Tinto's steps refused, also on the worktree by path.
         let allowed = |tool: &str| launch.args.iter().any(|arg| arg == tool);
-        assert!(allowed("Bash(git -C C:/work/repo-wt/K-1 status:*)"));
-        assert!(allowed("Bash(git rev-parse:*)"));
-        assert!(allowed("Bash(bash C:/cfg/jobs/j1/frozen/1/run.sh:*)"));
+        assert!(allowed("Bash"));
+        assert!(allowed("--disallowedTools"));
+        assert!(allowed("Bash(git -C C:/work/repo-wt/K-1 push:*)"));
         assert_eq!(claude_rule_path("C:/cfg/jobs/j1/qa"), "//c/cfg/jobs/j1/qa");
         assert_eq!(claude_rule_path("/home/me/qa"), "//home/me/qa");
         assert!(allowed(&format!(
@@ -2337,7 +2368,7 @@ pub(crate) mod tests {
             .contains("- C:/work/repo/.agent/qa/run.sh → C:/cfg/jobs/j1/frozen/1/run.sh"));
         assert!(launch
             .stdin
-            .contains("you can run only: bash C:/cfg/jobs/j1/frozen/1/run.sh."));
+            .contains("The repo's checks: bash C:/cfg/jobs/j1/frozen/1/run.sh."));
         assert!(launch.stdin.contains(
             "read and list these folders outside the worktree: C:/Users/me/.claude/skills."
         ));
@@ -2362,12 +2393,15 @@ pub(crate) mod tests {
         assert_eq!(launch.wsl_job.as_ref().unwrap().distro, "Ubuntu");
         let script = launch.args.last().unwrap();
         assert!(
-            script.contains("'Bash(bash /mnt/c/cfg/jobs/j1/frozen/1/run.sh:*)'"),
+            script.contains("'Bash(git -C /mnt/c/work/repo-wt/K-1 push:*)'"),
             "{script}"
         );
         assert!(
-            script.contains("'Bash(git -C /mnt/c/work/repo-wt/K-1 status:*)'"),
-            "{script}"
+            launch
+                .stdin
+                .contains("bash /mnt/c/cfg/jobs/j1/frozen/1/run.sh"),
+            "{}",
+            launch.stdin
         );
         assert!(
             script.contains(" '/mnt/c/Users/me/.claude/skills'"),

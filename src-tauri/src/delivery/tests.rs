@@ -1561,7 +1561,7 @@ fn a_permission_freezes_its_scripts_and_holds_for_one_candidate() {
     );
     assert!(
         prompt.contains(&format!(
-            "you can run only: bash {}.",
+            "The repo's checks: bash {}.",
             copy.copy.replace('\\', "/")
         )),
         "{prompt}"
