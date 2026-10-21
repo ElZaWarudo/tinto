@@ -99,6 +99,8 @@ export interface DeliveryTask {
   blocked_reason?: string;
   /** The repo checks Tinto runs on what each stage changes (the tests stage aside). */
   checks?: string[];
+  /** The repo setup commands Tinto runs once before the task's stages. */
+  setup?: string[];
 }
 
 /** A task's place among its issue's pull requests: "2 of 3". */
@@ -212,6 +214,10 @@ export interface DeliveryJob {
   decisions?: string[];
   /** What the job was told about the task's checks when it started. */
   task_checks?: string[];
+  /** It needs the repo's environment: it waits queued while that does not answer. */
+  needs_environment?: boolean;
+  /** Why it waits on the environment, while it does. */
+  waits_environment?: string | null;
   /** Where a Claude job on a Windows repo was asked to run; Tinto chose when null. */
   platform?: DeliveryPlatform | null;
   /** Where the job ran ("Windows", "WSL · Ubuntu"…), once started. */
@@ -455,6 +461,8 @@ export interface DeliveryRepoSettings {
   checks?: string[];
   /** More commands QA jobs may run (e.g. the CLI an issue changes). */
   qa_commands?: string[];
+  /** Commands that prepare a task's worktree; coordinators pick each task's. */
+  setup?: string[];
   /** Environment variables jobs run the checks and QA commands with, by name. */
   check_env?: Record<string, string>;
   /** Whether QA jobs get a headless browser. */
@@ -519,6 +527,8 @@ export interface DeliverySettingsChanges {
   checks_add?: string[];
   checks_remove?: string[];
   qa_commands_add?: string[];
+  setup_add?: string[];
+  setup_remove?: string[];
   bootstrap?: string | null;
   qa_browser?: boolean | null;
   verification?: string | null;
@@ -554,6 +564,8 @@ export type DeliveryPhase =
   | { kind: "approval" | "record" | "drifted"; rung: DeliveryRung; stage: string | null }
   | { kind: "running" | "paused" | "batch_paused"; job_id: string; role: string }
   | { kind: "waits_quarantine"; job_id: string; lease: string }
+  | { kind: "setup_failed"; job_id: string; command: string }
+  | { kind: "waits_environment"; job_id: string; role: string; problem: string }
   | { kind: "queued"; job_id: string; role: string; lease: string | null; position: number }
   | { kind: "quarantined"; lease: string }
   | { kind: "settings_proposal" }

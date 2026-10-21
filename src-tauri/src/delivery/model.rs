@@ -50,6 +50,10 @@ pub struct DeliveryTask {
     /// stage aside), as the coordinator chose them for this issue.
     #[serde(default)]
     pub checks: Vec<String>,
+    /// The repo's setup commands (installs, generators) Tinto runs once in
+    /// the task's worktree before its stages, as the coordinator chose them.
+    #[serde(default)]
+    pub setup: Vec<String>,
 }
 
 /// A task's place among the pull requests of its issue: "2 of 3".
@@ -349,6 +353,13 @@ pub struct DeliveryJob {
     /// it started from, as the job's instructions state them.
     #[serde(default)]
     pub task_checks: Vec<String>,
+    /// It needs the repo's environment (Docker, the probes' services): it
+    /// waits queued while the "Entorno" check fails instead of failing.
+    #[serde(default)]
+    pub needs_environment: bool,
+    /// Why it waits on the environment, while it does.
+    #[serde(default)]
+    pub waits_environment: Option<String>,
     /// Reasoning effort passed to the CLI; its default when `None`.
     #[serde(default)]
     pub reasoning: Option<String>,
@@ -857,6 +868,10 @@ pub struct DeliverySettingsChanges {
     pub checks_remove: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub qa_commands_add: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_add: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_remove: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -987,6 +1002,11 @@ pub struct DeliveryRepoSettings {
     /// More commands QA jobs may run, such as the CLI an issue changes.
     #[serde(default)]
     pub qa_commands: Vec<String>,
+    /// Commands that prepare a task's worktree (e.g. `npm --prefix frontend
+    /// ci`, a generator): a coordinator picks a task's from them, and Tinto
+    /// runs those before its stages.
+    #[serde(default)]
+    pub setup: Vec<String>,
     /// Environment variables, by name, that jobs run the checks and QA
     /// commands with (e.g. a test database's URL). Test settings, not secrets.
     /// `{task}` in a value becomes the job's task key, lowercase with `_` for

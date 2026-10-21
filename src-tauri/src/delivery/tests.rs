@@ -214,6 +214,7 @@ impl Harness {
                 platform: None,
                 read_dirs: Vec::new(),
                 stage_default: false,
+                needs_environment: false,
             })
             .unwrap()
     }
@@ -328,6 +329,7 @@ fn dispatch_fills_the_codex_default_model_and_claude_allowed_commands() {
         platform: None,
         read_dirs: Vec::new(),
         stage_default: false,
+        needs_environment: false,
     };
     let claude = h
         .service
@@ -380,6 +382,7 @@ fn only_qa_jobs_get_the_qa_commands_and_the_browser() {
         platform: None,
         read_dirs: Vec::new(),
         stage_default: false,
+        needs_environment: false,
     };
     let review = h.service.dispatch(new_job("review")).unwrap();
     assert_eq!(review.allowed_commands, vec!["npm test".to_string()]);
@@ -593,6 +596,7 @@ fn an_agent_missing_on_this_machine_gives_way_to_the_other_never_to_wsl() {
         platform: None,
         read_dirs: Vec::new(),
         stage_default: false,
+        needs_environment: false,
     };
     // Claude Code is not installed: Codex runs it, with its own model.
     h.service
@@ -694,6 +698,7 @@ fn a_finished_claude_job_tells_model_time_turns_and_commands() {
             platform: None,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .unwrap();
     let job = h.wait(&job.id);
@@ -753,6 +758,7 @@ fn a_paused_stage_holds_its_task_and_resource_until_it_resumes_in_its_session() 
             platform: None,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .unwrap_err();
     assert_eq!(refused.category, "job_paused");
@@ -1527,6 +1533,7 @@ fn a_job_reads_existing_folders_of_the_main_checkout_or_its_worktree_only() {
             platform: None,
             read_dirs,
             stage_default: false,
+            needs_environment: false,
         })
     };
     let job = dispatch(vec![plain_path(&contracts), plain_path(&task.worktree)]).unwrap();
@@ -1741,6 +1748,7 @@ fn a_stages_time_limit_applies_when_its_dispatch_gives_none_and_a_retry_can_chan
                 platform: None,
                 read_dirs: Vec::new(),
                 stage_default: false,
+                needs_environment: false,
             })
             .unwrap();
         h.wait(&job.id)
@@ -2043,6 +2051,7 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             platform: None,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .unwrap_err();
     assert_eq!(blocked.category, "decisions_pending");
@@ -2097,6 +2106,7 @@ fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
             platform: None,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .unwrap();
     assert!(qa
@@ -2254,6 +2264,7 @@ fn claude_qa(task: &DeliveryTask, prompt: &str) -> NewJob {
         platform: None,
         read_dirs: Vec::new(),
         stage_default: false,
+        needs_environment: false,
     }
 }
 
@@ -2647,6 +2658,7 @@ fn a_package_starts_from_the_one_it_builds_on_and_waits_for_its_pr() {
         platform: None,
         read_dirs: Vec::new(),
         stage_default: false,
+        needs_environment: false,
     });
     assert_eq!(refused.unwrap_err().category, "task_blocked");
 
@@ -2872,6 +2884,7 @@ fn a_task_blocked_on_another_tasks_merge_waits_until_it_merges() {
             platform: None,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .unwrap_err();
     assert_eq!(refused.category, "task_blocked");
@@ -3128,6 +3141,7 @@ fn coordinators_read_what_the_user_configured() {
             platform: None,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .unwrap();
     assert_eq!(
@@ -5350,6 +5364,7 @@ fn a_coordinator_proposes_settings_and_the_next_job_runs_what_the_user_approved(
             platform: None,
             read_dirs: Vec::new(),
             stage_default: false,
+            needs_environment: false,
         })
         .unwrap();
     assert!(job
@@ -6530,6 +6545,11 @@ fn set_repo_checks(h: &Harness, checks: &[&str]) {
 
 /// The task's check jobs, once there are `count` and all ended.
 fn ended_checks(h: &Harness, task: &DeliveryTask, count: usize) -> Vec<DeliveryJob> {
+    ended_jobs(h, task, "checks", count)
+}
+
+/// The task's jobs of `role`, once there are `count` and all ended.
+fn ended_jobs(h: &Harness, task: &DeliveryTask, role: &str, count: usize) -> Vec<DeliveryJob> {
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let checks: Vec<DeliveryJob> = h
@@ -6539,7 +6559,7 @@ fn ended_checks(h: &Harness, task: &DeliveryTask, count: usize) -> Vec<DeliveryJ
             .task_jobs(&task.id)
             .unwrap()
             .into_iter()
-            .filter(|job| job.role == "checks")
+            .filter(|job| job.role == role)
             .collect();
         if checks.len() == count && checks.iter().all(|job| !job.status.is_open()) {
             return checks;
@@ -6547,7 +6567,7 @@ fn ended_checks(h: &Harness, task: &DeliveryTask, count: usize) -> Vec<DeliveryJ
         let statuses: Vec<_> = checks.iter().map(|job| job.status).collect();
         assert!(
             Instant::now() < deadline,
-            "checks did not end: {statuses:?}"
+            "{role} jobs did not end: {statuses:?}"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -6650,4 +6670,161 @@ fn a_stage_after_passing_checks_is_told_not_to_run_them_again() {
     assert!(events
         .iter()
         .any(|event| event.kind == "checks_ended" && event.detail == "pasaron"));
+}
+
+fn set_repo_setup(h: &Harness, setup: &[&str]) {
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.setup = setup.iter().map(|command| command.to_string()).collect();
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+}
+
+#[test]
+fn setup_runs_before_any_stage_and_a_failed_command_holds_them_until_retried() {
+    use super::phase::{Phase, Waiter};
+    let h = harness();
+    set_repo_setup(&h, &["touch=deps.txt", "exit=1 events=codex-failed"]);
+    let task = h.task("K-60");
+    let error = h
+        .service
+        .set_task_setup(&task.id, vec!["npm ci".into()])
+        .unwrap_err();
+    assert_eq!(error.category, "unknown_setup");
+    let task = h
+        .service
+        .set_task_setup(
+            &task.id,
+            vec![
+                "touch=deps.txt".into(),
+                " exit=1 events=codex-failed ".into(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(task.setup, ["touch=deps.txt", "exit=1 events=codex-failed"]);
+    // A stage dispatched meanwhile waits for the setup.
+    let tests = h.dispatch(&task, "tests", "events=codex-ok touch=t.txt");
+    let setup = ended_jobs(&h, &task, "setup", 2);
+    assert_eq!(setup[0].status, DeliveryJobStatus::Finished);
+    assert_eq!(setup[1].status, DeliveryJobStatus::Failed);
+    assert!(task.worktree.join("deps.txt").is_file());
+    assert_eq!(
+        h.service.job(&tests.id).unwrap().status,
+        DeliveryJobStatus::Queued
+    );
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(
+        phase.phase,
+        Phase::SetupFailed {
+            job_id: setup[1].id.clone(),
+            command: "exit=1 events=codex-failed".into(),
+        }
+    );
+    assert_eq!(phase.waits_on, Waiter::Coordinator);
+    assert_eq!(phase.next_stage, None);
+    // The coordinator hears of it once, when the last command ended.
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    let ended: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "setup_ended")
+        .collect();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].detail, "fallaron `exit=1 events=codex-failed`");
+
+    // A retry is that command's second attempt; the stage still waits.
+    let retry = h.service.retry(&setup[1].id, None).unwrap();
+    assert_eq!(retry.attempt, 2);
+    assert_eq!(h.wait(&retry.id).status, DeliveryJobStatus::Failed);
+    assert_eq!(
+        h.service.job(&tests.id).unwrap().status,
+        DeliveryJobStatus::Queued
+    );
+    // Without that command the stage starts; what passed does not run again.
+    h.service
+        .set_task_setup(&task.id, vec!["touch=deps.txt".into()])
+        .unwrap();
+    assert_eq!(h.wait(&tests.id).status, DeliveryJobStatus::Finished);
+    assert_eq!(ended_jobs(&h, &task, "setup", 3).len(), 3);
+}
+
+#[test]
+fn jobs_that_need_the_environment_wait_while_it_fails_and_start_once_it_answers() {
+    use super::environment::DeliveryEnvironmentCheck;
+    use super::phase::{Phase, Waiter};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let h = harness();
+    let up = Arc::new(AtomicBool::new(false));
+    let answers = up.clone();
+    h.service.set_environment_check(Arc::new(move |_, _, _| {
+        let ok = answers.load(Ordering::SeqCst);
+        vec![DeliveryEnvironmentCheck {
+            name: "Docker".into(),
+            ok,
+            output: if ok {
+                "Docker 27 responde."
+            } else {
+                "no responde"
+            }
+            .into(),
+        }]
+    }));
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("E-1");
+    let checked = coordinator.call("check_environment", json!({"task_id": task_id}));
+    assert_eq!(checked["structuredContent"]["ok"], false, "{checked}");
+    assert_eq!(checked["structuredContent"]["checks"][0]["name"], "Docker");
+    let unknown = coordinator.write(
+        "set_task_state",
+        json!({"task_id": task_id, "setup": ["npm ci"]}),
+    );
+    assert!(error_text(&unknown).contains("comandos de preparación"));
+    let task = h.service.task(&task_id).unwrap();
+
+    // QA waits instead of failing, and says why.
+    let qa = h.dispatch(&task, "qa", "events=codex-ok");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let waiting = loop {
+        let job = h.service.job(&qa.id).unwrap();
+        if job.waits_environment.is_some() {
+            break job;
+        }
+        assert!(Instant::now() < deadline, "QA did not wait: {job:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(waiting.status, DeliveryJobStatus::Queued);
+    assert!(waiting.needs_environment);
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(
+        phase.phase,
+        Phase::WaitsEnvironment {
+            job_id: qa.id.clone(),
+            role: "qa".into(),
+            problem: "Docker: no responde".into(),
+        }
+    );
+    assert_eq!(phase.waits_on, Waiter::User);
+    // A job that does not need it runs meanwhile.
+    let other = h.task("E-2");
+    let plain = h.dispatch(&other, "implementation", "events=codex-ok");
+    assert_eq!(h.wait(&plain.id).status, DeliveryJobStatus::Finished);
+    assert_eq!(
+        h.service.job(&qa.id).unwrap().status,
+        DeliveryJobStatus::Queued
+    );
+
+    // Once it answers, the waiting job starts.
+    up.store(true, Ordering::SeqCst);
+    h.service
+        .check_environment(&task.repo, task.distro.as_deref())
+        .unwrap();
+    let qa = h.wait(&qa.id);
+    assert_eq!(qa.status, DeliveryJobStatus::Finished);
+    assert_eq!(qa.waits_environment, None);
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == "job_waits_environment")
+            .count(),
+        1
+    );
 }

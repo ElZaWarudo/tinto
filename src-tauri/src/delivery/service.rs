@@ -15,15 +15,16 @@ use std::time::{Duration, Instant};
 
 use super::adapters::{self, JobLaunch, JobOutcome, JobPaths};
 use super::decisions;
+use super::environment::{self, DeliveryEnvironmentCheck};
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
     DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview,
-    DeliveryPackage, DeliveryPlatform, DeliveryResultState, DeliverySettings,
+    DeliveryPackage, DeliveryPlatform, DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
     DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
     NewBlocker,
 };
-use super::phase::{current_checks, last_change};
+use super::phase::{current_checks, current_setup, last_change};
 use super::prs::{self, GitHub};
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
@@ -45,6 +46,12 @@ pub type SandboxPlanner =
     Arc<dyn Fn(&DeliveryTask, &[String]) -> adapters::SandboxPlan + Send + Sync>;
 /// Whether an agent's CLI is installed on this machine, outside WSL.
 pub type Installed = Arc<dyn Fn(DeliveryAgent) -> bool + Send + Sync>;
+/// Runs a repo's "Entorno" check (Docker, the user's probes).
+pub type EnvironmentCheck = Arc<
+    dyn Fn(&Path, Option<&str>, &DeliveryRepoSettings) -> Vec<DeliveryEnvironmentCheck>
+        + Send
+        + Sync,
+>;
 
 const CODEX_MODEL_SETTING: &str = "codex_model";
 
@@ -69,6 +76,14 @@ pub const QA_ROLE: &str = "qa";
 /// One of the task's checks, run by Tinto itself as a shell job.
 pub const CHECKS_ROLE: &str = "checks";
 
+/// One of the task's setup commands, run by Tinto itself as a shell job
+/// before its stages.
+pub const SETUP_ROLE: &str = "setup";
+
+/// How long a passing "Entorno" check stands before a job that needs the
+/// environment checks it again.
+const ENVIRONMENT_FRESH_MS: u64 = 60_000;
+
 /// The end of a failed check's output its next stage reads.
 const CHECK_TAIL_CHARS: usize = 2_000;
 
@@ -86,6 +101,7 @@ pub fn role_defaults(role: &str) -> (bool, Option<&'static str>, u32) {
         QA_ROLE => (false, Some("qa"), 60),
         "bootstrap" => (true, None, 30),
         CHECKS_ROLE => (false, None, 30),
+        SETUP_ROLE => (true, None, 30),
         _ => (true, None, 60),
     }
 }
@@ -113,11 +129,25 @@ pub(super) struct Inner {
     pub(super) coordinator: Mutex<Option<DeliveryCoordinatorEndpoint>>,
     sandbox_planner: Mutex<SandboxPlanner>,
     installed: Mutex<Installed>,
+    environment_check: Mutex<EnvironmentCheck>,
+    /// Each repo's last "Entorno" check, for the jobs that need it.
+    environment: Mutex<HashMap<PathBuf, RepoEnvironment>>,
     pub(super) github: Mutex<Arc<dyn GitHub>>,
     pub(super) jira: Mutex<Arc<dyn super::jira::Jira>>,
     launcher: Launcher,
     paths_for: PathsFor,
     checkpoint_config: CheckpointConfig,
+}
+
+/// A repo's last "Entorno" check, as the jobs that need it read it.
+#[derive(Debug, Clone, Default)]
+struct RepoEnvironment {
+    /// What failed, or `None` when everything answered.
+    problem: Option<String>,
+    /// `None` until a check ends.
+    checked_at_ms: Option<u64>,
+    /// A check is running.
+    checking: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +198,9 @@ pub struct NewJob {
     pub read_dirs: Vec<String>,
     /// The model and reasoning come from the stage's settings.
     pub stage_default: bool,
+    /// It needs the repo's environment: it waits while that is down. QA
+    /// always does.
+    pub needs_environment: bool,
 }
 
 /// How a job's process ended, before its result is evaluated.
@@ -211,6 +244,115 @@ impl DeliveryService {
         installed.is_none_or(|installed| installed(agent))
     }
 
+    /// How the "Entorno" check runs; tests replace it.
+    pub fn set_environment_check(&self, check: EnvironmentCheck) {
+        if let Ok(mut slot) = self.inner.environment_check.lock() {
+            *slot = check;
+        }
+    }
+
+    /// Runs the repo's "Entorno" check. The jobs that need the environment
+    /// read its outcome: they wait while it fails and start once it passes.
+    pub fn check_environment(
+        &self,
+        repo: &Path,
+        distro: Option<&str>,
+    ) -> Result<Vec<DeliveryEnvironmentCheck>, DeliveryError> {
+        let settings = self.store()?.repo_settings(repo)?;
+        let check = self
+            .inner
+            .environment_check
+            .lock()
+            .map(|slot| slot.clone())
+            .map_err(|_| {
+                DeliveryError::new("delivery_lock_poisoned", "Delivery state is unavailable")
+            })?;
+        if let Ok(mut repos) = self.inner.environment.lock() {
+            repos.entry(repo.to_path_buf()).or_default().checking = true;
+        }
+        let results = check(repo, distro, &settings);
+        let failed: Vec<String> = results
+            .iter()
+            .filter(|result| !result.ok)
+            .map(|result| format!("{}: {}", result.name, result.output))
+            .collect();
+        if let Ok(mut repos) = self.inner.environment.lock() {
+            repos.insert(
+                repo.to_path_buf(),
+                RepoEnvironment {
+                    problem: (!failed.is_empty()).then(|| failed.join("\n")),
+                    checked_at_ms: Some(now_ms()),
+                    checking: false,
+                },
+            );
+        }
+        // The jobs waiting on it start, or say why they wait.
+        self.tick();
+        Ok(results)
+    }
+
+    /// Checks again, in the background, the environment of each repo with a
+    /// queued job that needs it and no recent check. Notifies only through
+    /// the checks it starts, so the blockers' loop can call it.
+    pub fn check_due_environments(&self) {
+        let due = match self.environments_due() {
+            Ok(due) => due,
+            Err(error) => {
+                eprintln!(
+                    "tinto: delivery could not read the jobs waiting on the environment: {error}"
+                );
+                return;
+            }
+        };
+        for (repo, distro) in due {
+            if let Ok(mut repos) = self.inner.environment.lock() {
+                let state = repos.entry(repo.clone()).or_default();
+                if state.checking {
+                    continue;
+                }
+                state.checking = true;
+            }
+            let service = self.clone();
+            std::thread::spawn(move || {
+                if let Err(error) = service.check_environment(&repo, distro.as_deref()) {
+                    eprintln!("tinto: delivery could not check the environment: {error}");
+                }
+            });
+        }
+    }
+
+    fn environments_due(&self) -> Result<Vec<(PathBuf, Option<String>)>, DeliveryError> {
+        let store = self.store()?;
+        let tasks = store.tasks()?;
+        let repos = self
+            .inner
+            .environment
+            .lock()
+            .map(|repos| repos.clone())
+            .unwrap_or_default();
+        let now = now_ms();
+        let mut due: Vec<(PathBuf, Option<String>)> = Vec::new();
+        for job in store
+            .jobs()?
+            .iter()
+            .filter(|job| job.status == DeliveryJobStatus::Queued && job.needs_environment)
+        {
+            let Some(task) = tasks.iter().find(|task| task.id == job.task_id) else {
+                continue;
+            };
+            let fresh = repos.get(&task.repo).is_some_and(|state| {
+                state.checking
+                    || state
+                        .checked_at_ms
+                        .is_some_and(|at| now.saturating_sub(at) < ENVIRONMENT_FRESH_MS)
+            });
+            if !fresh && !due.iter().any(|(repo, _)| repo == &task.repo) {
+                due.push((task.repo.clone(), task.distro.clone()));
+            }
+        }
+        Ok(due)
+    }
+
     pub fn set_sandbox_planner(&self, planner: SandboxPlanner) {
         if let Ok(mut slot) = self.inner.sandbox_planner.lock() {
             *slot = planner;
@@ -251,6 +393,8 @@ impl DeliveryService {
                 sandbox_planner: Mutex::new(Arc::new(|_, _| adapters::SandboxPlan::default())),
                 // Every agent counts as installed unless the app checks.
                 installed: Mutex::new(Arc::new(|_| true)),
+                environment_check: Mutex::new(Arc::new(environment::check)),
+                environment: Mutex::new(HashMap::new()),
                 // Nothing reaches GitHub unless the app sets `gh`.
                 github: Mutex::new(Arc::new(prs::Offline)),
                 jira: Mutex::new(Arc::new(super::jira::JiraHttp)),
@@ -668,6 +812,7 @@ impl DeliveryService {
             blockers: Vec::new(),
             blocked_reason: String::new(),
             checks: Vec::new(),
+            setup: Vec::new(),
         };
         {
             let store = self.store()?;
@@ -692,6 +837,7 @@ impl DeliveryService {
                 platform: None,
                 read_dirs: Vec::new(),
                 stage_default: false,
+                needs_environment: false,
             })?;
         } else {
             self.notify();
@@ -868,21 +1014,14 @@ impl DeliveryService {
         let mut task = self.task(task_id)?;
         let store = self.store()?;
         let allowed = store.repo_settings(&task.repo)?.checks;
-        let mut chosen: Vec<String> = Vec::new();
-        for check in checks.iter().map(|check| check.trim()) {
-            if !allowed.iter().any(|allowed| allowed.trim() == check) {
-                return Err(DeliveryError::new(
-                    "unknown_check",
-                    format!(
-                        "«{check}» no es una de las comprobaciones del repositorio (read_settings: checks); elige entre ellas tal cual"
-                    ),
-                ));
-            }
-            if !chosen.iter().any(|chosen| chosen == check) {
-                chosen.push(check.to_string());
-            }
-        }
-        task.checks = chosen;
+        task.checks = pick_commands(&checks, &allowed).map_err(|check| {
+            DeliveryError::new(
+                "unknown_check",
+                format!(
+                    "«{check}» no es una de las comprobaciones del repositorio (read_settings: checks); elige entre ellas tal cual"
+                ),
+            )
+        })?;
         task.updated_at_ms = now_ms();
         store.put_task(&task)?;
         store.record_event(
@@ -894,6 +1033,70 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
+        Ok(task)
+    }
+
+    /// The commands that prepare the task's worktree, each one of the repo's
+    /// setup commands as the user wrote it: Tinto runs them outside any
+    /// agent sandbox. It queues at once, ahead of anything dispatched
+    /// later, each one that has not passed nor is queued or running.
+    pub fn set_task_setup(
+        &self,
+        task_id: &str,
+        setup: Vec<String>,
+    ) -> Result<DeliveryTask, DeliveryError> {
+        let mut task = self.task(task_id)?;
+        let jobs = {
+            let store = self.store()?;
+            let allowed = store.repo_settings(&task.repo)?.setup;
+            task.setup = pick_commands(&setup, &allowed).map_err(|command| {
+                DeliveryError::new(
+                    "unknown_setup",
+                    format!(
+                        "«{command}» no es uno de los comandos de preparación del repositorio (read_settings: setup); elige entre ellos tal cual"
+                    ),
+                )
+            })?;
+            task.updated_at_ms = now_ms();
+            store.put_task(&task)?;
+            store.record_event(
+                task.updated_at_ms,
+                "task_state_set",
+                Some(&task.id),
+                None,
+                &format!("preparación: {}", task.setup.join("; ")),
+            )?;
+            store.task_jobs(&task.id)?
+        };
+        let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
+        let current = current_setup(&task.setup, &jobs);
+        for command in &task.setup {
+            let settled = current.iter().any(|job| {
+                &job.prompt == command
+                    && (job.status.is_open() || job.status == DeliveryJobStatus::Finished)
+            });
+            if settled {
+                continue;
+            }
+            self.dispatch(NewJob {
+                task_id: task.id.clone(),
+                role: SETUP_ROLE.to_string(),
+                agent: DeliveryAgent::Shell,
+                model: None,
+                access: DeliveryAccess::Workspace,
+                prompt: command.clone(),
+                writes: None,
+                lease: None,
+                timeout_minutes: None,
+                reasoning: None,
+                platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
+                needs_environment: false,
+            })?;
+        }
+        // Stages a dropped command held can start.
+        self.tick();
         Ok(task)
     }
 
@@ -980,10 +1183,13 @@ impl DeliveryService {
                 ));
             }
         }
-        // A blocked task waits for its blockers before any stage.
+        // A blocked task waits for its blockers before any stage; its setup
+        // can run meanwhile.
+        let setup = request.agent == DeliveryAgent::Shell && request.role == SETUP_ROLE;
         let open: Vec<String> = task
             .blockers
             .iter()
+            .filter(|_| !setup)
             .filter(|blocker| blocker.is_open())
             .map(super::blockers::blocker_label)
             .collect();
@@ -1126,11 +1332,15 @@ impl DeliveryService {
         } else {
             String::new()
         };
-        // Each check counts its own attempts.
+        // Each check and setup command counts its own attempts.
         let attempt = store
             .task_jobs(&task.id)?
             .iter()
-            .filter(|job| job.role == role && (role != CHECKS_ROLE || job.prompt == request.prompt))
+            .filter(|job| {
+                job.role == role
+                    && (!matches!(role.as_str(), CHECKS_ROLE | SETUP_ROLE)
+                        || job.prompt == request.prompt)
+            })
             .map(|job| job.attempt)
             .max()
             .unwrap_or(0)
@@ -1175,6 +1385,8 @@ impl DeliveryService {
             qa_followup,
             qa_environment,
             task_checks: Vec::new(),
+            needs_environment: request.needs_environment || qa,
+            waits_environment: None,
             reasoning,
             platform: request.platform,
             ran_on: None,
@@ -1432,6 +1644,7 @@ impl DeliveryService {
             platform: job.platform,
             read_dirs: job.read_dirs,
             stage_default: job.stage_default,
+            needs_environment: job.needs_environment,
         })
     }
 
@@ -1635,13 +1848,61 @@ impl DeliveryService {
             }
             Err(error) => eprintln!("tinto: delivery scheduling failed: {error}"),
         }
+        self.check_due_environments();
         self.notify();
     }
 
     fn select_jobs(&self) -> Result<Vec<String>, DeliveryError> {
         let store = self.store()?;
-        let capacity = store.settings()?.effective_capacity(store.tasks()?.len()) as usize;
-        let jobs = store.jobs()?;
+        let tasks = store.tasks()?;
+        let capacity = store.settings()?.effective_capacity(tasks.len()) as usize;
+        let mut jobs = store.jobs()?;
+        // A task's stages and checks wait for its setup to pass.
+        let unprepared: HashSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                let task_jobs: Vec<&DeliveryJob> =
+                    jobs.iter().filter(|job| job.task_id == task.id).collect();
+                current_setup(&task.setup, &task_jobs)
+                    .iter()
+                    .any(|job| job.status != DeliveryJobStatus::Finished)
+            })
+            .map(|task| task.id.clone())
+            .collect();
+        // A job that needs the environment waits while its last check
+        // fails, and says why.
+        let environments = self
+            .inner
+            .environment
+            .lock()
+            .map(|repos| repos.clone())
+            .unwrap_or_default();
+        let environment_of = |job: &DeliveryJob| {
+            tasks
+                .iter()
+                .find(|task| task.id == job.task_id)
+                .and_then(|task| environments.get(&task.repo))
+        };
+        let now = now_ms();
+        for job in jobs
+            .iter_mut()
+            .filter(|job| job.status == DeliveryJobStatus::Queued && job.needs_environment)
+        {
+            let problem = environment_of(job).and_then(|state| state.problem.clone());
+            if job.waits_environment != problem {
+                if job.waits_environment.is_none() {
+                    store.record_event(
+                        now,
+                        "job_waits_environment",
+                        Some(&job.task_id),
+                        Some(&job.id),
+                        &job.role,
+                    )?;
+                }
+                job.waits_environment = problem;
+                store.put_job(job)?;
+            }
+        }
         let mut running = jobs.iter().filter(|job| job.status.is_active()).count();
         let mut busy: HashSet<String> = jobs
             .iter()
@@ -1671,6 +1932,19 @@ impl DeliveryService {
             .filter(|job| job.status == DeliveryJobStatus::Queued)
         {
             if busy.contains(&job.task_id) || held.contains(&job.task_id) {
+                continue;
+            }
+            let setup = job.agent == DeliveryAgent::Shell && job.role == SETUP_ROLE;
+            if unprepared.contains(&job.task_id) && !setup {
+                continue;
+            }
+            let reachable = environment_of(&job).is_some_and(|state| {
+                state.problem.is_none()
+                    && state
+                        .checked_at_ms
+                        .is_some_and(|at| now.saturating_sub(at) < ENVIRONMENT_FRESH_MS)
+            });
+            if job.needs_environment && !reachable {
                 continue;
             }
             if running >= capacity {
@@ -2181,6 +2455,7 @@ impl DeliveryService {
                 platform: None,
                 read_dirs: Vec::new(),
                 stage_default: false,
+                needs_environment: false,
             })?;
         }
         Ok(())
@@ -2350,18 +2625,30 @@ impl DeliveryService {
         store.put_job(&job)?;
         settle_lease(&store, &job, ending.touched)?;
         let detail = format!("{:?}", job.status).to_ascii_lowercase();
-        // The coordinator hears of the task's checks once, when all ended.
-        let check = job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE;
+        // The coordinator hears of the task's checks, and of its setup, once,
+        // when all ended.
+        let tinto_run = match (job.agent, job.role.as_str()) {
+            (DeliveryAgent::Shell, CHECKS_ROLE) => Some(("check_ended", "checks_ended")),
+            (DeliveryAgent::Shell, SETUP_ROLE) => Some(("setup_command_ended", "setup_ended")),
+            _ => None,
+        };
         store.record_event(
             now_ms(),
-            if check { "check_ended" } else { "job_ended" },
+            tinto_run.map_or("job_ended", |(one, _)| one),
             Some(&job.task_id),
             Some(&job.id),
             &detail,
         )?;
-        if let Some(task) = task.as_ref().filter(|_| check) {
-            if let Some(outcome) = checks_outcome(&task.checks, &store.task_jobs(&task.id)?) {
-                store.record_event(now_ms(), "checks_ended", Some(&job.task_id), None, &outcome)?;
+        if let (Some(task), Some((_, all))) = (task.as_ref(), tinto_run) {
+            let jobs = store.task_jobs(&task.id)?;
+            let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
+            let (wanted, current) = if job.role == CHECKS_ROLE {
+                (&task.checks, current_checks(&jobs))
+            } else {
+                (&task.setup, current_setup(&task.setup, &jobs))
+            };
+            if let Some(outcome) = checks_outcome(wanted, &current) {
+                store.record_event(now_ms(), all, Some(&job.task_id), None, &outcome)?;
             }
         }
         Ok(())
@@ -2710,13 +2997,24 @@ fn to_changes(snapshot: &WorktreeSnapshot) -> Vec<DeliveryChange> {
 
 /// Why a job a restart interrupted must not run again on its own, if so:
 /// what it did may have half-happened where a new attempt cannot see it.
-/// An agent with workspace access only changes its worktree (no network
-/// outside QA, no push, no merge), and a new attempt starts from what the
-/// first one left there.
-/// How the task's latest checks went, once each of `wanted` ran to its end.
-fn checks_outcome(wanted: &[String], jobs: &[DeliveryJob]) -> Option<String> {
-    let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
-    let checks = current_checks(&jobs);
+/// The repo's commands a coordinator chose, trimmed and without repeats;
+/// `Err` with the first one that is not among `allowed` as written.
+fn pick_commands(chosen: &[String], allowed: &[String]) -> Result<Vec<String>, String> {
+    let mut picked: Vec<String> = Vec::new();
+    for command in chosen.iter().map(|command| command.trim()) {
+        if !allowed.iter().any(|allowed| allowed.trim() == command) {
+            return Err(command.to_string());
+        }
+        if !picked.iter().any(|picked| picked == command) {
+            picked.push(command.to_string());
+        }
+    }
+    Ok(picked)
+}
+
+/// How the task's latest checks (or setup commands) went, once each of
+/// `wanted` ran to its end.
+fn checks_outcome(wanted: &[String], checks: &[&DeliveryJob]) -> Option<String> {
     let ended = |command: &String| {
         checks
             .iter()
@@ -2747,12 +3045,15 @@ fn checks_outcome(wanted: &[String], jobs: &[DeliveryJob]) -> Option<String> {
     })
 }
 
+/// An agent with workspace access only changes its worktree (no network
+/// outside QA, no push, no merge), and a new attempt starts from what the
+/// first one left there.
 fn not_safe_to_repeat(job: &DeliveryJob) -> Option<String> {
     if job.retry_of.is_some() {
         return Some("ya era el reintento automático de otro trabajo interrumpido".to_string());
     }
-    // A check only reads the code, so it can run again.
-    if job.agent == DeliveryAgent::Shell && job.role != CHECKS_ROLE {
+    // A check only reads the code, and setup commands are made to run again.
+    if job.agent == DeliveryAgent::Shell && !matches!(job.role.as_str(), CHECKS_ROLE | SETUP_ROLE) {
         return Some(
             "es un comando de shell, que pudo quedar a medias haciendo cualquier cosa".to_string(),
         );
@@ -2790,6 +3091,7 @@ fn in_same_session(job: &DeliveryJob) -> NewJob {
         platform: job.platform,
         read_dirs: job.read_dirs.clone(),
         stage_default: job.stage_default,
+        needs_environment: job.needs_environment,
     }
 }
 

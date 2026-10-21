@@ -1673,6 +1673,60 @@ describe("DeliveryPanel", () => {
         checks_add: checks.slice(0, 2),
         checks_remove: ["npm --prefix cli run build"],
         qa_commands_add: [],
+        setup_add: [],
+        setup_remove: [],
+      }),
+    );
+  });
+
+  it("shows the setup commands a coordinator proposes and approves the ones left checked", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryRepoSettings.mockResolvedValue({
+      worktree_root: null,
+      bootstrap: null,
+      default_base: null,
+      setup: ["npm --prefix cli ci"],
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        phases: { t1: phase({ kind: "settings_proposal" }) },
+        settings_proposals: [
+          {
+            id: "p1",
+            repo: REPO,
+            task_id: "t1",
+            run_id: "r1",
+            reason: "AGOS-474 toca el frontend y sus bindings",
+            changes: {
+              setup_add: ["npm --prefix frontend ci", "npm run bindings"],
+              setup_remove: ["npm --prefix cli ci"],
+            },
+            status: "pending",
+            approved: null,
+            requested_by: "coord",
+            requested_at_ms: 1,
+            decided_by: null,
+            decided_at_ms: null,
+          },
+        ],
+      }),
+    );
+    client.approveDeliverySettingsProposal.mockResolvedValue({});
+    renderPanel();
+
+    const card = await screen.findByRole("region", { name: "Cambios de ajustes por aprobar" });
+    await waitFor(() => expect(card).toHaveTextContent("Comandos de preparación"));
+    await waitFor(() => expect(card).toHaveTextContent("antes 1 · después 2"));
+    await user.click(within(card).getByRole("checkbox", { name: "Quitar npm --prefix cli ci" }));
+    expect(card).toHaveTextContent("antes 1 · después 3");
+    await user.click(within(card).getByRole("button", { name: "Aprobar 2 de 3" }));
+    await waitFor(() =>
+      expect(client.approveDeliverySettingsProposal).toHaveBeenCalledWith("p1", {
+        checks_add: [],
+        checks_remove: [],
+        qa_commands_add: [],
+        setup_add: ["npm --prefix frontend ci", "npm run bindings"],
+        setup_remove: [],
       }),
     );
   });
@@ -1726,6 +1780,8 @@ describe("DeliveryPanel", () => {
         checks_add: [],
         checks_remove: [],
         qa_commands_add: [],
+        setup_add: [],
+        setup_remove: [],
         check_env: { TEST_DB_MONGO_URL: "mongodb://127.0.0.1:27419/agos{task}" },
       }),
     );
@@ -2146,6 +2202,10 @@ describe("DeliveryPanel", () => {
     await user.click(within(settings).getByRole("checkbox", { name: /^Reintentar al reiniciar/ }));
     await user.click(within(settings).getByRole("checkbox", { name: "pg_isready -h localhost" }));
     expect(within(settings).getByRole("checkbox", { name: "npm test" })).not.toBeChecked();
+    await user.type(
+      within(settings).getByRole("textbox", { name: /^Comandos de preparación/ }),
+      "npm --prefix frontend ci{Enter}npm run bindings",
+    );
     await user.click(save);
     await waitFor(() =>
       expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
@@ -2153,6 +2213,7 @@ describe("DeliveryPanel", () => {
         expect.objectContaining({
           retry_on_restart: true,
           environment_probes: ["pg_isready -h localhost"],
+          setup: ["npm --prefix frontend ci", "npm run bindings"],
         }),
       ),
     );

@@ -37,6 +37,8 @@ fn clean(changes: &DeliverySettingsChanges) -> DeliverySettingsChanges {
         checks_add: trimmed(&changes.checks_add),
         checks_remove: trimmed(&changes.checks_remove),
         qa_commands_add: trimmed(&changes.qa_commands_add),
+        setup_add: trimmed(&changes.setup_add),
+        setup_remove: trimmed(&changes.setup_remove),
         bootstrap: changes
             .bootstrap
             .as_deref()
@@ -58,6 +60,8 @@ fn is_empty(changes: &DeliverySettingsChanges) -> bool {
     changes.checks_add.is_empty()
         && changes.checks_remove.is_empty()
         && changes.qa_commands_add.is_empty()
+        && changes.setup_add.is_empty()
+        && changes.setup_remove.is_empty()
         && changes.bootstrap.is_none()
         && changes.qa_browser.is_none()
         && changes.verification.is_none()
@@ -125,20 +129,35 @@ fn problems(
         &changes.qa_commands_add,
         &settings.qa_commands,
     );
+    commands("setup_add", &changes.setup_add, &settings.setup);
     if let Some(bootstrap) = &changes.bootstrap {
         if let Some(problem) = command_problem(bootstrap, task) {
             problems.push(format!("bootstrap «{bootstrap}»: {problem}"));
         }
     }
-    for (index, item) in changes.checks_remove.iter().enumerate() {
-        if changes.checks_remove[..index].contains(item) {
-            problems.push(format!("checks_remove «{item}»: está repetido"));
-        } else if !settings.checks.contains(item) {
-            problems.push(format!("checks_remove «{item}»: no está en los ajustes"));
-        } else if changes.checks_add.contains(item) {
-            problems.push(format!("checks_remove «{item}»: también se añade"));
+    let mut removed = |field: &str, items: &[String], current: &[String], added: &[String]| {
+        for (index, item) in items.iter().enumerate() {
+            if items[..index].contains(item) {
+                problems.push(format!("{field} «{item}»: está repetido"));
+            } else if !current.contains(item) {
+                problems.push(format!("{field} «{item}»: no está en los ajustes"));
+            } else if added.contains(item) {
+                problems.push(format!("{field} «{item}»: también se añade"));
+            }
         }
-    }
+    };
+    removed(
+        "checks_remove",
+        &changes.checks_remove,
+        &settings.checks,
+        &changes.checks_add,
+    );
+    removed(
+        "setup_remove",
+        &changes.setup_remove,
+        &settings.setup,
+        &changes.setup_add,
+    );
     if changes
         .verification
         .as_deref()
@@ -164,6 +183,8 @@ fn is_part_of(part: &DeliverySettingsChanges, whole: &DeliverySettingsChanges) -
     within(&part.checks_add, &whole.checks_add)
         && within(&part.checks_remove, &whole.checks_remove)
         && within(&part.qa_commands_add, &whole.qa_commands_add)
+        && within(&part.setup_add, &whole.setup_add)
+        && within(&part.setup_remove, &whole.setup_remove)
         && (part.bootstrap.is_none() || part.bootstrap == whole.bootstrap)
         && (part.qa_browser.is_none() || part.qa_browser == whole.qa_browser)
         && (part.verification.is_none() || part.verification == whole.verification)
@@ -189,6 +210,14 @@ fn apply(settings: &mut DeliveryRepoSettings, changes: &DeliverySettingsChanges)
             settings.qa_commands.push(item.clone());
         }
     }
+    for item in &changes.setup_add {
+        if !settings.setup.contains(item) {
+            settings.setup.push(item.clone());
+        }
+    }
+    settings
+        .setup
+        .retain(|item| !changes.setup_remove.contains(item));
     if let Some(bootstrap) = &changes.bootstrap {
         settings.bootstrap = Some(bootstrap.clone()).filter(|text| !text.is_empty());
     }
@@ -389,6 +418,7 @@ mod tests {
             blockers: Vec::new(),
             blocked_reason: String::new(),
             checks: Vec::new(),
+            setup: Vec::new(),
         }
     }
 
@@ -474,6 +504,7 @@ mod tests {
     fn applying_adds_removes_and_replaces() {
         let mut settings = DeliveryRepoSettings {
             checks: vec!["npm test".into(), "old".into()],
+            setup: vec!["npm ci".into(), "gone".into()],
             ..Default::default()
         };
         apply(
@@ -482,6 +513,8 @@ mod tests {
                 checks_add: vec!["npm test".into(), "new".into()],
                 checks_remove: vec!["old".into()],
                 qa_commands_add: vec!["qa".into()],
+                setup_add: vec!["make bindings".into()],
+                setup_remove: vec!["gone".into()],
                 bootstrap: Some("npm ci".into()),
                 qa_browser: Some(true),
                 verification: Some("e2e".into()),
@@ -490,6 +523,7 @@ mod tests {
         );
         assert_eq!(settings.checks, ["npm test", "new"]);
         assert_eq!(settings.qa_commands, ["qa"]);
+        assert_eq!(settings.setup, ["npm ci", "make bindings"]);
         assert_eq!(settings.bootstrap.as_deref(), Some("npm ci"));
         assert!(settings.qa_browser);
         assert_eq!(settings.verification, "e2e");

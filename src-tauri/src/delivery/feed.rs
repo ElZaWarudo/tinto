@@ -20,6 +20,7 @@ use super::{now_ms, DeliveryError};
 const COORDINATOR_EVENTS: &[&str] = &[
     "job_ended",
     "checks_ended",
+    "setup_ended",
     "job_cancelled",
     "job_interrupted",
     "job_retried",
@@ -363,6 +364,12 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         }
         "checks_ended" => format!(
             "las comprobaciones de Tinto no pasaron (si alguna falló, lanza implementation: sus instrucciones ya llevan la salida de cada fallo): {detail}"
+        ),
+        "setup_ended" if detail == "pasaron" => {
+            "la preparación de Tinto terminó: ya puedes lanzar la siguiente etapa".to_string()
+        }
+        "setup_ended" => format!(
+            "la preparación de Tinto no pasó; ninguna etapa empieza hasta que la reintentes con retry_job: {detail}"
         ),
         "job_cancelled" => format!("la etapa {stage} se canceló"),
         "job_interrupted" if detail.is_empty() => format!("la etapa {stage} se interrumpió"),

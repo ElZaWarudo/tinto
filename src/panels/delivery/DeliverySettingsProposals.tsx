@@ -15,14 +15,21 @@ import type {
 
 import { ActionButton, ActionGroup } from "./ActionButton";
 
-type ListField = "checks_add" | "checks_remove" | "qa_commands_add";
+type ListField = "checks_add" | "checks_remove" | "qa_commands_add" | "setup_add" | "setup_remove";
+const LIST_FIELDS: ListField[] = [
+  "checks_add",
+  "checks_remove",
+  "qa_commands_add",
+  "setup_add",
+  "setup_remove",
+];
 
 const key = (field: string, value: string) => `${field}\u0000${value}`;
 
 /** Every change of the proposal, by key. */
 function changeKeys(changes: DeliverySettingsChanges): string[] {
   const keys: string[] = [];
-  for (const field of ["checks_add", "checks_remove", "qa_commands_add"] as ListField[]) {
+  for (const field of LIST_FIELDS) {
     for (const value of changes[field] ?? []) keys.push(key(field, value));
   }
   if (changes.bootstrap != null) keys.push(key("bootstrap", ""));
@@ -43,6 +50,8 @@ function accepted(
     checks_add: pick("checks_add"),
     checks_remove: pick("checks_remove"),
     qa_commands_add: pick("qa_commands_add"),
+    setup_add: pick("setup_add"),
+    setup_remove: pick("setup_remove"),
   };
   if (changes.bootstrap != null && selected.has(key("bootstrap", ""))) {
     part.bootstrap = changes.bootstrap;
@@ -79,6 +88,7 @@ function ListDiff({
   added,
   removed,
   addField,
+  removeField,
   selected,
   toggle,
 }: {
@@ -87,11 +97,12 @@ function ListDiff({
   added: string[];
   removed: string[];
   addField: ListField;
+  removeField: ListField;
   selected: Set<string>;
   toggle: (key: string) => void;
 }) {
   if (added.length === 0 && removed.length === 0) return null;
-  const goes = removed.filter((value) => selected.has(key("checks_remove", value)));
+  const goes = removed.filter((value) => selected.has(key(removeField, value)));
   const comes = added.filter((value) => selected.has(key(addField, value)));
   const after = before.filter((value) => !goes.includes(value)).length + comes.length;
   return (
@@ -108,8 +119,8 @@ function ListDiff({
             <li key={value} className="delivery-settings-diff__removed">
               <Toggle
                 label={`Quitar ${value}`}
-                checked={selected.has(key("checks_remove", value))}
-                onChange={() => toggle(key("checks_remove", value))}
+                checked={selected.has(key(removeField, value))}
+                onChange={() => toggle(key(removeField, value))}
               />
               <span aria-hidden="true">−</span>
               <code>{value}</code>
@@ -202,6 +213,7 @@ function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
         added={changes.checks_add ?? []}
         removed={changes.checks_remove ?? []}
         addField="checks_add"
+        removeField="checks_remove"
         selected={selected}
         toggle={toggle}
       />
@@ -211,6 +223,17 @@ function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
         added={changes.qa_commands_add ?? []}
         removed={[]}
         addField="qa_commands_add"
+        removeField="checks_remove"
+        selected={selected}
+        toggle={toggle}
+      />
+      <ListDiff
+        title="Comandos de preparación"
+        before={current?.setup ?? changes.setup_remove ?? []}
+        added={changes.setup_add ?? []}
+        removed={changes.setup_remove ?? []}
+        addField="setup_add"
+        removeField="setup_remove"
         selected={selected}
         toggle={toggle}
       />
