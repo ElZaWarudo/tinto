@@ -19,6 +19,7 @@ use super::model::{
     DeliveryTask,
 };
 use super::prs::DeliveryPr;
+use super::service::CHECKS_ROLE;
 
 /// The built-in stages, in flow order.
 pub const STAGES: [&str; 4] = ["tests", "implementation", "review", "qa"];
@@ -217,6 +218,30 @@ pub fn is_answered(job: &DeliveryJob, jobs: &[&DeliveryJob]) -> bool {
         })
 }
 
+/// The latest stage that changed the task's code.
+pub fn last_change<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
+    jobs.iter()
+        .rev()
+        .find(|job| job.agent != DeliveryAgent::Shell && is_live(job) && !job.changes.is_empty())
+        .copied()
+}
+
+/// Tinto's checks of the code the latest change left: the latest run of
+/// each check since that change, oldest first.
+pub fn current_checks<'a>(jobs: &[&'a DeliveryJob]) -> Vec<&'a DeliveryJob> {
+    let since = last_change(jobs).map_or(0, |job| job.created_at_ms);
+    let mut latest: Vec<&DeliveryJob> = Vec::new();
+    for job in jobs.iter().filter(|job| {
+        job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE && job.created_at_ms > since
+    }) {
+        match latest.iter_mut().find(|other| other.prompt == job.prompt) {
+            Some(other) => *other = job,
+            None => latest.push(job),
+        }
+    }
+    latest
+}
+
 /// The paused job no later job resumes.
 fn paused_job<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
     let resumed: HashSet<&str> = jobs
@@ -276,10 +301,11 @@ fn stage_of(approval: &DeliveryApproval) -> Option<String> {
     })
 }
 
-/// The stage to run next: none while a stage runs, waits or is paused, nor
-/// once the task was committed after its last stage; else retry a broken
-/// one, go back to implementation after findings, or the first built-in
-/// stage without a passing (or answered) attempt that still stands.
+/// The stage to run next: none while a stage or Tinto's checks run, wait
+/// or are paused, nor once the task was committed after its last stage;
+/// else retry a broken one, go back to implementation after findings or a
+/// failed check, or the first built-in stage without a passing (or
+/// answered) attempt that still stands.
 pub fn next_stage(jobs: &[&DeliveryJob], approvals: &[&DeliveryApproval]) -> Option<String> {
     if paused_job(jobs).is_some() {
         return None;
@@ -289,7 +315,8 @@ pub fn next_stage(jobs: &[&DeliveryJob], approvals: &[&DeliveryApproval]) -> Opt
         .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job))
         .copied()
         .collect();
-    if agent_jobs.iter().any(|job| is_open(job)) {
+    let checks = current_checks(jobs);
+    if agent_jobs.iter().chain(&checks).any(|job| is_open(job)) {
         return None;
     }
     let latest = agent_jobs.last();
@@ -309,6 +336,12 @@ pub fn next_stage(jobs: &[&DeliveryJob], approvals: &[&DeliveryApproval]) -> Opt
         if latest.status == DeliveryJobStatus::Finished && result_is(latest, "findings") {
             return Some("implementation".into());
         }
+    }
+    if checks
+        .iter()
+        .any(|job| job.status == DeliveryJobStatus::Failed)
+    {
+        return Some("implementation".into());
     }
     STAGES
         .iter()

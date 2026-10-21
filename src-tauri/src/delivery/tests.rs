@@ -5860,3 +5860,134 @@ fn zz_measure_replies() {
         );
     }
 }
+
+fn set_repo_checks(h: &Harness, checks: &[&str]) {
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.checks = checks.iter().map(|check| check.to_string()).collect();
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+}
+
+/// The task's check jobs, once there are `count` and all ended.
+fn ended_checks(h: &Harness, task: &DeliveryTask, count: usize) -> Vec<DeliveryJob> {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        let checks: Vec<DeliveryJob> = h
+            .service
+            .store()
+            .unwrap()
+            .task_jobs(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|job| job.role == "checks")
+            .collect();
+        if checks.len() == count && checks.iter().all(|job| !job.status.is_open()) {
+            return checks;
+        }
+        let statuses: Vec<_> = checks.iter().map(|job| job.status).collect();
+        assert!(
+            Instant::now() < deadline,
+            "checks did not end: {statuses:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn tinto_runs_the_task_checks_after_a_change_and_sends_a_failure_back_to_implementation() {
+    let h = harness();
+    set_repo_checks(&h, &["exit=0", "exit=1 events=codex-failed"]);
+    let task = h.task("K-50");
+    let error = h
+        .service
+        .set_task_checks(&task.id, vec!["rm -rf /".into()])
+        .unwrap_err();
+    assert_eq!(error.category, "unknown_check");
+    let task = h
+        .service
+        .set_task_checks(
+            &task.id,
+            vec![
+                " exit=0 ".into(),
+                "exit=1 events=codex-failed".into(),
+                "exit=0".into(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(task.checks, ["exit=0", "exit=1 events=codex-failed"]);
+
+    // The tests stage's new tests fail until the implementation: no checks.
+    let tests = h.dispatch(&task, "tests", "events=codex-ok touch=t.txt");
+    h.wait(&tests.id);
+    let implementation = h.dispatch(&task, "implementation", "events=codex-ok touch=code.txt");
+    let implementation = h.wait(&implementation.id);
+    assert!(implementation.task_checks[1].starts_with("While you work, run only the tests"));
+    let checks = ended_checks(&h, &task, 2);
+    assert!(checks
+        .iter()
+        .all(|check| check.created_at_ms >= implementation.ended_at_ms.unwrap()));
+    assert_eq!(checks[0].prompt, "exit=0");
+    assert_eq!(checks[0].status, DeliveryJobStatus::Finished);
+    assert_eq!(checks[1].status, DeliveryJobStatus::Failed);
+    // Each check counts its own attempts.
+    assert!(checks.iter().all(|check| check.attempt == 1));
+
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(phase.next_stage.as_deref(), Some("implementation"));
+    // The coordinator hears of them once, when the last one ended.
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    let ended: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "checks_ended")
+        .collect();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].detail, "fallaron `exit=1 events=codex-failed`");
+    assert!(!events.iter().any(|event| event.kind == "job_ended"
+        && checks
+            .iter()
+            .any(|check| event.job_id.as_ref() == Some(&check.id))));
+
+    // The fix starts from that code and reads why it failed.
+    let fix = h.dispatch(&task, "implementation", "events=codex-ok");
+    let note = h.wait(&fix.id).task_checks.join("\n");
+    assert!(
+        note.contains("These failed on the code you start from:"),
+        "{note}"
+    );
+    assert!(note.contains("- `exit=1 events=codex-failed`"), "{note}");
+    assert!(note.contains("is not supported when using Codex"), "{note}");
+    assert!(!note.contains("- `exit=0`"), "{note}");
+}
+
+#[test]
+fn a_stage_after_passing_checks_is_told_not_to_run_them_again() {
+    let h = harness();
+    set_repo_checks(&h, &["exit=0"]);
+    let task = h.task("K-51");
+    h.service
+        .set_task_checks(&task.id, vec!["exit=0".into()])
+        .unwrap();
+    let tests = h.dispatch(&task, "tests", "events=codex-ok touch=t.txt");
+    h.wait(&tests.id);
+    let implementation = h.dispatch(&task, "implementation", "events=codex-ok touch=code.txt");
+    h.wait(&implementation.id);
+    assert_eq!(
+        ended_checks(&h, &task, 1)[0].status,
+        DeliveryJobStatus::Finished
+    );
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(phase.next_stage.as_deref(), Some("review"));
+
+    let review = h.dispatch(&task, "review", "events=codex-ok");
+    assert_eq!(
+        h.wait(&review.id).task_checks,
+        [
+            "Tinto runs this task's checks itself on what each stage changes: `exit=0`.",
+            "They all passed on the code you start from: do not run them again.",
+        ]
+    );
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.kind == "checks_ended" && event.detail == "pasaron"));
+}

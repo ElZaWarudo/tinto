@@ -19,6 +19,7 @@ use super::{now_ms, DeliveryError};
 /// coordinator itself asks (dispatches, requests) does not wake it.
 const COORDINATOR_EVENTS: &[&str] = &[
     "job_ended",
+    "checks_ended",
     "job_cancelled",
     "job_interrupted",
     "job_retried",
@@ -356,6 +357,12 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
     let stage = role.unwrap_or("la etapa");
     let what = match event.kind.as_str() {
         "job_ended" => format!("la etapa {stage} terminó ({detail})"),
+        "checks_ended" if detail == "pasaron" => {
+            "las comprobaciones de Tinto pasaron en el código de la última etapa".to_string()
+        }
+        "checks_ended" => format!(
+            "las comprobaciones de Tinto no pasaron (si alguna falló, lanza implementation: sus instrucciones ya llevan la salida de cada fallo): {detail}"
+        ),
         "job_cancelled" => format!("la etapa {stage} se canceló"),
         "job_interrupted" if detail.is_empty() => format!("la etapa {stage} se interrumpió"),
         "job_interrupted" => format!("la etapa {stage} se interrumpió al cerrarse Tinto; {detail}"),
