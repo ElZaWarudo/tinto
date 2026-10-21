@@ -3966,9 +3966,97 @@ impl super::jira::Jira for FakeJira {
                 ));
                 Ok(json!({"id": 1}))
             }
+            ("GET", path) if path.starts_with("/rest/api/2/issue/AGOS-455?fields=summary,") => {
+                assert!(path.ends_with("&expand=renderedFields"), "{path}");
+                Ok(json!({
+                    "key": "AGOS-455",
+                    "fields": {
+                        "summary": "Exportar facturas",
+                        "status": {"name": *status},
+                        "issuetype": {"name": "Historia"},
+                        "priority": {"name": "Alta"},
+                        "assignee": {"displayName": "Ana"},
+                        "reporter": null,
+                        "labels": ["facturas"],
+                        "parent": {"key": "AGOS-400", "fields": {"summary": "Facturación"}},
+                        "issuelinks": [
+                            {"type": {"inward": "is blocked by", "outward": "blocks"},
+                             "inwardIssue": {"key": "AGOS-12", "fields": {"summary": "API", "status": {"name": "Cerrada"}}}}
+                        ],
+                        "comment": {"comments": [
+                            {"author": {"displayName": "Luis"}, "created": "2026-10-20T10:00:00.000+0200", "body": "*hecho*"}
+                        ]}
+                    },
+                    "renderedFields": {
+                        "description": "<p>Exporta <b>CSV</b></p>",
+                        "comment": {"comments": [{"body": "<p><b>hecho</b></p>"}]}
+                    }
+                }))
+            }
+            ("GET", path) if path.starts_with("/rest/api/2/issue/AGOS-404?") => Err(
+                super::DeliveryError::new("jira_failed", "Jira respondió 404 Not Found"),
+            ),
             other => panic!("unexpected Jira call {other:?}"),
         }
     }
+}
+
+#[test]
+fn tinto_reads_a_tasks_issue_from_the_repos_jira() {
+    let h = harness();
+    let task = h.task("AGOS-455");
+    let missing = h.task("AGOS-404");
+    h.service.set_jira(Arc::new(FakeJira {
+        status: std::sync::Mutex::new("En ejecución".into()),
+        workflow: Vec::new(),
+        writes: std::sync::Mutex::new(Vec::new()),
+    }));
+
+    let unset = h.service.issue(&task.id).unwrap_err();
+    assert_eq!(unset.category, "jira_not_configured");
+
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.jira = Some(super::model::DeliveryJiraSettings {
+        host: "https://jira.test".into(),
+        project: "AGOS".into(),
+        after_pr: Vec::new(),
+        after_merge: Vec::new(),
+        has_token: false,
+    });
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+    drop(store);
+    // A host without a token cannot read it either.
+    assert_eq!(
+        h.service.issue(&task.id).unwrap_err().category,
+        "jira_not_configured"
+    );
+    h.service.set_jira_token(h.repo.path(), "secret").unwrap();
+
+    let issue = h.service.issue(&task.id).unwrap();
+    assert_eq!(
+        serde_json::to_value(&issue).unwrap(),
+        json!({
+            "key": "AGOS-455",
+            "url": "https://jira.test/browse/AGOS-455",
+            "summary": "Exportar facturas",
+            "status": "En ejecución",
+            "type": "Historia",
+            "priority": "Alta",
+            "assignee": "Ana",
+            "reporter": null,
+            "labels": ["facturas"],
+            "parent": {"key": "AGOS-400", "summary": "Facturación"},
+            "links": [{"type": "is blocked by", "key": "AGOS-12", "summary": "API", "status": "Cerrada"}],
+            "description_html": "<p>Exporta <b>CSV</b></p>",
+            "comments": [{"author": "Luis", "created": "2026-10-20T10:00:00.000+0200", "body_html": "<p><b>hecho</b></p>"}]
+        })
+    );
+
+    // What Jira refuses reaches the user as Jira said it.
+    let refused = h.service.issue(&missing.id).unwrap_err();
+    assert_eq!(refused.category, "jira_failed");
+    assert!(refused.message.contains("404"), "{}", refused.message);
 }
 
 #[test]

@@ -22,6 +22,7 @@ const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
   getDeliveryTaskChanges: vi.fn(),
   getDeliveryIssueUrl: vi.fn((): Promise<string | null> => Promise.resolve(null)),
+  getDeliveryIssue: vi.fn(),
   openDeliveryVisualRecord: vi.fn(),
   openDeliveryUrl: vi.fn(() => Promise.resolve()),
   pauseDeliveryJob: vi.fn(),
@@ -661,17 +662,23 @@ describe("DeliveryPanel", () => {
     expect(client.getDeliveryTaskChanges).toHaveBeenCalledWith("t1");
   });
 
-  it("links the task to its Jira issue by its title when Tinto knows the host", async () => {
+  it("shows the task's Jira issue over the task when Tinto knows the host", async () => {
     client.getDeliveryOverview.mockResolvedValue(overview());
     client.getDeliveryIssueUrl.mockResolvedValue("https://jira.example.com/browse/AGOS-501");
+    client.getDeliveryIssue.mockRejectedValue({ message: "falta el token de Jira" });
     renderPanel();
-    const link = await screen.findByRole("link", { name: "Abrir AGOS-501 en Jira" });
-    expect(link).toHaveAttribute("href", "https://jira.example.com/browse/AGOS-501");
-    expect(link).toHaveTextContent("Jira");
+    const button = await screen.findByRole("button", { name: "Ver AGOS-501 de Jira" });
+    expect(button).toHaveTextContent("Jira");
     expect(client.getDeliveryIssueUrl).toHaveBeenCalledWith("t1");
-    // The webview would not follow it: the system's browser opens it.
-    await userEvent.click(link);
+    await userEvent.click(button);
+    const card = screen.getByRole("dialog", { name: "Incidencia AGOS-501 de Jira" });
+    expect(client.getDeliveryIssue).toHaveBeenCalledWith("t1");
+    expect(await within(card).findByRole("alert")).toHaveTextContent("falta el token de Jira");
+    // The full page is still there; the system's browser opens it.
+    await userEvent.click(within(card).getByRole("link", { name: "Abrir en Jira ↗" }));
     expect(client.openDeliveryUrl).toHaveBeenCalledWith("https://jira.example.com/browse/AGOS-501");
+    await userEvent.click(within(card).getByRole("button", { name: "Cerrar la incidencia" }));
+    expect(screen.queryByRole("dialog", { name: /Incidencia/ })).toBeNull();
   });
 
   it("changes who runs a stage from now on in the repo, from its card", async () => {

@@ -641,6 +641,66 @@
   border: 1px solid var(--border);
   background: var(--bg);
 }
+/* A task's Jira issue, read in Tinto. */
+.delivery-issue {
+  padding: 10px 14px 14px;
+  font-size: 13px;
+}
+.delivery-issue h3 {
+  margin: 4px 36px 6px 0;
+  font-size: 14px;
+}
+.delivery-issue h4 {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.delivery-issue__page {
+  font-size: 12px;
+}
+.delivery-issue__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 6px 12px;
+  margin: 10px 0 0;
+}
+.delivery-issue__facts dt {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.delivery-issue__facts dd {
+  margin: 0;
+}
+.delivery-issue__links {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+.delivery-issue__status,
+.delivery-issue__empty,
+.delivery-issue__loading {
+  color: var(--fg-muted);
+}
+.delivery-issue__error {
+  color: var(--danger);
+}
+.delivery-issue__html {
+  overflow-wrap: anywhere;
+}
+.delivery-issue__html img {
+  max-width: 100%;
+}
+.delivery-issue__html pre {
+  overflow: auto;
+}
+.delivery-issue__comment {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.delivery-issue__comment header {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
 .delivery-qa-problems__head {
   display: flex;
   flex-wrap: wrap;

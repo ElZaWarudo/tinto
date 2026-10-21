@@ -4,6 +4,7 @@
 //! statuses for after the PR and after the merge) in Tinto; the token is
 //! stored apart from the settings and never leaves Tinto.
 
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::service::DeliveryService;
@@ -186,6 +187,129 @@ pub fn run_step(
     Ok(done.join(". "))
 }
 
+/// A task's issue as Tinto shows it: the fields that matter to the work,
+/// and its description and last comments as the HTML Jira renders.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DeliveryIssue {
+    pub key: String,
+    pub url: String,
+    pub summary: String,
+    pub status: String,
+    #[serde(rename = "type")]
+    pub issue_type: String,
+    pub priority: Option<String>,
+    pub assignee: Option<String>,
+    pub reporter: Option<String>,
+    pub labels: Vec<String>,
+    pub parent: Option<DeliveryIssueParent>,
+    pub links: Vec<DeliveryIssueLink>,
+    pub description_html: String,
+    pub comments: Vec<DeliveryIssueComment>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DeliveryIssueParent {
+    pub key: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DeliveryIssueLink {
+    /// How the other issue relates to this one: "blocks", "is blocked by"…
+    #[serde(rename = "type")]
+    pub link_type: String,
+    pub key: String,
+    pub summary: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DeliveryIssueComment {
+    pub author: String,
+    /// When it was written, as Jira gives it (ISO 8601).
+    pub created: String,
+    pub body_html: String,
+}
+
+/// How many comments the issue view keeps: the newest ones.
+const ISSUE_COMMENTS: usize = 10;
+
+/// The issue from Jira's answer to `GET /rest/api/2/issue/{key}` with
+/// `expand=renderedFields`.
+fn issue_from(key: &str, url: String, issue: &Value) -> DeliveryIssue {
+    let fields = &issue["fields"];
+    let rendered = &issue["renderedFields"];
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
+    let person = |value: &Value| {
+        value["displayName"]
+            .as_str()
+            .or(value["name"].as_str())
+            .map(str::to_string)
+    };
+    let links = fields["issuelinks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|link| {
+            let (other, link_type) = if link["outwardIssue"].is_object() {
+                (&link["outwardIssue"], &link["type"]["outward"])
+            } else if link["inwardIssue"].is_object() {
+                (&link["inwardIssue"], &link["type"]["inward"])
+            } else {
+                return None;
+            };
+            Some(DeliveryIssueLink {
+                link_type: text(link_type),
+                key: text(&other["key"]),
+                summary: text(&other["fields"]["summary"]),
+                status: text(&other["fields"]["status"]["name"]),
+            })
+        })
+        .collect();
+    let empty = Vec::new();
+    let comments = fields["comment"]["comments"].as_array().unwrap_or(&empty);
+    let rendered_comments = rendered["comment"]["comments"].as_array().unwrap_or(&empty);
+    let comments = comments
+        .iter()
+        .enumerate()
+        .skip(comments.len().saturating_sub(ISSUE_COMMENTS))
+        .map(|(index, comment)| DeliveryIssueComment {
+            author: person(&comment["author"]).unwrap_or_default(),
+            created: text(&comment["created"]),
+            body_html: rendered_comments
+                .get(index)
+                .and_then(|rendered| rendered["body"].as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| text(&comment["body"])),
+        })
+        .collect();
+    DeliveryIssue {
+        key: issue["key"].as_str().unwrap_or(key).to_string(),
+        url,
+        summary: text(&fields["summary"]),
+        status: text(&fields["status"]["name"]),
+        issue_type: text(&fields["issuetype"]["name"]),
+        priority: fields["priority"]["name"].as_str().map(str::to_string),
+        assignee: person(&fields["assignee"]),
+        reporter: person(&fields["reporter"]),
+        labels: fields["labels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|label| label.as_str().map(str::to_string))
+            .collect(),
+        parent: fields["parent"]["key"]
+            .as_str()
+            .map(|parent| DeliveryIssueParent {
+                key: parent.to_string(),
+                summary: text(&fields["parent"]["fields"]["summary"]),
+            }),
+        links,
+        description_html: text(&rendered["description"]),
+        comments,
+    }
+}
+
 impl DeliveryService {
     pub fn set_jira(&self, jira: std::sync::Arc<dyn Jira>) {
         if let Ok(mut slot) = self.inner.jira.lock() {
@@ -252,6 +376,24 @@ impl DeliveryService {
             .or(me["name"].as_str())
             .unwrap_or("usuario sin nombre")
             .to_string())
+    }
+
+    /// The task's issue, read from the repo's Jira set in Tinto.
+    pub fn issue(&self, task_id: &str) -> Result<DeliveryIssue, DeliveryError> {
+        let task = self.task(task_id)?;
+        let site = self.jira_site(&task.repo)?.ok_or_else(|| {
+            DeliveryError::new(
+                "jira_not_configured",
+                "falta el host o el token de Jira de este repositorio: ponlos en Ajustes para leer la incidencia en Tinto",
+            )
+        })?;
+        let path = format!(
+            "/rest/api/2/issue/{}?fields=summary,status,issuetype,priority,assignee,reporter,labels,description,comment,parent,issuelinks&expand=renderedFields",
+            task.key
+        );
+        let issue = self.jira_client().call(&site, "GET", &path, None)?;
+        let url = format!("{}/browse/{}", site.host, task.key);
+        Ok(issue_from(&task.key, url, &issue))
     }
 }
 

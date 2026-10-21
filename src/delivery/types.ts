@@ -600,3 +600,20 @@ export interface DeliveryArchivedTask {
   pr_number: number | null;
   pr_url: string | null;
 }
+
+/** A task's Jira issue as Tinto reads it; the HTML is Jira's, not yet sanitized. */
+export interface DeliveryIssue {
+  key: string;
+  url: string;
+  summary: string;
+  status: string;
+  type: string;
+  priority: string | null;
+  assignee: string | null;
+  reporter: string | null;
+  labels: string[];
+  parent: { key: string; summary: string } | null;
+  links: { type: string; key: string; summary: string; status: string }[];
+  description_html: string;
+  comments: { author: string; created: string; body_html: string }[];
+}

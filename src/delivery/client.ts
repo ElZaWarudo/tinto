@@ -10,6 +10,7 @@ import type {
   DeliveryArchivedTask,
   DeliveryCommit,
   DeliveryCommitDraft,
+  DeliveryIssue,
   DeliveryConversation,
   DeliveryTaskChanges,
   DeliveryDecision,
@@ -126,6 +127,10 @@ export const getDeliveryTaskChanges = (taskId: string) =>
 /** The task's Jira issue page, from the repo's Jira in Tinto or the skill's jira.env. */
 export const getDeliveryIssueUrl = (taskId: string) =>
   invoke<string | null>("delivery_issue_url", { taskId });
+
+/** The task's Jira issue, read from the repo's Jira in Tinto. */
+export const getDeliveryIssue = (taskId: string) =>
+  invoke<DeliveryIssue>("delivery_issue", { taskId });
 
 /** Opens a web page (Jira issue, PR) in the system's browser. */
 export const openDeliveryUrl = (url: string) => invoke<void>("delivery_open_url", { url });
