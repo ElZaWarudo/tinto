@@ -25,7 +25,7 @@ use super::model::{
     DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
     NewBlocker,
 };
-use super::phase::{current_checks, current_setup, is_broken, last_change};
+use super::phase::{current_checks, current_setup, has_open_findings, is_broken, last_change};
 use super::prs::{self, GitHub};
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
@@ -1948,10 +1948,12 @@ impl DeliveryService {
                 && other.undone_at_ms.is_none()
         });
         let open = jobs.iter().any(|other| other.status.is_open());
-        if open || !is_broken(&job) || latest.map(|latest| &latest.id) != Some(&job.id) {
+        // A stage that broke, or one whose findings are accepted as they are.
+        let settleable = is_broken(&job) || has_open_findings(&job);
+        if open || !settleable || latest.map(|latest| &latest.id) != Some(&job.id) {
             return Err(DeliveryError::new(
                 "resolve_unavailable",
-                "solo se da por resuelta la última etapa de la tarea cuando falló, se bloqueó o se interrumpió y no hay trabajos abiertos",
+                "solo se da por resuelta la última etapa de la tarea cuando falló, se bloqueó, se interrumpió o dejó hallazgos, y no hay trabajos abiertos",
             ));
         }
         job.resolved_at_ms = Some(now_ms());

@@ -245,7 +245,17 @@ export function attemptOutcome(
       : { tone: "waiting", label: "En pausa" };
   }
   if (job.status === "cancelled") return { tone: "idle", label: "Cancelado" };
-  if (job.resolved_at_ms && isLive(job)) return { tone: "ok", label: "Resuelta aparte" };
+  if (job.resolved_at_ms && isLive(job)) {
+    // Findings accepted as they are, or a broken stage done another way.
+    const findings = job.result?.status === "findings" ? job.result.findings.length : 0;
+    if (findings > 0) {
+      return {
+        tone: "ok",
+        label: `${findings === 1 ? "1 hallazgo" : `${findings} hallazgos`} · aceptados`,
+      };
+    }
+    return { tone: "ok", label: "Resuelta aparte" };
+  }
   if (job.status === "interrupted") return { tone: "danger", label: "Interrumpido" };
   if (job.status === "failed") return { tone: "danger", label: "Falló" };
   if (job.result_state === "stale") return { tone: "idle", label: "Obsoleto" };

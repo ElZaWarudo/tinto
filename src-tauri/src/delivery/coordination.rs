@@ -993,6 +993,20 @@ impl DeliveryService {
         if !republish {
             rung_prerequisites(&task, request.rung)?;
         }
+        // The coordinator commits only settled work: findings are fixed or
+        // accepted first. The user may commit as they judge.
+        if request.rung == DeliveryRung::Commit && request.requested_by != "user" {
+            let jobs = self.store()?.task_jobs(&task.id)?;
+            let jobs: Vec<&super::model::DeliveryJob> = jobs.iter().collect();
+            if let Some(why) = super::phase::commit_blocker(&jobs) {
+                return Err(DeliveryError::new(
+                    "stages_unsettled",
+                    format!(
+                        "{why}: arréglalos con una etapa de implementation, o acéptalos con resolve_job y una nota que diga por qué no bloquean; después pide el commit"
+                    ),
+                ));
+            }
+        }
         let mut title = request.title.trim().to_string();
         let mut body = request.body.clone();
         let mut commits = Vec::new();
