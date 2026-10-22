@@ -253,6 +253,9 @@ pub fn run() {
             agent_console::commands::list_agent_journal_sessions,
             agent_console::commands::get_agent_journal_session,
             agent_console::commands::resume_agent_journal_session,
+            agent_console::commands::restore_live_agent_sessions,
+            agent_console::commands::restart_plan,
+            agent_console::commands::restart_tinto,
             agent_console::commands::branch_agent_session_from_message,
             agent_console::commands::delete_agent_journal_session,
             agent_console::commands::agent_binary_available,
@@ -305,6 +308,8 @@ pub fn run() {
                     app.handle().clone(),
                     delivery_for_setup.clone(),
                 );
+                // Jobs that outlived the last Tinto go on where they are.
+                delivery_for_setup.follow_running();
                 delivery_for_setup.tick();
                 // Stopping what WSL jobs left can take a while: not on startup's path.
                 let retrying = delivery_for_setup.clone();

@@ -317,6 +317,10 @@ pub struct DeliveryJob {
     pub started_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
     pub pid: Option<u32>,
+    /// When the job's process started, as the system tells it: a restarted
+    /// Tinto adopts the process with `pid` only while this still matches.
+    #[serde(default)]
+    pub process_started: Option<String>,
     /// Codex thread id or Claude session id, for "Abrir en Agents".
     pub provider_session_id: Option<String>,
     pub exit_code: Option<i32>,

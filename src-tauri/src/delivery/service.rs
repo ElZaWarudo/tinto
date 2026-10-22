@@ -6,9 +6,9 @@
 //! exits. There are no turns.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use super::adapters::{self, JobLaunch, JobOutcome, JobPaths};
 use super::decisions;
 use super::environment::{self, DeliveryEnvironmentCheck};
+use super::job_process::{self, JobProcess};
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
@@ -66,6 +67,8 @@ fn catalog_setting(agent: DeliveryAgent) -> Option<&'static str> {
 
 /// Written next to a WSL job's files so a restart can stop what is left.
 const WSL_JOB_FILE: &str = "wsl-job.json";
+/// What the job's process reads as its input.
+const STDIN_FILE: &str = "stdin.txt";
 /// How long a WSL job gets to exit after `TERM` before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
@@ -120,6 +123,12 @@ pub(super) struct Inner {
     /// queues again (see [`DeliveryService::retry_interrupted`]), with what
     /// is left of each in WSL.
     restart_retries: Mutex<Vec<(String, Option<adapters::WslJob>)>>,
+    /// Jobs whose process outlived the last Tinto, which this one follows
+    /// once the app is wired (see [`DeliveryService::follow_running`]).
+    adopted: Mutex<Vec<String>>,
+    /// Tests set it to stand for Tinto closing: its jobs keep running and
+    /// nothing follows them any more.
+    closed: AtomicBool,
     notify: Mutex<Option<Notify>>,
     /// Counts every change; wait_run sleeps on it until the next one.
     pub(super) changes: (Mutex<u64>, Condvar),
@@ -211,6 +220,47 @@ struct Ending {
     timed_out: bool,
     /// The process ran, so an exclusive resource may be in an unknown state.
     touched: bool,
+}
+
+/// Reads a job's output file as its process writes it, a whole line at a
+/// time.
+#[derive(Default)]
+struct EventsTail {
+    offset: u64,
+    /// The start of a line still being written.
+    partial: Vec<u8>,
+}
+
+impl EventsTail {
+    /// The lines written whole since the last read.
+    fn read(&mut self, path: &Path) -> Vec<String> {
+        let Ok(mut file) = std::fs::File::open(path) else {
+            return Vec::new();
+        };
+        let mut bytes = Vec::new();
+        if file.seek(SeekFrom::Start(self.offset)).is_err() || file.read_to_end(&mut bytes).is_err()
+        {
+            return Vec::new();
+        }
+        self.offset += bytes.len() as u64;
+        self.partial.extend(bytes);
+        let Some(end) = self.partial.iter().rposition(|byte| *byte == b'\n') else {
+            return Vec::new();
+        };
+        let whole: Vec<u8> = self.partial.drain(..=end).collect();
+        String::from_utf8_lossy(&whole)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The last line, once the process ended without closing it.
+    fn rest(self) -> Option<String> {
+        let line = String::from_utf8_lossy(&self.partial)
+            .trim_end()
+            .to_string();
+        (!line.is_empty()).then_some(line)
+    }
 }
 
 impl DeliveryService {
@@ -385,6 +435,8 @@ impl DeliveryService {
                 cancels: Mutex::new(HashMap::new()),
                 pausing: Mutex::new(HashSet::new()),
                 restart_retries: Mutex::new(Vec::new()),
+                adopted: Mutex::new(Vec::new()),
+                closed: AtomicBool::new(false),
                 notify: Mutex::new(None),
                 changes: (Mutex::new(0), Condvar::new()),
                 waiting: Mutex::new(HashMap::new()),
@@ -435,17 +487,28 @@ impl DeliveryService {
         })
     }
 
-    /// Jobs that were running when Tinto stopped died with it (KTD9). They
-    /// become `interrupted` and any resource they held is quarantined until
-    /// the user releases it. With "Reintentar al reiniciar" in their repo,
-    /// the ones safe to repeat are queued again once the app is wired.
+    /// A job's process outlives Tinto: the jobs still running when it
+    /// starts again are adopted, and so are those whose agent delivered its
+    /// result while Tinto was closed; they end as any other. The rest died
+    /// (KTD9): they become `interrupted` and any resource they held is
+    /// quarantined until the user releases it. With "Reintentar al
+    /// reiniciar" in their repo, the ones safe to repeat are queued again
+    /// once the app is wired.
     fn reconcile(&self) -> Result<(), DeliveryError> {
         let store = self.store()?;
         let now = now_ms();
         let mut leftovers = Vec::new();
         let mut retries = Vec::new();
+        let mut adopted = Vec::new();
         for mut job in store.jobs()? {
             if !job.status.is_active() {
+                continue;
+            }
+            if self.outlived_tinto(&job) {
+                if let Ok(mut cancels) = self.inner.cancels.lock() {
+                    cancels.insert(job.id.clone(), Arc::new(AtomicBool::new(false)));
+                }
+                adopted.push(job.id);
                 continue;
             }
             let retry_on_restart = match store.task(&job.task_id)? {
@@ -492,6 +555,9 @@ impl DeliveryService {
         if let Ok(mut slot) = self.inner.restart_retries.lock() {
             *slot = retries;
         }
+        if let Ok(mut slot) = self.inner.adopted.lock() {
+            *slot = adopted;
+        }
         // WSL jobs outlive Tinto; stop what is left without delaying startup.
         if !leftovers.is_empty() {
             std::thread::spawn(move || {
@@ -501,6 +567,69 @@ impl DeliveryService {
             });
         }
         Ok(())
+    }
+
+    /// Whether a job Tinto had running when it closed goes on: its process
+    /// still runs, or its agent delivered its result meanwhile.
+    fn outlived_tinto(&self, job: &DeliveryJob) -> bool {
+        let (DeliveryJobStatus::Started, Some(pid), Some(started)) =
+            (job.status, job.pid, job.process_started.as_deref())
+        else {
+            return false;
+        };
+        if job_process::alive(pid, started) {
+            return true;
+        }
+        let Ok(paths) = (self.inner.paths_for)(&job.id) else {
+            return false;
+        };
+        let events = std::fs::read_to_string(&paths.events).unwrap_or_default();
+        let result = std::fs::read_to_string(&paths.result).ok();
+        job.agent != DeliveryAgent::Shell
+            && adapters::read_outcome(job.agent, &events, result.as_deref())
+                .result
+                .is_some()
+    }
+
+    /// Follows, each in its thread, the jobs that outlived the last Tinto.
+    /// Called once the app is wired.
+    pub fn follow_running(&self) {
+        let adopted = self
+            .inner
+            .adopted
+            .lock()
+            .map(|mut slot| std::mem::take(&mut *slot))
+            .unwrap_or_default();
+        for job_id in adopted {
+            let service = self.clone();
+            std::thread::spawn(move || service.end_job(&job_id, service.follow_adopted(&job_id)));
+        }
+    }
+
+    /// The jobs running now, each with its task's key: closing Tinto leaves
+    /// them running.
+    pub fn running_jobs(&self) -> Result<Vec<(String, DeliveryJob)>, DeliveryError> {
+        let store = self.store()?;
+        let mut running = Vec::new();
+        for job in store
+            .jobs()?
+            .into_iter()
+            .filter(|job| job.status.is_active())
+        {
+            let key = store
+                .task(&job.task_id)?
+                .map(|task| task.key)
+                .unwrap_or_default();
+            running.push((key, job));
+        }
+        Ok(running)
+    }
+
+    /// Stands for Tinto closing, in tests: its jobs keep running and
+    /// nothing in this service follows them any more.
+    #[cfg(test)]
+    pub fn close(&self) {
+        self.inner.closed.store(true, Ordering::SeqCst);
     }
 
     pub fn overview(&self) -> Result<DeliveryOverview, DeliveryError> {
@@ -1373,6 +1502,7 @@ impl DeliveryService {
             started_at_ms: None,
             ended_at_ms: None,
             pid: None,
+            process_started: None,
             // A resumed job goes on in the paused job's session.
             provider_session_id: resumes.and_then(|paused| paused.provider_session_id.clone()),
             exit_code: None,
@@ -2014,7 +2144,14 @@ impl DeliveryService {
     // ---- running a job ----
 
     fn run_job(&self, job_id: &str) {
-        let outcome = self.run_job_inner(job_id);
+        self.end_job(job_id, self.run_job_inner(job_id));
+    }
+
+    /// What follows a job's run, however it went: the next jobs start.
+    fn end_job(&self, job_id: &str, outcome: Result<(), DeliveryError>) {
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return;
+        }
         if let Err(error) = outcome {
             let _ = self.finish_failed(job_id, &error.message);
         }
@@ -2072,35 +2209,31 @@ impl DeliveryService {
             }
         }
         let launch = (self.inner.launcher)(&job, &task, &paths)?;
+        // The process writes its output straight to the job's files and
+        // reads its input from one, so it outlives Tinto: a restart adopts
+        // it (see `reconcile`).
+        let stdin_path = paths.dir.join(STDIN_FILE);
+        std::fs::write(&stdin_path, &launch.stdin).map_err(DeliveryError::io)?;
         let mut command = Command::new(&launch.program);
         // The repo's variables for checks reach every command the agent
         // runs; a WSL job exports them in its script instead.
         command
             .args(&launch.args)
             .envs(&job.check_env)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdin(std::fs::File::open(&stdin_path).map_err(DeliveryError::io)?)
+            .stdout(std::fs::File::create(&paths.events).map_err(DeliveryError::io)?)
+            .stderr(std::fs::File::create(&paths.stderr).map_err(DeliveryError::io)?);
         if let Some(cwd) = &launch.cwd {
             command.current_dir(cwd);
         }
-        #[cfg(target_os = "windows")]
-        crate::windows_process::hide_console(&mut command);
-        // Its own group, so stopping the job reaches what it starts: `codex`
-        // installed with npm is a Node script that runs the native binary.
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command.spawn().map_err(|error| {
+        // In a group of its own, so stopping the job reaches what it starts:
+        // `codex` installed with npm is a Node script that runs the binary.
+        let process = JobProcess::spawn(&mut command).map_err(|error| {
             DeliveryError::new(
                 "spawn_failed",
                 format!("no se pudo iniciar {}: {error}", launch.program.display()),
             )
         })?;
-        #[cfg(target_os = "windows")]
-        let process_tree = crate::windows_process::KillOnCloseJob::attach(&child).ok();
         if let Some(wsl_job) = &launch.wsl_job {
             if let Ok(data) = serde_json::to_vec(wsl_job) {
                 let _ = std::fs::write(paths.dir.join(WSL_JOB_FILE), data);
@@ -2114,7 +2247,8 @@ impl DeliveryService {
                 .ok_or_else(|| DeliveryError::not_found("el trabajo", &job.id))?;
             current.status = DeliveryJobStatus::Started;
             current.started_at_ms = Some(now_ms());
-            current.pid = Some(child.id());
+            current.pid = Some(process.pid());
+            current.process_started = process.started();
             current.provider_session_id = launch.provider_session_id.clone();
             current.ran_on = Some(ran_on(&launch));
             current.frozen_scripts = job.frozen_scripts.clone();
@@ -2130,65 +2264,93 @@ impl DeliveryService {
                 Some(&job.id),
                 "",
             )?;
+            job = current;
         }
         self.notify();
+        self.follow(job, task, paths, start, process, launch.wsl_job, false)
+    }
 
-        if let Some(mut stdin) = child.stdin.take() {
-            let input = launch.stdin.clone();
-            std::thread::spawn(move || {
-                let _ = stdin.write_all(input.as_bytes());
-            });
-        }
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let events_path = paths.events.clone();
+    /// Follows a job that a restart found still running, or that ended
+    /// while Tinto was closed, until it ends as any other.
+    fn follow_adopted(&self, job_id: &str) -> Result<(), DeliveryError> {
+        let job = self.job(job_id)?;
+        let task = self.task(&job.task_id)?;
+        let paths = (self.inner.paths_for)(&job.id)?;
+        let start = self.store()?.start_snapshot(&job.id)?;
+        let pid = job.pid.unwrap_or_default();
+        let process = job
+            .process_started
+            .as_deref()
+            .and_then(|started| JobProcess::adopt(pid, started))
+            .unwrap_or_else(|| JobProcess::ended(pid));
+        let wsl_job = std::fs::read(paths.dir.join(WSL_JOB_FILE))
+            .ok()
+            .and_then(|data| serde_json::from_slice::<adapters::WslJob>(&data).ok());
+        self.follow(job, task, paths, start, process, wsl_job, true)
+    }
+
+    /// Reads a running job's output as it grows, stops it when it is
+    /// cancelled or its time runs out, and evaluates it once it ends.
+    #[allow(clippy::too_many_arguments)]
+    fn follow(
+        &self,
+        job: DeliveryJob,
+        task: DeliveryTask,
+        paths: JobPaths,
+        start: Option<WorktreeSnapshot>,
+        mut process: JobProcess,
+        wsl_job: Option<adapters::WslJob>,
+        adopted: bool,
+    ) -> Result<(), DeliveryError> {
         let agent = job.agent;
-        let session_known = launch.provider_session_id.is_some();
-        let service = self.clone();
-        let stdout_job = job.id.clone();
-        let stdout_reader = std::thread::spawn(move || {
-            let mut clock = adapters::JobClock::default();
-            let Some(stdout) = stdout else { return clock };
-            let Ok(mut file) = std::fs::File::create(&events_path) else {
-                return clock;
-            };
-            let mut session_recorded = session_known;
-            // A Claude session says in its first event which model it runs,
-            // so the view names it even when the job asked for the default.
-            let mut model_recorded = agent != DeliveryAgent::Claude;
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                let _ = writeln!(file, "{line}");
+        let mut events = EventsTail::default();
+        let mut clock = adapters::JobClock::default();
+        let mut session_recorded = job.provider_session_id.is_some();
+        // A Claude session says in its first event which model it runs,
+        // so the view names it even when the job asked for the default.
+        let mut model_recorded = agent != DeliveryAgent::Claude || job.session_model.is_some();
+        // After a restart the first read takes in what the job wrote while
+        // Tinto was closed; the command it runs keeps its start.
+        let mut kept_command = adopted
+            .then(|| job.current_command.clone().zip(job.current_command_at_ms))
+            .flatten();
+        let mut read_events = |lines: Vec<String>| {
+            let mut seen = adapters::Observation::default();
+            for line in lines {
                 if !session_recorded {
                     if let Some(id) = adapters::session_id_from_line(agent, &line) {
                         session_recorded = true;
-                        service.record_session_id(&stdout_job, id);
+                        self.record_session_id(&job.id, id);
                     }
                 }
                 if !model_recorded {
                     if let Some(model) = adapters::claude_init_model(&line) {
                         model_recorded = true;
-                        service.record_model(&stdout_job, model);
+                        self.record_model(&job.id, model);
                     }
                 }
-                // Agents write one line per message or tool call, so each
-                // is saved: the view always knows when the agent last did
-                // something, and which command it waits on.
-                let mut seen = adapters::observe(agent, &line);
-                seen.command = clock.line(agent, &line, now_ms());
-                if seen != adapters::Observation::default() {
-                    service.record_observation(&stdout_job, seen);
+                // Agents write one line per message or tool call: the view
+                // always knows when the agent last did something, and
+                // which command it waits on.
+                let one = adapters::observe(agent, &line);
+                seen.activity = one.activity.or(seen.activity.take());
+                seen.plan = one.plan.or(seen.plan.take());
+                seen.usage = one.usage.or(seen.usage.take());
+                if let Some(command) = clock.line(agent, &line, now_ms()) {
+                    seen.command = Some(command);
                 }
             }
-            clock
-        });
-        let stderr_path = paths.stderr.clone();
-        let stderr_reader = std::thread::spawn(move || {
-            let Some(mut stderr) = stderr else { return };
-            let mut buffer = Vec::new();
-            let _ = stderr.read_to_end(&mut buffer);
-            let _ = std::fs::write(&stderr_path, buffer);
-        });
+            if let (Some(kept), Some(Some((command, at)))) =
+                (kept_command.take(), &mut seen.command)
+            {
+                if kept.0 == *command {
+                    *at = kept.1;
+                }
+            }
+            if seen != adapters::Observation::default() {
+                self.record_observation(&job.id, seen);
+            }
+        };
 
         let cancel = self
             .inner
@@ -2197,27 +2359,32 @@ impl DeliveryService {
             .ok()
             .and_then(|cancels| cancels.get(&job.id).cloned())
             .unwrap_or_default();
-        let deadline = Instant::now() + Duration::from_secs(u64::from(job.timeout_minutes) * 60);
+        let deadline_ms =
+            job.started_at_ms.unwrap_or_else(now_ms) + u64::from(job.timeout_minutes) * 60_000;
         let mut cancelled = false;
         let mut timed_out = false;
         // When the job is being stopped: kill it outright once this passes.
         let mut kill_at: Option<Instant> = None;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
+        let exited = loop {
+            if self.inner.closed.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            read_events(events.read(&paths.events));
+            match process.try_wait() {
+                Ok(Some(exited)) => break Some(exited),
                 Ok(None) => {}
                 Err(_) => break None,
             }
             if !cancelled && !timed_out {
                 if cancel.load(Ordering::SeqCst) {
                     cancelled = true;
-                } else if Instant::now() >= deadline {
+                } else if now_ms() >= deadline_ms {
                     timed_out = true;
                 }
                 if cancelled || timed_out {
                     // Closing `wsl.exe` would leave the Linux processes
                     // running, so a WSL job is asked to stop first.
-                    kill_at = Some(match &launch.wsl_job {
+                    kill_at = Some(match &wsl_job {
                         Some(wsl_job) => {
                             adapters::stop_wsl_job(wsl_job, "TERM");
                             Instant::now() + STOP_GRACE
@@ -2228,39 +2395,46 @@ impl DeliveryService {
             }
             if kill_at.is_some_and(|at| Instant::now() >= at) {
                 kill_at = None;
-                if let Some(wsl_job) = &launch.wsl_job {
+                if let Some(wsl_job) = &wsl_job {
                     adapters::stop_wsl_job(wsl_job, "KILL");
                 }
-                // Killing the child alone orphans what it started, among them
-                // the commands Codex runs in process groups of their own.
-                #[cfg(unix)]
-                let _ = crate::agent_console::pty::kill_process_tree(child.id());
-                let _ = child.kill();
-                #[cfg(target_os = "windows")]
-                if let Some(tree) = &process_tree {
-                    let _ = tree.kill_all();
-                }
+                process.kill_tree();
             }
             std::thread::sleep(Duration::from_millis(200));
         };
-        #[cfg(target_os = "windows")]
-        drop(process_tree);
-        let clock = stdout_reader.join().unwrap_or_default();
-        let _ = stderr_reader.join();
-        let timing = (job.agent != DeliveryAgent::Shell).then(|| clock.timing(now_ms()));
+        drop(process);
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let mut last = events.read(&paths.events);
+        last.extend(events.rest());
+        read_events(last);
+        let timing = (agent != DeliveryAgent::Shell).then(|| clock.timing(now_ms()));
 
         let events = std::fs::read_to_string(&paths.events).unwrap_or_default();
         let result_file = std::fs::read_to_string(&paths.result).ok();
-        let outcome = adapters::read_outcome(job.agent, &events, result_file.as_deref());
+        let mut outcome = adapters::read_outcome(agent, &events, result_file.as_deref());
         let end = match &start {
             Some(start) => {
                 Some(self.snapshot(&task, &format!("job-{}-end", job.id), Some(&start.tree))?)
             }
             None => None,
         };
+        // A command's exit code is its result; one Tinto could not learn
+        // after a restart counts as failed. An agent's result says itself.
+        let exit_ok = match exited {
+            Some(exited) => exited.success.unwrap_or(agent != DeliveryAgent::Shell),
+            None => false,
+        };
+        if exited.is_some_and(|exited| exited.success.is_none()) && agent == DeliveryAgent::Shell {
+            outcome.error = Some(
+                "Tinto se reinició mientras corría y no pudo saber cómo terminó; lánzalo de nuevo."
+                    .to_string(),
+            );
+        }
         let ending = Ending {
-            exit_ok: status.is_some_and(|status| status.success()),
-            exit_code: status.and_then(|status| status.code()),
+            exit_ok,
+            exit_code: exited.and_then(|exited| exited.code),
             cancelled,
             timed_out,
             // A job the user cancelled before it did more than read left
@@ -3139,7 +3313,7 @@ fn task_slug(key: &str) -> String {
         .collect()
 }
 
-pub(super) fn agent_name(agent: DeliveryAgent) -> &'static str {
+pub(crate) fn agent_name(agent: DeliveryAgent) -> &'static str {
     match agent {
         DeliveryAgent::Codex => "Codex",
         DeliveryAgent::Claude => "Claude Code",

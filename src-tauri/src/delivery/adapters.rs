@@ -2102,6 +2102,7 @@ pub(crate) mod tests {
             started_at_ms: None,
             ended_at_ms: None,
             pid: None,
+            process_started: None,
             provider_session_id: None,
             exit_code: None,
             error: None,

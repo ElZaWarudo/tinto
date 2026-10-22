@@ -17,6 +17,14 @@ pub struct AgentJournal {
     conn: Connection,
 }
 
+/// A conversation that was live when Tinto last closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveAgentSession {
+    pub id: String,
+    /// It was in the middle of a turn.
+    pub working: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentJournalError {
     #[error("no se pudo resolver el directorio de configuracion")]
@@ -138,6 +146,8 @@ impl AgentJournal {
         self.ensure_agent_sessions_column("subagents_json", "TEXT")?;
         self.ensure_agent_sessions_column("turn_checkpoints_json", "TEXT")?;
         self.ensure_agent_sessions_column("exit_code", "INTEGER")?;
+        self.ensure_agent_sessions_column("live", "INTEGER")?;
+        self.ensure_agent_sessions_column("turn_working", "INTEGER")?;
         Ok(())
     }
 
@@ -296,7 +306,44 @@ impl AgentJournal {
                 session.exit_code,
             ],
         )?;
+        // Whether it was live, and mid-turn, as Tinto last saw it: the
+        // conversations still live when Tinto starts again are resumed.
+        let live = matches!(
+            session.status,
+            AgentSessionStatus::Starting | AgentSessionStatus::Running
+        );
+        self.conn.execute(
+            "UPDATE agent_sessions SET live = ?2, turn_working = ?3 WHERE id = ?1",
+            params![
+                &session.id,
+                live,
+                live && session.turn_status == AgentSessionTurnStatus::Working
+            ],
+        )?;
         Ok(())
+    }
+
+    /// The conversations that were live when Tinto last closed, oldest
+    /// first. Each is taken once: its row is no longer live but ended.
+    pub fn take_live_sessions(&self) -> Result<Vec<LiveAgentSession>, AgentJournalError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, COALESCE(turn_working, 0) FROM agent_sessions
+             WHERE live = 1 AND ended_at_ms IS NULL ORDER BY started_at_ms",
+        )?;
+        let live = stmt
+            .query_map([], |row| {
+                Ok(LiveAgentSession {
+                    id: row.get(0)?,
+                    working: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        self.conn.execute(
+            "UPDATE agent_sessions SET live = 0, status = 'exited', ended_at_ms = updated_at_ms
+             WHERE live = 1 AND ended_at_ms IS NULL",
+            [],
+        )?;
+        Ok(live)
     }
 
     /// Restore the complete archived history atomically, without one commit per event.
@@ -805,6 +852,57 @@ mod tests {
             age_ms: 10,
             output_bytes_per_second: None,
         }
+    }
+
+    #[test]
+    fn the_conversations_live_when_tinto_closed_are_taken_once_with_their_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.sqlite");
+        {
+            let journal = AgentJournal::open(&path).unwrap();
+            journal.record_session(&session("idle")).unwrap();
+            let mut working = session("working");
+            working.started_at_ms = 150;
+            working.turn_status = AgentSessionTurnStatus::Working;
+            journal.record_session(&working).unwrap();
+            let mut stopped = session("stopped");
+            journal.record_session(&stopped).unwrap();
+            stopped.status = AgentSessionStatus::Exited;
+            stopped.ended_at_ms = Some(200);
+            journal.record_session(&stopped).unwrap();
+            // A row from before Tinto kept this is never taken as live.
+            journal
+                .conn
+                .execute(
+                    "INSERT INTO agent_sessions (id, repo, agent_type, status, started_at_ms, updated_at_ms)
+                     VALUES ('old', '/repo', 'codex', 'running', 1, 1)",
+                    [],
+                )
+                .unwrap();
+        }
+        let journal = AgentJournal::open(&path).unwrap();
+        assert_eq!(
+            journal.take_live_sessions().unwrap(),
+            vec![
+                LiveAgentSession {
+                    id: "idle".into(),
+                    working: false
+                },
+                LiveAgentSession {
+                    id: "working".into(),
+                    working: true
+                },
+            ]
+        );
+        assert!(journal.take_live_sessions().unwrap().is_empty());
+        assert_eq!(
+            journal
+                .session_from_journal("idle")
+                .unwrap()
+                .unwrap()
+                .status,
+            AgentSessionStatus::Exited
+        );
     }
 
     #[test]

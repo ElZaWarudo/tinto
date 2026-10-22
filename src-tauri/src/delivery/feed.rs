@@ -280,6 +280,22 @@ impl DeliveryService {
         Ok(())
     }
 
+    /// A coordinator's conversation resumed under another id (Tinto
+    /// restarted): its batches follow it, and it hears what it missed. Says
+    /// whether it coordinates any.
+    pub fn rebind_coordinator(&self, before: &str, after: &str) -> Result<bool, DeliveryError> {
+        let store = self.store()?;
+        let mut coordinates = false;
+        for mut run in store.runs()? {
+            if run.coordinator_session.as_deref() == Some(before) {
+                run.coordinator_session = Some(after.to_string());
+                store.put_run(&run)?;
+                coordinates = true;
+            }
+        }
+        Ok(coordinates)
+    }
+
     /// For each conversation that coordinates active batches: the changes
     /// it has not seen in those it is not waiting on inside wait_run, once
     /// they have been quiet for [`WAKE_QUIET_MS`]; one message for all its

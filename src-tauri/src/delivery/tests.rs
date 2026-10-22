@@ -921,28 +921,143 @@ fn results_from_superseded_attempts_or_older_contracts_are_stale() {
         .is_err());
 }
 
+/// Tinto closes and leaves its jobs running, as an update does.
+fn close_tinto(service: &DeliveryService) {
+    service.close();
+    // Its followers notice on their next look.
+    std::thread::sleep(Duration::from_millis(600));
+}
+
+/// Kills a job's process while Tinto is closed, as a reboot would.
+fn kill_job(service: &DeliveryService, job_id: &str) {
+    let job = service.job(job_id).unwrap();
+    let pid = job.pid.unwrap();
+    let _ = crate::agent_console::pty::kill_process_tree(pid);
+    wait_gone(&job);
+}
+
+fn wait_gone(job: &DeliveryJob) {
+    let (pid, started) = (job.pid.unwrap(), job.process_started.as_deref().unwrap());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while super::job_process::alive(pid, started) {
+        assert!(Instant::now() < deadline, "the job's process kept running");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Tinto starting again on the same state and job folders.
+fn reopen(path: &std::path::Path, h: &Harness) -> DeliveryService {
+    let jobs_dir = h._jobs.path().to_path_buf();
+    DeliveryService::with_parts(
+        DeliveryStore::open(path).unwrap(),
+        fake_launcher(),
+        Arc::new(move |id: &str| Ok(JobPaths::in_dir(jobs_dir.join(id)))),
+        CheckpointConfig::default(),
+    )
+    .unwrap()
+}
+
+fn wait_on(service: &DeliveryService, job_id: &str) -> DeliveryJob {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        let job = service.job(job_id).unwrap();
+        if !job.status.is_open() {
+            return job;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "job did not end: {:?}",
+            job.status
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 #[test]
-fn a_restart_marks_running_jobs_interrupted_and_quarantines_their_resource() {
+fn a_job_still_running_after_a_restart_is_adopted_and_ends_the_normal_way() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let task = h.task("K-20");
+    let job = h.dispatch(&task, "tests", "events=codex-ok touch=a.txt sleep=4");
+    let started = h.wait_status(&job.id, DeliveryJobStatus::Started);
+    assert!(started.process_started.is_some());
+    close_tinto(&h.service);
+
+    let restarted = reopen(&path, &h);
+    let adopted = restarted.job(&job.id).unwrap();
+    assert_eq!(adopted.status, DeliveryJobStatus::Started);
+    assert!(adopted.error.is_none());
+    restarted.follow_running();
+    let done = wait_on(&restarted, &job.id);
+    assert_eq!(done.status, DeliveryJobStatus::Finished, "{:?}", done.error);
+    assert_eq!(done.result_state, Some(DeliveryResultState::Accepted));
+    // What it wrote while Tinto was closed is read too.
+    assert!(done.usage.is_some());
+    assert_eq!(
+        done.provider_session_id.as_deref(),
+        Some("01a116a2-cd4d-7e31-a43d-b697759df531")
+    );
+    assert!(
+        done.changes.iter().any(|change| change.path == "a.txt"),
+        "{:?}",
+        done.changes
+    );
+}
+
+#[test]
+fn a_job_whose_agent_delivered_while_tinto_was_closed_ends_with_its_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let task = h.task("K-21");
+    let job = h.dispatch(&task, "tests", "events=codex-ok sleep=1");
+    h.wait_status(&job.id, DeliveryJobStatus::Started);
+    close_tinto(&h.service);
+    wait_gone(&h.service.job(&job.id).unwrap());
+
+    let restarted = reopen(&path, &h);
+    restarted.follow_running();
+    let done = wait_on(&restarted, &job.id);
+    assert_eq!(done.status, DeliveryJobStatus::Finished, "{:?}", done.error);
+    assert_eq!(done.result_state, Some(DeliveryResultState::Accepted));
+}
+
+#[test]
+fn an_adopted_job_can_be_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let task = h.task("K-22");
+    let job = h.dispatch(&task, "tests", "sleep=60");
+    h.wait_status(&job.id, DeliveryJobStatus::Started);
+    close_tinto(&h.service);
+
+    let restarted = reopen(&path, &h);
+    restarted.follow_running();
+    restarted.cancel(&job.id).unwrap();
+    let cancelled = wait_on(&restarted, &job.id);
+    assert_eq!(cancelled.status, DeliveryJobStatus::Cancelled);
+    wait_gone(&cancelled);
+}
+
+#[test]
+fn a_job_that_died_while_tinto_was_closed_is_interrupted_and_quarantines_its_resource() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("delivery.sqlite");
     let h = harness_with_store(DeliveryStore::open(&path).unwrap());
     let task = h.task("K-10");
     let job = h.dispatch(&task, "qa", "sleep=30");
     h.wait_status(&job.id, DeliveryJobStatus::Started);
+    close_tinto(&h.service);
+    kill_job(&h.service, &job.id);
 
-    let restarted = DeliveryService::with_parts(
-        DeliveryStore::open(&path).unwrap(),
-        fake_launcher(),
-        Arc::new(|id: &str| Ok(JobPaths::in_dir(std::env::temp_dir().join(id)))),
-        CheckpointConfig::default(),
-    )
-    .unwrap();
+    let restarted = reopen(&path, &h);
+    restarted.follow_running();
     let interrupted = restarted.job(&job.id).unwrap();
     assert_eq!(interrupted.status, DeliveryJobStatus::Interrupted);
     let lease = restarted.overview().unwrap().leases.remove(0);
     assert_eq!(lease.state, DeliveryLeaseState::Quarantined);
-
-    let _ = h.service.cancel(&job.id);
 }
 
 #[test]
@@ -986,6 +1101,9 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
     h.wait_status(&implementation.id, DeliveryJobStatus::Started);
     h.wait_status(&qa.id, DeliveryJobStatus::Started);
     let cursor = h.service.store().unwrap().last_event_seq().unwrap();
+    close_tinto(&h.service);
+    kill_job(&h.service, &implementation.id);
+    kill_job(&h.service, &qa.id);
 
     let jobs = tempfile::tempdir().unwrap();
     let jobs_dir = jobs.path().to_path_buf();
@@ -1070,6 +1188,8 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
         assert!(Instant::now() < deadline, "the retry did not start");
         std::thread::sleep(Duration::from_millis(100));
     }
+    close_tinto(&restarted);
+    kill_job(&restarted, &retry.id);
     let again = restart();
     again.retry_interrupted();
     let cut = again.job(&retry.id).unwrap();
@@ -1101,6 +1221,8 @@ fn without_retry_on_restart_an_interrupted_job_stays_as_it_was() {
     let task = h.task("R-3");
     let job = h.dispatch(&task, "implementation", "sleep=30");
     h.wait_status(&job.id, DeliveryJobStatus::Started);
+    close_tinto(&h.service);
+    kill_job(&h.service, &job.id);
 
     let restarted = DeliveryService::with_parts(
         DeliveryStore::open(&path).unwrap(),
