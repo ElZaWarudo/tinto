@@ -217,6 +217,8 @@ export interface DeliveryJob {
   decisions?: string[];
   /** What the job was told about the task's checks when it started. */
   task_checks?: string[];
+  /** What the job was told about the task's round when it was dispatched in one. */
+  round?: string[];
   /** It needs the repo's environment: it waits queued while that does not answer. */
   needs_environment?: boolean;
   /** Why it waits on the environment, while it does. */
@@ -333,6 +335,32 @@ export interface DeliveryDecisionOption {
 /** Something the user settles before a task's stages run; answers are final. */
 export type DeliveryQaProblemStatus =
   "open" | "sent" | "fixing" | "verified" | "still_failing" | "dismissed" | "superseded";
+
+/** What sent a task's work back. */
+export type DeliveryRoundKind = "review" | "qa" | "qa_problems" | "checks" | "pr" | "sync";
+
+/** A pass of work sent back on a task, recorded when it happened. Round 1,
+ *  the initial delivery, is never stored. */
+export interface DeliveryRound {
+  id: string;
+  task_id: string;
+  /** From 2. */
+  number: number;
+  kind: DeliveryRoundKind;
+  /** In a few words, for the task list: "5 hallazgos de QA", "PR". */
+  short: string;
+  /** One line: "Cambios pedidos en el PR #308 por ana (3 comentarios)". */
+  cause: string;
+  /** What the round has to address. */
+  items: string[];
+  source?: string | null;
+  opened_at_ms: number;
+  /** The branch was published when it opened: commit and push are done again in it. */
+  after_push?: boolean;
+  closed_at_ms?: number | null;
+  /** How it ended: "corregidos", "aceptados", "siguió en la ronda 4"… */
+  outcome?: string | null;
+}
 
 /** A problem QA found (or the user reported) and what the user decided. */
 export interface DeliveryQaProblem {
@@ -589,6 +617,9 @@ export type DeliveryTaskPhase = DeliveryPhase & {
   next_stage: string | null;
   /** The delivery steps this task climbs, when not the whole ladder (a middle package ends at merge). */
   steps?: { rung: DeliveryRung; stage: string | null }[];
+  /** The round the task is in, while work sent back on it is not done again;
+   *  `at` is the stage or delivery step it is at. */
+  round?: DeliveryRound & { at: string };
 };
 
 export interface DeliveryOverview {
@@ -604,6 +635,8 @@ export interface DeliveryOverview {
   qa_problems?: DeliveryQaProblem[];
   /** Settings changes coordinators asked for, waiting for the user. */
   settings_proposals?: DeliverySettingsProposal[];
+  /** Every round of the tasks after their initial delivery, oldest first. */
+  rounds?: DeliveryRound[];
   /** The tasks' pull requests Tinto follows. */
   prs?: DeliveryPr[];
   settings: DeliverySettings;
@@ -669,6 +702,8 @@ export interface DeliveryPr {
   new_reviews: number;
   new_comments: number;
   new_authors: string[];
+  /** Those reviews and comments, one line each ("ana: …"). */
+  news?: string[];
   latest_activity: string | null;
   seen_until: string | null;
   checked_at_ms: number | null;

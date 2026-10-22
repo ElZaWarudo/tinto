@@ -305,6 +305,7 @@ pub fn job_prompt(
         });
     }
     lines.extend(job.task_checks.iter().cloned());
+    lines.extend(job.round.iter().cloned());
     if job.role == QA_ROLE && !job.qa_followup.is_empty() {
         lines.push("Problems from earlier QA the user decided on:".to_string());
         lines.extend(job.qa_followup.iter().map(|note| format!("- {note}")));
@@ -2121,6 +2122,7 @@ pub(crate) mod tests {
             qa_followup: Vec::new(),
             qa_environment: String::new(),
             task_checks: Vec::new(),
+            round: Vec::new(),
             needs_environment: false,
             waits_environment: None,
             reasoning: None,

@@ -417,6 +417,7 @@ impl DeliveryService {
             store.put_qa_problem(problem)?;
         }
         store.record_event(now_ms(), "qa_problems_sent", Some(task_id), None, &numbers)?;
+        super::rounds::for_qa_problems(&store, task_id, &sent)?;
         drop(store);
         self.notify();
         Ok(sent)

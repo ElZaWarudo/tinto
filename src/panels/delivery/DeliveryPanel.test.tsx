@@ -13,6 +13,7 @@ import type {
   DeliveryJob,
   DeliveryOverview,
   DeliveryPhase,
+  DeliveryRound,
   DeliveryTask,
   DeliveryTaskPhase,
   DeliveryWaiter,
@@ -751,8 +752,8 @@ describe("DeliveryPanel", () => {
       overview({ decisions: [asked], phases: { t1: phase({ kind: "decisions", count: 1 }) } }),
     );
     renderPanel();
-    // In the task, one line (the sidebar says it too) and no cards.
-    expect(await screen.findAllByText("1 decisión pendiente")).toHaveLength(2);
+    // In the task, one line (the sidebar and the "Ahora" line say it too) and no cards.
+    expect(await screen.findAllByText("1 decisión pendiente")).toHaveLength(3);
     expect(screen.queryByText("¿Formato del aviso?")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Responder" }));
     const panel = screen.getByRole("dialog", { name: "Responder decisiones" });
@@ -3541,5 +3542,136 @@ describe("DeliveryPanel", () => {
         "rebase",
       ),
     );
+  });
+  it("says which round a task sent back is in, why, and what runs again", async () => {
+    // AGOS-468: delivered once, QA sent it back, and now its PR asks for changes.
+    const step = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
+      id: "a1",
+      task_id: "t1",
+      rung: "commit",
+      title: "x",
+      body: "",
+      status: "executed",
+      requested_by: "coord",
+      requested_at_ms: 5,
+      decided_at_ms: 5,
+      executed_at_ms: 5,
+      outcome: "Publicado en origin/feat/acceptance-cases",
+      ...over,
+    });
+    const pastRound: DeliveryRound = {
+      id: "r2",
+      task_id: "t1",
+      number: 2,
+      kind: "qa",
+      short: "5 hallazgos de QA",
+      cause: "5 hallazgos de QA",
+      items: [],
+      opened_at_ms: 3,
+      closed_at_ms: 4,
+      outcome: "corregidos",
+    };
+    const round: DeliveryRound = {
+      id: "r3",
+      task_id: "t1",
+      number: 3,
+      kind: "pr",
+      short: "PR",
+      cause: "Cambios pedidos en el PR #308 por ana (3 comentarios)",
+      items: ["ana pidió cambios: Renombra el caso", "ana: Falta un test", "ana: Sobra un log"],
+      opened_at_ms: 10,
+      after_push: true,
+    };
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [task({ key: "AGOS-468", title: "Guardar casos de aceptación" })],
+        jobs: [
+          job({ id: "t", role: "tests", created_at_ms: 1 }),
+          job({ id: "i", role: "implementation", created_at_ms: 2 }),
+          job({ id: "r", role: "review", writes: false, created_at_ms: 3 }),
+          job({ id: "q", role: "qa", writes: false, created_at_ms: 4 }),
+          job({
+            id: "i2",
+            role: "implementation",
+            status: "queued",
+            created_at_ms: 11,
+            started_at_ms: null,
+            ended_at_ms: null,
+            result: null,
+            result_state: null,
+          }),
+        ],
+        approvals: [
+          step({ status: "undone", outcome: "Deshecho por el usuario" }),
+          step({ id: "a2", rung: "push" }),
+          step({ id: "a3", rung: "pr", outcome: "https://github.com/o/r/pull/308" }),
+        ],
+        prs: [
+          {
+            task_id: "t1",
+            url: "https://github.com/o/r/pull/308",
+            repo: "o/r",
+            number: 308,
+            state: "open",
+            draft: false,
+            conflicts: false,
+            review_decision: "changes_requested",
+            checks: { passing: 2, failing: 0, pending: 0 },
+            new_reviews: 0,
+            new_comments: 0,
+            new_authors: [],
+            latest_activity: null,
+            seen_until: null,
+            checked_at_ms: 1,
+            error: null,
+          },
+        ],
+        rounds: [pastRound, round],
+        phases: {
+          t1: {
+            ...phase(
+              {
+                kind: "queued",
+                job_id: "i2",
+                role: "implementation",
+                lease: null,
+                position: 1,
+              },
+              "queue",
+            ),
+            round: { ...round, at: "implementation" },
+          },
+        },
+      }),
+    );
+    renderPanel();
+
+    // The list row and the header say the round, its cause and what happens now.
+    expect(await screen.findByText("↺ Ronda 3 · PR: en cola · 1.º")).toBeInTheDocument();
+    const now = screen.getByRole("group", { name: "Ahora" });
+    expect(now).toHaveTextContent(
+      "↺ Ronda 3 · Cambios pedidos en el PR #308 por ana (3 comentarios) · Implementación en cola",
+    );
+    expect(within(now).getByText("ana: Falta un test")).toBeInTheDocument();
+    expect(within(now).getByText("Ronda 2 · 5 hallazgos de QA → corregidos")).toBeInTheDocument();
+    expect(within(now).getByText("Ronda 1 · entrega inicial")).toBeInTheDocument();
+
+    // The track shows this round: what stands, what runs again.
+    const agents = screen.getByRole("list", { name: "Agentes" });
+    const node = (list: HTMLElement, name: string) =>
+      within(list).getByText(name).closest("li") as HTMLElement;
+    expect(node(agents, "Tests")).toHaveTextContent("Vale de la ronda anterior");
+    expect(node(agents, "Implementación")).toHaveTextContent("En cola");
+    expect(node(agents, "Revisión")).toHaveTextContent("Se repite en esta ronda");
+    expect(node(agents, "QA")).toHaveTextContent("Se repite en esta ronda");
+    const ladder = screen.getByRole("list", { name: "Entrega" });
+    expect(node(ladder, "Commit")).toHaveTextContent("Se repetirá");
+    expect(node(ladder, "Push")).toHaveTextContent("Se repetirá");
+    expect(within(ladder).queryByText("Deshecho")).not.toBeInTheDocument();
+    // What it was before stays at hand.
+    expect(
+      within(node(ladder, "Push")).getByTitle(/^Se repetirá en esta ronda. Antes: Publicado en/),
+    ).toBeInTheDocument();
+    expect(node(ladder, "PR")).toHaveTextContent("Cambios pedidos");
   });
 });

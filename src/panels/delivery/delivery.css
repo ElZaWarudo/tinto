@@ -473,6 +473,37 @@
 .delivery-task__meta code {
   color: var(--fg);
 }
+.delivery-task__now {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.delivery-task__now p {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.delivery-task__now-label {
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 18px;
+}
+.delivery-task__fold {
+  margin: 2px 0 0;
+  color: var(--fg-muted);
+}
+.delivery-task__fold summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.delivery-task__fold ol,
+.delivery-task__fold ul {
+  margin: 2px 0 0;
+  padding-left: 20px;
+  color: var(--fg);
+}
 
 .delivery-menu {
   position: relative;

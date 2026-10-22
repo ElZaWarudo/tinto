@@ -53,6 +53,8 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "run_takeover",
     "run_closed",
     "qa_problems_sent",
+    "round_opened",
+    "round_changed",
     "blocker_cleared",
     "blockers_changed",
 ];
@@ -474,6 +476,10 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         }
         "run_takeover" => "otro coordinador tomó el lote".to_string(),
         "run_closed" => "el lote se cerró".to_string(),
+        "round_opened" => format!(
+            "se abrió una ronda: {detail}. El trabajo vuelve a implementation; las etapas que lances la llevan en sus instrucciones"
+        ),
+        "round_changed" => format!("la ronda abierta cambió: {detail}"),
         "qa_problems_sent" => format!(
             "el usuario envió problemas de la QA para arreglar ({detail}); léelos con read_qa_problems"
         ),

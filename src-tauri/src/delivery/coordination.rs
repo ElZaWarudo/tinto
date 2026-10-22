@@ -1921,6 +1921,7 @@ impl DeliveryService {
             },
         };
         store.record_event(now_ms(), event, Some(&approval.task_id), None, &detail)?;
+        super::rounds::after_step(&store, approval)?;
         drop(store);
         self.notify();
         Ok(())

@@ -6805,8 +6805,14 @@ fn qa_problems_wait_for_the_user_and_reach_the_coordinator_and_the_next_qa() {
         .service
         .coordinator_events(&coordinator.run_id, cursor)
         .unwrap();
-    assert_eq!(events.len(), 1);
+    // And the round they open, with what to fix.
+    assert_eq!(events.len(), 2);
     assert!(events[0]["text"].as_str().unwrap().contains("(#1, #3)"));
+    assert_eq!(events[1]["kind"], "round_opened");
+    assert!(events[1]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Ronda 2 · 2 problemas de QA para corregir: 1) #1 P1:"));
     let read = coordinator.call("read_qa_problems", json!({"task_id": task_id}));
     let listed = read["structuredContent"]["result"]
         .as_array()
@@ -7750,4 +7756,416 @@ fn a_commit_waits_until_the_qa_findings_are_fixed_or_accepted() {
         h.service.request_approval(plan()),
         Err(error) if error.category == "stages_unsettled"
     ));
+}
+
+// ---- rounds ----
+
+/// A stage of the task as it ended, written to the store the way `finish`
+/// leaves it, rounds included.
+fn put_stage(
+    h: &Harness,
+    task: &DeliveryTask,
+    id: &str,
+    role: &str,
+    status: &str,
+    findings: &[&str],
+    changed: bool,
+) -> DeliveryJob {
+    // Each stage after the one before it, and after any round it opened.
+    std::thread::sleep(Duration::from_millis(5));
+    let at = super::now_ms();
+    let job: DeliveryJob = serde_json::from_value(json!({
+        "id": id, "task_id": task.id, "role": role, "attempt": 1, "agent": "claude",
+        "access": "workspace", "prompt": "x", "contract_version": 1,
+        "writes": matches!(role, "tests" | "implementation"), "timeout_minutes": 60,
+        "status": "finished", "created_at_ms": at, "started_at_ms": at, "ended_at_ms": at,
+        "result_state": "accepted",
+        "changes": if changed { json!([{"path": "a.txt", "kind": "modified"}]) } else { json!([]) },
+        "result": {
+            "status": status, "summary": "s", "changed_paths": [], "checks": [],
+            "findings": findings, "handoff": "", "blocked_by": "none",
+        },
+    }))
+    .unwrap();
+    let store = h.service.store().unwrap();
+    store.put_job(&job).unwrap();
+    super::rounds::after_job(&store, &job).unwrap();
+    drop(store);
+    std::thread::sleep(Duration::from_millis(5));
+    job
+}
+
+/// A delivery step done now, saved the way Tinto saves it.
+fn step_done_now(h: &Harness, task: &DeliveryTask, id: &str, rung: &str) {
+    let now = super::now_ms();
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": id, "task_id": task.id, "rung": rung, "title": rung, "body": "",
+        "status": "executed", "requested_by": "coord", "requested_at_ms": now,
+        "decided_at_ms": now, "executed_at_ms": now, "outcome": "hecho",
+    }))
+    .unwrap();
+    h.service
+        .save_approval(&step, "approval_completed")
+        .unwrap();
+}
+
+fn round_now(h: &Harness, task: &DeliveryTask) -> Option<super::phase::CurrentRound> {
+    h.service.overview().unwrap().phases[&task.id].round.clone()
+}
+
+#[test]
+fn each_send_back_opens_a_round_that_closes_once_its_work_is_committed() {
+    use super::phase::Phase;
+    let h = harness();
+    let task = h.task("R-1");
+    // The tests' failing cases are part of the initial delivery.
+    put_stage(
+        &h,
+        &task,
+        "t1",
+        "tests",
+        "findings",
+        &["falta el caso vacío"],
+        true,
+    );
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    assert!(round_now(&h, &task).is_none());
+
+    put_stage(
+        &h,
+        &task,
+        "r1",
+        "review",
+        "findings",
+        &["Falta validar la fecha", "El nombre confunde"],
+        false,
+    );
+    let round = round_now(&h, &task).expect("review findings open a round");
+    assert_eq!(round.round.number, 2);
+    assert_eq!(round.round.kind, "review");
+    assert_eq!(round.round.cause, "2 hallazgos de revisión");
+    assert_eq!(
+        round.round.items,
+        ["Falta validar la fecha", "El nombre confunde"]
+    );
+    assert_eq!(round.at, "implementation");
+    assert!(!round.round.after_push);
+    let opened = h
+        .service
+        .store()
+        .unwrap()
+        .event_details("round_opened")
+        .unwrap();
+    assert_eq!(
+        opened,
+        ["Ronda 2 · 2 hallazgos de revisión: 1) Falta validar la fecha; 2) El nombre confunde"]
+    );
+    // The stage dispatched in it is told what to address.
+    let note = super::rounds::note(&h.service.store().unwrap(), &task.id).unwrap();
+    assert_eq!(
+        note,
+        [
+            "This is round 2 of the task: its work came back because of this: 2 hallazgos de revisión.",
+            "What this round has to address:",
+            "- Falta validar la fecha",
+            "- El nombre confunde",
+        ]
+    );
+
+    // Fixed and reviewed, then QA sends it back: round 3, round 2 corrected.
+    put_stage(&h, &task, "i2", "implementation", "pass", &[], true);
+    put_stage(&h, &task, "r2", "review", "pass", &[], false);
+    put_stage(
+        &h,
+        &task,
+        "q1",
+        "qa",
+        "findings",
+        &["El aviso tapa el botón"],
+        false,
+    );
+    let rounds = h.service.overview().unwrap().rounds;
+    assert_eq!(rounds.len(), 2);
+    assert_eq!(rounds[0].outcome.as_deref(), Some("corregidos"));
+    assert!(rounds[0].closed_at_ms.is_some());
+    let round = round_now(&h, &task).unwrap();
+    assert_eq!((round.round.number, round.round.kind.as_str()), (3, "qa"));
+    assert_eq!(round.round.cause, "1 hallazgo de QA");
+
+    // Its stages pass again: the round still wants its commit.
+    put_stage(&h, &task, "i3", "implementation", "pass", &[], true);
+    put_stage(&h, &task, "r3", "review", "pass", &[], false);
+    put_stage(&h, &task, "q2", "qa", "pass", &[], false);
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(
+        phase.phase,
+        Phase::NextStep {
+            rung: DeliveryRung::Commit,
+            stage: None
+        }
+    );
+    assert_eq!(phase.round.unwrap().at, "commit");
+    step_done_now(&h, &task, "c1", "commit");
+    assert!(round_now(&h, &task).is_none());
+    let rounds = h.service.overview().unwrap().rounds;
+    assert_eq!(rounds[1].outcome.as_deref(), Some("corregidos"));
+    let closed = h
+        .service
+        .store()
+        .unwrap()
+        .event_details("round_closed")
+        .unwrap();
+    assert_eq!(closed.len(), 2);
+}
+
+#[test]
+fn qa_problems_sent_to_fix_refine_the_round_their_qa_opened() {
+    let h = harness();
+    let task = h.task("R-2");
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(&h, &task, "q1", "qa", "findings", &["P1", "P2"], false);
+    let problem: super::model::DeliveryQaProblem = serde_json::from_value(json!({
+        "id": "p1", "task_id": task.id, "job_id": "q1", "attempt": 1, "number": 1,
+        "label": "P1", "text": "El aviso tapa el botón", "status": "open",
+        "created_at_ms": 1, "updated_at_ms": 1,
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_qa_problem(&problem).unwrap();
+    h.service
+        .send_qa_problems(
+            &task.id,
+            &[super::qa_problems::QaProblemChoice {
+                problem_id: "p1".into(),
+                solution: "Subir el aviso".into(),
+            }],
+        )
+        .unwrap();
+    let round = round_now(&h, &task).unwrap();
+    assert_eq!(round.round.number, 2, "the same round, not a new one");
+    assert_eq!(round.round.kind, "qa_problems");
+    assert_eq!(round.round.cause, "1 problema de QA para corregir");
+    assert_eq!(
+        round.round.items,
+        ["#1 P1: El aviso tapa el botón → Subir el aviso"]
+    );
+    assert_eq!(h.service.overview().unwrap().rounds.len(), 1);
+    let kinds = h.service.store().unwrap().event_kinds().unwrap();
+    assert!(kinds.contains(&"round_changed".to_string()), "{kinds:?}");
+}
+
+#[test]
+fn accepted_findings_close_their_round() {
+    let h = harness();
+    let task = h.task("R-3");
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(
+        &h,
+        &task,
+        "q1",
+        "qa",
+        "findings",
+        &["Un detalle de estilo"],
+        false,
+    );
+    assert!(round_now(&h, &task).is_some());
+    h.service
+        .resolve("q1", "Estilo; no bloquea la incidencia", "coordinator")
+        .unwrap();
+    assert!(round_now(&h, &task).is_none());
+    let rounds = h.service.overview().unwrap().rounds;
+    assert_eq!(rounds[0].outcome.as_deref(), Some("aceptados"));
+}
+
+#[test]
+fn a_failing_check_opens_a_round_the_fix_is_told_about() {
+    let h = harness();
+    set_repo_checks(&h, &["exit=1"]);
+    let task = h.task("R-4");
+    h.service
+        .set_task_checks(&task.id, vec!["exit=1".into()])
+        .unwrap();
+    let implementation = h.dispatch(&task, "implementation", "events=codex-ok touch=code.txt");
+    h.wait(&implementation.id);
+    assert_eq!(
+        ended_checks(&h, &task, 1)[0].status,
+        DeliveryJobStatus::Failed
+    );
+    // There as soon as the check is seen ended.
+    let round = round_now(&h, &task).expect("a failing check opens a round");
+    assert_eq!(round.round.kind, "checks");
+    assert_eq!(
+        round.round.cause,
+        "Fallan comprobaciones de Tinto: `exit=1`"
+    );
+    assert_eq!(round.at, "implementation");
+
+    let fix = h.dispatch(&task, "implementation", "events=codex-ok");
+    let fix = h.wait(&fix.id);
+    assert_eq!(
+        fix.round[0],
+        "This is round 2 of the task: its work came back because of this: Fallan comprobaciones de Tinto: `exit=1`."
+    );
+    // It changed nothing, so the check still fails on the code: same round.
+    let round = round_now(&h, &task).unwrap();
+    assert_eq!(
+        (round.round.number, round.at.as_str()),
+        (2, "implementation")
+    );
+    assert_eq!(h.service.overview().unwrap().rounds.len(), 1);
+}
+
+#[test]
+fn a_round_whose_stages_pass_without_changes_has_nothing_to_publish() {
+    let h = harness();
+    let task = h.task("R-8");
+    put_stage(&h, &task, "t1", "tests", "pass", &[], true);
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(
+        &h,
+        &task,
+        "r1",
+        "review",
+        "findings",
+        &["¿Falta un caso?"],
+        false,
+    );
+    // The implementation finds it already covered; review and QA agree.
+    put_stage(&h, &task, "i2", "implementation", "pass", &[], false);
+    put_stage(&h, &task, "r2", "review", "pass", &[], false);
+    assert!(round_now(&h, &task).is_some(), "QA has not run yet");
+    put_stage(&h, &task, "q1", "qa", "pass", &[], false);
+    assert!(round_now(&h, &task).is_none());
+    let rounds = h.service.overview().unwrap().rounds;
+    assert_eq!(
+        rounds[0].outcome.as_deref(),
+        Some("sin cambios que publicar")
+    );
+}
+
+#[test]
+fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
+    use super::phase::Phase;
+    let h = harness();
+    let task = h.task("R-5");
+    for (rung, id) in [("commit", "c0"), ("push", "p0"), ("pr", "pr0")] {
+        put_step(&h, &task, id, rung, "executed", "hecho");
+    }
+    put_stage(&h, &task, "t1", "tests", "pass", &[], true);
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(&h, &task, "r1", "review", "pass", &[], false);
+    put_stage(&h, &task, "q1", "qa", "pass", &[], false);
+    let pr: super::prs::DeliveryPr = serde_json::from_value(json!({
+        "task_id": task.id, "url": "https://github.com/o/r/pull/308", "repo": "o/r",
+        "number": 308, "state": "open", "draft": false, "conflicts": false,
+        "review_decision": "changes_requested",
+        "checks": {"passing": 1, "failing": 0, "pending": 0},
+        "new_reviews": 1, "new_comments": 1, "new_authors": ["ana"],
+        "news": ["ana pidió cambios: Renombra el campo", "ana: Falta un test"],
+        "latest_activity": "2026-10-22T10:00:00Z", "seen_until": "2026-10-21T00:00:00Z",
+        "checked_at_ms": 1, "error": null, "changes_requested_at_ms": super::now_ms(),
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_pr(&pr).unwrap();
+    assert_eq!(
+        h.service.overview().unwrap().phases[&task.id].phase,
+        Phase::Pr { number: 308 }
+    );
+
+    // The coordinator sends the work back: the stage answers the PR.
+    let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=fix.txt");
+    let round = round_now(&h, &task).expect("a writing stage on the PR's news opens a round");
+    assert_eq!(round.round.kind, "pr");
+    assert_eq!(
+        round.round.cause,
+        "Cambios pedidos en el PR #308 por ana (2 comentarios)"
+    );
+    assert_eq!(
+        round.round.items,
+        ["ana pidió cambios: Renombra el campo", "ana: Falta un test"]
+    );
+    assert!(round.round.after_push);
+    let fix = h.wait(&fix.id);
+    assert!(fix.round.contains(&"- ana: Falta un test".to_string()));
+    assert_eq!(
+        h.service.task_pr(&task.id).unwrap().unwrap().news,
+        Vec::<String>::new(),
+        "seen once a stage answers it"
+    );
+
+    // Its review comes before the PR's wait, then its commit and its push.
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(
+        phase.phase,
+        Phase::NextStage {
+            role: "review".into()
+        }
+    );
+    put_stage(&h, &task, "r2", "review", "pass", &[], false);
+    put_stage(&h, &task, "q2", "qa", "pass", &[], false);
+    let phase = |h: &Harness| h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(matches!(
+        phase(&h).phase,
+        Phase::NextStep {
+            rung: DeliveryRung::Commit,
+            ..
+        }
+    ));
+    step_done_now(&h, &task, "c1", "commit");
+    assert_eq!(phase(&h).round.unwrap().at, "push");
+    step_done_now(&h, &task, "p1", "push");
+    assert!(phase(&h).round.is_none());
+    assert_eq!(phase(&h).phase, Phase::Pr { number: 308 });
+    assert_eq!(
+        h.service.overview().unwrap().rounds[0].outcome.as_deref(),
+        Some("cambios publicados")
+    );
+
+    // The same changes requested do not open another round.
+    let again = h.dispatch(&task, "tests", "events=codex-ok");
+    h.wait(&again.id);
+    assert_eq!(h.service.overview().unwrap().rounds.len(), 1);
+}
+
+#[test]
+fn a_sync_with_conflicts_opens_a_round_once() {
+    let h = harness();
+    let task = h.task("R-6");
+    let mut sync = executed_step(&task.id, "sync");
+    sync.executed_at_ms = Some(super::now_ms());
+    sync.conflicts = vec!["src/app.ts".into()];
+    h.service.save_approval(&sync, "approval_approved").unwrap();
+    h.service.save_approval(&sync, "step_matches").unwrap();
+    let round = round_now(&h, &task).unwrap();
+    assert_eq!(round.round.kind, "sync");
+    assert_eq!(
+        round.round.cause,
+        "Conflictos al sincronizar con la base en 1 archivo"
+    );
+    assert_eq!(round.round.items, ["src/app.ts"]);
+    assert_eq!(h.service.overview().unwrap().rounds.len(), 1);
+}
+
+#[test]
+fn rounds_survive_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delivery.sqlite");
+    let h = harness_with_store(DeliveryStore::open(&path).unwrap());
+    let task = h.task("R-7");
+    put_stage(&h, &task, "i1", "implementation", "pass", &[], true);
+    put_stage(
+        &h,
+        &task,
+        "r1",
+        "review",
+        "findings",
+        &["Falta validar"],
+        false,
+    );
+    let before = round_now(&h, &task).unwrap();
+    close_tinto(&h.service);
+
+    let service = reopen(&path, &h);
+    let after = service.overview().unwrap().phases[&task.id].round.clone();
+    assert_eq!(after, Some(before));
+    service.close();
 }

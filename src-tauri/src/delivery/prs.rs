@@ -172,6 +172,12 @@ pub struct DeliveryPr {
     pub new_reviews: u32,
     pub new_comments: u32,
     pub new_authors: Vec<String>,
+    /// Those reviews and comments, one line each ("ana: …"), oldest first.
+    #[serde(default)]
+    pub news: Vec<String>,
+    /// When Tinto saw the review decision turn to changes requested.
+    #[serde(default)]
+    pub changes_requested_at_ms: Option<u64>,
     /// GitHub timestamp of the newest activity Tinto has read.
     pub latest_activity: Option<String>,
     /// Activity up to this GitHub timestamp is not new. Set to the newest
@@ -210,6 +216,8 @@ impl DeliveryPr {
             new_reviews: 0,
             new_comments: 0,
             new_authors: Vec::new(),
+            news: Vec::new(),
+            changes_requested_at_ms: None,
             latest_activity: None,
             seen_until: None,
             checked_at_ms: None,
@@ -326,8 +334,8 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
     }
     pr.approved_by = approved_by;
 
-    // (time, author, is_review) of everything others did on the PR.
-    let mut activity: Vec<(String, String, bool)> = Vec::new();
+    // (time, author, is_review, line) of everything others did on the PR.
+    let mut activity: Vec<(String, String, bool, String)> = Vec::new();
     for (key, time_key, review) in [
         ("reviews", "submittedAt", true),
         ("comments", "createdAt", false),
@@ -338,13 +346,25 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
                 continue;
             };
             if !author.eq_ignore_ascii_case(me) {
-                activity.push((time.to_string(), author.to_string(), review));
+                let body = item["body"].as_str().unwrap_or_default();
+                let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+                let line = match (item["state"].as_str(), body.is_empty()) {
+                    (Some("CHANGES_REQUESTED"), true) => format!("{author} pidió cambios"),
+                    (Some("CHANGES_REQUESTED"), false) => {
+                        format!("{author} pidió cambios: {body}")
+                    }
+                    (Some("APPROVED"), _) => format!("{author} aprobó"),
+                    (_, true) => String::new(),
+                    (_, false) => format!("{author}: {body}"),
+                };
+                activity.push((time.to_string(), author.to_string(), review, line));
             }
         }
     }
+    activity.sort();
     pr.latest_activity = activity
         .iter()
-        .map(|(time, _, _)| time.clone())
+        .map(|(time, _, _, _)| time.clone())
         .max()
         .or(pr.latest_activity.take());
     if pr.seen_until.is_none() {
@@ -352,16 +372,24 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         pr.seen_until = Some(pr.latest_activity.clone().unwrap_or_default());
     }
     let seen = pr.seen_until.clone().unwrap_or_default();
-    let fresh: Vec<&(String, String, bool)> = activity
+    let fresh: Vec<&(String, String, bool, String)> = activity
         .iter()
-        .filter(|(time, _, _)| *time > seen)
+        .filter(|(time, _, _, _)| *time > seen)
         .collect();
-    pr.new_reviews = fresh.iter().filter(|(_, _, review)| *review).count() as u32;
-    pr.new_comments = fresh.iter().filter(|(_, _, review)| !review).count() as u32;
-    let mut authors: Vec<String> = fresh.iter().map(|(_, author, _)| author.clone()).collect();
+    pr.new_reviews = fresh.iter().filter(|(_, _, review, _)| *review).count() as u32;
+    pr.new_comments = fresh.iter().filter(|(_, _, review, _)| !review).count() as u32;
+    let mut authors: Vec<String> = fresh
+        .iter()
+        .map(|(_, author, _, _)| author.clone())
+        .collect();
     authors.sort();
     authors.dedup();
     pr.new_authors = authors;
+    pr.news = fresh
+        .iter()
+        .filter(|(_, _, _, line)| !line.is_empty())
+        .map(|(_, _, _, line)| line.clone())
+        .collect();
     pr.error = None;
 }
 
@@ -916,6 +944,11 @@ impl DeliveryService {
                 Err(error) => pr.error = Some(error.message),
             }
             pr.checked_at_ms = Some(now_ms());
+            let asked =
+                |pr: &DeliveryPr| pr.review_decision.as_deref() == Some("changes_requested");
+            if asked(&pr) && !asked(&before) {
+                pr.changes_requested_at_ms = pr.checked_at_ms;
+            }
             store.put_pr(&pr)?;
             if let Some(news) = pr_news(&before, &pr) {
                 store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
@@ -1008,6 +1041,7 @@ impl DeliveryService {
         pr.new_reviews = 0;
         pr.new_comments = 0;
         pr.new_authors.clear();
+        pr.news.clear();
         store.put_pr(&pr)?;
         store.record_event(now_ms(), "pr_seen", Some(task_id), None, &pr.url)?;
         drop(store);
