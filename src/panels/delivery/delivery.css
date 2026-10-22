@@ -445,6 +445,13 @@
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   display: grid;
 }
+/* A task's right-click menu, placed at the pointer. */
+.delivery-menu__list--context {
+  right: auto;
+  z-index: 40;
+  max-height: calc(100% - 8px);
+  overflow-y: auto;
+}
 .delivery-actions .delivery-menu__list {
   left: 0;
   right: auto;

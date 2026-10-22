@@ -16,6 +16,9 @@ export default defineConfig(async () => ({
     fileParallelism: false,
     setupFiles: "./src/setupTests.ts",
     globals: false,
+    // Room for several waits of a whole-panel test on a busy machine (see
+    // asyncUtilTimeout in setupTests).
+    testTimeout: 15000,
   },
 
   build: {

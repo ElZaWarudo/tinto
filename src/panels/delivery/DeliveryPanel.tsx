@@ -7,10 +7,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type Dispatch,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SetStateAction,
 } from "react";
@@ -43,6 +45,8 @@ import {
 import {
   archiveDeliveryTask,
   cancelDeliveryJob,
+  clearDeliveryBlockers,
+  openDeliveryUrl,
   getDeliveryIssueUrl,
   getDeliveryTaskChanges,
   openDeliveryVisualRecord,
@@ -140,6 +144,7 @@ import {
   nextStageOf,
   latestStep,
   nextStep,
+  openBlockers,
   parseStatuses,
   pausedJob,
   pendingSettingsProposals,
@@ -384,6 +389,114 @@ function Menu({
           </div>
         ))}
     </span>
+  );
+}
+
+/** Where a right click on a task asked for its menu: inside the Delivery panel. */
+export interface ContextPoint {
+  host: Element;
+  x: number;
+  y: number;
+}
+
+/** One entry of a task's context menu; `null` draws a separator. */
+interface ContextItem {
+  label: ReactNode;
+  onSelect: () => void;
+  disabled?: boolean;
+  title?: string;
+  danger?: boolean;
+}
+
+/** The list a right click opens at the pointer. Arrow keys move, Escape or a
+ *  click elsewhere closes it, and choosing an entry closes it first. */
+function ContextMenu({
+  at,
+  label,
+  items,
+  onClose,
+}: {
+  at: ContextPoint;
+  label: string;
+  items: (ContextItem | null)[];
+  onClose: () => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    // Kept inside the panel: it opens up or left when the pointer is near an edge.
+    const panel = at.host.getBoundingClientRect();
+    const left = Math.max(0, Math.min(at.x - panel.left, panel.width - list.offsetWidth - 4));
+    const top = Math.max(0, Math.min(at.y - panel.top, panel.height - list.offsetHeight - 4));
+    setPlace({ left, top });
+    list.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [at]);
+  useEffect(() => {
+    const onPointer = (event: MouseEvent) => {
+      if (!listRef.current?.contains(event.target as Node)) onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onClose);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+  const move = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const entries = [
+      ...(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []),
+    ];
+    const at = entries.indexOf(document.activeElement as HTMLElement);
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    entries[(at + step + entries.length) % entries.length]?.focus();
+  };
+  // Separators only between entries: none first, last or twice in a row.
+  const shown: (ContextItem | null)[] = [];
+  for (const item of items) {
+    if (item !== null || (shown.length > 0 && shown[shown.length - 1] !== null)) shown.push(item);
+  }
+  if (shown[shown.length - 1] === null) shown.pop();
+  return createPortal(
+    <div
+      ref={listRef}
+      className="delivery-menu__list delivery-menu__list--context"
+      role="menu"
+      aria-label={label}
+      style={place ?? { visibility: "hidden" }}
+      onKeyDown={move}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {shown.map((item, at) =>
+        item === null ? (
+          <hr key={`separator-${at}`} />
+        ) : (
+          <button
+            key={at}
+            type="button"
+            role="menuitem"
+            className={item.danger ? "delivery-menu__danger" : undefined}
+            disabled={item.disabled}
+            title={item.title}
+            onClick={() => {
+              onClose();
+              item.onSelect();
+            }}
+          >
+            {item.label}
+          </button>
+        ),
+      )}
+    </div>,
+    at.host,
   );
 }
 
@@ -1420,6 +1533,9 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   );
   const repoStalls = shared.stalls.filter((stall) => repoKey(stall.run.repo) === key);
   const [coordinatorOpen, setCoordinatorOpen] = useState(false);
+  // A task row's right-click menu, drawn by the task it selects.
+  const [contextAt, setContextAt] = useState<(ContextPoint & { taskId: string }) | null>(null);
+  const closeContext = useCallback(() => setContextAt(null), []);
   // A batch that closed since, or the only one left, shows every task.
   const lot =
     activeRuns.length > 1 && activeRuns.some((candidate) => candidate.id === listView.lot)
@@ -1690,6 +1806,32 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                         className={`delivery-task-row${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}`}
                         aria-current={selectedTask?.id === task.id ? "true" : undefined}
                         onClick={() => select(repo, task.id)}
+                        onContextMenu={(event) => {
+                          const host = event.currentTarget.closest(".delivery-panel");
+                          if (!host) return;
+                          event.preventDefault();
+                          select(repo, task.id);
+                          setContextAt({
+                            taskId: task.id,
+                            host,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
+                        onKeyDown={(event) => {
+                          // The keyboard's way to the same menu: Shift+F10 or the menu key.
+                          if (!(
+                            event.key === "ContextMenu" ||
+                            (event.shiftKey && event.key === "F10")
+                          ))
+                            return;
+                          const host = event.currentTarget.closest(".delivery-panel");
+                          if (!host) return;
+                          event.preventDefault();
+                          const row = event.currentTarget.getBoundingClientRect();
+                          select(repo, task.id);
+                          setContextAt({ taskId: task.id, host, x: row.left + 24, y: row.bottom });
+                        }}
                       >
                         <span className="delivery-task-row__key">
                           {taskLabel(task)}
@@ -1737,6 +1879,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                 onContinueJob={shared.continueJob}
                 onRemoved={() => select(repo, null)}
                 onSelectTask={reveal}
+                contextAt={contextAt?.taskId === selectedTask.id ? contextAt : null}
+                onCloseContext={closeContext}
               />
             ) : (
               <p className="delivery-panel__empty">Sin tareas.</p>
@@ -1767,6 +1911,8 @@ function TaskDetail({
   onContinueJob,
   onRemoved,
   onSelectTask,
+  contextAt,
+  onCloseContext,
 }: {
   task: DeliveryTask;
   overview: DeliveryOverview;
@@ -1777,6 +1923,9 @@ function TaskDetail({
   onContinueJob: (job: DeliveryJob) => Promise<void>;
   onRemoved: () => void;
   onSelectTask: (task: DeliveryTask) => void;
+  /** Where the task's row was right-clicked: its menu opens there. */
+  contextAt: ContextPoint | null;
+  onCloseContext: () => void;
 }) {
   const jobs = jobsOf(overview, task.id);
   // The latest QA's visual changes page: what the user reviews before the PR.
@@ -1940,8 +2089,146 @@ function TaskDetail({
   // Stages with the most recent activity first; older attempts fold under the latest.
   const historyKeys = [...new Set(newestFirst.map(historyKey))];
 
+  // The right-click menu: what the task can do now, what waits on the user first.
+  const running = jobs.find((job) => job.status === "started" || job.status === "pending");
+  const paused = pausedJob(jobs);
+  const pendingStep = openApprovals.find((approval) => approval.status === "pending");
+  const open = openBlockers(task);
+  const copy = (text: string) => void navigator.clipboard?.writeText(text).catch(() => {});
+  const menuEntries: (ContextItem | null | false | undefined)[] = [
+    pendingStep && {
+      label: `Aprobar ${lower(stepOf(pendingStep).label)}…`,
+      onSelect: () => setFloat(`approval:${pendingStep.id}`),
+    },
+    blocked && {
+      label:
+        pendingDecisions.length === 1
+          ? "Contestar 1 decisión…"
+          : `Contestar ${pendingDecisions.length} decisiones…`,
+      onSelect: () => setFloat("decisions"),
+    },
+    qaProblemsToDecide > 0 && {
+      label: `Decidir ${qaProblemsToDecide} problema${qaProblemsToDecide === 1 ? "" : "s"} de QA…`,
+      onSelect: () => setFloat("qa"),
+    },
+    broken
+      ? {
+          label: `Reintentar ${lower(stageLabel(broken.role))}`,
+          onSelect: () => void run(() => retryDeliveryJob(broken.id)),
+        }
+      : undefined,
+    broken && broken.agent !== "shell" && broken.provider_session_id
+      ? {
+          label: "Continuar en Agents",
+          onSelect: () => void run(() => onContinueJob(broken)),
+        }
+      : undefined,
+    running &&
+      running.status === "started" &&
+      running.agent !== "shell" && {
+        label: `Pausar ${lower(stageLabel(running.role))}`,
+        onSelect: () => void run(() => pauseDeliveryJob(running.id)),
+      },
+    paused && {
+      label: `Reanudar ${lower(stageLabel(paused.role))}`,
+      onSelect: () => void run(() => resumeDeliveryJob(paused.id)),
+    },
+    (running ?? paused) && {
+      label: `Cancelar ${lower(stageLabel((running ?? paused)!.role))}`,
+      danger: true,
+      onSelect: () => void run(() => cancelDeliveryJob((running ?? paused)!.id)),
+    },
+    null,
+    next && !broken
+      ? {
+          label: `Lanzar ${lower(stageLabel(next))}`,
+          disabled: blocked,
+          onSelect: () => dispatch(next, true),
+        }
+      : undefined,
+    {
+      label: "Lanzar etapa…",
+      disabled: blocked,
+      onSelect: () => dispatch(next ?? "tests", false),
+    },
+    step && !requesting
+      ? {
+          label:
+            latestStep(approvals, step)?.status === "drifted"
+              ? `Volver a pedir el ${lower(step.label)}…`
+              : `Preparar ${lower(step.label)}…`,
+          onSelect: () => setRequesting(true),
+        }
+      : undefined,
+    null,
+    !task.distro && { label: "Ver cambios", onSelect: () => void run(openChanges) },
+    {
+      label: `Abrir en Agents con ${agentName(lastStageAgent(jobs, task.id)?.agent ?? "claude")}`,
+      onSelect: () =>
+        void run(() => onOpenConversation(lastStageAgent(jobs, task.id)?.agent ?? "claude")),
+    },
+    issueUrl ? { label: "Ver issue en Jira", onSelect: () => setFloat("issue") } : undefined,
+    pr && {
+      label: `Abrir PR #${pr.number} en GitHub`,
+      onSelect: () => void openDeliveryUrl(pr.url).catch(() => {}),
+    },
+    qaRecord?.visual_record
+      ? {
+          label: "Abrir registro de QA",
+          onSelect: () => void run(() => openDeliveryVisualRecord(qaRecord.id)),
+        }
+      : undefined,
+    null,
+    open.length > 0 && {
+      label: open.length === 1 ? "Quitar bloqueo" : `Quitar ${open.length} bloqueos`,
+      onSelect: () => void run(() => clearDeliveryBlockers(task.id)),
+    },
+    !delivered && { label: "Bloquear por…", onSelect: () => setFloat("blocker") },
+    {
+      label: (
+        <>
+          Nueva versión del contrato… <small>v{task.contract_version}</small>
+        </>
+      ),
+      onSelect: () => void run(bumpContract),
+    },
+    correctable.length > 0 && {
+      label: "Corregir resultado…",
+      onSelect: () => setCorrecting(correctable[0].id),
+    },
+    null,
+    { label: `Copiar clave (${task.key})`, onSelect: () => copy(task.key) },
+    { label: "Copiar rama", onSelect: () => copy(task.branch) },
+    { label: "Copiar ruta del worktree", onSelect: () => copy(task.worktree) },
+    pr && { label: "Copiar enlace del PR", onSelect: () => copy(pr.url) },
+    null,
+    delivered && {
+      label: "Archivar tarea…",
+      disabled: hasOpenJob,
+      onSelect: () => void run(archive),
+    },
+    {
+      label: "Eliminar tarea…",
+      danger: true,
+      disabled: hasOpenJob,
+      title: hasOpenJob ? "Cancela o espera a que terminen sus etapas." : undefined,
+      onSelect: () => void run(remove),
+    },
+  ];
+  const contextItems = menuEntries.filter(
+    (item): item is ContextItem | null => item !== false && item !== undefined,
+  );
+
   return (
     <article className="delivery-task" aria-label={`Tarea ${taskLabel(task)}`}>
+      {contextAt && (
+        <ContextMenu
+          at={contextAt}
+          label={`Acciones de ${taskLabel(task)}`}
+          items={contextItems}
+          onClose={onCloseContext}
+        />
+      )}
       <header className="delivery-task__header">
         <div className="delivery-task__heading">
           <h2>

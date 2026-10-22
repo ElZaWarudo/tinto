@@ -1629,12 +1629,15 @@ impl DeliveryService {
     /// follows them as they are now: the user may have changed a model that
     /// failed.
     fn same_assignment(&self, job: DeliveryJob) -> Result<NewJob, DeliveryError> {
+        // A stage the user configured runs as it is configured now, whatever
+        // the attempt being repeated ran with: a model changed in Ajustes
+        // applies to the next attempt.
         let (mut agent, mut model, mut reasoning) = (job.agent, job.model, job.reasoning);
-        if job.stage_default {
-            let repo = self.task(&job.task_id)?.repo;
-            if let Some(stage) = self.store()?.repo_settings(&repo)?.stages.remove(&job.role) {
-                (agent, model, reasoning) = (stage.agent, stage.model, stage.reasoning);
-            }
+        let repo = self.task(&job.task_id)?.repo;
+        let stage = self.store()?.repo_settings(&repo)?.stages.remove(&job.role);
+        let follows_stage = stage.is_some() || job.stage_default;
+        if let Some(stage) = stage {
+            (agent, model, reasoning) = (stage.agent, stage.model, stage.reasoning);
         }
         Ok(NewJob {
             task_id: job.task_id,
@@ -1649,7 +1652,7 @@ impl DeliveryService {
             reasoning,
             platform: job.platform,
             read_dirs: job.read_dirs,
-            stage_default: job.stage_default,
+            stage_default: follows_stage,
             needs_environment: job.needs_environment,
         })
     }

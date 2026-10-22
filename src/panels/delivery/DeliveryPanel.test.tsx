@@ -948,6 +948,52 @@ describe("DeliveryPanel", () => {
     expect(await screen.findByRole("heading", { name: /AGOS-580/ })).toBeInTheDocument();
   });
 
+  it("opens a task's actions on a right click: what applies now, and copying its key", async () => {
+    const other = task({ id: "t2", key: "AGOS-580", branch: "delivery/agos-580" });
+    const blocked = task({
+      blockers: [
+        {
+          id: "b1",
+          type: "note",
+          text: "Docker Desktop está apagado",
+          status: "",
+          cleared_at_ms: null,
+        },
+      ],
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [blocked, other],
+        phases: { t1: phase({ kind: "blocked", open: 1 }, "external"), t2: NEXT_IMPLEMENTATION },
+      }),
+    );
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderPanel();
+    const row = await screen.findByRole("button", { name: /^AGOS-580/ });
+    await userEvent.pointer({ keys: "[MouseRight]", target: row });
+
+    const menu = await screen.findByRole("menu", { name: "Acciones de AGOS-580" });
+    const entries = within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent);
+    expect(entries).toContain("Lanzar implementación");
+    expect(entries).toContain("Bloquear por…");
+    expect(entries).not.toContain("Quitar bloqueo");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copiar clave (AGOS-580)" }));
+    expect(writeText).toHaveBeenCalledWith("AGOS-580");
+    expect(screen.queryByRole("menu", { name: "Acciones de AGOS-580" })).not.toBeInTheDocument();
+
+    // The blocked task's menu offers to clear what it waits for.
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByRole("button", { name: /^AGOS-501/ }),
+    });
+    const blockedMenu = await screen.findByRole("menu", { name: /^Acciones de AGOS-501/ });
+    await userEvent.click(within(blockedMenu).getByRole("menuitem", { name: "Quitar bloqueo" }));
+    await waitFor(() => expect(client.clearDeliveryBlockers).toHaveBeenCalledWith("t1"));
+  });
+
   it("creates a task in the chosen repository", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(overview({ tasks: [], jobs: [] }));

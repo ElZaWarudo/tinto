@@ -1437,8 +1437,8 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
     assert_eq!(fixed["model"], "gpt-6-sol");
     assert_eq!(fixed["reasoning"], "high");
     h.wait(fixed["id"].as_str().unwrap());
-    // A retry follows the stage as the user left it after a model failed;
-    // a model the coordinator chose is kept.
+    // A retry follows the stage as the user left it after a model failed,
+    // even when the attempt it repeats ran with a model the coordinator chose.
     let set_stage_model = |model: &str| {
         let mut settings = settings.clone();
         settings.stages.get_mut("review").unwrap().model = Some(model.into());
@@ -1467,7 +1467,8 @@ fn the_coordinator_api_speaks_mcp_and_fences_writes() {
     h.wait(chosen["id"].as_str().unwrap());
     set_stage_model("gpt-6-mini");
     let retried = retry(13, &chosen);
-    assert_eq!(retried["model"], "gpt-5.5", "{retried}");
+    assert_eq!(retried["model"], "gpt-6-mini", "{retried}");
+    assert_eq!(retried["stage_default"], true);
     h.wait(retried["id"].as_str().unwrap());
     // Folders to read must be inside the main checkout or the worktree.
     let mut outside = review.clone();
