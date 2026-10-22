@@ -3975,27 +3975,36 @@ pub fn start_delivery_waker(app: AppHandle, delivery: crate::delivery::service::
         };
         for wakeup in wakeups {
             if wake_coordinator(&app, &wakeup) {
-                let _ = delivery.mark_coordinator_notified(&wakeup.run_id, wakeup.cursor);
+                for (run_id, cursor) in &wakeup.runs {
+                    let _ = delivery.mark_coordinator_notified(run_id, *cursor);
+                }
             }
         }
     });
 }
 
-/// The user hands a Delivery batch to an Agents conversation: Tinto asks it
-/// to take the batch over, and it does so with takeover_run.
+/// The user hands Delivery batches to an Agents conversation: Tinto asks it
+/// to take each one over, and it does so with takeover_run.
 #[tauri::command]
 pub fn hand_over_delivery_run(
     app: AppHandle,
     registry: State<'_, Mutex<AgentSessionRegistry>>,
     delivery: State<'_, crate::delivery::service::DeliveryService>,
-    run_id: String,
+    run_ids: Vec<String>,
     session_id: String,
 ) -> Result<(), CommandError> {
-    let run = delivery.run(&run_id).map_err(CommandError::from)?;
-    let text = format!(
-        "[Tinto] El usuario te pide coordinar el lote «{}» (run_id {}). Tómalo con takeover_run (run_id {}, tu owner, reason «pedido por el usuario en Tinto»); no hace falta comprobar al coordinador anterior. Después llama a wait_run sin cursor, lee delivery_overview y sigue con el lote.",
-        run.title, run.id, run.id
-    );
+    if run_ids.is_empty() {
+        return Err(CommandError::new(
+            "invalid_arguments",
+            "elige al menos un lote",
+        ));
+    }
+    let runs = run_ids
+        .iter()
+        .map(|run_id| delivery.run(run_id))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(CommandError::from)?;
+    let text = crate::delivery::feed::handover_text(&runs);
     let mut registry = lock_registry(&registry)?;
     let session = registry
         .get_session(&session_id)

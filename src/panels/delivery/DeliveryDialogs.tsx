@@ -1277,6 +1277,19 @@ export function DeliverySettingsDialog({
   );
 }
 
+/** The other batches the same conversation coordinates, after a batch's coordinator. */
+function sharedWith(run: DeliveryRun, runs: DeliveryRun[]) {
+  const others = runs.filter(
+    (other) =>
+      other.id !== run.id &&
+      run.coordinator_session &&
+      other.coordinator_session === run.coordinator_session,
+  );
+  return others.length > 0
+    ? `, que coordina también ${others.map((other) => other.title || other.id).join(", ")}`
+    : null;
+}
+
 /** The active batches, what can be done to each, and a new one: the
  *  header's batch menu. */
 export function BatchList({
@@ -1311,7 +1324,12 @@ export function BatchList({
           <li key={run.id}>
             <span>
               <strong>{run.title || run.id}</strong>
-              <small>{run.owner ? `coordina ${run.owner}` : "sin coordinador"}</small>
+              <small>
+                {run.owner ? `coordina ${run.owner}` : "sin coordinador"}
+                {run.coordinator_session &&
+                  ` · conversación ${run.coordinator_session.slice(0, 8)}`}
+                {sharedWith(run, runs)}
+              </small>
             </span>
             <span className="delivery-run-list__actions">
               <select

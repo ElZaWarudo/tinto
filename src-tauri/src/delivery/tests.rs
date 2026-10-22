@@ -1037,7 +1037,12 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
         .any(|job| job.task_id == testing.id && job.id != qa.id));
 
     let waited = restarted
-        .wait_run(&run.id, Some(cursor), Duration::from_secs(1), true)
+        .wait_run(
+            std::slice::from_ref(&run.id),
+            Some(cursor),
+            Duration::from_secs(1),
+            true,
+        )
         .unwrap();
     let texts: Vec<&str> = waited["events"]
         .as_array()
@@ -6282,7 +6287,7 @@ fn the_coordinators_conversation_is_woken_once_with_what_it_has_not_seen() {
 
     // Once sent, it is not sent again.
     h.service
-        .mark_coordinator_notified(&wakeup.run_id, wakeup.cursor)
+        .mark_coordinator_notified(&wakeup.runs[0].0, wakeup.runs[0].1)
         .unwrap();
     assert!(h.service.pending_wakeups(later).unwrap().is_empty());
     assert!(h
@@ -6291,6 +6296,139 @@ fn the_coordinators_conversation_is_woken_once_with_what_it_has_not_seen() {
         .unwrap()
         .notified_at_ms
         .is_some());
+}
+
+/// A wait_run argument for each batch, as its owner `coord` at generation 1.
+fn held(coordinators: &[&Coordinator]) -> serde_json::Value {
+    json!(coordinators
+        .iter()
+        .map(|c| json!({"run_id": c.run_id, "owner": "coord", "generation": 1}))
+        .collect::<Vec<_>>())
+}
+
+fn wait_from(h: &Harness, session: &str, arguments: serde_json::Value) -> serde_json::Value {
+    super::mcp::handle_message_from(
+        &h.service,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "wait_run", "arguments": arguments}}),
+        Some(session),
+    )
+    .unwrap()["result"]
+        .clone()
+}
+
+#[test]
+fn one_wait_run_covers_every_batch_its_conversation_coordinates() {
+    let h = harness();
+    let first = Coordinator::start(&h);
+    let second = Coordinator::start(&h);
+    first.task("M-1");
+    second.task("M-2");
+    let now = wait_from(&h, "both", json!({"runs": held(&[&first, &second])}));
+    let cursor = now["structuredContent"]["cursor"].as_u64().expect("cursor");
+    for run_id in [&first.run_id, &second.run_id] {
+        let run = h.service.run(run_id).unwrap();
+        assert_eq!(run.coordinator_session.as_deref(), Some("both"));
+        assert_eq!(run.generation, 1, "ownership stays per batch");
+    }
+
+    // A change in the second batch wakes the one wait, naming its batch.
+    let service = h.service.clone();
+    let second_id = second.run_id.clone();
+    let user = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        service.set_run_paused(&second_id, true).unwrap();
+    });
+    let started = Instant::now();
+    let woken = wait_from(
+        &h,
+        "both",
+        json!({"runs": held(&[&first, &second]), "cursor": cursor, "timeout_seconds": 20, "idle_ok": true}),
+    );
+    user.join().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10));
+    let reply = &woken["structuredContent"];
+    let events = reply["events"].as_array().expect("events");
+    assert_eq!(events.len(), 1, "{reply}");
+    assert_eq!(events[0]["run_id"], json!(second.run_id));
+    assert_eq!(events[0]["text"], "el usuario pausó el lote");
+    // Both batches have read up to the new cursor: nothing to wake them for.
+    let next = reply["cursor"].as_u64().unwrap();
+    for run_id in [&first.run_id, &second.run_id] {
+        assert_eq!(h.service.run(run_id).unwrap().coordinator_cursor, next);
+    }
+    let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
+    assert!(h.service.pending_wakeups(later).unwrap().is_empty());
+}
+
+#[test]
+fn a_wait_on_several_batches_is_fenced_per_batch() {
+    let h = harness();
+    let first = Coordinator::start(&h);
+    let second = Coordinator::start(&h);
+    // Another coordinator takes the second batch.
+    second.call(
+        "takeover_run",
+        json!({"run_id": second.run_id, "owner": "other"}),
+    );
+    let refused = wait_from(&h, "both", json!({"runs": held(&[&first, &second])}));
+    let text = error_text(&refused);
+    assert!(text.contains(&format!("lote {}", second.run_id)), "{text}");
+    // The batch it still holds goes on.
+    let alone = wait_from(&h, "both", json!({"runs": held(&[&first])}));
+    assert!(alone["structuredContent"]["cursor"].is_u64(), "{alone}");
+    let missing = wait_from(&h, "both", json!({"runs": [{"run_id": first.run_id}]}));
+    assert!(error_text(&missing).contains("generation"));
+}
+
+#[test]
+fn a_conversation_with_several_batches_is_woken_once_for_all_of_them() {
+    let h = harness();
+    let first = Coordinator::start(&h);
+    let second = Coordinator::start(&h);
+    wait_from(&h, "both", json!({"runs": held(&[&first, &second])}));
+    h.service.set_run_paused(&first.run_id, true).unwrap();
+    h.service.set_run_paused(&second.run_id, true).unwrap();
+    let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
+    let wakeups = h.service.pending_wakeups(later).unwrap();
+    assert_eq!(wakeups.len(), 1, "{wakeups:?}");
+    let wakeup = &wakeups[0];
+    assert_eq!(wakeup.session_id, "both");
+    let mut woken: Vec<&str> = wakeup.runs.iter().map(|(id, _)| id.as_str()).collect();
+    woken.sort_unstable();
+    let mut expected = vec![first.run_id.as_str(), second.run_id.as_str()];
+    expected.sort_unstable();
+    assert_eq!(woken, expected);
+    assert!(wakeup.text.contains("`runs`"), "{}", wakeup.text);
+    assert!(
+        wakeup.text.contains(&first.run_id) && wakeup.text.contains(&second.run_id),
+        "{}",
+        wakeup.text
+    );
+
+    for (run_id, cursor) in &wakeup.runs {
+        h.service
+            .mark_coordinator_notified(run_id, *cursor)
+            .unwrap();
+    }
+    assert!(h.service.pending_wakeups(later).unwrap().is_empty());
+}
+
+#[test]
+fn the_handover_names_every_batch_and_one_wait_for_all() {
+    let h = harness();
+    let first = h.service.run(&Coordinator::start(&h).run_id).unwrap();
+    let second = h.service.run(&Coordinator::start(&h).run_id).unwrap();
+    let one = super::feed::handover_text(std::slice::from_ref(&first));
+    assert!(one.contains(&format!("run_id {}", first.id)), "{one}");
+    assert!(!one.contains("`runs`"), "{one}");
+    let both = super::feed::handover_text(&[first.clone(), second.clone()]);
+    assert!(both.contains("coordinar 2 lotes"), "{both}");
+    assert!(
+        both.contains(&format!("run_id {}", first.id))
+            && both.contains(&format!("run_id {}", second.id)),
+        "{both}"
+    );
+    assert!(both.contains("wait_run sin cursor con `runs`"), "{both}");
 }
 
 #[test]
@@ -6303,7 +6441,7 @@ fn a_coordinator_inside_wait_run_is_not_woken() {
     let run_id = coordinator.run_id.clone();
     let waiting = std::thread::spawn(move || {
         service
-            .wait_run(&run_id, Some(u64::MAX), Duration::from_secs(2), true)
+            .wait_run(&[run_id], Some(u64::MAX), Duration::from_secs(2), true)
             .unwrap()
     });
     std::thread::sleep(Duration::from_millis(300));

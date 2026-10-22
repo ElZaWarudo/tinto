@@ -1685,7 +1685,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                       role="menuitem"
                       onClick={() => {
                         close();
-                        void run(() => handOverDeliveryRun(activeRuns[0].id, session.id));
+                        void run(() => handOverDeliveryRun([activeRuns[0].id], session.id));
                       }}
                     >
                       {agentName(session.agent_type)} · {session.id.slice(0, 8)}
@@ -1890,7 +1890,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       )}
       {overview && activeRuns.length > 0 && (
         <CoordinatorDock
-          runs={lot ? activeRuns.filter((candidate) => candidate.id === lot) : activeRuns}
+          runs={activeRuns}
+          focus={lot}
           overview={overview}
           stalled={repoStalls.map((stall) => stall.run.id)}
           open={coordinatorOpen}

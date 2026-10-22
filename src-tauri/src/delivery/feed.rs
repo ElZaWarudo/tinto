@@ -2,8 +2,9 @@
 //! with a cursor (the events' `seq`).
 //!
 //! The coordinator waits for those changes with `wait_run`, which wakes on
-//! the next one. When it is not waiting, Tinto wakes its Agents
-//! conversation with one message per batch of changes (see
+//! the next one; one conversation may coordinate several batches and wait
+//! on all of them at once. When it is not waiting, Tinto wakes its Agents
+//! conversation with one message per burst of changes (see
 //! `agent_console::commands::start_delivery_waker`).
 
 use std::collections::HashMap;
@@ -60,30 +61,32 @@ const COORDINATOR_EVENTS: &[&str] = &[
 /// in one message.
 pub const WAKE_QUIET_MS: u64 = 5_000;
 
-/// A message for a coordinator's conversation.
+/// A message for a coordinator's conversation, about the batches it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoordinatorWakeup {
-    pub run_id: String,
     pub session_id: String,
-    /// The last event the message covers.
-    pub cursor: u64,
+    /// Each batch the message covers, with the last event it covers.
+    pub runs: Vec<(String, u64)>,
     pub text: String,
 }
 
-/// Counts a coordinator inside wait_run for as long as it waits.
+/// Counts a coordinator inside wait_run, on each of its batches, for as
+/// long as it waits.
 struct Waiting<'a> {
     service: &'a DeliveryService,
-    run_id: String,
+    run_ids: Vec<String>,
 }
 
 impl<'a> Waiting<'a> {
-    fn start(service: &'a DeliveryService, run_id: &str) -> Self {
+    fn start(service: &'a DeliveryService, run_ids: &[String]) -> Self {
         if let Ok(mut waiting) = service.inner.waiting.lock() {
-            *waiting.entry(run_id.to_string()).or_default() += 1;
+            for run_id in run_ids {
+                *waiting.entry(run_id.clone()).or_default() += 1;
+            }
         }
         Self {
             service,
-            run_id: run_id.to_string(),
+            run_ids: run_ids.to_vec(),
         }
     }
 }
@@ -91,10 +94,12 @@ impl<'a> Waiting<'a> {
 impl Drop for Waiting<'_> {
     fn drop(&mut self) {
         if let Ok(mut waiting) = self.service.inner.waiting.lock() {
-            if let Some(count) = waiting.get_mut(&self.run_id) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    waiting.remove(&self.run_id);
+            for run_id in &self.run_ids {
+                if let Some(count) = waiting.get_mut(run_id) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        waiting.remove(run_id);
+                    }
                 }
             }
         }
@@ -138,6 +143,7 @@ impl DeliveryService {
                 .and_then(|job_id| store.job(job_id).ok().flatten())
                 .map(|job| job.role);
             changes.push(json!({
+                "run_id": run_id,
                 "seq": event.seq,
                 "at_ms": event.at_ms,
                 "kind": event.kind,
@@ -151,20 +157,23 @@ impl DeliveryService {
         Ok((changes, cursor))
     }
 
-    /// Waits until something changes for the run's coordinator (a job
-    /// ends, the user answers or decides a step, the PR moves…) and returns
-    /// those changes with the cursor to wait from next. Without `cursor` it
-    /// returns at once with the current one.
+    /// Waits until something changes for the coordinator of any of
+    /// `run_ids` (a job ends, the user answers or decides a step, the PR
+    /// moves…) and returns those changes, each naming its batch, with the
+    /// cursor to wait from next. Without `cursor` it returns at once with
+    /// the current one.
     pub fn wait_run(
         &self,
-        run_id: &str,
+        run_ids: &[String],
         cursor: Option<u64>,
         timeout: Duration,
         idle_ok: bool,
     ) -> Result<Value, DeliveryError> {
-        self.run(run_id)?;
+        for run_id in run_ids {
+            self.run(run_id)?;
+        }
         let deadline = Instant::now() + timeout;
-        let _waiting = Waiting::start(self, run_id);
+        let _waiting = Waiting::start(self, run_ids);
         let mut first_look = true;
         loop {
             let seen = self.inner.changes.0.lock().map(|count| *count).unwrap_or(0);
@@ -172,18 +181,30 @@ impl DeliveryService {
                 Some(cursor) => cursor,
                 None => self.store()?.last_event_seq()?,
             };
-            let (events, next) = self.coordinator_events(run_id, after)?;
-            let idle = self.idle_tasks(run_id)?;
+            let mut events = Vec::new();
+            let mut idle = Vec::new();
+            let mut next = after;
+            for run_id in run_ids {
+                let (run_events, run_next) = self.coordinator_events(run_id, after)?;
+                events.extend(run_events);
+                idle.extend(self.idle_tasks(run_id)?);
+                next = next.max(run_next);
+            }
+            events.sort_by_key(|event| event["seq"].as_u64());
             let nudge = first_look && !idle_ok && !idle.is_empty();
             let expired = Instant::now() >= deadline;
             if cursor.is_none() || !events.is_empty() || nudge || expired {
-                self.record_coordinator_cursor(run_id, next)?;
+                let mut open_jobs = Vec::new();
+                for run_id in run_ids {
+                    self.record_coordinator_cursor(run_id, next)?;
+                    open_jobs.extend(self.open_jobs(run_id)?);
+                }
                 let mut reply = json!({
                     "cursor": next,
                     "events": events,
                     "waited": !first_look,
                     "idle": idle,
-                    "open_jobs": self.open_jobs(run_id)?,
+                    "open_jobs": open_jobs,
                     "spare_capacity": self.spare_capacity()?,
                 });
                 if nudge && events_is_empty(&reply) {
@@ -218,6 +239,7 @@ impl DeliveryService {
             .filter_map(|job| {
                 let key = tasks.get(&job.task_id)?;
                 Some(json!({
+                    "run_id": run_id,
                     "job_id": job.id,
                     "key": key,
                     "role": job.role,
@@ -258,16 +280,24 @@ impl DeliveryService {
         Ok(())
     }
 
-    /// For each active batch whose coordinator's conversation is known and
-    /// not inside wait_run: the changes it has not seen, once quiet for
-    /// [`WAKE_QUIET_MS`].
+    /// For each conversation that coordinates active batches: the changes
+    /// it has not seen in those it is not waiting on inside wait_run, once
+    /// they have been quiet for [`WAKE_QUIET_MS`]; one message for all its
+    /// batches.
     pub fn pending_wakeups(&self, now: u64) -> Result<Vec<CoordinatorWakeup>, DeliveryError> {
-        let runs: Vec<DeliveryRun> = self
-            .store()?
-            .runs()?
-            .into_iter()
-            .filter(|run| run.status == "active" && run.coordinator_session.is_some())
-            .collect();
+        let mut sessions: Vec<(String, Vec<DeliveryRun>)> = Vec::new();
+        for run in self.store()?.runs()? {
+            let Some(session) = run.coordinator_session.clone() else {
+                continue;
+            };
+            if run.status != "active" {
+                continue;
+            }
+            match sessions.iter_mut().find(|(id, _)| *id == session) {
+                Some((_, runs)) => runs.push(run),
+                None => sessions.push((session, vec![run])),
+            }
+        }
         let waiting = self
             .inner
             .waiting
@@ -275,25 +305,34 @@ impl DeliveryService {
             .map(|waiting| waiting.clone())
             .unwrap_or_default();
         let mut wakeups = Vec::new();
-        for run in runs {
-            if waiting.get(&run.id).is_some_and(|count| *count > 0) {
+        for (session_id, held) in sessions {
+            let mut changed = Vec::new();
+            for run in &held {
+                if waiting.get(&run.id).is_some_and(|count| *count > 0) {
+                    continue;
+                }
+                let after = run.coordinator_cursor.max(run.notified_cursor);
+                let (events, _) = self.coordinator_events(&run.id, after)?;
+                let Some(newest) = events.last() else {
+                    continue;
+                };
+                let newest_at = newest["at_ms"].as_u64().unwrap_or(now);
+                if now.saturating_sub(newest_at) < WAKE_QUIET_MS {
+                    continue;
+                }
+                let cursor = newest["seq"].as_u64().unwrap_or(after);
+                changed.push((run, events, cursor));
+            }
+            if changed.is_empty() {
                 continue;
             }
-            let after = run.coordinator_cursor.max(run.notified_cursor);
-            let (events, _) = self.coordinator_events(&run.id, after)?;
-            let Some(newest) = events.last() else {
-                continue;
-            };
-            let newest_at = newest["at_ms"].as_u64().unwrap_or(now);
-            if now.saturating_sub(newest_at) < WAKE_QUIET_MS {
-                continue;
-            }
-            let cursor = newest["seq"].as_u64().unwrap_or(after);
             wakeups.push(CoordinatorWakeup {
-                text: wakeup_text(&run, &events, after),
-                run_id: run.id,
-                session_id: run.coordinator_session.unwrap_or_default(),
-                cursor,
+                text: wakeup_text(&held, &changed),
+                runs: changed
+                    .iter()
+                    .map(|(run, _, cursor)| (run.id.clone(), *cursor))
+                    .collect(),
+                session_id,
             });
         }
         Ok(wakeups)
@@ -427,21 +466,65 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
     }
 }
 
-/// The message Tinto sends to the coordinator's conversation.
-fn wakeup_text(run: &DeliveryRun, events: &[Value], after: u64) -> String {
+/// The message Tinto sends to a coordinator's conversation: the changes of
+/// each batch in `changed`, and how to read them all from the batches it
+/// holds (`held`).
+fn wakeup_text(held: &[DeliveryRun], changed: &[(&DeliveryRun, Vec<Value>, u64)]) -> String {
     const MAX_LINES: usize = 12;
-    let mut lines: Vec<String> = events
-        .iter()
-        .take(MAX_LINES)
-        .filter_map(|event| event["text"].as_str().map(|text| format!("- {text}")))
-        .collect();
-    if events.len() > MAX_LINES {
-        lines.push(format!("- y {} cambios más", events.len() - MAX_LINES));
+    let mut sections = Vec::new();
+    for (run, events, _) in changed {
+        let mut lines: Vec<String> = events
+            .iter()
+            .take(MAX_LINES)
+            .filter_map(|event| event["text"].as_str().map(|text| format!("- {text}")))
+            .collect();
+        if events.len() > MAX_LINES {
+            lines.push(format!("- y {} cambios más", events.len() - MAX_LINES));
+        }
+        sections.push(format!(
+            "[Tinto] Cambios en el lote «{}» que esperan al coordinador:\n{}",
+            run.title,
+            lines.join("\n")
+        ));
     }
-    format!(
-        "[Tinto] Cambios en el lote «{}» que esperan al coordinador:\n{}\n\nLlama a wait_run con run_id {} y cursor {after} para leerlos completos y sigue con el lote.",
-        run.title,
-        lines.join("\n"),
-        run.id
-    )
+    // From the oldest change any of its batches has not had read.
+    let after = held
+        .iter()
+        .map(|run| run.coordinator_cursor.max(run.notified_cursor))
+        .min()
+        .unwrap_or(0);
+    let read = match held {
+        [run] => format!(
+            "Llama a wait_run con run_id {} y cursor {after} para leerlos completos y sigue con el lote.",
+            run.id
+        ),
+        _ => format!(
+            "Llama a wait_run con `runs` (cada lote que coordinas: {}, con su owner y generation) y cursor {after} para leerlos completos y sigue con los lotes.",
+            run_list(held)
+        ),
+    };
+    format!("{}\n\n{read}", sections.join("\n\n"))
+}
+
+/// The message that asks an Agents conversation to coordinate `runs`.
+pub fn handover_text(runs: &[DeliveryRun]) -> String {
+    match runs {
+        [run] => format!(
+            "[Tinto] El usuario te pide coordinar el lote «{}» (run_id {}). Tómalo con takeover_run (run_id {}, tu owner, reason «pedido por el usuario en Tinto»); no hace falta comprobar al coordinador anterior. Después llama a wait_run sin cursor, lee delivery_overview y sigue con el lote.",
+            run.title, run.id, run.id
+        ),
+        _ => format!(
+            "[Tinto] El usuario te pide coordinar {} lotes en esta conversación: {}. Toma cada uno con takeover_run (su run_id, tu owner, reason «pedido por el usuario en Tinto»); no hace falta comprobar a los coordinadores anteriores. Después llama a wait_run sin cursor con `runs` (cada lote con su run_id, owner y generation): una sola espera los cubre a todos. Lee delivery_overview y sigue con las tareas de todos los lotes a la vez.",
+            runs.len(),
+            run_list(runs)
+        ),
+    }
+}
+
+/// «Title» (run_id …) of each batch.
+fn run_list(runs: &[DeliveryRun]) -> String {
+    runs.iter()
+        .map(|run| format!("«{}» (run_id {})", run.title, run.id))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

@@ -1,7 +1,8 @@
 // A batch's coordinator inside Tinto: a floating button with its state that
 // unfolds its Agents conversation (messages, files, everything Agents does),
-// starts one when the batch has none here, stops new tasks, and detaches
-// the conversation into its own window.
+// starts one when the batch has none here (for that batch and any others the
+// user ticks: one conversation may coordinate several), stops new tasks, and
+// detaches the conversation into its own window.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
@@ -39,6 +40,15 @@ const STATE_LABEL: Record<CoordinatorState, string> = {
   none: "sin coordinador",
 };
 
+/** A batch's state where the user picks the batches a new coordinator takes. */
+const PICK_LABEL: Record<CoordinatorState, string> = {
+  waiting: "coordinado en Tinto",
+  working: "coordinado en Tinto",
+  stalled: "parado",
+  outside: "coordinado fuera de Tinto",
+  none: "sin coordinador",
+};
+
 const AGENT_LABEL: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex",
@@ -60,13 +70,16 @@ const drawerApi = {
 /** The floating button and, when open, the drawer with the conversation. */
 export function CoordinatorDock({
   runs,
+  focus = null,
   overview,
   stalled,
   open,
   onOpenChange,
 }: {
-  /** The repo's active batches; the first is shown unless one is chosen. */
+  /** The repo's active batches. */
   runs: DeliveryRun[];
+  /** The batch shown until the user picks another; else the first. */
+  focus?: string | null;
   overview: DeliveryOverview;
   /** Batches whose coordinator stopped with changes unread. */
   stalled: string[];
@@ -75,30 +88,39 @@ export function CoordinatorDock({
 }) {
   const sessions = useAgentSessionState().sessions;
   const [runId, setRunId] = useState<string | null>(null);
-  const run = runs.find((candidate) => candidate.id === runId) ?? runs[0];
-  // A conversation just started for a batch, until it takes it over.
-  const [started, setStarted] = useState<{ runId: string; sessionId: string } | null>(null);
+  const run =
+    runs.find((candidate) => candidate.id === (runId ?? focus)) ??
+    runs.find((candidate) => candidate.id === focus) ??
+    runs[0];
+  // A conversation just started for some batches, until it takes them over.
+  const [started, setStarted] = useState<{ runIds: string[]; sessionId: string } | null>(null);
   const handedOver = useRef<string | null>(null);
   const [detached, setDetached] = useState<string | null>(null);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
+  // The batches a new coordinator takes; the one shown until the user ticks others.
+  const [picked, setPicked] = useState<string[] | null>(null);
   // The conversation stays folded until the user opens it.
   const [chatShown, setChatShown] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sessionId =
-    (run?.coordinator_session && sessions[run.coordinator_session]
-      ? run.coordinator_session
-      : null) ?? (started && started.runId === run?.id ? started.sessionId : null);
+  // The Agents conversation that coordinates a batch here, if any.
+  const sessionOf = (target: DeliveryRun) =>
+    (target.coordinator_session && sessions[target.coordinator_session]
+      ? target.coordinator_session
+      : null) ?? (started?.runIds.includes(target.id) ? started.sessionId : null);
+  const sessionId = run ? sessionOf(run) : null;
   const session = sessionId ? sessions[sessionId] : undefined;
+  // Every batch that conversation coordinates.
+  const held = sessionId ? runs.filter((candidate) => sessionOf(candidate) === sessionId) : [];
 
   // Once the new conversation waits for its first message, Tinto asks it to
-  // take the batch over.
+  // take the batches over.
   useEffect(() => {
     if (!started || handedOver.current === started.sessionId) return;
     const live = sessions[started.sessionId];
     if (live?.status !== "running" || live.turn_status !== "waiting") return;
     handedOver.current = started.sessionId;
-    handOverDeliveryRun(started.runId, started.sessionId).catch((cause: unknown) =>
+    handOverDeliveryRun(started.runIds, started.sessionId).catch((cause: unknown) =>
       setError(cause instanceof Error ? cause.message : String(cause)),
     );
   }, [started, sessions]);
@@ -115,28 +137,38 @@ export function CoordinatorDock({
   );
 
   if (!run) return null;
-  const coordinator = (overview.coordinators ?? []).find((state) => state.run_id === run.id);
-  const state: CoordinatorState = stalled.includes(run.id)
-    ? "stalled"
-    : session?.turn_status === "working"
-      ? "working"
-      : coordinator?.waiting
-        ? "waiting"
-        : session
+  // Each batch's own state: stalls and waits are per batch, even when one
+  // conversation holds several.
+  const stateOf = (target: DeliveryRun): CoordinatorState => {
+    const id = sessionOf(target);
+    const live = id ? sessions[id] : undefined;
+    const coordinator = (overview.coordinators ?? []).find((state) => state.run_id === target.id);
+    return stalled.includes(target.id)
+      ? "stalled"
+      : live?.turn_status === "working"
+        ? "working"
+        : coordinator?.waiting || live
           ? "waiting"
-          : run.owner && run.owner !== "user"
+          : target.owner && target.owner !== "user"
             ? "outside"
             : "none";
+  };
+  const state = stateOf(run);
   const isDetached = session !== undefined && detached === session.id;
   // What the start form shows: what the user picked, else the last start in this repo.
   const shown = choice ?? rememberedChoice(run.repo);
+  const chosen = (picked ?? [run.id]).filter((id) => runs.some((candidate) => candidate.id === id));
 
   const start = async () => {
     setError(null);
     const id = await startAgentSession(run.repo, shown.agent, "workspace", runtimeOptions(shown));
     rememberChoice(run.repo, shown);
-    setStarted({ runId: run.id, sessionId: id });
+    setStarted({ runIds: chosen, sessionId: id });
+    setPicked(null);
   };
+
+  const pick = (id: string, on: boolean) =>
+    setPicked(on ? [...chosen, id] : chosen.filter((candidate) => candidate !== id));
 
   const detach = async () => {
     if (!session) return;
@@ -198,7 +230,10 @@ export function CoordinatorDock({
                 <select
                   aria-label="Lote"
                   value={run.id}
-                  onChange={(event) => setRunId(event.target.value)}
+                  onChange={(event) => {
+                    setRunId(event.target.value);
+                    setPicked(null);
+                  }}
                 >
                   {runs.map((candidate) => (
                     <option key={candidate.id} value={candidate.id}>
@@ -253,6 +288,12 @@ export function CoordinatorDock({
                 Tareas nuevas
               </ActionButton>
             </div>
+            {held.length > 1 && (
+              <p className="delivery-coordinator__held">
+                Esta conversación coordina {held.length} lotes:{" "}
+                {held.map((candidate) => batchName(candidate.title || candidate.id)).join(" · ")}
+              </p>
+            )}
           </header>
           {error && (
             <p className="delivery-coordinator__error" role="alert">
@@ -279,10 +320,28 @@ export function CoordinatorDock({
           ) : (
             <div className="delivery-coordinator__start">
               <p className="delivery-muted">
-                {state === "outside"
-                  ? "Puedes seguir así o iniciar aquí un coordinador que tome el lote."
-                  : "Inicia aquí un coordinador: tomará el lote y seguirá con sus tareas."}
+                {runs.length > 1
+                  ? "Inicia aquí un coordinador: tomará los lotes que marques y seguirá con sus tareas, todos en una conversación."
+                  : state === "outside"
+                    ? "Puedes seguir así o iniciar aquí un coordinador que tome el lote."
+                    : "Inicia aquí un coordinador: tomará el lote y seguirá con sus tareas."}
               </p>
+              {runs.length > 1 && (
+                <fieldset className="delivery-coordinator__batches">
+                  <legend>Lotes que toma</legend>
+                  {runs.map((candidate) => (
+                    <label key={candidate.id}>
+                      <input
+                        type="checkbox"
+                        checked={chosen.includes(candidate.id)}
+                        onChange={(event) => pick(candidate.id, event.target.checked)}
+                      />
+                      <span>{batchName(candidate.title || candidate.id)}</span>
+                      <span className="delivery-muted">{PICK_LABEL[stateOf(candidate)]}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              )}
               <div className="delivery-coordinator__pick">
                 <label>
                   Agente
@@ -331,7 +390,11 @@ export function CoordinatorDock({
                     ))}
                   </select>
                 </label>
-                <ActionButton className="delivery-button--primary" onAction={start}>
+                <ActionButton
+                  className="delivery-button--primary"
+                  disabled={chosen.length === 0}
+                  onAction={start}
+                >
                   Iniciar coordinador
                 </ActionButton>
               </div>
