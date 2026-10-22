@@ -14,7 +14,7 @@
 //!   (or starting a stage on the task) moves that mark.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +24,9 @@ use super::model::{DeliveryApproval, DeliveryApprovalStatus, DeliveryRung, Deliv
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
+
+/// How often every done push is checked against its remote branch.
+const PUSH_CHECK_EVERY: Duration = Duration::from_secs(5 * 60);
 
 /// How a PR step's notice starts when its reviewers could not be asked.
 const REVIEW_NOT_ASKED: &str = "No se pudo pedir la revisión a";
@@ -906,10 +909,16 @@ impl DeliveryService {
                 store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
             }
         }
-        if pr_changed(&before, &pr) {
+        let changed = pr_changed(&before, &pr);
+        if changed {
             self.notify();
         }
         self.check_pr_steps(&pr)?;
+        // New commits on the PR, or its branch gone: the push may have
+        // drifted or match again.
+        if changed {
+            self.check_push(&self.task(task_id)?)?;
+        }
         Ok(Some(pr))
     }
 
@@ -1327,7 +1336,9 @@ impl DeliveryService {
         Ok(())
     }
 
-    /// Follows the linked PRs for as long as the app runs.
+    /// Follows the linked PRs for as long as the app runs, and checks the
+    /// tasks' pushes against their remote branches: a drifted one on every
+    /// pass, so it clears once put right, and every one each few minutes.
     pub fn start_pr_watch(&self) {
         let service = self.clone();
         std::thread::spawn(move || {
@@ -1335,11 +1346,34 @@ impl DeliveryService {
                 eprintln!("tinto: delivery could not check the tasks' steps: {error}");
             }
             let mut etag = None;
+            let mut pushes_checked = Instant::now();
             loop {
                 let wait = service.watch_prs_once(&mut etag);
+                let all = pushes_checked.elapsed() >= PUSH_CHECK_EVERY;
+                if all {
+                    pushes_checked = Instant::now();
+                }
+                if let Err(error) = service.check_pushes(all) {
+                    eprintln!("tinto: delivery could not check the tasks' pushes: {error}");
+                }
                 std::thread::sleep(wait);
             }
         });
+    }
+
+    /// Runs [`Self::check_push`] on the tasks whose push drifted, or on all
+    /// with a push done.
+    pub(super) fn check_pushes(&self, all: bool) -> Result<(), DeliveryError> {
+        let tasks = self.store()?.tasks()?;
+        for task in tasks {
+            let Some(push) = self.latest_approval(&task.id, DeliveryRung::Push)? else {
+                continue;
+            };
+            if push.status == DeliveryApprovalStatus::Drifted || (all && push.status.was_done()) {
+                self.check_push(&task)?;
+            }
+        }
+        Ok(())
     }
 }
 

@@ -333,6 +333,13 @@ pub struct DeliveryJob {
     pub result_state: Option<DeliveryResultState>,
     pub result_note: Option<String>,
     pub undone_at_ms: Option<u64>,
+    /// A stage that failed or was blocked, settled without running it again
+    /// because its work was done another way: when, and the one-line note
+    /// saying how. It then counts as passed.
+    #[serde(default)]
+    pub resolved_at_ms: Option<u64>,
+    #[serde(default)]
+    pub resolved_note: Option<String>,
     /// The checks a job without full access is given, taken from the
     /// repo's verification commands (and, for QA, its QA commands and the
     /// user's permissions) when the job was dispatched. A Codex job's

@@ -25,7 +25,7 @@ use super::model::{
     DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
     NewBlocker,
 };
-use super::phase::{current_checks, current_setup, last_change};
+use super::phase::{current_checks, current_setup, is_broken, last_change};
 use super::prs::{self, GitHub};
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
@@ -1514,6 +1514,8 @@ impl DeliveryService {
             result_state: None,
             result_note: None,
             undone_at_ms: None,
+            resolved_at_ms: None,
+            resolved_note: None,
             allowed_commands,
             qa_browser,
             decisions: decision_notes,
@@ -1913,6 +1915,54 @@ impl DeliveryService {
         Ok(job)
     }
 
+    /// Settles the task's broken stage without running it again, because
+    /// its work was done another way (another session finished it, the
+    /// coordinator fixed it outside Tinto). The note, one line, says how;
+    /// the attempt then counts as passed, and a newer one replaces it as
+    /// usual. `by` is `user` or `coordinator`.
+    pub fn resolve(
+        &self,
+        job_id: &str,
+        note: &str,
+        by: &str,
+    ) -> Result<DeliveryJob, DeliveryError> {
+        let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
+        if note.is_empty() || note.chars().count() > 300 {
+            return Err(DeliveryError::new(
+                "invalid_note",
+                "di en una línea (hasta 300 caracteres) cómo quedó resuelta la etapa",
+            ));
+        }
+        let store = self.store()?;
+        let mut job = store
+            .job(job_id)?
+            .ok_or_else(|| DeliveryError::not_found("el trabajo", job_id))?;
+        let jobs = store.task_jobs(&job.task_id)?;
+        let latest = jobs.iter().rev().find(|other| {
+            other.agent != DeliveryAgent::Shell
+                && other.result_state != Some(DeliveryResultState::Stale)
+                && other.undone_at_ms.is_none()
+        });
+        let open = jobs.iter().any(|other| other.status.is_open());
+        if open || !is_broken(&job) || latest.map(|latest| &latest.id) != Some(&job.id) {
+            return Err(DeliveryError::new(
+                "resolve_unavailable",
+                "solo se da por resuelta la última etapa de la tarea cuando falló, se bloqueó o se interrumpió y no hay trabajos abiertos",
+            ));
+        }
+        job.resolved_at_ms = Some(now_ms());
+        job.resolved_note = Some(note.clone());
+        store.put_job(&job)?;
+        let kind = match by {
+            "user" => "job_resolved_by_user",
+            _ => "job_resolved",
+        };
+        store.record_event(now_ms(), kind, Some(&job.task_id), Some(&job.id), &note)?;
+        drop(store);
+        self.notify();
+        Ok(job)
+    }
+
     pub fn job_log(&self, job_id: &str, from_line: usize) -> Result<DeliveryJobLog, DeliveryError> {
         let job = self.job(job_id)?;
         let paths = (self.inner.paths_for)(job_id)?;
@@ -2157,6 +2207,15 @@ impl DeliveryService {
         }
         if let Ok(mut cancels) = self.inner.cancels.lock() {
             cancels.remove(job_id);
+        }
+        // The branch as it is now: a push that drifted may match again.
+        if let Ok(task) = self.job(job_id).and_then(|job| self.task(&job.task_id)) {
+            if let Err(error) = self.check_push(&task) {
+                eprintln!(
+                    "tinto: delivery could not check {}'s push: {error}",
+                    task.key
+                );
+            }
         }
         self.tick();
     }

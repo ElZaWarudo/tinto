@@ -37,6 +37,7 @@ const client = vi.hoisted(() => ({
   undoDeliveryJob: vi.fn(),
   cancelDeliveryJob: vi.fn(),
   retryDeliveryJob: vi.fn(),
+  resolveDeliveryJob: vi.fn(),
   removeDeliveryTask: vi.fn(),
   updateDeliveryTask: vi.fn(),
   updateDeliverySettings: vi.fn(),
@@ -1446,6 +1447,91 @@ describe("DeliveryPanel", () => {
     expect(screen.queryByRole("button", { name: "Lanzar implementación" })).toBeNull();
     await user.click(within(banner).getByRole("button", { name: "Reintentar" }));
     await waitFor(() => expect(client.retryDeliveryJob).toHaveBeenCalledWith("j2"));
+  });
+
+  it("clamps a blocked stage's long summary and settles it with a note", async () => {
+    const user = userEvent.setup();
+    const summary = `I stopped without changing anything. ${"Another session is running the same job in this worktree. ".repeat(8)}`;
+    const blocked = job({
+      id: "j2",
+      role: "implementation",
+      attempt: 22,
+      status: "finished",
+      error: "Tinto se cerró mientras el trabajo corría.",
+      result: {
+        status: "blocked",
+        summary,
+        changed_paths: [],
+        checks: [],
+        findings: [],
+        handoff: "",
+      },
+    });
+    client.getDeliveryOverview.mockResolvedValue(overview({ jobs: [job(), blocked] }));
+    client.resolveDeliveryJob.mockResolvedValue({
+      ...blocked,
+      resolved_at_ms: 5,
+      resolved_note: "Otra sesión terminó el trabajo",
+    });
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Etapa fallida" });
+    expect(banner).toHaveTextContent("Implementación está bloqueada");
+    expect(banner).toHaveTextContent("dejó 2 archivos cambiados");
+    // The long reason shows its first lines until asked for all of it.
+    const why = banner.querySelector(".delivery-broken__why")!;
+    expect(why).toHaveClass("delivery-broken__why--clamped");
+    await user.click(within(banner).getByRole("button", { name: "Ver todo" }));
+    expect(why).not.toHaveClass("delivery-broken__why--clamped");
+    expect(within(banner).getByRole("button", { name: "Ver menos" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    // Settled without running it again: a one-line note is required.
+    await user.click(within(banner).getByRole("button", { name: "Ya está resuelta…" }));
+    const settle = within(banner).getByRole("button", { name: "Dar por resuelta" });
+    await user.click(settle);
+    expect(client.resolveDeliveryJob).not.toHaveBeenCalled();
+    await user.type(
+      within(banner).getByRole("textbox", { name: /Cómo quedó resuelta/ }),
+      "Otra sesión terminó el trabajo",
+    );
+    await user.click(settle);
+    await waitFor(() =>
+      expect(client.resolveDeliveryJob).toHaveBeenCalledWith(
+        "j2",
+        "Otra sesión terminó el trabajo",
+      ),
+    );
+  });
+
+  it("shows a settled stage as resolved in its history, without the alert", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job(),
+          job({
+            id: "j2",
+            role: "implementation",
+            status: "interrupted",
+            error: "Tinto se cerró mientras el trabajo corría.",
+            result: null,
+            resolved_at_ms: 5,
+            resolved_note: "Otra sesión terminó el trabajo",
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    await screen.findByRole("heading", { name: /AGOS-501/ });
+    expect(screen.queryByRole("group", { name: "Etapa fallida" })).toBeNull();
+    const row = screen.getByRole("button", { name: /Implementación · intento/ });
+    expect(row).toHaveTextContent("Resuelta aparte");
+    if (row.getAttribute("aria-expanded") !== "true") await user.click(row);
+    expect(
+      screen.getByText("Dada por resuelta sin repetirla: Otra sesión terminó el trabajo"),
+    ).toBeInTheDocument();
   });
 
   it("has no manual state control and deletes the task from the menu", async () => {

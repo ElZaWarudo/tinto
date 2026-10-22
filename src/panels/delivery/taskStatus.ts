@@ -154,13 +154,14 @@ export function quietFor(job: DeliveryJob, now: number): string | null {
   return minutes >= 5 ? `sin actividad hace ${minutes} min` : null;
 }
 
-/** A job that ended without a usable result. */
+/** A job that ended without a usable result, and was not settled since. */
 export function isBroken(job: DeliveryJob): boolean {
   return (
-    job.status === "failed" ||
-    job.status === "interrupted" ||
-    job.result_state === "invalid" ||
-    (job.status === "finished" && job.result?.status === "blocked")
+    !job.resolved_at_ms &&
+    (job.status === "failed" ||
+      job.status === "interrupted" ||
+      job.result_state === "invalid" ||
+      (job.status === "finished" && job.result?.status === "blocked"))
   );
 }
 
@@ -174,7 +175,10 @@ function isCurrent(job: DeliveryJob): boolean {
 }
 
 export function isPassed(job: DeliveryJob): boolean {
-  return job.status === "finished" && isCurrent(job) && job.result?.status === "pass";
+  return (
+    (!!job.resolved_at_ms && isLive(job)) ||
+    (job.status === "finished" && isCurrent(job) && job.result?.status === "pass")
+  );
 }
 
 function stageOrder(role: string): number {
@@ -241,6 +245,7 @@ export function attemptOutcome(
       : { tone: "waiting", label: "En pausa" };
   }
   if (job.status === "cancelled") return { tone: "idle", label: "Cancelado" };
+  if (job.resolved_at_ms && isLive(job)) return { tone: "ok", label: "Resuelta aparte" };
   if (job.status === "interrupted") return { tone: "danger", label: "Interrumpido" };
   if (job.status === "failed") return { tone: "danger", label: "Falló" };
   if (job.result_state === "stale") return { tone: "idle", label: "Obsoleto" };

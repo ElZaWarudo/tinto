@@ -3820,7 +3820,8 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
         .contains("ya no están en la rama"));
     assert_eq!(changed(&task), ["a.txt"]);
 
-    // A commit rewritten outside (amend) is gone too, and nothing is pushed.
+    // A commit reworded outside (amend, same content) still stands, on the
+    // new commit: there is nothing to commit again.
     let asked = h
         .service
         .request_approval(commit_plan(&task, vec![commit("feat: a", &["a.txt"])], &[]))
@@ -3829,6 +3830,21 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
     git(
         &task.worktree,
         &["commit", "-q", "--amend", "-m", "feat: a, reworded"],
+    );
+    h.service.overview().unwrap();
+    let reworded = h.service.approval(&asked.id).unwrap();
+    assert_eq!(reworded.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(
+        reworded.created,
+        [in_worktree(&task, &["rev-parse", "HEAD"])]
+    );
+
+    // One rewritten with other content is gone, and nothing is pushed.
+    std::fs::write(PathBuf::from(plain_path(&task.worktree)).join("b.txt"), "b").unwrap();
+    git(&task.worktree, &["add", "b.txt"]);
+    git(
+        &task.worktree,
+        &["commit", "-q", "--amend", "-m", "feat: a and b"],
     );
     let push = h
         .service
@@ -7477,4 +7493,182 @@ fn jobs_that_need_the_environment_wait_while_it_fails_and_start_once_it_answers(
             .count(),
         1
     );
+}
+
+#[test]
+fn a_broken_stage_is_settled_with_a_note_and_the_task_moves_on() {
+    use super::phase::{Phase, Waiter};
+    let h = harness();
+    let fence = coordinated_run(&h);
+    let created = tool(
+        &h,
+        "create_task",
+        with(
+            &fence,
+            json!({"repo": plain_path(h.repo.path()), "key": "R-1", "title": "x"}),
+        ),
+    );
+    let task = h
+        .service
+        .task(created["structuredContent"]["id"].as_str().unwrap())
+        .unwrap();
+    let job = h.dispatch(&task, "implementation", "events=codex-failed touch=a.txt");
+    let job = h.wait(&job.id);
+    assert_eq!(job.status, DeliveryJobStatus::Failed);
+    let phase = || h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(matches!(phase().phase, Phase::Broken { .. }));
+    assert_eq!(phase().next_stage.as_deref(), Some("implementation"));
+
+    // A note is required, in one line.
+    let resolve = |note: &str| {
+        tool(
+            &h,
+            "resolve_job",
+            with(&fence, json!({"job_id": job.id, "note": note})),
+        )
+    };
+    assert_eq!(resolve("  ")["isError"], true);
+    let resolved = resolve("Otra sesión terminó\nla implementación")["structuredContent"].clone();
+    assert_eq!(
+        resolved["resolved_note"],
+        "Otra sesión terminó la implementación"
+    );
+    // The alert clears and the stage counts as passed: the task goes on.
+    assert!(!matches!(phase().phase, Phase::Broken { .. }));
+    assert_eq!(phase().waits_on, Waiter::Coordinator);
+    assert_eq!(phase().next_stage.as_deref(), Some("tests"));
+    let job = h.service.job(&job.id).unwrap();
+    assert!(job.resolved_at_ms.is_some());
+    assert_eq!(job.changes.len(), 1, "what it left stays");
+    // Only once, and only for a broken stage.
+    assert_eq!(resolve("otra vez")["isError"], true);
+    let store = h.service.store().unwrap();
+    assert_eq!(
+        store.event_details("job_resolved").unwrap(),
+        ["Otra sesión terminó la implementación"]
+    );
+    drop(store);
+
+    // The user settles too; that one wakes the coordinator.
+    let again = h.dispatch(&task, "implementation", "events=codex-failed");
+    h.wait(&again.id);
+    assert!(matches!(phase().phase, Phase::Broken { .. }));
+    let err = h.service.resolve(&again.id, "", "user").unwrap_err();
+    assert_eq!(err.category, "invalid_note");
+    h.service
+        .resolve(&again.id, "Lo arreglé a mano", "user")
+        .unwrap();
+    assert!(!matches!(phase().phase, Phase::Broken { .. }));
+    assert_eq!(
+        h.service
+            .store()
+            .unwrap()
+            .event_details("job_resolved_by_user")
+            .unwrap(),
+        ["Lo arreglé a mano"]
+    );
+}
+
+#[test]
+fn a_drifted_push_clears_once_the_remote_branch_has_what_tinto_published() {
+    use super::phase::{Phase, Waiter};
+    let h = harness();
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        h.repo.path(),
+        &["remote", "add", "origin", &plain_path(remote.path())],
+    );
+    let task = h.task("P-9");
+    let worktree = PathBuf::from(plain_path(&task.worktree));
+    std::fs::write(worktree.join("feature.txt"), "x").unwrap();
+    let request = |rung, title: &str| NewApproval {
+        task_id: task.id.clone(),
+        rung,
+        title: title.to_string(),
+        body: String::new(),
+        requested_by: "user".to_string(),
+        commits: Vec::new(),
+        leave_out: Vec::new(),
+        single_commit_reason: None,
+        merge_method: None,
+        stage: None,
+        jira_statuses: Vec::new(),
+    };
+    let commit = h
+        .service
+        .request_approval(request(DeliveryRung::Commit, "Add feature"))
+        .unwrap();
+    h.service.decide_approval(&commit.id, true, None).unwrap();
+    let push = h
+        .service
+        .request_approval(request(DeliveryRung::Push, "Publish"))
+        .unwrap();
+    let push = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(push.status, DeliveryApprovalStatus::Executed);
+    let status = || h.service.approval(&push.id).unwrap().status;
+
+    // The remote branch goes back: drifted, and the coordinator is told
+    // what puts it right.
+    let branch = format!("refs/heads/{}", task.branch);
+    git(remote.path(), &["update-ref", &branch, &task.base_commit]);
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(status(), DeliveryApprovalStatus::Drifted);
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert!(matches!(phase.phase, Phase::Drifted { .. }));
+    assert_eq!(phase.waits_on, Waiter::Coordinator);
+    let detail = h
+        .service
+        .store()
+        .unwrap()
+        .event_details("step_drifted")
+        .unwrap();
+    assert!(
+        detail[0].contains("La rama remota cambió fuera de Tinto")
+            && detail[0].contains("vuelve a pedir el paso push"),
+        "{detail:?}"
+    );
+
+    // Put right outside Tinto with one more commit on top: the remote has
+    // what Tinto published, so the push matches again on the next pass.
+    std::fs::write(worktree.join("more.txt"), "y").unwrap();
+    git(&worktree, &["add", "more.txt"]);
+    git(&worktree, &["commit", "-q", "-m", "more"]);
+    git(&worktree, &["push", "-q", "origin", &task.branch]);
+    h.service.check_pushes(false).unwrap();
+    assert_eq!(status(), DeliveryApprovalStatus::Executed);
+    assert!(!matches!(
+        h.service.overview().unwrap().phases[&task.id].phase,
+        Phase::Drifted { .. }
+    ));
+
+    // Someone else pushes ahead from another clone: Tinto fetches what it
+    // does not know and the push still matches.
+    let other = tempfile::tempdir().unwrap();
+    git(
+        other.path(),
+        &[
+            "clone",
+            "-q",
+            "--branch",
+            &task.branch,
+            &plain_path(remote.path()),
+            ".",
+        ],
+    );
+    std::fs::write(other.path().join("theirs.txt"), "z").unwrap();
+    git(other.path(), &["add", "theirs.txt"]);
+    git(other.path(), &["commit", "-q", "-m", "theirs"]);
+    git(other.path(), &["push", "-q", "origin", &task.branch]);
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(status(), DeliveryApprovalStatus::Executed);
+
+    // A rewrite that drops it is a drift again.
+    git(&worktree, &["reset", "-q", "--hard", &task.base_commit]);
+    std::fs::write(worktree.join("other.txt"), "w").unwrap();
+    git(&worktree, &["add", "other.txt"]);
+    git(&worktree, &["commit", "-q", "-m", "rewritten"]);
+    git(&worktree, &["push", "-q", "-f", "origin", &task.branch]);
+    h.service.check_pushes(true).unwrap();
+    assert_eq!(status(), DeliveryApprovalStatus::Drifted);
 }

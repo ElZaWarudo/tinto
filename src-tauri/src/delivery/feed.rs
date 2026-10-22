@@ -27,6 +27,7 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "job_retried",
     "job_not_retried",
     "job_undone",
+    "job_resolved_by_user",
     "approval_approved",
     "approval_rejected",
     "approval_completed",
@@ -436,6 +437,9 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
             format!("la etapa {stage} interrumpida no se pudo reintentar al reiniciar: {detail}")
         }
         "job_undone" => format!("el usuario deshizo los cambios de la etapa {stage}"),
+        "job_resolved_by_user" => format!(
+            "el usuario dio por resuelta la etapa {stage} sin repetirla ({detail}); sigue con la siguiente"
+        ),
         "approval_approved" => format!("el usuario aprobó el paso {detail}"),
         "approval_rejected" => format!("el usuario rechazó el paso {detail}"),
         "approval_completed" => format!("se registró el paso {detail}"),

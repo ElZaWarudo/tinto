@@ -78,6 +78,7 @@ import {
   releaseDeliveryLease,
   removeDeliveryTask,
   requestDeliveryApproval,
+  resolveDeliveryJob,
   retryDeliveryJob,
   setDeliveryRepoSettings,
   setDeliveryRunQaJiraComment,
@@ -2490,43 +2491,13 @@ function TaskDetail({
       )}
 
       {broken && (
-        <div
-          className="delivery-banner delivery-banner--danger"
-          role="group"
-          aria-label="Etapa fallida"
-        >
-          <p className="delivery-banner__title">
-            <Icon name="x" />
-            <strong>
-              {stageLabel(broken.role)} {brokenVerb(broken)}
-            </strong>
-            <span className="delivery-muted">intento {broken.attempt}</span>
-          </p>
-          {broken.error && <p>{broken.error}</p>}
-          {broken.result_note && <p>{broken.result_note}</p>}
-          {broken.result?.status === "blocked" && <p>{broken.result.summary}</p>}
-          {broken.changes.length > 0 && !broken.undone_at_ms && (
-            <p className="delivery-muted">Dejó {files(broken.changes.length)} cambiados.</p>
-          )}
-          <ActionGroup>
-            <div className="delivery-actions">
-              <ActionButton
-                className="delivery-button--primary"
-                onAction={() => retryDeliveryJob(broken.id)}
-              >
-                Reintentar
-              </ActionButton>
-              {broken.agent !== "shell" && broken.provider_session_id && (
-                <ActionButton onAction={() => onContinueJob(broken)}>
-                  Continuar en Agents
-                </ActionButton>
-              )}
-              {latestUndoable?.id === broken.id && (
-                <ActionButton onAction={() => undo(broken)}>Deshacer cambios</ActionButton>
-              )}
-            </div>
-          </ActionGroup>
-        </div>
+        <BrokenStage
+          key={broken.id}
+          job={broken}
+          undoable={latestUndoable?.id === broken.id}
+          onContinue={() => onContinueJob(broken)}
+          onUndo={() => undo(broken)}
+        />
       )}
 
       {qaRecord?.visual_record_error && !qaRecord.visual_record && (
@@ -2696,6 +2667,122 @@ function TaskDetail({
         </ul>
       </section>
     </article>
+  );
+}
+
+/** Past this, why a stage broke shows its first lines until asked for all. */
+const BROKEN_WHY_CHARS = 240;
+
+/** The task's latest stage failed or was blocked: why, in a few lines, and
+ *  what to do about it. When its work got done another way, the user settles
+ *  it with a note instead of running it again. */
+function BrokenStage({
+  job,
+  undoable,
+  onContinue,
+  onUndo,
+}: {
+  job: DeliveryJob;
+  undoable: boolean;
+  onContinue: () => Promise<unknown>;
+  onUndo: () => Promise<unknown>;
+}) {
+  const [whole, setWhole] = useState(false);
+  const [settling, setSettling] = useState(false);
+  const [note, setNote] = useState("");
+  const why = [
+    job.error,
+    job.result_note,
+    job.result?.status === "blocked" ? job.result.summary : null,
+  ].filter((text): text is string => !!text?.trim());
+  const long = why.join(" ").length > BROKEN_WHY_CHARS || why.some((text) => text.includes("\n"));
+  return (
+    <div
+      className="delivery-banner delivery-banner--danger delivery-broken"
+      role="group"
+      aria-label="Etapa fallida"
+    >
+      <p className="delivery-banner__title">
+        <Icon name="x" />
+        <strong>
+          {stageLabel(job.role)} {brokenVerb(job)}
+        </strong>
+        <span className="delivery-muted">intento {job.attempt}</span>
+        {job.changes.length > 0 && !job.undone_at_ms && (
+          <span className="delivery-muted">· dejó {files(job.changes.length)} cambiados</span>
+        )}
+      </p>
+      {why.length > 0 && (
+        <div
+          className={`delivery-broken__why${long && !whole ? " delivery-broken__why--clamped" : ""}`}
+        >
+          {why.map((text, at) => (
+            <p key={at}>{text}</p>
+          ))}
+        </div>
+      )}
+      {long && (
+        <button
+          type="button"
+          className="delivery-link-button delivery-broken__more"
+          aria-expanded={whole}
+          onClick={() => setWhole(!whole)}
+        >
+          {whole ? "Ver menos" : "Ver todo"}
+        </button>
+      )}
+      {settling ? (
+        <form className="delivery-broken__settle" onSubmit={(event) => event.preventDefault()}>
+          <label className="delivery-request__field">
+            <span>Cómo quedó resuelta, en una línea (queda en su historial)</span>
+            <input
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Otra sesión terminó el trabajo y la rama ya lo tiene"
+              maxLength={300}
+              required
+              autoFocus
+            />
+          </label>
+          <ActionGroup>
+            <div className="delivery-actions">
+              <ActionButton
+                type="submit"
+                className="delivery-button--primary"
+                onAction={() => resolveDeliveryJob(job.id, note)}
+              >
+                Dar por resuelta
+              </ActionButton>
+              <button type="button" onClick={() => setSettling(false)}>
+                Cancelar
+              </button>
+            </div>
+          </ActionGroup>
+        </form>
+      ) : (
+        <ActionGroup>
+          <div className="delivery-actions">
+            <ActionButton
+              className="delivery-button--primary"
+              onAction={() => retryDeliveryJob(job.id)}
+            >
+              Reintentar
+            </ActionButton>
+            {job.agent !== "shell" && job.provider_session_id && (
+              <ActionButton onAction={onContinue}>Continuar en Agents</ActionButton>
+            )}
+            {undoable && <ActionButton onAction={onUndo}>Deshacer cambios</ActionButton>}
+            <button
+              type="button"
+              title="Su trabajo se hizo de otra forma: la etapa cuenta como hecha sin repetirla"
+              onClick={() => setSettling(true)}
+            >
+              Ya está resuelta…
+            </button>
+          </div>
+        </ActionGroup>
+      )}
+    </div>
   );
 }
 
@@ -3718,6 +3805,11 @@ function JobRow({
             </p>
           )}
           {job.result_note && <p className="delivery-job__note">{job.result_note}</p>}
+          {job.resolved_note && (
+            <p className="delivery-job__note">
+              Dada por resuelta sin repetirla: {job.resolved_note}
+            </p>
+          )}
           {job.substituted && <p className="delivery-muted">{job.substituted}</p>}
           {job.retry_of && (
             <p className="delivery-muted">

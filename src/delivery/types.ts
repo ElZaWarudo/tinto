@@ -204,6 +204,9 @@ export interface DeliveryJob {
   result_state: DeliveryResultState | null;
   result_note: string | null;
   undone_at_ms: number | null;
+  /** A broken stage settled without running it again, and how. */
+  resolved_at_ms?: number | null;
+  resolved_note?: string | null;
   /** Commands a Claude job without full access may run. */
   allowed_commands?: string[];
   /** Reasoning effort passed to the CLI; its default when null. */

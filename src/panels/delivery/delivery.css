@@ -352,6 +352,9 @@
 }
 .delivery-task {
   display: grid;
+  /* As wide as the panel: a line that does not wrap (a job's timing, a
+     long command) must not widen the whole task past it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 .delivery-task__header {
@@ -480,10 +483,14 @@
 
 .delivery-banner {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--warn);
   background: rgb(from var(--warn) r g b / 0.08);
+  /* An agent's summary or a path without spaces wraps inside the box. */
+  overflow-wrap: anywhere;
 }
 /* Pending decisions: one line in the task, the cards in a floating panel. */
 .delivery-pending-bar {
@@ -566,6 +573,29 @@
 }
 .delivery-banner .delivery-muted {
   font-size: 12px;
+}
+/* A broken stage: compact, its reason clamped to a few lines until asked. */
+.delivery-broken {
+  gap: 6px;
+  padding: 8px 10px;
+}
+.delivery-broken__why {
+  display: grid;
+  gap: 4px;
+}
+.delivery-broken__why--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.delivery-panel .delivery-broken__more {
+  justify-self: start;
+}
+.delivery-broken__settle {
+  display: grid;
+  gap: 6px;
 }
 .delivery-panel .delivery-banner input:not([type="radio"]):not([type="checkbox"]) {
   flex: 1;
@@ -1238,6 +1268,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1px;
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -1359,6 +1390,7 @@
 /* ---------- History ---------- */
 .delivery-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 .delivery-jobs,
@@ -1446,6 +1478,7 @@
 }
 .delivery-job__detail p {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 .delivery-job__error {
   color: var(--danger);
