@@ -89,13 +89,13 @@ pub struct CoordinatorWakeup {
 
 /// Counts a coordinator inside wait_run, on each of its batches, for as
 /// long as it waits.
-struct Waiting<'a> {
+pub(super) struct Waiting<'a> {
     service: &'a DeliveryService,
     run_ids: Vec<String>,
 }
 
 impl<'a> Waiting<'a> {
-    fn start(service: &'a DeliveryService, run_ids: &[String]) -> Self {
+    pub(super) fn start(service: &'a DeliveryService, run_ids: &[String]) -> Self {
         if let Ok(mut waiting) = service.inner.waiting.lock() {
             for run_id in run_ids {
                 *waiting.entry(run_id.clone()).or_default() += 1;

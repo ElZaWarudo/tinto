@@ -2687,7 +2687,9 @@ fn past_the_brainstorm_qa_neither_waits_on_a_stale_permission_nor_on_a_quarantin
         .remove(0);
     assert!(allowed.runs_candidate);
     assert_eq!(allowed.decided_by.as_deref(), Some(super::decisions::AUTO));
-    std::fs::write(task.worktree.join("cli.js"), "v2\n").unwrap();
+    // Another size: written within the same moment as v1, a same-size file
+    // can look unchanged to git's stat cache, and the code would not move.
+    std::fs::write(task.worktree.join("cli.js"), "version 2\n").unwrap();
     let qa = h
         .service
         .dispatch(claude_qa(&task, "events=claude-ok"))
@@ -6699,32 +6701,15 @@ fn a_coordinator_inside_wait_run_is_not_woken() {
     let coordinator = Coordinator::start(&h);
     coordinator.task("F-4");
     coordinator.write_from("session-2", "wait_run", json!({}));
-    let service = h.service.clone();
-    let run_id = coordinator.run_id.clone();
-    let waiting = std::thread::spawn(move || {
-        service
-            .wait_run(&[run_id], Some(u64::MAX), Duration::from_secs(2), true)
-            .unwrap()
-    });
-    // Only once Tinto counts it as waiting: a fixed pause lost that race on
-    // a busy machine.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !h
-        .service
-        .overview()
-        .unwrap()
-        .coordinators
-        .iter()
-        .any(|state| state.run_id == coordinator.run_id && state.waiting)
-    {
-        assert!(Instant::now() < deadline, "the wait never started");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    // Counted as inside wait_run the way the wait counts it, for as long as
+    // the test needs: a real wait in a thread could time out on a busy
+    // machine before the change was checked.
+    let _inside =
+        super::feed::Waiting::start(&h.service, std::slice::from_ref(&coordinator.run_id));
     h.service.set_run_paused(&coordinator.run_id, true).unwrap();
     let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
     // The wait hands it the change; no message is needed.
     let pending = h.service.pending_wakeups(later).unwrap();
-    waiting.join().unwrap();
     assert!(pending.is_empty(), "{pending:?}");
 }
 
