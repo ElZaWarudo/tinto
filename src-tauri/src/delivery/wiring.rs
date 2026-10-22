@@ -585,9 +585,15 @@ mod tests {
             Some(moved.clone())
         );
         drop(listener);
+        // Nobody listens on port 1. The port just freed would not do: a test
+        // running alongside may take it at once.
+        let nowhere = Target {
+            url: "http://127.0.0.1:1/mcp".into(),
+            token: "t0k".into(),
+        };
         assert_eq!(
             wait_for_server(
-                || Some(moved.clone()),
+                || Some(nowhere.clone()),
                 std::time::Duration::from_millis(600)
             ),
             None

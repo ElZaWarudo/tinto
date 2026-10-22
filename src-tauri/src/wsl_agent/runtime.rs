@@ -1876,6 +1876,10 @@ mod tests {
 
     #[test]
     fn agent_checkpoint_scan_and_revert_are_agent_side() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "before\n");
 
@@ -2039,6 +2043,10 @@ mod tests {
 
     #[test]
     fn agent_ephemeral_checkpoint_can_be_created_and_removed_agent_side() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "current\n");
         let create = AgentRequest::AgentCheckpointCreate {

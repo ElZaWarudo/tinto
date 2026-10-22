@@ -1665,6 +1665,10 @@ mod tests {
 
     #[test]
     fn checkpoint_creation_records_git_head_when_repo_is_clean() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         let record =
             create_checkpoint(repo.path(), "sess-clean", 1, &CheckpointConfig::default()).unwrap();
@@ -1682,6 +1686,10 @@ mod tests {
 
     #[test]
     fn dirty_git_repo_uses_filesystem_snapshot() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty\n");
         repo.write("untracked.txt", "new\n");
@@ -1710,6 +1718,10 @@ mod tests {
 
     #[test]
     fn dirty_submodule_does_not_force_a_full_tree_snapshot() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         // A nested repository registered as a gitlink, like a git submodule.
         let sub_path = repo.path().join("sub");
@@ -1792,6 +1804,10 @@ mod tests {
 
     #[test]
     fn large_dirty_content_is_stored_once_and_restored_exactly() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         let big = noise(3 * 1024 * 1024, 7);
         fs::create_dir_all(repo.path().join("docs/runs")).unwrap();
@@ -1823,6 +1839,10 @@ mod tests {
 
     #[test]
     fn snapshots_never_write_to_the_user_repository() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write_and_stage("staged.txt", "staged\n");
         repo.write("base.txt", "dirty\n");
@@ -1850,6 +1870,10 @@ mod tests {
 
     #[test]
     fn renamed_files_are_snapshotted_without_a_full_tree_copy() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         run_git(repo.path(), &["mv", "base.txt", "renamed.txt"]).unwrap();
         let record =
@@ -1870,6 +1894,10 @@ mod tests {
 
     #[test]
     fn filesystem_snapshot_respects_gitignore_for_large_ignored_dirs() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write(".gitignore", "node_modules/\n");
         fs::create_dir_all(repo.path().join("node_modules/pkg")).unwrap();
@@ -1900,6 +1928,10 @@ mod tests {
 
     #[test]
     fn filesystem_revert_restores_modified_and_deletes_created_files() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty before\n");
         repo.write("baseline-new.txt", "baseline untracked\n");
@@ -1934,6 +1966,10 @@ mod tests {
 
     #[test]
     fn filesystem_file_revert_restores_only_selected_file() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty before\n");
         repo.write("other.txt", "other before\n");
@@ -1965,6 +2001,10 @@ mod tests {
 
     #[test]
     fn file_revert_rejects_paths_outside_repo_or_dot_git() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty before\n");
         let record = create_checkpoint(
@@ -1987,6 +2027,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_revert_rejects_symlink_ancestor_escape() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("dir/base.txt", "before\n");
         let outside = tempfile::tempdir().unwrap();
@@ -2010,6 +2054,10 @@ mod tests {
 
     #[test]
     fn retention_deletes_old_checkpoints() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty\n");
         let config = CheckpointConfig {
@@ -2029,6 +2077,10 @@ mod tests {
 
     #[test]
     fn ephemeral_checkpoint_does_not_prune_the_target_and_can_be_removed() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "target\n");
         let config = CheckpointConfig {
@@ -2049,6 +2101,10 @@ mod tests {
 
     #[test]
     fn ephemeral_checkpoint_restores_staged_index_state() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write_and_stage("base.txt", "staged content\n");
         let status_before = git_status_porcelain(repo.path());
@@ -2077,6 +2133,10 @@ mod tests {
 
     #[test]
     fn ephemeral_checkpoint_restores_staged_and_unstaged_index_state() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write_and_stage("base.txt", "staged content\n");
         repo.write("base.txt", "unstaged content\n");
@@ -2107,6 +2167,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ephemeral_checkpoint_rejects_a_dirty_symlink_before_repo_mutation() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         use std::os::unix::fs::symlink;
 
         let repo = TempRepo::with_initial_commit();
@@ -2128,6 +2192,10 @@ mod tests {
 
     #[test]
     fn ephemeral_checkpoint_cleanup_rejects_an_external_directory() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         let _anchor = create_checkpoint(
             repo.path(),
@@ -2158,6 +2226,10 @@ mod tests {
 
     #[test]
     fn repo_budget_prunes_old_checkpoints_before_failing_start() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty\n");
         let config = CheckpointConfig {
@@ -2185,6 +2257,10 @@ mod tests {
 
     #[test]
     fn plain_folder_uses_the_shadow_store_without_a_size_cap() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         // Bigger than the old 100 MB file-copy cap would allow at scale,
@@ -2232,6 +2308,10 @@ mod tests {
 
     #[test]
     fn change_log_detects_fs_created_modified_removed() {
+        // HOME must not change under it: checkpoints live in ~/.tinto.
+        let _home_lock = crate::HOME_ENV_LOCK
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let repo = TempRepo::with_initial_commit();
         repo.write("base.txt", "dirty before\n");
         repo.write("removed.txt", "gone soon\n");

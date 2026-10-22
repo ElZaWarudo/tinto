@@ -6582,7 +6582,20 @@ fn a_coordinator_inside_wait_run_is_not_woken() {
             .wait_run(&[run_id], Some(u64::MAX), Duration::from_secs(2), true)
             .unwrap()
     });
-    std::thread::sleep(Duration::from_millis(300));
+    // Only once Tinto counts it as waiting: a fixed pause lost that race on
+    // a busy machine.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !h
+        .service
+        .overview()
+        .unwrap()
+        .coordinators
+        .iter()
+        .any(|state| state.run_id == coordinator.run_id && state.waiting)
+    {
+        assert!(Instant::now() < deadline, "the wait never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     h.service.set_run_paused(&coordinator.run_id, true).unwrap();
     let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
     // The wait hands it the change; no message is needed.
