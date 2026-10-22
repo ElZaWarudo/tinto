@@ -3807,7 +3807,10 @@ function JobRow({
           {job.result_note && <p className="delivery-job__note">{job.result_note}</p>}
           {job.resolved_note && (
             <p className="delivery-job__note">
-              Dada por resuelta sin repetirla: {job.resolved_note}
+              {job.result?.status === "findings"
+                ? "Hallazgos aceptados sin corregirlos: "
+                : "Dada por resuelta sin repetirla: "}
+              {job.resolved_note}
             </p>
           )}
           {job.substituted && <p className="delivery-muted">{job.substituted}</p>}

@@ -7144,6 +7144,8 @@ fn the_coordinator_is_not_told_of_its_own_task_edits_but_is_of_the_users() {
         events[0]["text"],
         "AGOS-7: el usuario editó la tarea: estado «esperando diseño»"
     );
+    // Quiet long enough counting from the edit, not from before it.
+    let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
     let wakeups = h.service.pending_wakeups(later).unwrap();
     assert_eq!(wakeups.len(), 1);
     assert!(wakeups[0].text.contains("el usuario editó la tarea"));
@@ -7684,4 +7686,68 @@ fn a_drifted_push_clears_once_the_remote_branch_has_what_tinto_published() {
     git(&worktree, &["push", "-q", "-f", "origin", &task.branch]);
     h.service.check_pushes(true).unwrap();
     assert_eq!(status(), DeliveryApprovalStatus::Drifted);
+}
+
+#[test]
+fn a_commit_waits_until_the_qa_findings_are_fixed_or_accepted() {
+    let h = harness();
+    let task = h.task("QF-1");
+    write_files(&task, &["a.txt"]);
+    // The stages ran: QA ended with findings nobody answered.
+    for (index, (role, status)) in [("implementation", "pass"), ("qa", "findings")]
+        .into_iter()
+        .enumerate()
+    {
+        let job: DeliveryJob = serde_json::from_value(json!({
+            "id": format!("qf-{index}"), "task_id": task.id, "role": role,
+            "attempt": 1, "agent": "claude", "access": "workspace", "prompt": "x",
+            "contract_version": 1, "writes": role != "qa", "timeout_minutes": 60,
+            "status": "finished", "created_at_ms": index + 1, "started_at_ms": index + 1,
+            "ended_at_ms": index + 1, "result_state": "accepted",
+            "result": {
+                "status": status, "summary": "s", "changed_paths": [], "checks": [],
+                "findings": if status == "findings" { vec!["El aviso tapa el botón", "Falta el texto"] } else { vec![] },
+                "handoff": "", "blocked_by": "none",
+            },
+        }))
+        .unwrap();
+        h.service.store().unwrap().put_job(&job).unwrap();
+    }
+    let plan = || commit_plan(&task, vec![commit("feat: a", &["a.txt"])], &[]);
+    let error = h.service.request_approval(plan()).unwrap_err();
+    assert_eq!(error.category, "stages_unsettled", "{error}");
+    assert!(
+        error
+            .message
+            .contains("qa terminó con 2 hallazgos sin atender"),
+        "{error}"
+    );
+    assert!(error.message.contains("resolve_job"), "{error}");
+    // The user may still commit as they judge.
+    let mut by_user = plan();
+    by_user.requested_by = "user".into();
+    assert!(!matches!(
+        h.service.request_approval(by_user),
+        Err(error) if error.category == "stages_unsettled"
+    ));
+
+    // Accepted as they are, with a reason: the commit can be asked for.
+    let accepted = h
+        .service
+        .resolve(
+            "qf-1",
+            "Observaciones de estilo; no bloquean la incidencia",
+            "coordinator",
+        )
+        .unwrap();
+    assert!(accepted.resolved_at_ms.is_some());
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_ne!(phase.next_stage.as_deref(), Some("implementation"));
+    for approval in h.service.overview().unwrap().approvals {
+        let _ = h.service.withdraw_approval(&approval.id, "otra prueba");
+    }
+    assert!(!matches!(
+        h.service.request_approval(plan()),
+        Err(error) if error.category == "stages_unsettled"
+    ));
 }

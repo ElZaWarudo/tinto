@@ -387,6 +387,12 @@ describe("results left behind by later work", () => {
       label: "2 hallazgos · atendidos",
     });
     expect(attemptOutcome(tests, [tests]).tone).toBe("attention");
+    // Accepted as they are (resolve_job with a note): settled, not a warning.
+    const accepted = { ...tests, resolved_at_ms: 9, resolved_note: "no bloquean" };
+    expect(attemptOutcome(accepted, [accepted])).toEqual({
+      tone: "ok",
+      label: "2 hallazgos · aceptados",
+    });
     const paused = job({ status: "paused", result: null });
     const resumed = job({ status: "started", ended_at_ms: null, resumes: paused.id });
     expect(attemptOutcome(paused, [paused, resumed]).label).toBe("Pausado · reanudado");

@@ -249,6 +249,41 @@ pub fn is_answered(job: &DeliveryJob, jobs: &[&DeliveryJob]) -> bool {
         })
 }
 
+/// Ended with findings nobody has accepted (see `resolve_job`).
+pub fn has_open_findings(job: &DeliveryJob) -> bool {
+    job.status == DeliveryJobStatus::Finished && result_is(job, "findings") && !is_resolved(job)
+}
+
+/// Why the task's code cannot be committed yet: its latest stage's findings
+/// were neither answered by a later stage nor accepted, or one of Tinto's
+/// checks fails on it.
+pub fn commit_blocker(jobs: &[&DeliveryJob]) -> Option<String> {
+    let agent_jobs: Vec<&DeliveryJob> = jobs
+        .iter()
+        .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job))
+        .copied()
+        .collect();
+    if let Some(latest) = agent_jobs.last() {
+        if has_open_findings(latest) && !is_answered(latest, &agent_jobs) {
+            let count = latest
+                .result
+                .as_ref()
+                .map_or(0, |result| result.findings.len());
+            return Some(format!(
+                "{} terminó con {count} hallazgo{} sin atender",
+                latest.role,
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+    }
+    let failed: Vec<String> = current_checks(jobs)
+        .iter()
+        .filter(|check| check.status == DeliveryJobStatus::Failed)
+        .map(|check| format!("`{}`", check.prompt))
+        .collect();
+    (!failed.is_empty()).then(|| format!("fallan comprobaciones de Tinto: {}", failed.join(", ")))
+}
+
 /// The latest stage that changed the task's code.
 pub fn last_change<'a>(jobs: &[&'a DeliveryJob]) -> Option<&'a DeliveryJob> {
     jobs.iter()
@@ -424,7 +459,7 @@ pub fn next_stage(
         if is_broken(latest) {
             return Some(latest.role.clone());
         }
-        if latest.status == DeliveryJobStatus::Finished && result_is(latest, "findings") {
+        if has_open_findings(latest) {
             return Some("implementation".into());
         }
     }
