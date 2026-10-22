@@ -44,7 +44,10 @@ pub fn with_launch_options<T>(
 
 /// `--model` and `--effort` for the Claude Code conversation being launched.
 fn claude_launch_args() -> Vec<String> {
-    let mut args = Vec::new();
+    // With its Chrome extension installed, Claude Code opens with a question
+    // about using the user's browser and waits for a key nobody in Tinto
+    // presses. Tinto has its own browser for QA: keep Chrome's tools off.
+    let mut args = vec!["--no-chrome".to_string()];
     let Some(options) = LAUNCH_OPTIONS.with(|slot| slot.borrow().clone()) else {
         return args;
     };
