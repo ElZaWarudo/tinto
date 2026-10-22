@@ -149,6 +149,7 @@ import {
   parseStatuses,
   pausedJob,
   pendingSettingsProposals,
+  prMood,
   prSummary,
   quietFor,
   rolesOf,
@@ -2244,7 +2245,7 @@ function TaskDetail({
               {issueUrl && (
                 <button
                   type="button"
-                  className="delivery-link-chip"
+                  className="delivery-link-chip delivery-link-chip--jira"
                   aria-expanded={float === "issue"}
                   aria-label={`Ver ${task.key} de Jira`}
                   onClick={() => setFloat(float === "issue" ? null : "issue")}
@@ -2255,20 +2256,18 @@ function TaskDetail({
               )}
               {pr && (
                 <ExternalLink
-                  className="delivery-link-chip"
+                  className={`delivery-link-chip delivery-link-chip--pr delivery-link-chip--pr-${prMood(pr)}`}
                   href={pr.url}
                   label={`Abrir el PR #${pr.number} en GitHub`}
                 >
                   <Icon name={pr.state === "merged" ? "merge" : "pull"} />
                   PR #{pr.number}
-                  <span className={pr.state === "merged" ? "delivery-tone--ok" : "delivery-muted"}>
-                    · {lower(prSummary(pr).label)}
-                  </span>
+                  <span className="delivery-link-chip__state">· {lower(prSummary(pr).label)}</span>
                 </ExternalLink>
               )}
               {qaRecord?.visual_record && (
                 <ActionButton
-                  className="delivery-link-chip"
+                  className="delivery-link-chip delivery-link-chip--qa"
                   aria-label="Abrir registro visual de QA"
                   title={`Los cambios visuales que revisó la QA (intento ${qaRecord.attempt}), con capturas de escritorio y móvil. Se abre en tu navegador.`}
                   onAction={() => openDeliveryVisualRecord(qaRecord.id)}
@@ -2280,7 +2279,7 @@ function TaskDetail({
               {qaProblems.length > 0 && (
                 <button
                   type="button"
-                  className="delivery-link-chip"
+                  className={`delivery-link-chip delivery-link-chip--problems${qaProblemsToDecide > 0 ? " delivery-link-chip--pending" : ""}`}
                   aria-expanded={float === "qa"}
                   aria-label={
                     qaProblemsToDecide > 0

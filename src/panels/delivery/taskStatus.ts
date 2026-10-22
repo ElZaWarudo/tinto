@@ -666,6 +666,20 @@ export function prSummary(pr: DeliveryPr): { tone: Tone; icon: StatusIcon; label
   return { tone: "waiting", icon: "clock", label: "En revisión" };
 }
 
+/** The colour the PR's link takes in the task header, from what it needs:
+ *  merged, failing (checks or closed), attention (news, conflicts, changes
+ *  asked, checks running), approved, or neutral while it waits on review. */
+export type PrMood = "merged" | "failing" | "attention" | "approved" | "neutral";
+
+export function prMood(pr: DeliveryPr): PrMood {
+  if (pr.state === "merged") return "merged";
+  const { tone } = prSummary(pr);
+  if (tone === "danger") return "failing";
+  if (tone === "attention" || pr.checks.pending > 0) return "attention";
+  if (tone === "ok") return "approved";
+  return "neutral";
+}
+
 /** "En ejecución, In Review" (or with → between them) → the statuses in order. */
 export function parseStatuses(text: string): string[] {
   return text

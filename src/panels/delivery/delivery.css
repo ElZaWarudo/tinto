@@ -385,21 +385,63 @@
   align-items: center;
   gap: 5px;
 }
+/* Each link in bold with its own colour, taken from the theme's tokens so it
+   holds in every theme: Jira in the info blue, QA's record in the step
+   colour, QA's problems amber while some wait on the user, and the PR in the
+   colour of what it needs, with a bar so it stands out when it matters. */
 .delivery-panel .delivery-link-chip {
-  height: 22px;
-  padding: 0 6px;
+  --chip: var(--fg-muted);
+  height: 26px;
+  padding: 0 7px;
   border: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1;
-  color: var(--fg-muted);
+  color: var(--fg);
   background: transparent;
   text-decoration: none;
   cursor: pointer;
 }
+.delivery-panel .delivery-link-chip .delivery-icon {
+  color: var(--chip);
+}
 .delivery-panel .delivery-link-chip:hover:not(:disabled) {
-  color: var(--fg);
   background: var(--hover);
+}
+.delivery-panel .delivery-link-chip--jira {
+  --chip: var(--info);
+}
+.delivery-panel .delivery-link-chip--qa {
+  --chip: var(--step);
+}
+.delivery-panel .delivery-link-chip--pending {
+  --chip: var(--warn);
+}
+.delivery-panel .delivery-link-chip--pr {
+  border-left: 3px solid var(--chip);
+  padding-left: 8px;
+}
+.delivery-panel .delivery-link-chip--pr-merged {
+  --chip: var(--step);
+}
+.delivery-panel .delivery-link-chip--pr-failing {
+  --chip: var(--danger);
+}
+.delivery-panel .delivery-link-chip--pr-attention {
+  --chip: var(--warn);
+}
+.delivery-panel .delivery-link-chip--pr-approved {
+  --chip: var(--success);
+}
+.delivery-panel .delivery-link-chip--pr-neutral {
+  --chip: var(--fg-muted);
+}
+.delivery-panel .delivery-link-chip__state {
+  color: var(--chip);
+}
+.delivery-panel .delivery-link-chip--pr-neutral .delivery-link-chip__state {
+  font-weight: 400;
 }
 .delivery-panel .delivery-link-chip[aria-expanded="true"] {
   color: var(--fg);
