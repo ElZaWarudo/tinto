@@ -158,7 +158,13 @@ import {
   issueProgress,
   clusterPackages,
   stepOf,
+  type DeliveryCurrentRound,
   type DeliveryStep,
+  nowLine,
+  roundHistory,
+  roundOf,
+  roundRung,
+  roundStage,
   stageLabel,
   taskStatus,
   trackSteps,
@@ -1946,6 +1952,8 @@ function TaskDetail({
   );
   const hasOpenJob = jobs.some(isOpen);
   const next = nextStageOf(overview, task.id);
+  const round = roundOf(overview, task.id);
+  const pastRounds = roundHistory(overview, task.id);
   const handoff = lastHandoff(jobs);
   const latest = newestFirst.find(
     (job) => job.agent !== "shell" && job.result_state !== "stale" && !job.undone_at_ms,
@@ -2322,6 +2330,36 @@ function TaskDetail({
               </ActionButton>
             )}
           </p>
+          {/* What happens now, and in which round: one line. */}
+          <div className="delivery-task__now" role="group" aria-label="Ahora">
+            <p>
+              <span className="delivery-task__now-label">Ahora</span>
+              <span>
+                {round && "↺ "}
+                {nowLine(task, overview, now)}
+              </span>
+            </p>
+            {round && round.items.length > 0 && (
+              <details className="delivery-task__fold">
+                <summary>Qué atiende la ronda {round.number}</summary>
+                <ol>
+                  {round.items.map((item, at) => (
+                    <li key={at}>{item}</li>
+                  ))}
+                </ol>
+              </details>
+            )}
+            {pastRounds.length > 0 && (
+              <details className="delivery-task__fold">
+                <summary>Rondas anteriores</summary>
+                <ul>
+                  {pastRounds.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
         </div>
         <Menu label="Más acciones de la tarea" trigger={<Icon name="more" />}>
           {(close) => (
@@ -2521,6 +2559,7 @@ function TaskDetail({
         steps={trackSteps(ladder, approvals)}
         pr={pr}
         next={next}
+        round={round}
         onFocus={focusStage}
       />
 
@@ -2850,6 +2889,7 @@ function StageTrack({
   steps,
   pr,
   next,
+  round,
   onFocus,
 }: {
   /** The task's repo, whose settings say who runs each stage. */
@@ -2861,6 +2901,8 @@ function StageTrack({
   /** The PR step shows the followed PR's live state once it exists. */
   pr: DeliveryPr | undefined;
   next: string | null;
+  /** The round the task is in: the track shows that round's stages and steps. */
+  round: DeliveryCurrentRound | null;
   onFocus: (job: DeliveryJob) => void;
 }) {
   return (
@@ -2870,9 +2912,12 @@ function StageTrack({
         <ol aria-labelledby="delivery-track-agents">
           {rolesOf(jobs).map((role) => {
             const job = latestOfRole(jobs, role);
-            const outcome = job
-              ? attemptOutcome(job, jobs)
-              : { tone: "todo" as const, label: role === next ? "Siguiente" : "—" };
+            const inRound = roundStage(role, job, jobs, round);
+            const outcome = inRound
+              ? { ...inRound, label: role === next ? "Siguiente" : inRound.label }
+              : job
+                ? attemptOutcome(job, jobs)
+                : { tone: "todo" as const, label: role === next ? "Siguiente" : "—" };
             const tone = outcome.tone;
             const content = (
               <>
@@ -2881,7 +2926,7 @@ function StageTrack({
                   {stageLabel(role)}
                 </span>
                 <small>{outcome.label}</small>
-                {job?.visual_record && <small>Con registro visual ↓</small>}
+                {job?.visual_record && !inRound && <small>Con registro visual ↓</small>}
                 {job && job.agent !== "shell" && (
                   <small className="delivery-node__runtime">{runtimeLabel(job)}</small>
                 )}
@@ -2923,16 +2968,25 @@ function StageTrack({
             const live = rung === "pr" && pr ? prSummary(pr) : null;
             const approval = latestStep(approvals, ladder);
             const unlinked = rung === "pr" && !pr && approval?.status === "executed";
-            const step = live
-              ? { ...live, title: `${pr?.repo}#${pr?.number}` }
-              : unlinked
-                ? {
-                    tone: "step" as const,
-                    icon: "alert" as const,
-                    label: "Hecho · sin PR vinculado",
-                    title: approval.outcome ?? undefined,
-                  }
-                : rungStep(approval);
+            const before = rungStep(approval);
+            const step = roundRung(ladder, approval, round)
+              ? {
+                  tone: "todo" as const,
+                  icon: "ring" as const,
+                  label: "Se repetirá",
+                  // What it was before the round, for who asks.
+                  title: `Se repetirá en esta ronda${approval ? `. Antes: ${before.title ?? before.label}` : ""}`,
+                }
+              : live
+                ? { ...live, title: `${pr?.repo}#${pr?.number}` }
+                : unlinked
+                  ? {
+                      tone: "step" as const,
+                      icon: "alert" as const,
+                      label: "Hecho · sin PR vinculado",
+                      title: approval.outcome ?? undefined,
+                    }
+                  : before;
             return (
               <li key={stepKey(ladder)} className={`delivery-node delivery-node--${step.tone}`}>
                 <div title={step.title}>

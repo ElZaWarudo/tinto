@@ -364,6 +364,10 @@ pub struct DeliveryJob {
     /// it started from, as the job's instructions state them.
     #[serde(default)]
     pub task_checks: Vec<String>,
+    /// The task's round when the job was dispatched in one: why its work
+    /// came back and what to address, as the job's instructions state them.
+    #[serde(default)]
+    pub round: Vec<String>,
     /// It needs the repo's environment (Docker, the probes' services): it
     /// waits queued while the "Entorno" check fails instead of failing.
     #[serde(default)]
@@ -449,6 +453,47 @@ pub struct DeliveryJob {
     /// again.
     #[serde(default)]
     pub retry_of: Option<String>,
+}
+
+/// A pass of work sent back on a task: review or QA findings, QA problems
+/// the user sent to fix, a failing check of Tinto, changes asked on the PR,
+/// conflicts of a sync. Round 1, the initial delivery, is never stored.
+/// Recorded when it happens, so it keeps what the cause was then.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryRound {
+    pub id: String,
+    pub task_id: String,
+    /// From 2.
+    pub number: u32,
+    /// What sent the work back: `review`, `qa`, `qa_problems`, `checks`,
+    /// `pr` or `sync`.
+    pub kind: String,
+    /// In a few words, for the task list: "5 hallazgos de QA", "PR".
+    pub short: String,
+    /// One line: "Cambios pedidos en el PR #308 por ana (3 comentarios)".
+    pub cause: String,
+    /// What the round has to address, one per line.
+    #[serde(default)]
+    pub items: Vec<String>,
+    /// The job or step whose outcome opened it.
+    #[serde(default)]
+    pub source: Option<String>,
+    pub opened_at_ms: u64,
+    /// The branch was already published when it opened: its commit and
+    /// push are done again in it.
+    #[serde(default)]
+    pub after_push: bool,
+    #[serde(default)]
+    pub closed_at_ms: Option<u64>,
+    /// How it ended: "corregidos", "aceptados", "siguió en la ronda 4"…
+    #[serde(default)]
+    pub outcome: Option<String>,
+}
+
+impl DeliveryRound {
+    pub fn is_open(&self) -> bool {
+        self.closed_at_ms.is_none()
+    }
 }
 
 /// One item of an agent's task list.
@@ -1157,6 +1202,9 @@ pub struct DeliveryOverview {
     /// Settings changes coordinators asked for and the user has not decided.
     #[serde(default)]
     pub settings_proposals: Vec<DeliverySettingsProposal>,
+    /// Every round of the tasks after their initial delivery, oldest first.
+    #[serde(default)]
+    pub rounds: Vec<DeliveryRound>,
     /// The tasks' pull requests Tinto follows.
     pub prs: Vec<super::prs::DeliveryPr>,
     pub settings: DeliverySettings,

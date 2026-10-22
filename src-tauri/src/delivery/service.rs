@@ -675,6 +675,11 @@ impl DeliveryService {
             .into_iter()
             .filter(|problem| live.contains(problem.task_id.as_str()))
             .collect();
+        let rounds: Vec<_> = store
+            .rounds()?
+            .into_iter()
+            .filter(|round| live.contains(round.task_id.as_str()))
+            .collect();
         let runs = store.runs()?;
         let leases = store.leases()?;
         // Where each task is, from the same facts the view gets.
@@ -686,6 +691,7 @@ impl DeliveryService {
             decisions: &decisions,
             settings_proposals: &settings_proposals,
             prs: &prs,
+            rounds: &rounds,
         };
         let phases = tasks
             .iter()
@@ -706,6 +712,7 @@ impl DeliveryService {
             decisions,
             qa_problems,
             settings_proposals,
+            rounds,
             prs,
             leases,
             capacity: store.settings()?.effective_capacity(tasks.len()),
@@ -1374,7 +1381,18 @@ impl DeliveryService {
             DeliveryAgent::Shell => None,
             _ => self.merge_conflicts(&task)?,
         };
+        // A writing stage on a PR with news answers them in a round, which
+        // the stages dispatched in it are told about.
         let store = self.store()?;
+        let round = match request.agent {
+            DeliveryAgent::Shell => Vec::new(),
+            _ => {
+                if request.writes.unwrap_or(writes) {
+                    super::rounds::for_pr(&store, &task.id)?;
+                }
+                super::rounds::note(&store, &task.id)?
+            }
+        };
         let model = match request.model.filter(|model| !model.trim().is_empty()) {
             None if request.agent == DeliveryAgent::Codex => store
                 .setting::<Option<String>>(CODEX_MODEL_SETTING)?
@@ -1526,6 +1544,7 @@ impl DeliveryService {
             qa_followup,
             qa_environment,
             task_checks: Vec::new(),
+            round,
             needs_environment: request.needs_environment || qa,
             waits_environment: None,
             reasoning,
@@ -1964,6 +1983,7 @@ impl DeliveryService {
             _ => "job_resolved",
         };
         store.record_event(now_ms(), kind, Some(&job.task_id), Some(&job.id), &note)?;
+        super::rounds::settle_round(&store, &job.task_id)?;
         drop(store);
         self.notify();
         Ok(job)
@@ -2900,6 +2920,11 @@ impl DeliveryService {
             if let Some(outcome) = checks_outcome(wanted, &current) {
                 store.record_event(now_ms(), all, Some(&job.task_id), None, &outcome)?;
             }
+        }
+        // Findings or failing checks send the work back: the round is there
+        // as soon as the job is seen ended.
+        if let Err(error) = super::rounds::after_job(&store, &job) {
+            eprintln!("tinto: delivery could not record the round of {job_id}: {error}");
         }
         Ok(())
     }

@@ -15,8 +15,8 @@ use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
     DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
-    DeliveryLease, DeliveryLeaseState, DeliveryResultState, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
+    DeliveryLease, DeliveryLeaseState, DeliveryResultState, DeliveryRound, DeliveryRun,
+    DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{CHECKS_ROLE, SETUP_ROLE};
@@ -157,6 +157,20 @@ pub struct DeliveryTaskPhase {
     /// whole ladder (a middle package of a split issue); empty otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<DeliveryStep>,
+    /// The round the task is in, while work sent back on it is not done
+    /// again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<CurrentRound>,
+}
+
+/// A task's open round and where it is in it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CurrentRound {
+    #[serde(flatten)]
+    pub round: DeliveryRound,
+    /// The stage (`implementation`…) or delivery step (`commit`, `push`)
+    /// the round is at; empty when it waits on something else.
+    pub at: String,
 }
 
 /// One rung of a task's ladder (Jira with its moment).
@@ -176,6 +190,7 @@ pub struct Facts<'a> {
     pub decisions: &'a [DeliveryDecision],
     pub settings_proposals: &'a [DeliverySettingsProposal],
     pub prs: &'a [DeliveryPr],
+    pub rounds: &'a [DeliveryRound],
 }
 
 fn is_open(job: &DeliveryJob) -> bool {
@@ -576,7 +591,62 @@ fn pr_waits_on(pr: &DeliveryPr) -> Waiter {
     }
 }
 
+/// The delivery step a round still has to do again: its commit, then its
+/// push when the branch was published before it opened.
+pub fn round_step(round: &DeliveryRound, approvals: &[&DeliveryApproval]) -> Option<DeliveryRung> {
+    let done_since = |rung: DeliveryRung| {
+        approvals.iter().any(|approval| {
+            approval.rung == rung
+                && approval.status == DeliveryApprovalStatus::Executed
+                && approval.executed_at_ms.unwrap_or(0) > round.opened_at_ms
+        })
+    };
+    if !done_since(DeliveryRung::Commit) {
+        Some(DeliveryRung::Commit)
+    } else if round.after_push && !done_since(DeliveryRung::Push) {
+        Some(DeliveryRung::Push)
+    } else {
+        None
+    }
+}
+
 pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
+    let open = facts
+        .rounds
+        .iter()
+        .rev()
+        .find(|round| round.task_id == task.id && round.is_open());
+    let mut phase = phase_in_round(task, facts, open);
+    phase.round = open.map(|round| CurrentRound {
+        round: round.clone(),
+        at: round_at(&phase),
+    });
+    phase
+}
+
+/// The stage or delivery step a phase is at.
+fn round_at(phase: &DeliveryTaskPhase) -> String {
+    match &phase.phase {
+        Phase::Running { role, .. }
+        | Phase::Paused { role, .. }
+        | Phase::BatchPaused { role, .. }
+        | Phase::WaitsEnvironment { role, .. }
+        | Phase::Queued { role, .. }
+        | Phase::Broken { role, .. }
+        | Phase::NextStage { role } => role.clone(),
+        Phase::Approval { rung, .. }
+        | Phase::Record { rung, .. }
+        | Phase::Drifted { rung, .. }
+        | Phase::NextStep { rung, .. } => format!("{rung:?}").to_ascii_lowercase(),
+        _ => phase.next_stage.clone().unwrap_or_default(),
+    }
+}
+
+fn phase_in_round(
+    task: &DeliveryTask,
+    facts: &Facts<'_>,
+    round: Option<&DeliveryRound>,
+) -> DeliveryTaskPhase {
     let jobs: Vec<&DeliveryJob> = facts
         .jobs
         .iter()
@@ -605,6 +675,7 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         waits_on,
         next_stage: next.clone(),
         steps: steps.clone(),
+        round: None,
     };
 
     let decisions = facts
@@ -827,6 +898,16 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
     let Some((rung, stage)) = step else {
         return phase(Phase::Delivered, Waiter::Nobody);
     };
+    // Work sent back comes before the PR's wait: the round's stages, then
+    // its commit and push.
+    if let Some(round) = round {
+        if let Some(role) = next.clone() {
+            return phase(Phase::NextStage { role }, Waiter::Coordinator);
+        }
+        if let Some(rung) = round_step(round, &approvals) {
+            return phase(Phase::NextStep { rung, stage: None }, Waiter::Coordinator);
+        }
+    }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
         return phase(Phase::Pr { number: pr.number }, pr_waits_on(pr));
     }
@@ -885,6 +966,7 @@ mod tests {
         runs: Vec<DeliveryRun>,
         prs: Vec<DeliveryPr>,
         proposals: Vec<DeliverySettingsProposal>,
+        rounds: Vec<DeliveryRound>,
     }
 
     impl World {
@@ -897,6 +979,7 @@ mod tests {
                 runs: Vec::new(),
                 prs: Vec::new(),
                 proposals: Vec::new(),
+                rounds: Vec::new(),
             }
         }
 
@@ -911,6 +994,7 @@ mod tests {
                     decisions: &self.decisions,
                     settings_proposals: &self.proposals,
                     prs: &self.prs,
+                    rounds: &self.rounds,
                 },
             )
         }
@@ -1041,6 +1125,7 @@ mod tests {
             decisions: &[],
             settings_proposals: &[],
             prs: &[],
+            rounds: &[],
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,

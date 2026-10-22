@@ -5,6 +5,7 @@ import type {
   DeliveryOverview,
   DeliveryPhase,
   DeliveryPr,
+  DeliveryRound,
   DeliveryTask,
 } from "../../delivery/types";
 import {
@@ -19,7 +20,11 @@ import {
   latestOfRole,
   nextStageOf,
   nextStep,
+  nowLine,
   prSummary,
+  roundHistory,
+  roundRung,
+  roundStage,
   stageLabel,
   stepsOf,
   taskLabel,
@@ -565,5 +570,75 @@ describe("an issue delivered in packages", () => {
 
   it("keeps an issue's packages together, in order", () => {
     expect(clusterPackages([ui, task, backend]).map((one) => one.id)).toEqual(["p1", "p2", "t1"]);
+  });
+});
+
+describe("a task in a round", () => {
+  const round = (over: Partial<DeliveryRound> = {}): DeliveryRound & { at: string } => ({
+    id: "r2",
+    task_id: "t1",
+    number: 2,
+    kind: "qa",
+    short: "5 hallazgos de QA",
+    cause: "5 hallazgos de QA",
+    items: [],
+    opened_at_ms: 100,
+    at: "implementation",
+    ...over,
+  });
+  const inRound = (phase: DeliveryPhase, current: DeliveryRound & { at: string }) =>
+    overview({ phases: { t1: { ...phase, waits_on: "agent", next_stage: null, round: current } } });
+
+  it("says which round and why before what happens now", () => {
+    const running = job({ id: "i2", role: "implementation", status: "started", ended_at_ms: null });
+    const qa = inRound({ kind: "running", job_id: "i2", role: "implementation" }, round());
+    expect(taskStatus(task, { ...qa, jobs: [running] }, 76_000).label).toBe(
+      "↺ Ronda 2 · 5 hallazgos de QA · implementando · 1:15",
+    );
+    const pr = inRound(
+      { kind: "queued", job_id: "i2", role: "implementation", lease: null, position: 1 },
+      round({ number: 3, kind: "pr", short: "PR", cause: "Cambios pedidos en el PR #308" }),
+    );
+    expect(taskStatus(task, pr, 0).label).toBe("↺ Ronda 3 · PR: en cola · 1.º");
+    expect(nowLine(task, pr, 0)).toBe(
+      "Ronda 3 · Cambios pedidos en el PR #308 · Implementación en cola",
+    );
+  });
+
+  it("keeps the tests of an earlier round and runs again what follows them", () => {
+    const tests = job({ role: "tests", created_at_ms: 1 });
+    const review = job({ role: "review", created_at_ms: 2 });
+    const fix = job({ role: "implementation", created_at_ms: 150 });
+    const jobs = [tests, review, fix];
+    expect(roundStage("tests", tests, jobs, round())).toEqual({
+      tone: "ok",
+      label: "Vale de la ronda anterior",
+    });
+    expect(roundStage("review", review, jobs, round())?.label).toBe("Se repite en esta ronda");
+    expect(roundStage("qa", undefined, jobs, round())?.label).toBe("Se repite en esta ronda");
+    // This round's own attempt, and any outside a round, read as they went.
+    expect(roundStage("implementation", fix, jobs, round())).toBeNull();
+    expect(roundStage("review", review, jobs, null)).toBeNull();
+  });
+
+  it("repeats the commit, and the push once published, until asked for in the round", () => {
+    const commit = { rung: "commit" as const, label: "Commit" };
+    const push = { rung: "push" as const, label: "Push" };
+    const done = approval({ status: "executed", requested_at_ms: 50 });
+    expect(roundRung(commit, done, round())).toBe(true);
+    expect(roundRung(push, done, round())).toBe(false);
+    expect(roundRung(push, done, round({ after_push: true }))).toBe(true);
+    expect(roundRung(commit, approval({ requested_at_ms: 120 }), round())).toBe(false);
+    expect(roundRung(commit, done, null)).toBe(false);
+  });
+
+  it("folds the rounds that ended, newest first, down to the initial delivery", () => {
+    const ended = { ...round(), closed_at_ms: 200, outcome: "corregidos" };
+    const open = { ...round({ id: "r3", number: 3, cause: "Cambios pedidos en el PR #308" }) };
+    expect(roundHistory(overview({ rounds: [ended, open] }), "t1")).toEqual([
+      "Ronda 2 · 5 hallazgos de QA → corregidos",
+      "Ronda 1 · entrega inicial",
+    ]);
+    expect(roundHistory(overview(), "t1")).toEqual([]);
   });
 });

@@ -507,13 +507,110 @@ export function nextStageOf(overview: DeliveryOverview, taskId: string): string 
   return phaseOf(overview, taskId)?.next_stage ?? null;
 }
 
+/** The task's open round, as Tinto says it; null outside one. */
+export function roundOf(overview: DeliveryOverview, taskId: string): DeliveryCurrentRound | null {
+  return phaseOf(overview, taskId)?.round ?? null;
+}
+
+export type DeliveryCurrentRound = NonNullable<DeliveryTaskPhase["round"]>;
+
+/** "Implementando · 2:10" → "implementando · 2:10"; "QA en pausa" stays. */
+function lowerFirst(text: string): string {
+  return /^\p{Lu}\p{Lu}/u.test(text) ? text : text.charAt(0).toLowerCase() + text.slice(1);
+}
+
 /** How the task's phase reads in the list: Tinto decides where the task is;
- *  this only words it and adds what changes by the second (a clock). */
+ *  this only words it and adds what changes by the second (a clock). In a
+ *  round it says which and why first: "↺ Ronda 3 · PR: implementando". */
 export function taskStatus(
   task: DeliveryTask,
   overview: DeliveryOverview,
   now: number,
 ): TaskStatus {
+  const status = phaseStatus(task, overview, now);
+  const round = roundOf(overview, task.id);
+  if (!round) return status;
+  const joint = round.kind === "pr" ? ":" : " ·";
+  return {
+    ...status,
+    label: `↺ Ronda ${round.number} · ${round.short}${joint} ${lowerFirst(status.label)}`,
+  };
+}
+
+/** What the task is doing now, naming its stage: "Implementación en cola",
+ *  "Comprobaciones en marcha · 6:35"; otherwise as the list says it. */
+export function nowLabel(task: DeliveryTask, overview: DeliveryOverview, now: number): string {
+  const phase = phaseOf(overview, task.id);
+  if (phase?.kind === "running") {
+    const job = overview.jobs.find((candidate) => candidate.id === phase.job_id);
+    const quiet = job ? quietFor(job, now) : null;
+    return [`${stageLabel(phase.role)} en marcha`, job ? clock(job, now) : "", quiet]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (phase?.kind === "queued") {
+    return phase.lease
+      ? `${stageLabel(phase.role)} espera ${phase.lease.toUpperCase()} · ${ordinal(phase.position)} en la cola`
+      : `${stageLabel(phase.role)} en cola`;
+  }
+  return phaseStatus(task, overview, now).label;
+}
+
+/** The header's "Ahora" line: the round and its cause first, when in one. */
+export function nowLine(task: DeliveryTask, overview: DeliveryOverview, now: number): string {
+  const round = roundOf(overview, task.id);
+  const doing = nowLabel(task, overview, now);
+  return round ? `Ronda ${round.number} · ${round.cause} · ${doing}` : doing;
+}
+
+/** The task's rounds that ended, newest first, with round 1 (the initial
+ *  delivery) last: "Ronda 2 · 5 hallazgos de QA → corregidos". Empty while
+ *  the task never went back. */
+export function roundHistory(overview: DeliveryOverview, taskId: string): string[] {
+  const rounds = (overview.rounds ?? []).filter((round) => round.task_id === taskId);
+  if (rounds.length === 0) return [];
+  return [
+    ...rounds
+      .filter((round) => round.closed_at_ms)
+      .reverse()
+      .map((round) => `Ronda ${round.number} · ${round.cause} → ${round.outcome ?? "cerrada"}`),
+    "Ronda 1 · entrega inicial",
+  ];
+}
+
+/** How a stage reads in the track while the task is in a round, for an
+ *  attempt from before it: the tests still stand, implementation and what
+ *  follows it run again. null when its own outcome applies (an attempt of
+ *  this round, no round, another kind of stage). */
+export function roundStage(
+  role: string,
+  job: DeliveryJob | undefined,
+  jobs: DeliveryJob[],
+  round: DeliveryCurrentRound | null,
+): { tone: Tone | "todo"; label: string } | null {
+  if (!round || (job && job.created_at_ms >= round.opened_at_ms)) return null;
+  const order = stageOrder(role);
+  if (order >= 1) return { tone: "todo", label: "Se repite en esta ronda" };
+  if (order === 0 && job && (isPassed(job) || isAnswered(job, jobs)) && !isSuperseded(job, jobs)) {
+    return { tone: "ok", label: "Vale de la ronda anterior" };
+  }
+  return null;
+}
+
+/** How a commit or push step reads while a round has to do it again, until
+ *  it is asked for in the round: what it was before goes to its title. */
+export function roundRung(
+  step: DeliveryStep,
+  approval: DeliveryApproval | undefined,
+  round: DeliveryCurrentRound | null,
+): boolean {
+  if (!round || !(step.rung === "commit" || (step.rung === "push" && round.after_push))) {
+    return false;
+  }
+  return !approval || approval.requested_at_ms < round.opened_at_ms;
+}
+
+function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number): TaskStatus {
   const phase = phaseOf(overview, task.id);
   const attention = (label: string, icon: StatusIcon = "flag"): TaskStatus => ({
     group: "attention",

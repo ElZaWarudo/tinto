@@ -9,7 +9,7 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use super::model::{
     DeliveryApproval, DeliveryDecision, DeliveryEvent, DeliveryJob, DeliveryLease,
-    DeliveryQaProblem, DeliveryRepoSettings, DeliveryRun, DeliverySettings,
+    DeliveryQaProblem, DeliveryRepoSettings, DeliveryRound, DeliveryRun, DeliverySettings,
     DeliverySettingsProposal, DeliveryTask,
 };
 use super::prs::DeliveryPr;
@@ -70,6 +70,9 @@ impl DeliveryStore {
             );
             CREATE TABLE IF NOT EXISTS prs (task_id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS qa_problems (
+              id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rounds (
               id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings_proposals (
@@ -377,6 +380,29 @@ impl DeliveryStore {
     pub fn task_qa_problems(&self, task_id: &str) -> Result<Vec<DeliveryQaProblem>, DeliveryError> {
         self.all(
             "SELECT data FROM qa_problems WHERE task_id = ?1 ORDER BY rowid",
+            [task_id],
+        )
+    }
+
+    // ---- rounds ----
+
+    pub fn put_round(&self, round: &DeliveryRound) -> Result<(), DeliveryError> {
+        self.conn.execute(
+            "INSERT INTO rounds (id, task_id, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+            params![round.id, round.task_id, encode(round)?],
+        )?;
+        Ok(())
+    }
+
+    /// Every round, oldest first.
+    pub fn rounds(&self) -> Result<Vec<DeliveryRound>, DeliveryError> {
+        self.all("SELECT data FROM rounds ORDER BY rowid", [])
+    }
+
+    pub fn task_rounds(&self, task_id: &str) -> Result<Vec<DeliveryRound>, DeliveryError> {
+        self.all(
+            "SELECT data FROM rounds WHERE task_id = ?1 ORDER BY rowid",
             [task_id],
         )
     }
