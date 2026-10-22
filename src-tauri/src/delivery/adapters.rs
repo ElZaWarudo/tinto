@@ -222,6 +222,9 @@ pub fn job_prompt(
             lines.push(format!(
                 "You have a headless browser with a fresh profile through the {BROWSER_SERVER} MCP tools. The screenshots it saves go to the job's folder, outside the worktree; name them in the result's checks."
             ));
+        }
+        lines.push(qa_record_guide(&task.key));
+        if job.qa_browser {
             lines.push(visual_record_instructions(&task.key));
         }
     }
@@ -574,7 +577,26 @@ fn visual_record_instructions(key: &str) -> String {
 
 **Suggested solutions:** <a list, each item starting with the label of the problem it fixes ("P1: …"); several for one problem are alternatives, the one you recommend first; or "None">
 
+## Verdicts
+
+| Item | Verdict |
+| --- | --- |
+| 1. <Change name> | pass / fail / not verifiable: <why> |
+
 The user decides on each problem in Tinto, by its label: write each so it can be fixed on its own."#
+    )
+}
+
+/// What every QA job's record holds, visual or from the command line: Tinto
+/// shows it to the user and warns when its header or verdicts are missing.
+fn qa_record_guide(key: &str) -> String {
+    format!(
+        r#"QA record guide. Every QA writes its record, which the user reviews in Tinto before the commit:
+- File: `{key}.md` in your QA folder, exactly that name. Screenshots go beside it as `{key}-<n>-<slug>-desktop.png` or `-mobile.png`, linked by relative file name.
+- Header table first: date, branch, environment (the stack and ports you tested on, or "command line, no UI") and, when there is a UI, the viewports.
+- Visual QA: one section per change you checked (what, where, expected and seen, its screenshots), then a verdict table (each item → pass / fail / not verifiable, with why), then the problems for the user to decide: `**Problems:**` with a list labelled P1…Pn and `**Suggested solutions:**` with "P1: …" items, or "None".
+- Command-line QA (no UI): one section per suite (the command, its pass and fail counts, its log file in your QA folder), then a matrix table (each acceptance criterion or preserved behaviour → the test that proves it → pass / fail / not verified, with the reason), then the problems as above.
+- Never secrets: no passwords, tokens or keys in the record, and none in the command output you print or save."#
     )
 }
 
@@ -2146,6 +2168,9 @@ pub(crate) mod tests {
             usage: None,
             visual_record: None,
             visual_record_error: None,
+            visual_record_source: None,
+            visual_record_extras: Vec::new(),
+            visual_record_warnings: Vec::new(),
             substituted: None,
             retry_of: None,
         }
@@ -2398,6 +2423,12 @@ pub(crate) mod tests {
         qa.role = QA_ROLE.into();
         let prompt = job_prompt(&qa, &task, &paths, false, &[]);
         assert!(!prompt.contains("visual changes record"), "{prompt}");
+        // Command-line QA still gets the record guide.
+        assert!(prompt.contains("QA record guide"), "{prompt}");
+        assert!(prompt.contains(&format!("File: `{}.md` in your QA folder", task.key)));
+        assert!(prompt.contains("Command-line QA (no UI): one section per suite"));
+        assert!(prompt.contains("a matrix table"));
+        assert!(prompt.contains("Never secrets"));
         qa.qa_browser = true;
         let prompt = job_prompt(&qa, &task, &paths, false, &[]);
         assert!(
@@ -2405,6 +2436,8 @@ pub(crate) mod tests {
             "{prompt}"
         );
         assert!(prompt.contains("desktop 1280×800 and mobile 375×812"));
+        assert!(prompt.contains("Visual QA: one section per change you checked"));
+        assert!(prompt.contains("| 1. <Change name> | pass / fail / not verifiable"));
     }
 
     #[test]

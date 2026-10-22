@@ -21,6 +21,97 @@ pub fn render_beside(record: &Path) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// The record a QA job wrote, and the other candidates beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordFile {
+    pub source: PathBuf,
+    pub extras: Vec<PathBuf>,
+}
+
+/// Finds a QA job's record in its QA folder: `<KEY>.md`, else a
+/// `<KEY>.html` the agent wrote itself, else the newest `<KEY>-*.md` or
+/// `<KEY>_*.md`. The other `<KEY>-*.md` and `<KEY>_*.md` are its extras.
+pub fn find(dir: &Path, key: &str) -> Option<RecordFile> {
+    let mut named: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rest = name.strip_prefix(key)?;
+            let meta = entry.metadata().ok()?;
+            if !(rest.starts_with(['-', '_']) && rest.ends_with(".md") && meta.is_file()) {
+                return None;
+            }
+            Some((meta.modified().ok()?, entry.path()))
+        })
+        .collect();
+    // Newest first; the name settles a tie.
+    named.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let mut others: Vec<PathBuf> = named.into_iter().map(|(_, path)| path).collect();
+    let source = [
+        dir.join(format!("{key}.md")),
+        dir.join(format!("{key}.html")),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .or_else(|| (!others.is_empty()).then(|| others.remove(0)))?;
+    Some(RecordFile {
+        source,
+        extras: others,
+    })
+}
+
+/// The page the user opens for a record: an HTML record as it is, a
+/// Markdown one rendered beside it.
+pub fn page_for(record: &Path) -> Result<PathBuf, String> {
+    if record.extension().is_some_and(|ext| ext == "html") {
+        return Ok(record.to_path_buf());
+    }
+    render_beside(record)
+}
+
+/// What the QA record guide asks for and a Markdown record lacks: the
+/// header table (its date) and the verdict table or matrix (pass / fail /
+/// not verifiable per item).
+pub fn missing_parts(text: &str) -> Vec<String> {
+    let rows: Vec<Vec<String>> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('|'))
+        .map(|line| {
+            line.trim_matches('|')
+                .split('|')
+                .map(|cell| cell.trim().trim_matches('*').trim().to_lowercase())
+                .collect()
+        })
+        .collect();
+    let header = rows.iter().any(|cells| {
+        cells
+            .first()
+            .is_some_and(|cell| cell == "date" || cell == "fecha")
+    });
+    let verdict = rows.iter().flatten().any(|cell| {
+        let word = cell.trim_start_matches(|c: char| !c.is_alphanumeric());
+        ["pass", "fail", "not verif", "pasa", "falla", "no verific"]
+            .iter()
+            .any(|verdict| word.starts_with(verdict))
+    });
+    let mut missing = Vec::new();
+    if !header {
+        missing.push(
+            "Le falta la tabla de cabecera (fecha, rama, entorno y, si hay interfaz, viewports)"
+                .to_string(),
+        );
+    }
+    if !verdict {
+        missing.push(
+            "Le falta la tabla de veredictos o la matriz (cada punto → pass / fail / not verifiable)"
+                .to_string(),
+        );
+    }
+    missing
+}
+
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -615,6 +706,55 @@ mod tests {
         assert!(render_beside(&record)
             .unwrap_err()
             .contains("K-2-1-a-desktop.png"));
+    }
+
+    #[test]
+    fn a_record_under_another_name_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(find(dir.path(), "K-3"), None);
+        let write = |name: &str, secs: u64| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "# x").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+                .unwrap();
+            path
+        };
+        write("K-3-1-menu-desktop.png", 50);
+        write("K-30.md", 300);
+        let old = write("K-3_old.md", 100);
+        let matrix = write("K-3-wp1-matrix.md", 200);
+        assert_eq!(
+            find(dir.path(), "K-3"),
+            Some(RecordFile {
+                source: matrix.clone(),
+                extras: vec![old.clone()],
+            })
+        );
+        // A page the agent wrote comes before them, and `<KEY>.md` first.
+        let html = write("K-3.html", 10);
+        assert_eq!(find(dir.path(), "K-3").unwrap().source, html);
+        assert_eq!(page_for(&html).unwrap(), html);
+        let md = write("K-3.md", 10);
+        let found = find(dir.path(), "K-3").unwrap();
+        assert_eq!(found.source, md);
+        assert_eq!(found.extras, [matrix, old]);
+    }
+
+    #[test]
+    fn a_record_without_its_header_or_verdicts_is_told() {
+        let full = "| Test environment | |\n| --- | --- |\n| **Date** | 2026-10-22 |\n\n| Item | Verdict |\n| --- | --- |\n| Menu | ✅ Pass |\n";
+        assert!(missing_parts(full).is_empty());
+        let matrix =
+            "| Fecha | 2026-10-22 |\n\n| AC1 | `cargo test a` | not verified: no database |\n";
+        assert!(missing_parts(matrix).is_empty());
+        let bare = missing_parts("# K-1\n\nAll good.\n");
+        assert_eq!(bare.len(), 2);
+        assert!(bare[0].contains("cabecera"));
+        assert!(bare[1].contains("veredictos"));
     }
 
     #[test]

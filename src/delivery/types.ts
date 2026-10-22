@@ -275,6 +275,10 @@ export interface DeliveryJob {
   /** QA: the page rendered from its visual changes record, or why it could not be. */
   visual_record?: string | null;
   visual_record_error?: string | null;
+  /** QA: the file the record came from, the other candidates beside it, and what it lacks of the QA record guide. */
+  visual_record_source?: string | null;
+  visual_record_extras?: string[];
+  visual_record_warnings?: string[];
 }
 
 export type DeliveryPlatform = "windows" | "wsl";

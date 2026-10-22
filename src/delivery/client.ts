@@ -139,6 +139,10 @@ export const openDeliveryUrl = (url: string) => invoke<void>("delivery_open_url"
 export const openDeliveryVisualRecord = (jobId: string) =>
   invoke<void>("delivery_open_visual_record", { jobId });
 
+/** Finds and renders an ended QA job's visual changes record again, from its QA folder. */
+export const regenerateDeliveryVisualRecord = (jobId: string) =>
+  invoke<DeliveryJob>("delivery_regenerate_visual_record", { jobId });
+
 export const pauseDeliveryJob = (jobId: string) =>
   invoke<DeliveryJob>("delivery_pause_job", { jobId });
 

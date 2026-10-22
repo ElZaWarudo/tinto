@@ -50,6 +50,7 @@ import {
   getDeliveryIssueUrl,
   getDeliveryTaskChanges,
   openDeliveryVisualRecord,
+  regenerateDeliveryVisualRecord,
   pauseDeliveryJob,
   resumeDeliveryJob,
   setDeliveryRunPaused,
@@ -2538,19 +2539,7 @@ function TaskDetail({
         />
       )}
 
-      {qaRecord?.visual_record_error && !qaRecord.visual_record && (
-        <div
-          className="delivery-banner delivery-banner--danger"
-          role="group"
-          aria-label="Registro visual de QA"
-        >
-          <p className="delivery-banner__title">
-            <Icon name="x" />
-            <strong>No se pudo generar el registro visual de la QA</strong>
-          </p>
-          <p>{qaRecord.visual_record_error}</p>
-        </div>
-      )}
+      {qaRecord && <QaRecordNotice job={qaRecord} />}
 
       <StageTrack
         repo={task.repo}
@@ -3310,6 +3299,63 @@ function rejectionScope(
 }
 
 /** A rejected step: what still stands, and how to undo the PR when it is open. */
+/** The file name of a path Tinto gave, with either separator. */
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/**
+ * What the user has to know about the latest QA's record: why there is
+ * none, what it lacks of the QA record guide, the other files QA wrote.
+ */
+function QaRecordNotice({ job }: { job: DeliveryJob }) {
+  const warnings = job.visual_record_warnings ?? [];
+  const extras = job.visual_record_extras ?? [];
+  if (!job.visual_record_error && warnings.length === 0 && extras.length === 0) {
+    return null;
+  }
+  const missing = !job.visual_record;
+  const title = missing
+    ? job.visual_record_source
+      ? "No se pudo generar el registro visual de la QA"
+      : "La QA no tiene registro visual"
+    : warnings.length > 0
+      ? "El registro de QA no sigue la guía"
+      : "La QA escribió más de un registro";
+  return (
+    <div
+      className={missing ? "delivery-banner delivery-banner--danger" : "delivery-banner"}
+      role="group"
+      aria-label="Registro visual de QA"
+    >
+      <p className="delivery-banner__title">
+        <Icon name={missing ? "x" : "photo"} />
+        <strong>{title}</strong>
+      </p>
+      {job.visual_record_error && <p>{job.visual_record_error}</p>}
+      {warnings.map((warning) => (
+        <p key={warning}>{warning}.</p>
+      ))}
+      {job.visual_record_source && !missing && (
+        <p className="delivery-muted">Se muestra {fileName(job.visual_record_source)}.</p>
+      )}
+      {extras.length > 0 && (
+        <p className="delivery-muted">También escribió: {extras.join(", ")}.</p>
+      )}
+      <ActionGroup>
+        <div className="delivery-actions">
+          <ActionButton
+            title="Busca otra vez el registro en la carpeta de QA del trabajo y lo vuelve a generar"
+            onAction={() => regenerateDeliveryVisualRecord(job.id)}
+          >
+            Regenerar registro
+          </ActionButton>
+        </div>
+      </ActionGroup>
+    </div>
+  );
+}
+
 function RejectedStep({
   task,
   approval,
@@ -3890,8 +3936,11 @@ function JobRow({
             </p>
           )}
           {job.visual_record_error && (
-            <p className="delivery-job__note">
-              No se pudo generar el registro visual: {job.visual_record_error}
+            <p className="delivery-job__note">Sin registro visual: {job.visual_record_error}</p>
+          )}
+          {job.visual_record_source && (
+            <p className="delivery-muted">
+              Registro de QA tomado de {fileName(job.visual_record_source)}
             </p>
           )}
           {isSuperseded(job, jobs) && (
@@ -4030,6 +4079,14 @@ function JobRow({
                   onAction={() => openDeliveryVisualRecord(job.id)}
                 >
                   Abrir registro visual
+                </ActionButton>
+              )}
+              {job.role === "qa" && !isOpen(job) && job.status !== "paused" && (
+                <ActionButton
+                  title="Busca otra vez el registro en la carpeta de QA del trabajo y lo vuelve a generar"
+                  onAction={() => regenerateDeliveryVisualRecord(job.id)}
+                >
+                  Regenerar registro
                 </ActionButton>
               )}
               {job.status === "started" && job.agent !== "shell" && (

@@ -252,6 +252,16 @@ pub fn delivery_open_visual_record(
     open_with_system(&page)
 }
 
+/// Finds and renders an ended QA job's visual changes record again.
+#[tauri::command]
+pub async fn delivery_regenerate_visual_record(
+    service: State<'_, DeliveryService>,
+    job_id: String,
+) -> Result<DeliveryJob, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.regenerate_visual_record(&job_id)).await
+}
+
 /// Opens a web page (a Jira issue, a PR) in the system's browser: the app's
 /// webview does not follow links that would open a new window.
 #[tauri::command]

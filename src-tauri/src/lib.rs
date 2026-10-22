@@ -169,6 +169,7 @@ pub fn run() {
             delivery::commands::delivery_cancel_job,
             delivery::commands::delivery_pause_job,
             delivery::commands::delivery_open_visual_record,
+            delivery::commands::delivery_regenerate_visual_record,
             delivery::commands::delivery_issue_url,
             delivery::commands::delivery_issue,
             delivery::commands::delivery_open_url,
