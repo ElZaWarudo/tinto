@@ -2112,6 +2112,8 @@ pub(crate) mod tests {
             result_state: None::<DeliveryResultState>,
             result_note: None,
             undone_at_ms: None,
+            resolved_at_ms: None,
+            resolved_note: None,
             allowed_commands: Vec::new(),
             qa_browser: false,
             decisions: Vec::new(),

@@ -154,6 +154,9 @@ export const retryDeliveryJob = (jobId: string) =>
 export const undoDeliveryJob = (jobId: string) =>
   invoke<DeliveryJob>("delivery_undo_job", { jobId });
 
+export const resolveDeliveryJob = (jobId: string, note: string) =>
+  invoke<DeliveryJob>("delivery_resolve_job", { jobId, note });
+
 export const getDeliveryJobLog = (jobId: string, fromLine = 0) =>
   invoke<DeliveryJobLog>("delivery_job_log", { jobId, fromLine });
 

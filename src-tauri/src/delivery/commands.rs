@@ -338,6 +338,18 @@ pub async fn delivery_undo_job(
     blocking(move || service.undo(&job_id)).await
 }
 
+/// The user settles a broken stage whose work got done another way.
+#[tauri::command]
+pub fn delivery_resolve_job(
+    service: State<'_, DeliveryService>,
+    job_id: String,
+    note: String,
+) -> Result<DeliveryJob, CommandError> {
+    service
+        .resolve(&job_id, &note, "user")
+        .map_err(CommandError::from)
+}
+
 /// Off the main thread: a running job's log is read again every second or so.
 #[tauri::command]
 pub async fn delivery_job_log(

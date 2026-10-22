@@ -197,17 +197,24 @@ fn result_is(job: &DeliveryJob, status: &str) -> bool {
         .is_some_and(|result| result.status == status)
 }
 
-fn is_passed(job: &DeliveryJob) -> bool {
-    job.status == DeliveryJobStatus::Finished && is_current(job) && result_is(job, "pass")
+/// Settled without running it again: its work was done another way.
+fn is_resolved(job: &DeliveryJob) -> bool {
+    job.resolved_at_ms.is_some()
 }
 
-/// Ended without a usable result.
-fn is_broken(job: &DeliveryJob) -> bool {
-    matches!(
-        job.status,
-        DeliveryJobStatus::Failed | DeliveryJobStatus::Interrupted
-    ) || job.result_state == Some(DeliveryResultState::Invalid)
-        || (job.status == DeliveryJobStatus::Finished && result_is(job, "blocked"))
+fn is_passed(job: &DeliveryJob) -> bool {
+    (is_resolved(job) && is_live(job))
+        || (job.status == DeliveryJobStatus::Finished && is_current(job) && result_is(job, "pass"))
+}
+
+/// Ended without a usable result, and not settled since.
+pub fn is_broken(job: &DeliveryJob) -> bool {
+    !is_resolved(job)
+        && (matches!(
+            job.status,
+            DeliveryJobStatus::Failed | DeliveryJobStatus::Interrupted
+        ) || job.result_state == Some(DeliveryResultState::Invalid)
+            || (job.status == DeliveryJobStatus::Finished && result_is(job, "blocked")))
 }
 
 fn stage_order(role: &str) -> Option<usize> {
@@ -604,12 +611,18 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
             && latest_step(&approvals, approval.rung, stage_of(approval).as_deref())
                 .is_some_and(|latest| latest.id == approval.id)
     }) {
+        // A push is put right by asking for it again, which the
+        // coordinator does; the other steps wait on the user.
+        let waits_on = match step.rung {
+            DeliveryRung::Push => Waiter::Coordinator,
+            _ => Waiter::User,
+        };
         return phase(
             Phase::Drifted {
                 rung: step.rung,
                 stage: stage_of(step),
             },
-            Waiter::User,
+            waits_on,
         );
     }
     if let Some(job) = jobs.iter().find(|job| {

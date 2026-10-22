@@ -629,6 +629,20 @@ pub fn remote_tip(
     Ok(listed.split_whitespace().next().map(str::to_string))
 }
 
+/// Whether the remote branch, now at `tip`, still has `commit`: it moved
+/// ahead from it. The branch is fetched when `tip` is not known here.
+pub fn remote_has(place: Place<'_>, repo: &Path, branch: &str, commit: &str, tip: &str) -> bool {
+    let known = git_ok(
+        place,
+        repo,
+        &["cat-file", "-e", &format!("{tip}^{{commit}}")],
+    );
+    if !known && git(place, repo, &["fetch", "-q", "origin", branch]).is_err() {
+        return false;
+    }
+    git_ok(place, repo, &["merge-base", "--is-ancestor", commit, tip])
+}
+
 pub fn push_branch(
     place: Place<'_>,
     worktree: &Path,

@@ -1670,15 +1670,14 @@ impl DeliveryService {
         {
             return Ok(false);
         }
-        // Only the parents of the last commit were put right outside Tinto
-        // (a merge's second parent restored): the branch has the same
-        // content in the same place, so the step stands on the new commit.
-        if let Some(head) = reparented(place, &task.worktree, &created) {
-            approval.created = created;
-            if let Some(last) = approval.created.last_mut() {
-                *last = head;
-            }
-            self.save_approval(&approval, "commit_reparented")?;
+        // The commits were put right outside Tinto with the same content (a
+        // merge's second parent restored, a message reworded): the step
+        // stands on the new ones. There is nothing to commit again.
+        if let Some(rewritten) =
+            rewritten(place, &task.worktree, &created, approval.before.as_deref())
+        {
+            approval.created = rewritten;
+            self.save_approval(&approval, "commit_rewritten")?;
             return Ok(false);
         }
         approval.status = DeliveryApprovalStatus::Undone;
@@ -1695,9 +1694,9 @@ impl DeliveryService {
     }
 
     /// Checks a done push against the remote branch: it must still exist and
-    /// end where Tinto published it. Once the PR is merged GitHub deletes the
-    /// branch, so nothing is checked; a remote that cannot be read says
-    /// nothing either.
+    /// have what Tinto published, at its end or behind commits pushed since
+    /// (it moved ahead). Once the PR is merged GitHub deletes the branch, so
+    /// nothing is checked; a remote that cannot be read says nothing either.
     pub(super) fn check_push(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
         let Some(push) = self
             .latest_approval(&task.id, DeliveryRung::Push)?
@@ -1726,7 +1725,12 @@ impl DeliveryService {
             .or_else(|| tasks::git(place, &task.repo, &["rev-parse", &tracking]).ok());
         let drift = match remote {
             None => Some("La rama remota ya no existe"),
-            Some(tip) if published.is_some_and(|published| published != tip) => {
+            Some(tip)
+                if published.is_some_and(|published| {
+                    published != tip
+                        && !tasks::remote_has(place, &task.repo, &task.branch, &published, &tip)
+                }) =>
+            {
                 Some("La rama remota cambió fuera de Tinto")
             }
             Some(_) => None,
@@ -1889,9 +1893,18 @@ impl DeliveryService {
         store.put_approval(approval)?;
         // The step first, so the coordinator's wake-up can name it.
         let step = format!("{:?}", approval.rung).to_ascii_lowercase();
-        let detail = match approval.outcome.as_deref().unwrap_or_default() {
-            "" => step,
-            outcome => format!("{step}: {outcome}"),
+        let detail = match (approval.status, approval.notice.as_deref()) {
+            // Why it drifted and what puts it right.
+            (DeliveryApprovalStatus::Drifted, Some(why)) if approval.rung == DeliveryRung::Push => {
+                format!(
+                    "{step}: {why}; revisa la rama y vuelve a pedir el paso push para publicarla"
+                )
+            }
+            (DeliveryApprovalStatus::Drifted, Some(why)) => format!("{step}: {why}"),
+            _ => match approval.outcome.as_deref().unwrap_or_default() {
+                "" => step,
+                outcome => format!("{step}: {outcome}"),
+            },
         };
         store.record_event(now_ms(), event, Some(&approval.task_id), None, &detail)?;
         drop(store);
@@ -1992,33 +2005,51 @@ fn run_commit_plan(
     Ok(outcome)
 }
 
-/// The branch's HEAD when it replaces the last of `created` with the same
-/// tree on the same first parent (only its other parents differ), and the
-/// rest of `created` is still on the branch.
-fn reparented(place: Place<'_>, worktree: &std::path::Path, created: &[String]) -> Option<String> {
-    let (last, earlier) = created.split_last()?;
-    if !earlier
-        .iter()
-        .all(|commit| tasks::on_branch(place, worktree, commit))
-    {
+/// The commits that stand for `created` on the branch when they were
+/// rewritten outside Tinto with the same content: HEAD has the tree of the
+/// last of them. They are the branch's commits since `before` when that is
+/// still on it (first parents only), else HEAD alone. A rewrite that changed
+/// the content (an amend with other files, a rebase on a newer base) is not
+/// one: the commit is prepared again.
+fn rewritten(
+    place: Place<'_>,
+    worktree: &std::path::Path,
+    created: &[String],
+    before: Option<&str>,
+) -> Option<Vec<String>> {
+    let last = created.last()?;
+    let tree = |commit: &str| {
+        tasks::git(
+            place,
+            worktree,
+            &["rev-parse", &format!("{commit}^{{tree}}")],
+        )
+        .ok()
+    };
+    if tree("HEAD")? != tree(last)? {
         return None;
     }
-    // Tree, then parents.
-    let shape = |commit: &str| -> Option<(String, Vec<String>)> {
-        let text = tasks::git(place, worktree, &["show", "-s", "--format=%T %P", commit]).ok()?;
-        let mut ids = text.split_whitespace().map(str::to_string);
-        Some((ids.next()?, ids.collect()))
-    };
-    let (tree, parents) = shape("HEAD")?;
-    let (old_tree, old_parents) = shape(last)?;
-    // An amend keeps the parents: that is a rewrite, not a fix.
-    let only_parents = tree == old_tree
-        && parents != old_parents
-        && !parents.is_empty()
-        && parents.first() == old_parents.first();
-    only_parents
-        .then(|| tasks::head(place, worktree).ok())
-        .flatten()
+    let since = before
+        .filter(|before| tasks::on_branch(place, worktree, before))
+        .and_then(|before| {
+            tasks::git(
+                place,
+                worktree,
+                &[
+                    "rev-list",
+                    "--reverse",
+                    "--first-parent",
+                    &format!("{before}..HEAD"),
+                ],
+            )
+            .ok()
+        })
+        .map(|list| list.lines().map(str::to_string).collect::<Vec<_>>())
+        .filter(|list| !list.is_empty());
+    match since {
+        Some(commits) => Some(commits),
+        None => tasks::head(place, worktree).ok().map(|head| vec![head]),
+    }
 }
 
 fn shorts(commits: &[String]) -> String {
