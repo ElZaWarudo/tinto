@@ -883,7 +883,14 @@ impl DeliveryService {
         task_id: &str,
         max_age: Duration,
     ) -> Result<Option<DeliveryPr>, DeliveryError> {
-        let Some(mut pr) = self.task_pr(task_id)? else {
+        // One read at a time: two at once (the background read a link starts
+        // and the watch, say) would both record a merge found on GitHub.
+        let _reading = self
+            .inner
+            .pr_reads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(pr) = self.task_pr(task_id)? else {
             return Ok(None);
         };
         let fresh = pr
@@ -896,19 +903,25 @@ impl DeliveryService {
         let read = github
             .pr(&pr.url)
             .and_then(|snapshot| Ok((snapshot, self.github_login(&*github)?)));
-        let before = pr.clone();
-        match read {
-            Ok((snapshot, me)) => apply_snapshot(&mut pr, &snapshot, &me),
-            Err(error) => pr.error = Some(error.message),
-        }
-        pr.checked_at_ms = Some(now_ms());
-        {
+        // GitHub's answer goes onto the PR as it is now: while it was asked,
+        // the user may have seen its news (a stage started on the task).
+        let (before, pr) = {
             let store = self.store()?;
+            let Some(mut pr) = store.pr(task_id)? else {
+                return Ok(None);
+            };
+            let before = pr.clone();
+            match read {
+                Ok((snapshot, me)) => apply_snapshot(&mut pr, &snapshot, &me),
+                Err(error) => pr.error = Some(error.message),
+            }
+            pr.checked_at_ms = Some(now_ms());
             store.put_pr(&pr)?;
             if let Some(news) = pr_news(&before, &pr) {
                 store.record_event(now_ms(), "pr_changed", Some(task_id), None, &news)?;
             }
-        }
+            (before, pr)
+        };
         let changed = pr_changed(&before, &pr);
         if changed {
             self.notify();

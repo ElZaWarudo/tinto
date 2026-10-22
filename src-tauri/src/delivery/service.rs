@@ -116,6 +116,9 @@ pub struct DeliveryService {
 
 pub(super) struct Inner {
     pub(super) store: Mutex<DeliveryStore>,
+    /// Held while a PR is read from GitHub and its steps checked (see
+    /// `refresh_pr`).
+    pub(super) pr_reads: Mutex<()>,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Jobs being stopped to be paused rather than cancelled.
     pausing: Mutex<HashSet<String>>,
@@ -432,6 +435,7 @@ impl DeliveryService {
         let service = Self {
             inner: Arc::new(Inner {
                 store: Mutex::new(store),
+                pr_reads: Mutex::new(()),
                 cancels: Mutex::new(HashMap::new()),
                 pausing: Mutex::new(HashSet::new()),
                 restart_retries: Mutex::new(Vec::new()),
