@@ -2501,8 +2501,9 @@ impl DeliveryService {
             touched: !cancelled || adapters::acted(&job, &events),
         };
         let stderr_text = std::fs::read_to_string(&paths.stderr).unwrap_or_default();
-        self.finish(&job.id, ending, outcome, timing, end, &stderr_text)?;
-        // QA's visual changes record becomes one page the user opens.
+        // QA's visual changes record becomes one page the user opens. Saved
+        // before the job ends, so whoever learns it ended (the view, the
+        // coordinator, a test) finds the page and its problems with it.
         let record = paths.qa_output.join(format!("{}.md", task.key));
         if job.role == QA_ROLE && record.is_file() {
             // Its problems wait for the user's call in the task.
@@ -2519,6 +2520,7 @@ impl DeliveryService {
                 store.put_job(&done)?;
             }
         }
+        self.finish(&job.id, ending, outcome, timing, end, &stderr_text)?;
         // A task Tinto cannot queue checks on now (blocked, paused) goes on
         // without them.
         let _ = self.queue_checks(&job.id);
