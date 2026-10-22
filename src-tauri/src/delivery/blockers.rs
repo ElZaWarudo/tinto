@@ -8,7 +8,7 @@ use std::time::Duration;
 use super::model::{
     DeliveryApproval, DeliveryBlocker, DeliveryBlockerKind, DeliveryDecision,
     DeliveryDecisionStatus, DeliveryPrMilestone, DeliveryRung, DeliveryTask, DeliveryTaskMilestone,
-    NewBlocker,
+    DeliveryUnblock, NewBlocker,
 };
 use super::phase::{is_delivered, step_done};
 use super::prs::{parse_pr_url, DeliveryPr};
@@ -35,6 +35,26 @@ pub fn blocker_label(blocker: &DeliveryBlocker) -> String {
         DeliveryBlockerKind::Decision { key, .. } => format!("una decisión de {key}"),
         DeliveryBlockerKind::Note { text } => text.clone(),
     }
+}
+
+/// Once no blocker of the task is open, its reason goes with the blockers:
+/// when the coordinator did not clear them itself (`by` is `user` or
+/// `tinto`), the task waits on it until it acts on the task.
+fn settle_reason(task: &mut DeliveryTask, cleared: &[String], by: Option<&str>, now: u64) {
+    if task.blockers.iter().any(DeliveryBlocker::is_open) {
+        return;
+    }
+    let reason = std::mem::take(&mut task.blocked_reason);
+    task.unblocked = match by {
+        Some(by) if !cleared.is_empty() => Some(DeliveryUnblock {
+            at_ms: now,
+            cleared: cleared.join(", "),
+            by: by.to_string(),
+            reason,
+        }),
+        Some(_) => task.unblocked.take(),
+        None => None,
+    };
 }
 
 /// What Tinto knows that a blocker can depend on.
@@ -245,6 +265,7 @@ impl DeliveryService {
             .join(", ");
         task.blockers = blockers;
         task.blocked_reason = reason.trim().to_string();
+        task.unblocked = None;
         self.save_blockers(task, "task_blocked", &detail)
     }
 
@@ -258,6 +279,7 @@ impl DeliveryService {
         let blocker = self.new_blocker(&task, blocker)?;
         let detail = format!("añadió {}", blocker_label(&blocker));
         task.blockers.push(blocker);
+        task.unblocked = None;
         self.save_blockers(task, "blockers_changed", &detail)
     }
 
@@ -281,6 +303,7 @@ impl DeliveryService {
         if cleared.is_empty() {
             return Ok(task);
         }
+        settle_reason(&mut task, &cleared, by_user.then_some("user"), now);
         let event = if by_user {
             "blockers_changed"
         } else {
@@ -289,15 +312,34 @@ impl DeliveryService {
         self.save_blockers(task, event, &format!("quitó {}", cleared.join(", ")))
     }
 
+    /// The coordinator acted on the task (dispatched, asked for a step, set
+    /// its state, blocked it again): a cleared blocker no longer waits on it.
+    pub fn attend_task(&self, task_id: &str) -> Result<(), DeliveryError> {
+        {
+            let store = self.store()?;
+            let Some(mut task) = store.task(task_id)? else {
+                return Ok(());
+            };
+            if task.unblocked.take().is_none() {
+                return Ok(());
+            }
+            store.put_task(&task)?;
+        }
+        self.notify();
+        Ok(())
+    }
+
     /// Updates where each open blocker stands and clears the ones that
     /// resolved, with a `blocker_cleared` event for the coordinator.
     pub fn settle_blockers(&self) -> Result<usize, DeliveryError> {
         let store = self.store()?;
         let tasks = store.tasks()?;
-        if !tasks
-            .iter()
-            .any(|task| task.blockers.iter().any(DeliveryBlocker::is_open))
-        {
+        // A reason left from before blockers dropped theirs goes too.
+        let unsettled = |task: &DeliveryTask| {
+            let open = task.blockers.iter().any(DeliveryBlocker::is_open);
+            open || !task.blocked_reason.is_empty()
+        };
+        if !tasks.iter().any(unsettled) {
             return Ok(0);
         }
         let approvals = store.approvals()?;
@@ -312,9 +354,13 @@ impl DeliveryService {
         let now = now_ms();
         let mut cleared = 0;
         let mut changed_any = false;
-        for task in tasks.iter().filter(|task| task.removed_at_ms.is_none()) {
+        for task in tasks
+            .iter()
+            .filter(|task| task.removed_at_ms.is_none() && unsettled(task))
+        {
             let mut next = task.clone();
             let mut changed = false;
+            let mut resolved = Vec::new();
             for blocker in next.blockers.iter_mut().filter(|blocker| blocker.is_open()) {
                 let (status, done) = blocker_state(blocker, &world);
                 if status != blocker.status {
@@ -330,9 +376,15 @@ impl DeliveryService {
                         None,
                         &blocker_label(blocker),
                     )?;
+                    resolved.push(blocker_label(blocker));
                     cleared += 1;
                     changed = true;
                 }
+            }
+            let reason = next.blocked_reason.clone();
+            settle_reason(&mut next, &resolved, Some("tinto"), now);
+            if next.blocked_reason != reason {
+                changed = true;
             }
             if changed {
                 store.put_task(&next)?;

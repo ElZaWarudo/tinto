@@ -7,7 +7,7 @@
 //! waits on the user, what runs, what waits its turn, what broke, then the
 //! delivery ladder and the next stage. Each phase says who it waits on.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,8 +15,8 @@ use super::coordination::{JIRA_AFTER_MERGE, JIRA_AFTER_PR};
 use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryBlocker, DeliveryBlockerKind,
     DeliveryDecision, DeliveryDecisionStatus, DeliveryIssuePackage, DeliveryJob, DeliveryJobStatus,
-    DeliveryLease, DeliveryLeaseState, DeliveryResultState, DeliveryRun, DeliveryRung,
-    DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
+    DeliveryLease, DeliveryLeaseState, DeliveryQueueWait, DeliveryResultState, DeliveryRun,
+    DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{CHECKS_ROLE, SETUP_ROLE};
@@ -113,6 +113,9 @@ pub enum Phase {
         lease: Option<String>,
         /// Its place in the resource's queue, or in the capacity queue.
         position: usize,
+        /// Why it has not started, by the scheduler's rules.
+        reason: Option<String>,
+        since_ms: Option<u64>,
     },
     /// A job of this task left the resource in quarantine.
     Quarantined {
@@ -123,6 +126,14 @@ pub enum Phase {
     /// Blocked until its open blockers clear (see the task's `blockers`).
     Blocked {
         open: usize,
+    },
+    /// Its last blocker cleared (by the user, or it resolved) and the
+    /// coordinator has not acted on it since.
+    Unblocked {
+        cleared: String,
+        /// `user` or `tinto`.
+        by: String,
+        at_ms: u64,
     },
     /// Its latest stage failed or was blocked.
     Broken {
@@ -157,6 +168,9 @@ pub struct DeliveryTaskPhase {
     /// whole ladder (a middle package of a split issue); empty otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<DeliveryStep>,
+    /// What one of its queued jobs waits for looks stuck.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// One rung of a task's ladder (Jira with its moment).
@@ -176,6 +190,8 @@ pub struct Facts<'a> {
     pub decisions: &'a [DeliveryDecision],
     pub settings_proposals: &'a [DeliverySettingsProposal],
     pub prs: &'a [DeliveryPr],
+    /// Why each queued job has not started.
+    pub queued: &'a BTreeMap<String, DeliveryQueueWait>,
 }
 
 fn is_open(job: &DeliveryJob) -> bool {
@@ -600,11 +616,15 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
             })
             .collect()
     };
+    let warning = jobs
+        .iter()
+        .find_map(|job| facts.queued.get(&job.id)?.warning.clone());
     let phase = |phase: Phase, waits_on: Waiter| DeliveryTaskPhase {
         phase,
         waits_on,
         next_stage: next.clone(),
         steps: steps.clone(),
+        warning: warning.clone(),
     };
 
     let decisions = facts
@@ -763,12 +783,15 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
                     .map_or(0, |at| at + 1)
             }
         };
+        let wait = facts.queued.get(&job.id);
         return phase(
             Phase::Queued {
                 job_id: job.id.clone(),
                 role: job.role.clone(),
                 lease: lease.map(|lease| lease.name.clone()),
                 position,
+                reason: wait.map(|wait| wait.reason.clone()),
+                since_ms: wait.map(|wait| wait.since_ms),
             },
             Waiter::Queue,
         );
@@ -806,6 +829,16 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
             } else {
                 Waiter::External
             },
+        );
+    }
+    if let Some(unblock) = &task.unblocked {
+        return phase(
+            Phase::Unblocked {
+                cleared: unblock.cleared.clone(),
+                by: unblock.by.clone(),
+                at_ms: unblock.at_ms,
+            },
+            Waiter::Coordinator,
         );
     }
     let latest = jobs
@@ -911,6 +944,7 @@ mod tests {
                     decisions: &self.decisions,
                     settings_proposals: &self.proposals,
                     prs: &self.prs,
+                    queued: &BTreeMap::new(),
                 },
             )
         }
@@ -1041,6 +1075,7 @@ mod tests {
             decisions: &[],
             settings_proposals: &[],
             prs: &[],
+            queued: &BTreeMap::new(),
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,

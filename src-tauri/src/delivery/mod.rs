@@ -20,6 +20,7 @@ pub mod model;
 pub mod phase;
 pub mod prs;
 pub mod qa_problems;
+mod queue;
 pub mod service;
 pub mod settings_proposals;
 pub mod store;

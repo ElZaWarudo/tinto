@@ -96,6 +96,7 @@ import type {
   DeliveryJobLog,
   DeliveryOverview,
   DeliveryPr,
+  DeliveryQueueWait,
   DeliveryRepoSettings,
   DeliveryRun,
   DeliveryStageAgent,
@@ -2653,6 +2654,7 @@ function TaskDetail({
                     key={job.id}
                     job={job}
                     jobs={jobs}
+                    wait={overview.queued?.[job.id]}
                     now={now}
                     expanded={expandedJobId === job.id}
                     undoable={latestUndoable?.id === job.id && !hasOpenJob}
@@ -3710,6 +3712,7 @@ function StageHistory({
 function JobRow({
   job,
   jobs,
+  wait,
   now,
   expanded,
   undoable,
@@ -3720,6 +3723,8 @@ function JobRow({
   job: DeliveryJob;
   /** Every job of the task, oldest first. */
   jobs: DeliveryJob[];
+  /** Why it has not started, while it is queued. */
+  wait?: DeliveryQueueWait;
   now: number;
   expanded: boolean;
   undoable: boolean;
@@ -3782,6 +3787,18 @@ function JobRow({
               <small className={quiet ? "delivery-tone--attention" : "delivery-muted"}>
                 {quiet ?? ago(job.activity_at_ms, now)}
               </small>
+            </>
+          )}
+        </p>
+      )}
+      {job.status === "queued" && wait && (
+        <p className="delivery-job__activity" aria-label={`Por qué espera ${stageLabel(job.role)}`}>
+          <span>{wait.reason}</span>{" "}
+          <small className="delivery-muted">en cola {ago(wait.since_ms, now)}</small>
+          {wait.warning && (
+            <>
+              {" "}
+              <small className="delivery-tone--attention">· {wait.warning}</small>
             </>
           )}
         </p>

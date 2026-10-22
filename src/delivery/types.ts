@@ -95,12 +95,33 @@ export interface DeliveryTask {
   archived_at_ms?: number | null;
   /** What the task waits for; cleared ones stay, with `cleared_at_ms`. */
   blockers?: DeliveryBlocker[];
-  /** Why it is blocked, in the coordinator's words. */
+  /** Why it is blocked, in the coordinator's words; empty once no blocker is open. */
   blocked_reason?: string;
+  /** Its last blocker cleared and the coordinator has not acted on it since. */
+  unblocked?: DeliveryUnblock | null;
   /** The repo checks Tinto runs on what each stage changes (the tests stage aside). */
   checks?: string[];
   /** The repo setup commands Tinto runs once before the task's stages. */
   setup?: string[];
+}
+
+/** How a task's last open blocker cleared. */
+export interface DeliveryUnblock {
+  at_ms: number;
+  /** The blockers that cleared last, in a few words. */
+  cleared: string;
+  /** `user`: cleared by hand in Tinto; `tinto`: it resolved. */
+  by: "user" | "tinto" | string;
+  /** Why it was blocked, as the coordinator said. */
+  reason?: string;
+}
+
+/** Why a queued job has not started, by the scheduler's rules. */
+export interface DeliveryQueueWait {
+  reason: string;
+  since_ms: number;
+  /** What it waits for looks stuck. */
+  warning?: string | null;
 }
 
 /** A task's place among its issue's pull requests: "2 of 3". */
@@ -573,10 +594,20 @@ export type DeliveryPhase =
   | { kind: "waits_quarantine"; job_id: string; lease: string }
   | { kind: "setup_failed"; job_id: string; command: string }
   | { kind: "waits_environment"; job_id: string; role: string; problem: string }
-  | { kind: "queued"; job_id: string; role: string; lease: string | null; position: number }
+  | {
+      kind: "queued";
+      job_id: string;
+      role: string;
+      lease: string | null;
+      position: number;
+      /** Why it has not started. */
+      reason?: string | null;
+      since_ms?: number | null;
+    }
   | { kind: "quarantined"; lease: string }
   | { kind: "settings_proposal" }
   | { kind: "blocked"; open: number }
+  | { kind: "unblocked"; cleared: string; by: string; at_ms: number }
   | { kind: "broken"; job_id: string; role: string; attempt: number; blocked: boolean }
   | { kind: "delivered" }
   | { kind: "pr"; number: number }
@@ -589,6 +620,8 @@ export type DeliveryTaskPhase = DeliveryPhase & {
   next_stage: string | null;
   /** The delivery steps this task climbs, when not the whole ladder (a middle package ends at merge). */
   steps?: { rung: DeliveryRung; stage: string | null }[];
+  /** What one of its queued jobs waits for looks stuck. */
+  warning?: string | null;
 };
 
 export interface DeliveryOverview {
@@ -614,6 +647,8 @@ export interface DeliveryOverview {
   coordinators?: DeliveryCoordinatorState[];
   /** Issues delivered in several packages, each across its packages. */
   issues?: DeliverySplitIssue[];
+  /** Why each queued job (by id) has not started. */
+  queued?: Record<string, DeliveryQueueWait>;
 }
 
 /** Whether a batch's coordinator keeps up with its changes. */

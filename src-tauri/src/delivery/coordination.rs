@@ -589,6 +589,9 @@ impl DeliveryService {
         qa_jira_comment: Option<bool>,
     ) -> Result<DeliveryRun, DeliveryError> {
         let now = now_ms();
+        let store = self.store()?;
+        // Nothing before it concerns its coordinator.
+        let start = store.last_event_seq()?;
         let run = DeliveryRun {
             id: format!("run-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
             repo,
@@ -603,11 +606,11 @@ impl DeliveryService {
             paused: false,
             no_new_tasks: false,
             coordinator_session: None,
-            coordinator_cursor: 0,
+            coordinator_cursor: start,
+            returned_cursor: start,
             notified_cursor: 0,
             notified_at_ms: None,
         };
-        let store = self.store()?;
         store.put_run(&run)?;
         store.record_event(now, "run_created", None, None, &run.id)?;
         drop(store);

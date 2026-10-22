@@ -20,13 +20,14 @@ use super::job_process::{self, JobProcess};
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
-    DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryLeaseWaiter, DeliveryOverview,
-    DeliveryPackage, DeliveryPlatform, DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
+    DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryOverview, DeliveryPackage,
+    DeliveryPlatform, DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
     DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
     NewBlocker,
 };
 use super::phase::{current_checks, current_setup, has_open_findings, is_broken, last_change};
 use super::prs::{self, GitHub};
+use super::queue::Queue;
 use super::store::DeliveryStore;
 use super::tasks::{self, plain_path, Place};
 use super::{now_ms, DeliveryError};
@@ -85,7 +86,7 @@ pub const SETUP_ROLE: &str = "setup";
 
 /// How long a passing "Entorno" check stands before a job that needs the
 /// environment checks it again.
-const ENVIRONMENT_FRESH_MS: u64 = 60_000;
+pub(super) const ENVIRONMENT_FRESH_MS: u64 = 60_000;
 
 /// The end of a failed check's output its next stage reads.
 const CHECK_TAIL_CHARS: usize = 2_000;
@@ -153,11 +154,11 @@ pub(super) struct Inner {
 
 /// A repo's last "Entorno" check, as the jobs that need it read it.
 #[derive(Debug, Clone, Default)]
-struct RepoEnvironment {
+pub(super) struct RepoEnvironment {
     /// What failed, or `None` when everything answered.
-    problem: Option<String>,
+    pub(super) problem: Option<String>,
     /// `None` until a check ends.
-    checked_at_ms: Option<u64>,
+    pub(super) checked_at_ms: Option<u64>,
     /// A check is running.
     checking: bool,
 }
@@ -642,6 +643,7 @@ impl DeliveryService {
             eprintln!("tinto: delivery could not check the commit steps: {error}");
         }
         let coordinators = self.coordinator_states()?;
+        let queued = self.queue_waits()?;
         let store = self.store()?;
         let tasks = store.tasks()?;
         let live: HashSet<&str> = tasks.iter().map(|task| task.id.as_str()).collect();
@@ -686,6 +688,7 @@ impl DeliveryService {
             decisions: &decisions,
             settings_proposals: &settings_proposals,
             prs: &prs,
+            queued: &queued,
         };
         let phases = tasks
             .iter()
@@ -717,6 +720,7 @@ impl DeliveryService {
                 .ok()
                 .and_then(|slot| slot.clone()),
             coordinators,
+            queued,
             tasks,
         })
     }
@@ -944,6 +948,7 @@ impl DeliveryService {
             archived_at_ms: None,
             blockers: Vec::new(),
             blocked_reason: String::new(),
+            unblocked: None,
             checks: Vec::new(),
             setup: Vec::new(),
         };
@@ -2049,152 +2054,67 @@ impl DeliveryService {
 
     fn select_jobs(&self) -> Result<Vec<String>, DeliveryError> {
         let store = self.store()?;
-        let tasks = store.tasks()?;
-        let capacity = store.settings()?.effective_capacity(tasks.len()) as usize;
-        let mut jobs = store.jobs()?;
-        // A task's stages and checks wait for its setup to pass.
-        let unprepared: HashSet<String> = tasks
-            .iter()
-            .filter(|task| {
-                let task_jobs: Vec<&DeliveryJob> =
-                    jobs.iter().filter(|job| job.task_id == task.id).collect();
-                current_setup(&task.setup, &task_jobs)
-                    .iter()
-                    .any(|job| job.status != DeliveryJobStatus::Finished)
-            })
-            .map(|task| task.id.clone())
-            .collect();
+        let mut queue = Queue::read(&store, self.environments())?;
         // A job that needs the environment waits while its last check
         // fails, and says why.
-        let environments = self
-            .inner
-            .environment
-            .lock()
-            .map(|repos| repos.clone())
-            .unwrap_or_default();
-        let environment_of = |job: &DeliveryJob| {
-            tasks
-                .iter()
-                .find(|task| task.id == job.task_id)
-                .and_then(|task| environments.get(&task.repo))
-        };
         let now = now_ms();
-        for job in jobs
-            .iter_mut()
-            .filter(|job| job.status == DeliveryJobStatus::Queued && job.needs_environment)
-        {
-            let problem = environment_of(job).and_then(|state| state.problem.clone());
-            if job.waits_environment != problem {
-                if job.waits_environment.is_none() {
-                    store.record_event(
-                        now,
-                        "job_waits_environment",
-                        Some(&job.task_id),
-                        Some(&job.id),
-                        &job.role,
-                    )?;
-                }
-                job.waits_environment = problem;
-                store.put_job(job)?;
-            }
-        }
-        let mut running = jobs.iter().filter(|job| job.status.is_active()).count();
-        let mut busy: HashSet<String> = jobs
+        let problems: Vec<Option<String>> = queue
+            .jobs
             .iter()
-            .filter(|job| job.status.is_active())
-            .map(|job| job.task_id.clone())
-            .collect();
-        // Tasks of a paused batch start nothing new.
-        let paused_runs: HashSet<String> = store
-            .runs()?
-            .into_iter()
-            .filter(|run| run.paused)
-            .map(|run| run.id)
-            .collect();
-        let held: HashSet<String> = store
-            .tasks()?
-            .into_iter()
-            .filter(|task| {
-                task.run_id
-                    .as_ref()
-                    .is_some_and(|run| paused_runs.contains(run))
+            .map(|job| {
+                queue
+                    .environment_of(job)
+                    .and_then(|state| state.problem.clone())
             })
-            .map(|task| task.id)
             .collect();
+        for (job, problem) in queue.jobs.iter_mut().zip(problems) {
+            if job.status != DeliveryJobStatus::Queued
+                || !job.needs_environment
+                || job.waits_environment == problem
+            {
+                continue;
+            }
+            if job.waits_environment.is_none() {
+                store.record_event(
+                    now,
+                    "job_waits_environment",
+                    Some(&job.task_id),
+                    Some(&job.id),
+                    &job.role,
+                )?;
+            }
+            job.waits_environment = problem;
+            store.put_job(job)?;
+        }
+        let (plan, leases) = queue.plan(now);
+        for lease in leases.iter().filter(|lease| !queue.leases.contains(lease)) {
+            store.put_lease(lease)?;
+        }
         let mut started = Vec::new();
-        for mut job in jobs
-            .into_iter()
-            .filter(|job| job.status == DeliveryJobStatus::Queued)
-        {
-            if busy.contains(&job.task_id) || held.contains(&job.task_id) {
+        for (job_id, hold) in plan {
+            if hold.is_some() {
                 continue;
             }
-            let setup = job.agent == DeliveryAgent::Shell && job.role == SETUP_ROLE;
-            if unprepared.contains(&job.task_id) && !setup {
+            let Some(job) = queue.jobs.iter_mut().find(|job| job.id == job_id) else {
                 continue;
-            }
-            let reachable = environment_of(&job).is_some_and(|state| {
-                state.problem.is_none()
-                    && state
-                        .checked_at_ms
-                        .is_some_and(|at| now.saturating_sub(at) < ENVIRONMENT_FRESH_MS)
-            });
-            if job.needs_environment && !reachable {
-                continue;
-            }
-            if running >= capacity {
-                break;
-            }
-            if let Some(name) = job.lease.clone() {
-                let mut lease = store.lease(&name)?.unwrap_or(DeliveryLease {
-                    name: name.clone(),
-                    state: DeliveryLeaseState::Free,
-                    generation: 0,
-                    holder_job_id: None,
-                    holder_task_id: None,
-                    acquired_at_ms: None,
-                    note: None,
-                    queue: Vec::new(),
-                });
-                let first_in_line = lease
-                    .queue
-                    .first()
-                    .is_none_or(|waiter| waiter.job_id == job.id);
-                // The job resuming a paused one takes over what it held.
-                let inherited = lease.state == DeliveryLeaseState::Active
-                    && job.resumes.is_some()
-                    && lease.holder_job_id == job.resumes;
-                if (lease.state == DeliveryLeaseState::Free && first_in_line) || inherited {
-                    lease.queue.retain(|waiter| waiter.job_id != job.id);
-                    lease.state = DeliveryLeaseState::Active;
-                    lease.holder_job_id = Some(job.id.clone());
-                    lease.holder_task_id = Some(job.task_id.clone());
-                    lease.acquired_at_ms = Some(now_ms());
-                    lease.generation += 1;
-                    lease.note = None;
-                    store.put_lease(&lease)?;
-                } else {
-                    if !lease.queue.iter().any(|waiter| waiter.job_id == job.id) {
-                        lease.queue.push(DeliveryLeaseWaiter {
-                            job_id: job.id.clone(),
-                            task_id: job.task_id.clone(),
-                            requested_at_ms: now_ms(),
-                        });
-                        store.put_lease(&lease)?;
-                    }
-                    continue;
-                }
-            }
+            };
             job.status = DeliveryJobStatus::Pending;
-            store.put_job(&job)?;
+            store.put_job(job)?;
             if let Ok(mut cancels) = self.inner.cancels.lock() {
                 cancels.insert(job.id.clone(), Arc::new(AtomicBool::new(false)));
             }
-            busy.insert(job.task_id.clone());
-            running += 1;
-            started.push(job.id);
+            started.push(job_id);
         }
         Ok(started)
+    }
+
+    /// Each repo's last "Entorno" check.
+    pub(super) fn environments(&self) -> HashMap<PathBuf, RepoEnvironment> {
+        self.inner
+            .environment
+            .lock()
+            .map(|repos| repos.clone())
+            .unwrap_or_default()
     }
 
     // ---- running a job ----

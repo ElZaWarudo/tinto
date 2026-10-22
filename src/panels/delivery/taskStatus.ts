@@ -100,7 +100,7 @@ export interface TaskStatus {
   tone: Tone;
   icon: StatusIcon;
   label: string;
-  /** A blocked task: what it waits for, in a line of its own. */
+  /** What it waits for (a blocked or queued task), in a line of its own. */
   detail?: string;
 }
 
@@ -508,12 +508,20 @@ export function nextStageOf(overview: DeliveryOverview, taskId: string): string 
 }
 
 /** How the task's phase reads in the list: Tinto decides where the task is;
- *  this only words it and adds what changes by the second (a clock). */
+ *  this only words it and adds what changes by the second (a clock). When
+ *  what one of its queued jobs waits for looks stuck, it says so. */
 export function taskStatus(
   task: DeliveryTask,
   overview: DeliveryOverview,
   now: number,
 ): TaskStatus {
+  const status = phaseStatus(task, overview, now);
+  const warning = phaseOf(overview, task.id)?.warning;
+  if (!warning) return status;
+  return { ...status, detail: [status.detail, warning].filter(Boolean).join(" · ") };
+}
+
+function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number): TaskStatus {
   const phase = phaseOf(overview, task.id);
   const attention = (label: string, icon: StatusIcon = "flag"): TaskStatus => ({
     group: "attention",
@@ -585,13 +593,17 @@ export function taskStatus(
       // Starting Docker or a database is the user's; Tinto checks again by itself.
       return attention(`${stageLabel(phase.role)} espera al entorno`);
     case "queued":
-      return waiting(
-        phase.lease
-          ? `Esperando ${phase.lease.toUpperCase()} · ${ordinal(phase.position)} en la cola`
-          : phase.position > 0
-            ? `En cola · ${ordinal(phase.position)}`
-            : "En cola",
-      );
+      return {
+        ...waiting(
+          phase.lease
+            ? `Esperando ${phase.lease.toUpperCase()} · ${ordinal(phase.position)} en la cola`
+            : phase.position > 0
+              ? `En cola · ${ordinal(phase.position)}`
+              : "En cola",
+        ),
+        // Why it has not started, as the scheduler says.
+        detail: phase.reason ?? undefined,
+      };
     case "quarantined":
       return danger(`${phase.lease.toUpperCase()} en cuarentena`);
     case "settings_proposal":
@@ -606,6 +618,12 @@ export function taskStatus(
         detail: open.map(blockerWait).join(" · ") || undefined,
       };
     }
+    case "unblocked":
+      // Cleared, but the coordinator has not taken it up again yet.
+      return {
+        ...idle("Desbloqueada · espera al coordinador"),
+        detail: `${phase.by === "user" ? "Quitaste" : "Se resolvió"}: ${phase.cleared}`,
+      };
     case "broken":
       return danger(
         `${phase.blocked ? "Bloqueada en" : "Falló"} ${lower(stageLabel(phase.role))} · intento ${phase.attempt}`,

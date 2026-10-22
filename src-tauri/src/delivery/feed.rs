@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::model::{DeliveryCoordinatorState, DeliveryEvent, DeliveryRun};
+use super::model::{DeliveryCoordinatorState, DeliveryEvent, DeliveryRun, DeliveryUnblock};
 use super::service::DeliveryService;
 use super::{now_ms, DeliveryError};
 
@@ -56,6 +56,20 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "blocker_cleared",
     "blockers_changed",
 ];
+
+/// Changes acquire_run and takeover_run sum up for the coordinator: what
+/// the user decided that it has not acknowledged.
+const PENDING_EVENTS: &[&str] = &[
+    "decision_answered",
+    "decision_changed",
+    "approval_approved",
+    "approval_rejected",
+    "qa_problems_sent",
+];
+
+/// At most this many unacknowledged changes come again in a wait_run
+/// without cursor: the newest.
+const MAX_REDELIVERED: usize = 50;
 
 /// Changes are sent to the coordinator's conversation once they have been
 /// quiet this long, so a burst (several answers, a PR and its checks) goes
@@ -161,8 +175,10 @@ impl DeliveryService {
     /// Waits until something changes for the coordinator of any of
     /// `run_ids` (a job ends, the user answers or decides a step, the PR
     /// moves…) and returns those changes, each naming its batch, with the
-    /// cursor to wait from next. Without `cursor` it returns at once with
-    /// the current one.
+    /// cursor to wait from next. Passing `cursor` acknowledges every change
+    /// up to it. Without `cursor` it returns at once with the current one
+    /// and the changes not acknowledged yet: those handed over before (the
+    /// coordinator was interrupted after reading them) come `redelivered`.
     pub fn wait_run(
         &self,
         run_ids: &[String],
@@ -173,23 +189,32 @@ impl DeliveryService {
         for run_id in run_ids {
             self.run(run_id)?;
         }
+        if let Some(cursor) = cursor {
+            for run_id in run_ids {
+                self.acknowledge_cursor(run_id, cursor)?;
+            }
+        }
         let deadline = Instant::now() + timeout;
         let _waiting = Waiting::start(self, run_ids);
         let mut first_look = true;
         loop {
             let seen = self.inner.changes.0.lock().map(|count| *count).unwrap_or(0);
-            let after = match cursor {
+            let mut next = match cursor {
                 Some(cursor) => cursor,
                 None => self.store()?.last_event_seq()?,
             };
             let mut events = Vec::new();
             let mut idle = Vec::new();
-            let mut next = after;
             for run_id in run_ids {
-                let (run_events, run_next) = self.coordinator_events(run_id, after)?;
-                events.extend(run_events);
+                match cursor {
+                    Some(cursor) => {
+                        let (run_events, run_next) = self.coordinator_events(run_id, cursor)?;
+                        events.extend(run_events);
+                        next = next.max(run_next);
+                    }
+                    None => events.extend(self.unacknowledged(run_id)?),
+                }
                 idle.extend(self.idle_tasks(run_id)?);
-                next = next.max(run_next);
             }
             events.sort_by_key(|event| event["seq"].as_u64());
             let nudge = first_look && !idle_ok && !idle.is_empty();
@@ -197,7 +222,7 @@ impl DeliveryService {
             if cursor.is_none() || !events.is_empty() || nudge || expired {
                 let mut open_jobs = Vec::new();
                 for run_id in run_ids {
-                    self.record_coordinator_cursor(run_id, next)?;
+                    self.record_returned_cursor(run_id, next)?;
                     open_jobs.extend(self.open_jobs(run_id)?);
                 }
                 let mut reply = json!({
@@ -225,6 +250,60 @@ impl DeliveryService {
         }
     }
 
+    /// The run's changes its coordinator has not acknowledged, the newest
+    /// [`MAX_REDELIVERED`]; those it was handed before come `redelivered`.
+    /// A takeover is news for the coordinator it replaced, not for this one.
+    fn unacknowledged(&self, run_id: &str) -> Result<Vec<Value>, DeliveryError> {
+        let run = self.run(run_id)?;
+        let handed = handed_cursor(&run);
+        let (mut events, _) = self.coordinator_events(run_id, run.coordinator_cursor)?;
+        events.retain(|event| event["kind"] != "run_takeover");
+        for event in &mut events {
+            if event["seq"].as_u64().is_some_and(|seq| seq <= handed) {
+                event["redelivered"] = json!(true);
+            }
+        }
+        let skip = events.len().saturating_sub(MAX_REDELIVERED);
+        Ok(events.split_off(skip))
+    }
+
+    /// What waits on the run's coordinator since the cursor it last
+    /// acknowledged, one line each: tasks whose blockers cleared, answered
+    /// decisions, decided steps and QA problems sent. acquire_run and
+    /// takeover_run hand it over, so an interrupted coordinator, or the
+    /// next one, starts from it.
+    pub fn pending_summary(&self, run_id: &str) -> Result<Vec<Value>, DeliveryError> {
+        let run = self.run(run_id)?;
+        let mut pending = Vec::new();
+        for task in self.store()?.tasks()? {
+            if task.run_id.as_deref() != Some(run_id) {
+                continue;
+            }
+            if let Some(unblock) = &task.unblocked {
+                pending.push(json!({
+                    "kind": "unblocked",
+                    "task_id": task.id,
+                    "key": task.label(),
+                    "text": format!("{}: {}", task.label(), unblock_text(unblock)),
+                }));
+            }
+        }
+        let (events, _) = self.coordinator_events(run_id, run.coordinator_cursor)?;
+        for event in events {
+            if !PENDING_EVENTS.contains(&event["kind"].as_str().unwrap_or_default()) {
+                continue;
+            }
+            pending.push(json!({
+                "kind": event["kind"],
+                "seq": event["seq"],
+                "task_id": event["task_id"],
+                "key": event["key"],
+                "text": event["text"],
+            }));
+        }
+        Ok(pending)
+    }
+
     fn open_jobs(&self, run_id: &str) -> Result<Vec<Value>, DeliveryError> {
         let store = self.store()?;
         let tasks: HashMap<String, String> = store
@@ -250,11 +329,25 @@ impl DeliveryService {
             .collect())
     }
 
-    fn record_coordinator_cursor(&self, run_id: &str, cursor: u64) -> Result<(), DeliveryError> {
+    /// The coordinator called wait_run with `cursor`: it handled every
+    /// change it was handed up to there.
+    fn acknowledge_cursor(&self, run_id: &str, cursor: u64) -> Result<(), DeliveryError> {
         let store = self.store()?;
         if let Some(mut run) = store.run(run_id)? {
-            if run.coordinator_cursor < cursor {
-                run.coordinator_cursor = cursor;
+            let acknowledged = cursor.min(handed_cursor(&run));
+            if run.coordinator_cursor < acknowledged {
+                run.coordinator_cursor = acknowledged;
+                store.put_run(&run)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn record_returned_cursor(&self, run_id: &str, cursor: u64) -> Result<(), DeliveryError> {
+        let store = self.store()?;
+        if let Some(mut run) = store.run(run_id)? {
+            if run.returned_cursor < cursor {
+                run.returned_cursor = cursor;
                 store.put_run(&run)?;
             }
         }
@@ -328,7 +421,7 @@ impl DeliveryService {
                 if waiting.get(&run.id).is_some_and(|count| *count > 0) {
                     continue;
                 }
-                let after = run.coordinator_cursor.max(run.notified_cursor);
+                let after = handed_cursor(run);
                 let (events, _) = self.coordinator_events(&run.id, after)?;
                 let Some(newest) = events.last() else {
                     continue;
@@ -369,7 +462,7 @@ impl DeliveryService {
             .unwrap_or_default();
         let mut states = Vec::new();
         for run in runs.into_iter().filter(|run| run.status == "active") {
-            let after = run.coordinator_cursor.max(run.notified_cursor);
+            let after = handed_cursor(&run);
             let (events, _) = self.coordinator_events(&run.id, after)?;
             states.push(DeliveryCoordinatorState {
                 waiting: waiting.get(&run.id).is_some_and(|count| *count > 0),
@@ -399,6 +492,26 @@ impl DeliveryService {
         self.notify();
         Ok(())
     }
+}
+
+/// The newest change the run's coordinator was handed, by wait_run or a
+/// wake-up.
+fn handed_cursor(run: &DeliveryRun) -> u64 {
+    run.coordinator_cursor
+        .max(run.returned_cursor)
+        .max(run.notified_cursor)
+}
+
+/// How a task's blockers cleared, for its coordinator.
+fn unblock_text(unblock: &DeliveryUnblock) -> String {
+    let how = match unblock.by.as_str() {
+        "user" => "el usuario lo quitó en Tinto",
+        _ => "se resolvió solo",
+    };
+    format!(
+        "se despejó el bloqueo {} ({how}); la tarea espera que la retomes",
+        unblock.cleared
+    )
 }
 
 fn events_is_empty(reply: &Value) -> bool {
@@ -508,11 +621,7 @@ fn wakeup_text(held: &[DeliveryRun], changed: &[(&DeliveryRun, Vec<Value>, u64)]
         ));
     }
     // From the oldest change any of its batches has not had read.
-    let after = held
-        .iter()
-        .map(|run| run.coordinator_cursor.max(run.notified_cursor))
-        .min()
-        .unwrap_or(0);
+    let after = held.iter().map(handed_cursor).min().unwrap_or(0);
     let read = match held {
         [run] => format!(
             "Llama a wait_run con run_id {} y cursor {after} para leerlos completos y sigue con el lote.",
