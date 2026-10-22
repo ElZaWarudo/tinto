@@ -24,6 +24,7 @@ const client = vi.hoisted(() => ({
   getDeliveryIssueUrl: vi.fn((): Promise<string | null> => Promise.resolve(null)),
   getDeliveryIssue: vi.fn(),
   openDeliveryVisualRecord: vi.fn(),
+  regenerateDeliveryVisualRecord: vi.fn(),
   openDeliveryUrl: vi.fn(() => Promise.resolve()),
   pauseDeliveryJob: vi.fn(),
   resumeDeliveryJob: vi.fn(),
@@ -2884,6 +2885,58 @@ describe("DeliveryPanel", () => {
     const banner = await screen.findByRole("group", { name: "Registro visual de QA" });
     expect(within(banner).getByText("faltan las capturas")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /registro visual de QA/ })).toBeNull();
+  });
+
+  it("says why the QA has no record and renders it again on request", async () => {
+    const user = userEvent.setup();
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({
+            id: "qa-1",
+            role: "qa",
+            visual_record_error: "el trabajo no escribió AGOS-501.md en su carpeta de QA",
+          }),
+        ],
+      }),
+    );
+    client.regenerateDeliveryVisualRecord.mockResolvedValue(job({ id: "qa-1", role: "qa" }));
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Registro visual de QA" });
+    expect(within(banner).getByText("La QA no tiene registro visual")).toBeInTheDocument();
+    expect(
+      within(banner).getByText("el trabajo no escribió AGOS-501.md en su carpeta de QA"),
+    ).toBeInTheDocument();
+    await user.click(within(banner).getByRole("button", { name: "Regenerar registro" }));
+    expect(client.regenerateDeliveryVisualRecord).toHaveBeenCalledWith("qa-1");
+  });
+
+  it("warns when the QA's record misses part of the guide and names its other files", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [
+          job({
+            id: "qa-1",
+            role: "qa",
+            visual_record: "C:/jobs/qa-1/qa/AGOS-501-wp1-matrix.html",
+            visual_record_source: "C:/jobs/qa-1/qa/AGOS-501-wp1-matrix.md",
+            visual_record_extras: ["AGOS-501_notes.md"],
+            visual_record_warnings: ["Le falta la tabla de cabecera (fecha, rama, entorno)"],
+          }),
+        ],
+      }),
+    );
+    renderPanel();
+    const banner = await screen.findByRole("group", { name: "Registro visual de QA" });
+    expect(banner).not.toHaveClass("delivery-banner--danger");
+    expect(within(banner).getByText("El registro de QA no sigue la guía")).toBeInTheDocument();
+    expect(
+      within(banner).getByText("Le falta la tabla de cabecera (fecha, rama, entorno)."),
+    ).toBeInTheDocument();
+    expect(within(banner).getByText("Se muestra AGOS-501-wp1-matrix.md.")).toBeInTheDocument();
+    expect(within(banner).getByText("También escribió: AGOS-501_notes.md.")).toBeInTheDocument();
+    // The record still opens.
+    expect(screen.getByRole("button", { name: "Abrir registro visual de QA" })).toBeEnabled();
   });
 
   it("opens the task's PR on GitHub from its header", async () => {

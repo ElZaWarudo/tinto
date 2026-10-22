@@ -147,7 +147,7 @@ pub(super) struct Inner {
     pub(super) github: Mutex<Arc<dyn GitHub>>,
     pub(super) jira: Mutex<Arc<dyn super::jira::Jira>>,
     launcher: Launcher,
-    paths_for: PathsFor,
+    pub(super) paths_for: PathsFor,
     checkpoint_config: CheckpointConfig,
 }
 
@@ -642,14 +642,39 @@ impl DeliveryService {
             eprintln!("tinto: delivery could not check the commit steps: {error}");
         }
         let coordinators = self.coordinator_states()?;
-        let store = self.store()?;
+        let mut store = self.store()?;
         let tasks = store.tasks()?;
         let live: HashSet<&str> = tasks.iter().map(|task| task.id.as_str()).collect();
-        let jobs: Vec<_> = store
-            .jobs()?
-            .into_iter()
-            .filter(|job| live.contains(job.task_id.as_str()))
+        let live_jobs = |store: &DeliveryStore| -> Result<Vec<DeliveryJob>, DeliveryError> {
+            Ok(store
+                .jobs()?
+                .into_iter()
+                .filter(|job| live.contains(job.task_id.as_str()))
+                .collect())
+        };
+        let mut jobs = live_jobs(&store)?;
+        // A QA record copied or written after its job ended is rendered
+        // before the view shows that job.
+        let appeared: Vec<DeliveryJob> = tasks
+            .iter()
+            .filter_map(|task| {
+                jobs.iter()
+                    .filter(|job| job.task_id == task.id && job.role == QA_ROLE)
+                    .max_by_key(|job| job.created_at_ms)
+                    .filter(|job| self.record_appeared(task, job))
+                    .cloned()
+            })
             .collect();
+        if !appeared.is_empty() {
+            drop(store);
+            for job in &appeared {
+                if let Err(error) = self.refresh_visual_record(job) {
+                    eprintln!("tinto: delivery could not render a QA record: {error}");
+                }
+            }
+            store = self.store()?;
+            jobs = live_jobs(&store)?;
+        }
         let approvals: Vec<_> = store
             .approvals()?
             .into_iter()
@@ -1548,6 +1573,9 @@ impl DeliveryService {
             usage: None,
             visual_record: None,
             visual_record_error: None,
+            visual_record_source: None,
+            visual_record_extras: Vec::new(),
+            visual_record_warnings: Vec::new(),
             substituted,
             retry_of: retry_of.map(str::to_string),
         };
@@ -2507,21 +2535,16 @@ impl DeliveryService {
         let stderr_text = std::fs::read_to_string(&paths.stderr).unwrap_or_default();
         // QA's visual changes record becomes one page the user opens. Saved
         // before the job ends, so whoever learns it ended (the view, the
-        // coordinator, a test) finds the page and its problems with it.
-        let record = paths.qa_output.join(format!("{}.md", task.key));
-        if job.role == QA_ROLE && record.is_file() {
-            // Its problems wait for the user's call in the task.
-            if let Ok(text) = std::fs::read_to_string(&record) {
-                self.record_qa_problems(&task, &job.id, job.attempt, &text)?;
-            }
-            let rendered = super::visual_record::render_beside(&record);
-            let store = self.store()?;
-            if let Some(mut done) = store.job(&job.id)? {
-                match rendered {
-                    Ok(page) => done.visual_record = Some(plain_path(&page)),
-                    Err(error) => done.visual_record_error = Some(error),
-                }
-                store.put_job(&done)?;
+        // coordinator, a test) finds the page and its problems with it. A
+        // job the user cancelled without writing one is not told it lacks it.
+        if job.role == QA_ROLE
+            && (!cancelled
+                || super::visual_record::find(&paths.qa_output, &task.key).is_some())
+        {
+            // Its problems wait for the user's call in the task. The job
+            // ends even when they cannot be saved.
+            if let Err(error) = self.save_visual_record(&task, &job.id, &paths.qa_output, true) {
+                eprintln!("tinto: delivery could not save a QA record: {error}");
             }
         }
         self.finish(&job.id, ending, outcome, timing, end, &stderr_text)?;

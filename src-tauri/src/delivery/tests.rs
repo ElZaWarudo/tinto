@@ -49,21 +49,25 @@ fn fake_launcher() -> Launcher {
         let exit: i32 = spec.get("exit").and_then(|v| v.parse().ok()).unwrap_or(0);
         let touch = spec.get("touch").map(|name| worktree.join(name));
         // `record=1`: a QA job that writes its visual changes record;
-        // `record=problems`: one that lists two problems.
+        // `record=problems`: one that lists two problems; `record=guide`:
+        // one with the guide's header and verdict table. `record_as=-x.md`
+        // writes it as `<KEY>-x.md` instead (`.html`: a page of its own).
         if let Some(record) = spec.get("record") {
             let problems = match *record {
                 "problems" => "**Problems:**\n- P1: The toast covers Retry on mobile.\n- P2: The menu is cut off.\n\n**Suggested solutions:**\n- P1: Move the toast up.\n- P2: Let the menu scroll.\n",
+                "guide" => "| Test environment | |\n| --- | --- |\n| Date | 2026-10-22 |\n\n**Problems:** None\n\n## Verdicts\n\n| Item | Verdict |\n| --- | --- |\n| 1. Menú | pass |\n",
                 _ => "**Problems:** None\n",
             };
-            std::fs::create_dir_all(&paths.qa_output).unwrap();
-            std::fs::write(
-                paths.qa_output.join(format!("{}.md", task.key)),
-                format!(
+            let name = format!("{}{}", task.key, spec.get("record_as").unwrap_or(&".md"));
+            let text = match name.ends_with(".html") {
+                true => format!("<h1>{} by the agent</h1>", task.key),
+                false => format!(
                     "# {} — Visual changes\n\n## 1. Menú\n\n{problems}",
                     task.key
                 ),
-            )
-            .unwrap();
+            };
+            std::fs::create_dir_all(&paths.qa_output).unwrap();
+            std::fs::write(paths.qa_output.join(name), text).unwrap();
         }
         #[cfg(target_os = "windows")]
         {
@@ -645,9 +649,125 @@ fn a_qa_visual_record_becomes_a_page_the_user_opens() {
     let html = std::fs::read_to_string(&page).unwrap();
     assert!(html.contains("<h1>V-1 — Visual changes</h1>"));
     assert_eq!(qa.visual_record_error, None);
-    // Without a record, nothing is rendered.
+    assert!(qa.visual_record_source.unwrap().ends_with("V-1.md"));
+    // It lacks the guide's header and verdicts, and says so.
+    assert_eq!(qa.visual_record_warnings.len(), 2);
+    // Without a record, nothing is rendered, and the job says why.
     let plain = h.dispatch(&task, "qa", "events=codex-ok");
-    assert_eq!(h.wait(&plain.id).visual_record, None);
+    let plain = h.wait(&plain.id);
+    assert_eq!(plain.visual_record, None);
+    assert_eq!(
+        plain.visual_record_error.as_deref(),
+        Some("el trabajo no escribió V-1.md en su carpeta de QA")
+    );
+    // One that follows the guide has nothing to warn about.
+    let guided = h.dispatch(&task, "qa", "events=codex-ok record=guide");
+    let guided = h.wait(&guided.id);
+    assert!(guided.visual_record.is_some());
+    assert_eq!(guided.visual_record_warnings, Vec::<String>::new());
+    // Other jobs have no record to miss.
+    let tests = h.wait(&h.dispatch(&task, "tests", "events=codex-ok").id);
+    assert_eq!(tests.visual_record_error, None);
+}
+
+#[test]
+fn a_qa_record_under_another_name_is_the_record_and_its_problems_count() {
+    let h = harness();
+    let task = h.task("AGOS-360");
+    let qa = h.dispatch(
+        &task,
+        "qa",
+        "events=codex-ok record=problems record_as=-wp1-matrix.md",
+    );
+    let qa = h.wait(&qa.id);
+    let page = qa.visual_record.expect("a rendered page");
+    assert!(page.ends_with("AGOS-360-wp1-matrix.html"), "{page}");
+    assert!(std::fs::read_to_string(&page)
+        .unwrap()
+        .contains("AGOS-360 — Visual changes"));
+    assert!(qa
+        .visual_record_source
+        .unwrap()
+        .ends_with("AGOS-360-wp1-matrix.md"));
+    assert_eq!(qa.visual_record_error, None);
+    let problems = h.service.task_qa_problems(&task.id).unwrap();
+    assert_eq!(problems.len(), 2);
+    assert_eq!(problems[0].job_id.as_deref(), Some(qa.id.as_str()));
+}
+
+#[test]
+fn a_qa_page_the_agent_wrote_is_shown_as_it_is() {
+    let h = harness();
+    let task = h.task("AGOS-468");
+    let qa = h.dispatch(&task, "qa", "events=codex-ok record=1 record_as=.html");
+    let qa = h.wait(&qa.id);
+    let page = qa.visual_record.expect("its page");
+    assert!(page.ends_with("AGOS-468.html"), "{page}");
+    assert_eq!(qa.visual_record_source.as_deref(), Some(page.as_str()));
+    assert_eq!(
+        std::fs::read_to_string(&page).unwrap(),
+        "<h1>AGOS-468 by the agent</h1>"
+    );
+    assert_eq!(qa.visual_record_error, None);
+}
+
+#[test]
+fn a_qa_record_copied_after_the_job_ended_shows_when_read_or_regenerated() {
+    let h = harness();
+    let task = h.task("R-1");
+    let qa = h.wait(&h.dispatch(&task, "qa", "events=codex-ok").id);
+    assert!(qa.visual_record_error.is_some());
+    let folder = (h.service.inner.paths_for)(&qa.id).unwrap().qa_output;
+    std::fs::create_dir_all(&folder).unwrap();
+    let write = |name: &str, secs: u64| {
+        let path = folder.join(name);
+        std::fs::write(
+            &path,
+            "# R-1 — Visual changes\n\n## 1. Menú\n\n**Problems:**\n- P1: The menu is cut off.\n",
+        )
+        .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    };
+    write("R-1_notes.md", 100);
+    write("R-1-matrix.md", 200);
+    // The overview renders it, and only once.
+    let shown = |overview: super::model::DeliveryOverview| {
+        overview
+            .jobs
+            .into_iter()
+            .find(|job| job.id == qa.id)
+            .unwrap()
+    };
+    let read = shown(h.service.overview().unwrap());
+    assert!(read.visual_record.unwrap().ends_with("R-1-matrix.html"));
+    assert_eq!(read.visual_record_error, None);
+    assert_eq!(read.visual_record_extras, ["R-1_notes.md"]);
+    assert_eq!(h.service.task_qa_problems(&task.id).unwrap().len(), 1);
+    shown(h.service.overview().unwrap());
+
+    // `<KEY>.md` copied in later: read_job finds it.
+    std::fs::copy(folder.join("R-1-matrix.md"), folder.join("R-1.md")).unwrap();
+    let read = h.service.job(&qa.id).unwrap();
+    assert!(read.visual_record.as_deref().unwrap().ends_with("R-1-matrix.html"));
+    let mut cleared = read.clone();
+    cleared.visual_record = None;
+    cleared.visual_record_source = None;
+    h.service.store().unwrap().put_job(&cleared).unwrap();
+    let read = h.service.read_job(&qa.id).unwrap();
+    assert!(read.visual_record.unwrap().ends_with("R-1.html"));
+    assert_eq!(read.visual_record_extras, ["R-1-matrix.md", "R-1_notes.md"]);
+
+    // "Regenerar registro" renders it again; its problems are not repeated.
+    let again = h.service.regenerate_visual_record(&qa.id).unwrap();
+    assert!(again.visual_record.unwrap().ends_with("R-1.html"));
+    assert_eq!(h.service.task_qa_problems(&task.id).unwrap().len(), 1);
+    let tests = h.wait(&h.dispatch(&task, "tests", "events=codex-ok").id);
+    assert!(h.service.regenerate_visual_record(&tests.id).is_err());
 }
 
 #[test]

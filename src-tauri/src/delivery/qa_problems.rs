@@ -6,12 +6,16 @@
 //! `**Suggested solutions:**` of each change, labelled `P1`, `P2`…); Tinto
 //! reads them when the QA job ends and numbers them per task (`#1`, `#2`…).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::model::{DeliveryQaProblem, DeliveryQaProblemStatus, DeliveryTask};
+use super::model::{
+    DeliveryJob, DeliveryJobStatus, DeliveryQaProblem, DeliveryQaProblemStatus, DeliveryTask,
+};
 use super::service::{DeliveryService, QA_ROLE};
+use super::tasks::plain_path;
+use super::visual_record;
 use super::{now_ms, DeliveryError};
 
 /// A problem as the record states it.
@@ -209,6 +213,11 @@ fn same_problem(a: &str, b: &str) -> bool {
     clean(a) == clean(b)
 }
 
+/// The job no longer runs and will not resume.
+fn ended(job: &DeliveryJob) -> bool {
+    !job.status.is_open() && job.status != DeliveryJobStatus::Paused
+}
+
 fn invalid(message: &str) -> DeliveryError {
     DeliveryError::new("invalid_arguments", message)
 }
@@ -313,11 +322,137 @@ impl DeliveryService {
             {
                 continue;
             }
-            if let Ok(text) = std::fs::read_to_string(Path::new(page).with_extension("md")) {
-                self.record_qa_problems(&task, &job.id, job.attempt, &text)?;
+            let record = match &job.visual_record_source {
+                Some(source) => PathBuf::from(source),
+                None => Path::new(page).with_extension("md"),
+            };
+            if record.extension().is_some_and(|ext| ext == "md") {
+                if let Ok(text) = std::fs::read_to_string(record) {
+                    self.record_qa_problems(&task, &job.id, job.attempt, &text)?;
+                }
             }
         }
         Ok(())
+    }
+
+    /// Finds the QA job's record in `qa_dir`, renders it and saves on the
+    /// job its page, the file it came from, the other candidates and what
+    /// it lacks of the guide; or why there is none. With `read_problems`,
+    /// the problems a Markdown record lists wait for the user.
+    pub(super) fn save_visual_record(
+        &self,
+        task: &DeliveryTask,
+        job_id: &str,
+        qa_dir: &Path,
+        read_problems: bool,
+    ) -> Result<DeliveryJob, DeliveryError> {
+        let found = visual_record::find(qa_dir, &task.key);
+        let text = found
+            .as_ref()
+            .filter(|found| found.source.extension().is_some_and(|ext| ext == "md"))
+            .and_then(|found| std::fs::read_to_string(&found.source).ok());
+        if let (true, Some(text)) = (read_problems, &text) {
+            let attempt = self.job(job_id)?.attempt;
+            self.record_qa_problems(task, job_id, attempt, text)?;
+        }
+        let rendered = found
+            .as_ref()
+            .map(|found| visual_record::page_for(&found.source));
+        let store = self.store()?;
+        let Some(mut job) = store.job(job_id)? else {
+            return Err(DeliveryError::not_found("el trabajo", job_id));
+        };
+        let name = |path: &PathBuf| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        job.visual_record_source = found.as_ref().map(|found| plain_path(&found.source));
+        job.visual_record_extras = found
+            .as_ref()
+            .map(|found| found.extras.iter().map(name).collect())
+            .unwrap_or_default();
+        job.visual_record_warnings = text
+            .as_deref()
+            .map(visual_record::missing_parts)
+            .unwrap_or_default();
+        (job.visual_record, job.visual_record_error) = match rendered {
+            Some(Ok(page)) => (Some(plain_path(&page)), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (
+                None,
+                Some(format!(
+                    "el trabajo no escribió {}.md en su carpeta de QA",
+                    task.key
+                )),
+            ),
+        };
+        store.put_job(&job)?;
+        Ok(job)
+    }
+
+    /// The user's "Regenerar registro": an ended QA job's record, found and
+    /// rendered again, for one fixed or copied into its QA folder later.
+    pub fn regenerate_visual_record(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
+        let job = self.job(job_id)?;
+        if job.role != QA_ROLE {
+            return Err(invalid("solo un trabajo de QA tiene registro visual"));
+        }
+        if !ended(&job) {
+            return Err(DeliveryError::new(
+                "job_running",
+                "la QA aún no terminó; su registro se genera al terminar",
+            ));
+        }
+        let job = self.refresh_visual_record(&job)?;
+        self.notify();
+        Ok(job)
+    }
+
+    /// An ended QA job whose record was missing and that now has one: what
+    /// read_job and the overview render before they show it.
+    pub(super) fn record_appeared(&self, task: &DeliveryTask, job: &DeliveryJob) -> bool {
+        if job.role != QA_ROLE || !ended(job) || job.visual_record.is_some() {
+            return false;
+        }
+        let Ok(paths) = (self.inner.paths_for)(&job.id) else {
+            return false;
+        };
+        visual_record::find(&paths.qa_output, &task.key)
+            .is_some_and(|found| Some(plain_path(&found.source)) != job.visual_record_source)
+    }
+
+    /// A job as read_job shows it, with a record that appeared since it ended.
+    pub fn read_job(&self, job_id: &str) -> Result<DeliveryJob, DeliveryError> {
+        let job = self.job(job_id)?;
+        match self.task(&job.task_id) {
+            Ok(task) if self.record_appeared(&task, &job) => self.refresh_visual_record(&job),
+            _ => Ok(job),
+        }
+    }
+
+    /// Renders an ended QA job's record again. Its problems are read only
+    /// when it is the task's latest QA and none were read from it yet.
+    pub(super) fn refresh_visual_record(
+        &self,
+        job: &DeliveryJob,
+    ) -> Result<DeliveryJob, DeliveryError> {
+        let task = self.task(&job.task_id)?;
+        let paths = (self.inner.paths_for)(&job.id)?;
+        let read_problems = {
+            let store = self.store()?;
+            let latest = store
+                .task_jobs(&task.id)?
+                .into_iter()
+                .filter(|other| other.role == QA_ROLE)
+                .max_by_key(|other| other.created_at_ms);
+            latest.is_some_and(|latest| latest.id == job.id)
+                && !store
+                    .task_qa_problems(&task.id)?
+                    .iter()
+                    .any(|problem| problem.job_id.as_deref() == Some(job.id.as_str()))
+        };
+        self.save_visual_record(&task, &job.id, &paths.qa_output, read_problems)
     }
 
     /// A problem QA missed, as the user describes it.

@@ -440,6 +440,15 @@ pub struct DeliveryJob {
     pub visual_record: Option<String>,
     #[serde(default)]
     pub visual_record_error: Option<String>,
+    /// The file the record came from (`<KEY>.md`, a `<KEY>.html` the agent
+    /// wrote, or a `<KEY>-*.md`), the other candidates beside it, and what
+    /// the record lacks of the QA record guide.
+    #[serde(default)]
+    pub visual_record_source: Option<String>,
+    #[serde(default)]
+    pub visual_record_extras: Vec<String>,
+    #[serde(default)]
+    pub visual_record_warnings: Vec<String>,
     /// Why the job runs with another agent than the one asked for (it was
     /// not installed on this machine).
     #[serde(default)]
