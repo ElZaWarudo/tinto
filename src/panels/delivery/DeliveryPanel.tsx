@@ -216,6 +216,12 @@ const ICONS: Record<IconName, ReactNode> = {
       <path d="M8 5v3.2l2.2 1.4" />
     </>
   ),
+  lock: (
+    <>
+      <path d="M3.5 7.5h9v6h-9z" />
+      <path d="M5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5M8 10v1.2" />
+    </>
+  ),
   ring: <circle cx="8" cy="8" r="4" />,
   check: <path d="M3.5 8.5l3 3 6-7" />,
   more: <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth="2.6" />,
@@ -283,6 +289,7 @@ const TONE_ICON: Record<Tone, StatusIcon> = {
   danger: "x",
   live: "live",
   waiting: "clock",
+  blocked: "lock",
   idle: "ring",
   ok: "check",
 };
@@ -1675,11 +1682,12 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                       (candidate) => candidate.task_id === task.id,
                     );
                     const progress = overview ? issueProgress(overview, task) : null;
+                    const status = statuses.get(task.id)!;
                     return (
                       <button
                         key={task.id}
                         type="button"
-                        className="delivery-task-row"
+                        className={`delivery-task-row${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}`}
                         aria-current={selectedTask?.id === task.id ? "true" : undefined}
                         onClick={() => select(repo, task.id)}
                       >
@@ -1701,7 +1709,12 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                             {progress}
                           </span>
                         )}
-                        <StatusLine status={statuses.get(task.id)!} />
+                        <StatusLine status={status} />
+                        {status.detail && (
+                          <span className="delivery-task-row__blocker" title={status.detail}>
+                            {status.detail}
+                          </span>
+                        )}
                       </button>
                     );
                   })}

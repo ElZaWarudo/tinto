@@ -184,7 +184,27 @@ describe("taskStatus words the phase Tinto derives", () => {
     };
     expect(taskStatus(blocked, overview({ phases }), 0)).toMatchObject({
       group: "waiting",
-      label: "Bloqueada por PR acme/api#305",
+      tone: "blocked",
+      icon: "lock",
+      label: "Bloqueada",
+      detail: "Espera al PR acme/api#305",
+    });
+    const note = {
+      ...blocked,
+      blockers: [
+        ...blocked.blockers,
+        {
+          id: "b2",
+          type: "note" as const,
+          text: "Docker Desktop está apagado",
+          status: "",
+          cleared_at_ms: null,
+        },
+      ],
+    };
+    expect(taskStatus(note, overview({ phases }), 0)).toMatchObject({
+      label: "Bloqueada · 2 bloqueos",
+      detail: "Espera al PR acme/api#305 · Docker Desktop está apagado",
     });
   });
 
