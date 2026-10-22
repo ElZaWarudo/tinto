@@ -2682,7 +2682,7 @@ describe("DeliveryPanel", () => {
     const choices = screen.getAllByRole("menuitem");
     expect(choices.map((choice) => choice.textContent)).toEqual(["Muse Code · next-coo"]);
     await user.click(choices[0]);
-    expect(client.handOverDeliveryRun).toHaveBeenCalledWith("run-1", "next-coordinator");
+    expect(client.handOverDeliveryRun).toHaveBeenCalledWith(["run-1"], "next-coordinator");
     agentSessionStore.setSessions([]);
   });
 

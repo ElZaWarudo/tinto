@@ -2430,6 +2430,40 @@
   margin: 0;
   font-size: 12px;
 }
+.delivery-coordinator__held {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+/* The batches a new coordinator takes: one square checkbox row each. */
+.delivery-coordinator__batches {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+}
+.delivery-coordinator__batches legend {
+  padding: 0 0 2px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.delivery-coordinator__batches label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.delivery-coordinator__batches label > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delivery-coordinator__batches input {
+  margin: 0;
+  accent-color: var(--accent-fg);
+}
 .delivery-coordinator__pick {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
