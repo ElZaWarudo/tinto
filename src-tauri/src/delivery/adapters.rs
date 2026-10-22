@@ -2078,6 +2078,7 @@ pub(crate) mod tests {
             archived_at_ms: None,
             blockers: Vec::new(),
             blocked_reason: String::new(),
+            unblocked: None,
             checks: Vec::new(),
             setup: Vec::new(),
         }

@@ -255,6 +255,62 @@ describe("taskStatus words the phase Tinto derives", () => {
     expect(status({ kind: "quarantined", lease: "qa" }).label).toBe("QA en cuarentena");
   });
 
+  it("says why a queued job has not started, and when what it waits for looks stuck", () => {
+    const reason = "espera a que terminen las comprobaciones (trabajo c1) de esta tarea";
+    const queued: DeliveryPhase = {
+      kind: "queued",
+      job_id: "j",
+      role: "implementation",
+      lease: null,
+      position: 0,
+      reason,
+      since_ms: 1,
+    };
+    expect(status(queued)).toMatchObject({ label: "En cola", detail: reason });
+    const warning = "el trabajo c1 lleva 50 min, más que su límite de 30 min";
+    const stuck = taskStatus(
+      task,
+      overview({
+        phases: { t1: { ...queued, waits_on: "queue", next_stage: null, warning } },
+      }),
+      0,
+    );
+    expect(stuck.detail).toBe(`${reason} · ${warning}`);
+    // The checks run: the warning still shows on the task.
+    const running = taskStatus(
+      task,
+      overview({
+        phases: {
+          t1: {
+            kind: "running",
+            job_id: "c1",
+            role: "checks",
+            waits_on: "agent",
+            next_stage: null,
+            warning,
+          },
+        },
+      }),
+      0,
+    );
+    expect(running.detail).toBe(warning);
+  });
+
+  it("keeps a task whose blocker cleared on the coordinator, naming who cleared it", () => {
+    const unblocked = (by: string): DeliveryPhase => ({
+      kind: "unblocked",
+      cleared: "las bases de pruebas",
+      by,
+      at_ms: 1,
+    });
+    expect(status(unblocked("user"))).toMatchObject({
+      group: "idle",
+      label: "Desbloqueada · espera al coordinador",
+      detail: "Quitaste: las bases de pruebas",
+    });
+    expect(status(unblocked("tinto")).detail).toBe("Se resolvió: las bases de pruebas");
+  });
+
   it("flags a failed setup command and a job waiting on the environment", () => {
     expect(status({ kind: "setup_failed", job_id: "j", command: "npm ci" })).toEqual({
       group: "attention",

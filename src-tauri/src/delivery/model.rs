@@ -43,9 +43,16 @@ pub struct DeliveryTask {
     /// task is blocked: no stage starts on it.
     #[serde(default)]
     pub blockers: Vec<DeliveryBlocker>,
-    /// Why it is blocked, in the coordinator's words.
+    /// Why it is blocked, in the coordinator's words; empty once no
+    /// blocker is open (the cleared reason moves to `unblocked`).
     #[serde(default)]
     pub blocked_reason: String,
+    /// Its last open blocker cleared without the coordinator acting on it
+    /// (the user cleared it, or it resolved): the task waits on the
+    /// coordinator until it dispatches, asks for a step, sets its state or
+    /// blocks it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unblocked: Option<DeliveryUnblock>,
     /// The repo's checks Tinto runs on what each stage changes (the tests
     /// stage aside), as the coordinator chose them for this issue.
     #[serde(default)]
@@ -98,6 +105,19 @@ impl DeliveryTask {
             _ => false,
         }
     }
+}
+
+/// How a task's last open blocker cleared.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryUnblock {
+    pub at_ms: u64,
+    /// The blockers that cleared last, in a few words.
+    pub cleared: String,
+    /// `user` (cleared by hand in Tinto) or `tinto` (it resolved).
+    pub by: String,
+    /// Why it was blocked, as the coordinator said.
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// Something a blocked task waits for.
@@ -1029,9 +1049,15 @@ pub struct DeliveryRun {
     /// tool calls say: Tinto wakes it when something waits on it.
     #[serde(default)]
     pub coordinator_session: Option<String>,
-    /// The event cursor the coordinator last read with wait_run.
+    /// The event cursor the coordinator acknowledged: it called wait_run
+    /// with it (or a later one), so it handled every change up to it.
     #[serde(default)]
     pub coordinator_cursor: u64,
+    /// The newest cursor wait_run handed it. The changes after
+    /// `coordinator_cursor` up to this one were handed over but not
+    /// acknowledged: a coordinator interrupted meanwhile gets them again.
+    #[serde(default)]
+    pub returned_cursor: u64,
     /// The event cursor Tinto last woke the coordinator's conversation up to.
     #[serde(default)]
     pub notified_cursor: u64,
@@ -1217,6 +1243,20 @@ pub struct DeliveryOverview {
     /// Issues delivered in several packages, each across its packages.
     #[serde(default)]
     pub issues: Vec<DeliverySplitIssue>,
+    /// Why each queued job (by id) has not started.
+    #[serde(default)]
+    pub queued: std::collections::BTreeMap<String, DeliveryQueueWait>,
+}
+
+/// Why a queued job has not started, by the scheduler's own rules.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryQueueWait {
+    pub reason: String,
+    pub since_ms: u64,
+    /// What it waits for looks stuck: a job far beyond its usual time, a
+    /// resource held by a job whose process is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// An issue split into packages, as far as its packages got.

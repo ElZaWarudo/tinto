@@ -6489,10 +6489,10 @@ fn one_wait_run_covers_every_batch_its_conversation_coordinates() {
     assert_eq!(events.len(), 1, "{reply}");
     assert_eq!(events[0]["run_id"], json!(second.run_id));
     assert_eq!(events[0]["text"], "el usuario pausó el lote");
-    // Both batches have read up to the new cursor: nothing to wake them for.
+    // Both batches were handed the new cursor: nothing to wake them for.
     let next = reply["cursor"].as_u64().unwrap();
     for run_id in [&first.run_id, &second.run_id] {
-        assert_eq!(h.service.run(run_id).unwrap().coordinator_cursor, next);
+        assert_eq!(h.service.run(run_id).unwrap().returned_cursor, next);
     }
     let later = super::now_ms() + super::feed::WAKE_QUIET_MS + 1;
     assert!(h.service.pending_wakeups(later).unwrap().is_empty());
@@ -8168,4 +8168,375 @@ fn rounds_survive_a_restart() {
     let after = service.overview().unwrap().phases[&task.id].round.clone();
     assert_eq!(after, Some(before));
     service.close();
+}
+
+/// The structured reply of a wait_run as the run's owner.
+fn wait(coordinator: &Coordinator, arguments: serde_json::Value) -> serde_json::Value {
+    coordinator.write("wait_run", arguments)["structuredContent"].clone()
+}
+
+fn idle_kinds(reply: &serde_json::Value) -> Vec<(String, String)> {
+    reply["idle"]
+        .as_array()
+        .expect("idle")
+        .iter()
+        .map(|task| {
+            (
+                task["key"].as_str().unwrap_or_default().to_string(),
+                task["phase"]["kind"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_blocker_the_user_clears_waits_on_the_coordinator_until_it_acts() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("AGOS-463");
+    let blocked = coordinator.write(
+        "set_task_blocked",
+        json!({"task_id": task_id, "reason": "Waiting for the test databases",
+               "blockers": [{"type": "note", "text": "las bases de pruebas"}]}),
+    );
+    assert_eq!(blocked["isError"], json!(null), "{blocked}");
+    let cursor = wait(&coordinator, json!({}))["cursor"].as_u64().unwrap();
+
+    // The user clears it while the coordinator is not inside wait_run.
+    let cleared = h.service.clear_blockers(&task_id, None, true).unwrap();
+    assert_eq!(
+        cleared.blocked_reason, "",
+        "the reason goes with the blockers"
+    );
+    let unblock = cleared
+        .unblocked
+        .clone()
+        .expect("it waits on the coordinator");
+    assert_eq!(unblock.by, "user");
+    assert_eq!(unblock.cleared, "las bases de pruebas");
+    assert_eq!(unblock.reason, "Waiting for the test databases");
+
+    // With or without a cursor, the next waits list it until it is handled.
+    let unblocked = vec![("AGOS-463".to_string(), "unblocked".to_string())];
+    let with_cursor = wait(
+        &coordinator,
+        json!({"cursor": cursor, "timeout_seconds": 5}),
+    );
+    assert_eq!(idle_kinds(&with_cursor), unblocked, "{with_cursor}");
+    assert_eq!(with_cursor["idle"][0]["phase"]["by"], "user");
+    assert_eq!(
+        with_cursor["idle"][0]["phase"]["cleared"],
+        "las bases de pruebas"
+    );
+    assert_eq!(with_cursor["idle"][0]["phase"]["waits_on"], "coordinator");
+    let next = with_cursor["cursor"].as_u64().unwrap();
+    let quiet = wait(&coordinator, json!({"cursor": next, "timeout_seconds": 5}));
+    assert_eq!(quiet["waited"], false, "it does not wait: {quiet}");
+    assert_eq!(idle_kinds(&quiet), unblocked);
+    assert_eq!(idle_kinds(&wait(&coordinator, json!({}))), unblocked);
+    let phase = &h.service.overview().unwrap().phases[&task_id];
+    assert!(matches!(phase.phase, super::phase::Phase::Unblocked { .. }));
+    let held = coordinator.call(
+        "acquire_run",
+        json!({"run_id": coordinator.run_id, "owner": "coord"}),
+    );
+    let pending = held["structuredContent"]["pending"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["kind"], "unblocked");
+    assert!(pending[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("las bases de pruebas"));
+
+    // Acting on the task settles it.
+    coordinator.write(
+        "set_task_state",
+        json!({"task_id": task_id, "state": "implementation"}),
+    );
+    assert_eq!(h.service.task(&task_id).unwrap().unblocked, None);
+    let after = wait(&coordinator, json!({}));
+    assert!(
+        !idle_kinds(&after)
+            .iter()
+            .any(|(_, kind)| kind == "unblocked"),
+        "{after}"
+    );
+}
+
+#[test]
+fn a_blocker_that_resolves_waits_on_the_coordinator_until_it_dispatches() {
+    use super::model::NewBlocker;
+
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (rag, _) = coordinator.task("AGOS-580");
+    let (task_id, _) = coordinator.task("AGOS-434");
+    h.service
+        .set_blockers(
+            &task_id,
+            vec![NewBlocker::Task {
+                task: "AGOS-580".into(),
+                until: None,
+            }],
+            "needs the RAG",
+        )
+        .unwrap();
+    h.service
+        .store()
+        .unwrap()
+        .put_approval(&executed_step(&rag, "merge"))
+        .unwrap();
+    assert_eq!(h.service.settle_blockers().unwrap(), 1);
+    let task = h.service.task(&task_id).unwrap();
+    assert_eq!(task.blocked_reason, "");
+    assert_eq!(
+        task.unblocked.as_ref().map(|unblock| unblock.by.as_str()),
+        Some("tinto")
+    );
+
+    let dispatched = coordinator.write(
+        "dispatch_job",
+        json!({"task_id": task_id, "role": "tests", "agent": "codex", "prompt": "events=codex-ok"}),
+    );
+    assert_eq!(dispatched["isError"], json!(null), "{dispatched}");
+    assert_eq!(h.service.task(&task_id).unwrap().unblocked, None);
+}
+
+#[test]
+fn a_refused_dispatch_leaves_the_cleared_blocker_pending() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("AGOS-1");
+    coordinator.write(
+        "set_task_blocked",
+        json!({"task_id": task_id, "blockers": [{"type": "note", "text": "x"}]}),
+    );
+    h.service.clear_blockers(&task_id, None, true).unwrap();
+    let refused = coordinator.write(
+        "dispatch_job",
+        json!({"task_id": task_id, "role": "tests", "prompt": "x"}),
+    );
+    assert_eq!(refused["isError"], true, "no agent fixed for the stage");
+    assert!(h.service.task(&task_id).unwrap().unblocked.is_some());
+}
+
+#[test]
+fn clearing_every_blocker_empties_the_reason() {
+    use super::model::NewBlocker;
+
+    let h = harness();
+    let task = h.task("AGOS-468");
+    let note = |text: &str| NewBlocker::Note { text: text.into() };
+    let blocked = h
+        .service
+        .set_blockers(
+            &task.id,
+            vec![note("las bases"), note("el diseño")],
+            "Waiting for the test databases",
+        )
+        .unwrap();
+    // One left open keeps it.
+    let first = blocked.blockers[0].id.clone();
+    let one = h
+        .service
+        .clear_blockers(&task.id, Some(&[first]), false)
+        .unwrap();
+    assert_eq!(one.blocked_reason, "Waiting for the test databases");
+    // The coordinator clearing the last one leaves nothing pending.
+    let none = h.service.clear_blockers(&task.id, None, false).unwrap();
+    assert_eq!(none.blocked_reason, "");
+    assert_eq!(none.unblocked, None);
+
+    // A reason stored before blockers dropped theirs goes too.
+    let mut stale = h.service.task(&task.id).unwrap();
+    stale.blocked_reason = "Waiting for the test databases".into();
+    h.service.store().unwrap().put_task(&stale).unwrap();
+    h.service.settle_blockers().unwrap();
+    assert_eq!(h.service.task(&task.id).unwrap().blocked_reason, "");
+}
+
+#[test]
+fn changes_handed_to_an_interrupted_coordinator_come_again() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("AGOS-7");
+    let start = wait(&coordinator, json!({}))["cursor"].as_u64().unwrap();
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": "a-jira", "task_id": task_id, "rung": "jira", "title": "Jira", "body": "",
+        "status": "pending", "requested_by": "coord", "requested_at_ms": 1, "stage": "after_pr"
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+    h.service.decide_approval("a-jira", true, None).unwrap();
+
+    // The wait hands the approval over, then the coordinator is interrupted.
+    let handed = wait(
+        &coordinator,
+        json!({"cursor": start, "timeout_seconds": 5, "idle_ok": true}),
+    );
+    let events = handed["events"].as_array().unwrap().clone();
+    assert_eq!(events.len(), 1, "{handed}");
+    assert_eq!(events[0]["kind"], "approval_approved");
+    assert_eq!(events[0]["redelivered"], json!(null));
+    let cursor = handed["cursor"].as_u64().unwrap();
+    let run = h.service.run(&coordinator.run_id).unwrap();
+    assert_eq!(
+        run.coordinator_cursor, start,
+        "only handed, not acknowledged"
+    );
+    assert_eq!(run.returned_cursor, cursor);
+
+    // A new wait without cursor, or taking the run, gets it again.
+    let again = wait(&coordinator, json!({}));
+    let events = again["events"].as_array().unwrap().clone();
+    assert_eq!(events.len(), 1, "{again}");
+    assert_eq!(events[0]["seq"], handed["events"][0]["seq"]);
+    assert_eq!(events[0]["redelivered"], true);
+    let taken = coordinator.call(
+        "takeover_run",
+        json!({"run_id": coordinator.run_id, "owner": "coord"}),
+    );
+    let pending = taken["structuredContent"]["pending"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(pending.len(), 1, "{taken}");
+    assert_eq!(pending[0]["kind"], "approval_approved");
+
+    // After the takeover, the wait without cursor hands the approval again
+    // but not the takeover itself, which is news only for the replaced one.
+    let generation = taken["structuredContent"]["generation"].as_u64().unwrap();
+    let owned = |extra: serde_json::Value| {
+        let mut arguments =
+            json!({"run_id": coordinator.run_id, "owner": "coord", "generation": generation});
+        arguments
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        coordinator.call("wait_run", arguments)["structuredContent"].clone()
+    };
+    let resumed = owned(json!({}));
+    let kinds: Vec<&str> = resumed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect();
+    assert_eq!(kinds, vec!["approval_approved"], "{resumed}");
+
+    // Waiting from its cursor acknowledges it: nothing comes again.
+    let latest = resumed["cursor"].as_u64().unwrap();
+    owned(json!({"cursor": latest, "timeout_seconds": 1, "idle_ok": true}));
+    assert_eq!(
+        h.service
+            .run(&coordinator.run_id)
+            .unwrap()
+            .coordinator_cursor,
+        latest
+    );
+    let fresh = owned(json!({}));
+    assert_eq!(fresh["events"], json!([]), "{fresh}");
+    let none = coordinator.call(
+        "acquire_run",
+        json!({"run_id": coordinator.run_id, "owner": "coord"}),
+    );
+    assert_eq!(none["structuredContent"]["pending"], json!([]));
+}
+
+#[test]
+fn a_queued_job_says_what_holds_it() {
+    use super::adapters::tests::sample_job;
+
+    let h = harness();
+    let task = h.task("AGOS-468");
+    let other = h.task("AGOS-469");
+    let now = super::now_ms();
+    let mut checks = sample_job(DeliveryAgent::Shell);
+    checks.id = "checks-1".into();
+    checks.task_id = task.id.clone();
+    checks.role = "checks".into();
+    checks.prompt = "npm test".into();
+    checks.status = DeliveryJobStatus::Started;
+    checks.timeout_minutes = 30;
+    checks.created_at_ms = now - 50 * 60_000;
+    checks.started_at_ms = Some(now - 50 * 60_000);
+    let mut queued = sample_job(DeliveryAgent::Codex);
+    queued.id = "impl-1".into();
+    queued.task_id = task.id.clone();
+    queued.role = "implementation".into();
+    queued.created_at_ms = now - 40 * 60_000;
+    // QA of another task waits for the qa resource a finished job kept.
+    let mut holder = sample_job(DeliveryAgent::Codex);
+    holder.id = "qa-old".into();
+    holder.task_id = other.id.clone();
+    holder.role = "qa".into();
+    holder.status = DeliveryJobStatus::Finished;
+    holder.created_at_ms = now - 30 * 60_000;
+    let mut qa = sample_job(DeliveryAgent::Codex);
+    qa.id = "qa-2".into();
+    qa.task_id = other.id.clone();
+    qa.role = "qa".into();
+    qa.lease = Some("qa".into());
+    qa.created_at_ms = now - 20 * 60_000;
+    {
+        let store = h.service.store().unwrap();
+        for job in [&checks, &queued, &holder, &qa] {
+            store.put_job(job).unwrap();
+        }
+        let lease: super::model::DeliveryLease = serde_json::from_value(json!({
+            "name": "qa", "state": "active", "generation": 1, "holder_job_id": "qa-old",
+            "holder_task_id": other.id, "acquired_at_ms": 1, "note": null, "queue": [],
+        }))
+        .unwrap();
+        store.put_lease(&lease).unwrap();
+    }
+
+    let overview = h.service.overview().unwrap();
+    let wait = &overview.queued["impl-1"];
+    assert_eq!(
+        wait.reason,
+        "espera a que terminen las comprobaciones (trabajo checks-1) de esta tarea"
+    );
+    assert_eq!(wait.since_ms, queued.created_at_ms);
+    let stuck = wait
+        .warning
+        .as_deref()
+        .expect("the checks run past their limit");
+    assert!(
+        stuck.contains("checks-1") && stuck.contains("30 min"),
+        "{stuck}"
+    );
+    // The task runs its checks, and its phase warns that they look stuck.
+    let phase = &overview.phases[&task.id];
+    assert!(matches!(phase.phase, super::phase::Phase::Running { .. }));
+    assert_eq!(phase.warning.as_deref(), Some(stuck));
+
+    let qa_wait = &overview.queued["qa-2"];
+    assert_eq!(
+        qa_wait.reason,
+        "espera el recurso qa, que tiene el trabajo qa-old"
+    );
+    assert!(qa_wait
+        .warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("ya terminó")));
+    match &overview.phases[&other.id].phase {
+        super::phase::Phase::Queued { reason, .. } => {
+            assert_eq!(reason.as_deref(), Some(qa_wait.reason.as_str()));
+        }
+        phase => panic!("{phase:?}"),
+    }
+
+    let read = mcp_tool(&h, "read_job", json!({"job_id": "impl-1"}));
+    assert_eq!(read["queued_reason"], json!(wait.reason));
+    assert_eq!(read["queued_since_ms"], json!(queued.created_at_ms));
+    assert!(read["queued_warning"].is_string());
+    let running = mcp_tool(&h, "read_job", json!({"job_id": "checks-1"}));
+    assert_eq!(running.get("queued_reason"), None);
 }

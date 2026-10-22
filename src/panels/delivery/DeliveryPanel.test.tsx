@@ -467,6 +467,28 @@ describe("DeliveryPanel", () => {
     expect(activity).not.toHaveTextContent("sin actividad");
   });
 
+  it("says why a queued job has not started, and when what it waits for looks stuck", async () => {
+    const since = Date.now() - 31 * 60_000;
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [job({ status: "queued", started_at_ms: null, ended_at_ms: null, result: null })],
+        queued: {
+          j1: {
+            reason: "espera a que terminen las comprobaciones (trabajo c1) de esta tarea",
+            since_ms: since,
+            warning: "el trabajo c1 lleva 50 min, más que su límite de 30 min",
+          },
+        },
+      }),
+    );
+    renderPanel();
+    const wait = await screen.findByLabelText("Por qué espera Tests");
+    expect(wait).toHaveTextContent(
+      "espera a que terminen las comprobaciones (trabajo c1) de esta tarea en cola hace 31 min",
+    );
+    expect(wait).toHaveTextContent("el trabajo c1 lleva 50 min, más que su límite de 30 min");
+  });
+
   it("says where a finished job's time went", async () => {
     client.getDeliveryOverview.mockResolvedValue(
       overview({
