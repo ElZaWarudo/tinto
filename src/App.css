@@ -13782,3 +13782,56 @@ a:focus-visible {
   border-radius: 999px;
   font-size: 10px;
 }
+
+/* ---- Reiniciar o actualizar Tinto ---- */
+.restart-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  min-height: 0;
+}
+.restart-modal__body h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.restart-modal__body ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+.restart-modal__body li {
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.restart-modal__body li span,
+.restart-modal__empty {
+  color: var(--fg-muted);
+}
+.restart-modal__empty {
+  margin: 0;
+  font-size: 12px;
+}
+.restart-modal__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.restart-modal__primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.restart-modal__primary:hover {
+  filter: brightness(1.1);
+}
+.restart-modal .file-op-modal__button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}

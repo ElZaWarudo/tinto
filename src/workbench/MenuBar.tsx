@@ -15,6 +15,7 @@ import { autodetectFlow, switchWorkbench } from "./operations";
 import { visibleWorkbenchNames } from "./recentWorkbenches";
 import { AddonsManager } from "./AddonsManager";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
+import { RestartDialog } from "./RestartDialog";
 import { ManageWorkbenchesDialog } from "./ManageWorkbenchesDialog";
 import { ThemePicker } from "./ThemePicker";
 import { WindowBrand, WindowControls, WindowDragRegion } from "./WindowChrome";
@@ -79,6 +80,7 @@ export function MenuBar() {
   const [showThemes, setShowThemes] = useState(false);
   const [showAddons, setShowAddons] = useState(false);
   const [showManage, setShowManage] = useState(false);
+  const [showRestart, setShowRestart] = useState(false);
   const [feedback, setFeedback] = useState<MenuFeedback | null>(null);
   const [switchingWorkbench, setSwitchingWorkbench] = useState<string | null>(null);
   const [activeTrigger, setActiveTrigger] = useState<MenuId>("workbench");
@@ -672,6 +674,12 @@ export function MenuBar() {
                 close={close}
                 onSelect={() => setShowShortcuts(true)}
               />
+              <MenuItem
+                label="Reiniciar o actualizar Tinto…"
+                testid="restart-tinto"
+                close={close}
+                onSelect={() => setShowRestart(true)}
+              />
             </div>
           )}
         </div>
@@ -731,6 +739,7 @@ export function MenuBar() {
 
       {showShortcuts && <KeyboardShortcuts onClose={() => setShowShortcuts(false)} />}
       {showAddons && <AddonsManager onClose={() => setShowAddons(false)} />}
+      {showRestart && <RestartDialog onClose={() => setShowRestart(false)} />}
       {showManage && config && (
         <ManageWorkbenchesDialog
           config={config}

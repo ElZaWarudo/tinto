@@ -7,11 +7,16 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE},
+    Foundation::{CloseHandle, ERROR_ACCESS_DENIED, FILETIME, HANDLE, WAIT_OBJECT_0},
     System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    },
+    System::Threading::{
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess, WaitForSingleObject,
+        CREATE_BREAKAWAY_FROM_JOB, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        PROCESS_TERMINATE,
     },
 };
 
@@ -21,18 +26,106 @@ pub(crate) fn hide_console(command: &mut Command) -> &mut Command {
     command.creation_flags(CREATE_NO_WINDOW)
 }
 
+/// Starts `command` without a console and, when Tinto itself runs inside a
+/// job that would take it down on exit, outside that job.
+pub(crate) fn spawn_outliving(command: &mut Command) -> io::Result<Child> {
+    match command
+        .creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
+        .spawn()
+    {
+        // Tinto's job does not allow it: the process stays in it.
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => {
+            hide_console(command).spawn()
+        }
+        spawned => spawned,
+    }
+}
+
+/// When a process started, in 100 ns ticks: with its pid it tells that
+/// process from a later one given the same pid.
+pub(crate) fn creation_time(process: &impl AsRawHandle) -> Option<u64> {
+    created(process.as_raw_handle() as HANDLE)
+}
+
+fn created(handle: HANDLE) -> Option<u64> {
+    let mut times = [FILETIME::default(); 4];
+    let [creation, exit, kernel, user] = &mut times;
+    if unsafe { GetProcessTimes(handle, creation, exit, kernel, user) } == 0 {
+        return None;
+    }
+    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+}
+
+/// A process opened by pid: a job Tinto started before it restarted.
+pub(crate) struct ProcessHandle {
+    handle: HANDLE,
+}
+
+// SAFETY: a process handle can be used and closed from any thread.
+unsafe impl Send for ProcessHandle {}
+
+impl ProcessHandle {
+    pub(crate) fn open(pid: u32) -> Option<Self> {
+        let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE;
+        let handle = unsafe { OpenProcess(access, 0, pid) };
+        (!handle.is_null()).then_some(Self { handle })
+    }
+
+    pub(crate) fn creation_time(&self) -> Option<u64> {
+        created(self.handle)
+    }
+
+    /// Its exit code once it ended; `None` while it runs.
+    pub(crate) fn exit_code(&self) -> io::Result<Option<u32>> {
+        if unsafe { WaitForSingleObject(self.handle, 0) } != WAIT_OBJECT_0 {
+            return Ok(None);
+        }
+        let mut code = 0;
+        if unsafe { GetExitCodeProcess(self.handle, &mut code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Some(code))
+    }
+
+    pub(crate) fn terminate(&self) {
+        unsafe {
+            TerminateProcess(self.handle, 1);
+        }
+    }
+}
+
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.handle);
+        }
+    }
+}
+
 pub(crate) struct KillOnCloseJob {
     handle: HANDLE,
 }
 
 impl KillOnCloseJob {
     pub(crate) fn attach(child: &Child) -> io::Result<Self> {
+        Self::create(child, true)
+    }
+
+    /// A job that only groups `child` and what it starts, to stop them all
+    /// at once: closing it, as Tinto does when it exits, leaves them running.
+    pub(crate) fn attach_outliving(child: &Child) -> io::Result<Self> {
+        Self::create(child, false)
+    }
+
+    fn create(child: &Child, kill_on_close: bool) -> io::Result<Self> {
         let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
         if handle.is_null() {
             return Err(io::Error::last_os_error());
         }
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if kill_on_close {
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        }
         let configured = unsafe {
             SetInformationJobObject(
                 handle,

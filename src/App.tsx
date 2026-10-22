@@ -43,6 +43,7 @@ import { AddRepoDialog } from "./workbench/AddRepoDialog";
 import { FirstRun, StartupFailure, StartupLoading } from "./workbench/firstRun";
 import { addRepoFlow, removeRepoFlow } from "./workbench/operations";
 import { isWindowsHost } from "./workbench/platform";
+import { openRestoredConversations } from "./workbench/restart";
 import { reloadActiveWorkbench, useBusConnection } from "./bus/connection";
 import { busStore, useBusState } from "./bus/store";
 import type { WorkbenchConfig } from "./bus/contract";
@@ -91,6 +92,8 @@ export default function App() {
   }
   return <NativeApp />;
 }
+/** The last session's conversations are resumed once per launch. */
+let restoreRequested = false;
 
 function NativeApp() {
   useBusConnection();
@@ -202,6 +205,17 @@ function NativeApp() {
     }),
     [],
   );
+
+  // The conversations that were live when Tinto last closed (an update, a
+  // restart) resume once the workbench's repos are known, each in its tab.
+  const hasActiveWorkbench = Boolean(config?.active);
+  useEffect(() => {
+    if (!loaded || !hasActiveWorkbench || restoreRequested) return;
+    restoreRequested = true;
+    openRestoredConversations(actions.openAgentTerminal).catch((error) =>
+      console.error("Failed to resume the conversations of the last session", error),
+    );
+  }, [loaded, hasActiveWorkbench, actions]);
 
   // Install global keyboard shortcuts (navigation, view toggles, etc.)
   useEffect(() => {

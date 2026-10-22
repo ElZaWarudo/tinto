@@ -4031,25 +4031,26 @@ pub fn hand_over_delivery_run(
 /// Sends the message when the conversation is running and waiting for the
 /// user; a busy one is tried again on the next round.
 fn wake_coordinator(app: &AppHandle, wakeup: &crate::delivery::feed::CoordinatorWakeup) -> bool {
+    write_when_idle(app, &wakeup.session_id, &wakeup.text)
+}
+
+/// Writes Tinto's message to a conversation that is running and waiting
+/// for the user; says whether it did.
+fn write_when_idle(app: &AppHandle, session_id: &str, text: &str) -> bool {
     let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() else {
         return false;
     };
     let Ok(mut registry) = registry.lock() else {
         return false;
     };
-    let Some(session) = registry.get_session(&wakeup.session_id) else {
+    let Some(session) = registry.get_session(session_id) else {
         return false;
     };
     let idle = session.status == AgentSessionStatus::Running
         && session.turn_status == AgentSessionTurnStatus::Waiting;
     if !idle
         || registry
-            .write_session_turn(
-                &wakeup.session_id,
-                &wakeup.text,
-                &[],
-                tinto_turn_options(&session),
-            )
+            .write_session_turn(session_id, text, &[], tinto_turn_options(&session))
             .is_err()
     {
         return false;
@@ -4057,14 +4058,187 @@ fn wake_coordinator(app: &AppHandle, wakeup: &crate::delivery::feed::Coordinator
     drop(registry);
     emit_timeline_item(
         app,
-        &wakeup.session_id,
+        session_id,
         AgentSessionTimelineKind::UserMessage,
-        Some(wakeup.text.clone()),
+        Some(text.to_string()),
         now_ms(),
         Vec::new(),
     );
     refresh_and_emit_sessions(app);
     true
+}
+
+/// What a conversation cut off mid-turn by a restart is told once resumed.
+const RESTART_NOTE: &str = "[Tinto] Tinto se reinició (una actualización) mientras trabajabas y retomó esta conversación. Continúa donde lo dejaste.";
+
+/// What closing Tinto now leaves running and what it resumes on opening.
+#[derive(Debug, Clone, Serialize)]
+pub struct RestartPlan {
+    pub jobs: Vec<RestartJob>,
+    pub conversations: Vec<RestartConversation>,
+}
+
+/// A Delivery job that keeps running while Tinto is closed.
+#[derive(Debug, Clone, Serialize)]
+pub struct RestartJob {
+    pub task_key: String,
+    pub role: String,
+    pub agent: String,
+}
+
+/// An Agents conversation that Tinto resumes when it opens again.
+#[derive(Debug, Clone, Serialize)]
+pub struct RestartConversation {
+    pub session_id: String,
+    pub repo: PathBuf,
+    pub agent_type: String,
+    /// In the middle of a turn: it is told to go on.
+    pub working: bool,
+}
+
+#[tauri::command]
+pub fn restart_plan(
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    delivery: State<'_, crate::delivery::service::DeliveryService>,
+) -> Result<RestartPlan, CommandError> {
+    let jobs = delivery
+        .running_jobs()
+        .map_err(CommandError::from)?
+        .into_iter()
+        .map(|(task_key, job)| RestartJob {
+            task_key,
+            role: job.role,
+            agent: crate::delivery::service::agent_name(job.agent).to_string(),
+        })
+        .collect();
+    let conversations = lock_registry(&registry)?
+        .list_sessions()
+        .into_iter()
+        .filter(|session| {
+            matches!(
+                session.status,
+                AgentSessionStatus::Starting | AgentSessionStatus::Running
+            )
+        })
+        .map(|session| RestartConversation {
+            working: session.turn_status == AgentSessionTurnStatus::Working,
+            session_id: session.id,
+            repo: session.repo,
+            agent_type: session.agent_type,
+        })
+        .collect();
+    Ok(RestartPlan {
+        jobs,
+        conversations,
+    })
+}
+
+/// Closes Tinto and opens it again. With `installer`, Tinto runs that
+/// installer instead of reopening itself: the installer opens it once done.
+/// Delivery jobs keep running meanwhile; the conversations resume.
+#[tauri::command]
+pub fn restart_tinto(app: AppHandle, installer: Option<PathBuf>) -> Result<(), CommandError> {
+    let Some(installer) = installer else {
+        app.restart();
+    };
+    // Through the shell, so an installer that asks for elevation can.
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", "start", ""]).arg(&installer);
+        hide_console(&mut command);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = std::process::Command::new(&installer);
+    command.spawn().map_err(|error| {
+        CommandError::new(
+            "installer_failed",
+            format!("no se pudo abrir el instalador: {error}"),
+        )
+    })?;
+    app.exit(0);
+    Ok(())
+}
+
+/// A conversation Tinto resumed when it started.
+#[derive(Debug, Clone, Serialize)]
+pub struct RestoredAgentSession {
+    pub session_id: String,
+    pub repo: PathBuf,
+    pub agent_type: String,
+    /// It coordinates a Delivery batch: the Delivery view shows it.
+    pub coordinator: bool,
+}
+
+/// Resumes the conversations that were live when Tinto last closed (an
+/// update, a restart), each in its provider's own session: a Delivery
+/// batch they coordinated is bound to them again, and the ones cut off
+/// mid-turn are told to go on. Returns the ones resumed, for the view to
+/// open; it takes them once, so a second call returns none.
+#[tauri::command]
+pub async fn restore_live_agent_sessions(
+    app: AppHandle,
+    bus: State<'_, BusHandle>,
+    registry: State<'_, Mutex<AgentSessionRegistry>>,
+    journal: State<'_, Mutex<AgentJournal>>,
+    delivery: State<'_, crate::delivery::service::DeliveryService>,
+) -> Result<Vec<RestoredAgentSession>, CommandError> {
+    let live = lock_journal(&journal)?
+        .take_live_sessions()
+        .map_err(|error| CommandError::new("agent_journal_failed", error.to_string()))?;
+    let mut restored = Vec::new();
+    for session in live {
+        let resumed = match resume_agent_journal_session(
+            app.clone(),
+            bus.clone(),
+            registry.clone(),
+            journal.clone(),
+            session.id.clone(),
+        )
+        .await
+        {
+            Ok(resumed) => resumed,
+            Err(error) => {
+                eprintln!(
+                    "tinto: no se pudo retomar la conversación {}: {}",
+                    session.id, error.message
+                );
+                continue;
+            }
+        };
+        let coordinator = delivery
+            .rebind_coordinator(&session.id, &resumed.session_id)
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "tinto: el lote de la conversación {} no se reasignó: {error}",
+                    session.id
+                );
+                false
+            });
+        if session.working {
+            let app = app.clone();
+            let id = resumed.session_id.clone();
+            // It takes the note once its agent is ready for the user.
+            std::thread::spawn(move || {
+                for _ in 0..180 {
+                    if write_when_idle(&app, &id, RESTART_NOTE) {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            });
+        }
+        if let Some(live) = lock_registry(&registry)?.get_session(&resumed.session_id) {
+            restored.push(RestoredAgentSession {
+                session_id: live.id,
+                repo: live.repo,
+                agent_type: live.agent_type,
+                coordinator,
+            });
+        }
+    }
+    Ok(restored)
 }
 
 fn refresh_and_emit_sessions(app: &AppHandle) {
