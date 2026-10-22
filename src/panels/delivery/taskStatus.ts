@@ -91,15 +91,17 @@ export const TASK_STATE_LABEL: Record<string, string> = {
 
 /** `step`: a delivery step (commit, push, PR, merge, Jira) the user acts on,
  *  told apart from blockers (`attention`, `danger`). */
-export type Tone = "attention" | "step" | "danger" | "live" | "waiting" | "idle" | "ok";
+export type Tone = "attention" | "step" | "danger" | "live" | "waiting" | "blocked" | "idle" | "ok";
 export type StatusGroup = "attention" | "running" | "waiting" | "idle" | "delivered";
-export type StatusIcon = "flag" | "x" | "alert" | "live" | "clock" | "ring" | "check";
+export type StatusIcon = "flag" | "x" | "alert" | "live" | "clock" | "lock" | "ring" | "check";
 
 export interface TaskStatus {
   group: StatusGroup;
   tone: Tone;
   icon: StatusIcon;
   label: string;
+  /** A blocked task: what it waits for, in a line of its own. */
+  detail?: string;
 }
 
 export const GROUPS: { group: StatusGroup; label: string }[] = [
@@ -446,6 +448,25 @@ export function blockerLabel(blocker: DeliveryBlocker): string {
   }
 }
 
+/** What a blocked task waits for, as its list row says it: "Espera a
+ *  AGOS-580 · fusionado", "Espera al PR acme/api#305", or the note. */
+export function blockerWait(blocker: DeliveryBlocker): string {
+  switch (blocker.type) {
+    case "task":
+      return `Espera a ${blocker.key} · ${MILESTONE_LABEL[blocker.until] ?? blocker.until}`;
+    case "pr": {
+      const ref = prRef(blocker.url) ?? blocker.url;
+      return blocker.until === "closed"
+        ? `Espera a que se cierre el PR ${ref}`
+        : `Espera al PR ${ref}`;
+    }
+    case "decision":
+      return `Espera una decisión de ${blocker.key}`;
+    case "note":
+      return blocker.text;
+  }
+}
+
 /** The blockers the task still waits for. */
 export function openBlockers(task: DeliveryTask): DeliveryBlocker[] {
   return (task.blockers ?? []).filter((blocker) => !blocker.cleared_at_ms);
@@ -562,11 +583,13 @@ export function taskStatus(
       return attention("Aprobar cambio de ajustes");
     case "blocked": {
       const open = openBlockers(task);
-      return waiting(
-        open.length === 1
-          ? `Bloqueada por ${blockerLabel(open[0])}`
-          : `Bloqueada · ${phase.open} bloqueos`,
-      );
+      return {
+        group: "waiting",
+        tone: "blocked",
+        icon: "lock",
+        label: open.length > 1 ? `Bloqueada · ${open.length} bloqueos` : "Bloqueada",
+        detail: open.map(blockerWait).join(" · ") || undefined,
+      };
     }
     case "broken":
       return danger(
