@@ -428,6 +428,16 @@ export function pendingDecisions(overview: DeliveryOverview, taskId: string): nu
   ).length;
 }
 
+/** The task's QA problems that wait on the user: new ones, and fixes that
+ *  did not hold. */
+export function qaProblemsToDecide(overview: DeliveryOverview, taskId: string): number {
+  return (overview.qa_problems ?? []).filter(
+    (problem) =>
+      problem.task_id === taskId &&
+      (problem.status === "open" || problem.status === "still_failing"),
+  ).length;
+}
+
 /** The settings changes waiting for the user on the task's repo. */
 export function pendingSettingsProposals(
   overview: DeliveryOverview,
@@ -532,7 +542,23 @@ export function taskStatus(
   overview: DeliveryOverview,
   now: number,
 ): TaskStatus {
-  const status = phaseStatus(task, overview, now);
+  const phased = phaseStatus(task, overview, now);
+  // QA problems wait on the user without holding the task: the list shows
+  // them unless something there already needs the user.
+  const problems = qaProblemsToDecide(overview, task.id);
+  const problemsLabel = `Decidir ${problems} problema${problems === 1 ? "" : "s"} de QA`;
+  const status: TaskStatus =
+    problems === 0
+      ? phased
+      : phased.group === "attention"
+        ? { ...phased, detail: [phased.detail, problemsLabel].filter(Boolean).join(" · ") }
+        : {
+            group: "attention",
+            tone: "attention",
+            icon: "flag",
+            label: problemsLabel,
+            detail: [phased.label, phased.detail].filter(Boolean).join(" · "),
+          };
   const warning = phaseOf(overview, task.id)?.warning;
   const warned = warning
     ? { ...status, detail: [status.detail, warning].filter(Boolean).join(" · ") }

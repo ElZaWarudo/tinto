@@ -3,6 +3,7 @@ import type {
   DeliveryApproval,
   DeliveryJob,
   DeliveryOverview,
+  DeliveryQaProblem,
   DeliveryPhase,
   DeliveryPr,
   DeliveryRound,
@@ -168,6 +169,40 @@ describe("taskStatus words the phase Tinto derives", () => {
       label: "Push: ya no coincide",
     });
     expect(status({ kind: "settings_proposal" }).label).toBe("Aprobar cambio de ajustes");
+  });
+
+  it("shows the QA problems waiting on the user, without hiding what else does", () => {
+    const problem = (status: DeliveryQaProblem["status"], number: number): DeliveryQaProblem => ({
+      id: `p${number}`,
+      task_id: "t1",
+      job_id: "qa-1",
+      number,
+      label: `P${number}`,
+      change: "",
+      place: "",
+      text: "The toast covers Retry.",
+      suggestions: [],
+      status,
+      notes: [],
+      created_at_ms: 1,
+      updated_at_ms: 1,
+    });
+    const qa_problems = [problem("open", 1), problem("still_failing", 2), problem("sent", 3)];
+    expect(status({ kind: "next_stage", role: "implementation" }, { qa_problems })).toEqual({
+      group: "attention",
+      tone: "attention",
+      icon: "flag",
+      label: "Decidir 2 problemas de QA",
+      detail: "Siguiente: implementación",
+    });
+    // Something else needing the user keeps its place; the problems join it.
+    expect(status({ kind: "decisions", count: 1 }, { qa_problems })).toMatchObject({
+      label: "1 decisión pendiente",
+      detail: "Decidir 2 problemas de QA",
+    });
+    expect(
+      status({ kind: "next_stage", role: "qa" }, { qa_problems: [problem("sent", 3)] }).label,
+    ).toBe("Siguiente: QA");
   });
 
   it("names what a blocked task waits for, and waits instead of idling", () => {
