@@ -15,6 +15,7 @@ import type { DeliveryDecision } from "../../delivery/types";
 import { CodeThreads } from "./DeliveryCodeThread";
 
 import { ActionButton, ActionGroup } from "./ActionButton";
+import { GrowingTextarea } from "./GrowingTextarea";
 
 const ALLOWED = "allowed";
 const DENIED = "denied";
@@ -102,7 +103,7 @@ function TextCard({ decision }: { decision: DeliveryDecision }) {
       <CodeThreads threads={decision.references} />
       <label className="delivery-request__field">
         <span>Texto exacto, tal como lo verá el usuario</span>
-        <textarea value={text} onChange={(event) => setText(event.target.value)} rows={2} />
+        <GrowingTextarea value={text} onChange={(event) => setText(event.target.value)} rows={2} />
       </label>
       <TechnicalDetail detail={decision.detail} />
       <ActionGroup>
@@ -379,7 +380,7 @@ function CoordinatorDecision({ decision }: { decision: DeliveryDecision }) {
               </label>
             ))
           ) : (
-            <textarea
+            <GrowingTextarea
               aria-label="Texto"
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}

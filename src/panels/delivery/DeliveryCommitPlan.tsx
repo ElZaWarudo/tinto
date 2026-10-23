@@ -7,6 +7,7 @@ import { getDeliveryCommitDraft, requestDeliveryApproval } from "../../delivery/
 import type { DeliveryApproval, DeliveryCommitDraft, DeliveryTask } from "../../delivery/types";
 
 import { ActionButton } from "./ActionButton";
+import { GrowingTextarea } from "./GrowingTextarea";
 
 /** Where a changed file goes: a commit's position, or this to stay uncommitted. */
 const LEFT_OUT = -1;
@@ -156,7 +157,7 @@ export function CommitPlanForm({ task, onClose }: { task: DeliveryTask; onClose:
                   : `${commits[index].paths.length} archivos`
               }`}
           </span>
-          <textarea
+          <GrowingTextarea
             value={message}
             onChange={(event) =>
               setMessages(messages.map((old, at) => (at === index ? event.target.value : old)))

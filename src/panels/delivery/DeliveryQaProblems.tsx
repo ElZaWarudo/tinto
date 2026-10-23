@@ -11,6 +11,7 @@ import {
 import type { DeliveryQaProblem, DeliveryQaProblemStatus } from "../../delivery/types";
 
 import { ActionButton } from "./ActionButton";
+import { GrowingTextarea } from "./GrowingTextarea";
 
 const STATUS: Record<DeliveryQaProblemStatus, { label: string; tone: string }> = {
   open: { label: "nuevo", tone: "new" },
@@ -163,7 +164,7 @@ export function QaProblems({
                     </label>
                   </div>
                   {choice.picked === "own" && (
-                    <textarea
+                    <GrowingTextarea
                       className="delivery-qa-problem__own"
                       aria-label={`Tu solución para el problema #${problem.number}`}
                       placeholder="Cómo debería quedar: el coordinador lo recibe tal cual y la QA comprueba exactamente esto."
