@@ -32,6 +32,7 @@ import type {
   DeliveryStageAgent,
   DeliveryTask,
 } from "../../delivery/types";
+import { GrowingTextarea } from "./GrowingTextarea";
 
 export interface RepoChoice {
   path: string;
@@ -472,7 +473,7 @@ export function DispatchDialog({
           label="Comprobaciones del repositorio"
           hint="Uno por línea: los comandos que verifican el trabajo. Claude puede ejecutar cualquier comando, también encadenado, salvo los pasos de Tinto (commit, push, merge, rebase, checkout…) y las instalaciones globales. Se guardan para este repositorio y también los usan los trabajos del coordinador."
         >
-          <textarea
+          <GrowingTextarea
             value={shownChecks}
             onChange={(event) => setChecksText(event.target.value)}
             rows={3}
@@ -502,7 +503,7 @@ export function DispatchDialog({
           label="Comandos de QA"
           hint="Uno por línea, con cualquier argumento: lo que la QA necesita además de los comandos de arriba, por ejemplo la CLI que cambia el issue. Pueden escribir fuera del worktree, aunque Claude Code sigue bloqueando sus propios comandos de archivos (cat, touch, rm…) fuera del worktree y del checkout principal. Se guardan para este repositorio."
         >
-          <textarea
+          <GrowingTextarea
             value={shownQaCommands}
             onChange={(event) => setQaCommandsText(event.target.value)}
             rows={2}
@@ -518,7 +519,7 @@ export function DispatchDialog({
             : "Tinto añade la tarea, el worktree, la etapa y el formato del resultado."
         }
       >
-        <textarea
+        <GrowingTextarea
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           rows={8}
@@ -555,7 +556,7 @@ export function ReleaseLeaseDialog({
         anterior y que los datos estén como al principio.
       </p>
       <Field label="Qué comprobaste">
-        <textarea
+        <GrowingTextarea
           value={confirmation}
           onChange={(event) => setConfirmation(event.target.value)}
           rows={3}
@@ -683,7 +684,7 @@ export function CorrectResultDialog({
         </Field>
       )}
       <Field label="Resultado">
-        <textarea
+        <GrowingTextarea
           value={outcome}
           onChange={(event) => setOutcome(event.target.value)}
           rows={3}
@@ -691,7 +692,7 @@ export function CorrectResultDialog({
         />
       </Field>
       <Field label="Por qué se corrige">
-        <textarea
+        <GrowingTextarea
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           rows={2}
@@ -886,7 +887,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         label="Entorno de QA"
         hint="Dónde se prueba en esta máquina: plataforma, ámbito, clientes. Por ejemplo: Windows, ámbito personal; Claude Code y Codex con mis sesiones."
       >
-        <textarea
+        <GrowingTextarea
           value={environment}
           onChange={(event) => setEnvironment(event.target.value)}
           rows={2}
@@ -896,7 +897,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         label="Comandos de QA"
         hint="Uno por línea: el comando real, nunca un script que los agentes puedan editar. Pueden escribir fuera del worktree."
       >
-        <textarea
+        <GrowingTextarea
           value={commands}
           onChange={(event) => setCommands(event.target.value)}
           rows={2}
@@ -907,7 +908,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         label="Variables de entorno de verificación y QA"
         hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. {task} en un valor se cambia por la clave de la tarea (AGOS-474 → agos_474), así cada tarea tiene la suya. Son ajustes de prueba, no secretos: se ven tal cual."
       >
-        <textarea
+        <GrowingTextarea
           value={checkEnv}
           onChange={(event) => setCheckEnv(event.target.value)}
           rows={2}
@@ -925,7 +926,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         label="Cómo se verifica"
         hint="Además de las etapas: pruebas de punta a punta, QA en navegador cuando hay interfaz, en qué entorno… Los coordinadores lo leen y no lo preguntan en cada issue."
       >
-        <textarea
+        <GrowingTextarea
           value={verification}
           onChange={(event) => setVerification(event.target.value)}
           rows={2}
@@ -944,7 +945,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         label="Comandos de preparación"
         hint="Uno por línea: instalaciones y generadores que una tarea necesita antes de compilar y probar (cada paquete, los bindings…). El coordinador elige los de cada tarea y Tinto los corre en su worktree antes de las etapas, fuera de cualquier sandbox."
       >
-        <textarea
+        <GrowingTextarea
           value={setup}
           onChange={(event) => setSetup(event.target.value)}
           rows={3}

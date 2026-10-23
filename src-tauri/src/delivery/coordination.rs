@@ -51,6 +51,11 @@ pub struct NewApproval {
     /// `commit` only: why a single commit is right when the change spans
     /// several areas or is large; a coordinator's plan needs it then.
     pub single_commit_reason: Option<String>,
+    /// `pr_reply` only: the review comment answered, or the PR for a
+    /// general comment.
+    pub comment_url: Option<String>,
+    /// `pr_reply` only: resolve the review thread once replied.
+    pub resolve_thread: bool,
 }
 
 /// Where a changed file belongs for splitting commits: `docs`, `tests` or
@@ -318,6 +323,9 @@ pub(super) fn found_step(
         tip: None,
         notice: None,
         corrections: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
+        thread: None,
     }
 }
 
@@ -893,12 +901,41 @@ impl DeliveryService {
         let task = self.task(&request.task_id)?;
         let place = Place::of(task.distro.as_deref());
         let planned = request.rung == DeliveryRung::Commit && !request.commits.is_empty();
-        if request.title.trim().is_empty() && !planned {
+        let reply = request.rung == DeliveryRung::PrReply;
+        if request.title.trim().is_empty() && !planned && !reply {
             return Err(DeliveryError::new(
                 "invalid_approval",
                 "la aprobación necesita el texto exacto (título o mensaje)",
             ));
         }
+        // A reply names the comment it answers, which the user reads with
+        // it: a review comment with its diff, or the PR for a general one.
+        let (comment_url, thread) = if reply {
+            let url = request.comment_url.as_deref().unwrap_or_default().trim();
+            if request.body.trim().is_empty() {
+                return Err(DeliveryError::new(
+                    "invalid_approval",
+                    "la respuesta necesita su texto exacto en body",
+                ));
+            }
+            let thread = if super::threads::parse_comment_url(url).is_some() {
+                let reference = super::threads::NewReference {
+                    comment_url: Some(url.to_string()),
+                    ..Default::default()
+                };
+                self.resolve_references(&task, &[reference]).pop()
+            } else if super::prs::parse_pr_url(url).is_some() {
+                None
+            } else {
+                return Err(DeliveryError::new(
+                    "invalid_approval",
+                    "comment_url tiene que ser un comentario de revisión (…/pull/<n>#discussion_r<id>) o el PR, para un comentario general",
+                ));
+            };
+            (Some(url.to_string()), thread)
+        } else {
+            (None, None)
+        };
         let stage = match request.rung {
             DeliveryRung::Jira => Some(self.jira_stage(&task, request.stage.as_deref())?),
             _ => None,
@@ -975,6 +1012,7 @@ impl DeliveryService {
                 approval.task_id == task.id
                     && approval.rung == request.rung
                     && approval.stage == stage
+                    && approval.comment_url == comment_url
                     && matches!(
                         approval.status,
                         DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
@@ -1096,6 +1134,12 @@ impl DeliveryService {
             DeliveryRung::Merge => {
                 self.merge_prerequisites(&task, request.merge_method.as_deref())?
             }
+            DeliveryRung::PrReply => {
+                title = match thread.as_ref().and_then(|thread| thread.comment.as_ref()) {
+                    Some(comment) => format!("Respuesta a {}", comment.author),
+                    None => "Respuesta en el PR".to_string(),
+                };
+            }
             _ => {}
         }
         let approval = DeliveryApproval {
@@ -1117,6 +1161,9 @@ impl DeliveryService {
             tip: None,
             notice: None,
             corrections: Vec::new(),
+            resolve_thread: reply && request.resolve_thread,
+            comment_url,
+            thread,
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.clone(),
             rung: request.rung,
@@ -1226,6 +1273,23 @@ impl DeliveryService {
                 Ok(outcome) => {
                     approval.status = DeliveryApprovalStatus::Executed;
                     approval.outcome = Some(outcome);
+                }
+                Err(error) => {
+                    approval.status = DeliveryApprovalStatus::Failed;
+                    approval.outcome = Some(error.message);
+                }
+            }
+        }
+        // Posted once, never retried: a failure says why, and the
+        // coordinator asks again if it still makes sense.
+        if approval.rung == DeliveryRung::PrReply {
+            let posted = self.post_reply(&approval);
+            approval.executed_at_ms = Some(now_ms());
+            match posted {
+                Ok((url, notice)) => {
+                    approval.status = DeliveryApprovalStatus::Executed;
+                    approval.outcome = Some(url);
+                    approval.notice = notice;
                 }
                 Err(error) => {
                     approval.status = DeliveryApprovalStatus::Failed;
@@ -2111,7 +2175,7 @@ fn rung_prerequisites(task: &DeliveryTask, rung: DeliveryRung) -> Result<(), Del
             }
         }
         // Checked with the service: the followed PR, or the task's jobs.
-        DeliveryRung::Merge | DeliveryRung::Jira | DeliveryRung::Sync => {}
+        DeliveryRung::Merge | DeliveryRung::Jira | DeliveryRung::Sync | DeliveryRung::PrReply => {}
     }
     Ok(())
 }

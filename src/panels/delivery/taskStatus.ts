@@ -60,8 +60,12 @@ function isStep(approval: DeliveryApproval, step: DeliveryStep): boolean {
   );
 }
 
+/** A reply to a reviewer: asked per comment, outside the ladder. */
+export const REPLY_STEP: DeliveryStep = { rung: "pr_reply", label: "Respuesta al revisor" };
+
 /** The ladder step an approval is for. */
 export function stepOf(approval: DeliveryApproval): DeliveryStep {
+  if (approval.rung === "pr_reply") return REPLY_STEP;
   return (
     [...STEPS, SYNC_STEP].find((step) => isStep(approval, step)) ?? {
       rung: approval.rung,

@@ -3301,6 +3301,77 @@ describe("DeliveryPanel", () => {
     expect(client.getDeliveryPrReviewers).toHaveBeenCalledWith("t1");
   });
 
+  it("shows a reply to a reviewer with its comment, posts the edited text and lists the posted ones", async () => {
+    const user = userEvent.setup();
+    const reply = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
+      id: "r1",
+      task_id: "t1",
+      rung: "pr_reply",
+      title: "Respuesta a Sn4pe",
+      body: "Fixed in abc123.",
+      status: "pending",
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_at_ms: null,
+      executed_at_ms: null,
+      outcome: null,
+      comment_url: "https://github.com/o/r/pull/299#discussion_r2105",
+      thread: {
+        kind: "pr_comment",
+        path: "cli/src/commands.ts",
+        line: 1092,
+        url: "https://github.com/o/r/pull/299#discussion_r2105",
+        lines: [
+          { kind: "add", old: null, new: 1092, text: "installIntoDir(force);", target: true },
+        ],
+        comment: {
+          author: "Sn4pe",
+          body: "A folder the CLI did not install is deleted.",
+          created_at: "",
+          replies: 0,
+        },
+      },
+      ...over,
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        approvals: [
+          reply({}),
+          reply({
+            id: "r0",
+            title: "Respuesta a ana",
+            status: "executed",
+            executed_at_ms: 2,
+            outcome: "https://github.com/o/r/pull/299#discussion_r9003",
+          }),
+        ],
+      }),
+    );
+    client.decideDeliveryApproval.mockResolvedValue({});
+    renderPanel();
+    const banner = await openStep("Revisar respuesta al revisor", "pr_reply");
+    expect(within(banner).getByText("A folder the CLI did not install is deleted.")).toBeTruthy();
+    const text = within(banner).getByRole("textbox", { name: "Respuesta, tal como se publicará" });
+    await user.clear(text);
+    await user.type(text, "Fixed in abc123, thanks.");
+    await user.click(
+      within(banner).getByRole("button", { name: "Aprobar y responder con tu texto" }),
+    );
+    await waitFor(() =>
+      expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
+        "r1",
+        true,
+        undefined,
+        undefined,
+        "Fixed in abc123, thanks.",
+      ),
+    );
+    const posted = screen.getByRole("listitem", { name: "Respuesta a ana" });
+    expect(
+      within(posted).getByText("https://github.com/o/r/pull/299#discussion_r9003"),
+    ).toBeTruthy();
+  });
+
   it("asks the closing Jira step with the repo's statuses when Tinto runs Jira", async () => {
     const user = userEvent.setup();
     const done = (rung: DeliveryApproval["rung"]) => ({

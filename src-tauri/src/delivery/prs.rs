@@ -196,6 +196,9 @@ pub struct DeliveryPr {
     /// Who approved it: reviewers whose latest review is an approval.
     #[serde(default)]
     pub approved_by: Vec<String>,
+    /// Who GitHub is still waiting on for a review.
+    #[serde(default)]
+    pub requested_reviewers: Vec<String>,
     /// The branch it merges into, as GitHub last said.
     #[serde(default)]
     pub base: Option<String>,
@@ -226,6 +229,7 @@ impl DeliveryPr {
             merged_at: None,
             merge_commit: None,
             approved_by: Vec::new(),
+            requested_reviewers: Vec::new(),
             base: None,
         }
     }
@@ -246,7 +250,7 @@ impl DeliveryPr {
 
 /// `gh pr view --json` fields Tinto reads.
 pub const PR_FIELDS: &str =
-    "title,body,state,isDraft,mergeable,reviewDecision,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName";
+    "title,body,state,isDraft,mergeable,reviewDecision,reviewRequests,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName";
 
 fn check_state(check: &Value) -> &'static str {
     // Check runs carry status + conclusion; commit statuses carry state.
@@ -333,6 +337,15 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         }
     }
     pr.approved_by = approved_by;
+    // Teams have a name instead of a login; only people are asked from Tinto.
+    pr.requested_reviewers = snapshot["reviewRequests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|request| request["login"].as_str())
+        .filter(|login| !login.is_empty())
+        .map(str::to_string)
+        .collect();
 
     // (time, author, is_review, line) of everything others did on the PR.
     let mut activity: Vec<(String, String, bool, String)> = Vec::new();
@@ -418,6 +431,10 @@ pub trait GitHub: Send + Sync {
     fn assignees(&self, repo: &str) -> Result<Vec<String>, DeliveryError>;
     /// Asks `logins` to review the PR.
     fn request_reviewers(&self, url: &str, logins: &[String]) -> Result<(), DeliveryError>;
+    /// Takes back the review requests of `logins` on the PR.
+    fn remove_reviewers(&self, _url: &str, _logins: &[String]) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
     fn feed(&self, etag: Option<&str>) -> Result<Feed, DeliveryError>;
     /// Merges the PR and deletes its branch on GitHub. `subject` and `body`
     /// are the merge commit's message (`rebase` has none).
@@ -461,10 +478,67 @@ pub trait GitHub: Send + Sync {
     fn pr_review_comments(&self, _repo: &str, _number: u64) -> Result<Value, DeliveryError> {
         Err(offline())
     }
+    /// Replies in the thread of review comment `comment_id` (its first
+    /// comment) of PR `number`; returns the reply's URL.
+    fn reply_to_review_comment(
+        &self,
+        _repo: &str,
+        _number: u64,
+        _comment_id: u64,
+        _body: &str,
+    ) -> Result<String, DeliveryError> {
+        Err(offline())
+    }
+    /// Comments on the PR; returns the comment's URL.
+    fn comment_on_pr(&self, _url: &str, _body: &str) -> Result<String, DeliveryError> {
+        Err(offline())
+    }
+    /// Resolves the review thread that holds comment `comment_id`.
+    fn resolve_review_thread(
+        &self,
+        _repo: &str,
+        _number: u64,
+        _comment_id: u64,
+    ) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
 }
 
 fn offline() -> DeliveryError {
     DeliveryError::new("github_unavailable", "GitHub no está conectado")
+}
+
+const COMMENT_GONE: &str = "el comentario ya no existe en GitHub: lo borraron";
+
+/// Why GitHub did not take a reply, in plain words.
+fn reply_failure(error: DeliveryError) -> DeliveryError {
+    let lower = error.message.to_ascii_lowercase();
+    let (category, message) = if lower.contains("404") || lower.contains("not found") {
+        ("comment_gone", COMMENT_GONE.to_string())
+    } else if lower.contains("locked") {
+        (
+            "thread_locked",
+            "la conversación del PR está bloqueada: GitHub no deja responder".to_string(),
+        )
+    } else if lower.contains("auth login")
+        || lower.contains("not logged")
+        || lower.contains("401")
+        || lower.contains("bad credentials")
+    {
+        (
+            "github_signed_out",
+            "gh no tiene sesión en GitHub: inicia sesión con gh auth login y pide la respuesta otra vez"
+                .to_string(),
+        )
+    } else if error.category == "github_unavailable" {
+        return error;
+    } else {
+        (
+            "reply_failed",
+            format!("GitHub no publicó la respuesta: {}", error.message),
+        )
+    };
+    DeliveryError::new(category, message)
 }
 
 /// Until the app sets `gh`, nothing reaches GitHub.
@@ -612,6 +686,18 @@ impl GitHub for GhCli {
         ))
     }
 
+    fn remove_reviewers(&self, url: &str, logins: &[String]) -> Result<(), DeliveryError> {
+        let logins = logins.join(",");
+        let output = Self::run(&["pr", "edit", url, "--remove-reviewer", &logins])?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(DeliveryError::new(
+            "github_failed",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
+    }
+
     fn merge(
         &self,
         url: &str,
@@ -703,6 +789,89 @@ impl GitHub for GhCli {
         Self::act(
             &["pr", "ready", url, "--undo"],
             "gh no pudo pasar el PR a borrador",
+        )
+        .map(|_| ())
+    }
+
+    fn reply_to_review_comment(
+        &self,
+        repo: &str,
+        number: u64,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<String, DeliveryError> {
+        let path = format!("repos/{repo}/pulls/{number}/comments/{comment_id}/replies");
+        let field = format!("body={body}");
+        Self::act(
+            &[
+                "api",
+                "-X",
+                "POST",
+                &path,
+                "-f",
+                &field,
+                "--jq",
+                ".html_url",
+            ],
+            "gh no pudo responder al comentario",
+        )
+    }
+
+    fn comment_on_pr(&self, url: &str, body: &str) -> Result<String, DeliveryError> {
+        // gh prints the new comment's URL last.
+        let output = Self::act(
+            &["pr", "comment", url, "--body", body],
+            "gh no pudo comentar en el PR",
+        )?;
+        Ok(output.lines().last().unwrap_or_default().trim().to_string())
+    }
+
+    fn resolve_review_thread(
+        &self,
+        repo: &str,
+        number: u64,
+        comment_id: u64,
+    ) -> Result<(), DeliveryError> {
+        let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+        let query = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { id comments(first: 100) { nodes { databaseId } } } } } } }";
+        let select = format!(
+            ".data.repository.pullRequest.reviewThreads.nodes[] | select(any(.comments.nodes[]; .databaseId == {comment_id})) | .id"
+        );
+        let thread = Self::act(
+            &[
+                "api",
+                "graphql",
+                "-f",
+                &format!("query={query}"),
+                "-f",
+                &format!("owner={owner}"),
+                "-f",
+                &format!("name={name}"),
+                "-F",
+                &format!("number={number}"),
+                "--jq",
+                &select,
+            ],
+            "gh no pudo leer los hilos del PR",
+        )?;
+        let thread = thread.lines().next().unwrap_or_default().trim();
+        if thread.is_empty() {
+            return Err(DeliveryError::new(
+                "github_failed",
+                "GitHub no tiene el hilo de ese comentario",
+            ));
+        }
+        let mutation = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }";
+        Self::act(
+            &[
+                "api",
+                "graphql",
+                "-f",
+                &format!("query={mutation}"),
+                "-f",
+                &format!("id={thread}"),
+            ],
+            "gh no pudo resolver el hilo",
         )
         .map(|_| ())
     }
@@ -1229,6 +1398,40 @@ impl DeliveryService {
         Ok(logins)
     }
 
+    /// Changes who reviews the task's open PR: `request` are asked for a
+    /// review (again, when they already gave one), `remove` lose their
+    /// pending request. Returns the PR as GitHub has it afterwards.
+    pub fn change_pr_reviewers(
+        &self,
+        task_id: &str,
+        request: Vec<String>,
+        remove: Vec<String>,
+    ) -> Result<Option<DeliveryPr>, DeliveryError> {
+        let pr = self.linked_pr(task_id)?;
+        if pr.state != "open" {
+            return Err(DeliveryError::new(
+                "pr_not_open",
+                "solo se cambian los revisores de un PR abierto",
+            ));
+        }
+        let clean = |logins: Vec<String>| -> Vec<String> {
+            logins
+                .iter()
+                .map(|login| login.trim().trim_start_matches('@').to_string())
+                .filter(|login| !login.is_empty())
+                .collect()
+        };
+        let (request, remove) = (clean(request), clean(remove));
+        let github = self.github();
+        if !remove.is_empty() {
+            github.remove_reviewers(&pr.url, &remove)?;
+        }
+        if !request.is_empty() {
+            github.request_reviewers(&pr.url, &request)?;
+        }
+        self.refresh_pr(task_id, Duration::ZERO)
+    }
+
     /// The reviewers the user chose for a PR step before approving it.
     pub fn set_pr_reviewers(
         &self,
@@ -1249,6 +1452,88 @@ impl DeliveryService {
             .collect();
         self.save_approval(&approval, "pr_reviewers")?;
         Ok(approval)
+    }
+
+    /// The reply as the user edited it before approving: the text posted.
+    pub fn set_reply_body(
+        &self,
+        approval_id: &str,
+        body: &str,
+    ) -> Result<DeliveryApproval, DeliveryError> {
+        let mut approval = self.approval(approval_id)?;
+        if approval.rung != DeliveryRung::PrReply
+            || approval.status != DeliveryApprovalStatus::Pending
+        {
+            return Err(DeliveryError::new(
+                "invalid_approval",
+                "solo se edita una respuesta que aún no se aprobó",
+            ));
+        }
+        if body.trim().is_empty() {
+            return Err(DeliveryError::new(
+                "invalid_approval",
+                "la respuesta no puede quedar vacía",
+            ));
+        }
+        approval.body = body.to_string();
+        self.save_approval(&approval, "pr_reply_edited")?;
+        Ok(approval)
+    }
+
+    /// Posts an approved reply as the user: in the review comment's thread,
+    /// or as a comment on the PR. A reply of the user's with the same text
+    /// already in the thread is taken as this one, so it is never posted
+    /// twice. Returns its URL, and a notice when the thread could not be
+    /// resolved after replying.
+    pub(super) fn post_reply(
+        &self,
+        approval: &DeliveryApproval,
+    ) -> Result<(String, Option<String>), DeliveryError> {
+        let url = approval.comment_url.as_deref().unwrap_or_default();
+        let body = approval.body.trim();
+        let github = self.github();
+        let Some((repo, number, id)) = super::threads::parse_comment_url(url) else {
+            let pr = parse_pr_url(url).ok_or_else(|| {
+                DeliveryError::new("invalid_approval", "la respuesta no tiene PR")
+            })?;
+            let posted = github.comment_on_pr(&pr.url, body).map_err(reply_failure)?;
+            return Ok((posted, None));
+        };
+        let comments = github
+            .pr_review_comments(&repo, number)
+            .map_err(reply_failure)?;
+        let comments = comments.as_array().cloned().unwrap_or_default();
+        let Some(comment) = comments
+            .iter()
+            .find(|comment| comment["id"].as_u64() == Some(id))
+        else {
+            return Err(DeliveryError::new("comment_gone", COMMENT_GONE));
+        };
+        // GitHub answers in the thread of its first comment.
+        let first = comment["in_reply_to_id"].as_u64().unwrap_or(id);
+        let me = self.github_login(&*github).map_err(reply_failure)?;
+        let existing = comments.iter().find(|reply| {
+            reply["in_reply_to_id"].as_u64() == Some(first)
+                && reply["user"]["login"].as_str() == Some(me.as_str())
+                && reply["body"].as_str().map(str::trim) == Some(body)
+        });
+        let posted = match existing {
+            Some(reply) => reply["html_url"].as_str().unwrap_or(url).to_string(),
+            None => github
+                .reply_to_review_comment(&repo, number, first, body)
+                .map_err(reply_failure)?,
+        };
+        let notice = approval
+            .resolve_thread
+            .then(|| github.resolve_review_thread(&repo, number, first).err())
+            .flatten()
+            .map(|error| {
+                format!(
+                    "Respondido, pero no se pudo resolver el hilo: {}",
+                    reply_failure(error).message
+                )
+            });
+        Ok((posted, notice))
     }
 
     /// Asks the PR step's reviewers on GitHub once its PR is linked, once.
@@ -1482,6 +1767,21 @@ fn pr_changed(before: &DeliveryPr, after: &DeliveryPr) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_reply_github_refused_says_why_in_plain_words() {
+        let why = |message: &str| reply_failure(DeliveryError::new("github_failed", message));
+        assert_eq!(why("gh: Not Found (HTTP 404)").category, "comment_gone");
+        assert_eq!(
+            why("To get started with GitHub CLI, please run:  gh auth login").category,
+            "github_signed_out"
+        );
+        assert_eq!(
+            why("gh: Unable to create comment because issue is locked. (HTTP 403)").category,
+            "thread_locked"
+        );
+        assert!(why("boom").message.contains("boom"));
+    }
 
     #[test]
     fn finds_the_github_repo_and_the_branchs_pr() {

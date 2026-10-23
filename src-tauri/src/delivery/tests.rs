@@ -1466,6 +1466,8 @@ fn approvals_climb_one_rung_at_a_time_and_tinto_runs_commit_and_push() {
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
 
     assert_eq!(
@@ -2964,6 +2966,8 @@ fn a_split_issue_moves_in_jira_once_and_closes_with_its_last_package() {
         merge_method: None,
         stage: Some(stage.into()),
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
     // A middle package's ladder ends at its merge; the last climbs the whole
     // one, which the phase leaves unsaid.
@@ -3050,6 +3054,8 @@ fn a_package_merges_after_the_one_it_builds_on_into_that_ones_base() {
         merge_method: Some("merge".into()),
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
     // Its PR goes into package 1's branch: merging it now would land there.
     let refused = h.service.request_approval(merge.clone()).unwrap_err();
@@ -3663,6 +3669,8 @@ fn commit_plan(
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     }
 }
 
@@ -3915,6 +3923,8 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             merge_method: None,
             stage: None,
             jira_statuses: Vec::new(),
+            comment_url: None,
+            resolve_thread: false,
         })
         .unwrap();
     let mut done = h.service.decide_approval(&asked.id, true, None).unwrap();
@@ -3986,6 +3996,8 @@ fn a_commit_step_whose_commits_left_the_branch_goes_back_to_pending() {
             merge_method: None,
             stage: None,
             jira_statuses: Vec::new(),
+            comment_url: None,
+            resolve_thread: false,
         })
         .unwrap_err();
     assert_eq!(push.category, "commit_missing");
@@ -4163,6 +4175,8 @@ fn step(task: &DeliveryTask, rung: DeliveryRung, title: &str) -> NewApproval {
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     }
 }
 
@@ -4368,6 +4382,8 @@ fn a_commit_whose_parents_alone_were_fixed_outside_tinto_stays_done() {
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     });
     assert!(push.is_ok(), "{push:?}");
 
@@ -4505,6 +4521,13 @@ impl super::prs::GitHub for FakeGitHub {
             .push(format!("{url} {}", logins.join(",")));
         Ok(())
     }
+    fn remove_reviewers(&self, url: &str, logins: &[String]) -> Result<(), super::DeliveryError> {
+        self.reviews
+            .lock()
+            .unwrap()
+            .push(format!("remove {url} {}", logins.join(",")));
+        Ok(())
+    }
     fn merge(
         &self,
         url: &str,
@@ -4567,6 +4590,46 @@ impl super::prs::GitHub for FakeGitHub {
     ) -> Result<serde_json::Value, super::DeliveryError> {
         assert_eq!((repo, number), ("o/r", 299));
         Ok(self.review_comments.lock().unwrap().clone())
+    }
+    fn reply_to_review_comment(
+        &self,
+        repo: &str,
+        number: u64,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<String, super::DeliveryError> {
+        assert_eq!((repo, number), ("o/r", 299));
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("reply {comment_id} {body}"));
+        let mut comments = self.review_comments.lock().unwrap();
+        let id = 9000 + comments.as_array().unwrap().len() as u64;
+        let url = format!("https://github.com/o/r/pull/299#discussion_r{id}");
+        comments.as_array_mut().unwrap().push(json!({
+            "id": id, "in_reply_to_id": comment_id, "user": {"login": "me"},
+            "body": body, "html_url": url
+        }));
+        Ok(url)
+    }
+    fn comment_on_pr(&self, url: &str, body: &str) -> Result<String, super::DeliveryError> {
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("comment {url} {body}"));
+        Ok(format!("{url}#issuecomment-1"))
+    }
+    fn resolve_review_thread(
+        &self,
+        _repo: &str,
+        _number: u64,
+        comment_id: u64,
+    ) -> Result<(), super::DeliveryError> {
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("resolve {comment_id}"));
+        Ok(())
     }
     fn pr_to_draft(&self, url: &str) -> Result<(), super::DeliveryError> {
         self.actions.lock().unwrap().push(format!("draft {url}"));
@@ -4689,6 +4752,8 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         merge_method: method.map(str::to_string),
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
     assert_eq!(
         h.service
@@ -4959,6 +5024,8 @@ fn a_push_drifts_when_the_remote_branch_is_gone_or_moved_and_is_asked_again() {
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
     let commit = h
         .service
@@ -5109,6 +5176,8 @@ fn jira_is_asked_after_the_pr_and_after_the_merge_and_an_older_one_is_the_prs() 
         merge_method: None,
         stage: stage.map(str::to_string),
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
     let next = h.service.request_approval(jira(None)).unwrap();
     assert_eq!(
@@ -5194,6 +5263,52 @@ fn the_startup_check_of_every_task_finishes() {
 }
 
 #[test]
+fn the_user_asks_for_a_review_again_or_takes_a_request_back_on_the_open_pr() {
+    let h = harness();
+    let task = h.task("P-12");
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "REVIEW_REQUIRED",
+               "reviewRequests": [{"login": "Luis"}, {"name": "core-team"}],
+               "statusCheckRollup": [], "reviews": [], "comments": []}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/41").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    let pr = h
+        .service
+        .refresh_pr(&task.id, Duration::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pr.requested_reviewers,
+        ["Luis".to_string()],
+        "teams are left out"
+    );
+
+    h.service
+        .change_pr_reviewers(&task.id, vec!["@ana".into()], vec![" Luis ".into()])
+        .unwrap();
+    assert_eq!(
+        github.reviews.lock().unwrap().as_slice(),
+        [
+            "remove https://github.com/o/r/pull/41 Luis".to_string(),
+            "https://github.com/o/r/pull/41 ana".to_string()
+        ]
+    );
+
+    github.snapshot.lock().unwrap()["state"] = json!("MERGED");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        h.service
+            .change_pr_reviewers(&task.id, vec!["ana".into()], vec![])
+            .unwrap_err()
+            .category,
+        "pr_not_open"
+    );
+}
+
+#[test]
 fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_approval() {
     let h = harness();
     github_origin(&h);
@@ -5245,6 +5360,8 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
         merge_method: Some("merge".into()),
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
     let refused = h.service.request_approval(merge()).unwrap_err();
@@ -5434,6 +5551,8 @@ fn tinto_runs_the_jira_steps_and_verifies_the_status_when_the_repo_has_jira() {
         merge_method: None,
         stage: Some(stage.into()),
         jira_statuses: statuses,
+        comment_url: None,
+        resolve_thread: false,
     };
 
     // Without Jira in Tinto the coordinator does it, and must say what it did.
@@ -6779,6 +6898,141 @@ fn a_coordinator_the_user_asks_takes_the_batch_and_the_old_one_is_told() {
 }
 
 #[test]
+fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
+    use super::phase::{Phase, Waiter};
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("R-2");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    *github.review_comments.lock().unwrap() = json!([
+        {"id": 2105, "path": "cli/src/commands.ts", "line": 1092, "position": 14,
+         "html_url": "https://github.com/o/r/pull/299#discussion_r2105",
+         "user": {"login": "Sn4pe"}, "created_at": "2026-10-19T10:00:00Z",
+         "body": "With `--force`, a folder the CLI did not install is deleted.",
+         "diff_hunk": "@@ -979,1 +1091,1 @@ install\n-  old();\n+  installIntoDir(force);"},
+        {"id": 2107, "in_reply_to_id": 2105, "user": {"login": "Sn4pe"}, "body": "Any news?",
+         "html_url": "https://github.com/o/r/pull/299#discussion_r2107"},
+        {"id": 2200, "path": "a.ts", "line": 3, "position": 2, "user": {"login": "ana"},
+         "body": "typo", "diff_hunk": "@@ -1,1 +1,1 @@\n+x"}
+    ]);
+    h.service.set_github(github.clone());
+    // Past the brainstorm a reply still waits for the user.
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    let ask = |url: &str, body: &str| {
+        coordinator.write(
+            "request_approval",
+            json!({"task_id": task_id, "rung": "pr_reply", "comment_url": url,
+                   "body": body, "resolve_thread": true}),
+        )
+    };
+
+    let asked = ask(
+        "https://github.com/o/r/pull/299#discussion_r2107",
+        "Fixed in abc123.",
+    );
+    let reply = &asked["structuredContent"];
+    assert_eq!(reply["status"], "pending", "{asked}");
+    assert_eq!(reply["title"], "Respuesta a Sn4pe");
+    assert_eq!(reply["thread"]["comment"]["body"], "Any news?");
+    let reply_id = reply["id"].as_str().unwrap().to_string();
+    // One open reply per comment; another comment can have its own.
+    assert!(error_text(&ask(
+        "https://github.com/o/r/pull/299#discussion_r2107",
+        "again"
+    ))
+    .contains("ya hay una aprobación abierta"));
+    let general = ask("https://github.com/o/r/pull/299", "Thanks for the review!");
+    let general_id = general["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        general["structuredContent"]["thread"],
+        serde_json::Value::Null
+    );
+    let gone = ask("https://github.com/o/r/pull/299#discussion_r2200", "Done.");
+    let gone_id = gone["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(error_text(&ask("https://github.com/o/r/issues/3", "x")).contains("comment_url"));
+
+    // Pending replies hold neither the phase nor the stages.
+    let phase = h.service.overview().unwrap().phases[&task_id].clone();
+    assert!(
+        !matches!(phase.phase, Phase::Approval { .. }),
+        "{:?}",
+        phase.phase
+    );
+    assert_ne!(phase.waits_on, Waiter::User);
+
+    // The user's edited text is what is posted, in the thread's first
+    // comment, and the thread is resolved.
+    h.service
+        .set_reply_body(&reply_id, "Fixed in abc123, thanks.")
+        .unwrap();
+    let posted = h.service.decide_approval(&reply_id, true, None).unwrap();
+    assert_eq!(posted.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(posted.body, "Fixed in abc123, thanks.");
+    let url = posted.outcome.clone().unwrap();
+    assert!(url.contains("#discussion_r9"), "{url}");
+    assert_eq!(
+        github.actions.lock().unwrap().as_slice(),
+        [
+            "reply 2105 Fixed in abc123, thanks.".to_string(),
+            "resolve 2105".to_string()
+        ]
+    );
+
+    // Asked and approved again with the same text: the reply already there
+    // is taken as it, nothing is posted twice.
+    let again = ask(
+        "https://github.com/o/r/pull/299#discussion_r2105",
+        "Fixed in abc123, thanks.",
+    );
+    let again = h
+        .service
+        .decide_approval(
+            again["structuredContent"]["id"].as_str().unwrap(),
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(again.status, DeliveryApprovalStatus::Executed);
+    assert_eq!(again.outcome.as_deref(), Some(url.as_str()));
+    assert_eq!(
+        github
+            .actions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|action| action.starts_with("reply"))
+            .count(),
+        1
+    );
+
+    // A general comment goes on the PR.
+    let commented = h.service.decide_approval(&general_id, true, None).unwrap();
+    assert_eq!(
+        commented.outcome.as_deref(),
+        Some("https://github.com/o/r/pull/299#issuecomment-1")
+    );
+
+    // A comment deleted meanwhile fails the step with why, without retrying.
+    github
+        .review_comments
+        .lock()
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .retain(|comment| comment["id"] != 2200);
+    let failed = h.service.decide_approval(&gone_id, true, None).unwrap();
+    assert_eq!(failed.status, DeliveryApprovalStatus::Failed);
+    assert!(failed.outcome.unwrap().contains("ya no existe"));
+    assert_eq!(github.actions.lock().unwrap().len(), 4);
+}
+
+#[test]
 fn a_decision_shows_the_review_comment_and_the_code_it_is_about() {
     let h = harness();
     let coordinator = Coordinator::start(&h);
@@ -7724,6 +7978,8 @@ fn a_drifted_push_clears_once_the_remote_branch_has_what_tinto_published() {
         merge_method: None,
         stage: None,
         jira_statuses: Vec::new(),
+        comment_url: None,
+        resolve_thread: false,
     };
     let commit = h
         .service
