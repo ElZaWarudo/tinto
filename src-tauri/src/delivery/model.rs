@@ -620,6 +620,10 @@ pub enum DeliveryRung {
     /// Merge the PR on GitHub and delete its branch there.
     Merge,
     Jira,
+    /// Reply to a reviewer's comment on the PR. Asked once per comment,
+    /// outside the ladder: it neither counts toward delivery nor holds the
+    /// stages.
+    PrReply,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -741,6 +745,17 @@ pub struct DeliveryApproval {
     /// latest; each correction keeps the text it replaced.
     #[serde(default)]
     pub corrections: Vec<DeliveryCorrection>,
+    /// `pr_reply` only: the review comment answered
+    /// (`…/pull/<n>#discussion_r<id>`), or the PR for a general comment.
+    #[serde(default)]
+    pub comment_url: Option<String>,
+    /// `pr_reply` only: resolve the review thread once replied.
+    #[serde(default)]
+    pub resolve_thread: bool,
+    /// `pr_reply` only: the review comment and its diff, as Tinto read them
+    /// from GitHub when the reply was asked.
+    #[serde(default)]
+    pub thread: Option<DeliveryCodeThread>,
 }
 
 /// A result the user corrected by hand, for what Tinto cannot check.

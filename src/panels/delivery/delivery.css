@@ -2614,3 +2614,13 @@
   padding: 6px 10px;
   color: var(--danger);
 }
+.delivery-pr__reviewers {
+  display: grid;
+  gap: 6px;
+}
+.delivery-pr__reviewers[open] {
+  margin-bottom: 4px;
+}
+.delivery-pr__reviewers summary {
+  cursor: pointer;
+}

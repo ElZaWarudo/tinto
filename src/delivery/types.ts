@@ -51,7 +51,8 @@ export type DeliveryAgent = "codex" | "claude" | "muse" | "shell";
 export type DeliveryAccess = "workspace" | "full";
 export type DeliveryResultState = "accepted" | "stale" | "invalid";
 export type DeliveryLeaseState = "free" | "active" | "quarantined";
-export type DeliveryRung = "commit" | "sync" | "push" | "pr" | "merge" | "jira";
+/** `pr_reply`: a reply to a reviewer, outside the ladder: it holds nothing and never counts toward delivery. */
+export type DeliveryRung = "commit" | "sync" | "push" | "pr" | "merge" | "jira" | "pr_reply";
 export type DeliveryApprovalStatus =
   /** `undone`: a commit step whose commits were taken back; it is pending again.
    *  `drifted`: a done step git or GitHub no longer bear out; `notice` says why. */
@@ -339,6 +340,12 @@ export interface DeliveryApproval {
   notice?: string | null;
   /** The user's corrections of `outcome`, oldest first; `outcome` is the latest. */
   corrections?: DeliveryCorrection[];
+  /** `pr_reply`: the review comment answered, or the PR for a general comment. */
+  comment_url?: string | null;
+  /** `pr_reply`: resolve the review thread once replied. */
+  resolve_thread?: boolean;
+  /** `pr_reply`: the review comment and its diff, as Tinto read them. */
+  thread?: DeliveryCodeThread | null;
 }
 
 /** A result the user corrected by hand, keeping the one it replaced. */
@@ -753,6 +760,8 @@ export interface DeliveryPr {
   merge_commit?: string | null;
   /** Reviewers whose latest review approves it. */
   approved_by?: string[];
+  /** Who GitHub is still waiting on for a review. */
+  requested_reviewers?: string[];
   /** The branch it merges into, as GitHub last said. */
   base?: string | null;
 }

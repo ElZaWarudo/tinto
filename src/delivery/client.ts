@@ -287,13 +287,20 @@ export const decideDeliveryApproval = (
   approve: boolean,
   note?: string,
   reviewers?: string[],
+  /** A reply step: the text as the user edited it, which is the one posted. */
+  body?: string,
 ) =>
   invoke<DeliveryApproval>("delivery_decide_approval", {
     approvalId,
     approve,
     note: note ?? null,
     reviewers: reviewers ?? null,
+    body: body ?? null,
   });
+
+/** Asks for a review (again) or takes requests back on the task's open PR. */
+export const changeDeliveryPrReviewers = (taskId: string, request: string[], remove: string[]) =>
+  invoke<DeliveryPr | null>("delivery_change_pr_reviewers", { taskId, request, remove });
 
 /** Who can review the task's PR: the repo's assignable people, without the user. */
 export const getDeliveryPrReviewers = (taskId: string) =>

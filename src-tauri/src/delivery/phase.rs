@@ -668,10 +668,11 @@ fn phase_in_round(
         .iter()
         .filter(|job| job.task_id == task.id)
         .collect();
+    // A reply to a reviewer is outside the ladder and holds nothing.
     let approvals: Vec<&DeliveryApproval> = facts
         .approvals
         .iter()
-        .filter(|approval| approval.task_id == task.id)
+        .filter(|approval| approval.task_id == task.id && approval.rung != DeliveryRung::PrReply)
         .collect();
     let next = next_stage(&task.setup, &jobs, &approvals);
     let ladder = steps_for(task);

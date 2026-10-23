@@ -177,9 +177,11 @@ import {
   type Tone,
 } from "./taskStatus";
 import "./delivery.css";
+import { CodeThreads } from "./DeliveryCodeThread";
 import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
+import { GrowingTextarea } from "./GrowingTextarea";
 
 type Dialog =
   | { kind: "new-task" }
@@ -1968,7 +1970,10 @@ function TaskDetail({
   // A middle package of a split issue ends at its merge.
   const ladder = stepsOf(overview, task.id);
   const progress = issueProgress(overview, task);
-  const step = openApprovals.length === 0 ? nextStep(approvals, ladder) : null;
+  // A reply to a reviewer holds nothing: the next step can still be asked.
+  const step = openApprovals.every((approval) => approval.rung === "pr_reply")
+    ? nextStep(approvals, ladder)
+    : null;
   const [requesting, setRequesting] = useState(false);
   // What opens on top of the task: its pending decisions, QA's problems, its
   // Jira issue or an open step.
@@ -2521,7 +2526,11 @@ function TaskDetail({
           closeLabel="Cerrar el paso"
           onClose={() => setFloat(null)}
         >
-          <ApprovalBanner task={task} approval={floating} pr={pr} />
+          {floating.rung === "pr_reply" ? (
+            <ReplyBanner approval={floating} />
+          ) : (
+            <ApprovalBanner task={task} approval={floating} pr={pr} />
+          )}
         </TaskFloat>
       )}
 
@@ -3176,7 +3185,13 @@ function DeliveryResults({
     const approval = latestStep(approvals, step);
     return isDone(approval) ? [{ step, approval }] : [];
   });
-  if (done.length === 0) return null;
+  // Replies to reviewers, posted or refused by GitHub, oldest first.
+  const replies = approvals.filter(
+    (approval) =>
+      approval.rung === "pr_reply" &&
+      (approval.status === "executed" || approval.status === "failed"),
+  );
+  if (done.length === 0 && replies.length === 0) return null;
   return (
     <section className="delivery-section" aria-label="Resultados de la entrega">
       <h3>Resultados de la entrega</h3>
@@ -3221,6 +3236,18 @@ function DeliveryResults({
             </li>
           );
         })}
+        {replies.map((reply) => (
+          <li key={reply.id} aria-label={reply.title}>
+            <strong>{reply.title}</strong>{" "}
+            {reply.status === "executed" && reply.outcome ? (
+              <ExternalLink href={reply.outcome}>{reply.outcome}</ExternalLink>
+            ) : (
+              <span className="delivery-job__note">No se publicó: {reply.outcome}</span>
+            )}{" "}
+            <small className="delivery-muted">{when(reply.executed_at_ms)}</small>
+            {reply.notice && <p className="delivery-job__note">{reply.notice}</p>}
+          </li>
+        ))}
       </ul>
     </section>
   );
@@ -3264,7 +3291,9 @@ function CommitStep({ approvals }: { approvals: DeliveryApproval[] }) {
 
 /** The latest step, when the user rejected it and nothing was asked since. */
 function rejectedStep(approvals: DeliveryApproval[]): DeliveryApproval | null {
-  const latest = [...approvals].sort((a, b) => b.requested_at_ms - a.requested_at_ms)[0];
+  const latest = approvals
+    .filter((approval) => approval.rung !== "pr_reply")
+    .sort((a, b) => b.requested_at_ms - a.requested_at_ms)[0];
   return latest?.status === "rejected" ? latest : null;
 }
 
@@ -3414,6 +3443,59 @@ function ApprovalBar({ approval, onOpen }: { approval: DeliveryApproval; onOpen:
       >
         {pending ? "Revisar" : "Ver"}
       </button>
+    </div>
+  );
+}
+
+/** A reply to a reviewer: the comment with its diff and the editable text
+ *  Tinto posts as the user once approved. */
+function ReplyBanner({ approval }: { approval: DeliveryApproval }) {
+  const [body, setBody] = useState(approval.body);
+  const url = approval.comment_url ?? "";
+  return (
+    <div
+      className="delivery-banner delivery-banner--step"
+      role="group"
+      aria-label="Aprobación pr_reply"
+    >
+      <p className="delivery-banner__title">
+        <Icon name="flag" />
+        <strong>{approval.title}</strong>
+        <span className="delivery-muted">{preparedBy(approval)}</span>
+      </p>
+      {approval.thread ? (
+        <CodeThreads threads={[approval.thread]} />
+      ) : (
+        <p className="delivery-muted">
+          Comentario general en el{" "}
+          <ExternalLink href={url} label="Ver el PR en GitHub">
+            PR ↗
+          </ExternalLink>
+        </p>
+      )}
+      <label className="delivery-request__field">
+        <span>Respuesta, tal como se publicará</span>
+        <GrowingTextarea value={body} onChange={(event) => setBody(event.target.value)} rows={2} />
+      </label>
+      <p className="delivery-muted">
+        Al aprobar, Tinto la publica con tu cuenta de GitHub
+        {approval.thread ? " en el hilo del comentario" : " como comentario del PR"}
+        {approval.resolve_thread ? " y resuelve el hilo" : ""}. Rechazar no publica nada.
+      </p>
+      <ActionGroup>
+        <div className="delivery-actions">
+          <ActionButton
+            className="delivery-button--primary"
+            disabled={!body.trim()}
+            onAction={() => decideDeliveryApproval(approval.id, true, undefined, undefined, body)}
+          >
+            {body === approval.body ? "Aprobar y responder" : "Aprobar y responder con tu texto"}
+          </ActionButton>
+          <ActionButton onAction={() => decideDeliveryApproval(approval.id, false)}>
+            Rechazar
+          </ActionButton>
+        </div>
+      </ActionGroup>
     </div>
   );
 }
@@ -3731,7 +3813,7 @@ function DeliveryRequest({
         <span>
           {rung === "jira" && !jiraByTinto ? "Operaciones exactas en Jira" : "Detalle (opcional)"}
         </span>
-        <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={3} />
+        <GrowingTextarea value={body} onChange={(event) => setBody(event.target.value)} rows={3} />
       </label>
       {jiraByTinto && (
         <p className="delivery-muted">

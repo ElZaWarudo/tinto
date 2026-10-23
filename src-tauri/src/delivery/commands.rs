@@ -626,6 +626,8 @@ pub fn delivery_request_approval(
             merge_method,
             stage,
             jira_statuses: jira_statuses.unwrap_or_default(),
+            comment_url: None,
+            resolve_thread: false,
         })
         .map_err(CommandError::from)
 }
@@ -667,11 +669,16 @@ pub async fn delivery_decide_approval(
     note: Option<String>,
     // A PR step: who the user chose to review it.
     reviewers: Option<Vec<String>>,
+    // A reply step: the text as the user edited it.
+    body: Option<String>,
 ) -> Result<DeliveryApproval, CommandError> {
     let service = service.inner().clone();
     blocking(move || {
         if let Some(reviewers) = reviewers.filter(|_| approve) {
             service.set_pr_reviewers(&approval_id, reviewers)?;
+        }
+        if let Some(body) = body.filter(|_| approve) {
+            service.set_reply_body(&approval_id, &body)?;
         }
         service.decide_approval(&approval_id, approve, note)
     })
@@ -686,6 +693,19 @@ pub async fn delivery_pr_reviewers(
 ) -> Result<Vec<String>, CommandError> {
     let service = service.inner().clone();
     blocking(move || service.pr_reviewers(&task_id)).await
+}
+
+/// Asks reviewers for a review (again) or takes their request back on the
+/// task's open PR.
+#[tauri::command]
+pub async fn delivery_change_pr_reviewers(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+    request: Vec<String>,
+    remove: Vec<String>,
+) -> Result<Option<DeliveryPr>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.change_pr_reviewers(&task_id, request, remove)).await
 }
 
 #[tauri::command]

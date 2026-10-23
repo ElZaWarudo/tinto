@@ -2,7 +2,13 @@
 // what is new since the user last looked. GitHub content stays on GitHub;
 // only counts and authors are shown here.
 
-import { markDeliveryPrSeen, refreshDeliveryPr } from "../../delivery/client";
+import { useEffect, useState } from "react";
+import {
+  changeDeliveryPrReviewers,
+  getDeliveryPrReviewers,
+  markDeliveryPrSeen,
+  refreshDeliveryPr,
+} from "../../delivery/client";
 import type { DeliveryPr } from "../../delivery/types";
 import { prSummary } from "./taskStatus";
 import { ExternalLink } from "./ExternalLink";
@@ -30,6 +36,89 @@ const DECISION: Record<string, string> = {
   changes_requested: "Cambios pedidos",
   review_required: "Pendiente de revisión",
 };
+
+/** Who reviews the open PR. The user ticks people and asks them for a
+ *  review (again, when they already gave one) or takes their request back. */
+function PrReviewers({ pr }: { pr: DeliveryPr }) {
+  const requested = pr.requested_reviewers ?? [];
+  const approved = pr.approved_by ?? [];
+  const [open, setOpen] = useState(false);
+  // The repo's people who can review, read from GitHub the first time it opens.
+  const [candidates, setCandidates] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<string[]>([]);
+  useEffect(() => {
+    if (!open || candidates) return;
+    let live = true;
+    getDeliveryPrReviewers(pr.task_id).then(
+      (logins) => live && setCandidates(logins),
+      (cause) =>
+        live &&
+        setError(
+          cause && typeof cause === "object" && "message" in cause
+            ? String(cause.message)
+            : String(cause),
+        ),
+    );
+    return () => {
+      live = false;
+    };
+  }, [open, candidates, pr.task_id]);
+  const people = [...new Set([...requested, ...approved, ...(candidates ?? [])])];
+  const removable = chosen.filter((login) => requested.includes(login));
+  const change = async (request: string[], remove: string[]) => {
+    await changeDeliveryPrReviewers(pr.task_id, request, remove);
+    setChosen([]);
+  };
+  return (
+    <details className="delivery-pr__reviewers" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        Revisores:{" "}
+        {requested.length > 0 ? `esperando a ${requested.join(", ")}` : "ninguna revisión pedida"}
+      </summary>
+      <fieldset className="delivery-reviewers">
+        <legend>Elige a quién</legend>
+        {candidates === null && !error && (
+          <p className="delivery-muted">Leyendo quién puede revisar en GitHub…</p>
+        )}
+        {error && <p className="delivery-job__note">No se pudo leer quién puede revisar: {error}</p>}
+        {people.map((login) => (
+          <label key={login}>
+            <input
+              type="checkbox"
+              checked={chosen.includes(login)}
+              onChange={(event) =>
+                setChosen(
+                  event.target.checked
+                    ? [...chosen, login]
+                    : chosen.filter((other) => other !== login),
+                )
+              }
+            />
+            {login}
+            {requested.includes(login) && <small className="delivery-muted">pedida</small>}
+            {approved.includes(login) && <small className="delivery-muted">aprobó</small>}
+          </label>
+        ))}
+      </fieldset>
+      <div className="delivery-actions">
+        <ActionButton disabled={chosen.length === 0} onAction={() => change(chosen, [])}>
+          Pedir revisión
+        </ActionButton>
+        <ActionButton
+          disabled={removable.length === 0}
+          title="Solo a quien tiene la revisión pedida."
+          onAction={() => change([], removable)}
+        >
+          Quitar petición
+        </ActionButton>
+        <span className="delivery-muted">
+          A quien ya revisó, pedírsela otra vez le avisa de nuevo en GitHub.
+        </span>
+      </div>
+    </details>
+  );
+}
 
 export function PrSection({ pr }: { pr: DeliveryPr }) {
   const summary = prSummary(pr);
@@ -75,6 +164,7 @@ export function PrSection({ pr }: { pr: DeliveryPr }) {
             )}
           </ul>
         )}
+        {pr.state === "open" && <PrReviewers pr={pr} />}
         {fresh && (
           <div className="delivery-pr__news" role="status">
             <span>
