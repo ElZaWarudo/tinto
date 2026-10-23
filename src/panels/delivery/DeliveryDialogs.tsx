@@ -1238,7 +1238,7 @@ export function DeliverySettingsDialog({
     <FormDialog title="Ajustes de Delivery" wide onCancel={onClose}>
       <Field
         label="Agentes en paralelo"
-        hint="Automático: uno por cada tarea activa (cada issue), hasta 8. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
+        hint="Automático: uno por cada tarea activa (cada issue), hasta uno por núcleo físico menos uno (para las comprobaciones de Tinto), que corren de una en una. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
       >
         <select value={capacity} onChange={(event) => onCapacity(Number(event.target.value))}>
           <option value={0}>Automático: uno por issue</option>

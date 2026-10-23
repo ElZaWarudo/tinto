@@ -590,7 +590,8 @@ pub fn split_issues(
 
 /// Who a followed PR waits on: the user when it has news or trouble, the
 /// coordinator once approved or merged (the next step), else its reviewers.
-fn pr_waits_on(pr: &DeliveryPr) -> Waiter {
+/// Past the brainstorm the coordinator takes the news and trouble too.
+fn pr_waits_on(pr: &DeliveryPr, unattended: bool) -> Waiter {
     let trouble = pr.state == "closed"
         || pr.new_reviews + pr.new_comments > 0
         || pr.checks.failing > 0
@@ -598,7 +599,9 @@ fn pr_waits_on(pr: &DeliveryPr) -> Waiter {
         || pr.review_decision.as_deref() == Some("changes_requested");
     let approved = pr.review_decision.as_deref() == Some("approved")
         || (pr.review_decision.is_none() && !pr.approved_by.is_empty());
-    if trouble {
+    if trouble && unattended {
+        Waiter::Coordinator
+    } else if trouble {
         Waiter::User
     } else if pr.state == "merged" || (approved && pr.checks.pending == 0 && !pr.draft) {
         Waiter::Coordinator
@@ -674,6 +677,12 @@ fn phase_in_round(
         .iter()
         .filter(|approval| approval.task_id == task.id && approval.rung != DeliveryRung::PrReply)
         .collect();
+    // Past its run's brainstorm, what the coordinator can act on does not
+    // wait for the user.
+    let unattended = facts
+        .runs
+        .iter()
+        .any(|run| Some(&run.id) == task.run_id.as_ref() && run.unattended);
     let next = next_stage(&task.setup, &jobs, &approvals);
     let ladder = steps_for(task);
     let steps: Vec<DeliveryStep> = if ladder.len() == STEPS.len() {
@@ -739,9 +748,11 @@ fn phase_in_round(
                 .is_some_and(|latest| latest.id == approval.id)
     }) {
         // A push is put right by asking for it again, which the
-        // coordinator does; the other steps wait on the user.
+        // coordinator does, and so are the PR and Jira steps past the
+        // brainstorm; the other steps wait on the user.
         let waits_on = match step.rung {
             DeliveryRung::Push => Waiter::Coordinator,
+            DeliveryRung::Pr | DeliveryRung::Jira if unattended => Waiter::Coordinator,
             _ => Waiter::User,
         };
         return phase(
@@ -943,7 +954,7 @@ fn phase_in_round(
         }
     }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
-        return phase(Phase::Pr { number: pr.number }, pr_waits_on(pr));
+        return phase(Phase::Pr { number: pr.number }, pr_waits_on(pr, unattended));
     }
     if let Some(role) = next.clone() {
         return phase(Phase::NextStage { role }, Waiter::Coordinator);
@@ -1414,6 +1425,18 @@ mod tests {
         assert_eq!(
             waits(serde_json::json!({"state": "merged"})).1,
             Waiter::Coordinator
+        );
+        // Past the brainstorm the coordinator takes news and trouble.
+        for trouble in [
+            serde_json::json!({"new_comments": 1}),
+            serde_json::json!({"conflicts": true}),
+            serde_json::json!({"review_decision": "changes_requested"}),
+        ] {
+            assert_eq!(pr_waits_on(&pr(trouble), true), Waiter::Coordinator);
+        }
+        assert_eq!(
+            pr_waits_on(&pr(serde_json::json!({})), true),
+            Waiter::Reviewers
         );
     }
 

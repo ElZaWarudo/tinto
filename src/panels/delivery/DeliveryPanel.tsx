@@ -65,6 +65,7 @@ import {
   correctDeliveryApproval,
   createDeliveryRun,
   createDeliveryTask,
+  changeDeliveryPrReviewers,
   decideDeliveryApproval,
   dispatchDeliveryJob,
   findDeliveryPr,
@@ -170,6 +171,7 @@ import {
   roundStage,
   stageLabel,
   taskStatus,
+  qaProblemsToDecide as problemsToDecide,
   trackSteps,
   type StatusGroup,
   type StatusIcon,
@@ -1944,10 +1946,7 @@ function TaskDetail({
   // The latest QA's visual changes page: what the user reviews before the PR.
   const qaRecord = latestOfRole(jobs, "qa");
   const qaProblems = (overview.qa_problems ?? []).filter((problem) => problem.task_id === task.id);
-  // The QA's problems that wait on the user: new ones, and fixes that did not hold.
-  const qaProblemsToDecide = qaProblems.filter(
-    (problem) => problem.status === "open" || problem.status === "still_failing",
-  ).length;
+  const qaProblemsToDecide = problemsToDecide(overview, task.id);
   const newestFirst = [...jobs].reverse();
   const approvals = overview.approvals.filter((approval) => approval.task_id === task.id);
   const taskRun = overview.runs.find((candidate) => candidate.id === task.run_id);
@@ -1978,9 +1977,15 @@ function TaskDetail({
   // What opens on top of the task: its pending decisions, QA's problems, its
   // Jira issue or an open step.
   const [float, setFloat] = useState<
-    "decisions" | "qa" | "blocker" | "issue" | `approval:${string}` | null
+    "decisions" | "qa" | "blocker" | "issue" | "replies" | `approval:${string}` | null
   >(null);
-  const floating = openApprovals.find((approval) => float === `approval:${approval.id}`);
+  const floating = openApprovals.find(
+    (approval) => approval.rung !== "pr_reply" && float === `approval:${approval.id}`,
+  );
+  // Replies to reviewers are answered together, in one place.
+  const replies = openApprovals.filter(
+    (approval) => approval.rung === "pr_reply" && approval.status === "pending",
+  );
   // The worktree in the files view, compared with the commit it started from.
   const { openRepo } = useWorkspaceActions();
   const openChanges = async () => {
@@ -2513,24 +2518,50 @@ function TaskDetail({
 
       <PendingSettingsProposals proposals={pendingSettingsProposals(overview, task)} />
 
-      {openApprovals.map((approval) => (
-        <ApprovalBar
-          key={approval.id}
-          approval={approval}
-          onOpen={() => setFloat(`approval:${approval.id}`)}
-        />
-      ))}
+      {openApprovals
+        .filter((approval) => approval.rung !== "pr_reply")
+        .map((approval) => (
+          <ApprovalBar
+            key={approval.id}
+            approval={approval}
+            onOpen={() => setFloat(`approval:${approval.id}`)}
+          />
+        ))}
+      {replies.length > 0 && (
+        <div className="delivery-pending-bar delivery-pending-bar--step" role="status">
+          <span className="delivery-pending-bar__text">
+            <strong>
+              {replies.length === 1
+                ? "Aprobar la respuesta al revisor"
+                : `Aprobar ${replies.length} respuestas a los revisores`}
+            </strong>
+          </span>
+          <button
+            type="button"
+            className="delivery-button--primary"
+            aria-label="Revisar las respuestas a los revisores"
+            onClick={() => setFloat("replies")}
+          >
+            Revisar
+          </button>
+        </div>
+      )}
       {floating && (
         <TaskFloat
           label={`Paso ${lower(stepOf(floating).label)}`}
           closeLabel="Cerrar el paso"
           onClose={() => setFloat(null)}
         >
-          {floating.rung === "pr_reply" ? (
-            <ReplyBanner approval={floating} />
-          ) : (
-            <ApprovalBanner task={task} approval={floating} pr={pr} />
-          )}
+          <ApprovalBanner task={task} approval={floating} pr={pr} />
+        </TaskFloat>
+      )}
+      {float === "replies" && replies.length > 0 && (
+        <TaskFloat
+          label="Respuestas a los revisores"
+          closeLabel="Cerrar las respuestas"
+          onClose={() => setFloat(null)}
+        >
+          <RepliesBanner replies={replies} />
         </TaskFloat>
       )}
 
@@ -3447,55 +3478,135 @@ function ApprovalBar({ approval, onOpen }: { approval: DeliveryApproval; onOpen:
   );
 }
 
-/** A reply to a reviewer: the comment with its diff and the editable text
- *  Tinto posts as the user once approved. */
-function ReplyBanner({ approval }: { approval: DeliveryApproval }) {
-  const [body, setBody] = useState(approval.body);
-  const url = approval.comment_url ?? "";
+/** The task's pending replies to reviewers, all in one place: each comment
+ *  with its diff and the editable text Tinto posts as the user once
+ *  approved, next to how the user replies in this repository. */
+function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
+  const [bodies, setBodies] = useState<Record<string, string>>(() =>
+    Object.fromEntries(replies.map((reply) => [reply.id, reply.body])),
+  );
+  const bodyOf = (reply: DeliveryApproval) => bodies[reply.id] ?? reply.body;
+  const examples = replies.find((reply) => reply.style_examples?.length)?.style_examples ?? [];
+  const authorOf = (reply: DeliveryApproval) => reply.thread?.comment?.author;
+  const authors = [...new Set(replies.map(authorOf).filter((login) => login !== undefined))];
+  // Who is asked to review again once answered: every reviewer, unless unticked.
+  const [skipped, setSkipped] = useState<string[]>([]);
+  const askAgain = async (logins: (string | undefined)[]) => {
+    const chosen = logins.filter(
+      (login): login is string => login !== undefined && !skipped.includes(login),
+    );
+    if (chosen.length > 0) await changeDeliveryPrReviewers(replies[0].task_id, chosen, []);
+  };
+  const approve = async (reply: DeliveryApproval) => {
+    await decideDeliveryApproval(reply.id, true, undefined, undefined, bodyOf(reply));
+    await askAgain([authorOf(reply)]);
+  };
+  const approveAll = async () => {
+    for (const reply of replies) {
+      await decideDeliveryApproval(reply.id, true, undefined, undefined, bodyOf(reply));
+    }
+    await askAgain(authors);
+  };
   return (
     <div
       className="delivery-banner delivery-banner--step"
       role="group"
       aria-label="Aprobación pr_reply"
     >
-      <p className="delivery-banner__title">
-        <Icon name="flag" />
-        <strong>{approval.title}</strong>
-        <span className="delivery-muted">{preparedBy(approval)}</span>
-      </p>
-      {approval.thread ? (
-        <CodeThreads threads={[approval.thread]} />
-      ) : (
-        <p className="delivery-muted">
-          Comentario general en el{" "}
-          <ExternalLink href={url} label="Ver el PR en GitHub">
-            PR ↗
-          </ExternalLink>
-        </p>
+      {examples.length > 0 && (
+        <details className="delivery-replies__examples">
+          <summary>Cómo respondes tú: tus últimas respuestas en este repositorio</summary>
+          <ul>
+            {examples.map((example, index) => (
+              <li key={index}>{example}</li>
+            ))}
+          </ul>
+        </details>
       )}
-      <label className="delivery-request__field">
-        <span>Respuesta, tal como se publicará</span>
-        <GrowingTextarea value={body} onChange={(event) => setBody(event.target.value)} rows={2} />
-      </label>
-      <p className="delivery-muted">
-        Al aprobar, Tinto la publica con tu cuenta de GitHub
-        {approval.thread ? " en el hilo del comentario" : " como comentario del PR"}
-        {approval.resolve_thread ? " y resuelve el hilo" : ""}. Rechazar no publica nada.
-      </p>
-      <ActionGroup>
-        <div className="delivery-actions">
-          <ActionButton
-            className="delivery-button--primary"
-            disabled={!body.trim()}
-            onAction={() => decideDeliveryApproval(approval.id, true, undefined, undefined, body)}
-          >
-            {body === approval.body ? "Aprobar y responder" : "Aprobar y responder con tu texto"}
-          </ActionButton>
-          <ActionButton onAction={() => decideDeliveryApproval(approval.id, false)}>
-            Rechazar
-          </ActionButton>
-        </div>
-      </ActionGroup>
+      {replies.map((reply) => {
+        const body = bodyOf(reply);
+        return (
+          <section key={reply.id} className="delivery-replies__item" aria-label={reply.title}>
+            <p className="delivery-banner__title">
+              <Icon name="flag" />
+              <strong>{reply.title}</strong>
+              <span className="delivery-muted">{preparedBy(reply)}</span>
+            </p>
+            {reply.thread ? (
+              <CodeThreads threads={[reply.thread]} />
+            ) : (
+              <p className="delivery-muted">
+                Comentario general en el{" "}
+                <ExternalLink href={reply.comment_url ?? ""} label="Ver el PR en GitHub">
+                  PR ↗
+                </ExternalLink>
+              </p>
+            )}
+            <label className="delivery-request__field">
+              <span>Respuesta, tal como se publicará</span>
+              <GrowingTextarea
+                value={body}
+                onChange={(event) => setBodies({ ...bodies, [reply.id]: event.target.value })}
+                rows={2}
+              />
+            </label>
+            {reply.notice && <p className="delivery-job__note">{reply.notice}</p>}
+            <p className="delivery-muted">
+              Al aprobar, Tinto la publica con tu cuenta de GitHub
+              {reply.thread ? " en el hilo del comentario" : " como comentario del PR"}
+              {reply.resolve_thread ? " y resuelve el hilo" : ""}. Rechazar no publica nada.
+            </p>
+            <ActionGroup>
+              <div className="delivery-actions">
+                <ActionButton
+                  className="delivery-button--primary"
+                  disabled={!body.trim()}
+                  onAction={() => approve(reply)}
+                >
+                  {body === reply.body ? "Aprobar y responder" : "Aprobar y responder con tu texto"}
+                </ActionButton>
+                <ActionButton onAction={() => decideDeliveryApproval(reply.id, false)}>
+                  Rechazar
+                </ActionButton>
+              </div>
+            </ActionGroup>
+          </section>
+        );
+      })}
+      {authors.length > 0 && (
+        <fieldset className="delivery-reviewers">
+          <legend>Al responder, volver a pedir la revisión a</legend>
+          {authors.map((login) => (
+            <label key={login}>
+              <input
+                type="checkbox"
+                checked={!skipped.includes(login)}
+                onChange={(event) =>
+                  setSkipped(
+                    event.target.checked
+                      ? skipped.filter((other) => other !== login)
+                      : [...skipped, login],
+                  )
+                }
+              />{" "}
+              {login}
+            </label>
+          ))}
+        </fieldset>
+      )}
+      {replies.length > 1 && (
+        <ActionGroup>
+          <div className="delivery-actions">
+            <ActionButton
+              className="delivery-button--primary"
+              disabled={replies.some((reply) => !bodyOf(reply).trim())}
+              onAction={approveAll}
+            >
+              {`Aprobar y responder las ${replies.length}`}
+            </ActionButton>
+          </div>
+        </ActionGroup>
+      )}
     </div>
   );
 }

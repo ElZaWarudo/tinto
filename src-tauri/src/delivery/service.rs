@@ -80,6 +80,9 @@ pub const QA_ROLE: &str = "qa";
 /// One of the task's checks, run by Tinto itself as a shell job.
 pub const CHECKS_ROLE: &str = "checks";
 
+/// The stage that writes the task's code.
+const IMPLEMENTATION_ROLE: &str = "implementation";
+
 /// One of the task's setup commands, run by Tinto itself as a shell job
 /// before its stages.
 pub const SETUP_ROLE: &str = "setup";
@@ -93,6 +96,8 @@ const CHECK_TAIL_CHARS: usize = 2_000;
 
 /// The longest time limit a job can have, in minutes.
 pub const MAX_TIMEOUT_MINUTES: u32 = 24 * 60;
+/// The least time a job resolving a merge's conflicts gets by default.
+const MERGE_TIMEOUT_MINUTES: u32 = 120;
 
 /// Roles of the built-in flow (backlog-delivery's stages) and their defaults.
 pub fn role_defaults(role: &str) -> (bool, Option<&'static str>, u32) {
@@ -516,8 +521,16 @@ impl DeliveryService {
                 adopted.push(job.id);
                 continue;
             }
+            // Past its run's brainstorm nothing waits for the user, so the
+            // job is repeated as if the repo asked for it.
             let retry_on_restart = match store.task(&job.task_id)? {
-                Some(task) => store.repo_settings(&task.repo)?.retry_on_restart,
+                Some(task) => {
+                    let unattended = match task.run_id.as_deref() {
+                        Some(run_id) => store.run(run_id)?.is_some_and(|run| run.unattended),
+                        None => false,
+                    };
+                    unattended || store.repo_settings(&task.repo)?.retry_on_restart
+                }
                 None => false,
             };
             let not_retried = if retry_on_restart {
@@ -1451,11 +1464,15 @@ impl DeliveryService {
             .iter()
             .filter(|decision| qa && allowed_permission(decision))
             .collect();
-        // The time limit given, else the stage's, else the role's.
+        // The time limit given, else the stage's, else the role's. Resolving
+        // a merge's conflicts takes longer than a stage's usual work.
         let timeout = request
             .timeout_minutes
             .or_else(|| settings.stages.get(&role)?.timeout_minutes)
-            .unwrap_or(timeout);
+            .unwrap_or(match merge_conflicts {
+                Some(_) => timeout.max(MERGE_TIMEOUT_MINUTES),
+                None => timeout,
+            });
         // The checks the job is given. Codex's sandbox must also be
         // able to start their programs.
         let allowed_commands = match (request.agent, request.access) {
@@ -1616,8 +1633,40 @@ impl DeliveryService {
             // A stage on the task is the round that answers the PR's news.
             let _ = self.mark_pr_seen(&job.task_id);
         }
+        if job.role == IMPLEMENTATION_ROLE {
+            self.end_brainstorm_once_implementing(&task)?;
+        }
         self.tick();
         Ok(job)
+    }
+
+    /// Once every task of the run is being implemented, the brainstorm is
+    /// over even if the coordinator did not say so: from then on the run
+    /// does not wait for the user (commits, pushes, decisions). It stays
+    /// open while a decision or settings proposal of the run is pending.
+    fn end_brainstorm_once_implementing(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        let Some(run_id) = task.run_id.as_deref() else {
+            return Ok(());
+        };
+        if self.run(run_id)?.unattended {
+            return Ok(());
+        }
+        let store = self.store()?;
+        let jobs = store.jobs()?;
+        let all_implementing = store
+            .tasks()?
+            .iter()
+            .filter(|other| other.run_id.as_deref() == Some(run_id))
+            .all(|other| {
+                jobs.iter()
+                    .any(|job| job.task_id == other.id && job.role == IMPLEMENTATION_ROLE)
+            });
+        drop(store);
+        if all_implementing {
+            // Something still waits on the user: the coordinator ends it.
+            let _ = self.end_brainstorm(run_id);
+        }
+        Ok(())
     }
 
     /// The task's paused job that no later job resumes, if any.
@@ -1790,17 +1839,7 @@ impl DeliveryService {
                 ),
             ));
         }
-        // Its session exists only once the agent started it, as its own
-        // output says.
-        let started = (self.inner.paths_for)(&stopped.id)
-            .ok()
-            .and_then(|paths| std::fs::read_to_string(paths.events).ok())
-            .is_some_and(|events| {
-                events
-                    .lines()
-                    .any(|line| adapters::session_id_from_line(stopped.agent, line).is_some())
-            });
-        if stopped.provider_session_id.is_none() || !started {
+        if !self.session_started(&stopped) {
             return Err(DeliveryError::new(
                 "session_unknown",
                 "la sesión del agente no se puede reanudar (no llegó a empezar): usa retry_job",
@@ -1811,6 +1850,20 @@ impl DeliveryService {
             assignment.timeout_minutes = timeout_minutes;
         }
         self.dispatch_job(assignment, Some(&stopped), None)
+    }
+
+    /// Whether the job's agent session can be resumed: its session exists
+    /// only once the agent started it, as its own output says.
+    fn session_started(&self, job: &DeliveryJob) -> bool {
+        job.provider_session_id.is_some()
+            && (self.inner.paths_for)(&job.id)
+                .ok()
+                .and_then(|paths| std::fs::read_to_string(paths.events).ok())
+                .is_some_and(|events| {
+                    events
+                        .lines()
+                        .any(|line| adapters::session_id_from_line(job.agent, line).is_some())
+                })
     }
 
     /// A job's assignment again, for a retry. A job on the stage's settings
@@ -1866,11 +1919,16 @@ impl DeliveryService {
         }
     }
 
-    fn retry_after_restart(&self, job_id: &str) -> Result<(), DeliveryError> {
+    pub(super) fn retry_after_restart(&self, job_id: &str) -> Result<(), DeliveryError> {
         let mut job = self.job(job_id)?;
-        let queued = self
-            .same_assignment(job.clone())
-            .and_then(|assignment| self.dispatch_job(assignment, None, Some(&job.id)));
+        // An agent that had started goes on in its session, keeping what it
+        // did; anything else starts over.
+        let queued = if continue_note(&job).is_some() && self.session_started(&job) {
+            self.dispatch_job(in_same_session(&job), Some(&job), Some(&job.id))
+        } else {
+            self.same_assignment(job.clone())
+                .and_then(|assignment| self.dispatch_job(assignment, None, Some(&job.id)))
+        };
         let store = self.store()?;
         let note = match &queued {
             Ok(retry) => {
@@ -2698,6 +2756,10 @@ impl DeliveryService {
             lines.push("Run only the tests you write or change: Tinto runs the full checks once the implementation makes them pass.".to_string());
         } else if job.writes {
             lines.push("While you work, run only the tests of what you change, not these checks in full: Tinto runs them on your result when you finish.".to_string());
+        } else if job.role == QA_ROLE {
+            lines.push("Do not run these checks, builds, linters, type checkers or test suites: Tinto runs them. Test the behaviour the task asks for.".to_string());
+        } else {
+            lines.push("Do not run these checks, builds, linters, type checkers or test suites to review: Tinto runs them on every stage's result and sends failures back. Review by reading the change; run a test only to confirm a specific doubt.".to_string());
         }
         let same_code = last_change(&jobs).is_some_and(|change| {
             change.end_candidate.is_some() && change.end_candidate == job.start_candidate

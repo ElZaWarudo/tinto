@@ -2624,3 +2624,18 @@
 .delivery-pr__reviewers summary {
   cursor: pointer;
 }
+.delivery-replies__item {
+  display: grid;
+  gap: 8px;
+}
+.delivery-replies__item + .delivery-replies__item {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.delivery-replies__examples summary {
+  cursor: pointer;
+}
+.delivery-replies__examples li {
+  white-space: pre-wrap;
+  margin-top: 4px;
+}

@@ -346,6 +346,8 @@ export interface DeliveryApproval {
   resolve_thread?: boolean;
   /** `pr_reply`: the review comment and its diff, as Tinto read them. */
   thread?: DeliveryCodeThread | null;
+  /** `pr_reply`: the user's latest replies to review comments in the repo, newest first. */
+  style_examples?: string[];
 }
 
 /** A result the user corrected by hand, keeping the one it replaced. */

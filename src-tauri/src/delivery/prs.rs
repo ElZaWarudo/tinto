@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::coordination::found_step;
-use super::model::{DeliveryApproval, DeliveryApprovalStatus, DeliveryRung, DeliveryTask};
+use super::model::{
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryRung, DeliveryTask,
+};
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
 use super::{now_ms, DeliveryError};
@@ -502,10 +504,87 @@ pub trait GitHub: Send + Sync {
     ) -> Result<(), DeliveryError> {
         Err(offline())
     }
+    /// The latest review comments of every PR in `repo` (`owner/name`),
+    /// newest first, as GitHub's REST API lists them.
+    fn repo_review_comments(&self, _repo: &str) -> Result<Value, DeliveryError> {
+        Err(offline())
+    }
 }
 
 fn offline() -> DeliveryError {
     DeliveryError::new("github_unavailable", "GitHub no está conectado")
+}
+
+/// The status label a reply opens with ("Fixed:", "Done.", "Fixed in
+/// abc1234"), if any: the user's replies say what the code does now instead.
+pub fn status_label(body: &str) -> Option<String> {
+    let text = body
+        .trim_start()
+        .trim_start_matches(['*', '_', '>', '#', ' ']);
+    let word: String = text.chars().take_while(|c| c.is_alphabetic()).collect();
+    if !["fixed", "done", "addressed", "resolved"].contains(&word.to_lowercase().as_str()) {
+        return None;
+    }
+    let after = text[word.len()..].trim_start_matches(['*', '_']);
+    let hash = |rest: &str| {
+        rest.split_whitespace()
+            .next()
+            .map(|hash| hash.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
+            .is_some_and(|hash| hash.len() >= 4 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+    };
+    let labelled = match after.chars().next() {
+        None | Some(':' | '.' | ',' | '!' | '\n' | '\r') => true,
+        // "Fixed in abc1234"
+        Some(' ') => after.trim_start().strip_prefix("in ").is_some_and(hash),
+        _ => false,
+    };
+    labelled.then_some(word)
+}
+
+/// The questions of a review comment the reply leaves unanswered: those
+/// none of whose longer words (five letters or more) the reply mentions.
+pub fn unanswered_questions(comment: &str, reply: &str) -> Vec<String> {
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !c.is_alphanumeric())
+            .filter(|word| word.chars().count() >= 5)
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let answered = words(reply);
+    let mut questions = Vec::new();
+    let mut start = 0;
+    for (at, c) in comment.char_indices() {
+        match c {
+            '.' | '!' | '\n' => start = at + 1,
+            '?' => {
+                let question = comment[start..=at].trim();
+                start = at + 1;
+                let asked = words(question);
+                if !asked.is_empty() && !asked.iter().any(|word| answered.contains(word)) {
+                    questions.push(question.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    questions
+}
+
+/// The warning a reply gets when it leaves the review comment's questions
+/// unanswered.
+pub fn unanswered_notice(thread: Option<&DeliveryCodeThread>, reply: &str) -> Option<String> {
+    let comment = thread?.comment.as_ref()?;
+    let unanswered = unanswered_questions(&comment.body, reply);
+    (!unanswered.is_empty()).then(|| {
+        format!(
+            "La respuesta no parece contestar lo que pregunta el revisor: {}",
+            unanswered
+                .iter()
+                .map(|question| format!("«{question}»"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 const COMMENT_GONE: &str = "el comentario ya no existe en GitHub: lo borraron";
@@ -815,6 +894,17 @@ impl GitHub for GhCli {
             ],
             "gh no pudo responder al comentario",
         )
+    }
+
+    fn repo_review_comments(&self, repo: &str) -> Result<Value, DeliveryError> {
+        // One page: enough to find the user's latest replies.
+        let path = format!("repos/{repo}/pulls/comments?sort=created&direction=desc&per_page=100");
+        let output = Self::act(
+            &["api", &path],
+            "gh no pudo leer los comentarios del repositorio",
+        )?;
+        serde_json::from_str(&output)
+            .map_err(|error| DeliveryError::new("github_failed", error.to_string()))
     }
 
     fn comment_on_pr(&self, url: &str, body: &str) -> Result<String, DeliveryError> {
@@ -1134,6 +1224,7 @@ impl DeliveryService {
         if changed {
             self.check_push(&self.task(task_id)?)?;
         }
+        self.sync_conflicted_pr(&pr)?;
         Ok(Some(pr))
     }
 
@@ -1476,6 +1567,7 @@ impl DeliveryService {
             ));
         }
         approval.body = body.to_string();
+        approval.notice = unanswered_notice(approval.thread.as_ref(), body);
         self.save_approval(&approval, "pr_reply_edited")?;
         Ok(approval)
     }
@@ -1534,6 +1626,75 @@ impl DeliveryService {
                 )
             });
         Ok((posted, notice))
+    }
+
+    /// Up to five of the user's latest replies to review comments in the
+    /// task's repository, newest first. Empty when GitHub cannot say.
+    pub(super) fn style_examples(&self, task: &DeliveryTask) -> Vec<String> {
+        let Some(repo) = task_github_repo(task) else {
+            return Vec::new();
+        };
+        let github = self.github();
+        let (Ok(me), Ok(comments)) = (
+            self.github_login(&*github),
+            github.repo_review_comments(&repo),
+        ) else {
+            return Vec::new();
+        };
+        comments
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|comment| {
+                comment["in_reply_to_id"].is_u64()
+                    && comment["user"]["login"].as_str() == Some(me.as_str())
+            })
+            .filter_map(|comment| comment["body"].as_str())
+            .map(|body| body.trim().to_string())
+            .filter(|body| !body.is_empty())
+            .take(5)
+            .collect()
+    }
+
+    /// A review thread is resolved once its fix is on GitHub: no commit of
+    /// the branch that changes the commented file is missing from
+    /// `origin/<branch>`, and the file has nothing uncommitted. Without a
+    /// path, the whole branch is checked.
+    pub(super) fn check_fix_pushed(
+        &self,
+        task: &DeliveryTask,
+        path: &str,
+    ) -> Result<(), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let remote = format!("origin/{}", task.branch);
+        let unpushed = |why: String| {
+            DeliveryError::new(
+                "fix_unpushed",
+                format!("{why}: resolve_thread espera a que el arreglo esté publicado; pide el push y vuelve a pedir la respuesta, o pídela sin resolve_thread"),
+            )
+        };
+        let git = |args: &[&str]| tasks::git(place, &task.worktree, args);
+        if git(&["rev-parse", "--verify", "--quiet", &remote]).is_err() {
+            return Err(unpushed(format!(
+                "la rama {} no está publicada",
+                task.branch
+            )));
+        }
+        let range = format!("{remote}..HEAD");
+        let (only, what) = match path {
+            "" => (Vec::new(), "la rama"),
+            path => (vec!["--", path], path),
+        };
+        let commits = git(&[&["log", "--format=%h", &range][..], &only].concat())?;
+        if let Some(commit) = commits.lines().next() {
+            return Err(unpushed(format!(
+                "el commit {commit}, que cambia {what}, no está en {remote}"
+            )));
+        }
+        if !git(&[&["status", "--porcelain"][..], &only].concat())?.is_empty() {
+            return Err(unpushed(format!("{what} tiene cambios sin commit")));
+        }
+        Ok(())
     }
 
     /// Asks the PR step's reviewers on GitHub once its PR is linked, once.

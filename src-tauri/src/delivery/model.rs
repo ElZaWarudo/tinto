@@ -756,6 +756,10 @@ pub struct DeliveryApproval {
     /// from GitHub when the reply was asked.
     #[serde(default)]
     pub thread: Option<DeliveryCodeThread>,
+    /// `pr_reply` only: the user's latest replies to review comments in the
+    /// same repository, newest first, for the reply to match their style.
+    #[serde(default)]
+    pub style_examples: Vec<String>,
 }
 
 /// A result the user corrected by hand, for what Tinto cannot check.
@@ -1104,17 +1108,28 @@ pub struct DeliveryEvent {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliverySettings {
     /// Agents running at once. 0 is automatic: one per active task (each
-    /// issue), up to [`MAX_CAPACITY`].
+    /// issue), up to what the machine's cores bear ([`auto_capacity_limit`]).
     pub capacity: u32,
 }
 
 pub const MAX_CAPACITY: u32 = 8;
 
+/// Most jobs the automatic capacity runs at once: one per physical core
+/// (about half the logical ones), less one for Tinto's checks, at least 2.
+/// More jobs than that slow each other down: a type check that takes a
+/// minute alone took up to 17 with five jobs on four cores.
+pub fn auto_capacity_limit(logical_cores: usize) -> u32 {
+    ((logical_cores / 2).saturating_sub(1) as u32).clamp(2, MAX_CAPACITY)
+}
+
 impl DeliverySettings {
     /// How many agents may run now, given the active tasks.
     pub fn effective_capacity(&self, active_tasks: usize) -> u32 {
         match self.capacity {
-            0 => (active_tasks as u32).clamp(1, MAX_CAPACITY),
+            0 => {
+                let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+                (active_tasks as u32).clamp(1, auto_capacity_limit(cores))
+            }
             fixed => fixed.min(MAX_CAPACITY),
         }
     }

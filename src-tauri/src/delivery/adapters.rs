@@ -292,6 +292,7 @@ pub fn job_prompt(
         if !commands.is_empty() {
             lines.push(format!("The repo's checks: {}.", commands.join("; ")));
         }
+        lines.push("Run commands in the foreground and read their output when they end, with a time limit (`timeout`) on a slow one. Start one in the background only when it outlasts your shell's limit, and then wait for it once, not with repeated polls. To wait for a server you started, use one bounded readiness check (for example `curl --retry 30 --retry-delay 2 --retry-all-errors <url>`).".to_string());
     }
     if let Some(merge) = &job.merge_conflicts {
         let files = merge.files.join(", ");

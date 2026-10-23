@@ -297,6 +297,28 @@ impl DeliveryService {
         }
         drop(store);
         self.notify();
+        // Past the brainstorm nothing waits for the user: each problem goes
+        // to the coordinator with QA's recommended fix.
+        if self.unattended(task)? {
+            let choices: Vec<QaProblemChoice> = self
+                .task_qa_problems(&task.id)?
+                .into_iter()
+                .filter(|problem| {
+                    problem.status == DeliveryQaProblemStatus::Open
+                        && problem.job_id.as_deref() == Some(job_id)
+                })
+                .map(|problem| QaProblemChoice {
+                    solution: problem.suggestions.first().cloned().unwrap_or_else(|| {
+                        "QA no propuso una solución: arréglalo según lo que describe el problema"
+                            .to_string()
+                    }),
+                    problem_id: problem.id,
+                })
+                .collect();
+            if !choices.is_empty() {
+                self.send_qa_problems(&task.id, &choices)?;
+            }
+        }
         Ok(added)
     }
 

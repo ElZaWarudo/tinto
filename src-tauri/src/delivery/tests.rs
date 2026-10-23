@@ -4298,6 +4298,8 @@ fn a_sync_with_conflicts_goes_back_to_implementation_and_a_commit_concludes_it()
     // The implementation job is told what to resolve.
     let job = h.dispatch(&task, "implementation", "events=codex-ok");
     let conflicts = job.merge_conflicts.clone().unwrap();
+    // Resolving a merge gets more time than a stage's usual hour.
+    assert_eq!(job.timeout_minutes, 120);
     assert_eq!(conflicts.base, "main");
     assert_eq!(conflicts.files, ["shared.txt"]);
     let paths = super::adapters::JobPaths::in_dir(h.repo.path().join("job"));
@@ -4590,6 +4592,12 @@ impl super::prs::GitHub for FakeGitHub {
     ) -> Result<serde_json::Value, super::DeliveryError> {
         assert_eq!((repo, number), ("o/r", 299));
         Ok(self.review_comments.lock().unwrap().clone())
+    }
+    fn repo_review_comments(&self, repo: &str) -> Result<serde_json::Value, super::DeliveryError> {
+        assert_eq!(repo, "o/r");
+        let mut comments = self.review_comments.lock().unwrap().clone();
+        comments.as_array_mut().unwrap().reverse();
+        Ok(comments)
     }
     fn reply_to_review_comment(
         &self,
@@ -5735,12 +5743,18 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
 }
 
 #[test]
-fn automatic_capacity_runs_one_agent_per_active_task() {
+fn automatic_capacity_runs_one_agent_per_active_task_up_to_what_the_cores_bear() {
+    use super::model::auto_capacity_limit;
+    // One per physical core (half the logical ones), less one for checks.
+    assert_eq!(auto_capacity_limit(8), 3);
+    assert_eq!(auto_capacity_limit(32), 8);
+    assert_eq!(auto_capacity_limit(2), 2);
+    let limit = auto_capacity_limit(std::thread::available_parallelism().unwrap().get());
     let automatic = DeliverySettings { capacity: 0 };
     assert_eq!(automatic.effective_capacity(0), 1);
-    assert_eq!(automatic.effective_capacity(5), 5);
-    assert_eq!(automatic.effective_capacity(12), 8);
-    assert_eq!(DeliverySettings { capacity: 2 }.effective_capacity(5), 2);
+    assert_eq!(automatic.effective_capacity(2), 2);
+    assert_eq!(automatic.effective_capacity(12), limit);
+    assert_eq!(DeliverySettings { capacity: 5 }.effective_capacity(1), 5);
 
     let h = harness();
     h.service.update_settings(automatic).unwrap();
@@ -5748,7 +5762,10 @@ fn automatic_capacity_runs_one_agent_per_active_task() {
         h.task(key);
     }
     let overview = h.service.overview().unwrap();
-    assert_eq!((overview.settings.capacity, overview.capacity), (0, 4));
+    assert_eq!(
+        (overview.settings.capacity, overview.capacity),
+        (0, 4.min(limit))
+    );
 }
 
 #[test]
@@ -6916,6 +6933,13 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
          "body": "typo", "diff_hunk": "@@ -1,1 +1,1 @@\n+x"}
     ]);
     h.service.set_github(github.clone());
+    // The fix is published, so the threads can be resolved.
+    let task = h.service.task(&task_id).unwrap();
+    let remote = format!("refs/remotes/origin/{}", task.branch);
+    git(
+        &PathBuf::from(plain_path(&task.worktree)),
+        &["update-ref", &remote, "HEAD"],
+    );
     // Past the brainstorm a reply still waits for the user.
     h.service.end_brainstorm(&coordinator.run_id).unwrap();
     let ask = |url: &str, body: &str| {
@@ -6928,7 +6952,7 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
 
     let asked = ask(
         "https://github.com/o/r/pull/299#discussion_r2107",
-        "Fixed in abc123.",
+        "The CLI now deletes only folders it installed (abc123).",
     );
     let reply = &asked["structuredContent"];
     assert_eq!(reply["status"], "pending", "{asked}");
@@ -6950,7 +6974,10 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
         general["structuredContent"]["thread"],
         serde_json::Value::Null
     );
-    let gone = ask("https://github.com/o/r/pull/299#discussion_r2200", "Done.");
+    let gone = ask(
+        "https://github.com/o/r/pull/299#discussion_r2200",
+        "The typo is gone.",
+    );
     let gone_id = gone["structuredContent"]["id"]
         .as_str()
         .unwrap()
@@ -6969,17 +6996,23 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
     // The user's edited text is what is posted, in the thread's first
     // comment, and the thread is resolved.
     h.service
-        .set_reply_body(&reply_id, "Fixed in abc123, thanks.")
+        .set_reply_body(
+            &reply_id,
+            "The CLI now deletes only folders it installed. A new test checks it (abc123).",
+        )
         .unwrap();
     let posted = h.service.decide_approval(&reply_id, true, None).unwrap();
     assert_eq!(posted.status, DeliveryApprovalStatus::Executed);
-    assert_eq!(posted.body, "Fixed in abc123, thanks.");
+    assert_eq!(
+        posted.body,
+        "The CLI now deletes only folders it installed. A new test checks it (abc123)."
+    );
     let url = posted.outcome.clone().unwrap();
     assert!(url.contains("#discussion_r9"), "{url}");
     assert_eq!(
         github.actions.lock().unwrap().as_slice(),
         [
-            "reply 2105 Fixed in abc123, thanks.".to_string(),
+            "reply 2105 The CLI now deletes only folders it installed. A new test checks it (abc123).".to_string(),
             "resolve 2105".to_string()
         ]
     );
@@ -6988,7 +7021,7 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
     // is taken as it, nothing is posted twice.
     let again = ask(
         "https://github.com/o/r/pull/299#discussion_r2105",
-        "Fixed in abc123, thanks.",
+        "The CLI now deletes only folders it installed. A new test checks it (abc123).",
     );
     let again = h
         .service
@@ -7030,6 +7063,106 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
     assert_eq!(failed.status, DeliveryApprovalStatus::Failed);
     assert!(failed.outcome.unwrap().contains("ya no existe"));
     assert_eq!(github.actions.lock().unwrap().len(), 4);
+}
+
+#[test]
+fn a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed_fix() {
+    let h = harness();
+    github_origin(&h);
+    let coordinator = Coordinator::start(&h);
+    let (task_id, worktree) = coordinator.task("R-3");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    let mut comments = vec![json!(
+        {"id": 3000, "path": "README.md", "line": 1, "position": 1,
+         "html_url": "https://github.com/o/r/pull/299#discussion_r3000",
+         "user": {"login": "Sn4pe"}, "created_at": "2026-10-19T10:00:00Z",
+         "body": "Is the dialog shown again after leaving? Also, typo here.",
+         "diff_hunk": "@@ -1,1 +1,1 @@\n+base"}
+    )];
+    // Oldest first: six replies of the user, one of someone else and a
+    // comment of the user's that starts a thread.
+    for n in 1..=6 {
+        comments.push(json!({"id": 3000 + n, "in_reply_to_id": 3000,
+            "user": {"login": "me"}, "body": format!("The leave dialog now says {n}.")}));
+    }
+    comments
+        .push(json!({"id": 3010, "in_reply_to_id": 3000, "user": {"login": "ana"}, "body": "ok"}));
+    comments.push(
+        json!({"id": 3011, "user": {"login": "me"}, "body": "a review comment", "path": "a.ts"}),
+    );
+    *github.review_comments.lock().unwrap() = json!(comments);
+    h.service.set_github(github);
+    let ask = |body: &str, resolve: bool| {
+        coordinator.write(
+            "request_approval",
+            json!({"task_id": task_id, "rung": "pr_reply",
+                   "comment_url": "https://github.com/o/r/pull/299#discussion_r3000",
+                   "body": body, "resolve_thread": resolve}),
+        )
+    };
+    let withdraw = |reply: &serde_json::Value| {
+        h.service
+            .withdraw_approval(reply["structuredContent"]["id"].as_str().unwrap(), "again")
+            .unwrap();
+    };
+
+    // A status label opening the reply is refused, naming the rule.
+    for body in [
+        "Fixed: the typo.",
+        "Done.",
+        "**Addressed** in 4f54085",
+        "resolved",
+    ] {
+        let refused = error_text(&ask(body, false));
+        assert!(refused.contains("etiquetas de estado"), "{body}: {refused}");
+    }
+
+    // The user's five latest replies come with it, newest first, and an
+    // unanswered question is warned about.
+    let asked = ask("The typo is gone. Tests cover it.", false);
+    let reply = &asked["structuredContent"];
+    assert_eq!(
+        reply["style_examples"],
+        json!([6, 5, 4, 3, 2].map(|n| format!("The leave dialog now says {n}.")))
+    );
+    let notice = reply["notice"].as_str().unwrap_or_default();
+    assert!(
+        notice.contains("«Is the dialog shown again after leaving?»"),
+        "{asked}"
+    );
+    // Answered once edited: the warning goes.
+    let id = reply["id"].as_str().unwrap();
+    let edited = h
+        .service
+        .set_reply_body(id, "The dialog is not shown again after leaving.")
+        .unwrap();
+    assert_eq!(edited.notice, None);
+    withdraw(&asked);
+
+    // Resolving waits for the fix to be on the remote branch.
+    let task = h.service.task(&task_id).unwrap();
+    let remote = format!("refs/remotes/origin/{}", task.branch);
+    let refused = error_text(&ask("The dialog now closes once.", true));
+    assert!(refused.contains("no está publicada"), "{refused}");
+    git(&worktree, &["update-ref", &remote, "HEAD"]);
+    std::fs::write(worktree.join("README.md"), "fixed\n").unwrap();
+    let refused = error_text(&ask("The dialog now closes once.", true));
+    assert!(
+        refused.contains("README.md tiene cambios sin commit"),
+        "{refused}"
+    );
+    git(&worktree, &["commit", "-qam", "fix"]);
+    let refused = error_text(&ask("The dialog now closes once.", true));
+    assert!(
+        refused.contains("que cambia README.md, no está en origin/"),
+        "{refused}"
+    );
+    git(&worktree, &["update-ref", &remote, "HEAD"]);
+    let asked = ask("The dialog now closes once.", true);
+    assert_eq!(
+        asked["structuredContent"]["resolve_thread"], true,
+        "{asked}"
+    );
 }
 
 #[test]
@@ -7218,6 +7351,138 @@ fn qa_problems_wait_for_the_user_and_reach_the_coordinator_and_the_next_qa() {
         .map(|problem| (problem.number, problem.text.as_str()))
         .collect();
     assert_eq!(open, [(4, "The toast covers Retry on mobile.")]);
+}
+
+#[test]
+fn past_the_brainstorm_qa_problems_go_to_the_coordinator_with_qas_fix() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("Q-9");
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    let task = h.service.task(&task_id).unwrap();
+    let qa = h.dispatch(&task, "qa", "events=codex-ok record=problems");
+    h.wait(&qa.id);
+
+    let sent: Vec<_> = h
+        .service
+        .task_qa_problems(&task_id)
+        .unwrap()
+        .into_iter()
+        .map(|problem| (problem.status, problem.solution.unwrap_or_default()))
+        .collect();
+    let status = super::model::DeliveryQaProblemStatus::Sent;
+    assert_eq!(
+        sent,
+        [
+            (status, "Move the toast up.".to_string()),
+            (status, "Let the menu scroll.".to_string())
+        ]
+    );
+    let round = h.service.overview().unwrap().phases[&task_id].round.clone();
+    assert!(round.is_some(), "a round opens for them");
+}
+
+#[test]
+fn past_the_brainstorm_the_jira_steps_tinto_runs_go_through() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("AGOS-455");
+    let jira = Arc::new(FakeJira {
+        status: std::sync::Mutex::new("Por hacer".into()),
+        workflow: vec![("Por hacer", "151", "Submit for Review", "In Review")],
+        writes: std::sync::Mutex::new(Vec::new()),
+    });
+    h.service.set_jira(jira.clone());
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    let ask = || {
+        coordinator.write(
+            "request_approval",
+            json!({"task_id": task_id, "rung": "jira", "stage": "after_pr", "title": "AGOS-455"}),
+        )["structuredContent"]
+            .clone()
+    };
+
+    // Without Jira in Tinto the coordinator runs it, so the user approves it.
+    let manual = ask();
+    assert_eq!(manual["status"], "pending", "{manual}");
+    h.service
+        .withdraw_approval(manual["id"].as_str().unwrap(), "Jira set")
+        .unwrap();
+
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.jira = Some(super::model::DeliveryJiraSettings {
+        host: "https://jira.test".into(),
+        project: "AGOS".into(),
+        after_pr: vec!["In Review".into()],
+        after_merge: vec!["Cerrada".into()],
+        has_token: false,
+    });
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    h.service.set_jira_token(h.repo.path(), "secret").unwrap();
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/279").unwrap();
+    h.service.link_pr(&task_id, &reference).unwrap();
+
+    let done = ask();
+    assert_eq!(done["status"], "executed", "{done}");
+    assert_eq!(*jira.status.lock().unwrap(), "In Review");
+}
+
+#[test]
+fn past_the_brainstorm_a_pr_with_conflicts_brings_its_base_in() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("S-9");
+    let task = h.service.task(&task_id).unwrap();
+    diverge_from_main(&h, &task, true);
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/281").unwrap();
+    h.service.link_pr(&task_id, &reference).unwrap();
+    let mut pr = h.service.task_pr(&task_id).unwrap().unwrap();
+    pr.state = "open".into();
+    pr.conflicts = true;
+    let syncs = || {
+        h.service
+            .store()
+            .unwrap()
+            .approvals()
+            .unwrap()
+            .into_iter()
+            .filter(|approval| approval.rung == DeliveryRung::Sync)
+            .collect::<Vec<_>>()
+    };
+
+    // During the brainstorm the coordinator decides.
+    h.service.sync_conflicted_pr(&pr).unwrap();
+    assert!(syncs().is_empty());
+
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    h.service.sync_conflicted_pr(&pr).unwrap();
+    let [sync] = syncs().try_into().unwrap();
+    assert_eq!(
+        sync.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        sync.outcome
+    );
+    assert_eq!(sync.requested_by, "auto");
+    assert_eq!(
+        sync.title,
+        format!("Merge branch 'main' into {}", task.branch)
+    );
+    assert_eq!(sync.conflicts, ["shared.txt"]);
+    let phase = h.service.overview().unwrap().phases[&task_id].clone();
+    assert_eq!(phase.next_stage.as_deref(), Some("implementation"));
+    // Read again while the merge is in progress: no second sync.
+    h.service.sync_conflicted_pr(&pr).unwrap();
+    assert_eq!(syncs().len(), 1);
 }
 
 #[test]
@@ -7713,6 +7978,7 @@ fn a_stage_after_passing_checks_is_told_not_to_run_them_again() {
         h.wait(&review.id).task_checks,
         [
             "Tinto runs this task's checks itself on what each stage changes: `exit=0`.",
+            "Do not run these checks, builds, linters, type checkers or test suites to review: Tinto runs them on every stage's result and sends failures back. Review by reading the change; run a test only to confirm a specific doubt.",
             "They all passed on the code you start from: do not run them again.",
         ]
     );
@@ -8904,4 +9170,142 @@ fn a_queued_job_says_what_holds_it() {
     assert!(read["queued_warning"].is_string());
     let running = mcp_tool(&h, "read_job", json!({"job_id": "checks-1"}));
     assert_eq!(running.get("queued_reason"), None);
+}
+
+#[test]
+fn tintos_checks_run_one_at_a_time_across_tasks() {
+    use super::adapters::tests::sample_job;
+    let h = harness();
+    let (first, second) = (h.task("K-1"), h.task("K-2"));
+    let now = super::now_ms();
+    let check = |id: &str, task: &DeliveryTask, status: DeliveryJobStatus| {
+        let mut job = sample_job(DeliveryAgent::Shell);
+        job.id = id.into();
+        job.task_id = task.id.clone();
+        job.role = "checks".into();
+        job.prompt = "npm run typecheck".into();
+        job.status = status;
+        job.created_at_ms = now;
+        job.started_at_ms = (status == DeliveryJobStatus::Started).then_some(now);
+        job.pid = None;
+        job
+    };
+    // An agent of the second task may run beside the first task's check.
+    let mut agent = sample_job(DeliveryAgent::Codex);
+    agent.id = "review-2".into();
+    agent.task_id = second.id.clone();
+    agent.role = "review".into();
+    agent.created_at_ms = now - 1;
+    {
+        let store = h.service.store().unwrap();
+        store
+            .put_job(&check("check-1", &first, DeliveryJobStatus::Started))
+            .unwrap();
+        store.put_job(&agent).unwrap();
+    }
+    let overview = h.service.overview().unwrap();
+    assert_eq!(overview.queued["review-2"].reason, "empieza ahora");
+    h.service.cancel("review-2").unwrap();
+
+    h.service
+        .store()
+        .unwrap()
+        .put_job(&check("check-2", &second, DeliveryJobStatus::Queued))
+        .unwrap();
+    let overview = h.service.overview().unwrap();
+    assert_eq!(
+        overview.queued["check-2"].reason,
+        "espera a que termine otra comprobación (trabajo check-1): corren de una en una para no repartirse los núcleos"
+    );
+}
+
+#[test]
+fn a_job_cut_off_by_a_restart_goes_on_in_its_session_when_retried() {
+    let h = harness();
+    let task = h.task("C-9");
+    let mut cut = h.wait(&h.dispatch(&task, "implementation", "events=codex-ok").id);
+    assert!(cut.provider_session_id.is_some());
+    cut.status = DeliveryJobStatus::Interrupted;
+    cut.error = Some("Tinto se cerró mientras el trabajo corría.".into());
+    h.service.store().unwrap().put_job(&cut).unwrap();
+    h.service.retry_after_restart(&cut.id).unwrap();
+    let retry = h
+        .service
+        .overview()
+        .unwrap()
+        .jobs
+        .into_iter()
+        .find(|job| job.retry_of.as_deref() == Some(cut.id.as_str()))
+        .expect("queued again");
+    assert_eq!(retry.resumes.as_deref(), Some(cut.id.as_str()));
+    assert_eq!(retry.provider_session_id, cut.provider_session_id);
+    assert!(retry.resume_note.unwrap().contains("Tinto se cerró"));
+    h.wait(&retry.id);
+
+    // One that never started its session starts over.
+    let mut silent = h.wait(&h.dispatch(&task, "review", "events=none").id);
+    silent.status = DeliveryJobStatus::Interrupted;
+    silent.provider_session_id = Some("never-started".into());
+    h.service.store().unwrap().put_job(&silent).unwrap();
+    h.service.retry_after_restart(&silent.id).unwrap();
+    let again = h
+        .service
+        .overview()
+        .unwrap()
+        .jobs
+        .into_iter()
+        .find(|job| job.retry_of.as_deref() == Some(silent.id.as_str()))
+        .expect("queued again");
+    assert_eq!(again.resumes, None);
+    h.wait(&again.id);
+}
+
+#[test]
+fn the_brainstorm_ends_once_every_task_of_the_run_is_being_implemented() {
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (first, _) = coordinator.task("B-1");
+    let (second, _) = coordinator.task("B-2");
+    let unattended = || h.service.run(&coordinator.run_id).unwrap().unattended;
+    let implement = |task_id: &str| {
+        let task = h.service.task(task_id).unwrap();
+        let job = h.dispatch(&task, "implementation", "events=codex-ok");
+        h.wait(&job.id);
+    };
+    implement(&first);
+    assert!(!unattended(), "B-2 is not implemented yet");
+    // A decision still open keeps it going.
+    coordinator.write(
+        "request_decisions",
+        json!({"task_id": second, "decisions": [
+            {"kind": "text", "question": "Button text?", "text": "Save"}
+        ]}),
+    );
+    let pending = h.service.task_decisions(&second).unwrap();
+    let task = h.service.task(&second).unwrap();
+    assert!(h
+        .service
+        .dispatch(NewJob {
+            task_id: task.id.clone(),
+            role: "implementation".into(),
+            agent: DeliveryAgent::Codex,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=codex-ok".into(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
+            needs_environment: false,
+        })
+        .is_err());
+    assert!(!unattended());
+    h.service
+        .answer_decision(&pending[0].id, "Save", "user")
+        .unwrap();
+    implement(&second);
+    assert!(unattended());
 }

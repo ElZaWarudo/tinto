@@ -18,6 +18,12 @@ use super::service::{
 use super::store::DeliveryStore;
 use super::DeliveryError;
 
+/// One of Tinto's own checks: a verification command run on a stage's
+/// result.
+fn is_check(job: &DeliveryJob) -> bool {
+    job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE
+}
+
 /// What holds a queued job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Hold {
@@ -32,6 +38,9 @@ pub(super) enum Hold {
     Environment(Option<String>),
     /// As many jobs run as the capacity allows.
     Capacity,
+    /// Another of Tinto's checks runs: they compete for the same cores, so
+    /// one at a time.
+    CheckRunning(String),
     /// Its exclusive resource is held, or others asked for it first.
     Lease(String),
 }
@@ -123,16 +132,24 @@ impl Queue {
             .filter(|job| job.status.is_active())
             .map(|job| (job.task_id.clone(), job.id.clone()))
             .collect();
+        let mut checking = self
+            .jobs
+            .iter()
+            .find(|job| job.status.is_active() && is_check(job))
+            .map(|job| job.id.clone());
         let mut plan = Vec::new();
         for job in self
             .jobs
             .iter()
             .filter(|job| job.status == DeliveryJobStatus::Queued)
         {
-            let hold = self.hold(job, &busy, running, &mut leases, now);
+            let hold = self.hold(job, &busy, running, checking.as_deref(), &mut leases, now);
             if hold.is_none() {
                 busy.insert(job.task_id.clone(), job.id.clone());
                 running += 1;
+                if is_check(job) {
+                    checking = Some(job.id.clone());
+                }
             }
             plan.push((job.id.clone(), hold));
         }
@@ -144,6 +161,7 @@ impl Queue {
         job: &DeliveryJob,
         busy: &HashMap<String, String>,
         running: usize,
+        checking: Option<&str>,
         leases: &mut Vec<DeliveryLease>,
         now: u64,
     ) -> Option<Hold> {
@@ -169,6 +187,9 @@ impl Queue {
                 None if !fresh => return Some(Hold::Environment(None)),
                 None => {}
             }
+        }
+        if let Some(other) = checking.filter(|_| is_check(job)) {
+            return Some(Hold::CheckRunning(other.to_string()));
         }
         if running >= self.capacity {
             return Some(Hold::Capacity);
@@ -272,6 +293,12 @@ impl Queue {
             }
             Hold::Environment(Some(problem)) => (format!("espera al entorno: {problem}"), None),
             Hold::Environment(None) => ("espera a la comprobación del entorno".into(), None),
+            Hold::CheckRunning(other_id) => (
+                format!(
+                    "espera a que termine otra comprobación (trabajo {other_id}): corren de una en una para no repartirse los núcleos"
+                ),
+                self.job(other_id).and_then(|other| self.stuck(other, now)),
+            ),
             Hold::Capacity => {
                 let running = self
                     .jobs

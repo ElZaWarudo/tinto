@@ -73,6 +73,7 @@ const client = vi.hoisted(() => ({
   deliveryPrToDraft: vi.fn(() => Promise.resolve(null)),
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
   getDeliveryPrReviewers: vi.fn((): Promise<string[]> => Promise.resolve([])),
+  changeDeliveryPrReviewers: vi.fn(),
   correctDeliveryApproval: vi.fn(),
   archiveDeliveryTask: vi.fn(),
   getArchivedDeliveryTasks: vi.fn(),
@@ -3301,14 +3302,15 @@ describe("DeliveryPanel", () => {
     expect(client.getDeliveryPrReviewers).toHaveBeenCalledWith("t1");
   });
 
-  it("shows a reply to a reviewer with its comment, posts the edited text and lists the posted ones", async () => {
+  it("shows every pending reply to a reviewer in one place, with the user's style, and posts the edited texts", async () => {
     const user = userEvent.setup();
     const reply = (over: Partial<DeliveryApproval>): DeliveryApproval => ({
       id: "r1",
       task_id: "t1",
       rung: "pr_reply",
       title: "Respuesta a Sn4pe",
-      body: "Fixed in abc123.",
+      body: "The CLI now deletes only folders it installed.",
+      style_examples: ["The leave dialog now says why. Tests cover it."],
       status: "pending",
       requested_by: "coord",
       requested_at_ms: 1,
@@ -3338,6 +3340,12 @@ describe("DeliveryPanel", () => {
         approvals: [
           reply({}),
           reply({
+            id: "r2",
+            title: "Respuesta a luis",
+            body: "The typo is gone.",
+            notice: "La respuesta no parece contestar lo que pregunta el revisor: «Why?»",
+          }),
+          reply({
             id: "r0",
             title: "Respuesta a ana",
             status: "executed",
@@ -3348,23 +3356,41 @@ describe("DeliveryPanel", () => {
       }),
     );
     client.decideDeliveryApproval.mockResolvedValue({});
+    client.changeDeliveryPrReviewers.mockResolvedValue(null);
     renderPanel();
-    const banner = await openStep("Revisar respuesta al revisor", "pr_reply");
-    expect(within(banner).getByText("A folder the CLI did not install is deleted.")).toBeTruthy();
-    const text = within(banner).getByRole("textbox", { name: "Respuesta, tal como se publicará" });
+    expect(await screen.findByText("Aprobar 2 respuestas a los revisores")).toBeTruthy();
+    const banner = await openStep("Revisar las respuestas a los revisores", "pr_reply");
+    expect(within(banner).getByText("The leave dialog now says why. Tests cover it.")).toBeTruthy();
+    const first = within(banner).getByRole("region", { name: "Respuesta a Sn4pe" });
+    expect(within(first).getByText("A folder the CLI did not install is deleted.")).toBeTruthy();
+    const second = within(banner).getByRole("region", { name: "Respuesta a luis" });
+    expect(within(second).getByText(/no parece contestar/)).toBeTruthy();
+    // The reviewer is asked again unless unticked.
+    expect(
+      (within(banner).getByRole("checkbox", { name: "Sn4pe" }) as HTMLInputElement).checked,
+    ).toBe(true);
+    const text = within(first).getByRole("textbox", { name: "Respuesta, tal como se publicará" });
     await user.clear(text);
-    await user.type(text, "Fixed in abc123, thanks.");
-    await user.click(
-      within(banner).getByRole("button", { name: "Aprobar y responder con tu texto" }),
-    );
+    await user.type(text, "Only folders the CLI installed are deleted now.");
+    await user.click(within(banner).getByRole("button", { name: "Aprobar y responder las 2" }));
     await waitFor(() =>
       expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
-        "r1",
+        "r2",
         true,
         undefined,
         undefined,
-        "Fixed in abc123, thanks.",
+        "The typo is gone.",
       ),
+    );
+    expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
+      "r1",
+      true,
+      undefined,
+      undefined,
+      "Only folders the CLI installed are deleted now.",
+    );
+    await waitFor(() =>
+      expect(client.changeDeliveryPrReviewers).toHaveBeenCalledWith("t1", ["Sn4pe"], []),
     );
     const posted = screen.getByRole("listitem", { name: "Respuesta a ana" });
     expect(

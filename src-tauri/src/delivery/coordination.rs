@@ -326,6 +326,7 @@ pub(super) fn found_step(
         comment_url: None,
         resolve_thread: false,
         thread: None,
+        style_examples: Vec::new(),
     }
 }
 
@@ -918,6 +919,14 @@ impl DeliveryService {
                     "la respuesta necesita su texto exacto en body",
                 ));
             }
+            if let Some(label) = super::prs::status_label(&request.body) {
+                return Err(DeliveryError::new(
+                    "reply_status_label",
+                    format!(
+                        "la respuesta empieza con la etiqueta «{label}» y la regla es no abrir con etiquetas de estado (Fixed, Done, Addressed, Resolved): empieza por lo que hace el código ahora, en presente, como en style_examples"
+                    ),
+                ));
+            }
             let thread = if super::threads::parse_comment_url(url).is_some() {
                 let reference = super::threads::NewReference {
                     comment_url: Some(url.to_string()),
@@ -932,6 +941,18 @@ impl DeliveryService {
                     "comment_url tiene que ser un comentario de revisión (…/pull/<n>#discussion_r<id>) o el PR, para un comentario general",
                 ));
             };
+            if request.resolve_thread {
+                match thread.as_ref().filter(|thread| thread.error.is_none()) {
+                    Some(thread) => self.check_fix_pushed(&task, &thread.path)?,
+                    None if thread.is_some() => {
+                        return Err(DeliveryError::new(
+                            "fix_unpushed",
+                            "no se pudo leer el comentario para comprobar que su arreglo está publicado: pide la respuesta sin resolve_thread",
+                        ))
+                    }
+                    None => {}
+                }
+            }
             (Some(url.to_string()), thread)
         } else {
             (None, None)
@@ -1053,6 +1074,8 @@ impl DeliveryService {
         let mut commits = Vec::new();
         let mut left_out = Vec::new();
         let mut single_commit_reason = None;
+        let mut notice = None;
+        let mut style_examples = Vec::new();
         let merge_head = match request.rung {
             DeliveryRung::Commit => tasks::merge_head(place, &task.worktree),
             _ => None,
@@ -1139,6 +1162,8 @@ impl DeliveryService {
                     Some(comment) => format!("Respuesta a {}", comment.author),
                     None => "Respuesta en el PR".to_string(),
                 };
+                notice = super::prs::unanswered_notice(thread.as_ref(), &body);
+                style_examples = self.style_examples(&task);
             }
             _ => {}
         }
@@ -1159,11 +1184,12 @@ impl DeliveryService {
             created: Vec::new(),
             before: None,
             tip: None,
-            notice: None,
+            notice,
             corrections: Vec::new(),
             resolve_thread: reply && request.resolve_thread,
             comment_url,
             thread,
+            style_examples,
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.clone(),
             rung: request.rung,
@@ -1188,11 +1214,17 @@ impl DeliveryService {
         drop(store);
         self.notify();
         // Past the brainstorm the branch is committed and published without
-        // stopping; opening the PR still waits for the user.
-        if matches!(
-            approval.rung,
-            DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
-        ) && self.unattended(&task)?
+        // stopping, and the Jira steps Tinto runs itself go through; opening
+        // the PR and merging it still wait for the user.
+        let tinto_runs_jira = approval.rung == DeliveryRung::Jira
+            && (!approval.jira_statuses.is_empty()
+                || (approval.jira_link_only && self.jira_site(&task.repo)?.is_some()));
+        if (tinto_runs_jira
+            || matches!(
+                approval.rung,
+                DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
+            ))
+            && self.unattended(&task)?
         {
             return self.decide_approval(&approval.id, true, None);
         }
@@ -1294,6 +1326,7 @@ impl DeliveryService {
                 Err(error) => {
                     approval.status = DeliveryApprovalStatus::Failed;
                     approval.outcome = Some(error.message);
+                    approval.notice = None;
                 }
             }
         }
@@ -1595,6 +1628,44 @@ impl DeliveryService {
             .task_pr(&task.id)?
             .and_then(|pr| pr.base)
             .unwrap_or_else(|| task.base_ref.clone()))
+    }
+
+    /// Past the brainstorm a PR with conflicts brings its base in without
+    /// waiting for anyone: Tinto asks the sync itself, which runs as it is
+    /// asked, and the conflicts it leaves go to an implementation job. When
+    /// it cannot start now (a job running, a merge in progress, changes not
+    /// committed) the coordinator sees the conflicts on the PR.
+    pub(super) fn sync_conflicted_pr(
+        &self,
+        pr: &super::prs::DeliveryPr,
+    ) -> Result<(), DeliveryError> {
+        if !pr.is_open() || !pr.conflicts {
+            return Ok(());
+        }
+        let task = self.task(&pr.task_id)?;
+        if !self.unattended(&task)? {
+            return Ok(());
+        }
+        let base = self.sync_base(&task)?;
+        let request = NewApproval {
+            task_id: task.id.clone(),
+            rung: DeliveryRung::Sync,
+            title: format!("Merge branch '{base}' into {}", task.branch),
+            body: String::new(),
+            requested_by: super::decisions::AUTO.to_string(),
+            commits: Vec::new(),
+            merge_method: None,
+            stage: None,
+            jira_statuses: Vec::new(),
+            leave_out: Vec::new(),
+            single_commit_reason: None,
+            comment_url: None,
+            resolve_thread: false,
+        };
+        if let Err(error) = self.request_approval(request) {
+            eprintln!("tinto: delivery did not sync {}: {error}", task.key);
+        }
+        Ok(())
     }
 
     /// A sync starts from a clean worktree no job is changing, with no merge
