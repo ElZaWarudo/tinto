@@ -202,6 +202,13 @@ fn stem(reference: &str) -> String {
         .unwrap_or_default()
 }
 
+fn file_name(reference: &str) -> String {
+    Path::new(reference)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn shot(label: &str, reference: &str) -> Shot {
     let name = stem(reference);
     let label = match label.trim() {
@@ -288,10 +295,13 @@ fn render_panel(
             .iter()
             .enumerate()
             .map(|(index, shot)| {
+                // A long label is cut short on screen; the title keeps it whole.
+                let label = tab_label(&shot.label);
                 format!(
-                    r#"<button role="tab" aria-selected="{}">{}</button>"#,
+                    r#"<button role="tab" aria-selected="{}" title="{}">{}</button>"#,
                     index == 0,
-                    inline(&tab_label(&shot.label))
+                    escape(&label),
+                    inline(&label)
                 )
             })
             .collect();
@@ -302,11 +312,13 @@ fn render_panel(
     let mut figures = String::new();
     for (index, shot) in shots.iter().enumerate() {
         figures.push_str(&format!(
-            r#"<figure class="shot{}"><img src="{}" alt="{}" data-section="{}" loading="lazy"></figure>"#,
+            r#"<figure class="shot{}"><img src="{}" alt="{}" data-section="{}" data-file="{}" loading="lazy"><figcaption><code>{}</code></figcaption></figure>"#,
             if index == 0 { " on" } else { "" },
             data_uri(&shot.reference, base)?,
             escape(&shot.label),
-            escape(section)
+            escape(section),
+            escape(&shot.reference),
+            escape(&file_name(&shot.reference))
         ));
     }
     let bar = if frame == "browser" {
@@ -694,6 +706,10 @@ mod tests {
             .contains(r#"<div class="shots"><div class="panel"><div class="title">Desktop</div>"#));
         assert!(page.contains(r#"<div class="title">Mobile</div>"#));
         assert!(page.contains("data:image/png;base64,"));
+        // The file name lets a mention of it in the text open the screenshot.
+        assert!(page.contains(r#"data-file="K-1-1-menu-desktop.png""#));
+        // And each screenshot names its file below it.
+        assert!(page.contains(r#"<figcaption><code>K-1-1-menu-mobile.png</code></figcaption>"#));
         assert!(page.contains(r#"<div class="callout prob none">"#));
         assert!(page.contains(r##"<a href="#change-1">1. Menú</a>"##));
     }
