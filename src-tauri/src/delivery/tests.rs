@@ -2269,6 +2269,30 @@ fn decisions_are_validated() {
 }
 
 #[test]
+fn a_choice_answered_in_the_users_own_words_reaches_the_jobs() {
+    let h = harness();
+    let task = h.task("D-3");
+    let asked = h
+        .service
+        .request_decisions(
+            &task.id,
+            vec![choice("¿Instalamos también para Codex?", Some(0))],
+            "coord",
+        )
+        .unwrap();
+    assert!(h
+        .service
+        .answer_decision(&asked[0].id, " ", "user")
+        .is_err());
+    h.service
+        .answer_decision(&asked[0].id, "Solo si ya está instalado", "user")
+        .unwrap();
+    let tests = h.dispatch(&task, "tests", "events=codex-ok");
+    assert!(tests.decisions[0].ends_with("→ Solo si ya está instalado"));
+    h.wait(&tests.id);
+}
+
+#[test]
 fn pending_decisions_block_stages_and_answers_reach_the_jobs() {
     let h = harness();
     let task = h.task("D-2");
@@ -5884,7 +5908,16 @@ fn the_coordinators_own_calls_do_not_block_and_the_user_can_change_them() {
         "decision_answered",
         "the user's own answers stay final"
     );
-    assert!(h.service.change_decision(&own.id, "Quizá").is_err());
+    // Besides its options, a choice takes the user's own words; not nothing.
+    let own_words = h
+        .service
+        .change_decision(&own.id, "Solo en Claude Code, por ahora")
+        .unwrap();
+    assert_eq!(
+        own_words.answer.as_deref(),
+        Some("Solo en Claude Code, por ahora")
+    );
+    assert!(h.service.change_decision(&own.id, "  ").is_err());
 }
 
 #[test]

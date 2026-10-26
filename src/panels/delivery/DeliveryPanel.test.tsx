@@ -2174,6 +2174,50 @@ describe("DeliveryPanel", () => {
     expect(screen.getByRole("heading", { name: /DEC-1/ })).toBeInTheDocument();
   });
 
+  it("lets the user answer a choice in their own words", async () => {
+    const user = userEvent.setup();
+    const pending: DeliveryDecision = {
+      id: "d1",
+      task_id: "t1",
+      kind: "choice",
+      question: "¿Codex también?",
+      detail: "",
+      options: [
+        { label: "Sí", consequence: "", recommended: true },
+        { label: "No", consequence: "", recommended: false },
+      ],
+      text: "",
+      command: null,
+      undo: "",
+      status: "pending",
+      answer: null,
+      requested_by: "coord",
+      requested_at_ms: 1,
+      decided_by: null,
+      decided_at_ms: null,
+    };
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        jobs: [],
+        decisions: [pending],
+        phases: { t1: phase({ kind: "decisions", count: 1 }) },
+      }),
+    );
+    client.answerDeliveryDecision.mockResolvedValue({});
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "Responder" }));
+    await user.click(screen.getByRole("radio", { name: "Otra opción…" }));
+    const decide = screen.getByRole("button", { name: "Decidir" });
+    // Nothing written yet: nothing to send.
+    expect(decide).toBeDisabled();
+    await user.type(
+      screen.getByRole("textbox", { name: "Tu respuesta a «¿Codex también?»" }),
+      "Solo si ya está instalado",
+    );
+    await user.click(decide);
+    expect(client.answerDeliveryDecision).toHaveBeenCalledWith("d1", "Solo si ya está instalado");
+  });
+
   it("names each batch's buttons and never shows the coordinator token", async () => {
     const user = userEvent.setup();
     const batch = (id: string, title: string, created: number) => ({
@@ -3656,6 +3700,19 @@ describe("DeliveryPanel", () => {
     await user.click(within(section).getByRole("button", { name: "Guardar" }));
     await waitFor(() =>
       expect(client.changeDeliveryDecision).toHaveBeenCalledWith("d9", "Formato nuevo"),
+    );
+    // Or in the user's own words.
+    await user.click(
+      within(section).getByRole("button", { name: "Cambiar «¿Formato del manifiesto?»" }),
+    );
+    await user.click(within(section).getByRole("radio", { name: "Otra opción…" }));
+    await user.type(
+      within(section).getByRole("textbox", { name: "Tu respuesta a «¿Formato del manifiesto?»" }),
+      "Los dos formatos",
+    );
+    await user.click(within(section).getByRole("button", { name: "Guardar" }));
+    await waitFor(() =>
+      expect(client.changeDeliveryDecision).toHaveBeenCalledWith("d9", "Los dos formatos"),
     );
   });
 

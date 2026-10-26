@@ -55,9 +55,48 @@ function WithdrawButton({ decision }: { decision: DeliveryDecision }) {
   );
 }
 
+/** "Otra opción": the user's own answer to a choice, instead of its options. */
+function OwnAnswer({
+  decision,
+  name,
+  picked,
+  text,
+  onPick,
+  onText,
+}: {
+  decision: DeliveryDecision;
+  name: string;
+  picked: boolean;
+  text: string;
+  onPick: () => void;
+  onText: (text: string) => void;
+}) {
+  return (
+    <>
+      <label className="delivery-decision__option">
+        <input type="radio" name={name} checked={picked} onChange={onPick} />
+        <span>
+          <span className="delivery-decision__label">Otra opción…</span>
+        </span>
+      </label>
+      {picked && (
+        <GrowingTextarea
+          aria-label={`Tu respuesta a «${decision.question}»`}
+          placeholder="Escríbela con tus palabras: llega tal cual a todos los trabajos de la tarea."
+          value={text}
+          onChange={(event) => onText(event.target.value)}
+          rows={2}
+        />
+      )}
+    </>
+  );
+}
+
 function ChoiceCard({ decision }: { decision: DeliveryDecision }) {
   const recommended = decision.options.find((option) => option.recommended)?.label ?? null;
   const [choice, setChoice] = useState<string | null>(recommended);
+  const [own, setOwn] = useState<string | null>(null);
+  const answer = own !== null ? own.trim() : (choice ?? "");
   return (
     <fieldset className="delivery-decision">
       <legend>{decision.question}</legend>
@@ -67,8 +106,11 @@ function ChoiceCard({ decision }: { decision: DeliveryDecision }) {
           <input
             type="radio"
             name={`decision-${decision.id}`}
-            checked={choice === option.label}
-            onChange={() => setChoice(option.label)}
+            checked={own === null && choice === option.label}
+            onChange={() => {
+              setChoice(option.label);
+              setOwn(null);
+            }}
           />
           <span>
             <span className="delivery-decision__label">
@@ -79,12 +121,20 @@ function ChoiceCard({ decision }: { decision: DeliveryDecision }) {
           </span>
         </label>
       ))}
+      <OwnAnswer
+        decision={decision}
+        name={`decision-${decision.id}`}
+        picked={own !== null}
+        text={own ?? ""}
+        onPick={() => setOwn(own ?? "")}
+        onText={setOwn}
+      />
       <TechnicalDetail detail={decision.detail} />
       <ActionGroup>
         <div className="delivery-actions">
           <ActionButton
-            disabled={choice === null}
-            onAction={() => answerDeliveryDecision(decision.id, choice ?? "")}
+            disabled={answer === ""}
+            onAction={() => answerDeliveryDecision(decision.id, answer)}
           >
             Decidir
           </ActionButton>
@@ -341,6 +391,11 @@ function LogRow({
 function CoordinatorDecision({ decision }: { decision: DeliveryDecision }) {
   const [changing, setChanging] = useState(false);
   const [answer, setAnswer] = useState(decision.answer ?? "");
+  const labels = decision.options.map((option) => option.label);
+  // An earlier answer in the user's own words opens on "Otra opción".
+  const [ownPicked, setOwnPicked] = useState(
+    decision.kind === "choice" && !labels.includes(decision.answer ?? ""),
+  );
   const changed = decision.decided_by === "user";
   return (
     <li className="delivery-coordinator-decision">
@@ -365,20 +420,36 @@ function CoordinatorDecision({ decision }: { decision: DeliveryDecision }) {
       ) : (
         <span className="delivery-decision-log__answer">
           {decision.kind === "choice" ? (
-            decision.options.map((option) => (
-              <label key={option.label} className="delivery-decision__option">
-                <input
-                  type="radio"
-                  name={`change-${decision.id}`}
-                  checked={answer === option.label}
-                  onChange={() => setAnswer(option.label)}
-                />
-                <span>
-                  <span className="delivery-decision__label">{option.label}</span>
-                  {option.consequence && <small>{option.consequence}</small>}
-                </span>
-              </label>
-            ))
+            <>
+              {decision.options.map((option) => (
+                <label key={option.label} className="delivery-decision__option">
+                  <input
+                    type="radio"
+                    name={`change-${decision.id}`}
+                    checked={!ownPicked && answer === option.label}
+                    onChange={() => {
+                      setAnswer(option.label);
+                      setOwnPicked(false);
+                    }}
+                  />
+                  <span>
+                    <span className="delivery-decision__label">{option.label}</span>
+                    {option.consequence && <small>{option.consequence}</small>}
+                  </span>
+                </label>
+              ))}
+              <OwnAnswer
+                decision={decision}
+                name={`change-${decision.id}`}
+                picked={ownPicked}
+                text={ownPicked ? answer : ""}
+                onPick={() => {
+                  setOwnPicked(true);
+                  if (labels.includes(answer)) setAnswer("");
+                }}
+                onText={setAnswer}
+              />
+            </>
           ) : (
             <GrowingTextarea
               aria-label="Texto"

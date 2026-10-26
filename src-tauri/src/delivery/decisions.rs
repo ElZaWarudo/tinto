@@ -643,11 +643,9 @@ impl DeliveryService {
             ));
         }
         let answer = answer.trim();
+        // A choice takes one of its options or the user's own words.
         let valid = match decision.kind {
-            DeliveryDecisionKind::Choice => {
-                decision.options.iter().any(|option| option.label == answer)
-            }
-            DeliveryDecisionKind::Text => !answer.is_empty(),
+            DeliveryDecisionKind::Choice | DeliveryDecisionKind::Text => !answer.is_empty(),
             DeliveryDecisionKind::Permission => answer == ALLOWED || answer == DENIED,
         };
         if !valid {
@@ -680,13 +678,8 @@ impl DeliveryService {
             ));
         }
         let answer = answer.trim();
-        let valid = match decision.kind {
-            DeliveryDecisionKind::Choice => {
-                decision.options.iter().any(|option| option.label == answer)
-            }
-            _ => !answer.is_empty(),
-        };
-        if !valid {
+        // A choice takes one of its options or the user's own words.
+        if answer.is_empty() {
             return Err(invalid("la respuesta no corresponde a esta decisión"));
         }
         decision.answer = Some(answer.to_string());
