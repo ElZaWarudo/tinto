@@ -220,7 +220,7 @@ pub fn job_prompt(
         }
         if job.qa_browser {
             lines.push(format!(
-                "You have a headless browser with a fresh profile through the {BROWSER_SERVER} MCP tools. The screenshots it saves go to the job's folder, outside the worktree; name them in the result's checks."
+                "You have a headless browser with a fresh profile through the {BROWSER_SERVER} MCP tools. The screenshots it saves go to the job's folder, outside the worktree; name them in the result's checks. Its console logs and page snapshots are saved in your QA folder too: read them there, or with the browser_console_messages tool, and never search the disk for them."
             ));
         }
         lines.push(qa_record_guide(&task.key));
@@ -333,6 +333,15 @@ pub fn job_prompt(
     lines.push(String::new());
     lines.push("Assignment:".to_string());
     lines.push(job.prompt.trim().to_string());
+    // Coordinators keep asking jobs for full builds and suites Tinto runs
+    // anyway, often three times per stage: Tinto's word is the last one.
+    if !job.task_checks.is_empty() {
+        lines.push(String::new());
+        lines.push(
+            "If the assignment asks you to run the task's checks above in full (builds, linters, type checkers, test suites), do not: Tinto runs them on your result. Run only the tests of what you change."
+                .to_string(),
+        );
+    }
     lines.join("\n")
 }
 

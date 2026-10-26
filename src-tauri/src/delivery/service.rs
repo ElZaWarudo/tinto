@@ -2754,9 +2754,15 @@ impl DeliveryService {
         {
             return Ok(());
         }
-        for check in self.task(&job.task_id)?.checks {
+        self.queue_task_checks(&job.task_id)
+    }
+
+    /// Queues each of the task's checks as one shell job, ahead of anything
+    /// dispatched later.
+    pub(super) fn queue_task_checks(&self, task_id: &str) -> Result<(), DeliveryError> {
+        for check in self.task(task_id)?.checks {
             self.dispatch(NewJob {
-                task_id: job.task_id.clone(),
+                task_id: task_id.to_string(),
                 role: CHECKS_ROLE.to_string(),
                 agent: DeliveryAgent::Shell,
                 model: None,

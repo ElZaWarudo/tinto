@@ -736,6 +736,10 @@ describe("DeliveryPanel", () => {
     const section = within(float).getByRole("region", { name: "Problemas de la QA" });
     // What is settled hides until the user asks for everything.
     expect(within(section).queryByText("Old one")).toBeNull();
+    // One click sends every problem QA suggested a fix for.
+    expect(
+      within(section).getByRole("button", { name: "Enviar todos con su solución (1)" }),
+    ).toBeInTheDocument();
     const first = within(section).getByRole("article", { name: "Problema #1" });
     expect(within(first).getByText("P1 de la QA intento 2", { exact: false })).toBeInTheDocument();
     await user.click(within(first).getByRole("button", { name: "Aplicar solución sugerida" }));
@@ -746,6 +750,7 @@ describe("DeliveryPanel", () => {
       "Let it scroll",
     );
     expect(within(section).getByText(/2 problemas listos/)).toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: /Enviar todos/ })).toBeNull();
     await user.click(within(section).getByRole("button", { name: "Enviar al coordinador" }));
     expect(client.sendDeliveryQaProblems).toHaveBeenCalledWith("t1", [
       { problem_id: "p1", solution: "Move the toast up." },

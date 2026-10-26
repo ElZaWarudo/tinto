@@ -61,10 +61,14 @@ export function QaProblems({
     (problem) =>
       problem.status === "open" && choiceOf(problem).included && solutionOf(problem) !== "",
   );
-  const send = async () => {
+  // Every open problem with a fix: the user's pick, else QA's suggestion.
+  const fixable = problems.filter(
+    (problem) => problem.status === "open" && solutionOf(problem) !== "",
+  );
+  const send = async (chosen: DeliveryQaProblem[]) => {
     await sendDeliveryQaProblems(
       taskId,
-      ready.map((problem) => ({ problem_id: problem.id, solution: solutionOf(problem) })),
+      chosen.map((problem) => ({ problem_id: problem.id, solution: solutionOf(problem) })),
     );
     setChoices({});
   };
@@ -260,10 +264,15 @@ export function QaProblems({
             ? "Elige una solución para los problemas que quieras arreglar."
             : `${ready.length === 1 ? "1 problema listo" : `${ready.length} problemas listos`} para el coordinador: se arreglan en una sola implementación y la QA vuelve a comprobar solo esos puntos.`}
         </span>
+        {fixable.length > ready.length && (
+          <ActionButton onAction={() => send(fixable)}>
+            Enviar todos con su solución ({fixable.length})
+          </ActionButton>
+        )}
         <ActionButton
           className="delivery-button--primary"
           disabled={ready.length === 0}
-          onAction={send}
+          onAction={() => send(ready)}
         >
           Enviar al coordinador
         </ActionButton>

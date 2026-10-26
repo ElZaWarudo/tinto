@@ -7533,6 +7533,59 @@ fn past_the_brainstorm_a_pr_with_conflicts_brings_its_base_in() {
 }
 
 #[test]
+fn a_merged_pr_brings_its_base_into_the_other_open_prs_and_checks_verify_the_merge() {
+    let h = harness();
+    set_repo_checks(&h, &["exit=0"]);
+    let coordinator = Coordinator::start(&h);
+    let (merged_id, _) = coordinator.task("S-10");
+    let (open_id, _) = coordinator.task("S-11");
+    let open = h.service.task(&open_id).unwrap();
+    h.service
+        .set_task_checks(&open_id, vec!["exit=0".into()])
+        .unwrap();
+    diverge_from_main(&h, &open, false);
+    let pr = |task_id: &str, number: u32, state: &str| {
+        let reference =
+            super::prs::parse_pr_url(&format!("https://github.com/o/r/pull/{number}")).unwrap();
+        // Stored as GitHub showed it, without the background read a link starts.
+        let mut pr = super::prs::DeliveryPr::linked(task_id, &reference);
+        pr.state = state.into();
+        pr.base = Some("main".into());
+        h.service.store().unwrap().put_pr(&pr).unwrap();
+        pr
+    };
+    let merged = pr(&merged_id, 290, "merged");
+    pr(&open_id, 291, "open");
+    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+
+    h.service.sync_after_merge(&merged).unwrap();
+    let store = h.service.store().unwrap();
+    let sync = store
+        .approvals()
+        .unwrap()
+        .into_iter()
+        .find(|approval| approval.rung == DeliveryRung::Sync)
+        .expect("the open PR's task syncs");
+    assert_eq!(sync.task_id, open_id);
+    assert_eq!(
+        sync.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        sync.outcome
+    );
+    assert!(sync.conflicts.is_empty());
+    // The clean merge is verified by Tinto's checks, not by a stage.
+    let checks: Vec<String> = store
+        .task_jobs(&open_id)
+        .unwrap()
+        .into_iter()
+        .filter(|job| job.role == "checks")
+        .map(|job| job.prompt)
+        .collect();
+    assert_eq!(checks, ["exit=0"]);
+}
+
+#[test]
 fn a_qa_record_from_before_tinto_read_problems_is_read_at_startup() {
     let h = harness();
     let coordinator = Coordinator::start(&h);
@@ -9220,10 +9273,10 @@ fn a_queued_job_says_what_holds_it() {
 }
 
 #[test]
-fn tintos_checks_run_one_at_a_time_across_tasks() {
+fn tintos_checks_run_two_at_a_time_across_tasks() {
     use super::adapters::tests::sample_job;
     let h = harness();
-    let (first, second) = (h.task("K-1"), h.task("K-2"));
+    let (first, second, third) = (h.task("K-1"), h.task("K-2"), h.task("K-3"));
     let now = super::now_ms();
     let check = |id: &str, task: &DeliveryTask, status: DeliveryJobStatus| {
         let mut job = sample_job(DeliveryAgent::Shell);
@@ -9260,9 +9313,21 @@ fn tintos_checks_run_one_at_a_time_across_tasks() {
         .put_job(&check("check-2", &second, DeliveryJobStatus::Queued))
         .unwrap();
     let overview = h.service.overview().unwrap();
+    assert_eq!(overview.queued["check-2"].reason, "empieza ahora");
+    h.service
+        .store()
+        .unwrap()
+        .put_job(&check("check-2", &second, DeliveryJobStatus::Started))
+        .unwrap();
+    h.service
+        .store()
+        .unwrap()
+        .put_job(&check("check-3", &third, DeliveryJobStatus::Queued))
+        .unwrap();
+    let overview = h.service.overview().unwrap();
     assert_eq!(
-        overview.queued["check-2"].reason,
-        "espera a que termine otra comprobación (trabajo check-1): corren de una en una para no repartirse los núcleos"
+        overview.queued["check-3"].reason,
+        "espera a que termine otra comprobación (trabajo check-1): corren 2 a la vez para no repartirse los núcleos"
     );
 }
 

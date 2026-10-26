@@ -44,8 +44,11 @@ fn check_within(
     timeout: Duration,
 ) -> Vec<DeliveryEnvironmentCheck> {
     let mut names = Vec::new();
+    let mut found = Vec::new();
     if uses_docker(repo, distro, settings) {
         names.push(None);
+        // A full disk hangs Docker's engine and fails every install.
+        found.extend(disk(repo, distro));
     }
     // A probe whose command is no longer a verification command is not run.
     names.extend(
@@ -75,8 +78,50 @@ fn check_within(
         running
             .into_iter()
             .filter_map(|handle| handle.join().ok())
+            .chain(found)
             .collect()
     })
+}
+
+/// Below this much free space on the repo's disk the environment fails.
+const MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
+/// The free space of the disk the repo is on, when the system says it.
+fn disk(repo: &Path, distro: Option<&str>) -> Option<DeliveryEnvironmentCheck> {
+    let free = free_bytes(&readable_root(repo, distro))?;
+    let gb = free as f64 / (1024.0 * 1024.0 * 1024.0);
+    Some(DeliveryEnvironmentCheck {
+        name: "Disco".to_string(),
+        ok: free >= MIN_FREE_BYTES,
+        output: if free >= MIN_FREE_BYTES {
+            format!("Quedan {gb:.0} GB libres.")
+        } else {
+            format!("Solo quedan {gb:.1} GB libres: Docker y las instalaciones fallan sin espacio. Libera espacio en el disco del repositorio.")
+        },
+    })
+}
+
+#[cfg(windows)]
+fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` is a NUL-terminated path and `free` outlives the call.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free)
+}
+
+#[cfg(not(windows))]
+fn free_bytes(_path: &Path) -> Option<u64> {
+    None
 }
 
 /// A compose file or Dockerfile at the repo's root, or a command of its
@@ -320,6 +365,20 @@ mod tests {
         ));
         std::fs::write(repo.path().join("compose.yaml"), "services: {}\n").unwrap();
         assert!(uses_docker(repo.path(), None, &settings(&[], &[])));
+    }
+
+    #[test]
+    fn a_repo_with_docker_also_has_its_disk_checked() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("compose.yaml"), "services: {}\n").unwrap();
+        let results = check_within(
+            repo.path(),
+            None,
+            &settings(&[], &[]),
+            Duration::from_secs(1),
+        );
+        let disk = results.iter().find(|result| result.name == "Disco");
+        assert_eq!(disk.is_some(), cfg!(windows), "{results:?}");
     }
 
     #[test]

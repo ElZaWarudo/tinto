@@ -1364,6 +1364,15 @@ impl DeliveryService {
             }
         }
         self.save_approval(&approval, "approval_approved")?;
+        // A sync that merged cleanly changed the code no stage made: Tinto's
+        // checks verify it, not an agent.
+        if approval.rung == DeliveryRung::Sync
+            && approval.status == DeliveryApprovalStatus::Executed
+            && approval.conflicts.is_empty()
+            && !approval.created.is_empty()
+        {
+            self.queue_task_checks(&approval.task_id)?;
+        }
         if let Some(found) = opened {
             let task = self.task(&approval.task_id)?;
             self.adopt_pr(&task, &found)?;
@@ -1642,11 +1651,47 @@ impl DeliveryService {
         if !pr.is_open() || !pr.conflicts {
             return Ok(());
         }
-        let task = self.task(&pr.task_id)?;
-        if !self.unattended(&task)? {
+        self.auto_sync(&self.task(&pr.task_id)?)
+    }
+
+    /// Once a PR of the batch merges, every other open PR of the repo into
+    /// the same base brings it in at once, while the conflicts are few and
+    /// fresh, instead of when its own PR is ready.
+    pub(super) fn sync_after_merge(
+        &self,
+        merged: &super::prs::DeliveryPr,
+    ) -> Result<(), DeliveryError> {
+        let Some(base) = merged.base.as_deref() else {
+            return Ok(());
+        };
+        let repo = self.task(&merged.task_id)?.repo;
+        let store = self.store()?;
+        let open: Vec<DeliveryTask> = store
+            .tasks()?
+            .into_iter()
+            .filter(|task| task.id != merged.task_id && task.repo == repo)
+            .filter(|task| {
+                store
+                    .pr(&task.id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|pr| pr.is_open() && pr.base.as_deref() == Some(base))
+            })
+            .collect();
+        drop(store);
+        for task in open {
+            self.auto_sync(&task)?;
+        }
+        Ok(())
+    }
+
+    /// Past the brainstorm, asks the sync of the task's base, which runs as
+    /// it is asked; one that cannot start now is only logged.
+    fn auto_sync(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        if !self.unattended(task)? {
             return Ok(());
         }
-        let base = self.sync_base(&task)?;
+        let base = self.sync_base(task)?;
         let request = NewApproval {
             task_id: task.id.clone(),
             rung: DeliveryRung::Sync,

@@ -1225,6 +1225,10 @@ impl DeliveryService {
             self.check_push(&self.task(task_id)?)?;
         }
         self.sync_conflicted_pr(&pr)?;
+        // Merged since Tinto last read it, not found merged when linked.
+        if pr.state == "merged" && before.state != "merged" && before.checked_at_ms.is_some() {
+            self.sync_after_merge(&pr)?;
+        }
         Ok(Some(pr))
     }
 

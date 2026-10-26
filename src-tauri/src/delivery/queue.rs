@@ -18,10 +18,19 @@ use super::service::{
 use super::store::DeliveryStore;
 use super::DeliveryError;
 
+/// How many of Tinto's checks run at once: they compete for the same cores,
+/// so few, but not one, or every task's checks queue behind the others'.
+const CHECKS_AT_ONCE: usize = 2;
+
 /// One of Tinto's own checks: a verification command run on a stage's
 /// result.
 fn is_check(job: &DeliveryJob) -> bool {
     job.agent == DeliveryAgent::Shell && job.role == CHECKS_ROLE
+}
+
+/// One of the task's setup commands.
+fn is_setup(job: &DeliveryJob) -> bool {
+    job.agent == DeliveryAgent::Shell && job.role == SETUP_ROLE
 }
 
 /// What holds a queued job.
@@ -38,8 +47,8 @@ pub(super) enum Hold {
     Environment(Option<String>),
     /// As many jobs run as the capacity allows.
     Capacity,
-    /// Another of Tinto's checks runs: they compete for the same cores, so
-    /// one at a time.
+    /// As many of Tinto's checks run as `CHECKS_AT_ONCE` allows: the first
+    /// of them.
     CheckRunning(String),
     /// Its exclusive resource is held, or others asked for it first.
     Lease(String),
@@ -132,23 +141,24 @@ impl Queue {
             .filter(|job| job.status.is_active())
             .map(|job| (job.task_id.clone(), job.id.clone()))
             .collect();
-        let mut checking = self
+        let mut checking: Vec<String> = self
             .jobs
             .iter()
-            .find(|job| job.status.is_active() && is_check(job))
-            .map(|job| job.id.clone());
+            .filter(|job| job.status.is_active() && is_check(job))
+            .map(|job| job.id.clone())
+            .collect();
         let mut plan = Vec::new();
         for job in self
             .jobs
             .iter()
             .filter(|job| job.status == DeliveryJobStatus::Queued)
         {
-            let hold = self.hold(job, &busy, running, checking.as_deref(), &mut leases, now);
+            let hold = self.hold(job, &busy, running, &checking, &mut leases, now);
             if hold.is_none() {
                 busy.insert(job.task_id.clone(), job.id.clone());
                 running += 1;
                 if is_check(job) {
-                    checking = Some(job.id.clone());
+                    checking.push(job.id.clone());
                 }
             }
             plan.push((job.id.clone(), hold));
@@ -161,17 +171,21 @@ impl Queue {
         job: &DeliveryJob,
         busy: &HashMap<String, String>,
         running: usize,
-        checking: Option<&str>,
+        checking: &[String],
         leases: &mut Vec<DeliveryLease>,
         now: u64,
     ) -> Option<Hold> {
+        let setup = is_setup(job);
+        // A task's setup commands prepare separate parts of its worktree (one
+        // package's install each), so they run beside each other.
         if let Some(other) = busy.get(&job.task_id) {
-            return Some(Hold::TaskBusy(other.clone()));
+            if !(setup && self.job(other).is_some_and(is_setup)) {
+                return Some(Hold::TaskBusy(other.clone()));
+            }
         }
         if self.held.contains(&job.task_id) {
             return Some(Hold::BatchPaused);
         }
-        let setup = job.agent == DeliveryAgent::Shell && job.role == SETUP_ROLE;
         if self.unprepared.contains(&job.task_id) && !setup {
             return Some(Hold::Setup);
         }
@@ -188,8 +202,8 @@ impl Queue {
                 None => {}
             }
         }
-        if let Some(other) = checking.filter(|_| is_check(job)) {
-            return Some(Hold::CheckRunning(other.to_string()));
+        if is_check(job) && checking.len() >= CHECKS_AT_ONCE {
+            return Some(Hold::CheckRunning(checking[0].clone()));
         }
         if running >= self.capacity {
             return Some(Hold::Capacity);
@@ -295,7 +309,7 @@ impl Queue {
             Hold::Environment(None) => ("espera a la comprobación del entorno".into(), None),
             Hold::CheckRunning(other_id) => (
                 format!(
-                    "espera a que termine otra comprobación (trabajo {other_id}): corren de una en una para no repartirse los núcleos"
+                    "espera a que termine otra comprobación (trabajo {other_id}): corren {CHECKS_AT_ONCE} a la vez para no repartirse los núcleos"
                 ),
                 self.job(other_id).and_then(|other| self.stuck(other, now)),
             ),
