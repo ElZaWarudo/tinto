@@ -394,6 +394,8 @@ export interface DeliveryRound {
   closed_at_ms?: number | null;
   /** How it ended: "corregidos", "aceptados", "siguió en la ronda 4"… */
   outcome?: string | null;
+  /** Opened during a sync's merge: it waits for the commit that concludes it. */
+  waits_merge_commit?: boolean;
 }
 
 /** A problem QA found (or the user reported) and what the user decided. */
@@ -651,7 +653,13 @@ export type DeliveryPhase =
   | { kind: "unblocked"; cleared: string; by: string; at_ms: number }
   | { kind: "broken"; job_id: string; role: string; attempt: number; blocked: boolean }
   | { kind: "delivered" }
-  | { kind: "pr"; number: number }
+  | { kind: "pr"; number: number; ci?: DeliveryCiState | null }
+  /** A sync's merge is in progress and its commit comes first; `waiting_round` waits for it. */
+  | { kind: "waits_merge_commit"; waiting_round: number | null }
+  /** Stages of these rounds changed the code during a merge: the user decides how to commit it. */
+  | { kind: "merge_mixed"; mixed_rounds: number[] }
+  /** Its PR was merged on GitHub with CI not green; a round fixes it on the base. */
+  | { kind: "merged_failing_ci"; number: number; why: string }
   | { kind: "next_stage"; role: string }
   | { kind: "next_step"; rung: DeliveryRung; stage: string | null };
 
@@ -734,6 +742,9 @@ export interface DeliveryTaskChanges {
 }
 
 /** A task's pull request as Tinto follows it on GitHub. */
+/** The CI of a PR's head commit. */
+export type DeliveryCiState = "passing" | "failing" | "pending" | "not_run";
+
 export interface DeliveryPr {
   task_id: string;
   url: string;
@@ -745,7 +756,21 @@ export interface DeliveryPr {
   conflicts: boolean;
   /** approved, changes_requested, review_required or none. */
   review_decision: string | null;
-  checks: { passing: number; failing: number; pending: number };
+  checks: {
+    passing: number;
+    failing: number;
+    pending: number;
+    skipped?: number;
+    /** Workflows that started on the head but skipped every job. */
+    not_run?: string[];
+  };
+  /** Its head's CI as the merge reads it; null in a repo without CI where no check ran. */
+  ci?: DeliveryCiState | null;
+  /** The head commit its checks ran on. */
+  head?: string | null;
+  labels?: string[];
+  /** Merged on GitHub while its head's CI was not green: what it was. */
+  merged_failing_ci?: string | null;
   /** Reviews and comments by others since the user last saw the PR. */
   new_reviews: number;
   new_comments: number;

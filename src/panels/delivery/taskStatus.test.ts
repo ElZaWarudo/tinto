@@ -444,6 +444,33 @@ describe("a followed PR", () => {
     expect(withPr({ review_decision: "changes_requested" }).label).toBe("PR: cambios pedidos");
   });
 
+  it("says the CI of the PR's head and keeps a CI that never ran in sight", () => {
+    const unrun = withPr({
+      ci: "not_run",
+      head: "abc1234ef",
+      checks: { passing: 0, failing: 0, pending: 0 },
+    });
+    expect(unrun.label).toBe("PR: CI sin ejecutar");
+    expect(unrun.group).toBe("attention");
+    expect(unrun.detail).toBe("CI sin ejecutar en abc1234");
+    expect(withPr({ ci: "passing", head: "abc1234ef" }).detail).toBe("CI pasa en abc1234");
+  });
+
+  it("words a merge in progress and a PR merged with CI not green", () => {
+    const waits = status({ kind: "waits_merge_commit", waiting_round: 4 });
+    expect(waits.label).toBe("Espera el commit del merge");
+    expect(waits.detail).toContain("La ronda 4 corre encima del commit del merge");
+    const mixed = status({ kind: "merge_mixed", mixed_rounds: [3] });
+    expect(mixed.group).toBe("attention");
+    expect(mixed.detail).toContain("la ronda 3");
+    const red = status({ kind: "merged_failing_ci", number: 9, why: "checks fallando en fedcba9" });
+    expect(red).toMatchObject({
+      tone: "danger",
+      label: "PR #9 fusionado con la CI sin pasar",
+      detail: "checks fallando en fedcba9",
+    });
+  });
+
   it("waits while others review it, and offers the merge once approved", () => {
     expect(withPr({})).toMatchObject({ group: "waiting", label: "PR: en revisión" });
     expect(withPr({ checks: { passing: 1, failing: 0, pending: 2 } }).label).toBe(

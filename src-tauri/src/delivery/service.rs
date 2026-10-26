@@ -722,6 +722,20 @@ impl DeliveryService {
             .collect();
         let runs = store.runs()?;
         let leases = store.leases()?;
+        // Git is asked only about the tasks whose sync stopped on conflicts.
+        let merging: HashSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                let steps: Vec<&super::model::DeliveryApproval> = approvals
+                    .iter()
+                    .filter(|approval| approval.task_id == task.id)
+                    .collect();
+                super::phase::open_merge(&steps, true).is_some()
+                    && tasks::merge_head(Place::of(task.distro.as_deref()), &task.worktree)
+                        .is_some()
+            })
+            .map(|task| task.id.clone())
+            .collect();
         // Where each task is, from the same facts the view gets.
         let facts = super::phase::Facts {
             runs: &runs,
@@ -733,6 +747,7 @@ impl DeliveryService {
             prs: &prs,
             rounds: &rounds,
             queued: &queued,
+            merging: &merging,
         };
         let phases = tasks
             .iter()
@@ -1463,6 +1478,9 @@ impl DeliveryService {
             Vec::new()
         };
         let shared_decisions = self.package_decisions(&task.id)?;
+        if request.agent != DeliveryAgent::Shell {
+            self.check_merge_stage(&task, &role)?;
+        }
         // A sync stopped on conflicts: the job is told which files to resolve.
         let merge_conflicts = match request.agent {
             DeliveryAgent::Shell => None,
@@ -2594,6 +2612,12 @@ impl DeliveryService {
         // A task Tinto cannot queue checks on now (blocked, paused) goes on
         // without them.
         let _ = self.queue_checks(&job.id);
+        if let Err(error) = self.conclude_merge(&job.task_id) {
+            eprintln!(
+                "tinto: delivery could not settle the merge of {}: {error}",
+                job.task_id
+            );
+        }
         Ok(())
     }
 

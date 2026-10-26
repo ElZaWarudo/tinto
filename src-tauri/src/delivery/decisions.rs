@@ -762,6 +762,10 @@ impl DeliveryService {
         store.record_event(now_ms(), event, Some(&decision.task_id), None, &decision.id)?;
         drop(store);
         self.notify();
+        // How to commit a mixed merge is one of them.
+        if decision.question == super::coordination::MIXED_QUESTION {
+            self.conclude_merge(&decision.task_id)?;
+        }
         Ok(decision)
     }
 

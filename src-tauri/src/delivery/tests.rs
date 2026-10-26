@@ -2996,11 +2996,19 @@ fn a_task_created_as_a_whole_issue_becomes_its_first_package() {
         until: None,
     };
     // An existing task keeps its base: it cannot build on another.
-    let refused = h.service.set_task_package(&whole.id, &as_package(2, Some(1)));
+    let refused = h
+        .service
+        .set_task_package(&whole.id, &as_package(2, Some(1)));
     assert_eq!(refused.unwrap_err().category, "invalid_package");
 
-    let first = h.service.set_task_package(&whole.id, &as_package(1, None)).unwrap();
-    assert_eq!(first.package.as_ref().map(|p| (p.index, p.of)), Some((1, 2)));
+    let first = h
+        .service
+        .set_task_package(&whole.id, &as_package(1, None))
+        .unwrap();
+    assert_eq!(
+        first.package.as_ref().map(|p| (p.index, p.of)),
+        Some((1, 2))
+    );
     assert_eq!(first.worktree, whole.worktree);
     assert_eq!(first.base_ref, whole.base_ref);
     let again = h.service.set_task_package(&whole.id, &as_package(1, None));
@@ -4713,6 +4721,22 @@ impl super::prs::GitHub for FakeGitHub {
     fn pr_to_draft(&self, url: &str) -> Result<(), super::DeliveryError> {
         self.actions.lock().unwrap().push(format!("draft {url}"));
         self.snapshot.lock().unwrap()["isDraft"] = json!(true);
+        Ok(())
+    }
+    fn add_label(&self, url: &str, label: &str) -> Result<(), super::DeliveryError> {
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("label {url} {label}"));
+        self.snapshot.lock().unwrap()["labels"] = json!([{ "name": label }]);
+        Ok(())
+    }
+    fn remove_label(&self, url: &str, label: &str) -> Result<(), super::DeliveryError> {
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("unlabel {url} {label}"));
+        self.snapshot.lock().unwrap()["labels"] = json!([]);
         Ok(())
     }
     fn feed(&self, _etag: Option<&str>) -> Result<super::prs::Feed, super::DeliveryError> {
@@ -8832,7 +8856,10 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     h.service.store().unwrap().put_pr(&pr).unwrap();
     assert_eq!(
         h.service.overview().unwrap().phases[&task.id].phase,
-        Phase::Pr { number: 308 }
+        Phase::Pr {
+            number: 308,
+            ci: None
+        }
     );
 
     // The coordinator sends the work back: the stage answers the PR.
@@ -8878,7 +8905,13 @@ fn changes_asked_on_the_pr_open_a_round_that_repeats_commit_and_push() {
     assert_eq!(phase(&h).round.unwrap().at, "push");
     step_done_now(&h, &task, "p1", "push");
     assert!(phase(&h).round.is_none());
-    assert_eq!(phase(&h).phase, Phase::Pr { number: 308 });
+    assert_eq!(
+        phase(&h).phase,
+        Phase::Pr {
+            number: 308,
+            ci: None
+        }
+    );
     assert_eq!(
         h.service.overview().unwrap().rounds[0].outcome.as_deref(),
         Some("cambios publicados")
@@ -9453,4 +9486,442 @@ fn the_brainstorm_ends_once_every_task_of_the_run_is_being_implemented() {
         .unwrap();
     implement(&second);
     assert!(unattended());
+}
+
+/// A workflow on main that runs CI only once a PR gets the `Ready` label,
+/// as agentos does.
+fn commit_ready_workflow(h: &Harness) {
+    let dir = h.repo.path().join(".github/workflows");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("frontend.yml"),
+        "on:\n  pull_request:\n    types: [ opened, labeled ]\njobs:\n  ci:\n    if: github.event_name == 'push' || (github.event.action == 'labeled' &&\n      github.event.label.name == 'Ready')\n",
+    )
+    .unwrap();
+    git(h.repo.path(), &["add", "--all"]);
+    git(h.repo.path(), &["commit", "-q", "-m", "ci"]);
+}
+
+fn merge_step(task: &DeliveryTask) -> NewApproval {
+    NewApproval {
+        merge_method: Some("squash".into()),
+        requested_by: "user".into(),
+        ..step(task, DeliveryRung::Merge, "Merge")
+    }
+}
+
+/// What a job dispatched now would get: started, or why not.
+fn try_dispatch(
+    h: &Harness,
+    task: &DeliveryTask,
+    role: &str,
+) -> Result<DeliveryJob, super::DeliveryError> {
+    h.service.dispatch(NewJob {
+        task_id: task.id.clone(),
+        role: role.to_string(),
+        agent: DeliveryAgent::Codex,
+        model: None,
+        access: DeliveryAccess::Workspace,
+        prompt: "events=codex-ok".to_string(),
+        writes: None,
+        lease: None,
+        timeout_minutes: None,
+        reasoning: None,
+        platform: None,
+        read_dirs: Vec::new(),
+        stage_default: false,
+        needs_environment: false,
+    })
+}
+
+/// Polls `check` until it gives something, for what Tinto does right
+/// after a job ends.
+fn eventually<T>(mut check: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        if let Some(found) = check() {
+            return found;
+        }
+        assert!(Instant::now() < deadline, "it never happened");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
+    let h = harness();
+    commit_ready_workflow(&h);
+    let task = h.task("CI-1");
+    let github = FakeGitHub::new(
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "headRefOid": "abc1234def", "reviews": [], "comments": [], "statusCheckRollup": []
+        }),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/7").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    let refused = |rollup: serde_json::Value| {
+        github.snapshot.lock().unwrap()["statusCheckRollup"] = rollup;
+        h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+        h.service.request_approval(merge_step(&task)).err()
+    };
+    let check = |name: &str, status: &str, conclusion: &str| json!({"workflowName": "frontend", "name": name, "status": status, "conclusion": conclusion});
+    let red = refused(json!([check("ci", "COMPLETED", "FAILURE")])).unwrap();
+    assert_eq!(red.category, "pr_not_ready");
+    assert_eq!(red.message, "el PR #7 tiene checks fallando en abc1234");
+    let pending = refused(json!([check("ci", "IN_PROGRESS", "")])).unwrap();
+    assert_eq!(pending.message, "el PR #7 tiene checks en curso en abc1234");
+    let not_run = "la CI no se ejecutó en abc1234: añade la etiqueta Ready";
+    assert_eq!(refused(json!([])).unwrap().message, not_run);
+    // A workflow whose paths the PR touches but that skipped every job did
+    // not run.
+    assert_eq!(
+        refused(json!([check("ci", "COMPLETED", "SKIPPED")]))
+            .unwrap()
+            .message,
+        not_run
+    );
+    assert_eq!(
+        h.service.overview().unwrap().phases[&task.id].phase,
+        super::phase::Phase::Pr {
+            number: 7,
+            ci: Some(super::prs::CiState::NotRun)
+        }
+    );
+    // Green, beside a job of the same workflow that runs only on main.
+    let green = json!([
+        check("ci", "COMPLETED", "SUCCESS"),
+        check("deploy", "COMPLETED", "SKIPPED")
+    ]);
+    assert!(refused(green.clone()).is_none());
+    let asked = h
+        .service
+        .store()
+        .unwrap()
+        .approvals()
+        .unwrap()
+        .pop()
+        .unwrap();
+    h.service.withdraw_approval(&asked.id, "again").unwrap();
+
+    // The base moved after the green run: sync and a new green run first.
+    std::fs::write(h.repo.path().join("later.txt"), "later\n").unwrap();
+    git(h.repo.path(), &["add", "--all"]);
+    git(h.repo.path(), &["commit", "-q", "-m", "main moves on"]);
+    let moved = refused(green).unwrap();
+    assert_eq!(moved.category, "base_moved", "{moved}");
+}
+
+#[test]
+fn the_pr_and_push_steps_put_the_ci_label_on_and_a_push_starts_ci_again() {
+    let h = harness();
+    commit_ready_workflow(&h);
+    github_origin(&h);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    let origin_path = plain_path(origin.path());
+    git(
+        h.repo.path(),
+        &["remote", "set-url", "--push", "origin", &origin_path],
+    );
+    let task = h.task("CI-2");
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "statusCheckRollup": [], "reviews": [], "comments": [], "labels": []}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let url = "https://github.com/o/r/pull/8";
+    let reference = super::prs::parse_pr_url(url).unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+
+    // Opening the PR: the label goes on.
+    assert_eq!(h.service.label_for_ci(&task, url, false), None);
+    assert_eq!(
+        github.actions.lock().unwrap().as_slice(),
+        [format!("label {url} Ready")]
+    );
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    github.actions.lock().unwrap().clear();
+
+    // A push: off and on again, which is what makes CI run on the new head.
+    write_files(&task, &["more.txt"]);
+    git(&task.worktree, &["add", "--all"]);
+    git(&task.worktree, &["commit", "-q", "-m", "more"]);
+    let push = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Push, "Publish"))
+        .unwrap();
+    let pushed = h.service.decide_approval(&push.id, true, None).unwrap();
+    assert_eq!(
+        pushed.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        pushed.outcome
+    );
+    assert_eq!(pushed.notice, None);
+    assert_eq!(
+        github.actions.lock().unwrap().as_slice(),
+        [format!("unlabel {url} Ready"), format!("label {url} Ready")]
+    );
+}
+
+#[test]
+fn a_pr_merged_on_github_with_red_ci_opens_a_round_to_fix_it_on_the_base() {
+    let h = harness();
+    let task = h.task("CI-3");
+    let github = FakeGitHub::new(
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "headRefOid": "fedcba98", "baseRefName": "main", "reviews": [], "comments": [],
+            "statusCheckRollup": [{"workflowName": "api", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}]
+        }),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/9").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    github.snapshot.lock().unwrap()["state"] = json!("MERGED");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+
+    let why = "el PR #9 tiene checks fallando en fedcba9";
+    let pr = h.service.task_pr(&task.id).unwrap().unwrap();
+    assert_eq!(pr.merged_failing_ci.as_deref(), Some(why));
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.kind == "pr_merged_failing_ci"));
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(
+        phase.phase,
+        super::phase::Phase::MergedFailingCi {
+            number: 9,
+            why: why.into()
+        }
+    );
+    let round = phase.round.expect("a round to fix it");
+    assert_eq!(round.round.kind, "ci");
+    assert!(
+        round.round.cause.contains("arréglalo en main"),
+        "{}",
+        round.round.cause
+    );
+    // Read again: still one round.
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        h.service
+            .store()
+            .unwrap()
+            .task_rounds(&task.id)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// A task whose sync stopped on conflicts in `shared.txt`, with `exit=0`
+/// as its check.
+fn conflicted_merge(h: &Harness, key: &str) -> DeliveryTask {
+    set_repo_checks(h, &["exit=0"]);
+    let task = h.task(key);
+    h.service
+        .set_task_checks(&task.id, vec!["exit=0".into()])
+        .unwrap();
+    diverge_from_main(h, &task, true);
+    let asked = h
+        .service
+        .request_approval(step(&task, DeliveryRung::Sync, "Merge main"))
+        .unwrap();
+    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
+    assert_eq!(done.conflicts, ["shared.txt"]);
+    h.service.task(&task.id).unwrap()
+}
+
+/// The commit Tinto asked last for the task.
+fn merge_commit_asked(h: &Harness, task: &DeliveryTask) -> super::model::DeliveryApproval {
+    eventually(|| {
+        h.service
+            .store()
+            .unwrap()
+            .approvals()
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|approval| {
+                approval.task_id == task.id
+                    && approval.rung == DeliveryRung::Commit
+                    && approval.status == DeliveryApprovalStatus::Pending
+            })
+    })
+}
+
+/// The merge's own stages: the implementation that resolves the conflict,
+/// its checks and its review.
+fn resolve_merge(h: &Harness, task: &DeliveryTask) -> DeliveryJob {
+    let fix = h.dispatch(task, "implementation", "events=codex-ok touch=resolved.txt");
+    std::fs::write(task.worktree.join("shared.txt"), "task and main\n").unwrap();
+    h.wait(&fix.id);
+    ended_checks(h, task, 1);
+    let review = h.dispatch(task, "review", "events=codex-ok");
+    h.wait(&review.id);
+    fix
+}
+
+#[test]
+fn during_a_merge_only_its_stages_run_and_tinto_asks_its_commit_once_they_pass() {
+    let h = harness();
+    let task = conflicted_merge(&h, "MC-1");
+    for role in ["qa", "tests"] {
+        let refused = try_dispatch(&h, &task, role).unwrap_err();
+        assert_eq!(refused.category, "merge_in_progress", "{role}: {refused}");
+    }
+    resolve_merge(&h, &task);
+    let commit = merge_commit_asked(&h, &task);
+    assert_eq!(commit.requested_by, "auto");
+    assert_eq!(commit.title, "Merge main");
+    // Its stages passed: nothing runs before the commit, not even them.
+    for role in ["implementation", "review", "qa"] {
+        assert_eq!(
+            try_dispatch(&h, &task, role).unwrap_err().category,
+            "merge_in_progress",
+            "{role}"
+        );
+    }
+    let concluded = h.service.decide_approval(&commit.id, true, None).unwrap();
+    assert_eq!(
+        concluded.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        concluded.outcome
+    );
+    assert!(super::tasks::merge_head(super::tasks::Place::Native, &task.worktree).is_none());
+    let qa = try_dispatch(&h, &task, "qa").unwrap();
+    h.wait(&qa.id);
+}
+
+#[test]
+fn a_round_opened_during_a_merge_waits_for_its_commit_and_runs_on_top_of_it() {
+    let h = harness();
+    let task = conflicted_merge(&h, "MC-2");
+    super::rounds::open_round(
+        &h.service.store().unwrap(),
+        &task.id,
+        super::rounds::NewRound {
+            kind: "qa_problems",
+            short: "1 problema de QA".into(),
+            cause: "1 problema de QA para corregir".into(),
+            items: vec!["#1 P1: the toast covers Retry → move it up".into()],
+            source: None,
+        },
+    )
+    .unwrap();
+    let rounds = || h.service.store().unwrap().task_rounds(&task.id).unwrap();
+    let waiting = rounds()
+        .into_iter()
+        .find(|round| round.kind == "qa_problems")
+        .unwrap();
+    assert!(waiting.waits_merge_commit && waiting.is_open());
+    // The merge's own round stays the one its stages work in.
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(phase.round.unwrap().round.kind, "sync");
+    let fix = resolve_merge(&h, &task);
+    assert!(!fix.round.join("\n").contains("toast"), "{:?}", fix.round);
+
+    // While the commit is not there, the task says what it waits for.
+    let commit = merge_commit_asked(&h, &task);
+    h.service.withdraw_approval(&commit.id, "later").unwrap();
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(
+        phase.phase,
+        super::phase::Phase::WaitsMergeCommit {
+            waiting_round: Some(waiting.number)
+        }
+    );
+    assert_eq!(phase.next_stage, None);
+
+    h.service.conclude_merge(&task.id).unwrap();
+    let commit = merge_commit_asked(&h, &task);
+    let concluded = h.service.decide_approval(&commit.id, true, None).unwrap();
+    assert_eq!(
+        concluded.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        concluded.outcome
+    );
+    let released = rounds()
+        .into_iter()
+        .find(|round| round.id == waiting.id)
+        .unwrap();
+    assert!(!released.waits_merge_commit && released.is_open());
+    assert!(released.opened_at_ms >= concluded.executed_at_ms.unwrap());
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(phase.round.unwrap().round.kind, "qa_problems");
+    // Its fix is told about it, on top of the merge commit.
+    let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=toast.txt");
+    assert!(fix.round.join("\n").contains("toast"), "{:?}", fix.round);
+    h.wait(&fix.id);
+}
+
+#[test]
+fn a_merge_other_work_got_into_asks_the_user_how_to_commit_it() {
+    let h = harness();
+    let task = conflicted_merge(&h, "MC-3");
+    // As before Tinto kept them apart: a PR round worked during the merge.
+    let round = super::model::DeliveryRound {
+        id: "legacy".into(),
+        task_id: task.id.clone(),
+        number: 3,
+        kind: "pr".into(),
+        short: "PR".into(),
+        cause: "Cambios pedidos en el PR #5".into(),
+        items: Vec::new(),
+        source: None,
+        opened_at_ms: super::now_ms(),
+        after_push: true,
+        closed_at_ms: None,
+        outcome: None,
+        waits_merge_commit: false,
+    };
+    h.service.store().unwrap().put_round(&round).unwrap();
+    let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=review.txt");
+    std::fs::write(task.worktree.join("shared.txt"), "task and main\n").unwrap();
+    h.wait(&fix.id);
+    let asked = eventually(|| {
+        h.service
+            .store()
+            .unwrap()
+            .task_decisions(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|decision| decision.question == super::coordination::MIXED_QUESTION)
+    });
+    assert!(asked.detail.contains("review.txt"), "{}", asked.detail);
+    let labels: Vec<&str> = asked
+        .options
+        .iter()
+        .map(|option| option.label.as_str())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            super::coordination::MIXED_ONE_COMMIT,
+            super::coordination::MIXED_SPLIT
+        ]
+    );
+    h.service
+        .answer_decision(&asked.id, super::coordination::MIXED_ONE_COMMIT, "user")
+        .unwrap();
+    let commit = merge_commit_asked(&h, &task);
+    assert!(
+        commit
+            .body
+            .contains("Ronda 3 (Cambios pedidos en el PR #5): review.txt")
+            || commit.commits[0]
+                .message
+                .contains("Ronda 3 (Cambios pedidos en el PR #5): review.txt"),
+        "{commit:?}"
+    );
 }

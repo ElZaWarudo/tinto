@@ -10,7 +10,9 @@ use super::model::{
     DeliveryAgent, DeliveryApproval, DeliveryApprovalStatus, DeliveryJob, DeliveryJobStatus,
     DeliveryQaProblem, DeliveryResultState, DeliveryRound, DeliveryRung, DeliveryTask,
 };
-use super::phase::{current_checks, has_open_findings, next_stage, round_step};
+use super::phase::{
+    current_checks, has_open_findings, next_stage, open_merge, resolves_merge, round_step,
+};
 use super::prs::DeliveryPr;
 use super::service::{CHECKS_ROLE, QA_ROLE};
 use super::store::DeliveryStore;
@@ -211,7 +213,7 @@ fn open_of(store: &DeliveryStore, task_id: &str) -> Result<Option<DeliveryRound>
         .task_rounds(task_id)?
         .into_iter()
         .rev()
-        .find(DeliveryRound::is_open))
+        .find(DeliveryRound::is_current))
 }
 
 /// Opens a round on the task, unless its source already opened one. A
@@ -231,11 +233,61 @@ pub(super) fn open_round(
     let jobs = store.task_jobs(task_id)?;
     let now = now_ms();
     let number = rounds.last().map_or(2, |round| round.number + 1);
-    let mut items = new.items;
-    if let Some(mut open) = rounds.iter().rev().find(|round| round.is_open()).cloned() {
-        let worked = jobs
+    let approvals = task_approvals(store, task_id)?;
+    let approval_refs: Vec<&DeliveryApproval> = approvals.iter().collect();
+    let job_refs: Vec<&DeliveryJob> = jobs.iter().collect();
+    // While a sync's merge is in progress, work that is not resolving it
+    // waits for the commit that concludes it: committed after it, its
+    // changes stay apart from the merge.
+    let merge = open_merge(&approval_refs, true);
+    let probe = DeliveryRound {
+        id: String::new(),
+        task_id: task_id.to_string(),
+        number,
+        kind: new.kind.to_string(),
+        short: String::new(),
+        cause: String::new(),
+        items: Vec::new(),
+        source: new.source.clone(),
+        opened_at_ms: now,
+        after_push: false,
+        closed_at_ms: None,
+        outcome: None,
+        waits_merge_commit: false,
+    };
+    let waits = merge.is_some_and(|sync| !resolves_merge(&probe, sync, &job_refs));
+    // The sync's own round sets aside the one in course, unfinished: its
+    // work goes on once the merge is committed.
+    if merge.is_some() && new.kind == "sync" {
+        if let Some(mut open) = rounds
             .iter()
-            .any(|job| job.agent != DeliveryAgent::Shell && job.created_at_ms >= open.opened_at_ms);
+            .rev()
+            .find(|round| round.is_current())
+            .cloned()
+        {
+            open.waits_merge_commit = true;
+            store.put_round(&open)?;
+            store.record_event(
+                now,
+                "round_changed",
+                Some(task_id),
+                None,
+                &round_text(&open),
+            )?;
+        }
+    }
+    let mut items = new.items;
+    let previous = rounds.iter().rev().find(|round| {
+        round.is_open()
+            && round.waits_merge_commit == waits
+            && !(new.kind == "sync" && merge.is_some())
+    });
+    if let Some(mut open) = previous.cloned() {
+        // A round waiting for the merge commit has had no stage of its own.
+        let worked = !waits
+            && jobs.iter().any(|job| {
+                job.agent != DeliveryAgent::Shell && job.created_at_ms >= open.opened_at_ms
+            });
         let refines = open.kind == new.kind || (open.kind == "qa" && new.kind == "qa_problems");
         if !worked && refines {
             if open.kind == new.kind {
@@ -306,6 +358,7 @@ pub(super) fn open_round(
         after_push,
         closed_at_ms: None,
         outcome: None,
+        waits_merge_commit: waits,
     };
     store.put_round(&round)?;
     store.record_event(
@@ -445,9 +498,62 @@ pub(super) fn after_step(
                 source: Some(approval.id.clone()),
             },
         ),
-        DeliveryRung::Commit | DeliveryRung::Push => settle_round(store, &approval.task_id),
+        DeliveryRung::Commit => {
+            settle_round(store, &approval.task_id)?;
+            release_waiting(store, &approval.task_id)
+        }
+        DeliveryRung::Push => settle_round(store, &approval.task_id),
         _ => Ok(()),
     }
+}
+
+/// Once the merge is concluded, the rounds that waited for it start: their
+/// stages run on top of the merge commit, and their own commit comes after.
+pub(super) fn release_waiting(store: &DeliveryStore, task_id: &str) -> Result<(), DeliveryError> {
+    let approvals = task_approvals(store, task_id)?;
+    let approval_refs: Vec<&DeliveryApproval> = approvals.iter().collect();
+    if open_merge(&approval_refs, true).is_some() {
+        return Ok(());
+    }
+    let after_push = latest_done(&approvals, DeliveryRung::Push).is_some();
+    let rounds = store.task_rounds(task_id)?;
+    if !rounds
+        .iter()
+        .any(|round| round.is_open() && round.waits_merge_commit)
+    {
+        return Ok(());
+    }
+    // The merge's round ends with its commit: its push goes out with the
+    // next round's.
+    for mut round in rounds.iter().filter(|round| round.is_current()).cloned() {
+        round.closed_at_ms = Some(now_ms());
+        round.outcome = Some("merge confirmado".to_string());
+        store.put_round(&round)?;
+        store.record_event(
+            now_ms(),
+            "round_closed",
+            Some(task_id),
+            None,
+            &round_text(&round),
+        )?;
+    }
+    for mut round in rounds
+        .into_iter()
+        .filter(|round| round.is_open() && round.waits_merge_commit)
+    {
+        round.waits_merge_commit = false;
+        round.opened_at_ms = now_ms();
+        round.after_push = after_push;
+        store.put_round(&round)?;
+        store.record_event(
+            now_ms(),
+            "round_changed",
+            Some(task_id),
+            None,
+            &round_text(&round),
+        )?;
+    }
+    Ok(())
 }
 
 /// A writing stage dispatched while the PR has news or asks for changes: it

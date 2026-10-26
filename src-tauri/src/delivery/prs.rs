@@ -155,6 +155,40 @@ pub struct PrChecks {
     pub passing: u32,
     pub failing: u32,
     pub pending: u32,
+    /// Skipped jobs, beside others of their workflow that ran (a deploy
+    /// that runs only on main): they count for nothing.
+    #[serde(default)]
+    pub skipped: u32,
+    /// Workflows that started on the head but skipped every job (the PR
+    /// touches their paths, yet a condition such as a label kept them
+    /// from running): CI did not run there.
+    #[serde(default)]
+    pub not_run: Vec<String>,
+}
+
+/// The CI of a PR's head commit, as the merge reads it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CiState {
+    Passing,
+    Failing,
+    Pending,
+    /// No check ran on the head, or a workflow it triggered skipped all.
+    NotRun,
+}
+
+impl PrChecks {
+    pub fn state(&self) -> CiState {
+        if self.failing > 0 {
+            CiState::Failing
+        } else if self.pending > 0 {
+            CiState::Pending
+        } else if self.passing == 0 || !self.not_run.is_empty() {
+            CiState::NotRun
+        } else {
+            CiState::Passing
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -204,6 +238,18 @@ pub struct DeliveryPr {
     /// The branch it merges into, as GitHub last said.
     #[serde(default)]
     pub base: Option<String>,
+    /// The head commit its checks ran on, as GitHub last said.
+    #[serde(default)]
+    pub head: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Merged on GitHub while its head's CI was not green: what it was.
+    #[serde(default)]
+    pub merged_failing_ci: Option<String>,
+    /// Its head's CI as the merge reads it; `None` in a repo without CI
+    /// where no check ran.
+    #[serde(default)]
+    pub ci: Option<CiState>,
 }
 
 impl DeliveryPr {
@@ -233,6 +279,36 @@ impl DeliveryPr {
             approved_by: Vec::new(),
             requested_reviewers: Vec::new(),
             base: None,
+            head: None,
+            labels: Vec::new(),
+            merged_failing_ci: None,
+            ci: None,
+        }
+    }
+
+    /// Why its head's CI does not let it merge, or `None` when it passed.
+    /// `label` is the one the repo runs CI on, when it has one.
+    pub fn ci_refusal(&self, label: Option<&str>) -> Option<String> {
+        let sha = self
+            .head
+            .as_deref()
+            .map_or("su último commit".to_string(), |head| {
+                head.chars().take(7).collect()
+            });
+        match self.checks.state() {
+            CiState::Passing => None,
+            CiState::Failing => Some(format!(
+                "el PR #{} tiene checks fallando en {sha}",
+                self.number
+            )),
+            CiState::Pending => Some(format!(
+                "el PR #{} tiene checks en curso en {sha}",
+                self.number
+            )),
+            CiState::NotRun => Some(match label {
+                Some(label) => format!("la CI no se ejecutó en {sha}: añade la etiqueta {label}"),
+                None => format!("la CI no se ejecutó en {sha}"),
+            }),
         }
     }
 
@@ -252,7 +328,39 @@ impl DeliveryPr {
 
 /// `gh pr view --json` fields Tinto reads.
 pub const PR_FIELDS: &str =
-    "title,body,state,isDraft,mergeable,reviewDecision,reviewRequests,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName";
+    "title,body,state,isDraft,mergeable,reviewDecision,reviewRequests,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName,headRefOid,labels";
+
+/// Whether the repo has CI at all: workflow files in the worktree's commit.
+pub fn has_ci(place: Place<'_>, worktree: &std::path::Path) -> bool {
+    !workflow_files(place, worktree).is_empty()
+}
+
+fn workflow_files(place: Place<'_>, worktree: &std::path::Path) -> Vec<String> {
+    tasks::git(
+        place,
+        worktree,
+        &["ls-tree", "--name-only", "HEAD", ".github/workflows/"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter(|path| path.ends_with(".yml") || path.ends_with(".yaml"))
+    .map(str::to_string)
+    .collect()
+}
+
+/// The label the repo's workflows run CI on for a PR
+/// (`github.event.label.name == 'Ready'`), when they wait for one.
+pub fn ci_label(place: Place<'_>, worktree: &std::path::Path) -> Option<String> {
+    const KEY: &str = "github.event.label.name";
+    workflow_files(place, worktree).iter().find_map(|path| {
+        let text = tasks::git(place, worktree, &["show", &format!("HEAD:{path}")]).ok()?;
+        let at = text.find(KEY)? + KEY.len();
+        let rest = text[at..].trim_start().strip_prefix("==")?.trim_start();
+        let quote = rest.chars().next().filter(|c| *c == '\'' || *c == '"')?;
+        let label: String = rest[1..].chars().take_while(|c| *c != quote).collect();
+        (!label.is_empty()).then_some(label)
+    })
+}
 
 fn check_state(check: &Value) -> &'static str {
     // Check runs carry status + conclusion; commit statuses carry state.
@@ -269,6 +377,7 @@ fn check_state(check: &Value) -> &'static str {
     }
     match upper("conclusion").as_str() {
         "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failing",
+        "SKIPPED" => "skipped",
         _ => "passing",
     }
 }
@@ -300,18 +409,43 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         .as_str()
         .filter(|decision| !decision.is_empty())
         .map(str::to_ascii_lowercase);
+    pr.head = text(&snapshot["headRefOid"]);
+    pr.labels = snapshot["labels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|label| label["name"].as_str().map(str::to_string))
+        .collect();
     let mut checks = PrChecks::default();
+    // Each workflow (a status by its context) and whether a job of it ran.
+    let mut workflows: Vec<(String, bool)> = Vec::new();
     for check in snapshot["statusCheckRollup"]
         .as_array()
         .into_iter()
         .flatten()
     {
-        match check_state(check) {
+        let state = check_state(check);
+        match state {
             "passing" => checks.passing += 1,
             "failing" => checks.failing += 1,
+            "skipped" => checks.skipped += 1,
             _ => checks.pending += 1,
         }
+        let workflow = ["workflowName", "name", "context"]
+            .iter()
+            .find_map(|key| text(&check[*key]))
+            .unwrap_or_default();
+        let ran = state != "skipped";
+        match workflows.iter_mut().find(|(name, _)| *name == workflow) {
+            Some((_, any)) => *any |= ran,
+            None => workflows.push((workflow, ran)),
+        }
     }
+    checks.not_run = workflows
+        .into_iter()
+        .filter(|(_, ran)| !ran)
+        .map(|(name, _)| name)
+        .collect();
     pr.checks = checks;
 
     // Each reviewer's latest verdict; comments alone are not one.
@@ -438,6 +572,14 @@ pub trait GitHub: Send + Sync {
         Err(offline())
     }
     fn feed(&self, etag: Option<&str>) -> Result<Feed, DeliveryError>;
+    /// Adds `label` to the PR.
+    fn add_label(&self, _url: &str, _label: &str) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
+    /// Takes `label` off the PR.
+    fn remove_label(&self, _url: &str, _label: &str) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
     /// Merges the PR and deletes its branch on GitHub. `subject` and `body`
     /// are the merge commit's message (`rebase` has none).
     fn merge(
@@ -775,6 +917,22 @@ impl GitHub for GhCli {
             "github_failed",
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ))
+    }
+
+    fn add_label(&self, url: &str, label: &str) -> Result<(), DeliveryError> {
+        Self::act(
+            &["pr", "edit", url, "--add-label", label],
+            "gh no pudo poner la etiqueta",
+        )
+        .map(|_| ())
+    }
+
+    fn remove_label(&self, url: &str, label: &str) -> Result<(), DeliveryError> {
+        Self::act(
+            &["pr", "edit", url, "--remove-label", label],
+            "gh no pudo quitar la etiqueta",
+        )
+        .map(|_| ())
     }
 
     fn merge(
@@ -1186,6 +1344,8 @@ impl DeliveryService {
         if fresh {
             return Ok(Some(pr));
         }
+        let task = self.task(task_id)?;
+        let place = Place::of(task.distro.as_deref());
         let github = self.github();
         let read = github
             .pr(&pr.url)
@@ -1203,6 +1363,8 @@ impl DeliveryService {
                 Err(error) => pr.error = Some(error.message),
             }
             pr.checked_at_ms = Some(now_ms());
+            let state = pr.checks.state();
+            pr.ci = (state != CiState::NotRun || has_ci(place, &task.worktree)).then_some(state);
             let asked =
                 |pr: &DeliveryPr| pr.review_decision.as_deref() == Some("changes_requested");
             if asked(&pr) && !asked(&before) {
@@ -1278,7 +1440,49 @@ impl DeliveryService {
                 merged_outside(pr),
             ),
         };
-        self.save_approval(&step, "merge_found")
+        self.save_approval(&step, "merge_found")?;
+        self.check_merged_ci(pr)
+    }
+
+    /// A PR merged on GitHub while its head's CI was red, still running or
+    /// never ran: the task says so, and a round fixes it on the base.
+    fn check_merged_ci(&self, pr: &DeliveryPr) -> Result<(), DeliveryError> {
+        if pr.merged_failing_ci.is_some() {
+            return Ok(());
+        }
+        let task = self.task(&pr.task_id)?;
+        let Some(why) = self.ci_refusal(&task, pr) else {
+            return Ok(());
+        };
+        let base = pr.base.clone().unwrap_or_else(|| task.base_ref.clone());
+        let store = self.store()?;
+        let mut merged = pr.clone();
+        merged.merged_failing_ci = Some(why.clone());
+        store.put_pr(&merged)?;
+        store.record_event(
+            now_ms(),
+            "pr_merged_failing_ci",
+            Some(&task.id),
+            None,
+            &format!("PR #{} fusionado con CI sin pasar: {why}", pr.number),
+        )?;
+        super::rounds::open_round(
+            &store,
+            &task.id,
+            super::rounds::NewRound {
+                kind: "ci",
+                short: "CI en rojo".to_string(),
+                cause: format!(
+                    "El PR #{} se fusionó en GitHub con la CI sin pasar: arréglalo en {base}",
+                    pr.number
+                ),
+                items: vec![why],
+                source: Some(format!("merged:{}", pr.url)),
+            },
+        )?;
+        drop(store);
+        self.notify();
+        Ok(())
     }
 
     fn github_login(&self, github: &dyn GitHub) -> Result<String, DeliveryError> {
@@ -1428,19 +1632,62 @@ impl DeliveryService {
                 .pr(&found.url)
                 .is_ok_and(|pr| pr["state"].as_str() == Some("OPEN"))
         });
-        if let Some(found) = open {
-            github.edit_pr(&found.url, &approval.title, &approval.body)?;
-            return Ok(found);
+        let found = match open {
+            Some(found) => {
+                github.edit_pr(&found.url, &approval.title, &approval.body)?;
+                found
+            }
+            None => {
+                let base = task.base_ref.trim_start_matches("origin/");
+                let base = (base != "HEAD" && !base.is_empty()).then_some(base);
+                let url =
+                    github.create_pr(&repo, base, &task.branch, &approval.title, &approval.body)?;
+                parse_pr_url(&url).ok_or_else(|| {
+                    DeliveryError::new(
+                        "github_failed",
+                        format!("gh no devolvió la URL del PR abierto: {url}"),
+                    )
+                })?
+            }
+        };
+        // Without it the merge would wait for a CI that never runs.
+        if let Some(problem) = self.label_for_ci(&task, &found.url, false) {
+            eprintln!("tinto: delivery PR #{}: {problem}", found.number);
         }
-        let base = task.base_ref.trim_start_matches("origin/");
-        let base = (base != "HEAD" && !base.is_empty()).then_some(base);
-        let url = github.create_pr(&repo, base, &task.branch, &approval.title, &approval.body)?;
-        parse_pr_url(&url).ok_or_else(|| {
-            DeliveryError::new(
-                "github_failed",
-                format!("gh no devolvió la URL del PR abierto: {url}"),
-            )
-        })
+        Ok(found)
+    }
+
+    /// Makes the repo's CI run on the PR's head when it runs only on a
+    /// label: the label goes on, and after a push it goes off and on again
+    /// (adding it is what starts CI, and one already there adds nothing).
+    /// Returns what could not be done, for the step's notice.
+    pub(super) fn label_for_ci(
+        &self,
+        task: &DeliveryTask,
+        url: &str,
+        pushed: bool,
+    ) -> Option<String> {
+        let place = Place::of(task.distro.as_deref());
+        let label = ci_label(place, &task.worktree)?;
+        let github = self.github_client();
+        let labelled = self
+            .task_pr(&task.id)
+            .ok()
+            .flatten()
+            .is_some_and(|pr| pr.labels.contains(&label));
+        if pushed && labelled {
+            if let Err(error) = github.remove_label(url, &label) {
+                return Some(format!(
+                    "no se pudo quitar la etiqueta {label} para relanzar la CI: {error}"
+                ));
+            }
+        }
+        if let Err(error) = github.add_label(url, &label) {
+            return Some(format!(
+                "no se pudo poner la etiqueta {label}, sin la que la CI no corre: {error}"
+            ));
+        }
+        None
     }
 
     /// How the PR on GitHub differs from the approved title and body, or
@@ -2017,11 +2264,14 @@ mod tests {
         assert_eq!(
             pr.checks,
             PrChecks {
-                passing: 2,
+                passing: 1,
                 failing: 1,
-                pending: 2
+                pending: 2,
+                skipped: 1,
+                not_run: vec!["docs".to_string()],
             }
         );
+        assert_eq!(pr.checks.state(), CiState::Failing);
         // What was there before Tinto followed the PR is not news.
         assert_eq!(pr.new_reviews, 0);
         assert_eq!(pr.seen_until.as_deref(), Some("2026-10-14T08:00:00Z"));

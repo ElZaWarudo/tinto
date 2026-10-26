@@ -517,11 +517,20 @@ pub struct DeliveryRound {
     /// How it ended: "corregidos", "aceptados", "siguió en la ronda 4"…
     #[serde(default)]
     pub outcome: Option<String>,
+    /// Opened while a sync's merge was in progress: it waits for the
+    /// commit that concludes the merge, so its changes are not mixed in.
+    #[serde(default)]
+    pub waits_merge_commit: bool,
 }
 
 impl DeliveryRound {
     pub fn is_open(&self) -> bool {
         self.closed_at_ms.is_none()
+    }
+
+    /// Open and not waiting for a merge commit: the round stages work in.
+    pub fn is_current(&self) -> bool {
+        self.is_open() && !self.waits_merge_commit
     }
 }
 

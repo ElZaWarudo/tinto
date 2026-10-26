@@ -18,7 +18,7 @@ use super::model::{
     DeliveryLease, DeliveryLeaseState, DeliveryQueueWait, DeliveryResultState, DeliveryRound,
     DeliveryRun, DeliveryRung, DeliverySettingsProposal, DeliverySplitIssue, DeliveryTask,
 };
-use super::prs::DeliveryPr;
+use super::prs::{CiState, DeliveryPr};
 use super::service::{CHECKS_ROLE, SETUP_ROLE};
 
 /// The built-in stages, in flow order.
@@ -144,9 +144,27 @@ pub enum Phase {
         blocked: bool,
     },
     Delivered,
-    /// Its PR is followed on GitHub.
+    /// Its PR is followed on GitHub, with the CI of its head.
     Pr {
         number: u64,
+        ci: Option<CiState>,
+    },
+    /// A sync's merge is in progress and its conflicts are resolved (or
+    /// work waits on it): the commit that concludes it comes before any
+    /// other stage. `waiting_round` is the round waiting for it, if any.
+    WaitsMergeCommit {
+        waiting_round: Option<u32>,
+    },
+    /// Stages of these rounds changed the code while a sync's merge was
+    /// in progress: the user decides how to commit it.
+    MergeMixed {
+        mixed_rounds: Vec<u32>,
+    },
+    /// Its PR was merged on GitHub with the CI of its head not green; a
+    /// round fixes it on the base.
+    MergedFailingCi {
+        number: u64,
+        why: String,
     },
     NextStage {
         role: String,
@@ -207,6 +225,8 @@ pub struct Facts<'a> {
     pub rounds: &'a [DeliveryRound],
     /// Why each queued job has not started.
     pub queued: &'a BTreeMap<String, DeliveryQueueWait>,
+    /// Tasks whose worktree has a merge in progress, as git says.
+    pub merging: &'a HashSet<String>,
 }
 
 fn is_open(job: &DeliveryJob) -> bool {
@@ -337,6 +357,110 @@ pub fn current_checks<'a>(jobs: &[&'a DeliveryJob]) -> Vec<&'a DeliveryJob> {
         }
     }
     latest
+}
+
+/// The sync whose merge is still in progress: it stopped on conflicts and
+/// no commit concluded it since. `None` once git has no merge in progress
+/// (`in_progress` false), whoever concluded it.
+pub fn open_merge<'a>(
+    approvals: &[&'a DeliveryApproval],
+    in_progress: bool,
+) -> Option<&'a DeliveryApproval> {
+    if !in_progress {
+        return None;
+    }
+    let sync = latest_step(approvals, DeliveryRung::Sync, None).filter(|sync| {
+        sync.status == DeliveryApprovalStatus::Executed && !sync.conflicts.is_empty()
+    })?;
+    let at = sync.executed_at_ms.unwrap_or(0);
+    let concluded = approvals.iter().any(|approval| {
+        approval.rung == DeliveryRung::Commit
+            && approval.status == DeliveryApprovalStatus::Executed
+            && approval.executed_at_ms.unwrap_or(0) > at
+    });
+    (!concluded).then_some(sync)
+}
+
+/// The stages that resolve a sync's conflicts: implementation, then its
+/// review (Tinto's checks run between them).
+pub const MERGE_STAGES: [&str; 2] = ["implementation", "review"];
+
+/// Whether a round belongs to resolving the merge of `sync`: the sync's own
+/// round, or findings and failing checks of the stages run since it.
+pub fn resolves_merge(
+    round: &DeliveryRound,
+    sync: &DeliveryApproval,
+    jobs: &[&DeliveryJob],
+) -> bool {
+    let at = sync.executed_at_ms.unwrap_or(0);
+    (round.kind == "sync" && round.source.as_deref() == Some(sync.id.as_str()))
+        || (matches!(round.kind.as_str(), "review" | "checks")
+            && jobs.iter().any(|job| {
+                Some(job.id.as_str()) == round.source.as_deref() && job.created_at_ms > at
+            }))
+}
+
+/// The merge's conflicts are resolved and verified: since the sync an
+/// implementation passed, every one of the task's checks passed on it and
+/// a review after it passed, with nothing running.
+pub fn merge_resolved(checks: &[String], jobs: &[&DeliveryJob], sync: &DeliveryApproval) -> bool {
+    let at = sync.executed_at_ms.unwrap_or(0);
+    if jobs.iter().any(|job| is_open(job)) {
+        return false;
+    }
+    let agent: Vec<&DeliveryJob> = jobs
+        .iter()
+        .filter(|job| job.agent != DeliveryAgent::Shell && is_live(job) && job.created_at_ms > at)
+        .copied()
+        .collect();
+    let Some(fix) = agent.iter().rposition(|job| job.role == "implementation") else {
+        return false;
+    };
+    if !is_passed(agent[fix]) {
+        return false;
+    }
+    let reviewed = agent[fix + 1..]
+        .last()
+        .is_some_and(|job| job.role == "review" && is_passed(job));
+    let current = current_checks(jobs);
+    let checked = checks.iter().all(|command| {
+        current
+            .iter()
+            .any(|check| &check.prompt == command && check.status == DeliveryJobStatus::Finished)
+    });
+    reviewed && checked
+}
+
+/// Rounds that are not part of the merge but whose stages changed the code
+/// while it was in progress (from before Tinto kept them apart): their
+/// changes can only be committed together with the merge now.
+pub fn mixed_into_merge<'a>(
+    rounds: &[&'a DeliveryRound],
+    jobs: &[&DeliveryJob],
+    sync: &DeliveryApproval,
+) -> Vec<&'a DeliveryRound> {
+    let at = sync.executed_at_ms.unwrap_or(0);
+    rounds
+        .iter()
+        // A round waiting for the merge commit had no stage of its own.
+        .filter(|round| {
+            round.opened_at_ms >= at
+                && !round.waits_merge_commit
+                && !resolves_merge(round, sync, jobs)
+        })
+        .filter(|round| {
+            jobs.iter().any(|job| {
+                job.agent != DeliveryAgent::Shell
+                    && is_live(job)
+                    && !job.changes.is_empty()
+                    && job.created_at_ms >= round.opened_at_ms
+                    && round
+                        .closed_at_ms
+                        .is_none_or(|closed| job.created_at_ms <= closed)
+            })
+        })
+        .copied()
+        .collect()
 }
 
 /// The latest run of each of the task's setup commands, in its order. A
@@ -634,7 +758,7 @@ pub fn task_phase(task: &DeliveryTask, facts: &Facts<'_>) -> DeliveryTaskPhase {
         .rounds
         .iter()
         .rev()
-        .find(|round| round.task_id == task.id && round.is_open());
+        .find(|round| round.task_id == task.id && round.is_current());
     let mut phase = phase_in_round(task, facts, open);
     phase.round = open.map(|round| CurrentRound {
         round: round.clone(),
@@ -683,7 +807,18 @@ fn phase_in_round(
         .runs
         .iter()
         .any(|run| Some(&run.id) == task.run_id.as_ref() && run.unattended);
-    let next = next_stage(&task.setup, &jobs, &approvals);
+    let merge = open_merge(&approvals, facts.merging.contains(&task.id));
+    let mut next = next_stage(&task.setup, &jobs, &approvals);
+    // While a merge is in progress only the stages resolving it run, and
+    // none once they passed: the merge is committed first.
+    if let Some(sync) = merge {
+        if merge_resolved(&task.checks, &jobs, sync) {
+            next = None;
+        } else if next.as_deref().is_some_and(|role| role != "implementation") {
+            next = Some("review".to_string());
+        }
+    }
+    let resolving = merge.is_some() && next.is_some();
     let ladder = steps_for(task);
     let steps: Vec<DeliveryStep> = if ladder.len() == STEPS.len() {
         Vec::new()
@@ -939,6 +1074,50 @@ fn phase_in_round(
             Waiter::Coordinator,
         );
     }
+    if let Some(sync) = merge {
+        let task_rounds: Vec<&DeliveryRound> = facts
+            .rounds
+            .iter()
+            .filter(|round| round.task_id == task.id)
+            .collect();
+        let mixed = mixed_into_merge(&task_rounds, &jobs, sync);
+        if !mixed.is_empty() {
+            return phase(
+                Phase::MergeMixed {
+                    mixed_rounds: mixed.iter().map(|round| round.number).collect(),
+                },
+                Waiter::User,
+            );
+        }
+        if !resolving {
+            let waiting = task_rounds
+                .iter()
+                .rev()
+                .find(|round| round.is_open() && round.waits_merge_commit)
+                .map(|round| round.number);
+            return phase(
+                Phase::WaitsMergeCommit {
+                    waiting_round: waiting,
+                },
+                Waiter::Coordinator,
+            );
+        }
+    }
+    if let Some(pr) = facts
+        .prs
+        .iter()
+        .find(|pr| pr.task_id == task.id && round.is_some_and(|round| round.kind == "ci"))
+    {
+        if let Some(why) = &pr.merged_failing_ci {
+            return phase(
+                Phase::MergedFailingCi {
+                    number: pr.number,
+                    why: why.clone(),
+                },
+                Waiter::Coordinator,
+            );
+        }
+    }
     let step = next_step(task, &approvals);
     let Some((rung, stage)) = step else {
         return phase(Phase::Delivered, Waiter::Nobody);
@@ -954,7 +1133,13 @@ fn phase_in_round(
         }
     }
     if let Some(pr) = facts.prs.iter().find(|pr| pr.task_id == task.id) {
-        return phase(Phase::Pr { number: pr.number }, pr_waits_on(pr, unattended));
+        return phase(
+            Phase::Pr {
+                number: pr.number,
+                ci: pr.ci,
+            },
+            pr_waits_on(pr, unattended),
+        );
     }
     if let Some(role) = next.clone() {
         return phase(Phase::NextStage { role }, Waiter::Coordinator);
@@ -1012,6 +1197,7 @@ mod tests {
         prs: Vec<DeliveryPr>,
         proposals: Vec<DeliverySettingsProposal>,
         rounds: Vec<DeliveryRound>,
+        merging: HashSet<String>,
     }
 
     impl World {
@@ -1025,6 +1211,7 @@ mod tests {
                 prs: Vec::new(),
                 proposals: Vec::new(),
                 rounds: Vec::new(),
+                merging: HashSet::new(),
             }
         }
 
@@ -1041,6 +1228,7 @@ mod tests {
                     prs: &self.prs,
                     rounds: &self.rounds,
                     queued: &BTreeMap::new(),
+                    merging: &self.merging,
                 },
             )
         }
@@ -1173,6 +1361,7 @@ mod tests {
             prs: &[],
             rounds: &[],
             queued: &BTreeMap::new(),
+            merging: &HashSet::new(),
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,
@@ -1400,7 +1589,13 @@ mod tests {
         };
         assert_eq!(
             waits(serde_json::json!({})),
-            (Phase::Pr { number: 5 }, Waiter::Reviewers)
+            (
+                Phase::Pr {
+                    number: 5,
+                    ci: None
+                },
+                Waiter::Reviewers
+            )
         );
         assert_eq!(
             waits(serde_json::json!({"new_comments": 1})).1,

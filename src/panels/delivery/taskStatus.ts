@@ -136,7 +136,9 @@ export function historyKey(job: DeliveryJob): string {
 
 /** "Implementación" → "implementación", but keep "QA", "PR" and "Jira…" as written. */
 export function lower(label: string): string {
-  return label === label.toUpperCase() || label.startsWith("Jira") ? label : label.toLowerCase();
+  return label === label.toUpperCase() || label.startsWith("Jira") || label.startsWith("CI ")
+    ? label
+    : label.toLowerCase();
 }
 
 export function isOpen(job: DeliveryJob): boolean {
@@ -799,6 +801,24 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       );
     case "delivered":
       return { group: "delivered", tone: "ok", icon: "check", label: "Entregada" };
+    case "waits_merge_commit":
+      return {
+        ...waiting("Espera el commit del merge"),
+        detail:
+          phase.waiting_round === null
+            ? "Hay un merge de la base en curso: se confirma antes de cualquier otra etapa."
+            : `La ronda ${phase.waiting_round} corre encima del commit del merge, en commits aparte.`,
+      };
+    case "merge_mixed":
+      return {
+        ...attention("Merge mezclado con otros cambios", "alert"),
+        detail: `Cambios de ${phase.mixed_rounds.length === 1 ? "la ronda" : "las rondas"} ${phase.mixed_rounds.join(", ")} quedaron dentro del merge en curso: decide cómo confirmarlos.`,
+      };
+    case "merged_failing_ci":
+      return {
+        ...danger(`PR #${phase.number} fusionado con la CI sin pasar`, "x"),
+        detail: phase.why,
+      };
     case "pr": {
       const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
       if (!pr) return waiting("PR");
@@ -816,6 +836,7 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
         tone: summary.tone,
         icon: summary.icon,
         label: ready ? `PR aprobado${then}` : `PR: ${lower(summary.label)}`,
+        detail: ciLine(pr) ?? undefined,
       };
     }
     case "next_stage":
@@ -823,6 +844,19 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
     case "next_step":
       return idle(`Siguiente: ${lower(phaseStep(phase.rung, phase.stage).label)}`);
   }
+}
+
+/** The CI of a PR's head in words, with its commit: "CI pasa en abc1234". */
+export function ciLine(pr: DeliveryPr): string | null {
+  if (!pr.ci) return null;
+  const at = pr.head ? ` en ${pr.head.slice(0, 7)}` : "";
+  const words = {
+    passing: "CI pasa",
+    failing: "CI falla",
+    pending: "CI en curso",
+    not_run: "CI sin ejecutar",
+  } as const;
+  return `${words[pr.ci]}${at}`;
 }
 
 /** One line for the state of a followed PR, from most to least urgent. */
@@ -839,6 +873,7 @@ export function prSummary(pr: DeliveryPr): { tone: Tone; icon: StatusIcon; label
     };
   }
   if (pr.checks.failing > 0) return { tone: "danger", icon: "x", label: "Checks fallando" };
+  if (pr.ci === "not_run") return { tone: "attention", icon: "alert", label: "CI sin ejecutar" };
   if (pr.conflicts) return { tone: "attention", icon: "alert", label: "Conflictos" };
   if (pr.review_decision === "changes_requested") {
     return { tone: "attention", icon: "alert", label: "Cambios pedidos" };

@@ -20,9 +20,11 @@
 //!   rungs are approved as they are asked; the PR and Jira rungs still wait.
 
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCommit, DeliveryDecisionStatus,
-    DeliveryMergeConflicts, DeliveryRun, DeliveryRung, DeliverySettingsProposalStatus,
-    DeliveryTask, SINGLE_COMMIT_MAX_FILES, SINGLE_COMMIT_MAX_LINES,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryBlockerKind, DeliveryCommit,
+    DeliveryDecisionKind, DeliveryDecisionOption, DeliveryDecisionStatus, DeliveryJob,
+    DeliveryMergeConflicts, DeliveryRound, DeliveryRun, DeliveryRung,
+    DeliverySettingsProposalStatus, DeliveryTask, NewBlocker, SINGLE_COMMIT_MAX_FILES,
+    SINGLE_COMMIT_MAX_LINES,
 };
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
@@ -286,6 +288,46 @@ fn created_commits(approval: &DeliveryApproval) -> Vec<String> {
 pub const JIRA_AFTER_PR: &str = "after_pr";
 /// The Jira step once the PR is merged (the issue is closed).
 pub const JIRA_AFTER_MERGE: &str = "after_merge";
+
+/// The question Tinto asks when other work got into a merge in progress,
+/// and its two answers.
+pub const MIXED_QUESTION: &str =
+    "Hay cambios de otras rondas mezclados con el merge en curso: ¿cómo se confirman?";
+pub const MIXED_ONE_COMMIT: &str = "Un solo commit de merge con todo";
+pub const MIXED_SPLIT: &str = "Separarlos a mano";
+/// The blocker the user clears once the split by hand is done; Tinto then
+/// runs the checks again.
+pub const MIXED_SPLIT_NOTE: &str =
+    "Separa a mano el merge de los cambios de otras rondas (commits aparte) y quita este bloqueo";
+
+/// What the mixed rounds changed, for the merge commit's message.
+fn mixed_body(mixed: &[&DeliveryRound], jobs: &[&DeliveryJob]) -> String {
+    let mut lines = vec!["Incluye también cambios hechos durante el merge:".to_string()];
+    for round in mixed {
+        let mut paths: Vec<String> = jobs
+            .iter()
+            .filter(|job| job.created_at_ms >= round.opened_at_ms)
+            .filter(|job| {
+                round
+                    .closed_at_ms
+                    .is_none_or(|closed| job.created_at_ms <= closed)
+            })
+            .flat_map(|job| job.changes.iter().map(|change| change.path.clone()))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        lines.push(format!(
+            "- Ronda {} ({}): {}",
+            round.number,
+            round.cause,
+            paths.join(", ")
+        ));
+    }
+    lines.join(
+        "
+",
+    )
+}
 
 /// A step done outside Tinto that Tinto found on GitHub.
 pub(super) fn found_step(
@@ -1362,6 +1404,14 @@ impl DeliveryService {
                     approval.outcome = Some(error.message);
                 }
             }
+            // New commits on an open PR: its CI must run on them.
+            if approval.rung == DeliveryRung::Push
+                && approval.status == DeliveryApprovalStatus::Executed
+            {
+                if let Some(pr) = self.task_pr(&task.id)?.filter(|pr| pr.is_open()) {
+                    approval.notice = self.label_for_ci(&task, &pr.url, true);
+                }
+            }
         }
         self.save_approval(&approval, "approval_approved")?;
         // A sync that merged cleanly changed the code no stage made: Tinto's
@@ -1812,6 +1862,187 @@ impl DeliveryService {
         Ok(Some(DeliveryMergeConflicts { base, files }))
     }
 
+    /// The sync whose merge is still in progress in the task's worktree.
+    fn task_open_merge(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<Option<DeliveryApproval>, DeliveryError> {
+        let approvals: Vec<DeliveryApproval> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|approval| approval.task_id == task.id)
+            .collect();
+        let refs: Vec<&DeliveryApproval> = approvals.iter().collect();
+        let place = Place::of(task.distro.as_deref());
+        let in_progress = tasks::merge_head(place, &task.worktree).is_some();
+        Ok(super::phase::open_merge(&refs, in_progress).cloned())
+    }
+
+    /// While a sync's merge is in progress only its implementation and its
+    /// review run, and nothing once they passed: a commit concludes a merge
+    /// whole, so anything else done now could never be committed apart.
+    pub(super) fn check_merge_stage(
+        &self,
+        task: &DeliveryTask,
+        role: &str,
+    ) -> Result<(), DeliveryError> {
+        let Some(sync) = self.task_open_merge(task)? else {
+            return Ok(());
+        };
+        let jobs = self.store()?.task_jobs(&task.id)?;
+        let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
+        let resolving = super::phase::MERGE_STAGES.contains(&role)
+            && !super::phase::merge_resolved(&task.checks, &jobs, &sync);
+        if resolving {
+            return Ok(());
+        }
+        Err(DeliveryError::new(
+            "merge_in_progress",
+            format!(
+                "hay un merge en curso ({}): solo implementation y review lo resuelven. Confirma antes el merge con el paso commit (Tinto lo pide en cuanto sus etapas pasan); {role} corre después, encima del commit de merge",
+                sync.title
+            ),
+        ))
+    }
+
+    /// After a job ended or a decision was answered: once the stages that
+    /// resolve a merge passed, Tinto asks the commit that concludes it; a
+    /// merge mixed with other work asks the user how to commit it; a merge
+    /// concluded outside Tinto lets the rounds waiting for it go on.
+    pub(super) fn conclude_merge(&self, task_id: &str) -> Result<(), DeliveryError> {
+        let task = self.task(task_id)?;
+        let Some(sync) = self.task_open_merge(&task)? else {
+            let store = self.store()?;
+            return super::rounds::release_waiting(&store, task_id);
+        };
+        let store = self.store()?;
+        let jobs = store.task_jobs(task_id)?;
+        let rounds = store.task_rounds(task_id)?;
+        let decisions = store.task_decisions(task_id)?;
+        let asking = store.approvals()?.into_iter().any(|approval| {
+            approval.task_id == task_id
+                && approval.rung == DeliveryRung::Commit
+                && matches!(
+                    approval.status,
+                    DeliveryApprovalStatus::Pending | DeliveryApprovalStatus::Approved
+                )
+        });
+        drop(store);
+        if asking {
+            return Ok(());
+        }
+        let job_refs: Vec<&DeliveryJob> = jobs.iter().collect();
+        let round_refs: Vec<&DeliveryRound> = rounds.iter().collect();
+        let mixed = super::phase::mixed_into_merge(&round_refs, &job_refs, &sync);
+        let body = if mixed.is_empty() {
+            if !super::phase::merge_resolved(&task.checks, &job_refs, &sync) {
+                return Ok(());
+            }
+            String::new()
+        } else {
+            let asked = decisions
+                .iter()
+                .find(|decision| decision.question == MIXED_QUESTION);
+            let Some(asked) = asked else {
+                self.ask_mixed_merge(&task, &mixed, &job_refs)?;
+                return Ok(());
+            };
+            match asked.answer.as_deref() {
+                Some(MIXED_ONE_COMMIT) => mixed_body(&mixed, &job_refs),
+                Some(MIXED_SPLIT) => {
+                    let noted = task.blockers.iter().any(|blocker| {
+                        matches!(&blocker.kind, DeliveryBlockerKind::Note { text } if text == MIXED_SPLIT_NOTE)
+                    });
+                    if !noted {
+                        self.add_blocker(
+                            task_id,
+                            NewBlocker::Note {
+                                text: MIXED_SPLIT_NOTE.to_string(),
+                            },
+                        )?;
+                    }
+                    return Ok(());
+                }
+                _ => return Ok(()),
+            }
+        };
+        let request = NewApproval {
+            task_id: task.id.clone(),
+            rung: DeliveryRung::Commit,
+            title: sync.title.clone(),
+            body,
+            requested_by: super::decisions::AUTO.to_string(),
+            commits: Vec::new(),
+            merge_method: None,
+            stage: None,
+            jira_statuses: Vec::new(),
+            leave_out: Vec::new(),
+            single_commit_reason: None,
+            comment_url: None,
+            resolve_thread: false,
+        };
+        if let Err(error) = self.request_approval(request) {
+            eprintln!(
+                "tinto: delivery did not ask the merge commit of {}: {error}",
+                task.key
+            );
+        }
+        Ok(())
+    }
+
+    /// Asks the user how to commit a merge other work got mixed into.
+    fn ask_mixed_merge(
+        &self,
+        task: &DeliveryTask,
+        mixed: &[&DeliveryRound],
+        jobs: &[&DeliveryJob],
+    ) -> Result<(), DeliveryError> {
+        let rounds: Vec<String> = mixed
+            .iter()
+            .map(|round| format!("ronda {} ({})", round.number, round.cause))
+            .collect();
+        let option = |label: &str, consequence: String| DeliveryDecisionOption {
+            label: label.to_string(),
+            consequence,
+            recommended: false,
+        };
+        self.request_decisions(
+            &task.id,
+            vec![super::decisions::NewDecision {
+                kind: DeliveryDecisionKind::Choice,
+                question: MIXED_QUESTION.to_string(),
+                detail: format!(
+                    "Cambios hechos durante el merge en {}:\n{}",
+                    rounds.join("; "),
+                    mixed_body(mixed, jobs)
+                ),
+                references: Vec::new(),
+                options: vec![
+                    option(
+                        MIXED_ONE_COMMIT,
+                        "Un commit concluye el merge con todo; su mensaje lista qué cambios vinieron de la revisión.".to_string(),
+                    ),
+                    option(
+                        MIXED_SPLIT,
+                        "Separas a mano el merge de esos cambios; después una etapa verifica el resultado y las comprobaciones de Tinto vuelven a correr.".to_string(),
+                    ),
+                ],
+                text: String::new(),
+                command: None,
+                undo: String::new(),
+                scripts: Vec::new(),
+                read_dirs: Vec::new(),
+                write_dirs: Vec::new(),
+                clients: Vec::new(),
+                full_access: false,
+                blocking: true,
+            }],
+            super::decisions::AUTO,
+        )?;
+        Ok(())
+    }
+
     /// Before a push: no merge left in progress, and the base the latest
     /// sync merged still in the branch (a commit made over the merge must
     /// keep it as a parent).
@@ -2028,17 +2259,48 @@ impl DeliveryService {
             ))
         } else if pr.conflicts {
             Some(format!("el PR #{} tiene conflictos con su base", pr.number))
-        } else if pr.checks.failing > 0 {
-            Some(format!("el PR #{} tiene checks fallando", pr.number))
-        } else if pr.checks.pending > 0 {
-            Some(format!("el PR #{} tiene checks en curso", pr.number))
         } else {
-            None
+            self.ci_refusal(task, &pr)
         };
-        match blocker {
-            Some(message) => Err(DeliveryError::new("pr_not_ready", message)),
-            None => Ok(()),
+        if let Some(message) = blocker {
+            return Err(DeliveryError::new("pr_not_ready", message));
         }
+        // CI passed on a branch without the base's latest commits: what
+        // merges was never tested together.
+        let place = Place::of(task.distro.as_deref());
+        let base = self.sync_base(task)?;
+        // Offline, the base as last fetched; unknown, nothing to compare.
+        let tip = tasks::base_tip(place, &task.worktree, &base, true)
+            .or_else(|_| tasks::base_tip(place, &task.worktree, &base, false));
+        let Ok((name, commit)) = tip else {
+            return Ok(());
+        };
+        if !tasks::on_branch(place, &task.worktree, &commit) {
+            return Err(DeliveryError::new(
+                "base_moved",
+                format!(
+                    "{name} avanzó ({}) desde la última CI en verde: sincroniza la rama, publícala y espera a que la CI pase de nuevo",
+                    short(&commit)
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Why the CI on the PR's head does not let it merge. A repo without
+    /// workflows may have no check at all; what checks it has still count.
+    pub(super) fn ci_refusal(
+        &self,
+        task: &DeliveryTask,
+        pr: &super::prs::DeliveryPr,
+    ) -> Option<String> {
+        let place = Place::of(task.distro.as_deref());
+        if pr.checks.state() == super::prs::CiState::NotRun
+            && !super::prs::has_ci(place, &task.worktree)
+        {
+            return None;
+        }
+        pr.ci_refusal(super::prs::ci_label(place, &task.worktree).as_deref())
     }
 
     /// Runs a Jira step on the task's issue: links its PR once it is open
@@ -2066,10 +2328,14 @@ impl DeliveryService {
 
     /// Merges the task's PR on GitHub and deletes its branch there.
     fn merge_pr(&self, approval: &DeliveryApproval) -> Result<String, DeliveryError> {
+        let method = approval.merge_method.as_deref().unwrap_or("squash");
+        // The PR as it is now: the step may have waited while it moved.
+        let task = self.task(&approval.task_id)?;
+        self.refresh_pr(&task.id, std::time::Duration::ZERO)?;
+        self.merge_prerequisites(&task, Some(method))?;
         let pr = self.task_pr(&approval.task_id)?.ok_or_else(|| {
             DeliveryError::new("pr_missing", "la tarea ya no tiene un PR de GitHub")
         })?;
-        let method = approval.merge_method.as_deref().unwrap_or("squash");
         self.github_client()
             .merge(&pr.url, method, &approval.title, &approval.body)?;
         Ok(format!(

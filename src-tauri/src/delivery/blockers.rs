@@ -309,7 +309,15 @@ impl DeliveryService {
         } else {
             "task_unblocked"
         };
-        self.save_blockers(task, event, &format!("quitó {}", cleared.join(", ")))
+        // The merge was split by hand: Tinto's checks run on the result.
+        let split = cleared
+            .iter()
+            .any(|label| label == super::coordination::MIXED_SPLIT_NOTE);
+        let task = self.save_blockers(task, event, &format!("quitó {}", cleared.join(", ")))?;
+        if split {
+            self.queue_task_checks(&task.id)?;
+        }
+        Ok(task)
     }
 
     /// The coordinator acted on the task (dispatched, asked for a step, set

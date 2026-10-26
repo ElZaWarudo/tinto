@@ -153,6 +153,7 @@ import {
   pendingSettingsProposals,
   prMood,
   prSummary,
+  ciLine,
   quietFor,
   rolesOf,
   stepKey,
@@ -3764,7 +3765,7 @@ function ApprovalBanner({
           : approval.rung === "pr"
             ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar.`
             : approval.rung === "merge"
-              ? `Al aprobar, Tinto fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
+              ? `Al aprobar, Tinto comprueba que la CI pasó en el último commit del PR y que la base no avanzó, fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
               : approval.jira_link_only
                 ? `Al aprobar, Tinto enlaza este PR en ${task.key} sin cambiar su estado: otro paquete del issue ya lo movió.`
                 : approval.jira_statuses?.length
@@ -3784,6 +3785,17 @@ function ApprovalBanner({
         </span>
       </p>
       {!pending && approval.notice && <p className="delivery-job__note">{approval.notice}</p>}
+      {(approval.rung === "merge" || approval.rung === "pr") && pr && ciLine(pr) && (
+        <p
+          className={pr.ci === "passing" ? "delivery-muted" : "delivery-tone--danger"}
+          aria-label="CI del PR"
+        >
+          {ciLine(pr)}
+          {approval.rung === "merge" &&
+            pr.ci !== "passing" &&
+            ": no se fusiona hasta que la CI pase en este commit"}
+        </p>
+      )}
       {!pending && approval.rung === "pr" && (
         <div className="delivery-actions">
           <ActionButton
