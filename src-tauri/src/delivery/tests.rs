@@ -2950,6 +2950,53 @@ fn a_package_starts_from_the_one_it_builds_on_and_waits_for_its_pr() {
 }
 
 #[test]
+fn a_task_created_as_a_whole_issue_becomes_its_first_package() {
+    let h = harness();
+    let whole = h.service.create_task(NewTask {
+        repo: h.repo.path().to_path_buf(),
+        distro: None,
+        key: "K-61".into(),
+        title: "Task K-61".into(),
+        read_dirs: Vec::new(),
+        base: None,
+        branch: None,
+        run_id: None,
+        package: None,
+    });
+    let whole = whole.unwrap();
+    let as_package = |index: u32, builds_on: Option<u32>| NewPackage {
+        index,
+        of: 2,
+        title: format!("Parte {index}"),
+        builds_on,
+        until: None,
+    };
+    // An existing task keeps its base: it cannot build on another.
+    let refused = h.service.set_task_package(&whole.id, &as_package(2, Some(1)));
+    assert_eq!(refused.unwrap_err().category, "invalid_package");
+
+    let first = h.service.set_task_package(&whole.id, &as_package(1, None)).unwrap();
+    assert_eq!(first.package.as_ref().map(|p| (p.index, p.of)), Some((1, 2)));
+    assert_eq!(first.worktree, whole.worktree);
+    assert_eq!(first.base_ref, whole.base_ref);
+    let again = h.service.set_task_package(&whole.id, &as_package(1, None));
+    assert_eq!(again.unwrap_err().category, "invalid_package");
+
+    // The issue's next package can now follow it.
+    let second = package(&h, "K-61", 2, Some(1)).unwrap();
+    assert_eq!(second.base_ref, first.branch);
+    let issues = h.service.overview().unwrap().issues;
+    assert_eq!(
+        issues[0]
+            .packages
+            .iter()
+            .map(|package| package.task_id.as_str())
+            .collect::<Vec<_>>(),
+        [first.id.as_str(), second.id.as_str()]
+    );
+}
+
+#[test]
 fn a_split_issue_moves_in_jira_once_and_closes_with_its_last_package() {
     let h = harness();
     let first = package(&h, "K-61", 1, None).unwrap();

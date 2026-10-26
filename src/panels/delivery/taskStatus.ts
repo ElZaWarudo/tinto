@@ -11,6 +11,7 @@ import type {
   DeliveryPr,
   DeliveryRung,
   DeliverySettingsProposal,
+  DeliverySplitIssue,
   DeliveryTask,
   DeliveryTaskPhase,
 } from "../../delivery/types";
@@ -370,46 +371,89 @@ function packageWhere(overview: DeliveryOverview, taskId: string): string {
   }
 }
 
+/** The split issue a package belongs to, as Tinto sums it up. */
+export function splitIssueOf(
+  overview: DeliveryOverview,
+  task: DeliveryTask,
+): DeliverySplitIssue | null {
+  return (
+    overview.issues?.find((candidate) =>
+      candidate.packages.some((pkg) => pkg.task_id === task.id),
+    ) ?? null
+  );
+}
+
+/** Where package `index` of a split issue stands: "fusionado", "en QA", "sin crear". */
+export function packageState(
+  overview: DeliveryOverview,
+  issue: DeliverySplitIssue,
+  index: number,
+): string {
+  const pkg = issue.packages.find((candidate) => candidate.index === index);
+  if (!pkg) return "sin crear";
+  if (pkg.delivered) return "entregado";
+  if (pkg.merged) return "fusionado";
+  return packageWhere(overview, pkg.task_id);
+}
+
 /** "1/2 fusionado · 2/2 en QA": where each package of the task's split
  *  issue stands; null for a task that is a whole issue. */
 export function issueProgress(overview: DeliveryOverview, task: DeliveryTask): string | null {
-  const issue = overview.issues?.find((candidate) =>
-    candidate.packages.some((pkg) => pkg.task_id === task.id),
-  );
+  const issue = splitIssueOf(overview, task);
   if (!issue) return null;
   const parts = [];
   for (let index = 1; index <= issue.of; index++) {
-    const pkg = issue.packages.find((candidate) => candidate.index === index);
-    const where = !pkg
-      ? "sin crear"
-      : pkg.delivered
-        ? "entregado"
-        : pkg.merged
-          ? "fusionado"
-          : packageWhere(overview, pkg.task_id);
-    parts.push(`${index}/${issue.of} ${where}`);
+    parts.push(`${index}/${issue.of} ${packageState(overview, issue, index)}`);
   }
   return parts.join(" · ");
 }
 
-/** The tasks with each split issue's packages together, in order, where
- *  its first package stands. */
-export function clusterPackages(tasks: DeliveryTask[]): DeliveryTask[] {
-  const issueOf = (task: DeliveryTask) => `${task.repo}\n${task.key.toLowerCase()}`;
-  const first = new Map<string, number>();
-  tasks.forEach((task, at) => {
-    if (task.package && !first.has(issueOf(task))) first.set(issueOf(task), at);
-  });
-  const place = (task: DeliveryTask, at: number) =>
-    task.package ? (first.get(issueOf(task)) ?? at) : at;
-  return tasks
-    .map((task, at) => ({ task, at }))
-    .sort(
-      (a, b) =>
-        place(a.task, a.at) - place(b.task, b.at) ||
-        (a.task.package?.index ?? 0) - (b.task.package?.index ?? 0),
-    )
-    .map(({ task }) => task);
+/** A row of the task list: a task, or a split issue holding its packages in order. */
+export type TaskListEntry =
+  | { kind: "task"; task: DeliveryTask }
+  | { kind: "issue"; id: string; key: string; packages: DeliveryTask[] };
+
+/** What selects a split issue's row in its repo's list. */
+export function issueRowId(task: DeliveryTask): string {
+  return `issue:${task.key.toLowerCase()}`;
+}
+
+/** The task list by status group. A split issue is one entry, in the group
+ *  of its package that needs the most (the first group among theirs). */
+export function taskListGroups(
+  tasks: DeliveryTask[],
+  groupOf: (task: DeliveryTask) => StatusGroup,
+): { group: StatusGroup; label: string; entries: TaskListEntry[] }[] {
+  const rank = (group: StatusGroup) => GROUPS.findIndex((candidate) => candidate.group === group);
+  const issues = new Map<string, DeliveryTask[]>();
+  for (const task of tasks) {
+    if (!task.package) continue;
+    issues.set(issueRowId(task), [...(issues.get(issueRowId(task)) ?? []), task]);
+  }
+  const entryGroup = (task: DeliveryTask) =>
+    task.package
+      ? GROUPS[Math.min(...issues.get(issueRowId(task))!.map((one) => rank(groupOf(one))))].group
+      : groupOf(task);
+  return GROUPS.map((group) => {
+    const entries: TaskListEntry[] = [];
+    for (const task of tasks) {
+      if (entryGroup(task) !== group.group) continue;
+      if (!task.package) {
+        entries.push({ kind: "task", task });
+        continue;
+      }
+      const id = issueRowId(task);
+      if (entries.some((entry) => entry.kind === "issue" && entry.id === id)) continue;
+      const packages = [...issues.get(id)!].sort((a, b) => a.package!.index - b.package!.index);
+      entries.push({ kind: "issue", id, key: task.key, packages });
+    }
+    return { ...group, entries };
+  }).filter((group) => group.entries.length > 0);
+}
+
+/** The tasks of the list's entries, packages in order. */
+export function entryTasks(entries: TaskListEntry[]): DeliveryTask[] {
+  return entries.flatMap((entry) => (entry.kind === "task" ? [entry.task] : entry.packages));
 }
 
 function clock(job: DeliveryJob, now: number): string {

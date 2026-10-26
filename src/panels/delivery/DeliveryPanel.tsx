@@ -129,7 +129,6 @@ import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryD
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
 import { PrSection } from "./DeliveryPr";
 import {
-  GROUPS,
   STEPS,
   TASK_STATE_LABEL,
   attemptOutcome,
@@ -160,7 +159,11 @@ import {
   stepsOf,
   taskLabel,
   issueProgress,
-  clusterPackages,
+  entryTasks,
+  packageState,
+  splitIssueOf,
+  taskListGroups,
+  type TaskListEntry,
   stepOf,
   type DeliveryCurrentRound,
   type DeliveryStep,
@@ -1558,21 +1561,32 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const listed = lot ? tasks.filter((task) => task.run_id === lot) : tasks;
   // What needs the user is never folded.
   const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
-  // A split issue's packages sit together within each group, in order.
-  const groups = GROUPS.map((group) => ({
-    ...group,
-    tasks: clusterPackages(listed.filter((task) => statuses.get(task.id)?.group === group.group)),
-  })).filter((group) => group.tasks.length > 0);
+  // A split issue is one row, with its packages nested under it in order.
+  const groups = taskListGroups(listed, (task) => statuses.get(task.id)?.group ?? "idle").map(
+    (group) => ({ ...group, tasks: entryTasks(group.entries) }),
+  );
   const ordered = groups.flatMap((group) => (isFolded(group.group) ? [] : group.tasks));
+  // A split issue's row shows its plan.
+  const selectedIssue =
+    groups
+      .flatMap((group) => group.entries)
+      .find(
+        (entry): entry is Extract<TaskListEntry, { kind: "issue" }> =>
+          entry.kind === "issue" && entry.id === selected[key],
+      ) ?? null;
   // With every group folded, the detail still shows a task.
-  const selectedTask =
-    tasks.find((task) => task.id === selected[key]) ?? ordered[0] ?? groups[0]?.tasks[0] ?? null;
-  const shownTaskId = selectedTask?.id ?? null;
+  const selectedTask = selectedIssue
+    ? null
+    : (tasks.find((task) => task.id === selected[key]) ??
+      ordered[0] ??
+      groups[0]?.tasks[0] ??
+      null);
+  const shownId = selectedIssue?.id ?? selectedTask?.id ?? null;
   // Keep showing the same task when its group changes (e.g. after answering
   // its decisions) instead of jumping to whatever is first in the list.
   useEffect(() => {
-    if (shownTaskId && shownTaskId !== selected[key]) select(repo, shownTaskId);
-  }, [shownTaskId, selected, key, repo, select]);
+    if (shownId && shownId !== selected[key]) select(repo, shownId);
+  }, [shownId, selected, key, repo, select]);
   const chooseLot = (next: string | null) => {
     setListView((view) => ({ ...view, lot: next }));
     if (next && selectedTask && selectedTask.run_id !== next) select(repo, null);
@@ -1639,6 +1653,84 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       </Menu>
     </span>
   );
+
+  // A task's row; a package's, nested under its issue, says only which one it is.
+  const taskRow = (task: DeliveryTask) => {
+    const pr = (overview?.prs ?? []).find((candidate) => candidate.task_id === task.id);
+    const status = statuses.get(task.id)!;
+    return (
+      <button
+        key={task.id}
+        type="button"
+        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}`}
+        aria-current={selectedTask?.id === task.id ? "true" : undefined}
+        onClick={() => select(repo, task.id)}
+        onContextMenu={(event) => {
+          const host = event.currentTarget.closest(".delivery-panel");
+          if (!host) return;
+          event.preventDefault();
+          select(repo, task.id);
+          setContextAt({
+            taskId: task.id,
+            host,
+            x: event.clientX,
+            y: event.clientY,
+          });
+        }}
+        onKeyDown={(event) => {
+          // The keyboard's way to the same menu: Shift+F10 or the menu key.
+          if (!(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
+          const host = event.currentTarget.closest(".delivery-panel");
+          if (!host) return;
+          event.preventDefault();
+          const row = event.currentTarget.getBoundingClientRect();
+          select(repo, task.id);
+          setContextAt({ taskId: task.id, host, x: row.left + 24, y: row.bottom });
+        }}
+      >
+        <span className="delivery-task-row__key">
+          {task.package ? `Paquete ${task.package.index}/${task.package.of}` : taskLabel(task)}
+          {pr && (
+            <span className="delivery-task-row__pr" title={`PR #${pr.number}`}>
+              #{pr.number}
+            </span>
+          )}
+        </span>
+        <span className="delivery-task-row__title">
+          {task.package ? task.package.title || task.title : task.title || task.branch}
+        </span>
+        <StatusLine status={status} />
+        {status.detail && (
+          <span className="delivery-task-row__blocker" title={status.detail}>
+            {status.detail}
+          </span>
+        )}
+      </button>
+    );
+  };
+  // A split issue's row: what it is and how far its packages got; a click shows its plan.
+  const issueRow = (entry: Extract<TaskListEntry, { kind: "issue" }>) => {
+    const first = entry.packages[0];
+    const issue = overview ? splitIssueOf(overview, first) : null;
+    const of = issue?.of ?? first.package!.of;
+    const merged = issue?.packages.filter((pkg) => pkg.merged).length ?? 0;
+    return (
+      <button
+        type="button"
+        className="delivery-task-row delivery-task-row--issue"
+        aria-current={selectedIssue?.id === entry.id ? "true" : undefined}
+        onClick={() => select(repo, entry.id)}
+      >
+        <span className="delivery-task-row__key">
+          {entry.key}
+          <span className="delivery-task-row__pr">
+            {merged}/{of} fusionados
+          </span>
+        </span>
+        <span className="delivery-task-row__title">{first.title || `${of} paquetes`}</span>
+      </button>
+    );
+  };
 
   return (
     <div className="delivery-repo" aria-label={`Delivery de ${choice.label}`}>
@@ -1807,79 +1899,29 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                   )}
                 </h2>
                 {!isFolded(group.group) &&
-                  group.tasks.map((task) => {
-                    const pr = (overview?.prs ?? []).find(
-                      (candidate) => candidate.task_id === task.id,
-                    );
-                    const progress = overview ? issueProgress(overview, task) : null;
-                    const status = statuses.get(task.id)!;
-                    return (
-                      <button
-                        key={task.id}
-                        type="button"
-                        className={`delivery-task-row${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}`}
-                        aria-current={selectedTask?.id === task.id ? "true" : undefined}
-                        onClick={() => select(repo, task.id)}
-                        onContextMenu={(event) => {
-                          const host = event.currentTarget.closest(".delivery-panel");
-                          if (!host) return;
-                          event.preventDefault();
-                          select(repo, task.id);
-                          setContextAt({
-                            taskId: task.id,
-                            host,
-                            x: event.clientX,
-                            y: event.clientY,
-                          });
-                        }}
-                        onKeyDown={(event) => {
-                          // The keyboard's way to the same menu: Shift+F10 or the menu key.
-                          if (!(
-                            event.key === "ContextMenu" ||
-                            (event.shiftKey && event.key === "F10")
-                          ))
-                            return;
-                          const host = event.currentTarget.closest(".delivery-panel");
-                          if (!host) return;
-                          event.preventDefault();
-                          const row = event.currentTarget.getBoundingClientRect();
-                          select(repo, task.id);
-                          setContextAt({ taskId: task.id, host, x: row.left + 24, y: row.bottom });
-                        }}
-                      >
-                        <span className="delivery-task-row__key">
-                          {taskLabel(task)}
-                          {pr && (
-                            <span className="delivery-task-row__pr" title={`PR #${pr.number}`}>
-                              #{pr.number}
-                            </span>
-                          )}
-                        </span>
-                        <span className="delivery-task-row__title">
-                          {[task.package?.title, task.title || task.branch]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                        {progress && (
-                          <span className="delivery-task-row__title" title="El issue, por paquetes">
-                            {progress}
-                          </span>
-                        )}
-                        <StatusLine status={status} />
-                        {status.detail && (
-                          <span className="delivery-task-row__blocker" title={status.detail}>
-                            {status.detail}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
+                  group.entries.map((entry) =>
+                    entry.kind === "task" ? (
+                      taskRow(entry.task)
+                    ) : (
+                      <div key={entry.id} className="delivery-issue-rows">
+                        {issueRow(entry)}
+                        {entry.packages.map(taskRow)}
+                      </div>
+                    ),
+                  )}
               </section>
             ))}
           </nav>
 
           <main className="delivery-panel__detail">
-            {selectedTask && overview ? (
+            {selectedIssue && overview ? (
+              <IssuePlan
+                packages={selectedIssue.packages}
+                overview={overview}
+                now={now}
+                onSelectTask={(task) => select(repo, task.id)}
+              />
+            ) : selectedTask && overview ? (
               <TaskDetail
                 key={selectedTask.id}
                 task={selectedTask}
@@ -1913,6 +1955,77 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         />
       )}
     </div>
+  );
+}
+
+/** A split issue's plan: its packages in order, where each stands, what it
+ *  builds on and what it waits for. A package opens its task. */
+function IssuePlan({
+  packages,
+  overview,
+  now,
+  onSelectTask,
+}: {
+  packages: DeliveryTask[];
+  overview: DeliveryOverview;
+  now: number;
+  onSelectTask: (task: DeliveryTask) => void;
+}) {
+  const first = packages[0];
+  const issue = splitIssueOf(overview, first);
+  const of = issue?.of ?? first.package!.of;
+  const merged = issue?.packages.filter((pkg) => pkg.merged).length ?? 0;
+  return (
+    <article className="delivery-task delivery-issue-plan" aria-label={`Plan de ${first.key}`}>
+      <header className="delivery-task__header">
+        <div className="delivery-task__heading">
+          <h2>
+            {first.key}
+            {first.title && <span> {first.title}</span>}
+          </h2>
+        </div>
+        <p className="delivery-muted">
+          {of} paquetes, un PR cada uno · {merged} de {of} fusionados
+        </p>
+      </header>
+      <ol className="delivery-issue-plan__packages" aria-label="Paquetes">
+        {Array.from({ length: of }, (_, at) => at + 1).map((index) => {
+          const task = packages.find((one) => one.package!.index === index);
+          const summary = issue?.packages.find((pkg) => pkg.index === index);
+          const title = task?.package?.title || summary?.title || `Paquete ${index}`;
+          const state = issue ? packageState(overview, issue, index) : "sin crear";
+          const pr =
+            task && (overview.prs ?? []).find((candidate) => candidate.task_id === task.id);
+          const base = packages.find((one) => one.id === task?.package?.builds_on)?.package?.index;
+          const detail = task && !summary?.merged ? taskStatus(task, overview, now).detail : null;
+          return (
+            <li key={index}>
+              <span className="delivery-issue-plan__index">{index}</span>
+              <div>
+                {task ? (
+                  <button
+                    type="button"
+                    className="delivery-link-button"
+                    onClick={() => onSelectTask(task)}
+                  >
+                    {title}
+                  </button>
+                ) : (
+                  <strong>{title}</strong>
+                )}
+                <span className="delivery-muted">
+                  {" "}
+                  · {state}
+                  {pr && ` · PR #${pr.number}`}
+                  {base && ` · sobre el paquete ${base}`}
+                </span>
+                {detail && <p className="delivery-issue-plan__waits">{detail}</p>}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </article>
   );
 }
 

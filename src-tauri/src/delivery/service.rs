@@ -1307,6 +1307,50 @@ impl DeliveryService {
         Ok(task)
     }
 
+    /// Makes a task created as a whole issue one package of it, so the
+    /// issue's other packages can follow. It keeps its worktree and base.
+    pub fn set_task_package(
+        &self,
+        task_id: &str,
+        package: &NewPackage,
+    ) -> Result<DeliveryTask, DeliveryError> {
+        validate_package(package)?;
+        let invalid = |message: String| DeliveryError::new("invalid_package", message);
+        if package.builds_on.is_some() || package.until.is_some() {
+            return Err(invalid(
+                "una tarea que ya existe conserva su base: package solo admite index, of y title"
+                    .into(),
+            ));
+        }
+        let mut task = self.task(task_id)?;
+        if let Some(existing) = &task.package {
+            return Err(invalid(format!(
+                "{} ya es el paquete {} de {}",
+                task.key, existing.index, existing.of
+            )));
+        }
+        // A task without a package is the only one of its issue.
+        task.package = Some(DeliveryPackage {
+            index: package.index,
+            of: package.of,
+            title: package.title.trim().to_string(),
+            builds_on: None,
+        });
+        task.updated_at_ms = now_ms();
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(
+            task.updated_at_ms,
+            "task_state_set",
+            Some(&task.id),
+            None,
+            &format!("paquete {}/{}", package.index, package.of),
+        )?;
+        drop(store);
+        self.notify();
+        Ok(task)
+    }
+
     // ---- jobs ----
 
     pub fn dispatch(&self, request: NewJob) -> Result<DeliveryJob, DeliveryError> {

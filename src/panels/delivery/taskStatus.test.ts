@@ -12,11 +12,14 @@ import type {
 import {
   attemptOutcome,
   batchName,
-  clusterPackages,
   historyKey,
   isDelivered,
+  entryTasks,
   issueProgress,
+  issueRowId,
   isSuperseded,
+  packageState,
+  taskListGroups,
   lastHandoff,
   latestOfRole,
   nextStageOf,
@@ -659,8 +662,31 @@ describe("an issue delivered in packages", () => {
     expect(stepsOf(split, "p2")).toHaveLength(6);
   });
 
-  it("keeps an issue's packages together, in order", () => {
-    expect(clusterPackages([ui, task, backend]).map((one) => one.id)).toEqual(["p1", "p2", "t1"]);
+  it("lists a split issue as one entry, its packages in order, where its neediest package is", () => {
+    const groups = taskListGroups([ui, task, backend], (one) =>
+      one.id === "p2" ? "running" : one.id === "p1" ? "delivered" : "idle",
+    );
+    expect(
+      groups.map((group) => [
+        group.group,
+        group.entries.map((entry) =>
+          entry.kind === "task" ? entry.task.id : entryTasks([entry]).map((one) => one.id),
+        ),
+      ]),
+    ).toEqual([
+      ["running", [["p1", "p2"]]],
+      ["idle", ["t1"]],
+    ]);
+    expect(issueRowId(backend)).toBe("issue:agos-432");
+  });
+
+  it("says where each package of an issue stands, created or not", () => {
+    const issue = { ...split.issues![0], of: 3 };
+    expect([1, 2, 3].map((index) => packageState(split, issue, index))).toEqual([
+      "fusionado",
+      "en QA",
+      "sin crear",
+    ]);
   });
 });
 

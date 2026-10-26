@@ -270,6 +270,10 @@
   background: var(--active);
   border-left-color: var(--accent-fg);
 }
+/* A split issue's packages sit nested under its row. */
+.delivery-panel .delivery-task-row--package {
+  padding-left: 24px;
+}
 /* A blocked task stands out from those merely waiting their turn. */
 .delivery-panel .delivery-task-row--blocked {
   border-left-color: var(--warn);
@@ -751,6 +755,35 @@
 .delivery-panel .delivery-link-button:hover:not(:disabled) {
   background: transparent;
   text-decoration: underline;
+}
+
+/* ---------- A split issue's plan ---------- */
+.delivery-issue-plan__packages {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.delivery-issue-plan__packages li {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+.delivery-issue-plan__index {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.delivery-panel .delivery-issue-plan__packages .delivery-link-button {
+  font-size: inherit;
+}
+.delivery-issue-plan__waits {
+  margin: 3px 0 0;
+  padding: 3px 7px;
+  border-left: 2px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  font-size: 11.5px;
 }
 
 /* ---------- Decisions ---------- */

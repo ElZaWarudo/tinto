@@ -271,7 +271,7 @@ describe("DeliveryPanel", () => {
     expect(within(list).queryByText("AGOS-501")).toBeNull();
   });
 
-  it("lists an issue's packages together and ends a middle package at its merge", async () => {
+  it("lists a split issue as one row with its packages nested, and shows its plan", async () => {
     const user = userEvent.setup();
     const backend = task({
       key: "AGOS-432",
@@ -313,11 +313,27 @@ describe("DeliveryPanel", () => {
     );
     renderPanel();
     const list = await screen.findByRole("navigation", { name: "Tareas de Delivery" });
-    expect(await within(list).findByText("AGOS-432 · 2/2")).toBeInTheDocument();
-    expect(within(list).getByText("Backend · Relaciones")).toBeInTheDocument();
-    expect(within(list).getAllByText("1/2 en curso · 2/2 bloqueado")).toHaveLength(2);
+    // One row for the issue, its packages under it in order.
+    const issueRow = (await within(list).findByText("AGOS-432")).closest("button")!;
+    expect(within(issueRow).getByText("0/2 fusionados")).toBeInTheDocument();
+    const rows = within(list)
+      .getAllByRole("button")
+      .map((row) => row.querySelector(".delivery-task-row__key")?.firstChild?.textContent);
+    expect(rows.filter(Boolean)).toEqual(["AGOS-432", "Paquete 1/2", "Paquete 2/2"]);
+    expect(within(list).getByText("Backend")).toBeInTheDocument();
 
-    await user.click(within(list).getByText("AGOS-432 · 1/2"));
+    // Its plan: each package, where it stands and what it builds on.
+    await user.click(issueRow);
+    const plan = await screen.findByRole("article", { name: "Plan de AGOS-432" });
+    const steps = within(within(plan).getByRole("list", { name: "Paquetes" })).getAllByRole(
+      "listitem",
+    );
+    expect(steps.map((step) => step.textContent)).toEqual([
+      expect.stringContaining("Backend · en curso"),
+      expect.stringContaining("UI · bloqueado · sobre el paquete 1"),
+    ]);
+
+    await user.click(within(plan).getByRole("button", { name: "Backend" }));
     expect(await screen.findByRole("heading", { name: /AGOS-432 · 1\/2/ })).toBeInTheDocument();
     const ladder = screen.getByRole("list", { name: "Entrega" });
     expect(within(ladder).getByText("Merge")).toBeInTheDocument();
