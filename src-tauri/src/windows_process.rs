@@ -9,16 +9,45 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{CloseHandle, ERROR_ACCESS_DENIED, FILETIME, HANDLE, WAIT_OBJECT_0},
     System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
+        JobObjectExtendedLimitInformation, OpenJobObjectW, QueryInformationJobObject,
         SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     },
     System::Threading::{
-        GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess, WaitForSingleObject,
-        CREATE_BREAKAWAY_FROM_JOB, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-        PROCESS_TERMINATE,
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW,
+        TerminateProcess, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     },
 };
+
+/// Access to a job object opened by name: list its processes, end them.
+const JOB_OBJECT_QUERY: u32 = 0x0004;
+const JOB_OBJECT_TERMINATE: u32 = 0x0008;
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
+}
+
+/// The executable of process `pid` ("node.exe"), when it can be read.
+fn image_name(pid: u32) -> Option<String> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut buffer = [0u16; 1024];
+    let mut length = buffer.len() as u32;
+    let read = unsafe {
+        QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut length)
+    };
+    unsafe {
+        CloseHandle(handle);
+    }
+    (read != 0).then(|| {
+        let path = String::from_utf16_lossy(&buffer[..length as usize]);
+        path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string()
+    })
+}
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -108,17 +137,65 @@ pub(crate) struct KillOnCloseJob {
 
 impl KillOnCloseJob {
     pub(crate) fn attach(child: &Child) -> io::Result<Self> {
-        Self::create(child, true)
+        Self::create(child, true, None)
     }
 
     /// A job that only groups `child` and what it starts, to stop them all
     /// at once: closing it, as Tinto does when it exits, leaves them running.
-    pub(crate) fn attach_outliving(child: &Child) -> io::Result<Self> {
-        Self::create(child, false)
+    /// Named so that a Tinto started later finds it again with
+    /// [`Self::open_named`]: the job lives on while any of its processes
+    /// does, even once no Tinto has it open.
+    pub(crate) fn attach_named_outliving(child: &Child, name: &str) -> io::Result<Self> {
+        Self::create(child, false, Some(name))
     }
 
-    fn create(child: &Child, kill_on_close: bool) -> io::Result<Self> {
-        let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+    /// The job named `name`, while any process is still in it.
+    pub(crate) fn open_named(name: &str) -> Option<Self> {
+        let name = wide(name);
+        let handle =
+            unsafe { OpenJobObjectW(JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE, 0, name.as_ptr()) };
+        (!handle.is_null()).then_some(Self { handle })
+    }
+
+    /// The processes still in the job, as "node.exe (pid 1234)".
+    pub(crate) fn processes(&self) -> Vec<String> {
+        #[repr(C)]
+        struct IdList {
+            assigned: u32,
+            listed: u32,
+            ids: [usize; 512],
+        }
+        let mut list = IdList {
+            assigned: 0,
+            listed: 0,
+            ids: [0; 512],
+        };
+        let read = unsafe {
+            QueryInformationJobObject(
+                self.handle,
+                JobObjectBasicProcessIdList,
+                (&raw mut list).cast(),
+                size_of::<IdList>() as u32,
+                ptr::null_mut(),
+            )
+        };
+        if read == 0 {
+            return Vec::new();
+        }
+        list.ids[..(list.listed as usize).min(list.ids.len())]
+            .iter()
+            .map(|&id| {
+                let pid = id as u32;
+                let name = image_name(pid).unwrap_or_else(|| "proceso".to_string());
+                format!("{name} (pid {pid})")
+            })
+            .collect()
+    }
+
+    fn create(child: &Child, kill_on_close: bool, name: Option<&str>) -> io::Result<Self> {
+        let name = name.map(wide);
+        let name_ptr = name.as_ref().map_or(ptr::null(), |name| name.as_ptr());
+        let handle = unsafe { CreateJobObjectW(ptr::null(), name_ptr) };
         if handle.is_null() {
             return Err(io::Error::last_os_error());
         }

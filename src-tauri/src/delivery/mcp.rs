@@ -795,10 +795,13 @@ fn run_tool(
                 DeliveryError::new("lease_not_quarantined", "el recurso no está en cuarentena")
             })?;
             task_in_run(&run_id, holder)?;
-            if !service.run(&run_id)?.unattended {
+            // While the user still has the batch's questions to answer, they
+            // also check the environment; once nothing waits on them, the
+            // coordinator does, whether or not it ended the brainstorm.
+            if let Some(why) = service.brainstorm_waits(&service.run(&run_id)?)? {
                 return Err(DeliveryError::new(
                     "brainstorm_open",
-                    "durante el brainstorm el recurso lo libera el usuario en Tinto",
+                    format!("el recurso lo libera el usuario en Tinto mientras {why}"),
                 ));
             }
             if note.trim().is_empty() {

@@ -234,6 +234,36 @@ impl Queue {
         let inherited = lease.state == DeliveryLeaseState::Active
             && job.resumes.is_some()
             && lease.holder_job_id == job.resumes;
+        // A later attempt of the stage that left it in quarantine (continued
+        // or retried) goes on in the environment it left: the same task and
+        // stage, so nobody else's work is at stake. Others still wait.
+        let quarantine_holder = lease
+            .holder_job_id
+            .as_deref()
+            .filter(|_| lease.state == DeliveryLeaseState::Quarantined)
+            .and_then(|holder| self.job(holder));
+        if let Some(holder) = quarantine_holder.filter(|holder| {
+            holder.task_id == job.task_id
+                && holder.role == job.role
+                && holder.created_at_ms < job.created_at_ms
+        }) {
+            let left = lease.note.take().unwrap_or_default();
+            lease.queue.retain(|waiter| waiter.job_id != job.id);
+            lease.state = DeliveryLeaseState::Active;
+            lease.note = Some(
+                format!(
+                    "{} lo retomó en cuarentena, tras el intento {} de la misma etapa. {left}",
+                    job.id, holder.attempt
+                )
+                .trim()
+                .to_string(),
+            );
+            lease.holder_job_id = Some(job.id.clone());
+            lease.holder_task_id = Some(job.task_id.clone());
+            lease.acquired_at_ms = Some(now);
+            lease.generation += 1;
+            return None;
+        }
         if (lease.state == DeliveryLeaseState::Free && first_in_line) || inherited {
             lease.queue.retain(|waiter| waiter.job_id != job.id);
             lease.state = DeliveryLeaseState::Active;

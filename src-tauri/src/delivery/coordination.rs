@@ -14,10 +14,11 @@
 //!   they are no longer on the branch. While a merge is in progress the
 //!   plan is one commit of the whole merge, which keeps both parents.
 //! - The sync rung, asked when needed, merges the task's base into its
-//!   branch (jobs cannot run git merge). Conflicts leave the merge in
-//!   progress for an implementation job, and a commit step concludes it.
-//! - Once the coordinator ends a run's brainstorm, its commit, sync and push
-//!   rungs are approved as they are asked; the PR and Jira rungs still wait.
+//!   branch (jobs cannot run git merge). It runs as it is asked, without the
+//!   user: it publishes nothing. Conflicts leave the merge in progress for an
+//!   implementation job, and a commit step concludes it.
+//! - Once the coordinator ends a run's brainstorm, its commit and push rungs
+//!   are approved as they are asked; the PR and Jira rungs still wait.
 
 use super::model::{
     DeliveryApproval, DeliveryApprovalStatus, DeliveryBlockerKind, DeliveryCommit,
@@ -793,41 +794,47 @@ impl DeliveryService {
         Ok(run)
     }
 
-    /// The coordinator ends the batch's brainstorm once the user has
-    /// answered everything it asked, so nothing is left for the stages to
-    /// wait on. From then on the batch runs without stopping until a PR.
-    pub fn end_brainstorm(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
-        let mut run = self.active_run(run_id)?;
+    /// What of the batch still waits on the user's answer, if anything: a
+    /// task's decision or a settings proposal. Nothing past the brainstorm.
+    pub(super) fn brainstorm_waits(
+        &self,
+        run: &DeliveryRun,
+    ) -> Result<Option<String>, DeliveryError> {
+        if run.unattended {
+            return Ok(None);
+        }
         let tasks = self.store()?.tasks()?;
         for task in tasks
             .iter()
-            .filter(|task| task.run_id.as_deref() == Some(run_id))
+            .filter(|task| task.run_id.as_deref() == Some(run.id.as_str()))
         {
             if self
                 .task_decisions(&task.id)?
                 .iter()
                 .any(|decision| decision.status == DeliveryDecisionStatus::Pending)
             {
-                return Err(DeliveryError::new(
-                    "brainstorm_open",
-                    format!(
-                        "el brainstorm sigue: {} tiene decisiones sin responder",
-                        task.key
-                    ),
-                ));
+                return Ok(Some(format!("{} tiene decisiones sin responder", task.key)));
             }
         }
-        if self
+        let proposing = self
             .repo_settings_proposals(&run.repo)?
             .iter()
             .any(|proposal| {
-                proposal.run_id == run_id
+                proposal.run_id == run.id
                     && proposal.status == DeliverySettingsProposalStatus::Pending
-            })
-        {
+            });
+        Ok(proposing.then(|| "hay una propuesta de ajustes sin decidir".to_string()))
+    }
+
+    /// The coordinator ends the batch's brainstorm once the user has
+    /// answered everything it asked, so nothing is left for the stages to
+    /// wait on. From then on the batch runs without stopping until a PR.
+    pub fn end_brainstorm(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
+        let mut run = self.active_run(run_id)?;
+        if let Some(why) = self.brainstorm_waits(&run)? {
             return Err(DeliveryError::new(
                 "brainstorm_open",
-                "el brainstorm sigue: hay una propuesta de ajustes sin decidir",
+                format!("el brainstorm sigue: {why}"),
             ));
         }
         run.unattended = true;
@@ -1270,6 +1277,12 @@ impl DeliveryService {
             ))
             && self.unattended(&task)?
         {
+            return self.decide_approval(&approval.id, true, None);
+        }
+        // A sync only brings the base into the local branch, publishing
+        // nothing, and Tinto refuses it on a dirty worktree or a running
+        // job: it runs as it is asked, brainstorm or not.
+        if approval.rung == DeliveryRung::Sync {
             return self.decide_approval(&approval.id, true, None);
         }
         Ok(approval)
@@ -1738,12 +1751,9 @@ impl DeliveryService {
         Ok(())
     }
 
-    /// Past the brainstorm, asks the sync of the task's base, which runs as
-    /// it is asked; one that cannot start now is only logged.
+    /// Asks the sync of the task's base, which runs as it is asked; one that
+    /// cannot start now is only logged.
     fn auto_sync(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
-        if !self.unattended(task)? {
-            return Ok(());
-        }
         let base = self.sync_base(task)?;
         let request = NewApproval {
             task_id: task.id.clone(),

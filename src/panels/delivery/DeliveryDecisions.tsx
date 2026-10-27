@@ -16,6 +16,7 @@ import { CodeThreads } from "./DeliveryCodeThread";
 
 import { ActionButton, ActionGroup } from "./ActionButton";
 import { GrowingTextarea } from "./GrowingTextarea";
+import { Icon } from "../../workbench/Icon";
 
 const ALLOWED = "allowed";
 const DENIED = "denied";
@@ -601,7 +602,8 @@ export function DecisionLog({
                 return (
                   <LogRow key={decision.id} decision={decision} shared={by !== null}>
                     <strong className={allowed ? "delivery-tone--ok" : "delivery-tone--danger"}>
-                      {allowed ? "✓ Permitido" : "✕ No permitido"}
+                      <Icon name={allowed ? "check" : "x"} className="delivery-icon" />{" "}
+                      {allowed ? "Permitido" : "No permitido"}
                     </strong>
                     {allowed ? (
                       <PermissionScope decision={decision} />

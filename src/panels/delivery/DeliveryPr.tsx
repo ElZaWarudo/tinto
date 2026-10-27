@@ -13,6 +13,7 @@ import type { DeliveryPr } from "../../delivery/types";
 import { prSummary } from "./taskStatus";
 import { ExternalLink } from "./ExternalLink";
 import { ActionButton } from "./ActionButton";
+import { Icon } from "../../workbench/Icon";
 
 function checked(ms: number | null): string {
   if (!ms) return "todavía sin leer";
@@ -71,7 +72,10 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
     setChosen([]);
   };
   return (
-    <details className="delivery-pr__reviewers" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details
+      className="delivery-pr__reviewers"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
       <summary>
         Revisores:{" "}
         {requested.length > 0 ? `esperando a ${requested.join(", ")}` : "ninguna revisión pedida"}
@@ -81,7 +85,9 @@ function PrReviewers({ pr }: { pr: DeliveryPr }) {
         {candidates === null && !error && (
           <p className="delivery-muted">Leyendo quién puede revisar en GitHub…</p>
         )}
-        {error && <p className="delivery-job__note">No se pudo leer quién puede revisar: {error}</p>}
+        {error && (
+          <p className="delivery-job__note">No se pudo leer quién puede revisar: {error}</p>
+        )}
         {people.map((login) => (
           <label key={login}>
             <input
@@ -153,9 +159,21 @@ export function PrSection({ pr }: { pr: DeliveryPr }) {
                 <strong>ninguno</strong>
               ) : (
                 <>
-                  <strong className="delivery-tone--ok">✓ {passing}</strong>
-                  {failing > 0 && <strong className="delivery-tone--danger"> ✕ {failing}</strong>}
-                  {pending > 0 && <strong className="delivery-tone--waiting"> ⏳ {pending}</strong>}
+                  <strong className="delivery-tone--ok" title="Pasan">
+                    <Icon name="check" className="delivery-icon" /> {passing}
+                  </strong>
+                  {failing > 0 && (
+                    <strong className="delivery-tone--danger" title="Fallan">
+                      {" "}
+                      <Icon name="x" className="delivery-icon" /> {failing}
+                    </strong>
+                  )}
+                  {pending > 0 && (
+                    <strong className="delivery-tone--waiting" title="En curso">
+                      {" "}
+                      <Icon name="clock" className="delivery-icon" /> {pending}
+                    </strong>
+                  )}
                 </>
               )}
             </li>

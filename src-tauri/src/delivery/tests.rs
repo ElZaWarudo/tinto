@@ -82,6 +82,10 @@ fn fake_launcher() -> Launcher {
                     worktree.join("env.txt").display()
                 ));
             }
+            // `server=1`: a server it starts in the background and leaves.
+            if spec.contains_key("server") {
+                lines.push("start \"\" /b ping -n 300 127.0.0.1 >NUL".to_string());
+            }
             if sleep > 0 {
                 lines.push(format!("ping -n {} 127.0.0.1 >NUL", sleep + 1));
             }
@@ -118,6 +122,9 @@ fn fake_launcher() -> Launcher {
                 lines.push(format!(
                     "perl -e 'setpgrp(0, 0); exec \"sleep\", \"300\"' & echo $! > '{dir}/own.pid'"
                 ));
+            }
+            if spec.contains_key("server") {
+                lines.push("sleep 300 &".to_string());
             }
             if sleep > 0 {
                 lines.push(format!("exec sleep {sleep}"));
@@ -2686,14 +2693,30 @@ fn past_the_brainstorm_qa_neither_waits_on_a_stale_permission_nor_on_a_quarantin
     };
 
     // A QA job of the run crashes and leaves the resource quarantined;
-    // during the brainstorm only the user may free it.
+    // while the user has the batch's questions to answer, only they free it.
     let crashing = h.dispatch(&task, "qa", "events=none exit=3");
     h.wait(&crashing.id);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(qa_lease(&h).state, DeliveryLeaseState::Quarantined);
-    assert_eq!(release("limpio")["isError"], true);
+    let asked = h
+        .service
+        .request_decisions(&task.id, vec![choice("¿Codex también?", Some(0))], "coord")
+        .unwrap();
+    let refused = release("limpio");
+    assert_eq!(refused["isError"], true);
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("D-8 tiene decisiones sin responder"),
+        "{refused}"
+    );
 
-    h.service.end_brainstorm(&run.id).unwrap();
+    // Answered: the coordinator checks and frees it, though nobody called
+    // end_brainstorm.
+    h.service
+        .answer_decision(&asked[0].id, "Sí", "user")
+        .unwrap();
     assert_eq!(release(" ")["isError"], true, "it says what it checked");
     let released = release("sin procesos ni datos de prueba");
     assert_eq!(released["structuredContent"]["state"], "free", "{released}");
@@ -2701,6 +2724,11 @@ fn past_the_brainstorm_qa_neither_waits_on_a_stale_permission_nor_on_a_quarantin
         .as_str()
         .unwrap()
         .starts_with("Liberado por el coordinador coord"));
+    // What it found reaches the user.
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    assert!(events.iter().any(|event| event.kind == "lease_released"
+        && event.detail.contains("sin procesos ni datos de prueba")));
+    h.service.end_brainstorm(&run.id).unwrap();
 
     // A permission that runs the task's code is allowed again for the code
     // QA finds, instead of failing it as stale.
@@ -2722,7 +2750,13 @@ fn past_the_brainstorm_qa_neither_waits_on_a_stale_permission_nor_on_a_quarantin
         .unwrap();
     let qa = h.wait(&qa.id);
     assert_eq!(qa.status, DeliveryJobStatus::Finished, "{:?}", qa.error);
-    let renewed = h.service.task_decisions(&task.id).unwrap().remove(0);
+    let renewed = h
+        .service
+        .task_decisions(&task.id)
+        .unwrap()
+        .into_iter()
+        .find(|decision| decision.id == allowed.id)
+        .unwrap();
     assert_ne!(renewed.candidate, allowed.candidate);
     assert_eq!(renewed.decided_by.as_deref(), Some(super::decisions::AUTO));
 }
@@ -4286,11 +4320,11 @@ fn a_sync_step_merges_the_fetched_base_and_the_push_checks_it_is_still_merged() 
     std::fs::remove_file(task.worktree.join("wip.txt")).unwrap();
 
     let message = "Merge remote-tracking branch 'origin/main' into delivery/s-1";
-    let asked = h
+    // A sync runs as it is asked: nobody approves it.
+    let done = h
         .service
         .request_approval(step(&task, DeliveryRung::Sync, message))
         .unwrap();
-    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
     assert_eq!(
         done.status,
         DeliveryApprovalStatus::Executed,
@@ -4343,11 +4377,11 @@ fn a_sync_with_conflicts_goes_back_to_implementation_and_a_commit_concludes_it()
     diverge_from_main(&h, &task, true);
     let head = in_worktree(&task, &["rev-parse", "HEAD"]);
     let main = in_worktree(&task, &["rev-parse", "main"]);
-    let asked = h
+    // A sync runs as it is asked: nobody approves it.
+    let done = h
         .service
         .request_approval(step(&task, DeliveryRung::Sync, "Merge main"))
         .unwrap();
-    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
     assert_eq!(
         done.status,
         DeliveryApprovalStatus::Executed,
@@ -7562,7 +7596,7 @@ fn past_the_brainstorm_the_jira_steps_tinto_runs_go_through() {
 }
 
 #[test]
-fn past_the_brainstorm_a_pr_with_conflicts_brings_its_base_in() {
+fn a_pr_with_conflicts_brings_its_base_in_without_asking() {
     let h = harness();
     let coordinator = Coordinator::start(&h);
     let (task_id, _) = coordinator.task("S-9");
@@ -7584,11 +7618,7 @@ fn past_the_brainstorm_a_pr_with_conflicts_brings_its_base_in() {
             .collect::<Vec<_>>()
     };
 
-    // During the brainstorm the coordinator decides.
-    h.service.sync_conflicted_pr(&pr).unwrap();
-    assert!(syncs().is_empty());
-
-    h.service.end_brainstorm(&coordinator.run_id).unwrap();
+    // Brainstorm or not: a sync publishes nothing, so nobody approves it.
     h.service.sync_conflicted_pr(&pr).unwrap();
     let [sync] = syncs().try_into().unwrap();
     assert_eq!(
@@ -9752,11 +9782,11 @@ fn conflicted_merge(h: &Harness, key: &str) -> DeliveryTask {
         .set_task_checks(&task.id, vec!["exit=0".into()])
         .unwrap();
     diverge_from_main(h, &task, true);
-    let asked = h
+    // A sync runs as it is asked: nobody approves it.
+    let done = h
         .service
         .request_approval(step(&task, DeliveryRung::Sync, "Merge main"))
         .unwrap();
-    let done = h.service.decide_approval(&asked.id, true, None).unwrap();
     assert_eq!(done.conflicts, ["shared.txt"]);
     h.service.task(&task.id).unwrap()
 }
@@ -10131,4 +10161,136 @@ fn the_pr_step_shows_the_qa_screenshots_the_user_chose_in_its_description() {
     assert_eq!(github.snapshot.lock().unwrap()["body"], shown);
     // The step holds the text GitHub has.
     assert_eq!(done.body, shown);
+}
+
+#[test]
+fn a_quarantine_holds_other_tasks_qa_while_the_stage_that_left_it_goes_on() {
+    use super::adapters::tests::sample_job;
+    use super::phase::{Phase, Waiter};
+    let h = harness();
+    let coordinator = Coordinator::start(&h);
+    let (left_id, _) = coordinator.task("Q-10");
+    let (other_id, _) = coordinator.task("Q-11");
+    let now = super::now_ms();
+    let qa = |id: &str, task_id: &str, status: DeliveryJobStatus, at: u64| {
+        let mut job = sample_job(DeliveryAgent::Codex);
+        job.id = id.into();
+        job.task_id = task_id.into();
+        job.role = "qa".into();
+        job.lease = Some("qa".into());
+        job.status = status;
+        job.created_at_ms = at;
+        job.started_at_ms = (status != DeliveryJobStatus::Queued).then_some(at);
+        job.ended_at_ms = (status == DeliveryJobStatus::Failed).then_some(at + 1);
+        job.pid = None;
+        job
+    };
+    {
+        let store = h.service.store().unwrap();
+        store
+            .put_job(&qa("qa-1", &left_id, DeliveryJobStatus::Failed, now - 10))
+            .unwrap();
+        store
+            .put_job(&qa(
+                "qa-other",
+                &other_id,
+                DeliveryJobStatus::Queued,
+                now - 5,
+            ))
+            .unwrap();
+        store
+            .put_lease(&super::model::DeliveryLease {
+                name: "qa".into(),
+                state: DeliveryLeaseState::Quarantined,
+                generation: 1,
+                holder_job_id: Some("qa-1".into()),
+                holder_task_id: Some(left_id.clone()),
+                acquired_at_ms: Some(now - 10),
+                note: Some(
+                    "Al terminar seguían en marcha, y Tinto los paró: node.exe (pid 9).".into(),
+                ),
+                // As when the scheduler held the job back for something else.
+                queue: Vec::new(),
+            })
+            .unwrap();
+    }
+
+    // The other task waits on it, and the coordinator, with nothing of the
+    // batch waiting on the user, is the one to release it.
+    let overview = h.service.overview().unwrap();
+    let phase = &overview.phases[&other_id];
+    assert_eq!(
+        phase.phase,
+        Phase::WaitsQuarantine {
+            job_id: "qa-other".into(),
+            lease: "qa".into()
+        }
+    );
+    assert_eq!(phase.waits_on, Waiter::Coordinator);
+    let woken = coordinator.write("wait_run", json!({}));
+    let open = &woken["structuredContent"]["open_jobs"];
+    let waiting = open
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|job| job["job_id"] == "qa-other")
+        .unwrap_or_else(|| panic!("{woken}"));
+    assert_eq!(waiting["waits_quarantine"], "qa");
+    assert_eq!(waiting["waits_on"], "coordinator");
+    assert!(waiting["quarantine_note"]
+        .as_str()
+        .unwrap()
+        .contains("node.exe"));
+
+    // The stage that left it, continued, takes it over at once; the other
+    // task still waits.
+    h.service
+        .store()
+        .unwrap()
+        .put_job(&qa("qa-2", &left_id, DeliveryJobStatus::Queued, now - 1))
+        .unwrap();
+    let overview = h.service.overview().unwrap();
+    assert_eq!(overview.queued["qa-2"].reason, "empieza ahora");
+    assert!(
+        overview.queued["qa-other"].reason.contains("cuarentena")
+            || overview.queued["qa-other"].reason.contains("qa-2"),
+        "{}",
+        overview.queued["qa-other"].reason
+    );
+}
+
+#[test]
+fn a_qa_job_that_leaves_a_server_running_ends_with_it_stopped_and_named_in_the_quarantine() {
+    let h = harness();
+    let task = h.task("Q-12");
+    let job = h.dispatch(&task, "qa", "events=none server=1 exit=3");
+    assert_eq!(h.wait(&job.id).status, DeliveryJobStatus::Failed);
+    let lease = eventually(|| {
+        Some(qa_lease(&h)).filter(|lease| lease.state == DeliveryLeaseState::Quarantined)
+    });
+    let server = if cfg!(windows) { "ping" } else { "sleep" };
+    let note = lease.note.unwrap_or_default();
+    assert!(note.to_lowercase().contains(server), "{note}");
+    assert!(note.contains("Tinto los paró"), "{note}");
+    let events = h.service.store().unwrap().events_after(0).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.kind == "job_leftovers"
+            && event.job_id.as_deref() == Some(job.id.as_str())));
+    // Nothing of the job runs any more.
+    #[cfg(target_os = "windows")]
+    {
+        let left = crate::windows_process::KillOnCloseJob::open_named(&format!(
+            "Local\tinto-delivery-{}",
+            job.id
+        ));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while left
+            .as_ref()
+            .is_some_and(|tree| !tree.processes().is_empty())
+        {
+            assert!(Instant::now() < deadline, "the server kept running");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
 }

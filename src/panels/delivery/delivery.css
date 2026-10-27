@@ -153,8 +153,13 @@
 .delivery-meter i.on {
   background: var(--accent-fg);
 }
+/* QA has a colour of its own: not a warning, the task is being tested. */
 .delivery-lease--active {
-  color: var(--warn);
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 55%, transparent);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+  padding: 2px 8px;
+  font-weight: 600;
 }
 .delivery-lease--quarantined {
   color: var(--danger);
@@ -277,6 +282,27 @@
 /* A blocked task stands out from those merely waiting their turn. */
 .delivery-panel .delivery-task-row--blocked {
   border-left-color: var(--warn);
+}
+/* The task under QA, in QA's colour; the one that left it in quarantine. */
+.delivery-panel .delivery-task-row--qa {
+  border-left-color: var(--info);
+  background: color-mix(in srgb, var(--info) 8%, transparent);
+}
+.delivery-panel .delivery-task-row--qa-quarantined {
+  border-left-color: var(--danger);
+}
+.delivery-qa-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.delivery-qa-badge--active {
+  color: var(--info);
+}
+.delivery-qa-badge--quarantined {
+  color: var(--danger);
 }
 .delivery-task-row__blocker {
   display: -webkit-box;

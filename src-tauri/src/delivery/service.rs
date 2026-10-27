@@ -229,6 +229,8 @@ struct Ending {
     timed_out: bool,
     /// The process ran, so an exclusive resource may be in an unknown state.
     touched: bool,
+    /// What it left running once it ended, which Tinto stopped.
+    leftovers: Vec<String>,
 }
 
 /// Reads a job's output file as its process writes it, a whole line at a
@@ -550,7 +552,7 @@ impl DeliveryService {
                 None => "Tinto se cerró mientras el trabajo corría.".to_string(),
             });
             store.put_job(&job)?;
-            settle_lease(&store, &job, true)?;
+            settle_lease(&store, &job, true, &[])?;
             store.record_event(
                 now,
                 "job_interrupted",
@@ -736,6 +738,25 @@ impl DeliveryService {
             })
             .map(|task| task.id.clone())
             .collect();
+        // The batches whose coordinator checks a quarantined environment
+        // itself: past the brainstorm, or with nothing waiting on the user.
+        let releasable_runs: HashSet<String> = runs
+            .iter()
+            .filter(|run| {
+                let asking = tasks.iter().any(|task| {
+                    task.run_id.as_deref() == Some(run.id.as_str())
+                        && decisions.iter().any(|decision| {
+                            decision.task_id == task.id
+                                && decision.status == DeliveryDecisionStatus::Pending
+                        })
+                });
+                let proposing = settings_proposals
+                    .iter()
+                    .any(|proposal| proposal.run_id == run.id);
+                run.unattended || !(asking || proposing)
+            })
+            .map(|run| run.id.clone())
+            .collect();
         // Where each task is, from the same facts the view gets.
         let facts = super::phase::Facts {
             runs: &runs,
@@ -748,6 +769,7 @@ impl DeliveryService {
             rounds: &rounds,
             queued: &queued,
             merging: &merging,
+            releasable_runs: &releasable_runs,
         };
         let phases = tasks
             .iter()
@@ -1795,7 +1817,7 @@ impl DeliveryService {
                 job.status = DeliveryJobStatus::Cancelled;
                 job.ended_at_ms = Some(now_ms());
                 store.put_job(&job)?;
-                settle_lease(&store, &job, false)?;
+                settle_lease(&store, &job, false, &[])?;
                 store.record_event(
                     now_ms(),
                     "job_cancelled",
@@ -1835,7 +1857,7 @@ impl DeliveryService {
                 job.status = DeliveryJobStatus::Cancelled;
                 job.error = Some("Pausado y cancelado por el usuario.".to_string());
                 store.put_job(&job)?;
-                settle_lease(&store, &job, true)?;
+                settle_lease(&store, &job, true, &[])?;
                 store.record_event(
                     now_ms(),
                     "job_cancelled",
@@ -2195,7 +2217,14 @@ impl DeliveryService {
         lease.generation += 1;
         lease.note = Some(format!("Liberado por {released_by}: {}", note.trim()));
         store.put_lease(&lease)?;
-        store.record_event(now_ms(), "lease_released", None, None, name)?;
+        // What whoever released it found and did, for the user to read.
+        store.record_event(
+            now_ms(),
+            "lease_released",
+            None,
+            None,
+            &format!("{name}: {}", lease.note.as_deref().unwrap_or_default()),
+        )?;
         drop(store);
         self.tick();
         Ok(lease)
@@ -2381,7 +2410,7 @@ impl DeliveryService {
         }
         // In a group of its own, so stopping the job reaches what it starts:
         // `codex` installed with npm is a Node script that runs the binary.
-        let process = JobProcess::spawn(&mut command).map_err(|error| {
+        let process = JobProcess::spawn(&mut command, &job.id).map_err(|error| {
             DeliveryError::new(
                 "spawn_failed",
                 format!("no se pudo iniciar {}: {error}", launch.program.display()),
@@ -2434,8 +2463,8 @@ impl DeliveryService {
         let process = job
             .process_started
             .as_deref()
-            .and_then(|started| JobProcess::adopt(pid, started))
-            .unwrap_or_else(|| JobProcess::ended(pid));
+            .and_then(|started| JobProcess::adopt(pid, started, &job.id))
+            .unwrap_or_else(|| JobProcess::ended(pid, &job.id));
         let wsl_job = std::fs::read(paths.dir.join(WSL_JOB_FILE))
             .ok()
             .and_then(|data| serde_json::from_slice::<adapters::WslJob>(&data).ok());
@@ -2555,6 +2584,10 @@ impl DeliveryService {
             }
             std::thread::sleep(Duration::from_millis(200));
         };
+        // Whatever ended it, nothing it started keeps running: a server it
+        // left in the background would hold the environment and its data.
+        let mut process = process;
+        let leftovers = process.sweep();
         drop(process);
         if self.inner.closed.load(Ordering::SeqCst) {
             return Ok(());
@@ -2593,6 +2626,7 @@ impl DeliveryService {
             // A job the user cancelled before it did more than read left
             // its resource as it was.
             touched: !cancelled || adapters::acted(&job, &events),
+            leftovers,
         };
         let stderr_text = std::fs::read_to_string(&paths.stderr).unwrap_or_default();
         // QA's visual changes record becomes one page the user opens. Saved
@@ -2971,7 +3005,16 @@ impl DeliveryService {
             }
         }
         store.put_job(&job)?;
-        settle_lease(&store, &job, ending.touched)?;
+        settle_lease(&store, &job, ending.touched, &ending.leftovers)?;
+        if !ending.leftovers.is_empty() {
+            store.record_event(
+                now_ms(),
+                "job_leftovers",
+                Some(&job.task_id),
+                Some(&job.id),
+                &ending.leftovers.join(", "),
+            )?;
+        }
         let detail = format!("{:?}", job.status).to_ascii_lowercase();
         // The coordinator hears of the task's checks, and of its setup, once,
         // when all ended.
@@ -3024,7 +3067,7 @@ impl DeliveryService {
         job.current_command_at_ms = None;
         job.error = Some(message.to_string());
         store.put_job(&job)?;
-        settle_lease(&store, &job, touched)?;
+        settle_lease(&store, &job, touched, &[])?;
         store.record_event(
             now_ms(),
             "job_ended",
@@ -3156,6 +3199,7 @@ fn settle_lease(
     store: &DeliveryStore,
     job: &DeliveryJob,
     touched: bool,
+    leftovers: &[String],
 ) -> Result<(), DeliveryError> {
     let Some(name) = job.lease.as_deref() else {
         return Ok(());
@@ -3185,8 +3229,15 @@ fn settle_lease(
             let key = store
                 .task(&job.task_id)?
                 .map_or_else(|| job.task_id.clone(), |task| task.key);
+            let found = match leftovers {
+                [] => String::new(),
+                left => format!(
+                    " Al terminar seguían en marcha, y Tinto los paró: {}.",
+                    left.join(", ")
+                ),
+            };
             lease.note = Some(format!(
-                "El trabajo {} de {key} {how}, así que el entorno puede haber quedado a medio usar. Nadie más puede usarlo hasta que lo liberes: comprueba que no queden procesos ni datos de prueba suyos y pulsa Liberar.",
+                "El trabajo {} de {key} {how}, así que el entorno puede haber quedado a medio usar.{found} Nadie más puede usarlo hasta que lo liberes: comprueba que no queden procesos ni datos de prueba suyos y pulsa Liberar.",
                 job.role
             ));
         }

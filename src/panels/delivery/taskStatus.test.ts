@@ -287,10 +287,11 @@ describe("taskStatus words the phase Tinto derives", () => {
     expect(
       status({ kind: "queued", job_id: "j", role: "tests", lease: null, position: 2 }).label,
     ).toBe("En cola · 2.º");
+    // Only the user can release it: it is theirs to act on.
     expect(status({ kind: "waits_quarantine", job_id: "j", lease: "qa" })).toMatchObject({
       group: "attention",
       tone: "danger",
-      label: "Espera QA, en cuarentena",
+      label: "QA bloqueada · libera el recurso",
     });
     expect(status({ kind: "quarantined", lease: "qa" }).label).toBe("QA en cuarentena");
   });

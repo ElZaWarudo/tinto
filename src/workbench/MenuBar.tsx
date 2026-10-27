@@ -19,6 +19,7 @@ import { RestartDialog } from "./RestartDialog";
 import { ManageWorkbenchesDialog } from "./ManageWorkbenchesDialog";
 import { ThemePicker } from "./ThemePicker";
 import { WindowBrand, WindowControls, WindowDragRegion } from "./WindowChrome";
+import { Icon } from "./Icon";
 
 type MenuId = "workbench" | "repos" | "projects" | "view" | "addons" | "help";
 
@@ -64,7 +65,7 @@ function MenuItem({
         close();
       }}
     >
-      <span className="menu__check">{checked ? "✓" : ""}</span>
+      <span className="menu__check">{checked && <Icon name="check" />}</span>
       <span>{label}</span>
     </button>
   );

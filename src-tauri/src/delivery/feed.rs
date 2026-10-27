@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::model::{DeliveryCoordinatorState, DeliveryEvent, DeliveryRun, DeliveryUnblock};
+use super::model::{
+    DeliveryCoordinatorState, DeliveryEvent, DeliveryJobStatus, DeliveryLeaseState, DeliveryRun,
+    DeliveryUnblock,
+};
 use super::service::DeliveryService;
 use super::{now_ms, DeliveryError};
 
@@ -314,19 +317,45 @@ impl DeliveryService {
             .filter(|task| task.run_id.as_deref() == Some(run_id))
             .map(|task| (task.id.clone(), task.label()))
             .collect();
-        Ok(store
-            .jobs()?
-            .into_iter()
+        let jobs = store.jobs()?;
+        let leases = store.leases()?;
+        drop(store);
+        // Who releases a quarantined resource the batch waits on.
+        let releases = match self.brainstorm_waits(&self.run(run_id)?)? {
+            None => "coordinator",
+            Some(_) => "user",
+        };
+        Ok(jobs
+            .iter()
             .filter(|job| job.status.is_open())
             .filter_map(|job| {
                 let key = tasks.get(&job.task_id)?;
-                Some(json!({
+                let mut open = json!({
                     "run_id": run_id,
                     "job_id": job.id,
                     "key": key,
                     "role": job.role,
                     "status": job.status,
-                }))
+                });
+                // Not just queued: it waits until someone releases it.
+                let quarantined = leases.iter().find(|lease| {
+                    job.status == DeliveryJobStatus::Queued
+                        && Some(lease.name.as_str()) == job.lease.as_deref()
+                        && lease.state == DeliveryLeaseState::Quarantined
+                        && !lease
+                            .holder_job_id
+                            .as_deref()
+                            .and_then(|holder| jobs.iter().find(|other| other.id == holder))
+                            .is_some_and(|holder| {
+                                holder.task_id == job.task_id && holder.role == job.role
+                            })
+                });
+                if let Some(lease) = quarantined {
+                    open["waits_quarantine"] = json!(lease.name);
+                    open["waits_on"] = json!(releases);
+                    open["quarantine_note"] = json!(lease.note);
+                }
+                Some(open)
             })
             .collect())
     }

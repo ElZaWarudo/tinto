@@ -227,6 +227,9 @@ pub struct Facts<'a> {
     pub queued: &'a BTreeMap<String, DeliveryQueueWait>,
     /// Tasks whose worktree has a merge in progress, as git says.
     pub merging: &'a HashSet<String>,
+    /// Batches whose coordinator may release a quarantined resource:
+    /// nothing of theirs waits on the user's answer.
+    pub releasable_runs: &'a HashSet<String>,
 }
 
 fn is_open(job: &DeliveryJob) -> bool {
@@ -964,13 +967,35 @@ fn phase_in_round(
             .leases
             .iter()
             .find(|lease| lease.queue.iter().any(|waiter| waiter.job_id == job.id));
-        if let Some(lease) = lease.filter(|lease| lease.state == DeliveryLeaseState::Quarantined) {
+        // The resource it asks for, also while the scheduler holds it back
+        // for something else first (capacity, its task, the environment).
+        let wanted = lease.or_else(|| {
+            let name = job.lease.as_deref()?;
+            facts.leases.iter().find(|lease| lease.name == name)
+        });
+        // A later attempt of the stage that left it there takes it over.
+        let takes_over = |lease: &DeliveryLease| {
+            lease
+                .holder_job_id
+                .as_deref()
+                .and_then(|holder| facts.jobs.iter().find(|other| other.id == holder))
+                .is_some_and(|holder| holder.task_id == job.task_id && holder.role == job.role)
+        };
+        if let Some(lease) = wanted
+            .filter(|lease| lease.state == DeliveryLeaseState::Quarantined && !takes_over(lease))
+        {
+            // Once nothing of the batch waits on the user, the coordinator
+            // checks the environment and releases it.
+            let releases = match task.run_id.as_ref() {
+                Some(run) if facts.releasable_runs.contains(run) => Waiter::Coordinator,
+                _ => Waiter::User,
+            };
             return phase(
                 Phase::WaitsQuarantine {
                     job_id: job.id.clone(),
                     lease: lease.name.clone(),
                 },
-                Waiter::User,
+                releases,
             );
         }
         let position = match lease {
@@ -1198,6 +1223,7 @@ mod tests {
         proposals: Vec<DeliverySettingsProposal>,
         rounds: Vec<DeliveryRound>,
         merging: HashSet<String>,
+        releasable_runs: HashSet<String>,
     }
 
     impl World {
@@ -1212,6 +1238,7 @@ mod tests {
                 proposals: Vec::new(),
                 rounds: Vec::new(),
                 merging: HashSet::new(),
+                releasable_runs: HashSet::new(),
             }
         }
 
@@ -1229,6 +1256,7 @@ mod tests {
                     rounds: &self.rounds,
                     queued: &BTreeMap::new(),
                     merging: &self.merging,
+                    releasable_runs: &self.releasable_runs,
                 },
             )
         }
@@ -1362,6 +1390,7 @@ mod tests {
             rounds: &[],
             queued: &BTreeMap::new(),
             merging: &HashSet::new(),
+            releasable_runs: &HashSet::new(),
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,

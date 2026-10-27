@@ -31,6 +31,7 @@ import {
   type RuntimePreset,
   type RuntimePresetIcon,
 } from "./runtimePresets";
+import { Icon } from "../../workbench/Icon";
 
 export type CodexRuntimeMenu = "presets" | "reasoning" | "model" | "speed" | "summary" | null;
 
@@ -634,7 +635,7 @@ function RuntimePresetPanel({
                     aria-label="Configuración guardada activa"
                     className="agent-panel__preset-check"
                   >
-                    ✓
+                    <Icon name="check" />
                   </span>
                 )}
               </button>
@@ -652,7 +653,7 @@ function RuntimePresetPanel({
                 }
                 type="button"
               >
-                {preset.favorite ? "★" : "☆"}
+                <Icon name={preset.favorite ? "star-filled" : "star"} />
               </button>
               <button
                 aria-label={`Editar configuración guardada ${preset.name}`}

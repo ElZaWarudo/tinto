@@ -756,7 +756,10 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
     case "batch_paused":
       return waiting("Lote en pausa");
     case "waits_quarantine":
-      return danger(`Espera ${phase.lease.toUpperCase()}, en cuarentena`);
+      // Only the user can release it while the batch asks them things.
+      return phase.waits_on === "user"
+        ? danger(`${phase.lease.toUpperCase()} bloqueada · libera el recurso`, "lock")
+        : waiting(`Espera ${phase.lease.toUpperCase()}, en cuarentena`);
     case "setup_failed":
       return danger(`Falló la preparación: ${phase.command}`, "x");
     case "waits_environment":

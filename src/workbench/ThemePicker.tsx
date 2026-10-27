@@ -4,6 +4,7 @@
 // once; arrow keys move the choice like any radio group, Escape closes.
 
 import { useEffect, useRef, type KeyboardEvent } from "react";
+import { Icon } from "./Icon";
 import {
   THEME_OPTIONS,
   themeStore,
@@ -129,7 +130,10 @@ export function ThemePicker({
                     onClick={() => themeStore.set(option.value)}
                   >
                     <ThemeSwatch theme={option.value} />
-                    <span className="theme-picker__option-label">{option.label}</span>
+                    <span className="theme-picker__option-label">
+                      {checked && <Icon name="check" className="theme-picker__check" />}
+                      {option.label}
+                    </span>
                   </button>
                 );
               })}

@@ -85,6 +85,7 @@ import {
 } from "./agentRuntimeCatalog";
 import { loadFavoriteRuntimePreset } from "./runtimePresets";
 import { AgentTreeLens } from "./AgentTreeLens";
+import { Icon } from "../../workbench/Icon";
 
 export interface TerminalPanelParams {
   sessionId: string;
@@ -4947,6 +4948,7 @@ function AgentMessageBlock({
               onClick={onEdit}
               type="button"
             >
+              <Icon name="pencil" className="agent-panel__message-icon" />
               Editar
             </button>
           )}
@@ -4956,6 +4958,7 @@ function AgentMessageBlock({
             onClick={onCopy}
             type="button"
           >
+            <Icon name={copied ? "check" : "copy"} className="agent-panel__message-icon" />
             <span>{copied ? "Copiado" : "Copiar"}</span>
           </button>
         </div>

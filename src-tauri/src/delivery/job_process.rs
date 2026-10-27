@@ -30,21 +30,37 @@ enum Kind {
     Adopted {
         #[cfg(target_os = "windows")]
         handle: crate::windows_process::ProcessHandle,
+        /// Its tree, found again by name.
+        #[cfg(target_os = "windows")]
+        tree: Option<crate::windows_process::KillOnCloseJob>,
         #[cfg(not(target_os = "windows"))]
         started: String,
     },
-    /// It ended while Tinto was closed.
-    Ended,
+    /// It ended while Tinto was closed; what it started may not have.
+    Ended {
+        #[cfg(target_os = "windows")]
+        tree: Option<crate::windows_process::KillOnCloseJob>,
+    },
+}
+
+/// The name of a job's process tree, by which a restarted Tinto finds it.
+#[cfg(target_os = "windows")]
+fn tree_name(job_id: &str) -> String {
+    format!("Local\\tinto-delivery-{job_id}")
 }
 
 impl JobProcess {
     /// Starts `command` so that closing Tinto leaves it running; its own
     /// group, so stopping the job reaches what it starts.
-    pub fn spawn(command: &mut Command) -> io::Result<Self> {
+    pub fn spawn(command: &mut Command, job_id: &str) -> io::Result<Self> {
         #[cfg(target_os = "windows")]
         {
             let child = crate::windows_process::spawn_outliving(command)?;
-            let tree = crate::windows_process::KillOnCloseJob::attach_outliving(&child).ok();
+            let tree = crate::windows_process::KillOnCloseJob::attach_named_outliving(
+                &child,
+                &tree_name(job_id),
+            )
+            .ok();
             Ok(Self {
                 pid: child.id(),
                 kind: Kind::Child { child, tree },
@@ -53,6 +69,7 @@ impl JobProcess {
         #[cfg(not(target_os = "windows"))]
         {
             use std::os::unix::process::CommandExt;
+            let _ = job_id;
             let child = command.process_group(0).spawn()?;
             Ok(Self {
                 pid: child.id(),
@@ -63,17 +80,21 @@ impl JobProcess {
 
     /// The process `pid` if it still is the one that started at `started`
     /// (see [`JobProcess::started`]).
-    pub fn adopt(pid: u32, started: &str) -> Option<Self> {
+    pub fn adopt(pid: u32, started: &str, job_id: &str) -> Option<Self> {
         #[cfg(target_os = "windows")]
         {
             let handle = crate::windows_process::ProcessHandle::open(pid)?;
-            (handle.creation_time()?.to_string() == started).then_some(Self {
+            (handle.creation_time()?.to_string() == started).then(|| Self {
                 pid,
-                kind: Kind::Adopted { handle },
+                kind: Kind::Adopted {
+                    handle,
+                    tree: crate::windows_process::KillOnCloseJob::open_named(&tree_name(job_id)),
+                },
             })
         }
         #[cfg(not(target_os = "windows"))]
         {
+            let _ = job_id;
             (start_time(pid)? == started).then(|| Self {
                 pid,
                 kind: Kind::Adopted {
@@ -84,10 +105,15 @@ impl JobProcess {
     }
 
     /// A job whose process ended while Tinto was closed.
-    pub fn ended(pid: u32) -> Self {
+    pub fn ended(pid: u32, job_id: &str) -> Self {
+        #[cfg(not(target_os = "windows"))]
+        let _ = job_id;
         Self {
             pid,
-            kind: Kind::Ended,
+            kind: Kind::Ended {
+                #[cfg(target_os = "windows")]
+                tree: crate::windows_process::KillOnCloseJob::open_named(&tree_name(job_id)),
+            },
         }
     }
 
@@ -115,7 +141,7 @@ impl JobProcess {
                 success: Some(status.success()),
             })),
             #[cfg(target_os = "windows")]
-            Kind::Adopted { handle } => Ok(handle.exit_code()?.map(|code| Exited {
+            Kind::Adopted { handle, .. } => Ok(handle.exit_code()?.map(|code| Exited {
                 code: Some(code as i32),
                 success: Some(code == 0),
             })),
@@ -125,7 +151,7 @@ impl JobProcess {
                     code: None,
                     success: None,
                 })),
-            Kind::Ended => Ok(Some(Exited {
+            Kind::Ended { .. } => Ok(Some(Exited {
                 code: None,
                 success: None,
             })),
@@ -153,22 +179,70 @@ impl JobProcess {
             // Tinto's job object for it closed with the Tinto that started it:
             // the tree is found from its pid.
             #[cfg(target_os = "windows")]
-            Kind::Adopted { handle } => {
+            Kind::Adopted { handle, tree } => {
                 let _ = crate::agent_console::pty::kill_process_tree(self.pid);
                 handle.terminate();
+                if let Some(tree) = tree {
+                    let _ = tree.kill_all();
+                }
             }
             #[cfg(not(target_os = "windows"))]
             Kind::Adopted { .. } => {
                 let _ = crate::agent_console::pty::kill_process_tree(self.pid);
             }
-            Kind::Ended => {}
+            Kind::Ended { .. } => {}
+        }
+    }
+
+    /// Once the job ended, for whatever reason: ends what it left running
+    /// (a server it started in the background, say) and says what that was.
+    pub fn sweep(&mut self) -> Vec<String> {
+        #[cfg(target_os = "windows")]
+        {
+            let tree = match &self.kind {
+                Kind::Child { tree, .. } | Kind::Adopted { tree, .. } | Kind::Ended { tree } => {
+                    tree.as_ref()
+                }
+            };
+            let Some(tree) = tree else {
+                return Vec::new();
+            };
+            let left = tree.processes();
+            if !left.is_empty() {
+                let _ = tree.kill_all();
+            }
+            left
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Its own process group: what it started in the background is in
+            // it, unless it left the group on purpose.
+            let group = self.pid.to_string();
+            let listed = Command::new("ps")
+                .args(["-o", "pid=,args=", "-g", &group])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+                .unwrap_or_default();
+            let left: Vec<String> = listed
+                .lines()
+                .map(str::trim)
+                .filter_map(|line| line.split_once(char::is_whitespace))
+                .filter(|(pid, _)| *pid != group)
+                .map(|(pid, args)| format!("{} (pid {pid})", args.trim()))
+                .collect();
+            if !left.is_empty() {
+                let _ = Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{group}")])
+                    .status();
+            }
+            left
         }
     }
 }
 
 /// Whether `pid` is still the process that started at `started`.
 pub(super) fn alive(pid: u32, started: &str) -> bool {
-    let Some(mut process) = JobProcess::adopt(pid, started) else {
+    let Some(mut process) = JobProcess::adopt(pid, started, "") else {
         return false;
     };
     matches!(process.try_wait(), Ok(None))
@@ -220,13 +294,13 @@ mod tests {
         command
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let mut started = JobProcess::spawn(&mut command).unwrap();
+        let mut started = JobProcess::spawn(&mut command, "j-adopt").unwrap();
         let pid = started.pid();
         let at = started.started().expect("its start time");
         assert!(alive(pid, &at));
         assert!(!alive(pid, "1"), "another start time is another process");
 
-        let mut adopted = JobProcess::adopt(pid, &at).expect("adopted");
+        let mut adopted = JobProcess::adopt(pid, &at, "j-adopt").expect("adopted");
         assert_eq!(adopted.try_wait().unwrap(), None);
         adopted.kill_tree();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -234,6 +308,52 @@ mod tests {
         while started.try_wait().unwrap().is_none() || alive(pid, &at) {
             assert!(std::time::Instant::now() < deadline, "it kept running");
             std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// A job that starts a server in the background and ends.
+    fn detaching() -> Command {
+        #[cfg(target_os = "windows")]
+        {
+            let mut command = Command::new("cmd");
+            command.args(["/c", "start", "", "/b", "ping", "-n", "60", "127.0.0.1"]);
+            command
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 60 & exit 0"]);
+            command
+        }
+    }
+
+    #[test]
+    fn what_a_job_left_running_is_named_and_stopped_even_by_a_later_tinto() {
+        let name = format!("j-sweep-{}", std::process::id());
+        let mut command = detaching();
+        command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut job = JobProcess::spawn(&mut command, &name).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while job.try_wait().unwrap().is_none() {
+            assert!(std::time::Instant::now() < deadline, "the job did not end");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // A Tinto that restarted finds what the job left by its name.
+        let mut found = JobProcess::ended(job.pid(), &name);
+        let left = found.sweep();
+        let server = if cfg!(windows) { "ping" } else { "sleep" };
+        assert!(
+            left.iter()
+                .any(|process| process.to_lowercase().contains(server)),
+            "{left:?}"
+        );
+        // Stopped: nothing is left for the next look.
+        while !job.sweep().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "it kept running");
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
 }

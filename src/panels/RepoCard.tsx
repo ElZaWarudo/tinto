@@ -30,6 +30,7 @@ import { RepoSourceBadge } from "./RepoSourceBadge";
 import { SecretScanIndicator } from "./SecretScanIndicator";
 import { SignalBadges } from "./SignalBadges";
 import { REPO_STATUS_MARKS } from "./statusMarks";
+import { Icon } from "../workbench/Icon";
 
 export interface RepoCardProps {
   delta: RepoDelta;
@@ -573,7 +574,7 @@ function RepoCardImpl({
           }}
           onKeyDown={(e) => e.stopPropagation()}
         >
-          ✕
+          <Icon name="x" />
         </button>
         <div className="repo-card__branch" data-testid="branch">
           <span className="repo-card__branch-name">{branchLabel(branch, head)}</span>

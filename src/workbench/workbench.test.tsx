@@ -249,11 +249,12 @@ describe("MenuBar", () => {
     // Side is the most recent and is listed first.
     const recentList = screen.getByTestId("workbench-recent-Side");
     expect(recentList).toBeInTheDocument();
-    // The active workbench is marked via the menu__check ✓ (no testid, but
-    // the active one is in the same menu and renders the checkmark).
+    // The active workbench is marked by the check icon in its menu__check;
+    // the others leave it empty.
     const activeItem = screen.getByTestId("workbench-recent-Work");
     expect(activeItem).toBeInTheDocument();
-    expect(activeItem.querySelector(".menu__check")?.textContent).toBe("✓");
+    expect(activeItem.querySelector(".menu__check svg")).not.toBeNull();
+    expect(recentList.querySelector(".menu__check svg")).toBeNull();
 
     fireEvent.click(screen.getByTestId("workbench-recent-Side"));
     await waitFor(() => expect(ops.switchWorkbench).toHaveBeenCalledWith("Side", "Work"));

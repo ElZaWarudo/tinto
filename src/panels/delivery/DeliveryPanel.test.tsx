@@ -1437,14 +1437,19 @@ describe("DeliveryPanel", () => {
             holder_task_id: "t1",
             acquired_at_ms: 1,
             note: "El trabajo qa terminó sin liberar el recurso.",
-            queue: [{ job_id: "j10", task_id: "t1", requested_at_ms: 2 }],
+            // The scheduler did not list it: the job and its phase say it.
+            queue: [],
           },
         ],
+        jobs: [job({ id: "j10", role: "qa", status: "queued", lease: "qa" })],
+        phases: {
+          t1: phase({ kind: "waits_quarantine", job_id: "j10", lease: "qa" }, "user"),
+        },
       }),
     );
     renderPanel();
-    expect(await screen.findByText(/^Una QA espera/)).toHaveTextContent(
-      "Una QA espera a que liberes el recurso QA, en cuarentena tras AGOS-501.",
+    expect((await screen.findByText("QA bloqueada:")).parentElement).toHaveTextContent(
+      "QA bloqueada: una QA espera a que liberes el recurso QA, en cuarentena tras AGOS-501. El trabajo qa terminó sin liberar el recurso.",
     );
     expect(screen.getByRole("button", { name: "Liberar…" })).toBeInTheDocument();
   });
@@ -2397,8 +2402,10 @@ describe("DeliveryPanel", () => {
     });
     expect(client.checkDeliveryEnvironment).toHaveBeenCalledWith(REPO, null);
     expect(failing).toHaveClass("delivery-env--fail");
-    expect(failing.title).toContain("✗ pg_isready -h localhost\nlocalhost:5432 - no response");
-    expect(failing.title).toContain("✓ Docker");
+    expect(failing.title).toContain(
+      "Falla · pg_isready -h localhost\nlocalhost:5432 - no response",
+    );
+    expect(failing.title).toContain("Responde · Docker");
 
     await user.click(failing);
     const ok = await screen.findByRole("button", { name: "Entorno: bien. Comprobar de nuevo" });

@@ -1039,9 +1039,20 @@ select option:checked {
   border-color: var(--accent-fg);
   color: var(--fg-strong);
 }
-.theme-picker__option[aria-checked="true"] .theme-picker__option-label::before {
-  content: "✓ ";
+.theme-picker__check {
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  vertical-align: -1px;
   color: var(--accent-fg);
+}
+
+/* The app's icons (workbench/Icon.tsx) where nothing sizes them. */
+.app-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  vertical-align: -2px;
 }
 .theme-picker__option:focus-visible {
   outline: 2px solid var(--accent);
@@ -6555,13 +6566,20 @@ select option:checked {
   color: var(--fg-muted);
   font-size: 0;
 }
-.agent-panel__message--user_message .agent-panel__message-edit::before {
-  content: "✎";
-  font-size: 14px;
+/* Icons only on the user's own messages, where the buttons hide their text. */
+.agent-panel__message-icon {
+  display: none;
+  width: 14px;
+  height: 14px;
 }
-.agent-panel__message--user_message .agent-panel__message-copy::before {
-  content: "⧉";
-  font-size: 14px;
+.agent-panel__message--user_message .agent-panel__message-edit,
+.agent-panel__message--user_message .agent-panel__message-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.agent-panel__message--user_message .agent-panel__message-icon {
+  display: block;
 }
 .agent-panel__message--user_message .agent-panel__message-edit:hover,
 .agent-panel__message--user_message .agent-panel__message-edit:focus-visible,

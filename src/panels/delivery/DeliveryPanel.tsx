@@ -37,6 +37,7 @@ import {
 import { armExternalTabDetach } from "../../workspace/externalTabDetach";
 import { isWslRepoSource } from "../repoSource";
 import { confirm } from "../../workbench/confirmDialog";
+import { Icon as AppIcon, type IconName } from "../../workbench/Icon";
 import {
   codexReasoningLabel,
   lastRuntimeCatalog,
@@ -220,86 +221,9 @@ function savedListView(): ListView {
   return { lot: null, folded: ["delivered"] };
 }
 
-type IconName =
-  | Exclude<StatusIcon, "live">
-  | "more"
-  | "down"
-  | "right"
-  | "gear"
-  | "play"
-  | "ticket"
-  | "pull"
-  | "merge"
-  | "photo"
-  | "bug";
-
-const ICONS: Record<IconName, ReactNode> = {
-  flag: <path d="M4 14V2.5M4 3h7.5l-1.8 2.6L11.5 8.2H4" />,
-  x: <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />,
-  alert: <path d="M8 2.5l6 11H2zM8 6.6v3.1M8 11.7v.1" />,
-  clock: (
-    <>
-      <circle cx="8" cy="8" r="5.5" />
-      <path d="M8 5v3.2l2.2 1.4" />
-    </>
-  ),
-  lock: (
-    <>
-      <path d="M3.5 7.5h9v6h-9z" />
-      <path d="M5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5M8 10v1.2" />
-    </>
-  ),
-  ring: <circle cx="8" cy="8" r="4" />,
-  check: <path d="M3.5 8.5l3 3 6-7" />,
-  more: <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth="2.6" />,
-  down: <path d="M4 6l4 4 4-4" />,
-  right: <path d="M6 4l4 4-4 4" />,
-  gear: (
-    <>
-      <circle cx="8" cy="8" r="2.3" />
-      <path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6L5 5M11 11l1.4 1.4M3.6 12.4L5 11M11 5l1.4-1.4" />
-    </>
-  ),
-  play: <path d="M5 3.5l7 4.5-7 4.5z" />,
-  ticket: (
-    <path d="M2.5 5V3.5h11V5a1.5 1.5 0 0 0 0 3v0a1.5 1.5 0 0 0 0 3v1.5h-11V11a1.5 1.5 0 0 0 0-3 1.5 1.5 0 0 0 0-3zM9.5 4v8" />
-  ),
-  pull: (
-    <>
-      <circle cx="4.5" cy="3.5" r="1.5" />
-      <circle cx="4.5" cy="12.5" r="1.5" />
-      <circle cx="11.5" cy="12.5" r="1.5" />
-      <path d="M4.5 5v6M11.5 11V6.5A2 2 0 0 0 9.5 4.5H8" />
-    </>
-  ),
-  merge: (
-    <>
-      <circle cx="4.5" cy="3.5" r="1.5" />
-      <circle cx="4.5" cy="12.5" r="1.5" />
-      <circle cx="11.5" cy="8" r="1.5" />
-      <path d="M4.5 5v6M4.5 5c0 2.5 2 3 5.5 3" />
-    </>
-  ),
-  photo: (
-    <>
-      <rect x="2.5" y="3.5" width="11" height="9" rx="1" />
-      <path d="M2.5 11l3.5-3.5 3 3 2-2 2.5 2.5" />
-    </>
-  ),
-  bug: (
-    <>
-      <rect x="5" y="5" width="6" height="8" rx="3" />
-      <path d="M6 5a2 2 0 0 1 4 0M2.5 9H5M11 9h2.5M3 5.5l2 1.5M13 5.5l-2 1.5M3 12.5l2-1.5M13 12.5l-2-1.5" />
-    </>
-  ),
-};
-
+/** The app's icons, sized as Delivery draws them. */
 function Icon({ name }: { name: IconName }) {
-  return (
-    <svg className="delivery-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      {ICONS[name]}
-    </svg>
-  );
+  return <AppIcon name={name} className="delivery-icon" />;
 }
 
 function StatusMark({ icon }: { icon: StatusIcon }) {
@@ -979,6 +903,17 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   const capacity = overview?.capacity ?? Math.max(1, capacitySetting);
   const qa = overview?.leases.find((lease) => lease.name === "qa");
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
+  // The QA jobs a quarantine holds back, wherever the scheduler put them,
+  // and whether only the user can release it for them.
+  const qaBlocked = (overview?.jobs ?? []).filter(
+    (job) =>
+      job.status === "queued" &&
+      job.lease === "qa" &&
+      overview?.phases?.[job.task_id]?.kind === "waits_quarantine",
+  );
+  const qaWaitsOnUser = qaBlocked.some(
+    (job) => overview?.phases?.[job.task_id]?.waits_on === "user",
+  );
   const allStalls = overview ? coordinatorStalls(overview, now) : [];
   const [hiddenStalls, setHiddenStalls] = useState(savedHiddenStalls);
   const stalls = allStalls.filter((stall) => !hiddenStalls.includes(stallKey(stall)));
@@ -1109,17 +1044,24 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                 onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
               >
                 QA en cuarentena
-                {qa.queue.length > 0 && (
-                  <span className="delivery-muted">· {qa.queue.length} esperando</span>
+                {qaBlocked.length > 0 && (
+                  <span className="delivery-muted">· {qaBlocked.length} esperando</span>
                 )}
               </button>
             ) : (
               qa && (
                 <span
                   className={`delivery-lease delivery-lease--${qa.state}`}
-                  title={qa.note ?? undefined}
+                  title={
+                    qa.state === "active" && qaHolder
+                      ? `En QA: ${taskLabel(qaHolder)} · ${qaHolder.title}`
+                      : (qa.note ?? undefined)
+                  }
                 >
-                  {qa.state === "active" ? `QA: ${qaHolder?.key ?? "ocupado"}` : "QA libre"}
+                  {qa.state === "active" && <Icon name="photo" />}
+                  {qa.state === "active"
+                    ? `En QA: ${qaHolder ? taskLabel(qaHolder) : "ocupado"}`
+                    : "QA libre"}
                   {qa.queue.length > 0 && (
                     <span className="delivery-muted">· {qa.queue.length} esperando</span>
                   )}
@@ -1158,11 +1100,14 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
           )}
 
           {/* Only when it holds work back; otherwise the header and the task say it. */}
-          {qa?.state === "quarantined" && qa.queue.length > 0 && (
+          {qa?.state === "quarantined" && qaBlocked.length > 0 && (
             <div className="delivery-panel__warning" role="status">
               <span title={qa.note ?? undefined}>
-                {qa.queue.length === 1 ? "Una QA espera" : `${qa.queue.length} QA esperan`} a que
-                liberes el recurso QA{qaHolder ? `, en cuarentena tras ${qaHolder.key}` : ""}.
+                <strong>QA bloqueada:</strong>{" "}
+                {qaBlocked.length === 1 ? "una QA espera" : `${qaBlocked.length} QA esperan`} a que
+                {qaWaitsOnUser ? " liberes" : " el coordinador libere"} el recurso QA
+                {qaHolder ? `, en cuarentena tras ${qaHolder.key}` : ""}.
+                {qa.note ? ` ${qa.note}` : ""}
               </span>
               <button
                 type="button"
@@ -1521,7 +1466,8 @@ function EnvironmentStatus({ repo, distro }: { repo: string; distro: string | nu
       ? "Docker no se usa en este repositorio y no hay sondas marcadas (en los ajustes del repositorio)."
       : (checks ?? [])
           .map(
-            (item) => `${item.ok ? "✓" : "✗"} ${item.name}${item.output ? `\n${item.output}` : ""}`,
+            (item) =>
+              `${item.ok ? "Responde" : "Falla"} · ${item.name}${item.output ? `\n${item.output}` : ""}`,
           )
           .join("\n\n");
   return (
@@ -1667,11 +1613,17 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const taskRow = (task: DeliveryTask) => {
     const pr = (overview?.prs ?? []).find((candidate) => candidate.task_id === task.id);
     const status = statuses.get(task.id)!;
+    // The task QA is on now, or the one that left it in quarantine.
+    const qaLease = overview?.leases.find(
+      (lease) => lease.name === "qa" && lease.holder_task_id === task.id,
+    );
+    const qaHere =
+      qaLease?.state === "active" || qaLease?.state === "quarantined" ? qaLease.state : null;
     return (
       <button
         key={task.id}
         type="button"
-        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}`}
+        className={`delivery-task-row${task.package ? " delivery-task-row--package" : ""}${status.tone === "blocked" ? " delivery-task-row--blocked" : ""}${qaHere === "active" ? " delivery-task-row--qa" : qaHere === "quarantined" ? " delivery-task-row--qa-quarantined" : ""}`}
         aria-current={selectedTask?.id === task.id ? "true" : undefined}
         onClick={() => select(repo, task.id)}
         onContextMenu={(event) => {
@@ -1699,6 +1651,14 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       >
         <span className="delivery-task-row__key">
           {task.package ? `Paquete ${task.package.index}/${task.package.of}` : taskLabel(task)}
+          {qaHere && (
+            <span
+              className={`delivery-qa-badge delivery-qa-badge--${qaHere}`}
+              title={qaLease?.note ?? undefined}
+            >
+              {qaHere === "active" ? "En QA" : "QA en cuarentena"}
+            </span>
+          )}
           {pr && (
             <span className="delivery-task-row__pr" title={`PR #${pr.number}`}>
               #{pr.number}
@@ -4435,13 +4395,15 @@ function JobRow({
               <ul className="delivery-plan" aria-label="Plan del agente">
                 {job.plan?.map((item, index) => (
                   <li key={index} data-status={item.status}>
-                    <span aria-hidden>
-                      {item.status === "completed"
-                        ? "✓"
-                        : item.status === "in_progress"
-                          ? "▸"
-                          : "○"}
-                    </span>
+                    <Icon
+                      name={
+                        item.status === "completed"
+                          ? "check"
+                          : item.status === "in_progress"
+                            ? "right"
+                            : "ring"
+                      }
+                    />
                     {item.text}
                   </li>
                 ))}

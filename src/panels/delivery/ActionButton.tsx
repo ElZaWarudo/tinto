@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { DeliveryRefreshContext } from "./deliveryRefresh";
+import { Icon } from "../../workbench/Icon";
 
 type Group = { working: boolean; setWorking: (working: boolean) => void };
 const ActionGroupContext = createContext<Group | null>(null);
@@ -107,7 +108,11 @@ export function ActionButton({
         <span className="delivery-action__label">{children}</span>
         {(working || state === "done") && (
           <span className="delivery-action__status" aria-hidden="true">
-            {working ? <span className="delivery-action__spinner" /> : "✓"}
+            {working ? (
+              <span className="delivery-action__spinner" />
+            ) : (
+              <Icon name="check" className="delivery-icon" />
+            )}
           </span>
         )}
       </button>
