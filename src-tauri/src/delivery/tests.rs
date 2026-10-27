@@ -10156,6 +10156,7 @@ fn a_quarantine_holds_other_tasks_qa_while_the_stage_that_left_it_goes_on() {
                 // As when the scheduler held the job back for something else.
                 queue: Vec::new(),
                 last_task_id: Some(left_id.clone()),
+                prepared: None,
             })
             .unwrap();
     }
@@ -10337,6 +10338,7 @@ fn a_free_qa_slot_goes_first_to_the_task_its_stack_was_built_for() {
                 note: None,
                 queue: Vec::new(),
                 last_task_id: Some(stack.id.clone()),
+                prepared: None,
             })
             .unwrap();
     }
@@ -10348,4 +10350,122 @@ fn a_free_qa_slot_goes_first_to_the_task_its_stack_was_built_for() {
     eventually(|| {
         (h.service.job("qa-other").unwrap().status != DeliveryJobStatus::Queued).then_some(())
     });
+}
+
+/// A local app for QA stack tests: `/` loads `/m.js`, which imports
+/// `/dep.js`. It records the paths asked for.
+fn qa_app() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = asked.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut line = String::new();
+            let _ = BufReader::new(&stream).read_line(&mut line);
+            let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let body = match path.as_str() {
+                "/" => r#"<html><script type="module" src="/m.js"></script></html>"#,
+                "/m.js" => r#"import "/dep.js";"#,
+                _ => "export {};",
+            };
+            seen.lock().unwrap().push(path);
+            let mut stream = stream;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (url, asked)
+}
+
+#[test]
+fn browser_qa_starts_on_a_prepared_stack_beside_a_command_line_qa() {
+    let h = harness();
+    let (url, asked) = qa_app();
+    let built = h.repo.path().join("built.txt");
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(h.repo.path()).unwrap();
+    settings.qa_browser = true;
+    settings.qa_stack = Some(super::model::DeliveryQaStack {
+        name: "dev".into(),
+        up: format!("echo {{services}}>> \"{}\"", plain_path(&built)),
+        services: [
+            ("frontend".to_string(), vec!["web".to_string()]),
+            ("api".to_string(), vec!["api".to_string()]),
+        ]
+        .into(),
+        ready_url: url,
+        warm_paths: vec!["/".into()],
+        ..Default::default()
+    });
+    store.set_repo_settings(h.repo.path(), &settings).unwrap();
+    drop(store);
+    let task = h.task("S-1");
+    let other = h.task("S-2");
+    let worktree = PathBuf::from(plain_path(&task.worktree));
+    std::fs::create_dir_all(worktree.join("frontend")).unwrap();
+    std::fs::write(worktree.join("frontend").join("page.vue"), "x").unwrap();
+
+    let browser = h.dispatch(&task, "qa", "events=codex-ok sleep=3");
+    let cli = h
+        .service
+        .dispatch(NewJob {
+            task_id: other.id.clone(),
+            role: "qa".into(),
+            agent: DeliveryAgent::Codex,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: "events=codex-ok sleep=3".into(),
+            writes: None,
+            lease: Some("qa:cli:s2".into()),
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
+            needs_environment: false,
+        })
+        .unwrap();
+    assert_eq!(browser.lease.as_deref(), Some("qa:browser:dev"));
+    assert!(!cli.qa_browser && cli.qa_stack.is_none());
+    // Each holds its own environment's resource: both run at once.
+    h.wait_status(&browser.id, DeliveryJobStatus::Started);
+    assert_eq!(h.service.job(&cli.id).unwrap().status, DeliveryJobStatus::Started);
+
+    let browser = h.wait(&browser.id);
+    let prepare = browser.prepare.clone().unwrap();
+    // Only the service of the changed folder was rebuilt, and the warm-up
+    // followed the page's imports.
+    assert_eq!(prepare.services, ["web"]);
+    assert!(!prepare.reused);
+    assert_eq!(std::fs::read_to_string(&built).unwrap().trim(), "web");
+    assert!(asked.lock().unwrap().contains(&"/dep.js".to_string()));
+    assert!(browser.timing.unwrap().prepare_ms.is_some());
+
+    // The same worktree again: nothing is rebuilt.
+    let again = h.wait(&h.dispatch(&task, "qa", "events=codex-ok").id);
+    assert!(again.prepare.unwrap().reused);
+    assert_eq!(std::fs::read_to_string(&built).unwrap().trim(), "web");
+}
+
+#[test]
+fn a_qa_that_ends_without_its_record_leaves_a_stub_and_its_changes_undone() {
+    let h = harness();
+    let task = h.task("S-3");
+    let qa = h.wait(&h.dispatch(&task, "qa", "events=none touch=README.md").id);
+    let worktree = PathBuf::from(plain_path(&task.worktree));
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).unwrap().replace('\r', ""),
+        "base\n"
+    );
+    assert_eq!(qa.reverted, ["README.md"]);
+    assert!(qa.changes.is_empty());
+    let source = qa.visual_record_source.unwrap();
+    assert!(source.ends_with("S-3.md"), "{source}");
+    assert!(qa.visual_record_warnings.is_empty(), "{:?}", qa.visual_record_warnings);
+    assert!(std::fs::read_to_string(source).unwrap().contains("not verifiable: out of time"));
 }

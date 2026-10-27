@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod model;
 pub mod phase;
 pub mod prs;
+mod qa_prepare;
 pub mod qa_problems;
 mod queue;
 pub mod reply_images;

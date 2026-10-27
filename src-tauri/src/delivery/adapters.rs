@@ -17,13 +17,20 @@ use super::model::{
     DeliveryPlanItem, DeliveryPlatform, DeliverySlowCommand, DeliveryTask, DeliveryTiming,
     DeliveryUsage,
 };
-use super::service::QA_ROLE;
+use super::service::{QA_CLI_LEASE, QA_ROLE};
 use super::tasks::{git, plain_path, Place};
 use super::DeliveryError;
 
 /// The browser QA jobs get, pinned so a new release cannot change a run.
 pub const PLAYWRIGHT_MCP: &str = "@playwright/mcp@0.0.82";
 const BROWSER_SERVER: &str = "playwright";
+/// How long a browser tool call may go without a word before the agent's
+/// CLI stops it: a page that never loads would otherwise hold the job for
+/// the CLI's own limit (30 minutes for Claude Code).
+pub const BROWSER_TOOL_SILENCE_SECS: u32 = 180;
+/// The share of a QA job's time limit after which it is told to stop
+/// testing and write its record.
+pub const QA_BUDGET_PERCENT: u32 = 70;
 
 /// Shape of the result every agent job ends with; Codex and Claude both
 /// enforce it on the final answer.
@@ -218,11 +225,40 @@ pub fn job_prompt(
                 job.qa_environment.trim()
             ));
         }
+        if let (Some(stack), Some(prepare)) = (&job.qa_stack, &job.prepare) {
+            lines.push(format!(
+                "Tinto prepared the QA stack «{}» before you started, and it serves this worktree at {}: {} Do not rebuild, restart or reconfigure it. If it stops answering, report what depends on it as blocked by the environment.",
+                stack.name,
+                stack.ready_url,
+                prepare.note.trim()
+            ));
+        }
+        if let Some(project) = job
+            .lease
+            .as_deref()
+            .and_then(|lease| lease.strip_prefix(QA_CLI_LEASE))
+        {
+            lines.push(format!(
+                "This is a command-line QA without a browser. Run it on its own isolated environment named «{project}» (for example a compose project of that name) and remove it when you end; do not use or change the repo's shared stack, which another QA may be testing on."
+            ));
+        }
         if job.qa_browser {
             lines.push(format!(
                 "You have a headless browser with a fresh profile through the {BROWSER_SERVER} MCP tools. The screenshots it saves go to the job's folder, outside the worktree; name them in the result's checks. Its console logs and page snapshots are saved in your QA folder too: read them there, or with the browser_console_messages tool, and never search the disk for them."
             ));
+            lines.push(format!(
+                "Work the browser in short steps: browser_navigate, browser_snapshot, browser_click and browser_type, and browser_wait_for with a text to wait for and a time limit of at most 30 seconds. Do not write browser_run_code_unsafe scripts that wait on page loads or sleep: a browser call that says nothing for {} minutes is stopped. If a page does not load within a minute, check the dev server's logs once and report it as blocked by the environment instead of retrying. Check the visual changes first and the regressions last.",
+                BROWSER_TOOL_SILENCE_SECS / 60
+            ));
         }
+        if !job.qa_followup.is_empty() || !job.round.is_empty() {
+            lines.push("This QA re-checks a round: check only the items the round and the earlier problems below list, not the whole feature, unless the assignment asks for more.".to_string());
+        }
+        let budget = job.timeout_minutes * QA_BUDGET_PERCENT / 100;
+        lines.push(format!(
+            "Your time limit is {} minutes. By minute {budget}, stop testing and write `{}.md` with what you have, marking each item you did not check «not verifiable: out of time»: a QA without its record is lost. If time runs out anyway, Tinto writes a stub record from your screenshots and your task list.",
+            job.timeout_minutes, task.key
+        ));
         lines.push(qa_record_guide(&task.key));
         if job.qa_browser {
             lines.push(visual_record_instructions(&task.key));
@@ -1159,13 +1195,53 @@ fn claude_qa_args(
         args.push(
             serde_json::json!({
                 "mcpServers": {
-                    BROWSER_SERVER: { "type": "stdio", "command": command, "args": server_args }
+                    BROWSER_SERVER: {
+                        "type": "stdio",
+                        "command": command,
+                        "args": server_args,
+                        "timeout": BROWSER_TOOL_SILENCE_SECS * 1000,
+                    }
                 }
             })
             .to_string(),
         );
     }
+    // Past its budget, every tool call tells the agent to write its record.
+    let budget_ms = u64::from(job.timeout_minutes * QA_BUDGET_PERCENT / 100) * 60_000;
+    let script = paths.dir.join(QA_BUDGET_SCRIPT);
+    std::fs::write(
+        &script,
+        qa_budget_script(super::now_ms() + budget_ms, job.timeout_minutes, &job.id),
+    )
+    .map_err(DeliveryError::io)?;
+    let hook = format!("node \"{}\"", agent_path(&plain_path(&script), from_wsl));
+    args.push("--settings".to_string());
+    args.push(
+        serde_json::json!({
+            "hooks": { "PostToolUse": [{ "hooks": [{ "type": "command", "command": hook }] }] }
+        })
+        .to_string(),
+    );
     Ok(args)
+}
+
+/// The hook that tells a QA agent its budget is spent (see
+/// [`qa_budget_script`]).
+const QA_BUDGET_SCRIPT: &str = "qa-budget.mjs";
+
+/// A Claude Code hook run after each tool call: past `deadline_ms` it adds
+/// to the agent's context that it must stop testing and write its record.
+fn qa_budget_script(deadline_ms: u64, timeout_minutes: u32, job_id: &str) -> String {
+    let message = format!(
+        "Tinto: {QA_BUDGET_PERCENT}% of this QA job's {timeout_minutes} minutes are spent. Stop testing now: write the QA record with what you have, marking each item you did not check «not verifiable: out of time», then finish with the structured result."
+    );
+    let output = serde_json::json!({
+        "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": message }
+    });
+    format!(
+        "// Tinto QA budget for job {job_id}.\nif (Date.now() >= {deadline_ms}) console.log({});\n",
+        Value::from(output.to_string())
+    )
 }
 
 /// Arguments for a Codex QA job: its QA folder writable, network in the
@@ -1197,6 +1273,10 @@ fn codex_qa_overrides(
         values.push(format!(
             "{}=\"approve\"",
             key("default_tools_approval_mode")
+        ));
+        values.push(format!(
+            "{}={BROWSER_TOOL_SILENCE_SECS}",
+            key("tool_timeout_sec")
         ));
     }
     std::fs::create_dir_all(&paths.qa_output).map_err(DeliveryError::io)?;
@@ -1702,6 +1782,7 @@ impl JobClock {
             commands_ms: self.commands_ms,
             turns: self.turns,
             slowest,
+            prepare_ms: None,
         }
     }
 }
@@ -2156,6 +2237,9 @@ pub(crate) mod tests {
             decisions: Vec::new(),
             qa_followup: Vec::new(),
             qa_environment: String::new(),
+            qa_stack: None,
+            prepare: None,
+            reverted: Vec::new(),
             task_checks: Vec::new(),
             round: Vec::new(),
             needs_environment: false,
@@ -2580,6 +2664,7 @@ pub(crate) mod tests {
                 model_ms: Some(5100),
                 commands_ms: 3000,
                 turns: Some(4),
+                prepare_ms: None,
                 slowest: vec![slow(first, 2000, 1, 0), slow(second, 1000, 1, 0)],
             }
         );
@@ -2640,6 +2725,7 @@ pub(crate) mod tests {
                 model_ms: None,
                 commands_ms: 600_000 + 60_000 + 200_000,
                 turns: None,
+                prepare_ms: None,
                 slowest: vec![
                     slow(preflight_line, 660_000, 2, 1),
                     slow("npm test", 200_000, 1, 0),
@@ -2663,6 +2749,7 @@ pub(crate) mod tests {
                 model_ms: None,
                 commands_ms: 1000,
                 turns: None,
+                prepare_ms: None,
                 slowest: vec![slow(command, 1000, 1, 0)],
             }
         );
@@ -2850,7 +2937,7 @@ pub(crate) mod tests {
             "{script}"
         );
         assert!(
-            script.contains(r#"'mcp_servers.playwright.default_tools_approval_mode="approve"' -"#),
+            script.contains(r#"'mcp_servers.playwright.default_tools_approval_mode="approve"' '-c' 'mcp_servers.playwright.tool_timeout_sec=180' -"#),
             "{script}"
         );
 

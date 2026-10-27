@@ -11,7 +11,7 @@ use super::coordination::{DeliveryCommitDraft, NewApproval};
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision,
     DeliveryJiraSettings, DeliveryJob, DeliveryJobLog, DeliveryLease, DeliveryOverview,
-    DeliveryPlatform, DeliveryRepoSettings, DeliveryRun, DeliveryRung, DeliverySettings,
+    DeliveryPlatform, DeliveryQaStack, DeliveryRepoSettings, DeliveryRun, DeliveryRung, DeliverySettings,
     DeliverySettingsChanges, DeliverySettingsProposal, DeliveryStageAgent, DeliveryTask,
 };
 use super::prs::DeliveryPr;
@@ -523,6 +523,7 @@ pub fn delivery_set_repo_settings(
         check_env: super::service::clean_check_env(settings.check_env)?,
         qa_browser: settings.qa_browser,
         qa_environment: settings.qa_environment.trim().to_string(),
+        qa_stack: clean_qa_stack(settings.qa_stack)?,
         verification: settings.verification.trim().to_string(),
         paid_model_calls: settings.paid_model_calls,
         // Zero means no limit was set: the default applies.
@@ -1145,4 +1146,54 @@ pub async fn delivery_open_job_in_agents(
         repo,
         agent_type: agent_type.to_string(),
     })
+}
+
+/// A QA stack as the user set it, trimmed: none when it has no name, and
+/// refused when it has a name but not how to bring it up or check it.
+fn clean_qa_stack(stack: Option<DeliveryQaStack>) -> Result<Option<DeliveryQaStack>, CommandError> {
+    let Some(stack) = stack.filter(|stack| !stack.name.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let lines = |values: Vec<String>| -> Vec<String> {
+        values
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect()
+    };
+    let stack = DeliveryQaStack {
+        name: stack.name.trim().to_string(),
+        up: stack.up.trim().to_string(),
+        services: stack
+            .services
+            .into_iter()
+            .map(|(folder, services)| {
+                (folder.trim().trim_end_matches(['/', '\\']).to_string(), lines(services))
+            })
+            .filter(|(folder, services)| !folder.is_empty() && !services.is_empty())
+            .collect(),
+        ready_url: stack.ready_url.trim().to_string(),
+        warm_paths: lines(stack.warm_paths),
+        seed: lines(stack.seed),
+        preview: stack.preview.trim().to_string(),
+    };
+    if stack.name.chars().any(|c| !(c.is_ascii_alphanumeric() || "-_.".contains(c))) {
+        return Err(CommandError::new(
+            "invalid_qa_stack",
+            "el nombre del entorno de QA solo admite letras, números, «-», «_» y «.»",
+        ));
+    }
+    if stack.up.is_empty() || !stack.up.contains("{services}") {
+        return Err(CommandError::new(
+            "invalid_qa_stack",
+            "el comando que levanta el entorno de QA debe incluir {services}",
+        ));
+    }
+    if !stack.ready_url.starts_with("http://") && !stack.ready_url.starts_with("https://") {
+        return Err(CommandError::new(
+            "invalid_qa_stack",
+            "la URL de disponibilidad del entorno de QA debe empezar por http:// o https://",
+        ));
+    }
+    Ok(Some(stack))
 }

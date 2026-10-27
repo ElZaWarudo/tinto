@@ -222,6 +222,7 @@ impl Queue {
                     note: None,
                     queue: Vec::new(),
                     last_task_id: None,
+                    prepared: None,
                 });
                 leases.len() - 1
             }

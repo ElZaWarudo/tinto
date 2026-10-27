@@ -21,7 +21,8 @@ use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryChange, DeliveryCoordinatorEndpoint, DeliveryDecision,
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
     DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryOverview, DeliveryPackage,
-    DeliveryPlatform, DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
+    DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare, DeliveryQaStack,
+    DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
     DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
     NewBlocker,
 };
@@ -86,6 +87,12 @@ const IMPLEMENTATION_ROLE: &str = "implementation";
 /// One of the task's setup commands, run by Tinto itself as a shell job
 /// before its stages.
 pub const SETUP_ROLE: &str = "setup";
+
+/// The resource of browser QA on a repo's QA stack, followed by its name.
+pub const QA_BROWSER_LEASE: &str = "qa:browser:";
+/// The resource of a command-line QA on its own isolated project, followed
+/// by the project's name: it runs without the browser and the QA stack.
+pub const QA_CLI_LEASE: &str = "qa:cli:";
 
 /// How long a passing "Entorno" check stands before a job that needs the
 /// environment checks it again.
@@ -226,6 +233,12 @@ pub struct NewJob {
     /// It needs the repo's environment: it waits while that is down. QA
     /// always does.
     pub needs_environment: bool,
+}
+
+/// Why preparing a QA stack stopped short.
+enum PrepareStop {
+    Cancelled,
+    Failed(String),
 }
 
 /// How a job's process ended, before its result is evaluated.
@@ -1620,12 +1633,26 @@ impl DeliveryService {
                 decision_notes.push(format!("{note} (decided for {package})"));
             }
         }
-        let qa_browser = qa && settings.qa_browser;
+        // A QA job holds the resource of the environment it tests on: a
+        // command-line QA the coordinator gives its own `qa:cli:<project>`
+        // runs beside a browser QA on the repo's stack, without the browser.
+        let lease = request
+            .lease
+            .filter(|lease| !lease.trim().is_empty())
+            .or_else(|| match (&settings.qa_stack, qa && settings.qa_browser) {
+                (Some(stack), true) => Some(format!("{QA_BROWSER_LEASE}{}", stack.name)),
+                _ => lease.map(str::to_string),
+            });
+        let command_line_qa = lease
+            .as_deref()
+            .is_some_and(|lease| lease.starts_with(QA_CLI_LEASE));
+        let qa_browser = qa && settings.qa_browser && !command_line_qa;
         let qa_environment = if qa {
             settings.qa_environment.clone()
         } else {
             String::new()
         };
+        let qa_stack = settings.qa_stack.clone().filter(|_| qa_browser);
         // Each check and setup command counts its own attempts.
         let attempt = store
             .task_jobs(&task.id)?
@@ -1652,10 +1679,7 @@ impl DeliveryService {
             prompt: request.prompt,
             contract_version: task.contract_version,
             writes: request.writes.unwrap_or(writes),
-            lease: request
-                .lease
-                .filter(|lease| !lease.trim().is_empty())
-                .or_else(|| lease.map(str::to_string)),
+            lease,
             timeout_minutes: timeout.clamp(1, MAX_TIMEOUT_MINUTES),
             status: DeliveryJobStatus::Queued,
             created_at_ms: now,
@@ -1681,6 +1705,9 @@ impl DeliveryService {
             decisions: decision_notes,
             qa_followup,
             qa_environment,
+            qa_stack,
+            prepare: None,
+            reverted: Vec::new(),
             task_checks: Vec::new(),
             round,
             needs_environment: request.needs_environment || qa,
@@ -2397,6 +2424,24 @@ impl DeliveryService {
                 }
             }
         }
+        // Browser QA on the repo's stack starts once Tinto has it serving
+        // this worktree; its time limit counts from then.
+        if let Some(stack) = job.qa_stack.clone() {
+            match self.prepare_qa_stack(&job, &task, &stack, &paths, start.as_ref()) {
+                Ok(prepare) => job.prepare = Some(prepare),
+                Err(PrepareStop::Cancelled) => return self.cancel_preparing(&job.id),
+                Err(PrepareStop::Failed(message)) => {
+                    return Err(DeliveryError::new(
+                        "qa_prepare_failed",
+                        format!(
+                            "No se pudo preparar el entorno de QA «{}»: {message}. Detalle en {}.",
+                            stack.name,
+                            plain_path(&paths.dir.join(super::qa_prepare::PREPARE_LOG))
+                        ),
+                    ))
+                }
+            }
+        }
         let launch = (self.inner.launcher)(&job, &task, &paths)?;
         // The process writes its output straight to the job's files and
         // reads its input from one, so it outlives Tinto: a restart adopts
@@ -2441,6 +2486,9 @@ impl DeliveryService {
             current.provider_session_id = launch.provider_session_id.clone();
             current.ran_on = Some(ran_on(&launch));
             current.frozen_scripts = job.frozen_scripts.clone();
+            current.prepare = job.prepare.clone();
+            current.current_command = None;
+            current.current_command_at_ms = None;
             current.start_candidate = start.as_ref().map(WorktreeSnapshot::candidate_id);
             store.put_job(&current)?;
             if let Some(start) = &start {
@@ -2607,12 +2655,33 @@ impl DeliveryService {
         let events = std::fs::read_to_string(&paths.events).unwrap_or_default();
         let result_file = std::fs::read_to_string(&paths.result).ok();
         let mut outcome = adapters::read_outcome(agent, &events, result_file.as_deref());
-        let end = match &start {
+        let mut end = match &start {
             Some(start) => {
                 Some(self.snapshot(&task, &format!("job-{}-end", job.id), Some(&start.tree))?)
             }
             None => None,
         };
+        // QA only reads the worktree: what it changed there (a lockfile a
+        // build rewrote) goes back as it was, so it never reaches a commit.
+        let mut reverted = Vec::new();
+        if let (Some(start), Some(found)) = (&start, &end) {
+            if job.role == QA_ROLE && !found.changes.is_empty() {
+                for change in to_changes(found) {
+                    match self.revert_file(&task, start, Path::new(&change.path)) {
+                        Ok(()) => reverted.push(change.path),
+                        Err(error) => eprintln!(
+                            "tinto: delivery could not put back {} after QA: {error}",
+                            change.path
+                        ),
+                    }
+                }
+                end = Some(self.snapshot(
+                    &task,
+                    &format!("job-{}-end-reverted", job.id),
+                    Some(&start.tree),
+                )?);
+            }
+        }
         // A command's exit code is its result; one Tinto could not learn
         // after a restart counts as failed. An agent's result says itself.
         let exit_ok = match exited {
@@ -2640,16 +2709,42 @@ impl DeliveryService {
         // before the job ends, so whoever learns it ended (the view, the
         // coordinator, a test) finds the page and its problems with it. A
         // job the user cancelled without writing one is not told it lacks it.
+        // A QA that ended without its record, its time out or its process
+        // killed, still leaves its evidence: Tinto writes a stub from its
+        // screenshots and task list. It has no problems to read.
+        let mut stub = false;
+        if job.role == QA_ROLE
+            && !cancelled
+            && (timed_out || outcome.result.is_none())
+            && super::visual_record::find(&paths.qa_output, &task.key).is_none()
+        {
+            let why = match timed_out {
+                true => format!("its {} minutes ran out", job.timeout_minutes),
+                false => "its process ended without a result".to_string(),
+            };
+            let written = super::visual_record::write_stub(
+                &paths.qa_output,
+                &task.key,
+                &task.branch,
+                &super::visual_record::date_of(now_ms()),
+                &why,
+                &self.stub_items(&job.id)?,
+            );
+            match written {
+                Ok(_) => stub = true,
+                Err(error) => eprintln!("tinto: delivery could not write a stub QA record: {error}"),
+            }
+        }
         if job.role == QA_ROLE
             && (!cancelled || super::visual_record::find(&paths.qa_output, &task.key).is_some())
         {
             // Its problems wait for the user's call in the task. The job
             // ends even when they cannot be saved.
-            if let Err(error) = self.save_visual_record(&task, &job.id, &paths.qa_output, true) {
+            if let Err(error) = self.save_visual_record(&task, &job.id, &paths.qa_output, !stub) {
                 eprintln!("tinto: delivery could not save a QA record: {error}");
             }
         }
-        self.finish(&job.id, ending, outcome, timing, end, &stderr_text)?;
+        self.finish(&job.id, ending, outcome, timing, end, reverted, &stderr_text)?;
         // A task Tinto cannot queue checks on now (blocked, paused) goes on
         // without them.
         let _ = self.queue_checks(&job.id);
@@ -2666,6 +2761,199 @@ impl DeliveryService {
             );
         }
         Ok(())
+    }
+
+    /// Brings the repo's QA stack to serve the task's worktree as it is now:
+    /// rebuilds the services its changes touch (and those another task's
+    /// worktree was served by), unless the stack already serves it; waits
+    /// for it to answer and requests the pages QA visits. Its log goes to
+    /// the job's folder; what it did, to the job and to the stack's resource.
+    fn prepare_qa_stack(
+        &self,
+        job: &DeliveryJob,
+        task: &DeliveryTask,
+        stack: &DeliveryQaStack,
+        paths: &JobPaths,
+        start: Option<&WorktreeSnapshot>,
+    ) -> Result<DeliveryQaPrepare, PrepareStop> {
+        use super::qa_prepare as prepare;
+        let began = Instant::now();
+        let until = began + prepare::PREPARE_LIMIT;
+        let log = paths.dir.join(prepare::PREPARE_LOG);
+        let failed = |message: String| PrepareStop::Failed(message);
+        let cancel = self
+            .inner
+            .cancels
+            .lock()
+            .ok()
+            .and_then(|cancels| cancels.get(&job.id).cloned())
+            .unwrap_or_default();
+        self.record_observation(
+            &job.id,
+            adapters::Observation {
+                command: Some(Some(("Tinto prepara el entorno de QA".to_string(), now_ms()))),
+                ..Default::default()
+            },
+        );
+        // What the task changed since it left its base, committed or not.
+        let place = Place::of(task.distro.as_deref());
+        let base = tasks::git(place, &task.worktree, &["merge-base", "HEAD", &task.base_ref])
+            .unwrap_or_else(|_| task.base_commit.clone());
+        let mut changed: Vec<String> = Vec::new();
+        for args in [
+            vec!["diff", "--name-only", base.as_str()],
+            vec!["ls-files", "--others", "--exclude-standard"],
+        ] {
+            let listed = tasks::git(place, &task.worktree, &args).map_err(|e| failed(e.message))?;
+            changed.extend(listed.lines().map(str::to_string));
+        }
+        let candidate = start.map(WorktreeSnapshot::candidate_id).unwrap_or_default();
+        let lease_name = job.lease.clone().unwrap_or_default();
+        let prepared = self
+            .store()
+            .and_then(|store| store.lease(&lease_name))
+            .map_err(|e| failed(e.message))?
+            .and_then(|lease| lease.prepared);
+        let (services, reused) = prepare::rebuild(
+            &task.id,
+            &candidate,
+            prepare::services_for(&changed, &stack.services),
+            prepared.as_ref(),
+        );
+        prepare::log(
+            &log,
+            &format!(
+                "{} archivos cambiados desde {base}; servicios a reconstruir: {}",
+                changed.len(),
+                match (reused, services.is_empty()) {
+                    (true, _) => "ninguno (el entorno ya sirve este worktree)".to_string(),
+                    (false, true) => "ninguno".to_string(),
+                    (false, false) => services.join(" "),
+                }
+            ),
+        );
+        let run = |command: &str| -> Result<(), PrepareStop> {
+            let mut shell = job.clone();
+            shell.agent = DeliveryAgent::Shell;
+            shell.prompt = command.to_string();
+            let launch = adapters::launch(&shell, task, paths, None).map_err(|e| failed(e.message))?;
+            let mut process = Command::new(&launch.program);
+            process.args(&launch.args).envs(&job.check_env);
+            if let Some(cwd) = &launch.cwd {
+                process.current_dir(cwd);
+            }
+            prepare::run(process, command, &log, &cancel, until, &job.id).map_err(|message| {
+                if let Some(wsl_job) = &launch.wsl_job {
+                    adapters::stop_wsl_job(wsl_job, "KILL");
+                }
+                match cancel.load(Ordering::SeqCst) {
+                    true => PrepareStop::Cancelled,
+                    false => failed(message),
+                }
+            })
+        };
+        let mut done = Vec::new();
+        if !services.is_empty() {
+            run(&prepare::up_command(stack, &services))?;
+            done.push(format!("reconstruyó {}", services.join(", ")));
+        }
+        if !reused && !stack.preview.is_empty() {
+            run(&stack.preview)?;
+            done.push("sirve el frontend compilado para producción".to_string());
+        }
+        prepare::log(&log, &format!("esperando {}", stack.ready_url));
+        prepare::wait_ready(&stack.ready_url, &cancel, until).map_err(|message| {
+            match cancel.load(Ordering::SeqCst) {
+                true => PrepareStop::Cancelled,
+                false => failed(message),
+            }
+        })?;
+        if !reused {
+            for command in &stack.seed {
+                run(command)?;
+            }
+        }
+        prepare::log(&log, "calentando las páginas de QA");
+        let warmed = prepare::warm(&stack.ready_url, &stack.warm_paths, &log).map_err(failed)?;
+        done.push(format!("respondió y compiló {warmed} módulos de sus páginas"));
+        let note = match reused {
+            true => format!(
+                "ya servía este worktree en el mismo commit, así que no reconstruyó nada; {}.",
+                done.join("; ")
+            ),
+            false if services.is_empty() => format!(
+                "la tarea no cambió ningún servicio del entorno, así que no reconstruyó nada; {}.",
+                done.join("; ")
+            ),
+            false => format!("{}.", done.join("; ")),
+        };
+        // The stack serves this worktree now, with what this task built on
+        // it before.
+        let mut built = services.clone();
+        if let Some(earlier) = prepared.filter(|earlier| earlier.task_id == task.id) {
+            built.extend(earlier.services);
+        }
+        built.sort();
+        built.dedup();
+        if let Ok(store) = self.store() {
+            if let Ok(Some(mut lease)) = store.lease(&lease_name) {
+                lease.prepared = Some(DeliveryPreparedStack {
+                    task_id: task.id.clone(),
+                    candidate,
+                    services: built,
+                });
+                let _ = store.put_lease(&lease);
+            }
+        }
+        prepare::log(&log, &note);
+        Ok(DeliveryQaPrepare {
+            ms: began.elapsed().as_millis() as u64,
+            services,
+            reused,
+            note,
+        })
+    }
+
+    /// A QA job the user cancelled while Tinto prepared its stack.
+    fn cancel_preparing(&self, job_id: &str) -> Result<(), DeliveryError> {
+        let store = self.store()?;
+        let Some(mut job) = store.job(job_id)? else {
+            return Ok(());
+        };
+        job.status = DeliveryJobStatus::Cancelled;
+        job.error = Some("Cancelado por el usuario mientras Tinto preparaba el entorno de QA.".to_string());
+        job.ended_at_ms = Some(now_ms());
+        job.current_command = None;
+        job.current_command_at_ms = None;
+        store.put_job(&job)?;
+        settle_lease(&store, &job, false, &[])?;
+        store.record_event(now_ms(), "job_cancelled", Some(&job.task_id), Some(&job.id), "")
+    }
+
+    /// What a stub QA record lists: the agent's task list as it last wrote
+    /// it, else the earlier problems it was to check again.
+    fn stub_items(&self, job_id: &str) -> Result<Vec<(String, bool)>, DeliveryError> {
+        let job = self.job(job_id)?;
+        if !job.plan.is_empty() {
+            return Ok(job
+                .plan
+                .into_iter()
+                .map(|item| (item.text, item.status == "completed"))
+                .collect());
+        }
+        Ok(job
+            .qa_followup
+            .iter()
+            .filter_map(|note| {
+                // "Check #9 again: «<problem>». The fix the user chose: …"
+                let (head, rest) = note.strip_prefix("Check ")?.split_once(": «")?;
+                let problem: String = rest.split('»').next()?.chars().take(160).collect();
+                Some((
+                    format!("{} {problem}", head.trim_end_matches(" again")),
+                    false,
+                ))
+            })
+            .collect())
     }
 
     /// A package built on another starts from that package's latest work:
@@ -2944,6 +3232,7 @@ impl DeliveryService {
         outcome: JobOutcome,
         timing: Option<DeliveryTiming>,
         end: Option<WorktreeSnapshot>,
+        reverted: Vec<String>,
         stderr: &str,
     ) -> Result<(), DeliveryError> {
         let store = self.store()?;
@@ -2955,7 +3244,11 @@ impl DeliveryService {
         job.exit_code = ending.exit_code;
         job.current_command = None;
         job.current_command_at_ms = None;
-        job.timing = timing;
+        job.timing = timing.map(|timing| DeliveryTiming {
+            prepare_ms: job.prepare.as_ref().map(|prepare| prepare.ms),
+            ..timing
+        });
+        job.reverted = reverted;
         if outcome.provider_session_id.is_some() {
             job.provider_session_id = outcome.provider_session_id.clone();
         }
@@ -3016,6 +3309,23 @@ impl DeliveryService {
                     job.ran_on.as_deref().unwrap_or("esta plataforma")
                 ));
             }
+        }
+        if !job.reverted.is_empty() {
+            let note = format!(
+                "Tinto deshizo lo que el trabajo cambió en el worktree: {}.",
+                job.reverted.join(", ")
+            );
+            job.result_note = Some(match job.result_note.take() {
+                Some(earlier) => format!("{earlier} {note}"),
+                None => note,
+            });
+            store.record_event(
+                now_ms(),
+                "qa_changes_reverted",
+                Some(&job.task_id),
+                Some(&job.id),
+                &job.reverted.join(", "),
+            )?;
         }
         store.put_job(&job)?;
         settle_lease(&store, &job, ending.touched, &ending.leftovers)?;

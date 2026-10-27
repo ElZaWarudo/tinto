@@ -21,6 +21,86 @@ pub fn render_beside(record: &Path) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// The record Tinto writes for a QA job that ended without one (its time ran
+/// out, its process was killed), so its evidence is not lost: a header, the
+/// items it was to check, each «not verifiable», and the screenshots it left
+/// in `dir`. `items` are the agent's task list with whether it finished
+/// each, else what the job was to check again.
+pub fn write_stub(
+    dir: &Path,
+    key: &str,
+    branch: &str,
+    date: &str,
+    why: &str,
+    items: &[(String, bool)],
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let mut shots: Vec<String> = std::fs::read_dir(dir)?
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            let lower = name.to_ascii_lowercase();
+            [".png", ".jpg", ".jpeg"].iter().any(|ext| lower.ends_with(ext))
+        })
+        .collect();
+    shots.sort();
+    let mut lines = vec![
+        format!("# {key} — QA record written by Tinto: {why}"),
+        String::new(),
+        "| Test environment | |".to_string(),
+        "| --- | --- |".to_string(),
+        format!("| Date | {date} |"),
+        format!("| Branch | `{branch}` |"),
+        "| Environment | as the job found it; the agent did not write its record |".to_string(),
+        String::new(),
+        format!("The QA job ended before it wrote its record ({why}). Tinto lists what it was checking and the screenshots it took; nothing here is a verdict."),
+        String::new(),
+        "## Verdicts".to_string(),
+        String::new(),
+        "| Item | Verdict |".to_string(),
+        "| --- | --- |".to_string(),
+    ];
+    let fallback = [(format!("QA of {key}"), false)];
+    let items = if items.is_empty() { &fallback[..] } else { items };
+    for (number, (item, done)) in items.iter().enumerate() {
+        let item = item.replace('|', "/");
+        let verdict = match done {
+            true => "not verifiable: out of time (checked, but no verdict was written)",
+            false => "not verifiable: out of time",
+        };
+        lines.push(format!("| {}. {item} | {verdict} |", number + 1));
+    }
+    if !shots.is_empty() {
+        lines.extend([String::new(), "## Screenshots".to_string()]);
+        for shot in &shots {
+            lines.extend([String::new(), format!("![]({shot})")]);
+        }
+    }
+    lines.extend([
+        String::new(),
+        "**Problems:** Not recorded: the job ended before it wrote them.".to_string(),
+        String::new(),
+    ]);
+    let path = dir.join(format!("{key}.md"));
+    std::fs::write(&path, lines.join("\n"))?;
+    Ok(path)
+}
+
+/// `YYYY-MM-DD` (UTC) of a time in milliseconds since the epoch.
+pub fn date_of(ms: u64) -> String {
+    // Howard Hinnant's days-to-civil algorithm.
+    let z = (ms / 86_400_000) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 /// The record a QA job wrote, and the other candidates beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordFile {
@@ -758,6 +838,20 @@ mod tests {
         let found = find(dir.path(), "K-3").unwrap();
         assert_eq!(found.source, md);
         assert_eq!(found.extras, [matrix, old]);
+    }
+
+    #[test]
+    fn a_stub_record_keeps_the_evidence_and_verdicts_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("K-1-1-menu-desktop.png"), b"png").unwrap();
+        let items = [("Check the menu".to_string(), true), ("Check the toast".to_string(), false)];
+        let path = write_stub(dir.path(), "K-1", "feat/k-1", &date_of(1_793_106_614_092), "its 60 minutes ran out", &items).unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(missing_parts(&text).is_empty(), "{text}");
+        assert!(text.contains("| Date | 2026-10-27 |"), "{text}");
+        assert!(text.contains("| 2. Check the toast | not verifiable: out of time |"), "{text}");
+        assert!(text.contains("![](K-1-1-menu-desktop.png)"), "{text}");
+        assert!(!text.contains("pass"), "{text}");
     }
 
     #[test]

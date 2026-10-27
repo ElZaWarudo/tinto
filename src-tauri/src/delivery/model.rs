@@ -380,6 +380,17 @@ pub struct DeliveryJob {
     /// QA jobs only: the repo's QA environment when the job was dispatched.
     #[serde(default)]
     pub qa_environment: String,
+    /// Browser QA jobs only: the repo's QA stack when the job was
+    /// dispatched, which Tinto prepares before the agent starts.
+    #[serde(default)]
+    pub qa_stack: Option<DeliveryQaStack>,
+    /// What Tinto's preparation of the QA stack did, once it ran.
+    #[serde(default)]
+    pub prepare: Option<DeliveryQaPrepare>,
+    /// QA jobs only: files of the worktree the job changed, which Tinto put
+    /// back as they were when it started.
+    #[serde(default)]
+    pub reverted: Vec<String>,
     /// The task's checks when the job started and how they did on the code
     /// it started from, as the job's instructions state them.
     #[serde(default)]
@@ -563,6 +574,61 @@ pub struct DeliveryTiming {
     pub turns: Option<u32>,
     /// The commands that took longest, all their runs added up.
     pub slowest: Vec<DeliverySlowCommand>,
+    /// QA: the time Tinto spent preparing the QA stack before the agent
+    /// started, outside the job's time limit.
+    #[serde(default)]
+    pub prepare_ms: Option<u64>,
+}
+
+/// How Tinto prepares a repo's QA stack before a browser QA job, so the
+/// agent starts on a stack that serves the task's worktree.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryQaStack {
+    /// Its name, such as the compose project (`agentos-dev`). Browser QA on
+    /// it holds the resource `qa:browser:<name>`.
+    pub name: String,
+    /// Run in the task's worktree to rebuild and restart services;
+    /// `{services}` becomes the ones to rebuild, space-separated.
+    pub up: String,
+    /// The repo's folders and the services built from each.
+    #[serde(default)]
+    pub services: BTreeMap<String, Vec<String>>,
+    /// Answers once the stack is up.
+    pub ready_url: String,
+    /// The app's paths QA visits, requested before it starts so the dev
+    /// server has compiled them.
+    #[serde(default)]
+    pub warm_paths: Vec<String>,
+    /// Run once the stack answers: test data, test users.
+    #[serde(default)]
+    pub seed: Vec<String>,
+    /// Run after `up` to serve a production build of the frontend instead
+    /// of its dev server; nothing when empty.
+    #[serde(default)]
+    pub preview: String,
+}
+
+/// What preparing the QA stack did for a job.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryQaPrepare {
+    pub ms: u64,
+    /// The services it rebuilt.
+    pub services: Vec<String>,
+    /// The stack already served this task's worktree as it is: nothing was
+    /// rebuilt.
+    pub reused: bool,
+    /// What it did, in a few lines, or why it failed.
+    pub note: String,
+}
+
+/// What the QA stack serves since Tinto last prepared it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryPreparedStack {
+    pub task_id: String,
+    /// The worktree's candidate (commit and tree) it was built from.
+    pub candidate: String,
+    /// The services built from that task's worktree.
+    pub services: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -620,6 +686,9 @@ pub struct DeliveryLease {
     /// that task's branch) may still be up, so its next job goes first.
     #[serde(default)]
     pub last_task_id: Option<String>,
+    /// A QA stack's resource: what Tinto last prepared on it.
+    #[serde(default)]
+    pub prepared: Option<DeliveryPreparedStack>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -1205,6 +1274,9 @@ pub struct DeliveryRepoSettings {
     /// user's words. QA jobs get it; coordinators read it instead of asking.
     #[serde(default)]
     pub qa_environment: String,
+    /// How Tinto prepares the stack browser QA runs on, if set.
+    #[serde(default)]
+    pub qa_stack: Option<DeliveryQaStack>,
     /// The agent each stage (`tests`, `review`…) runs with, fixed by the
     /// user. The launch dialog starts from it and coordinators that name no
     /// agent get it.

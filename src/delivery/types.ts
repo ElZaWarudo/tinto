@@ -37,6 +37,35 @@ export interface DeliveryTiming {
   turns: number | null;
   /** The commands that took longest, all their runs added up. */
   slowest: DeliverySlowCommand[];
+  /** QA: time Tinto spent preparing the QA stack, outside the time limit. */
+  prepare_ms?: number | null;
+}
+
+/** How Tinto prepares a repo's QA stack before a browser QA job. */
+export interface DeliveryQaStack {
+  /** Its name, such as the compose project; browser QA holds `qa:browser:<name>`. */
+  name: string;
+  /** Run in the task's worktree; `{services}` becomes the ones to rebuild. */
+  up: string;
+  /** The repo's folders and the services built from each. */
+  services: Record<string, string[]>;
+  /** Answers once the stack is up. */
+  ready_url: string;
+  /** The app's paths QA visits, requested so the dev server compiles them. */
+  warm_paths: string[];
+  /** Run once the stack answers: test data, test users. */
+  seed: string[];
+  /** Serves a production build of the frontend instead of the dev server; empty for none. */
+  preview: string;
+}
+
+/** What preparing the QA stack did for a job. */
+export interface DeliveryQaPrepare {
+  ms: number;
+  services: string[];
+  /** The stack already served this worktree as it is: nothing was rebuilt. */
+  reused: boolean;
+  note: string;
 }
 
 export interface DeliverySlowCommand {
@@ -269,6 +298,10 @@ export interface DeliveryJob {
   current_command_at_ms?: number | null;
   /** Where the job's time went, once it ended. */
   timing?: DeliveryTiming | null;
+  /** What Tinto's preparation of the QA stack did, once it ran. */
+  prepare?: DeliveryQaPrepare | null;
+  /** QA: worktree files the job changed, which Tinto put back. */
+  reverted?: string[];
   /** The agent's own task list, as it last wrote it. */
   plan?: DeliveryPlanItem[];
   /** What the job used, once the agent reports it. */
@@ -564,6 +597,8 @@ export interface DeliveryRepoSettings {
   qa_browser?: boolean;
   /** Where QA runs on this machine, in the user's words. */
   qa_environment?: string;
+  /** How Tinto prepares the stack browser QA runs on, if set. */
+  qa_stack?: DeliveryQaStack | null;
   /** How changes are verified beyond the stages, in the user's words. */
   verification?: string;
   /** Whether QA may make paid model calls; null until set. */

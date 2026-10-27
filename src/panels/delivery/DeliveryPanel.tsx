@@ -491,6 +491,18 @@ function lasted(ms: number): string {
   return seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 }
 
+/** QA's resources: `qa`, or one per environment (`qa:browser:agentos-dev`,
+ *  `qa:cli:qa580`). */
+function isQaLease(name: string): boolean {
+  return name === "qa" || name.startsWith("qa:");
+}
+
+/** The environment a QA resource names, for its chip: " (agentos-dev)". */
+function qaPlace(name: string): string {
+  const place = name.split(":").slice(2).join(":");
+  return place ? ` (${place})` : "";
+}
+
 /** Where a job's time went: "Modelo 5 min · Comandos 78 min · 37 turnos ·
  *  más lento: npm run preflight ×5 (31 min, 2 al límite de 10 min)". */
 function timingLabel(timing: DeliveryTiming): string {
@@ -505,6 +517,7 @@ function timingLabel(timing: DeliveryTiming): string {
     return `${slow.command}${runs} (${lasted(slow.total_ms)}${ceiling})`;
   });
   return [
+    timing.prepare_ms == null ? null : `Preparación del entorno ${lasted(timing.prepare_ms)}`,
     timing.model_ms === null ? null : `Modelo ${lasted(timing.model_ms)}`,
     `Comandos ${lasted(timing.commands_ms)}`,
     timing.turns === null ? null : timing.turns === 1 ? "1 turno" : `${timing.turns} turnos`,
@@ -904,14 +917,19 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   // The setting, and the agents it allows now (automatic: one per active task).
   const capacitySetting = overview?.settings.capacity ?? 0;
   const capacity = overview?.capacity ?? Math.max(1, capacitySetting);
-  const qa = overview?.leases.find((lease) => lease.name === "qa");
+  // QA's resources, one per environment it tests on: the one in quarantine
+  // first, else the busy ones.
+  const qaLeases = (overview?.leases ?? []).filter((lease) => isQaLease(lease.name));
+  const qaActive = qaLeases.filter((lease) => lease.state === "active");
+  const qa =
+    qaLeases.find((lease) => lease.state === "quarantined") ?? qaActive[0] ?? qaLeases[0];
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
   // The QA jobs a quarantine holds back, wherever the scheduler put them,
   // and whether only the user can release it for them.
   const qaBlocked = (overview?.jobs ?? []).filter(
     (job) =>
       job.status === "queued" &&
-      job.lease === "qa" &&
+      job.lease === qa?.name &&
       overview?.phases?.[job.task_id]?.kind === "waits_quarantine",
   );
   const qaWaitsOnUser = qaBlocked.some(
@@ -1044,32 +1062,36 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
                 type="button"
                 className="delivery-lease delivery-lease--quarantined"
                 title={qa.note ?? undefined}
-                onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
+                onClick={() => setDialog({ kind: "release", name: qa.name, note: qa.note })}
               >
-                QA en cuarentena
+                QA en cuarentena{qaPlace(qa.name)}
                 {qaBlocked.length > 0 && (
                   <span className="delivery-muted">· {qaBlocked.length} esperando</span>
                 )}
               </button>
             ) : (
-              qa && (
-                <span
-                  className={`delivery-lease delivery-lease--${qa.state}`}
-                  title={
-                    qa.state === "active" && qaHolder
-                      ? `En QA: ${taskLabel(qaHolder)} · ${qaHolder.title}`
-                      : (qa.note ?? undefined)
-                  }
-                >
-                  {qa.state === "active" && <Icon name="photo" />}
-                  {qa.state === "active"
-                    ? `En QA: ${qaHolder ? taskLabel(qaHolder) : "ocupado"}`
-                    : "QA libre"}
-                  {qa.queue.length > 0 && (
-                    <span className="delivery-muted">· {qa.queue.length} esperando</span>
-                  )}
-                </span>
-              )
+              (qaActive.length > 0 ? qaActive : qa ? [qa] : []).map((lease) => {
+                const holder = tasks.find((task) => task.id === lease.holder_task_id);
+                return (
+                  <span
+                    key={lease.name}
+                    className={`delivery-lease delivery-lease--${lease.state}`}
+                    title={
+                      lease.state === "active" && holder
+                        ? `En QA${qaPlace(lease.name)}: ${taskLabel(holder)} · ${holder.title}`
+                        : (lease.note ?? undefined)
+                    }
+                  >
+                    {lease.state === "active" && <Icon name="photo" />}
+                    {lease.state === "active"
+                      ? `En QA${qaPlace(lease.name)}: ${holder ? taskLabel(holder) : "ocupado"}`
+                      : "QA libre"}
+                    {lease.queue.length > 0 && (
+                      <span className="delivery-muted">· {lease.queue.length} esperando</span>
+                    )}
+                  </span>
+                );
+              })
             )}
             <button type="button" onClick={() => setDialog({ kind: "archived" })}>
               Archivadas…
@@ -1114,7 +1136,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
               </span>
               <button
                 type="button"
-                onClick={() => setDialog({ kind: "release", name: "qa", note: qa.note })}
+                onClick={() => setDialog({ kind: "release", name: qa.name, note: qa.note })}
               >
                 Liberar…
               </button>
@@ -1621,7 +1643,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     const status = statuses.get(task.id)!;
     // The task QA is on now, or the one that left it in quarantine.
     const qaLease = overview?.leases.find(
-      (lease) => lease.name === "qa" && lease.holder_task_id === task.id,
+      (lease) => isQaLease(lease.name) && lease.holder_task_id === task.id,
     );
     const qaHere =
       qaLease?.state === "active" || qaLease?.state === "quarantined" ? qaLease.state : null;
@@ -4392,6 +4414,16 @@ function JobRow({
       {expanded && (
         <div className="delivery-job__detail">
           {job.error && <p className="delivery-job__error">{job.error}</p>}
+          {job.prepare && (
+            <p className="delivery-job__note">
+              Entorno de QA preparado en {lasted(job.prepare.ms)}: {job.prepare.note}
+            </p>
+          )}
+          {(job.reverted ?? []).length > 0 && (
+            <p className="delivery-job__note">
+              Tinto deshizo lo que la QA cambió en el worktree: {job.reverted!.join(", ")}.
+            </p>
+          )}
           {job.status === "queued" && job.waits_environment && (
             <p className="delivery-job__note">
               Espera al entorno; Tinto lo comprueba cada minuto y la lanza cuando responda:{" "}

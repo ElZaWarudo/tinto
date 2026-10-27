@@ -292,6 +292,19 @@ function parseEnv(text: string): Record<string, string> {
   return env;
 }
 
+/** `folder: service service` lines as the services built from each folder. */
+function parseServices(text: string): Record<string, string[]> {
+  const services: Record<string, string[]> = {};
+  for (const line of text.split("\n")) {
+    const at = line.indexOf(":");
+    if (at < 0) continue;
+    const folder = line.slice(0, at).trim();
+    const built = line.slice(at + 1).split(/[\s,]+/).filter(Boolean);
+    if (folder && built.length > 0) services[folder] = built;
+  }
+  return services;
+}
+
 export function DispatchDialog({
   task,
   settings,
@@ -807,6 +820,15 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
   // `NAME=value` lines.
   const [checkEnv, setCheckEnv] = useState("");
   const [environment, setEnvironment] = useState("");
+  // The QA stack Tinto prepares; no stack while its name is empty.
+  const [stackName, setStackName] = useState("");
+  const [stackUp, setStackUp] = useState("");
+  // `folder: service service` lines.
+  const [stackServices, setStackServices] = useState("");
+  const [stackReady, setStackReady] = useState("");
+  const [stackWarm, setStackWarm] = useState("");
+  const [stackSeed, setStackSeed] = useState("");
+  const [stackPreview, setStackPreview] = useState("");
   const [verification, setVerification] = useState("");
   // "yes", "no", or "" while the user has not set it.
   const [paidCalls, setPaidCalls] = useState("");
@@ -840,6 +862,18 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
             .join("\n"),
         );
         setEnvironment(settings.qa_environment ?? "");
+        const stack = settings.qa_stack;
+        setStackName(stack?.name ?? "");
+        setStackUp(stack?.up ?? "");
+        setStackServices(
+          Object.entries(stack?.services ?? {})
+            .map(([folder, built]) => `${folder}: ${built.join(" ")}`)
+            .join("\n"),
+        );
+        setStackReady(stack?.ready_url ?? "");
+        setStackWarm((stack?.warm_paths ?? []).join("\n"));
+        setStackSeed((stack?.seed ?? []).join("\n"));
+        setStackPreview(stack?.preview ?? "");
         setVerification(settings.verification ?? "");
         setMaxFiles(settings.single_commit_max_files?.toString() ?? "");
         setMaxLines(settings.single_commit_max_lines?.toString() ?? "");
@@ -890,6 +924,79 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         <GrowingTextarea
           value={environment}
           onChange={(event) => setEnvironment(event.target.value)}
+          rows={2}
+        />
+      </Field>
+      <h3>Pila de QA</h3>
+      <p className="delivery-settings__intro">
+        Antes de cada QA con navegador, Tinto reconstruye solo los servicios cuyas carpetas cambió la
+        tarea, espera a que la pila responda y abre las páginas de QA para que estén compiladas. El
+        tiempo que tarda no cuenta en el límite del trabajo. Si la pila ya sirve el worktree de la
+        tarea en el mismo commit, no reconstruye nada. Sin nombre, no hay pila.
+      </p>
+      <Field
+        label="Nombre"
+        hint="El proyecto de compose, por ejemplo agentos-dev. La QA con navegador ocupa el recurso qa:browser:<nombre>; una QA de línea de comandos en su propio proyecto corre a la vez."
+      >
+        <input value={stackName} onChange={(event) => setStackName(event.target.value)} />
+      </Field>
+      <Field
+        label="Comando que la levanta"
+        hint="Corre en el worktree de la tarea. {services} se cambia por los servicios a reconstruir."
+      >
+        <GrowingTextarea
+          value={stackUp}
+          onChange={(event) => setStackUp(event.target.value)}
+          rows={2}
+          placeholder="docker compose -p agentos-dev -f docker/compose/docker-compose.yml --env-file ../agentos/docker/compose/.env up -d --build --no-deps {services}"
+        />
+      </Field>
+      <Field
+        label="Servicios por carpeta"
+        hint="Una carpeta por línea con los servicios que se construyen de ella: carpeta: servicio servicio."
+      >
+        <GrowingTextarea
+          value={stackServices}
+          onChange={(event) => setStackServices(event.target.value)}
+          rows={3}
+          placeholder={"frontend: frontend\napi-gateway: api-gateway\nservices/workflows: workflows"}
+        />
+      </Field>
+      <Field label="URL de disponibilidad" hint="Responde cuando la pila está lista.">
+        <input
+          value={stackReady}
+          onChange={(event) => setStackReady(event.target.value)}
+          placeholder="http://localhost:8080/"
+        />
+      </Field>
+      <Field
+        label="Páginas a calentar"
+        hint="Una ruta por línea; Tinto las pide con los módulos que cargan antes de que empiece la QA. Vacío: la URL de disponibilidad."
+      >
+        <GrowingTextarea
+          value={stackWarm}
+          onChange={(event) => setStackWarm(event.target.value)}
+          rows={2}
+          placeholder={"/login\n/app/workflows"}
+        />
+      </Field>
+      <Field
+        label="Datos de prueba"
+        hint="Comandos, uno por línea, que corren cuando la pila responde: usuarios y datos de prueba."
+      >
+        <GrowingTextarea
+          value={stackSeed}
+          onChange={(event) => setStackSeed(event.target.value)}
+          rows={2}
+        />
+      </Field>
+      <Field
+        label="Build de producción"
+        hint="Opcional: un comando que sirve el frontend compilado para producción en lugar del servidor de desarrollo, sin compilar cada página al abrirla."
+      >
+        <GrowingTextarea
+          value={stackPreview}
+          onChange={(event) => setStackPreview(event.target.value)}
           rows={2}
         />
       </Field>
@@ -1110,6 +1217,17 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
               setup: parseChecks(setup),
               check_env: parseEnv(checkEnv),
               qa_environment: environment.trim(),
+              qa_stack: stackName.trim()
+                ? {
+                    name: stackName.trim(),
+                    up: stackUp.trim(),
+                    services: parseServices(stackServices),
+                    ready_url: stackReady.trim(),
+                    warm_paths: parseChecks(stackWarm),
+                    seed: parseChecks(stackSeed),
+                    preview: stackPreview.trim(),
+                  }
+                : null,
               verification: verification.trim(),
               paid_model_calls: paidCalls === "" ? null : paidCalls === "yes",
               single_commit_max_files: positive(maxFiles),
