@@ -364,6 +364,10 @@ impl DeliveryPr {
     }
 }
 
+/// How an approval reads among a PR's news ("ana aprobó"): news that asks
+/// for no work.
+pub(super) const APPROVED_NEWS: &str = " aprobó";
+
 /// `gh pr view --json` fields Tinto reads.
 pub const PR_FIELDS: &str =
     "title,body,state,isDraft,mergeable,reviewDecision,reviewRequests,statusCheckRollup,reviews,comments,mergedBy,mergedAt,mergeCommit,baseRefName,headRefOid,labels";
@@ -562,7 +566,7 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
                     (Some("CHANGES_REQUESTED"), false) => {
                         format!("{author} pidió cambios: {body}")
                     }
-                    (Some("APPROVED"), _) => format!("{author} aprobó"),
+                    (Some("APPROVED"), _) => format!("{author}{APPROVED_NEWS}"),
                     (_, true) => String::new(),
                     (_, false) => format!("{author}: {body}"),
                 };

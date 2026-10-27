@@ -10147,6 +10147,7 @@ fn a_quarantine_holds_other_tasks_qa_while_the_stage_that_left_it_goes_on() {
                 ),
                 // As when the scheduler held the job back for something else.
                 queue: Vec::new(),
+                last_task_id: Some(left_id.clone()),
             })
             .unwrap();
     }
@@ -10268,4 +10269,75 @@ fn a_pr_merges_only_once_every_chosen_reviewer_approved_or_was_removed() {
         .change_pr_reviewers(&task.id, Vec::new(), vec!["luis".into()])
         .unwrap();
     assert!(h.service.request_approval(merge_step(&task)).is_ok());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn a_check_the_system_killed_runs_again_once_before_it_sends_the_work_back() {
+    // 0x40010004: what Windows gives a process it terminated.
+    let killed = "exit=1073807364";
+    let h = harness();
+    set_repo_checks(&h, &[killed]);
+    let task = h.task("K-70");
+    h.service
+        .set_task_checks(&task.id, vec![killed.into()])
+        .unwrap();
+    let fix = h.dispatch(&task, "implementation", "events=codex-ok touch=code.txt");
+    h.wait(&fix.id);
+    // Killed once: it runs again rather than sending the work back.
+    let runs = ended_checks(&h, &task, 2);
+    assert!(runs
+        .iter()
+        .all(|run| run.status == DeliveryJobStatus::Failed));
+    // Killed again: now it does.
+    let round = eventually(|| round_now(&h, &task));
+    assert_eq!(round.round.kind, "checks");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(ended_checks(&h, &task, 2).len(), 2, "only one retry");
+}
+
+#[test]
+fn a_free_qa_slot_goes_first_to_the_task_its_stack_was_built_for() {
+    use super::adapters::tests::sample_job;
+    let h = harness();
+    let (stack, other) = (h.task("ST-1"), h.task("ST-2"));
+    let now = super::now_ms();
+    let qa = |id: &str, task: &DeliveryTask, at: u64| {
+        let mut job = sample_job(DeliveryAgent::Codex);
+        job.id = id.into();
+        job.task_id = task.id.clone();
+        job.role = "qa".into();
+        job.lease = Some("qa".into());
+        job.status = DeliveryJobStatus::Queued;
+        job.created_at_ms = at;
+        job.started_at_ms = None;
+        job
+    };
+    {
+        let store = h.service.store().unwrap();
+        // The other task asked first; the stack is still on ST-1's branch.
+        store.put_job(&qa("qa-other", &other, now - 5)).unwrap();
+        store.put_job(&qa("qa-stack", &stack, now - 1)).unwrap();
+        store
+            .put_lease(&super::model::DeliveryLease {
+                name: "qa".into(),
+                state: DeliveryLeaseState::Free,
+                generation: 2,
+                holder_job_id: None,
+                holder_task_id: None,
+                acquired_at_ms: None,
+                note: None,
+                queue: Vec::new(),
+                last_task_id: Some(stack.id.clone()),
+            })
+            .unwrap();
+    }
+    let queued = h.service.overview().unwrap().queued;
+    assert_eq!(queued["qa-stack"].reason, "empieza ahora");
+    assert_ne!(queued["qa-other"].reason, "empieza ahora");
+    // Without a job of ST-1 waiting, nobody waits for it: the other starts.
+    h.service.cancel("qa-stack").unwrap();
+    eventually(|| {
+        (h.service.job("qa-other").unwrap().status != DeliveryJobStatus::Queued).then_some(())
+    });
 }

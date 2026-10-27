@@ -2653,6 +2653,12 @@ impl DeliveryService {
         // A task Tinto cannot queue checks on now (blocked, paused) goes on
         // without them.
         let _ = self.queue_checks(&job.id);
+        if let Err(error) = self.settle_doubtful_check(&job.id) {
+            eprintln!(
+                "tinto: delivery could not look again at check {}: {error}",
+                job.id
+            );
+        }
         if let Err(error) = self.conclude_merge(&job.task_id) {
             eprintln!(
                 "tinto: delivery could not settle the merge of {}: {error}",
@@ -3050,11 +3056,66 @@ impl DeliveryService {
             }
         }
         // Findings or failing checks send the work back: the round is there
-        // as soon as the job is seen ended.
-        if let Err(error) = super::rounds::after_job(&store, &job) {
-            eprintln!("tinto: delivery could not record the round of {job_id}: {error}");
+        // as soon as the job is seen ended. A check whose failure may not be
+        // the code's is looked at first (see `settle_doubtful_check`).
+        let doubtful = task.as_ref().is_some_and(|task| {
+            doubtful_check(
+                &job,
+                task,
+                &store.task_jobs(&task.id).unwrap_or_default(),
+                &store,
+            )
+        });
+        if !doubtful {
+            if let Err(error) = super::rounds::after_job(&store, &job) {
+                eprintln!("tinto: delivery could not record the round of {job_id}: {error}");
+            }
         }
         Ok(())
+    }
+
+    /// A check that failed on the first run on this code because it was
+    /// killed, or in a repo whose environment may be down, before it sends
+    /// the work back: killed, it runs again; with the environment down, it
+    /// waits for it; otherwise its round opens as any other.
+    fn settle_doubtful_check(&self, job_id: &str) -> Result<(), DeliveryError> {
+        let job = self.job(job_id)?;
+        let task = self.task(&job.task_id)?;
+        let jobs = self.store()?.task_jobs(&task.id)?;
+        if !doubtful_check(&job, &task, &jobs, &*self.store()?) {
+            return Ok(());
+        }
+        let again = |needs_environment: bool| {
+            self.dispatch(NewJob {
+                task_id: task.id.clone(),
+                role: CHECKS_ROLE.to_string(),
+                agent: DeliveryAgent::Shell,
+                model: None,
+                access: DeliveryAccess::Workspace,
+                prompt: job.prompt.clone(),
+                writes: None,
+                lease: None,
+                timeout_minutes: Some(job.timeout_minutes),
+                reasoning: None,
+                platform: None,
+                read_dirs: Vec::new(),
+                stage_default: false,
+                needs_environment,
+            })
+            .map(|_| ())
+        };
+        if killed(&job) {
+            return again(false);
+        }
+        let down = self
+            .check_environment(&task.repo, task.distro.as_deref())?
+            .iter()
+            .any(|check| !check.ok);
+        if down {
+            return again(true);
+        }
+        let store = self.store()?;
+        super::rounds::after_job(&store, &job)
     }
 
     /// A job that failed outside its process (snapshot, launch, store). If
@@ -3198,6 +3259,57 @@ fn result_state(
         ));
     }
     Ok((DeliveryResultState::Accepted, None))
+}
+
+/// The check's process was stopped from outside (the system or a closed
+/// console on Windows, a signal elsewhere), not failed by its tests.
+fn killed(job: &DeliveryJob) -> bool {
+    // 0x40010004 (DBG_TERMINATE_PROCESS) and 0xC000013A (STATUS_CONTROL_C_EXIT).
+    const WINDOWS_KILLED: [i32; 2] = [0x4001_0004, 0xC000_013A_u32 as i32];
+    let timed_out = job
+        .error
+        .as_deref()
+        .is_some_and(|error| error.starts_with(TIMED_OUT));
+    match job.exit_code {
+        Some(code) => WINDOWS_KILLED.contains(&code),
+        None => !timed_out && job.ended_at_ms.is_some(),
+    }
+}
+
+/// A failed check of Tinto's whose failure may not be the code's: its first
+/// failure on this code, killed, or in a repo whose jobs need an
+/// environment (Docker, probes) that may be down.
+fn doubtful_check(
+    job: &DeliveryJob,
+    task: &DeliveryTask,
+    jobs: &[DeliveryJob],
+    store: &DeliveryStore,
+) -> bool {
+    if job.agent != DeliveryAgent::Shell
+        || job.role != CHECKS_ROLE
+        || job.status != DeliveryJobStatus::Failed
+    {
+        return false;
+    }
+    let refs: Vec<&DeliveryJob> = jobs.iter().collect();
+    let since = last_change(&refs).map_or(0, |change| change.created_at_ms);
+    let failed_before = jobs.iter().any(|other| {
+        other.id != job.id
+            && other.agent == DeliveryAgent::Shell
+            && other.role == CHECKS_ROLE
+            && other.prompt == job.prompt
+            && other.created_at_ms > since
+            && other.created_at_ms < job.created_at_ms
+            && other.status == DeliveryJobStatus::Failed
+    });
+    if failed_before {
+        return false;
+    }
+    killed(job)
+        || store.repo_settings(&task.repo).is_ok_and(|settings| {
+            !settings.environment_probes.is_empty()
+                || super::environment::uses_docker(&task.repo, task.distro.as_deref(), &settings)
+        })
 }
 
 /// Releases the job's exclusive resource, or quarantines it when the job

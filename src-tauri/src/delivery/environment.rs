@@ -126,7 +126,11 @@ fn free_bytes(_path: &Path) -> Option<u64> {
 
 /// A compose file or Dockerfile at the repo's root, or a command of its
 /// settings that calls `docker`.
-fn uses_docker(repo: &Path, distro: Option<&str>, settings: &DeliveryRepoSettings) -> bool {
+pub(super) fn uses_docker(
+    repo: &Path,
+    distro: Option<&str>,
+    settings: &DeliveryRepoSettings,
+) -> bool {
     const FILES: &[&str] = &[
         "compose.yaml",
         "compose.yml",

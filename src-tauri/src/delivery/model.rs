@@ -616,6 +616,10 @@ pub struct DeliveryLease {
     pub note: Option<String>,
     #[serde(default)]
     pub queue: Vec<DeliveryLeaseWaiter>,
+    /// The task that held it last: its environment (a QA stack built from
+    /// that task's branch) may still be up, so its next job goes first.
+    #[serde(default)]
+    pub last_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

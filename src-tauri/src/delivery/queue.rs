@@ -221,6 +221,7 @@ impl Queue {
                     acquired_at_ms: None,
                     note: None,
                     queue: Vec::new(),
+                    last_task_id: None,
                 });
                 leases.len() - 1
             }
@@ -260,15 +261,35 @@ impl Queue {
             );
             lease.holder_job_id = Some(job.id.clone());
             lease.holder_task_id = Some(job.task_id.clone());
+            lease.last_task_id = Some(job.task_id.clone());
             lease.acquired_at_ms = Some(now);
             lease.generation += 1;
             return None;
         }
-        if (lease.state == DeliveryLeaseState::Free && first_in_line) || inherited {
+        // The environment may still be built for the task that held it last
+        // (a QA stack on its branch): while that task has a job ready for
+        // it, the job goes first and nothing is rebuilt. Others take their
+        // turn as usual; the resource never waits empty for it.
+        let stack_task = lease.last_task_id.clone();
+        let ours = stack_task.as_deref() == Some(job.task_id.as_str());
+        let yields = !ours
+            && stack_task.as_deref().is_some_and(|task| {
+                !busy.contains_key(task)
+                    && !self.held.contains(task)
+                    && !self.unprepared.contains(task)
+                    && self.jobs.iter().any(|other| {
+                        other.status == DeliveryJobStatus::Queued
+                            && other.task_id == task
+                            && other.lease.as_deref() == Some(name.as_str())
+                    })
+            });
+        let free = lease.state == DeliveryLeaseState::Free && (first_in_line || ours) && !yields;
+        if free || inherited {
             lease.queue.retain(|waiter| waiter.job_id != job.id);
             lease.state = DeliveryLeaseState::Active;
             lease.holder_job_id = Some(job.id.clone());
             lease.holder_task_id = Some(job.task_id.clone());
+            lease.last_task_id = Some(job.task_id.clone());
             lease.acquired_at_ms = Some(now);
             lease.generation += 1;
             lease.note = None;

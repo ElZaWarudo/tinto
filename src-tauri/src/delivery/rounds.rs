@@ -150,7 +150,12 @@ fn checks_round(task: &DeliveryTask, job: &DeliveryJob, jobs: &[DeliveryJob]) ->
 /// The PR's news a writing stage answers: changes asked, or others' new
 /// reviews and comments.
 fn pr_round(pr: &DeliveryPr, rounds: &[DeliveryRound]) -> Option<NewRound> {
-    let news = pr.new_reviews + pr.new_comments > 0;
+    // An approval asks for no work: only what else reviewers said sends the
+    // work back.
+    let news = pr
+        .news
+        .iter()
+        .any(|line| !line.ends_with(super::prs::APPROVED_NEWS));
     // Changes asked since the latest round that answered the PR.
     let answered = rounds
         .iter()
@@ -276,7 +281,7 @@ pub(super) fn open_round(
             )?;
         }
     }
-    let mut items = new.items;
+    let items = new.items;
     let previous = rounds.iter().rev().find(|round| {
         round.is_open()
             && round.waits_merge_commit == waits
@@ -288,16 +293,19 @@ pub(super) fn open_round(
             && jobs.iter().any(|job| {
                 job.agent != DeliveryAgent::Shell && job.created_at_ms >= open.opened_at_ms
             });
-        let refines = open.kind == new.kind || (open.kind == "qa" && new.kind == "qa_problems");
-        if !worked && refines {
-            if open.kind == new.kind {
+        // A round no stage worked on yet takes the new cause, under its own
+        // number: QA problems refine QA's findings; anything else joins what
+        // it already had to address.
+        let refines = open.kind == "qa" && new.kind == "qa_problems";
+        if !worked {
+            if refines {
+                open.items = items;
+            } else {
                 for item in items {
                     if !open.items.contains(&item) {
                         open.items.push(item);
                     }
                 }
-            } else {
-                open.items = items;
             }
             open.kind = new.kind.to_string();
             open.short = new.short;
@@ -312,12 +320,6 @@ pub(super) fn open_round(
                 &round_text(&open),
             )?;
             return Ok(());
-        }
-        // A round no stage worked on hands its items to the next one.
-        if !worked {
-            let mut carried = open.items.clone();
-            carried.extend(items.into_iter().filter(|item| !open.items.contains(item)));
-            items = carried;
         }
         let role = if open.kind == "review" {
             "review"
@@ -591,4 +593,28 @@ pub(super) fn note(store: &DeliveryStore, task_id: &str) -> Result<Vec<String>, 
         }
     }
     Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pr_round;
+    use crate::delivery::prs::DeliveryPr;
+
+    fn pr(news: &[&str]) -> DeliveryPr {
+        serde_json::from_value(serde_json::json!({
+            "task_id": "t1", "url": "https://github.com/o/r/pull/5", "repo": "o/r",
+            "number": 5, "state": "open", "draft": false, "conflicts": false,
+            "review_decision": "approved", "checks": {"passing": 1, "failing": 0, "pending": 0},
+            "new_reviews": news.len(), "new_comments": 0, "new_authors": ["ana"], "news": news,
+            "latest_activity": null, "seen_until": null, "checked_at_ms": 1, "error": null,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_approval_alone_sends_no_work_back() {
+        assert!(pr_round(&pr(&["ana aprobó"]), &[]).is_none());
+        let round = pr_round(&pr(&["ana aprobó", "ana: Falta un test"]), &[]).unwrap();
+        assert_eq!(round.items, ["ana aprobó", "ana: Falta un test"]);
+    }
 }
