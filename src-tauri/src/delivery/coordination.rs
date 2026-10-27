@@ -371,6 +371,7 @@ pub(super) fn found_step(
         images: Vec::new(),
         thread: None,
         style_examples: Vec::new(),
+        fix_commits: Vec::new(),
     }
 }
 
@@ -1126,6 +1127,7 @@ impl DeliveryService {
         let mut single_commit_reason = None;
         let mut notice = None;
         let mut style_examples = Vec::new();
+        let mut fix_commits = Vec::new();
         let merge_head = match request.rung {
             DeliveryRung::Commit => tasks::merge_head(place, &task.worktree),
             _ => None,
@@ -1214,6 +1216,7 @@ impl DeliveryService {
                 };
                 notice = super::prs::unanswered_notice(thread.as_ref(), &body);
                 style_examples = self.style_examples(&task);
+                fix_commits = self.fix_commits(&task, comment_url.as_deref(), thread.as_ref());
             }
             _ => {}
         }
@@ -1241,6 +1244,7 @@ impl DeliveryService {
             comment_url,
             thread,
             style_examples,
+            fix_commits,
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.clone(),
             rung: request.rung,

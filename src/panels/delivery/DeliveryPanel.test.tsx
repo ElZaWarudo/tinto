@@ -3429,6 +3429,13 @@ describe("DeliveryPanel", () => {
       title: "Respuesta a Sn4pe",
       body: "The CLI now deletes only folders it installed.",
       style_examples: ["The leave dialog now says why. Tests cover it."],
+      fix_commits: [
+        {
+          sha: "4f54085aa11bb22cc33dd44ee55ff66778899001",
+          subject: "fix(cli): delete only folders the CLI installed",
+          url: "https://github.com/o/r/pull/299/commits/4f54085aa11bb22cc33dd44ee55ff66778899001",
+        },
+      ],
       status: "pending",
       requested_by: "coord",
       requested_at_ms: 1,
@@ -3485,6 +3492,14 @@ describe("DeliveryPanel", () => {
     expect(within(banner).getByText("The leave dialog now says why. Tests cover it.")).toBeTruthy();
     const first = within(banner).getByRole("region", { name: "Respuesta a Sn4pe" });
     expect(within(first).getByText("A folder the CLI did not install is deleted.")).toBeTruthy();
+    // The commit with the fix, linked in the PR.
+    const fix = within(first).getByRole("list", { name: "Commits con el arreglo" });
+    expect(within(fix).getByText("fix(cli): delete only folders the CLI installed")).toBeTruthy();
+    expect(
+      within(fix)
+        .getByRole("link", { name: "Ver el commit 4f54085 en GitHub" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/o/r/pull/299/commits/4f54085aa11bb22cc33dd44ee55ff66778899001");
     const second = within(banner).getByRole("region", { name: "Respuesta a luis" });
     expect(within(second).getByText(/no parece contestar/)).toBeTruthy();
     // The reviewer is asked again unless unticked.

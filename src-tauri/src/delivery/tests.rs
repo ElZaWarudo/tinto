@@ -7258,6 +7258,14 @@ fn a_reply_comes_with_the_users_style_and_is_refused_with_a_label_or_an_unpushed
         asked["structuredContent"]["resolve_thread"], true,
         "{asked}"
     );
+    // The commit that changed the commented file is the fix, linked in the PR.
+    let fix = &asked["structuredContent"]["fix_commits"];
+    assert_eq!(fix.as_array().unwrap().len(), 1, "{asked}");
+    assert_eq!(fix[0]["subject"], "fix");
+    assert!(fix[0]["url"]
+        .as_str()
+        .unwrap()
+        .starts_with("https://github.com/o/r/pull/299/commits/"));
 }
 
 #[test]

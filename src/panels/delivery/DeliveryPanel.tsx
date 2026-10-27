@@ -97,6 +97,7 @@ import type {
   DeliveryApproval,
   DeliveryQaScreenshot,
   DeliveryReplyImage,
+  DeliveryFixCommit,
   DeliveryEnvironmentCheck,
   DeliveryJob,
   DeliveryJobLog,
@@ -3602,6 +3603,31 @@ function ApprovalBar({ approval, onOpen }: { approval: DeliveryApproval; onOpen:
   );
 }
 
+/** The commits of the branch that changed the commented file since the
+ *  review comment: the fix a reply is about. */
+function FixCommits({ commits, path }: { commits: DeliveryFixCommit[]; path: string }) {
+  if (commits.length === 0) {
+    return (
+      <p className="delivery-muted">Ningún commit de la rama cambió {path} desde el comentario.</p>
+    );
+  }
+  return (
+    <ul className="delivery-replies__fix" aria-label="Commits con el arreglo">
+      {commits.map((commit) => (
+        <li key={commit.sha}>
+          <ExternalLink
+            href={commit.url}
+            label={`Ver el commit ${commit.sha.slice(0, 7)} en GitHub`}
+          >
+            <code>{commit.sha.slice(0, 7)}</code>
+          </ExternalLink>{" "}
+          {commit.subject}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** QA screenshots a reply or the PR's description can show, ticked on or
  *  off. Once published, Tinto pushes the chosen ones to the task's evidence
  *  branch and shows them after the text. */
@@ -3744,7 +3770,10 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
               <span className="delivery-muted">{preparedBy(reply)}</span>
             </p>
             {reply.thread ? (
-              <CodeThreads threads={[reply.thread]} />
+              <>
+                <CodeThreads threads={[reply.thread]} />
+                <FixCommits commits={reply.fix_commits ?? []} path={reply.thread.path} />
+              </>
             ) : (
               <p className="delivery-muted">
                 Comentario general en el{" "}

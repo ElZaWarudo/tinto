@@ -2729,6 +2729,10 @@
   white-space: pre-wrap;
   margin-top: 4px;
 }
+.delivery-replies__fix {
+  margin: 0;
+  padding-left: 18px;
+}
 
 /* QA screenshots a reply can show: square thumbnails to tick. */
 .delivery-replies__images ul {

@@ -776,6 +776,19 @@ pub struct DeliveryApproval {
     /// same repository, newest first, for the reply to match their style.
     #[serde(default)]
     pub style_examples: Vec<String>,
+    /// `pr_reply` only: the branch's commits that changed the commented file
+    /// since the review comment, newest first: the fix the reply is about.
+    #[serde(default)]
+    pub fix_commits: Vec<DeliveryFixCommit>,
+}
+
+/// A commit of the task's branch, as a reply to a reviewer refers to it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryFixCommit {
+    pub sha: String,
+    pub subject: String,
+    /// The commit in the PR on GitHub.
+    pub url: String,
 }
 
 /// A screenshot of one of the task's QA jobs, shown in a reply to a

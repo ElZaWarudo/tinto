@@ -362,6 +362,16 @@ export interface DeliveryApproval {
   thread?: DeliveryCodeThread | null;
   /** `pr_reply`: the user's latest replies to review comments in the repo, newest first. */
   style_examples?: string[];
+  /** `pr_reply`: the branch's commits that changed the commented file since the comment. */
+  fix_commits?: DeliveryFixCommit[];
+}
+
+/** A commit of the task's branch, as a reply to a reviewer refers to it. */
+export interface DeliveryFixCommit {
+  sha: string;
+  subject: string;
+  /** The commit in the PR on GitHub. */
+  url: string;
 }
 
 /** A result the user corrected by hand, keeping the one it replaced. */

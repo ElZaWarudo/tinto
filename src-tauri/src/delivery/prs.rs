@@ -22,7 +22,8 @@ use serde_json::Value;
 
 use super::coordination::found_step;
 use super::model::{
-    DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryRung, DeliveryTask,
+    DeliveryApproval, DeliveryApprovalStatus, DeliveryCodeThread, DeliveryFixCommit, DeliveryRung,
+    DeliveryTask,
 };
 use super::service::DeliveryService;
 use super::tasks::{self, Place};
@@ -2119,6 +2120,57 @@ impl DeliveryService {
             .map(|body| body.trim().to_string())
             .filter(|body| !body.is_empty())
             .take(5)
+            .collect()
+    }
+
+    /// The task's own commits that changed the commented file since the
+    /// review comment, newest first (at most five), each with its link in
+    /// the PR. Empty for a general comment or when git cannot say.
+    pub(super) fn fix_commits(
+        &self,
+        task: &DeliveryTask,
+        comment_url: Option<&str>,
+        thread: Option<&DeliveryCodeThread>,
+    ) -> Vec<DeliveryFixCommit> {
+        let (Some((repo, number, _)), Some(thread)) = (
+            comment_url.and_then(super::threads::parse_comment_url),
+            thread,
+        ) else {
+            return Vec::new();
+        };
+        let Some(since) = thread.comment.as_ref().map(|comment| &comment.created_at) else {
+            return Vec::new();
+        };
+        if thread.path.is_empty() || since.is_empty() {
+            return Vec::new();
+        }
+        let place = Place::of(task.distro.as_deref());
+        let since = format!("--since={since}");
+        // The task's own commits: not its base's, nor those a sync merged in.
+        let range = format!("{}..HEAD", task.base_commit);
+        let log = tasks::git(
+            place,
+            &task.worktree,
+            &[
+                "log",
+                "-5",
+                "--first-parent",
+                "--no-merges",
+                "--format=%H%x09%s",
+                &since,
+                &range,
+                "--",
+                &thread.path,
+            ],
+        )
+        .unwrap_or_default();
+        log.lines()
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(sha, subject)| DeliveryFixCommit {
+                url: format!("https://github.com/{repo}/pull/{number}/commits/{sha}"),
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+            })
             .collect()
     }
 
