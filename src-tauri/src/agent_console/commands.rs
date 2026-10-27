@@ -4015,6 +4015,14 @@ pub fn hand_over_delivery_run(
             "esa conversación no está en marcha",
         ));
     }
+    // Until then Claude Code may still ask to trust the folder, which would
+    // swallow the message.
+    if !session.reports_turns {
+        return Err(CommandError::new(
+            "session_not_ready",
+            "esa conversación todavía no ha arrancado (puede que pregunte si confías en la carpeta); pásale el lote cuando esté lista",
+        ));
+    }
     if session.turn_status != AgentSessionTurnStatus::Waiting {
         return Err(CommandError::new(
             "session_busy",
@@ -4043,8 +4051,8 @@ fn wake_coordinator(app: &AppHandle, wakeup: &crate::delivery::feed::Coordinator
     write_when_idle(app, &wakeup.session_id, &wakeup.text)
 }
 
-/// Writes Tinto's message to a conversation that is running and waiting
-/// for the user; says whether it did.
+/// Writes Tinto's message to a conversation that is running, reports its
+/// turns and waits for the user; says whether it did.
 fn write_when_idle(app: &AppHandle, session_id: &str, text: &str) -> bool {
     let Some(registry) = app.try_state::<Mutex<AgentSessionRegistry>>() else {
         return false;
@@ -4056,6 +4064,7 @@ fn write_when_idle(app: &AppHandle, session_id: &str, text: &str) -> bool {
         return false;
     };
     let idle = session.status == AgentSessionStatus::Running
+        && session.reports_turns
         && session.turn_status == AgentSessionTurnStatus::Waiting;
     if !idle
         || registry

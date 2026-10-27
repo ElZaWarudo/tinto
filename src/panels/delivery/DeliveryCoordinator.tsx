@@ -103,22 +103,33 @@ export function CoordinatorDock({
   const [chatShown, setChatShown] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // A conversation that ended coordinates nothing: the batch can start another.
+  const ended = (id: string) => {
+    const status = sessions[id]?.status;
+    return status !== undefined && status !== "starting" && status !== "running";
+  };
   // The Agents conversation that coordinates a batch here, if any.
   const sessionOf = (target: DeliveryRun) =>
-    (target.coordinator_session && sessions[target.coordinator_session]
+    (target.coordinator_session &&
+    sessions[target.coordinator_session] &&
+    !ended(target.coordinator_session)
       ? target.coordinator_session
-      : null) ?? (started?.runIds.includes(target.id) ? started.sessionId : null);
+      : null) ??
+    (started?.runIds.includes(target.id) && !ended(started.sessionId) ? started.sessionId : null);
   const sessionId = run ? sessionOf(run) : null;
   const session = sessionId ? sessions[sessionId] : undefined;
   // Every batch that conversation coordinates.
   const held = sessionId ? runs.filter((candidate) => sessionOf(candidate) === sessionId) : [];
 
   // Once the new conversation waits for its first message, Tinto asks it to
-  // take the batches over.
+  // take the batches over. Claude Code reports its turns only past its
+  // startup prompts (trusting the folder), which would swallow the message.
   useEffect(() => {
     if (!started || handedOver.current === started.sessionId) return;
     const live = sessions[started.sessionId];
-    if (live?.status !== "running" || live.turn_status !== "waiting") return;
+    if (live?.status !== "running" || !live.reports_turns || live.turn_status !== "waiting") {
+      return;
+    }
     handedOver.current = started.sessionId;
     handOverDeliveryRun(started.runIds, started.sessionId).catch((cause: unknown) =>
       setError(cause instanceof Error ? cause.message : String(cause)),
@@ -149,14 +160,18 @@ export function CoordinatorDock({
         ? "working"
         : coordinator?.waiting || live
           ? "waiting"
-          : target.owner && target.owner !== "user"
+          : target.owner &&
+              target.owner !== "user" &&
+              !(target.coordinator_session && ended(target.coordinator_session))
             ? "outside"
             : "none";
   };
   const state = stateOf(run);
   const isDetached = session !== undefined && detached === session.id;
-  // What the start form shows: what the user picked, else the last start in this repo.
-  const shown = choice ?? rememberedChoice(run.repo);
+  // What the start form shows: what the user picked, else the last start in
+  // this repo. Read against the models offered now, which may have loaded
+  // since: a model the select cannot show would start with another one.
+  const shown = agentChoice(choice ?? rememberedChoice(run.repo));
   const chosen = (picked ?? [run.id]).filter((id) => runs.some((candidate) => candidate.id === id));
 
   const start = async () => {

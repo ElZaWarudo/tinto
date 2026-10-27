@@ -13,6 +13,9 @@ export default defineConfig(async () => ({
     // Nested worktrees and Pumarejo fixtures can contain stale copies of src.
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     environment: "jsdom",
+    // Node 25+ has its own localStorage global, unusable without a backing
+    // file, which hides jsdom's.
+    execArgv: ["--no-experimental-webstorage"],
     fileParallelism: false,
     setupFiles: "./src/setupTests.ts",
     globals: false,

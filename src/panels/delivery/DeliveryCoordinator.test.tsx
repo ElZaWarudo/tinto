@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DeliveryOverview, DeliveryRun } from "../../delivery/types";
 import { CoordinatorDock } from "./DeliveryCoordinator";
@@ -19,6 +19,11 @@ const windows = vi.hoisted(() => ({
   openDetachedTerminalWindow: vi.fn(() => Promise.resolve(true)),
 }));
 vi.mock("../terminal/detachTerminalWindow", () => windows);
+const catalog = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock("../terminal/agentRuntimeCatalog", () => ({
+  lastRuntimeCatalog: () => catalog.value,
+  codexReasoningLabel: (value: string) => value,
+}));
 vi.mock("../terminal/TerminalPanel", () => ({
   TerminalPanel: ({ params }: { params: { sessionId: string } }) => (
     <div>Conversación {params.sessionId}</div>
@@ -39,8 +44,15 @@ const run = (over: Partial<DeliveryRun> = {}): DeliveryRun => ({
 
 const overview = { coordinators: [] } as unknown as DeliveryOverview;
 
-function session(id: string, turn_status: "waiting" | "working") {
-  return { id, repo: "C:\\work\\agentos", agent_type: "claude", status: "running", turn_status };
+function session(id: string, turn_status: "waiting" | "working", reports_turns = true) {
+  return {
+    id,
+    repo: "C:\\work\\agentos",
+    agent_type: "claude",
+    status: "running",
+    turn_status,
+    reports_turns,
+  };
 }
 
 function Dock({
@@ -69,6 +81,7 @@ function Dock({
 beforeEach(() => {
   vi.clearAllMocks();
   sessions.value = {};
+  catalog.value = null;
   localStorage.removeItem("tinto:delivery-coordinator-agent");
 });
 
@@ -89,6 +102,48 @@ describe("CoordinatorDock", () => {
     expect(screen.getByText("Conversación s1")).toBeInTheDocument();
   });
 
+  it("offers a new coordinator once the batch's conversation ended", async () => {
+    const user = userEvent.setup();
+    sessions.value = { s1: { ...session("s1", "waiting"), status: "exited" } };
+    render(<Dock runs={[run({ coordinator_session: "s1", owner: "claude-1" })]} />);
+    expect(
+      screen.getByRole("button", { name: "Coordinador de Lote A: sin coordinador" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Conversación" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Iniciar coordinador" }));
+    expect(bus.startAgentSession).toHaveBeenCalled();
+  });
+
+  it("starts Codex on the model it shows once its models load after the pick", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Dock runs={[run()]} />);
+    // No catalog yet: Codex offers only its own default.
+    await user.selectOptions(screen.getByRole("combobox", { name: "Agente" }), "codex");
+    const effort = { value: "medium", label: "Medium", description: "" };
+    catalog.value = {
+      status: "ready",
+      source: "codex_app_server",
+      default_model: "gpt-6-luna",
+      updated_at_ms: 1,
+      models: ["gpt-6-luna", "gpt-5.6-terra"].map((model) => ({
+        id: model,
+        model,
+        display_name: model,
+        description: "",
+        supported_reasoning_efforts: [effort],
+        default_reasoning_effort: "medium",
+        is_default: model === "gpt-6-luna",
+      })),
+    };
+    rerender(<Dock runs={[run()]} />);
+    expect(screen.getByRole("combobox", { name: "Modelo" })).toHaveValue("gpt-6-luna");
+    await user.click(screen.getByRole("button", { name: "Iniciar coordinador" }));
+    expect(bus.startAgentSession).toHaveBeenCalledWith(run().repo, "codex", "workspace", {
+      model: "gpt-6-luna",
+      reasoning_effort: "medium",
+    });
+  });
+
   it("starts a coordinator here and hands it the batch once it waits", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<Dock runs={[run()]} />);
@@ -96,6 +151,13 @@ describe("CoordinatorDock", () => {
     expect(bus.startAgentSession).toHaveBeenCalledWith(run().repo, "claude", "workspace", {
       reasoning_effort: "medium",
     });
+    expect(client.handOverDeliveryRun).not.toHaveBeenCalled();
+
+    // Claude Code still asks whether to trust the folder: no turns yet, and a
+    // message typed now would be lost.
+    sessions.value = { "s-new": session("s-new", "waiting", false) };
+    rerender(<Dock runs={[run()]} />);
+    await act(() => Promise.resolve());
     expect(client.handOverDeliveryRun).not.toHaveBeenCalled();
 
     sessions.value = { "s-new": session("s-new", "waiting") };

@@ -26,7 +26,7 @@ checks, and brand asset generation. It reflects the same workflow used by CI
 
 Tinto is a Tauri 2 app: a Rust shell hosting a React 19 + Vite webview.
 
-- **Node.js 24** — required by `package.json`; CI uses the same major.
+- **Node.js 26** — required by `package.json`; CI uses the same major.
 - **Rust** — stable toolchain (CI uses `dtolnay/rust-toolchain@stable`).
   - **Windows**: install the **MSVC** target (`rustup default stable-msvc`).
   - **Linux**: install the build deps below.
