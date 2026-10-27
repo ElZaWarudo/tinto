@@ -265,10 +265,11 @@ error categories.
 The installer is produced by Tauri's bundler. Because
 `tauri.conf.json` sets `bundle.targets` to `"all"`, the bundler picks the
 right format for the host OS, except on Windows, where
-`tauri.windows.conf.json` limits it to the NSIS installer:
+`tauri.windows.conf.json` limits it to the NSIS installer, and on Linux, where
+`tauri.linux.conf.json` limits it to the AppImage:
 
 - **Windows**: NSIS `.exe` (an `.msi` only with `--bundles msi`)
-- **Linux**:   `.deb`, `.AppImage`
+- **Linux**:   `.AppImage` (a `.deb` or `.rpm` only with `--bundles deb` or `--bundles rpm`)
 - **macOS**:   `.dmg` (and `.app`)
 
 ### One-shot (frontend + Rust release + bundle)
@@ -306,7 +307,7 @@ All installers are written under `src-tauri/target/release/bundle/`:
 src-tauri/target/release/bundle/
 ├── msi/        # Windows .msi  (WiX), only with --bundles msi
 ├── nsis/       # Windows NSIS .exe
-├── deb/        # Debian/Ubuntu .deb
+├── deb/        # Debian/Ubuntu .deb, only with --bundles deb
 ├── appimage/   # Linux AppImage
 ├── dmg/        # macOS .dmg
 └── macos/      # macOS .app bundle
@@ -334,7 +335,7 @@ src-tauri/target/release/tinto(.exe)
 
 ```bash
 # Build only for a single target on the current OS:
-npm run tauri build -- --bundles appimage   # Linux only
+npm run tauri build -- --bundles deb        # Linux only
 npm run tauri build -- --bundles msi        # Windows only
 
 # Build a debug installer (faster, unsigned):
