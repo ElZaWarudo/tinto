@@ -254,6 +254,10 @@ pub struct DeliveryPr {
     /// where no check ran.
     #[serde(default)]
     pub ci: Option<CiState>,
+    /// Who must approve it before it merges: the reviewers chosen in Tinto
+    /// or asked on GitHub, until they are removed.
+    #[serde(default)]
+    pub reviewers: Vec<String>,
 }
 
 impl DeliveryPr {
@@ -287,6 +291,34 @@ impl DeliveryPr {
             labels: Vec::new(),
             merged_failing_ci: None,
             ci: None,
+            reviewers: Vec::new(),
+        }
+    }
+
+    /// The reviewers who must approve it and have not yet.
+    pub fn missing_approvals(&self) -> Vec<String> {
+        self.reviewers
+            .iter()
+            .filter(|login| {
+                !self
+                    .approved_by
+                    .iter()
+                    .any(|approved| approved.eq_ignore_ascii_case(login))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Adds `logins` to who must approve it, once each.
+    pub fn add_reviewers(&mut self, logins: &[String]) {
+        for login in logins {
+            if !self
+                .reviewers
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(login))
+            {
+                self.reviewers.push(login.clone());
+            }
         }
     }
 
@@ -321,12 +353,14 @@ impl DeliveryPr {
     }
 
     /// Reviewed and approved: GitHub's decision when the repo requires
-    /// reviews, else at least one approval and no changes requested.
+    /// reviews, else at least one approval and no changes requested; and,
+    /// either way, by every reviewer who must approve it.
     pub fn is_approved(&self) -> bool {
-        match self.review_decision.as_deref() {
+        let decided = match self.review_decision.as_deref() {
             Some(decision) => decision == "approved",
             None => !self.approved_by.is_empty(),
-        }
+        };
+        decided && self.missing_approvals().is_empty()
     }
 }
 
@@ -478,7 +512,7 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
     }
     pr.approved_by = approved_by;
     // Teams have a name instead of a login; only people are asked from Tinto.
-    pr.requested_reviewers = snapshot["reviewRequests"]
+    let requested: Vec<String> = snapshot["reviewRequests"]
         .as_array()
         .into_iter()
         .flatten()
@@ -486,6 +520,28 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         .filter(|login| !login.is_empty())
         .map(str::to_string)
         .collect();
+    // Who must approve it: one asked on GitHub joins; one whose request was
+    // taken back there before they reviewed leaves.
+    let reviewed = |login: &str| {
+        snapshot["reviews"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|review| {
+                review["author"]["login"]
+                    .as_str()
+                    .is_some_and(|author| author.eq_ignore_ascii_case(login))
+            })
+    };
+    let removed: Vec<String> = pr
+        .requested_reviewers
+        .iter()
+        .filter(|login| !requested.contains(login) && !reviewed(login))
+        .cloned()
+        .collect();
+    pr.reviewers.retain(|login| !removed.contains(login));
+    pr.add_reviewers(&requested);
+    pr.requested_reviewers = requested;
 
     // (time, author, is_review, line) of everything others did on the PR.
     let mut activity: Vec<(String, String, bool, String)> = Vec::new();
@@ -1914,6 +1970,17 @@ impl DeliveryService {
         if !request.is_empty() {
             github.request_reviewers(&pr.url, &request)?;
         }
+        // Who must approve it before it merges changes with them.
+        {
+            let store = self.store()?;
+            if let Some(mut stored) = store.pr(task_id)? {
+                stored
+                    .reviewers
+                    .retain(|login| !remove.iter().any(|gone| gone.eq_ignore_ascii_case(login)));
+                stored.add_reviewers(&request);
+                store.put_pr(&stored)?;
+            }
+        }
         self.refresh_pr(task_id, Duration::ZERO)
     }
 
@@ -2109,6 +2176,13 @@ impl DeliveryService {
         match self.github().request_reviewers(&pr.url, &step.reviewers) {
             Ok(()) => {
                 step.reviewers_requested = true;
+                // They must all approve it before it merges.
+                let store = self.store()?;
+                if let Some(mut stored) = store.pr(task_id)? {
+                    stored.add_reviewers(&step.reviewers);
+                    store.put_pr(&stored)?;
+                }
+                drop(store);
                 if step
                     .notice
                     .as_deref()

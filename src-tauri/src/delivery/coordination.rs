@@ -2265,6 +2265,12 @@ impl DeliveryService {
             ))
         } else if let Some(why) = self.package_merge_refusal(task)? {
             Some(format!("el PR #{} {why}", pr.number))
+        } else if !pr.missing_approvals().is_empty() {
+            Some(format!(
+                "al PR #{} le falta la aprobación de {}: aprueban todos los revisores elegidos, salvo los que quites",
+                pr.number,
+                pr.missing_approvals().join(", ")
+            ))
         } else if !pr.is_approved() {
             Some(format!(
                 "el PR #{} no tiene una revisión aprobada",

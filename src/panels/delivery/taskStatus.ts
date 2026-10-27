@@ -865,10 +865,20 @@ export function ciLine(pr: DeliveryPr): string | null {
   return `${words[pr.ci]}${at}`;
 }
 
+/** The reviewers who must approve the PR and have not yet. */
+export function missingApprovals(pr: DeliveryPr): string[] {
+  const approved = (pr.approved_by ?? []).map((login) => login.toLowerCase());
+  return (pr.reviewers ?? []).filter((login) => !approved.includes(login.toLowerCase()));
+}
+
 /** Who the PR's review waits on: "Revisión pedida a ana, luis", or that
  *  nobody was asked (then nobody can approve it). */
 export function reviewLine(pr: DeliveryPr): string | null {
   if (pr.state !== "open") return null;
+  const missing = missingApprovals(pr);
+  if (missing.length > 0 && (pr.approved_by?.length ?? 0) > 0) {
+    return `Falta la aprobación de ${missing.join(", ")}`;
+  }
   const asked = pr.requested_reviewers ?? [];
   if (asked.length > 0) return `Revisión pedida a ${asked.join(", ")}`;
   return (pr.approved_by?.length ?? 0) > 0 ? null : "Nadie tiene pedida la revisión";
@@ -922,8 +932,11 @@ export function prSummary(pr: DeliveryPr): { tone: Tone; icon: StatusIcon; label
   if (pr.checks.pending > 0) return { tone: "waiting", icon: "clock", label: "Checks en curso" };
   if (pr.draft) return { tone: "waiting", icon: "clock", label: "Borrador" };
   // Without required reviews GitHub gives no decision; an approval still counts.
+  // And every reviewer chosen for it, until removed.
   const approved =
-    pr.review_decision === "approved" || (!pr.review_decision && (pr.approved_by?.length ?? 0) > 0);
+    (pr.review_decision === "approved" ||
+      (!pr.review_decision && (pr.approved_by?.length ?? 0) > 0)) &&
+    missingApprovals(pr).length === 0;
   if (approved) return { tone: "ok", icon: "check", label: "Aprobado" };
   return { tone: "waiting", icon: "clock", label: "Espera aprobación" };
 }

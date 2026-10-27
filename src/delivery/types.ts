@@ -803,6 +803,8 @@ export interface DeliveryPr {
   approved_by?: string[];
   /** Who GitHub is still waiting on for a review. */
   requested_reviewers?: string[];
+  /** Who must approve it before it merges: the reviewers chosen, until removed. */
+  reviewers?: string[];
   /** The branch it merges into, as GitHub last said. */
   base?: string | null;
 }

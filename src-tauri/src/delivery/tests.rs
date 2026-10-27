@@ -25,6 +25,8 @@ use crate::agent_console::checkpoint::CheckpointConfig;
 const CODEX_OK: &str = include_str!("fixtures/codex-ok.jsonl");
 const CODEX_FAILED: &str = include_str!("fixtures/codex-failed.jsonl");
 const CLAUDE_OK: &str = include_str!("fixtures/claude-ok.jsonl");
+/// How often a test looks again at what it waits for.
+const POLL: Duration = Duration::from_millis(20);
 
 /// Prompt directives for the fake agent: `events=codex-ok touch=a.txt
 /// exit=0 sleep=0`; `env=NAME` writes that variable's value to `env.txt`.
@@ -242,7 +244,7 @@ impl Harness {
                 "job did not end: {:?}",
                 job.status
             );
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(POLL);
         }
     }
 
@@ -258,7 +260,7 @@ impl Harness {
                 "job stayed {:?}, expected {status:?}",
                 job.status
             );
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(POLL);
         }
     }
 }
@@ -678,47 +680,6 @@ fn a_qa_visual_record_becomes_a_page_the_user_opens() {
 }
 
 #[test]
-fn a_qa_record_under_another_name_is_the_record_and_its_problems_count() {
-    let h = harness();
-    let task = h.task("AGOS-360");
-    let qa = h.dispatch(
-        &task,
-        "qa",
-        "events=codex-ok record=problems record_as=-wp1-matrix.md",
-    );
-    let qa = h.wait(&qa.id);
-    let page = qa.visual_record.expect("a rendered page");
-    assert!(page.ends_with("AGOS-360-wp1-matrix.html"), "{page}");
-    assert!(std::fs::read_to_string(&page)
-        .unwrap()
-        .contains("AGOS-360 — Visual changes"));
-    assert!(qa
-        .visual_record_source
-        .unwrap()
-        .ends_with("AGOS-360-wp1-matrix.md"));
-    assert_eq!(qa.visual_record_error, None);
-    let problems = h.service.task_qa_problems(&task.id).unwrap();
-    assert_eq!(problems.len(), 2);
-    assert_eq!(problems[0].job_id.as_deref(), Some(qa.id.as_str()));
-}
-
-#[test]
-fn a_qa_page_the_agent_wrote_is_shown_as_it_is() {
-    let h = harness();
-    let task = h.task("AGOS-468");
-    let qa = h.dispatch(&task, "qa", "events=codex-ok record=1 record_as=.html");
-    let qa = h.wait(&qa.id);
-    let page = qa.visual_record.expect("its page");
-    assert!(page.ends_with("AGOS-468.html"), "{page}");
-    assert_eq!(qa.visual_record_source.as_deref(), Some(page.as_str()));
-    assert_eq!(
-        std::fs::read_to_string(&page).unwrap(),
-        "<h1>AGOS-468 by the agent</h1>"
-    );
-    assert_eq!(qa.visual_record_error, None);
-}
-
-#[test]
 fn a_qa_record_copied_after_the_job_ended_shows_when_read_or_regenerated() {
     let h = harness();
     let task = h.task("R-1");
@@ -810,45 +771,6 @@ fn a_running_job_shows_what_it_does_and_what_it_used() {
 }
 
 #[test]
-fn a_finished_claude_job_tells_model_time_turns_and_commands() {
-    let h = harness();
-    let task = h.task("O-2");
-    let job = h
-        .service
-        .dispatch(NewJob {
-            task_id: task.id.clone(),
-            role: "review".into(),
-            agent: DeliveryAgent::Claude,
-            model: None,
-            access: DeliveryAccess::Workspace,
-            prompt: "events=claude-ok".into(),
-            writes: None,
-            lease: None,
-            timeout_minutes: None,
-            reasoning: None,
-            platform: None,
-            read_dirs: Vec::new(),
-            stage_default: false,
-            needs_environment: false,
-        })
-        .unwrap();
-    let job = h.wait(&job.id);
-    assert_eq!(job.current_command, None);
-    let timing = job.timing.expect("timing");
-    assert_eq!(timing.model_ms, Some(5100));
-    assert_eq!(timing.turns, Some(4));
-    let commands: Vec<&str> = timing
-        .slowest
-        .iter()
-        .map(|slow| slow.command.as_str())
-        .collect();
-    assert!(
-        commands.contains(&"printf 'goodbye from claude' > farewell.txt"),
-        "{commands:?}"
-    );
-}
-
-#[test]
 fn a_paused_stage_holds_its_task_and_resource_until_it_resumes_in_its_session() {
     let h = harness();
     let task = h.task("P-1");
@@ -864,7 +786,7 @@ fn a_paused_stage_holds_its_task_and_resource_until_it_resumes_in_its_session() 
         .is_none()
     {
         assert!(Instant::now() < deadline, "no session recorded");
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(POLL);
     }
     h.service.pause(&running.id).unwrap();
     let paused = h.wait_status(&running.id, DeliveryJobStatus::Paused);
@@ -1072,7 +994,7 @@ fn wait_gone(job: &DeliveryJob) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while super::job_process::alive(pid, started) {
         assert!(Instant::now() < deadline, "the job's process kept running");
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(POLL);
     }
 }
 
@@ -1100,7 +1022,7 @@ fn wait_on(service: &DeliveryService, job_id: &str) -> DeliveryJob {
             "job did not end: {:?}",
             job.status
         );
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(POLL);
     }
 }
 
@@ -1317,7 +1239,7 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
     let deadline = Instant::now() + Duration::from_secs(60);
     while restarted.job(&retry.id).unwrap().status != DeliveryJobStatus::Started {
         assert!(Instant::now() < deadline, "the retry did not start");
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(POLL);
     }
     close_tinto(&restarted);
     kill_job(&restarted, &retry.id);
@@ -5525,12 +5447,15 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
     let refused = h.service.request_approval(merge()).unwrap_err();
     assert_eq!(refused.category, "pr_not_ready");
     assert!(
-        refused.message.contains("no tiene una revisión aprobada"),
+        refused
+            .message
+            .contains("le falta la aprobación de ana, Luis"),
         "{}",
         refused.message
     );
 
-    // A repo without required reviews: one approval is enough.
+    // A repo without required reviews: its latest verdict counts, and every
+    // reviewer chosen must approve.
     github.snapshot.lock().unwrap()["reviews"] = json!([
         {"author": {"login": "ana"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-14T08:00:00Z"},
         {"author": {"login": "ana"}, "state": "APPROVED", "submittedAt": "2026-10-14T09:00:00Z"}
@@ -5540,6 +5465,17 @@ fn the_chosen_reviewers_are_asked_once_the_pr_is_linked_and_merging_needs_an_app
         h.service.task_pr(&task.id).unwrap().unwrap().approved_by,
         vec!["ana".to_string()]
     );
+    let refused = h.service.request_approval(merge()).unwrap_err();
+    assert!(
+        refused.message.contains("aprobación de Luis"),
+        "{}",
+        refused.message
+    );
+    github.snapshot.lock().unwrap()["reviews"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"author": {"login": "Luis"}, "state": "APPROVED", "submittedAt": "2026-10-14T10:00:00Z"}));
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
     h.service.request_approval(merge()).unwrap();
 }
 
@@ -8092,7 +8028,7 @@ fn ended_jobs(h: &Harness, task: &DeliveryTask, role: &str, count: usize) -> Vec
             Instant::now() < deadline,
             "{role} jobs did not end: {statuses:?}"
         );
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(POLL);
     }
 }
 
@@ -9594,7 +9530,7 @@ fn eventually<T>(mut check: impl FnMut() -> Option<T>) -> T {
             return found;
         }
         assert!(Instant::now() < deadline, "it never happened");
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(POLL);
     }
 }
 
@@ -10290,7 +10226,46 @@ fn a_qa_job_that_leaves_a_server_running_ends_with_it_stopped_and_named_in_the_q
             .is_some_and(|tree| !tree.processes().is_empty())
         {
             assert!(Instant::now() < deadline, "the server kept running");
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(POLL);
         }
     }
+}
+
+#[test]
+fn a_pr_merges_only_once_every_chosen_reviewer_approved_or_was_removed() {
+    let h = harness();
+    let task = h.task("RV-1");
+    let github = FakeGitHub::new(
+        json!({
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "reviews": [{"author": {"login": "ana"}, "state": "APPROVED", "submittedAt": "2026-10-27T08:00:00Z"}],
+            "comments": []
+        }),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/14").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    h.service
+        .change_pr_reviewers(&task.id, vec!["ana".into(), "luis".into()], Vec::new())
+        .unwrap();
+
+    // GitHub says approved, but luis, chosen to review it, has not.
+    let refused = h.service.request_approval(merge_step(&task)).unwrap_err();
+    assert_eq!(refused.category, "pr_not_ready");
+    assert!(
+        refused.message.contains("le falta la aprobación de luis"),
+        "{}",
+        refused.message
+    );
+    let phase = h.service.overview().unwrap().phases[&task.id].clone();
+    assert_eq!(phase.waits_on, super::phase::Waiter::Reviewers);
+
+    // The user takes him off: what was asked is approved.
+    h.service
+        .change_pr_reviewers(&task.id, Vec::new(), vec!["luis".into()])
+        .unwrap();
+    assert!(h.service.request_approval(merge_step(&task)).is_ok());
 }

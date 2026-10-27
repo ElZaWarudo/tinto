@@ -90,6 +90,13 @@ pub const SETUP_ROLE: &str = "setup";
 /// How long a passing "Entorno" check stands before a job that needs the
 /// environment checks it again.
 pub(super) const ENVIRONMENT_FRESH_MS: u64 = 60_000;
+/// How often a running job's process and output are looked at. Tests look
+/// often: each of their jobs would otherwise end up to a tick late.
+const MONITOR_TICK: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_millis(200)
+};
 
 /// The end of a failed check's output its next stage reads.
 const CHECK_TAIL_CHARS: usize = 2_000;
@@ -2582,7 +2589,7 @@ impl DeliveryService {
                 }
                 process.kill_tree();
             }
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(MONITOR_TICK);
         };
         // Whatever ended it, nothing it started keeps running: a server it
         // left in the background would hold the environment and its data.

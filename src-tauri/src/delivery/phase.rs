@@ -724,8 +724,8 @@ fn pr_waits_on(pr: &DeliveryPr, unattended: bool) -> Waiter {
         || pr.checks.failing > 0
         || pr.conflicts
         || pr.review_decision.as_deref() == Some("changes_requested");
-    let approved = pr.review_decision.as_deref() == Some("approved")
-        || (pr.review_decision.is_none() && !pr.approved_by.is_empty());
+    // Every reviewer who must approve it has.
+    let approved = pr.is_approved();
     if trouble && unattended {
         Waiter::Coordinator
     } else if trouble {
