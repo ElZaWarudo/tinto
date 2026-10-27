@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ACTIVITY_WINDOW_MS } from "./constants";
+import { setWindowsHostOverrideForTests } from "../workbench/platform";
 import type {
   AgentCliUpdateStatus,
   AgentInstallPreview,
@@ -183,9 +184,25 @@ describe("RepoCard", () => {
   });
 
   it("keeps the WSL badge when source metadata arrives late but the repo path is Linux", () => {
-    renderCard({ repo: "/home/me/api" });
+    setWindowsHostOverrideForTests(true);
+    try {
+      renderCard({ repo: "/home/me/api" });
 
-    expect(screen.getByTestId("repo-source-badge")).toHaveTextContent("WSL");
+      expect(screen.getByTestId("repo-source-badge")).toHaveTextContent("WSL");
+    } finally {
+      setWindowsHostOverrideForTests(null);
+    }
+  });
+
+  it("does not take a Linux path for WSL on a Linux host", () => {
+    setWindowsHostOverrideForTests(false);
+    try {
+      renderCard({ repo: "/home/me/api" });
+
+      expect(screen.queryByTestId("repo-source-badge")).toBeNull();
+    } finally {
+      setWindowsHostOverrideForTests(null);
+    }
   });
 
   it("does not show a source badge for local repos", () => {
