@@ -671,6 +671,8 @@ pub async fn delivery_decide_approval(
     reviewers: Option<Vec<String>>,
     // A reply step: the text as the user edited it.
     body: Option<String>,
+    // A reply step: the QA screenshots shown after the text.
+    images: Option<Vec<super::model::DeliveryReplyImage>>,
 ) -> Result<DeliveryApproval, CommandError> {
     let service = service.inner().clone();
     blocking(move || {
@@ -680,9 +682,22 @@ pub async fn delivery_decide_approval(
         if let Some(body) = body.filter(|_| approve) {
             service.set_reply_body(&approval_id, &body)?;
         }
+        if let Some(images) = images.filter(|_| approve) {
+            service.set_reply_images(&approval_id, images)?;
+        }
         service.decide_approval(&approval_id, approve, note)
     })
     .await
+}
+
+/// The screenshots of the task's QA, for a reply to show.
+#[tauri::command]
+pub async fn delivery_qa_screenshots(
+    service: State<'_, DeliveryService>,
+    task_id: String,
+) -> Result<Vec<super::reply_images::DeliveryQaScreenshot>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.qa_screenshots(&task_id)).await
 }
 
 /// Who can review the task's PR: the repo's assignable people on GitHub.

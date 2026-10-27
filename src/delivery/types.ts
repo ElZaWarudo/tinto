@@ -301,6 +301,18 @@ export interface DeliveryLease {
   queue: DeliveryLeaseWaiter[];
 }
 
+/** A QA screenshot shown in a reply to a reviewer: `file` in the job's QA folder. */
+export interface DeliveryReplyImage {
+  job_id: string;
+  file: string;
+}
+
+/** A screenshot one of the task's QA jobs saved, with the image itself. */
+export interface DeliveryQaScreenshot extends DeliveryReplyImage {
+  attempt: number;
+  data_uri: string;
+}
+
 export interface DeliveryApproval {
   id: string;
   task_id: string;
@@ -344,6 +356,8 @@ export interface DeliveryApproval {
   comment_url?: string | null;
   /** `pr_reply`: resolve the review thread once replied. */
   resolve_thread?: boolean;
+  /** `pr_reply`: the QA screenshots shown after the text, pushed to the PR's evidence branch. */
+  images?: DeliveryReplyImage[];
   /** `pr_reply`: the review comment and its diff, as Tinto read them. */
   thread?: DeliveryCodeThread | null;
   /** `pr_reply`: the user's latest replies to review comments in the repo, newest first. */

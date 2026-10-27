@@ -836,7 +836,10 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
         tone: summary.tone,
         icon: summary.icon,
         label: ready ? `PR aprobado${then}` : `PR: ${lower(summary.label)}`,
-        detail: ciLine(pr) ?? undefined,
+        detail:
+          [summary.label === "Espera aprobación" ? reviewLine(pr) : null, ciLine(pr)]
+            .filter(Boolean)
+            .join(" · ") || undefined,
       };
     }
     case "next_stage":
@@ -857,6 +860,41 @@ export function ciLine(pr: DeliveryPr): string | null {
     not_run: "CI sin ejecutar",
   } as const;
   return `${words[pr.ci]}${at}`;
+}
+
+/** Who the PR's review waits on: "Revisión pedida a ana, luis", or that
+ *  nobody was asked (then nobody can approve it). */
+export function reviewLine(pr: DeliveryPr): string | null {
+  if (pr.state !== "open") return null;
+  const asked = pr.requested_reviewers ?? [];
+  if (asked.length > 0) return `Revisión pedida a ${asked.join(", ")}`;
+  return (pr.approved_by?.length ?? 0) > 0 ? null : "Nadie tiene pedida la revisión";
+}
+
+/** Who the task waits on, as its row says it after its state: "ti", "el
+ *  coordinador", the reviewers by name… Nothing while an agent works on it or
+ *  nobody has to act. */
+export function waitsOnLabel(overview: DeliveryOverview, taskId: string): string | null {
+  const phase = phaseOf(overview, taskId);
+  switch (phase?.waits_on) {
+    case "user":
+      return "ti";
+    case "coordinator":
+      return "el coordinador";
+    case "queue":
+      return "su turno";
+    case "reviewers": {
+      const pr = (overview.prs ?? []).find((candidate) => candidate.task_id === taskId);
+      const asked = pr?.requested_reviewers ?? [];
+      return asked.length > 0 ? asked.join(", ") : "los revisores";
+    }
+    case "dependency":
+      return "otra tarea";
+    case "external":
+      return "algo fuera de Tinto";
+    default:
+      return null;
+  }
 }
 
 /** One line for the state of a followed PR, from most to least urgent. */
@@ -884,7 +922,7 @@ export function prSummary(pr: DeliveryPr): { tone: Tone; icon: StatusIcon; label
   const approved =
     pr.review_decision === "approved" || (!pr.review_decision && (pr.approved_by?.length ?? 0) > 0);
   if (approved) return { tone: "ok", icon: "check", label: "Aprobado" };
-  return { tone: "waiting", icon: "clock", label: "En revisión" };
+  return { tone: "waiting", icon: "clock", label: "Espera aprobación" };
 }
 
 /** The colour the PR's link takes in the task header, from what it needs:

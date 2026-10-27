@@ -761,6 +761,9 @@ pub struct DeliveryApproval {
     /// `pr_reply` only: resolve the review thread once replied.
     #[serde(default)]
     pub resolve_thread: bool,
+    /// `pr_reply` only: QA screenshots the user chose to show in the reply.
+    #[serde(default)]
+    pub images: Vec<DeliveryReplyImage>,
     /// `pr_reply` only: the review comment and its diff, as Tinto read them
     /// from GitHub when the reply was asked.
     #[serde(default)]
@@ -769,6 +772,14 @@ pub struct DeliveryApproval {
     /// same repository, newest first, for the reply to match their style.
     #[serde(default)]
     pub style_examples: Vec<String>,
+}
+
+/// A screenshot of one of the task's QA jobs, shown in a reply to a
+/// reviewer: `file` is its name in the job's QA folder.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryReplyImage {
+    pub job_id: String,
+    pub file: String,
 }
 
 /// A result the user corrected by hand, for what Tinto cannot check.

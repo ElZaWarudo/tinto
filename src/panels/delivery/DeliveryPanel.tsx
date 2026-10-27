@@ -71,6 +71,7 @@ import {
   findDeliveryPr,
   getDeliveryMergeMethod,
   getDeliveryPrReviewers,
+  getDeliveryQaScreenshots,
   getDeliveryJobLog,
   getDeliveryOverview,
   getDeliveryRepoSettings,
@@ -93,6 +94,8 @@ import {
 } from "../../delivery/client";
 import type {
   DeliveryApproval,
+  DeliveryQaScreenshot,
+  DeliveryReplyImage,
   DeliveryEnvironmentCheck,
   DeliveryJob,
   DeliveryJobLog,
@@ -154,6 +157,7 @@ import {
   prMood,
   prSummary,
   ciLine,
+  waitsOnLabel,
   quietFor,
   rolesOf,
   stepKey,
@@ -317,11 +321,15 @@ const TONE_ICON: Record<Tone, StatusIcon> = {
   ok: "check",
 };
 
-function StatusLine({ status }: { status: TaskStatus }) {
+/** The task's state; `who` it waits on follows it, unless the state already
+ *  asks the user or an agent is at work. */
+function StatusLine({ status, who }: { status: TaskStatus; who?: string | null }) {
+  const shown = who && status.group !== "attention" && status.group !== "running";
   return (
     <span className={`delivery-status-line delivery-tone--${status.tone}`}>
       <StatusMark icon={status.icon} />
       {status.label}
+      {shown && <small className="delivery-status-line__who">espera a {who}</small>}
     </span>
   );
 }
@@ -1700,7 +1708,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         <span className="delivery-task-row__title">
           {task.package ? task.package.title || task.title : task.title || task.branch}
         </span>
-        <StatusLine status={status} />
+        <StatusLine status={status} who={overview ? waitsOnLabel(overview, task.id) : null} />
         {status.detail && (
           <span className="delivery-task-row__blocker" title={status.detail}>
             {status.detail}
@@ -3592,6 +3600,62 @@ function ApprovalBar({ approval, onOpen }: { approval: DeliveryApproval; onOpen:
   );
 }
 
+/** QA screenshots a reply or the PR's description can show, ticked on or
+ *  off. Once published, Tinto pushes the chosen ones to the task's evidence
+ *  branch and shows them after the text. */
+function QaImagePicker({
+  shots,
+  chosen,
+  onChange,
+  where = "en la respuesta",
+}: {
+  shots: DeliveryQaScreenshot[];
+  chosen: DeliveryReplyImage[];
+  onChange: (images: DeliveryReplyImage[]) => void;
+  /** Where the chosen ones show: "en la respuesta", "en la descripción del PR". */
+  where?: string;
+}) {
+  if (shots.length === 0) return null;
+  const same = (a: DeliveryReplyImage, b: DeliveryReplyImage) =>
+    a.job_id === b.job_id && a.file === b.file;
+  return (
+    <details className="delivery-replies__images" open={chosen.length > 0}>
+      <summary>Capturas de la QA{chosen.length > 0 ? ` · ${chosen.length} ${where}` : ""}</summary>
+      <ul aria-label="Capturas de la QA">
+        {shots.map((shot) => {
+          const on = chosen.some((image) => same(image, shot));
+          return (
+            <li key={`${shot.job_id}/${shot.file}`}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  aria-label={`Mostrar ${shot.file} ${where}`}
+                  onChange={() =>
+                    onChange(
+                      on
+                        ? chosen.filter((image) => !same(image, shot))
+                        : [...chosen, { job_id: shot.job_id, file: shot.file }],
+                    )
+                  }
+                />
+                <img src={shot.data_uri} alt={shot.file} />
+                <small>
+                  {shot.file} · QA intento {shot.attempt}
+                </small>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="delivery-muted">
+        Se suben a una rama tinto/qa-evidence de la tarea, que nunca se fusiona y Tinto borra cuando
+        el PR se cierra o se fusiona.
+      </p>
+    </details>
+  );
+}
+
 /** The task's pending replies to reviewers, all in one place: each comment
  *  with its diff and the editable text Tinto posts as the user once
  *  approved, next to how the user replies in this repository. */
@@ -3600,6 +3664,23 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     Object.fromEntries(replies.map((reply) => [reply.id, reply.body])),
   );
   const bodyOf = (reply: DeliveryApproval) => bodies[reply.id] ?? reply.body;
+  const [images, setImages] = useState<Record<string, DeliveryReplyImage[]>>(() =>
+    Object.fromEntries(replies.map((reply) => [reply.id, reply.images ?? []])),
+  );
+  const imagesOf = (reply: DeliveryApproval) => images[reply.id] ?? reply.images ?? [];
+  const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);
+  const taskId = replies[0]?.task_id;
+  useEffect(() => {
+    if (!taskId) return;
+    let live = true;
+    getDeliveryQaScreenshots(taskId).then(
+      (found) => live && setShots(found),
+      () => live && setShots([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [taskId]);
   const examples = replies.find((reply) => reply.style_examples?.length)?.style_examples ?? [];
   const authorOf = (reply: DeliveryApproval) => reply.thread?.comment?.author;
   const authors = [...new Set(replies.map(authorOf).filter((login) => login !== undefined))];
@@ -3612,12 +3693,26 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     if (chosen.length > 0) await changeDeliveryPrReviewers(replies[0].task_id, chosen, []);
   };
   const approve = async (reply: DeliveryApproval) => {
-    await decideDeliveryApproval(reply.id, true, undefined, undefined, bodyOf(reply));
+    await decideDeliveryApproval(
+      reply.id,
+      true,
+      undefined,
+      undefined,
+      bodyOf(reply),
+      imagesOf(reply),
+    );
     await askAgain([authorOf(reply)]);
   };
   const approveAll = async () => {
     for (const reply of replies) {
-      await decideDeliveryApproval(reply.id, true, undefined, undefined, bodyOf(reply));
+      await decideDeliveryApproval(
+        reply.id,
+        true,
+        undefined,
+        undefined,
+        bodyOf(reply),
+        imagesOf(reply),
+      );
     }
     await askAgain(authors);
   };
@@ -3664,6 +3759,11 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
                 rows={2}
               />
             </label>
+            <QaImagePicker
+              shots={shots}
+              chosen={imagesOf(reply)}
+              onChange={(chosen) => setImages({ ...images, [reply.id]: chosen })}
+            />
             {reply.notice && <p className="delivery-job__note">{reply.notice}</p>}
             <p className="delivery-muted">
               Al aprobar, Tinto la publica con tu cuenta de GitHub
@@ -3755,6 +3855,20 @@ function ApprovalBanner({
   }, [choosesReviewers, task.id]);
   // Without a reviewer nobody can approve the PR, and it cannot be merged.
   const needsReviewer = choosesReviewers && (candidates?.length ?? 0) > 0 && reviewers.length === 0;
+  // The PR's description can show the task's QA screenshots.
+  const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);
+  const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);
+  useEffect(() => {
+    if (!choosesReviewers) return;
+    let live = true;
+    getDeliveryQaScreenshots(task.id).then(
+      (found) => live && setShots(found),
+      () => live && setShots([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [choosesReviewers, task.id]);
   const consequence =
     approval.rung === "commit"
       ? `Al aprobar, Tinto crea ${(approval.commits?.length ?? 1) > 1 ? "estos commits, en este orden," : "el commit"} en ${task.branch} con estos textos exactos y sin añadir firmas. Si uno falla, se detiene. No publica nada: el push se aprueba aparte, y hasta entonces puedes deshacerlo.`
@@ -3858,6 +3972,14 @@ function ApprovalBanner({
           ))}
         </fieldset>
       )}
+      {choosesReviewers && (
+        <QaImagePicker
+          shots={shots}
+          chosen={images}
+          onChange={setImages}
+          where="en la descripción del PR"
+        />
+      )}
       {pending && <p className="delivery-muted">{consequence}</p>}
       {pending ? (
         <ActionGroup>
@@ -3868,7 +3990,14 @@ function ApprovalBanner({
               title={needsReviewer ? "Elige al menos un revisor." : undefined}
               onAction={() =>
                 choosesReviewers
-                  ? decideDeliveryApproval(approval.id, true, undefined, reviewers)
+                  ? decideDeliveryApproval(
+                      approval.id,
+                      true,
+                      undefined,
+                      reviewers,
+                      undefined,
+                      images,
+                    )
                   : decideDeliveryApproval(approval.id, true)
               }
             >

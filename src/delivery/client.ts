@@ -6,6 +6,8 @@ import type {
   DeliveryAccess,
   DeliveryAgent,
   DeliveryApproval,
+  DeliveryQaScreenshot,
+  DeliveryReplyImage,
   DeliveryQaProblem,
   DeliveryArchivedTask,
   DeliveryCommit,
@@ -289,6 +291,8 @@ export const decideDeliveryApproval = (
   reviewers?: string[],
   /** A reply step: the text as the user edited it, which is the one posted. */
   body?: string,
+  /** A reply step: the QA screenshots shown after the text. */
+  images?: DeliveryReplyImage[],
 ) =>
   invoke<DeliveryApproval>("delivery_decide_approval", {
     approvalId,
@@ -296,7 +300,12 @@ export const decideDeliveryApproval = (
     note: note ?? null,
     reviewers: reviewers ?? null,
     body: body ?? null,
+    images: images ?? null,
   });
+
+/** The screenshots of the task's QA jobs, newest QA first, for a reply to show. */
+export const getDeliveryQaScreenshots = (taskId: string) =>
+  invoke<DeliveryQaScreenshot[]>("delivery_qa_screenshots", { taskId });
 
 /** Asks for a review (again) or takes requests back on the task's open PR. */
 export const changeDeliveryPrReviewers = (taskId: string, request: string[], remove: string[]) =>

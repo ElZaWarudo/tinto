@@ -16,6 +16,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,12 +30,15 @@ use super::{now_ms, DeliveryError};
 
 /// How often every done push is checked against its remote branch.
 const PUSH_CHECK_EVERY: Duration = Duration::from_secs(5 * 60);
+/// Every open PR is read at least this often: GitHub's notifications miss
+/// what the user already read there, and never tell of CI.
+const PR_READ_EVERY: Duration = Duration::from_secs(2 * 60);
 
 /// How a PR step's notice starts when its reviewers could not be asked.
 const REVIEW_NOT_ASKED: &str = "No se pudo pedir la revisión a";
 
 /// `owner/name` of the task's `origin`, when it is on GitHub.
-fn task_github_repo(task: &DeliveryTask) -> Option<String> {
+pub(super) fn task_github_repo(task: &DeliveryTask) -> Option<String> {
     let place = Place::of(task.distro.as_deref());
     tasks::origin_url(place, &task.repo)
         .as_deref()
@@ -580,6 +584,23 @@ pub trait GitHub: Send + Sync {
     fn remove_label(&self, _url: &str, _label: &str) -> Result<(), DeliveryError> {
         Err(offline())
     }
+    /// Adds a file at `path` on `branch` of `repo` (`owner/name`), creating
+    /// the branch with no history when it is missing; a file already there
+    /// stays as it is. Returns the branch's commit that has it.
+    fn upload_file(
+        &self,
+        _repo: &str,
+        _branch: &str,
+        _path: &str,
+        _bytes: &[u8],
+        _message: &str,
+    ) -> Result<String, DeliveryError> {
+        Err(offline())
+    }
+    /// Deletes `branch` of `repo`; one already gone is no error.
+    fn delete_branch(&self, _repo: &str, _branch: &str) -> Result<(), DeliveryError> {
+        Err(offline())
+    }
     /// Merges the PR and deletes its branch on GitHub. `subject` and `body`
     /// are the merge commit's message (`rebase` has none).
     fn merge(
@@ -833,6 +854,17 @@ impl GhCli {
         ))
     }
 
+    /// `gh api` with a JSON body, sent through a file: a screenshot in
+    /// base64 is longer than a command line may be.
+    fn api(method: &str, endpoint: &str, body: &Value) -> Result<Value, DeliveryError> {
+        let file = std::env::temp_dir().join(format!("tinto-gh-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&file, body.to_string()).map_err(DeliveryError::io)?;
+        let input = file.to_string_lossy().to_string();
+        let answer = Self::json(&["api", "-X", method, endpoint, "--input", &input]);
+        let _ = std::fs::remove_file(&file);
+        answer
+    }
+
     fn json(args: &[&str]) -> Result<Value, DeliveryError> {
         let output = Self::run(args)?;
         if !output.status.success() {
@@ -916,6 +948,78 @@ impl GitHub for GhCli {
         Err(DeliveryError::new(
             "github_failed",
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
+    }
+
+    fn upload_file(
+        &self,
+        repo: &str,
+        branch: &str,
+        path: &str,
+        bytes: &[u8],
+        message: &str,
+    ) -> Result<String, DeliveryError> {
+        let head = |repo: &str| {
+            Self::json(&["api", &format!("repos/{repo}/git/ref/heads/{branch}")]).map(|found| {
+                found["object"]["sha"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+        };
+        if head(repo).is_err() {
+            // A branch of its own, with no history: nothing to merge from it.
+            let tree = Self::api(
+                "POST",
+                &format!("repos/{repo}/git/trees"),
+                &serde_json::json!({"tree": [{
+                    "path": "README.md", "mode": "100644", "type": "blob",
+                    "content": "QA screenshots Tinto shows in replies to reviewers. Never merged.
+                "
+                }]}),
+            )?;
+            let commit = Self::api(
+                "POST",
+                &format!("repos/{repo}/git/commits"),
+                &serde_json::json!({"message": message, "tree": tree["sha"], "parents": []}),
+            )?;
+            Self::api(
+                "POST",
+                &format!("repos/{repo}/git/refs"),
+                &serde_json::json!({"ref": format!("refs/heads/{branch}"), "sha": commit["sha"]}),
+            )?;
+        }
+        let content = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let put = Self::api(
+            "PUT",
+            &format!("repos/{repo}/contents/{path}"),
+            &serde_json::json!({"message": message, "content": content, "branch": branch}),
+        );
+        match put {
+            Ok(done) => Ok(done["commit"]["sha"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()),
+            // Already there (GitHub asks for its sha to replace it): kept.
+            Err(error) if error.message.contains("sha") => head(repo),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn delete_branch(&self, repo: &str, branch: &str) -> Result<(), DeliveryError> {
+        let output = Self::run(&[
+            "api",
+            "-X",
+            "DELETE",
+            &format!("repos/{repo}/git/refs/heads/{branch}"),
+        ])?;
+        let message = String::from_utf8_lossy(&output.stderr).to_string();
+        if output.status.success() || message.contains("Reference does not exist") {
+            return Ok(());
+        }
+        Err(DeliveryError::new(
+            "github_failed",
+            message.trim().to_string(),
         ))
     }
 
@@ -1391,6 +1495,11 @@ impl DeliveryService {
         if pr.state == "merged" && before.state != "merged" && before.checked_at_ms.is_some() {
             self.sync_after_merge(&pr)?;
         }
+        // Done with: the screenshots its replies showed are not kept.
+        let done = |pr: &DeliveryPr| pr.state == "merged" || pr.state == "closed";
+        if done(&pr) && !done(&before) && before.checked_at_ms.is_some() {
+            self.drop_evidence(&self.task(task_id)?);
+        }
         Ok(Some(pr))
     }
 
@@ -1544,10 +1653,20 @@ impl DeliveryService {
             }
             Err(_) => {}
         }
+        let now = now_ms();
         for pr in open {
             let key = format!("{}#{}", pr.repo, pr.number);
-            let due = pr.state == "unknown" || pr.checks.pending > 0 || mentioned.contains(&key);
-            if due {
+            // What can change any moment is read on every pass: CI running,
+            // red (it may be running again), not run yet, conflicts.
+            let hot = pr.state == "unknown"
+                || pr.checks.pending > 0
+                || pr.checks.failing > 0
+                || pr.ci == Some(CiState::NotRun)
+                || pr.conflicts;
+            let stale = pr
+                .checked_at_ms
+                .is_none_or(|at| now.saturating_sub(at) >= PR_READ_EVERY.as_millis() as u64);
+            if hot || stale || mentioned.contains(&key) {
                 let _ = self.refresh_pr(&pr.task_id, Duration::ZERO);
             }
         }
@@ -1620,9 +1739,13 @@ impl DeliveryService {
     /// is what the user approved.
     pub(super) fn open_approved_pr(
         &self,
-        approval: &DeliveryApproval,
+        approval: &mut DeliveryApproval,
     ) -> Result<PrRef, DeliveryError> {
         let task = self.task(&approval.task_id)?;
+        // Its QA screenshots go up first: the description shows them, and
+        // the step then holds the text GitHub has.
+        let body = self.text_with_images(approval)?;
+        approval.body = body;
         let repo = task_github_repo(&task).ok_or_else(|| {
             DeliveryError::new("github_unavailable", "el remoto origin no está en GitHub")
         })?;
@@ -1655,6 +1778,26 @@ impl DeliveryService {
             eprintln!("tinto: delivery PR #{}: {problem}", found.number);
         }
         Ok(found)
+    }
+
+    /// Just published: CI starts on the new head, so the PR shows it running
+    /// until GitHub says otherwise, and is read again on the next pass.
+    pub(super) fn expect_ci(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        let place = Place::of(task.distro.as_deref());
+        let store = self.store()?;
+        let Some(mut pr) = store.pr(&task.id)?.filter(DeliveryPr::is_open) else {
+            return Ok(());
+        };
+        pr.head = tasks::head(place, &task.worktree).ok().or(pr.head);
+        pr.checks = PrChecks {
+            pending: 1,
+            ..PrChecks::default()
+        };
+        pr.ci = Some(CiState::Pending);
+        store.put_pr(&pr)?;
+        drop(store);
+        self.notify();
+        Ok(())
     }
 
     /// Makes the repo's CI run on the PR's head when it runs only on a
@@ -1833,7 +1976,8 @@ impl DeliveryService {
         approval: &DeliveryApproval,
     ) -> Result<(String, Option<String>), DeliveryError> {
         let url = approval.comment_url.as_deref().unwrap_or_default();
-        let body = approval.body.trim();
+        let text = self.text_with_images(approval)?;
+        let body = text.as_str();
         let github = self.github();
         let Some((repo, number, id)) = super::threads::parse_comment_url(url) else {
             let pr = parse_pr_url(url).ok_or_else(|| {

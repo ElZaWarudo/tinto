@@ -4723,6 +4723,27 @@ impl super::prs::GitHub for FakeGitHub {
         self.snapshot.lock().unwrap()["isDraft"] = json!(true);
         Ok(())
     }
+    fn upload_file(
+        &self,
+        repo: &str,
+        branch: &str,
+        path: &str,
+        _bytes: &[u8],
+        _message: &str,
+    ) -> Result<String, super::DeliveryError> {
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("upload {repo} {branch} {path}"));
+        Ok("c0ffee1".into())
+    }
+    fn delete_branch(&self, repo: &str, branch: &str) -> Result<(), super::DeliveryError> {
+        self.actions
+            .lock()
+            .unwrap()
+            .push(format!("delete-branch {repo} {branch}"));
+        Ok(())
+    }
     fn add_label(&self, url: &str, label: &str) -> Result<(), super::DeliveryError> {
         self.actions
             .lock()
@@ -9924,4 +9945,190 @@ fn a_merge_other_work_got_into_asks_the_user_how_to_commit_it() {
                 .contains("Ronda 3 (Cambios pedidos en el PR #5): review.txt"),
         "{commit:?}"
     );
+}
+
+#[test]
+fn a_reply_shows_the_qa_screenshots_the_user_chose_from_a_branch_deleted_with_the_pr() {
+    let h = harness();
+    github_origin(&h);
+    let coordinator = Coordinator::start(&h);
+    let (task_id, _) = coordinator.task("R-9");
+    let task = h.service.task(&task_id).unwrap();
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "statusCheckRollup": [], "reviews": [], "comments": []}),
+        json!([]),
+    );
+    *github.review_comments.lock().unwrap() = json!([
+        {"id": 3100, "path": "README.md", "line": 1, "position": 1,
+         "html_url": "https://github.com/o/r/pull/299#discussion_r3100",
+         "user": {"login": "Sn4pe"}, "created_at": "2026-10-19T10:00:00Z",
+         "body": "The menu wraps on mobile.", "diff_hunk": "@@ -1,1 +1,1 @@
+    +base"}
+    ]);
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/299").unwrap();
+    h.service.link_pr(&task_id, &reference).unwrap();
+    h.service.refresh_pr(&task_id, Duration::ZERO).unwrap();
+
+    // What a QA of the task saved.
+    let qa = h.dispatch(&task, "qa", "events=codex-ok");
+    h.wait(&qa.id);
+    let folder = (h.service.inner.paths_for)(&qa.id).unwrap().qa_output;
+    std::fs::create_dir_all(&folder).unwrap();
+    let shot = "R-9-1-menu-mobile.png";
+    std::fs::write(folder.join(shot), b"png").unwrap();
+    std::fs::write(folder.join("R-9.md"), "# R-9").unwrap();
+    let shots = h.service.qa_screenshots(&task_id).unwrap();
+    let files: Vec<&str> = shots.iter().map(|shot| shot.file.as_str()).collect();
+    assert_eq!(files, [shot]);
+    assert!(shots[0].data_uri.starts_with("data:image/png;base64,"));
+
+    let asked = coordinator.write(
+        "request_approval",
+        json!({"task_id": task_id, "rung": "pr_reply",
+               "comment_url": "https://github.com/o/r/pull/299#discussion_r3100",
+               "body": "The menu keeps each option on one line now."}),
+    );
+    let id = asked["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let image = |file: &str| super::model::DeliveryReplyImage {
+        job_id: qa.id.clone(),
+        file: file.to_string(),
+    };
+    // Only the task's QA screenshots.
+    assert!(h
+        .service
+        .set_reply_images(&id, vec![image("other.png")])
+        .is_err());
+    h.service.set_reply_images(&id, vec![image(shot)]).unwrap();
+    let posted = h.service.decide_approval(&id, true, None).unwrap();
+    assert_eq!(
+        posted.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        posted.outcome
+    );
+    let short = qa.id.split('-').next().unwrap();
+    let path = format!("R-9/{short}/{shot}");
+    let branch = task.branch.replace('/', "-");
+    let actions = github.actions.lock().unwrap().clone();
+    assert!(
+        actions.contains(&format!("upload o/r tinto/qa-evidence/{branch} {path}")),
+        "{actions:?}"
+    );
+    let reply = actions
+        .iter()
+        .find(|action| action.starts_with("reply 3100"))
+        .unwrap();
+    assert!(
+        reply.ends_with(&format!(
+            "The menu keeps each option on one line now.
+
+![{shot}](https://github.com/o/r/blob/c0ffee1/{path}?raw=true)"
+        )),
+        "{reply}"
+    );
+
+    // Merged: the branch with the screenshots goes.
+    github.snapshot.lock().unwrap()["state"] = json!("MERGED");
+    h.service.refresh_pr(&task_id, Duration::ZERO).unwrap();
+    assert!(github
+        .actions
+        .lock()
+        .unwrap()
+        .contains(&format!("delete-branch o/r tinto/qa-evidence/{branch}")));
+}
+
+#[test]
+fn the_watch_reads_a_red_pr_on_every_pass_and_any_open_pr_every_two_minutes() {
+    let h = harness();
+    let task = h.task("W-1");
+    let rollup = |conclusion: &str| json!([{"workflowName": "api", "name": "ci", "status": "COMPLETED", "conclusion": conclusion}]);
+    let github = FakeGitHub::new(
+        json!({"state": "OPEN", "mergeable": "MERGEABLE", "reviews": [], "comments": [],
+               "statusCheckRollup": rollup("FAILURE")}),
+        json!([]),
+    );
+    h.service.set_github(github.clone());
+    let reference = super::prs::parse_pr_url("https://github.com/o/r/pull/12").unwrap();
+    h.service.link_pr(&task.id, &reference).unwrap();
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let pr = || h.service.task_pr(&task.id).unwrap().unwrap();
+    assert_eq!(pr().checks.failing, 1);
+
+    // CI ran again and passed: no notification tells, the next pass sees it.
+    github.snapshot.lock().unwrap()["statusCheckRollup"] = rollup("SUCCESS");
+    let mut etag = None;
+    h.service.watch_prs_once(&mut etag);
+    assert_eq!(pr().checks.failing, 0);
+    assert_eq!(pr().checks.passing, 1);
+
+    // Green and just read: left alone.
+    github.snapshot.lock().unwrap()["comments"] = json!([{"author": {"login": "ana"}, "createdAt": "2099-01-01T00:00:00Z", "body": "one more thing"}]);
+    h.service.watch_prs_once(&mut etag);
+    assert_eq!(pr().new_comments, 0);
+    // Read two minutes ago: read again, and the comment is there.
+    let mut old = pr();
+    old.checked_at_ms = Some(super::now_ms() - 3 * 60_000);
+    h.service.store().unwrap().put_pr(&old).unwrap();
+    h.service.watch_prs_once(&mut etag);
+    assert_eq!(pr().new_comments, 1);
+}
+
+#[test]
+fn the_pr_step_shows_the_qa_screenshots_the_user_chose_in_its_description() {
+    let h = harness();
+    github_origin(&h);
+    let task = h.task("O-9");
+    let github = FakeGitHub::new(json!({}), json!([]));
+    h.service.set_github(github.clone());
+    let qa = h.dispatch(&task, "qa", "events=codex-ok");
+    h.wait(&qa.id);
+    let folder = (h.service.inner.paths_for)(&qa.id).unwrap().qa_output;
+    std::fs::create_dir_all(&folder).unwrap();
+    let shot = "O-9-1-menu-desktop.png";
+    std::fs::write(folder.join(shot), b"png").unwrap();
+    let step: super::model::DeliveryApproval = serde_json::from_value(json!({
+        "id": "a-pr", "task_id": task.id, "rung": "pr", "title": "feat: menu",
+        "body": "## Summary\n\nA wider menu.\n\n## How to test\n\nOpen the menu.\n\n## Notes\n\nNone.",
+        "status": "pending",
+        "requested_by": "coord", "requested_at_ms": 1
+    }))
+    .unwrap();
+    h.service.store().unwrap().put_approval(&step).unwrap();
+    h.service
+        .set_reply_images(
+            "a-pr",
+            vec![super::model::DeliveryReplyImage {
+                job_id: qa.id.clone(),
+                file: shot.into(),
+            }],
+        )
+        .unwrap();
+
+    let done = h.service.decide_approval("a-pr", true, None).unwrap();
+    assert_eq!(
+        done.status,
+        DeliveryApprovalStatus::Executed,
+        "{:?}",
+        done.notice
+    );
+    let short = qa.id.split('-').next().unwrap();
+    let path = format!("O-9/{short}/{shot}");
+    let branch = task.branch.replace('/', "-");
+    let actions = github.actions.lock().unwrap().clone();
+    // The screenshot goes up before the PR opens with it.
+    assert_eq!(
+        actions[0],
+        format!("upload o/r tinto/qa-evidence/{branch} {path}")
+    );
+    // In its "How to test" section.
+    let shown = format!(
+        "## Summary\n\nA wider menu.\n\n## How to test\n\nOpen the menu.\n\n![{shot}](https://github.com/o/r/blob/c0ffee1/{path}?raw=true)\n\n## Notes\n\nNone."
+    );
+    assert_eq!(github.snapshot.lock().unwrap()["body"], shown);
+    // The step holds the text GitHub has.
+    assert_eq!(done.body, shown);
 }

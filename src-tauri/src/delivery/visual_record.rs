@@ -263,7 +263,7 @@ fn redundant_caption(label: &str) -> bool {
     numeric(sides.next()) && numeric(sides.next()) && sides.next().is_none()
 }
 
-fn data_uri(reference: &str, base: &Path) -> Result<String, String> {
+pub(super) fn data_uri(reference: &str, base: &Path) -> Result<String, String> {
     let source = base.join(reference);
     let bytes = std::fs::read(&source).map_err(|_| format!("falta la captura {reference}"))?;
     let mime = match source

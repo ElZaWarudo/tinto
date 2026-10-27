@@ -21,6 +21,7 @@ pub mod phase;
 pub mod prs;
 pub mod qa_problems;
 mod queue;
+pub mod reply_images;
 pub mod rounds;
 pub mod service;
 pub mod settings_proposals;

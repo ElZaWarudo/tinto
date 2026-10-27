@@ -8,6 +8,7 @@ import type {
   DeliveryPr,
   DeliveryRound,
   DeliveryTask,
+  DeliveryTaskPhase,
 } from "../../delivery/types";
 import {
   attemptOutcome,
@@ -26,6 +27,7 @@ import {
   nextStep,
   nowLine,
   prSummary,
+  waitsOnLabel,
   roundHistory,
   roundRung,
   roundStage,
@@ -453,7 +455,28 @@ describe("a followed PR", () => {
     expect(unrun.label).toBe("PR: CI sin ejecutar");
     expect(unrun.group).toBe("attention");
     expect(unrun.detail).toBe("CI sin ejecutar en abc1234");
-    expect(withPr({ ci: "passing", head: "abc1234ef" }).detail).toBe("CI pasa en abc1234");
+    expect(withPr({ ci: "passing", head: "abc1234ef" }).detail).toBe(
+      "Nadie tiene pedida la revisión · CI pasa en abc1234",
+    );
+  });
+
+  it("says who a PR waiting for approval waits on", () => {
+    const asked = withPr({
+      requested_reviewers: ["ana", "luis"],
+      ci: "passing",
+      head: "abc1234ef",
+    });
+    expect(asked.label).toBe("PR: espera aprobación");
+    expect(asked.detail).toBe("Revisión pedida a ana, luis · CI pasa en abc1234");
+    expect(withPr({}).detail).toBe("Nadie tiene pedida la revisión");
+    const world = (waits_on: DeliveryTaskPhase["waits_on"]) =>
+      overview({
+        prs: [pr({ requested_reviewers: ["ana"] })],
+        phases: { t1: { kind: "pr", number: 5, waits_on, next_stage: null } },
+      });
+    expect(waitsOnLabel(world("reviewers"), "t1")).toBe("ana");
+    expect(waitsOnLabel(world("coordinator"), "t1")).toBe("el coordinador");
+    expect(waitsOnLabel(world("agent"), "t1")).toBeNull();
   });
 
   it("words a merge in progress and a PR merged with CI not green", () => {
@@ -472,7 +495,7 @@ describe("a followed PR", () => {
   });
 
   it("waits while others review it, and offers the merge once approved", () => {
-    expect(withPr({})).toMatchObject({ group: "waiting", label: "PR: en revisión" });
+    expect(withPr({})).toMatchObject({ group: "waiting", label: "PR: espera aprobación" });
     expect(withPr({ checks: { passing: 1, failing: 0, pending: 2 } }).label).toBe(
       "PR: checks en curso",
     );

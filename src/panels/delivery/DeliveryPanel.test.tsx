@@ -10,6 +10,7 @@ import type {
   DeliveryApproval,
   DeliveryDecision,
   DeliveryQaProblem,
+  DeliveryQaScreenshot,
   DeliveryJob,
   DeliveryOverview,
   DeliveryPhase,
@@ -73,6 +74,7 @@ const client = vi.hoisted(() => ({
   deliveryPrToDraft: vi.fn(() => Promise.resolve(null)),
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
   getDeliveryPrReviewers: vi.fn((): Promise<string[]> => Promise.resolve([])),
+  getDeliveryQaScreenshots: vi.fn((): Promise<DeliveryQaScreenshot[]> => Promise.resolve([])),
   changeDeliveryPrReviewers: vi.fn(),
   correctDeliveryApproval: vi.fn(),
   archiveDeliveryTask: vi.fn(),
@@ -3362,7 +3364,14 @@ describe("DeliveryPanel", () => {
     await user.click(within(reviewers).getByRole("checkbox", { name: "luis" }));
     await user.click(approve);
     await waitFor(() =>
-      expect(client.decideDeliveryApproval).toHaveBeenCalledWith("pr", true, undefined, ["luis"]),
+      expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
+        "pr",
+        true,
+        undefined,
+        ["luis"],
+        undefined,
+        [],
+      ),
     );
     expect(client.getDeliveryPrReviewers).toHaveBeenCalledWith("t1");
   });
@@ -3422,6 +3431,10 @@ describe("DeliveryPanel", () => {
     );
     client.decideDeliveryApproval.mockResolvedValue({});
     client.changeDeliveryPrReviewers.mockResolvedValue(null);
+    const shot = { job_id: "qa-1", file: "K-1-1-menu-mobile.png", attempt: 2 };
+    client.getDeliveryQaScreenshots.mockResolvedValue([
+      { ...shot, data_uri: "data:image/png;base64,cG5n" },
+    ]);
     renderPanel();
     expect(await screen.findByText("Aprobar 2 respuestas a los revisores")).toBeTruthy();
     const banner = await openStep("Revisar las respuestas a los revisores", "pr_reply");
@@ -3434,6 +3447,13 @@ describe("DeliveryPanel", () => {
     expect(
       (within(banner).getByRole("checkbox", { name: "Sn4pe" }) as HTMLInputElement).checked,
     ).toBe(true);
+    // A QA screenshot shown in the first reply.
+    await user.click(
+      await within(first).findByRole("checkbox", {
+        name: "Mostrar K-1-1-menu-mobile.png en la respuesta",
+      }),
+    );
+    expect(within(first).getByText(/1 en la respuesta/)).toBeTruthy();
     const text = within(first).getByRole("textbox", { name: "Respuesta, tal como se publicará" });
     await user.clear(text);
     await user.type(text, "Only folders the CLI installed are deleted now.");
@@ -3445,6 +3465,7 @@ describe("DeliveryPanel", () => {
         undefined,
         undefined,
         "The typo is gone.",
+        [],
       ),
     );
     expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
@@ -3453,6 +3474,7 @@ describe("DeliveryPanel", () => {
       undefined,
       undefined,
       "Only folders the CLI installed are deleted now.",
+      [{ job_id: "qa-1", file: "K-1-1-menu-mobile.png" }],
     );
     await waitFor(() =>
       expect(client.changeDeliveryPrReviewers).toHaveBeenCalledWith("t1", ["Sn4pe"], []),

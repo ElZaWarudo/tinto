@@ -195,6 +195,7 @@ pub fn run() {
             delivery::commands::delivery_merge_method,
             delivery::commands::delivery_undo_commit,
             delivery::commands::delivery_decide_approval,
+            delivery::commands::delivery_qa_screenshots,
             delivery::commands::delivery_complete_approval,
             delivery::commands::delivery_correct_approval,
             delivery::commands::delivery_create_run,

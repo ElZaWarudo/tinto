@@ -367,6 +367,7 @@ pub(super) fn found_step(
         corrections: Vec::new(),
         comment_url: None,
         resolve_thread: false,
+        images: Vec::new(),
         thread: None,
         style_examples: Vec::new(),
     }
@@ -1229,6 +1230,7 @@ impl DeliveryService {
             notice,
             corrections: Vec::new(),
             resolve_thread: reply && request.resolve_thread,
+            images: Vec::new(),
             comment_url,
             thread,
             style_examples,
@@ -1325,7 +1327,7 @@ impl DeliveryService {
         // is checked against that text.
         let mut opened = None;
         if approval.rung == DeliveryRung::Pr {
-            match self.open_approved_pr(&approval) {
+            match self.open_approved_pr(&mut approval) {
                 Ok(found) => {
                     approval.status = DeliveryApprovalStatus::Executed;
                     approval.executed_at_ms = Some(now_ms());
@@ -1410,6 +1412,7 @@ impl DeliveryService {
             {
                 if let Some(pr) = self.task_pr(&task.id)?.filter(|pr| pr.is_open()) {
                     approval.notice = self.label_for_ci(&task, &pr.url, true);
+                    self.expect_ci(&task)?;
                 }
             }
         }
@@ -1448,7 +1451,7 @@ impl DeliveryService {
                 "solo se abre un paso PR aprobado que aún no tiene PR",
             ));
         }
-        let found = self.open_approved_pr(&approval)?;
+        let found = self.open_approved_pr(&mut approval)?;
         approval.status = DeliveryApprovalStatus::Executed;
         approval.executed_at_ms = Some(now_ms());
         approval.outcome = Some(found.url.clone());
