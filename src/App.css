@@ -4148,7 +4148,7 @@ select option:checked {
   background: var(--danger);
 }
 
-@media (max-width: 900px) {
+@container dashboard (max-width: 1240px) {
   .repo-card__error {
     grid-row: 7;
   }
