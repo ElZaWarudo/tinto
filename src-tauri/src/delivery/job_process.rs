@@ -216,19 +216,23 @@ impl JobProcess {
         #[cfg(not(target_os = "windows"))]
         {
             // Its own process group: what it started in the background is in
-            // it, unless it left the group on purpose.
+            // it, unless it left the group on purpose. Every process, filtered
+            // by group here: `ps -g` selects a session on Linux, not a group.
             let group = self.pid.to_string();
             let listed = Command::new("ps")
-                .args(["-o", "pid=,args=", "-g", &group])
+                .args(["-A", "-o", "pid=,pgid=,args="])
                 .output()
                 .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
                 .unwrap_or_default();
             let left: Vec<String> = listed
                 .lines()
-                .map(str::trim)
-                .filter_map(|line| line.split_once(char::is_whitespace))
-                .filter(|(pid, _)| *pid != group)
-                .map(|(pid, args)| format!("{} (pid {pid})", args.trim()))
+                .filter_map(|line| {
+                    let mut fields = line.split_whitespace();
+                    let pid = fields.next()?;
+                    let pgid = fields.next()?;
+                    (pgid == group && pid != group)
+                        .then(|| format!("{} (pid {pid})", fields.collect::<Vec<_>>().join(" ")))
+                })
                 .collect();
             if !left.is_empty() {
                 let _ = Command::new("kill")
