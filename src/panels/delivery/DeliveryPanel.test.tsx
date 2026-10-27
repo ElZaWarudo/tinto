@@ -318,11 +318,22 @@ describe("DeliveryPanel", () => {
     // One row for the issue, its packages under it in order.
     const issueRow = (await within(list).findByText("AGOS-432")).closest("button")!;
     expect(within(issueRow).getByText("0/2 fusionados")).toBeInTheDocument();
-    const rows = within(list)
-      .getAllByRole("button")
-      .map((row) => row.querySelector(".delivery-task-row__key")?.firstChild?.textContent);
-    expect(rows.filter(Boolean)).toEqual(["AGOS-432", "Paquete 1/2", "Paquete 2/2"]);
-    expect(within(list).getByText("Backend")).toBeInTheDocument();
+    const rows = () =>
+      within(list)
+        .getAllByRole("button")
+        .map((row) => row.querySelector(".delivery-task-row__key")?.firstChild?.textContent)
+        .filter(Boolean);
+    // Folded at first: the row says which package is under way.
+    expect(rows()).toEqual(["AGOS-432"]);
+    expect(within(issueRow).getByText("Paquete 1/2 · Backend")).toBeInTheDocument();
+    await user.click(
+      within(list).getByRole("button", { name: "Mostrar los paquetes de AGOS-432" }),
+    );
+    expect(rows()).toEqual(["AGOS-432", "Paquete 1/2", "Paquete 2/2"]);
+    expect(within(issueRow).queryByText("Paquete 1/2 · Backend")).toBeNull();
+    expect(
+      within(list).getByRole("button", { name: "Ocultar los paquetes de AGOS-432" }),
+    ).toHaveAttribute("aria-expanded", "true");
 
     // Its plan: each package, where it stands and what it builds on.
     await user.click(issueRow);
@@ -340,6 +351,32 @@ describe("DeliveryPanel", () => {
     const ladder = screen.getByRole("list", { name: "Entrega" });
     expect(within(ladder).getByText("Merge")).toBeInTheDocument();
     expect(within(ladder).queryByText("Jira (merge)")).toBeNull();
+  });
+
+  it("keeps a split issue open while one of its packages needs the user", async () => {
+    const backend = task({
+      key: "AGOS-432",
+      package: { index: 1, of: 2, title: "Backend" },
+      worktree: "C:\\work\\agentos-wt\\AGOS-432-1",
+    });
+    const ui = task({
+      ...backend,
+      id: "t2",
+      package: { index: 2, of: 2, title: "UI" },
+      worktree: "C:\\work\\agentos-wt\\AGOS-432-2",
+    });
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [backend, ui],
+        jobs: [],
+        phases: { t1: NEXT_IMPLEMENTATION, t2: phase({ kind: "decisions", count: 1 }) },
+      }),
+    );
+    renderPanel();
+    const list = await screen.findByRole("navigation", { name: "Tareas de Delivery" });
+    expect(await within(list).findByText("Paquete 2/2")).toBeInTheDocument();
+    expect(within(list).getByText("Paquete 1/2")).toBeInTheDocument();
+    expect(within(list).queryByRole("button", { name: /los paquetes de AGOS-432/ })).toBeNull();
   });
 
   it("leaves a repo's tab out while its window outlives a reload", async () => {
@@ -3641,6 +3678,7 @@ describe("DeliveryPanel", () => {
     expect(JSON.parse(localStorage.getItem("tinto:delivery-list-view")!)).toEqual({
       lot: "r2",
       folded: [],
+      openIssues: [],
     });
   });
 

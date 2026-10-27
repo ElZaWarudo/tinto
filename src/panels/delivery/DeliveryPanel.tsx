@@ -202,11 +202,13 @@ type Dialog =
   | { kind: "settings" }
   | null;
 
-/** What the task list shows: one batch (null: all of them) and the groups
- *  folded to their count. Delivered tasks start folded. */
+/** What the task list shows: one batch (null: all of them), the groups
+ *  folded to their count, and the split issues opened to their packages.
+ *  Delivered tasks and split issues start folded. */
 interface ListView {
   lot: string | null;
   folded: StatusGroup[];
+  openIssues: string[];
 }
 
 const LIST_VIEW_KEY = "tinto:delivery-list-view";
@@ -214,11 +216,11 @@ const LIST_VIEW_KEY = "tinto:delivery-list-view";
 function savedListView(): ListView {
   try {
     const saved = JSON.parse(localStorage.getItem(LIST_VIEW_KEY) ?? "null") as ListView | null;
-    if (saved) return saved;
+    if (saved) return { ...saved, openIssues: saved.openIssues ?? [] };
   } catch {
     // Without storage the list opens as it does the first time.
   }
-  return { lot: null, folded: ["delivered"] };
+  return { lot: null, folded: ["delivered"], openIssues: [] };
 }
 
 /** The app's icons, sized as Delivery draws them. */
@@ -1516,6 +1518,9 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const listed = lot ? tasks.filter((task) => task.run_id === lot) : tasks;
   // What needs the user is never folded.
   const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
+  const needsYou = (task: DeliveryTask) => statuses.get(task.id)?.group === "attention";
+  const issueFolded = (entry: Extract<TaskListEntry, { kind: "issue" }>) =>
+    !listView.openIssues.includes(entry.id) && !entry.packages.some(needsYou);
   // A split issue is one row, with its packages nested under it in order.
   const groups = taskListGroups(listed, (task) => statuses.get(task.id)?.group ?? "idle").map(
     (group) => ({ ...group, tasks: entryTasks(group.entries) }),
@@ -1678,16 +1683,22 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     );
   };
   // A split issue's row: what it is and how far its packages got; a click shows its plan.
-  const issueRow = (entry: Extract<TaskListEntry, { kind: "issue" }>) => {
+  // Folded, it also says which package is under way and where it stands.
+  const issueRow = (entry: Extract<TaskListEntry, { kind: "issue" }>, folded: boolean) => {
     const first = entry.packages[0];
     const issue = overview ? splitIssueOf(overview, first) : null;
     const of = issue?.of ?? first.package!.of;
     const merged = issue?.packages.filter((pkg) => pkg.merged).length ?? 0;
+    const done = (task: DeliveryTask) =>
+      issue?.packages.some((pkg) => pkg.task_id === task.id && (pkg.merged || pkg.delivered));
+    const current = entry.packages.find((task) => !done(task)) ?? entry.packages.at(-1)!;
+    // A hidden package that is selected shows as its issue.
+    const holdsSelected = folded && entry.packages.some((task) => task.id === selectedTask?.id);
     return (
       <button
         type="button"
         className="delivery-task-row delivery-task-row--issue"
-        aria-current={selectedIssue?.id === entry.id ? "true" : undefined}
+        aria-current={selectedIssue?.id === entry.id || holdsSelected ? "true" : undefined}
         onClick={() => select(repo, entry.id)}
       >
         <span className="delivery-task-row__key">
@@ -1697,9 +1708,28 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           </span>
         </span>
         <span className="delivery-task-row__title">{first.title || `${of} paquetes`}</span>
+        {folded && (
+          <>
+            <span className="delivery-task-row__package">
+              Paquete {current.package!.index}/{current.package!.of}
+              {current.package!.title && ` · ${current.package!.title}`}
+            </span>
+            <StatusLine
+              status={statuses.get(current.id)!}
+              who={overview ? waitsOnLabel(overview, current.id) : null}
+            />
+          </>
+        )}
       </button>
     );
   };
+  const toggleIssue = (id: string) =>
+    setListView((view) => ({
+      ...view,
+      openIssues: view.openIssues.includes(id)
+        ? view.openIssues.filter((candidate) => candidate !== id)
+        : [...view.openIssues, id],
+    }));
 
   return (
     <div className="delivery-repo" aria-label={`Delivery de ${choice.label}`}>
@@ -1873,8 +1903,20 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                       taskRow(entry.task)
                     ) : (
                       <div key={entry.id} className="delivery-issue-rows">
-                        {issueRow(entry)}
-                        {entry.packages.map(taskRow)}
+                        {/* A package that needs the user keeps its issue open. */}
+                        {!entry.packages.some(needsYou) && (
+                          <button
+                            type="button"
+                            className="delivery-issue-rows__fold"
+                            aria-expanded={!issueFolded(entry)}
+                            aria-label={`${issueFolded(entry) ? "Mostrar" : "Ocultar"} los paquetes de ${entry.key}`}
+                            onClick={() => toggleIssue(entry.id)}
+                          >
+                            <Icon name={issueFolded(entry) ? "right" : "down"} />
+                          </button>
+                        )}
+                        {issueRow(entry, issueFolded(entry))}
+                        {!issueFolded(entry) && entry.packages.map(taskRow)}
                       </div>
                     ),
                   )}

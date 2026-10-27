@@ -275,9 +275,40 @@
   background: var(--active);
   border-left-color: var(--accent-fg);
 }
-/* A split issue's packages sit nested under its row. */
+/* A split issue's packages sit nested under its row, which folds them. */
 .delivery-panel .delivery-task-row--package {
-  padding-left: 24px;
+  padding-left: 40px;
+}
+.delivery-issue-rows {
+  position: relative;
+}
+.delivery-panel .delivery-task-row--issue {
+  padding-left: 28px;
+}
+.delivery-panel .delivery-issue-rows__fold {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  left: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+}
+.delivery-panel .delivery-issue-rows__fold:hover {
+  color: var(--fg);
+}
+.delivery-task-row__package {
+  width: 100%;
+  margin-top: 2px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* A blocked task stands out from those merely waiting their turn. */
 .delivery-panel .delivery-task-row--blocked {
