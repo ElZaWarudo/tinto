@@ -2374,6 +2374,9 @@ impl DeliveryService {
                 if let Err(error) = service.check_pushes(all) {
                     eprintln!("tinto: delivery could not check the tasks' pushes: {error}");
                 }
+                if let Err(error) = service.read_parents() {
+                    eprintln!("tinto: delivery could not read the issues' parents: {error}");
+                }
                 std::thread::sleep(wait);
             }
         });

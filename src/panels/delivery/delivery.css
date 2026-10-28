@@ -369,6 +369,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The Jira parent: a click narrows the list to its children. */
+.delivery-task-row__parent {
+  width: 100%;
+  font-size: 12px;
+  color: var(--accent-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.delivery-task-row__parent:hover {
+  text-decoration: underline;
+}
+.delivery-parent-progress {
+  margin: 0 12px 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
 .delivery-task-row__title {
   width: 100%;
   color: var(--fg-muted);

@@ -353,6 +353,33 @@ describe("DeliveryPanel", () => {
     expect(within(ladder).queryByText("Jira (merge)")).toBeNull();
   });
 
+  it("tags each task with its Jira parent and narrows the list to one parent's children", async () => {
+    const user = userEvent.setup();
+    const graph = { key: "AGOS-400", summary: "Grafo de entidades" };
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        tasks: [
+          task({ key: "AGOS-434", parent: graph }),
+          task({ id: "t2", key: "AGOS-435", parent: graph }),
+          task({ id: "t3", key: "AGOS-580" }),
+        ],
+        jobs: [],
+      }),
+    );
+    renderPanel();
+    const list = await screen.findByRole("navigation", { name: "Tareas de Delivery" });
+    expect(await within(list).findAllByText("↳ AGOS-400 · Grafo de entidades")).toHaveLength(2);
+    expect(within(list).getByText("AGOS-580")).toBeInTheDocument();
+
+    await user.click(within(list).getAllByText("↳ AGOS-400 · Grafo de entidades")[0]);
+    expect(within(list).queryByText("AGOS-580")).toBeNull();
+    expect(within(list).getByText("AGOS-435")).toBeInTheDocument();
+    expect(within(list).getByText("2 tareas en Delivery · 0 entregadas")).toBeInTheDocument();
+
+    await user.selectOptions(within(list).getByRole("combobox", { name: "Padre" }), "");
+    expect(within(list).getByText("AGOS-580")).toBeInTheDocument();
+  });
+
   it("keeps a split issue open while one of its packages needs the user", async () => {
     const backend = task({
       key: "AGOS-432",
@@ -3692,6 +3719,7 @@ describe("DeliveryPanel", () => {
     expect(within(list).queryByText("AGOS-2")).toBeNull();
     expect(JSON.parse(localStorage.getItem("tinto:delivery-list-view")!)).toEqual({
       lot: "r2",
+      parent: null,
       folded: [],
       openIssues: [],
     });

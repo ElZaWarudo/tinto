@@ -1052,6 +1052,8 @@ impl DeliveryService {
             unblocked: None,
             checks: Vec::new(),
             setup: Vec::new(),
+            parent: None,
+            parent_read_at_ms: None,
         };
         {
             let store = self.store()?;

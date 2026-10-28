@@ -5504,6 +5504,9 @@ impl super::jira::Jira for FakeJira {
             ("GET", "/rest/api/2/issue/AGOS-455?fields=status") => {
                 Ok(json!({"fields": {"status": {"name": *status}}}))
             }
+            ("GET", "/rest/api/2/issue/AGOS-455?fields=parent") => Ok(json!({
+                "fields": {"parent": {"key": "AGOS-400", "fields": {"summary": "Facturación"}}}
+            })),
             ("GET", "/rest/api/2/issue/AGOS-455/transitions") => Ok(json!({
                 "transitions": self.workflow.iter()
                     .filter(|(from, ..)| *from == status.as_str())
@@ -5594,6 +5597,14 @@ fn tinto_reads_a_tasks_issue_from_the_repos_jira() {
         "jira_not_configured"
     );
     h.service.set_jira_token(h.repo.path(), "secret").unwrap();
+
+    // The list shows each task's parent: read once in the background; an
+    // issue Jira refuses stays unread, to try again.
+    h.service.read_parents().unwrap();
+    let read = h.service.task(&task.id).unwrap();
+    assert_eq!(read.parent.unwrap().key, "AGOS-400");
+    assert!(read.parent_read_at_ms.is_some());
+    assert_eq!(h.service.task(&missing.id).unwrap().parent_read_at_ms, None);
 
     let issue = h.service.issue(&task.id).unwrap();
     assert_eq!(

@@ -133,6 +133,8 @@ export interface DeliveryTask {
   checks?: string[];
   /** The repo setup commands Tinto runs once before the task's stages. */
   setup?: string[];
+  /** Its issue's parent in Jira (an epic, a story), as last read. */
+  parent?: { key: string; summary: string } | null;
 }
 
 /** How a task's last open blocker cleared. */

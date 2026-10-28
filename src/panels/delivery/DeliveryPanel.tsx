@@ -203,11 +203,13 @@ type Dialog =
   | { kind: "settings" }
   | null;
 
-/** What the task list shows: one batch (null: all of them), the groups
- *  folded to their count, and the split issues opened to their packages.
- *  Delivered tasks and split issues start folded. */
+/** What the task list shows: one batch (null: all of them), the children
+ *  of one Jira parent (null: all tasks), the groups folded to their count,
+ *  and the split issues opened to their packages. Delivered tasks and split
+ *  issues start folded. */
 interface ListView {
   lot: string | null;
+  parent: string | null;
   folded: StatusGroup[];
   openIssues: string[];
 }
@@ -217,11 +219,12 @@ const LIST_VIEW_KEY = "tinto:delivery-list-view";
 function savedListView(): ListView {
   try {
     const saved = JSON.parse(localStorage.getItem(LIST_VIEW_KEY) ?? "null") as ListView | null;
-    if (saved) return { ...saved, openIssues: saved.openIssues ?? [] };
+    if (saved)
+      return { ...saved, parent: saved.parent ?? null, openIssues: saved.openIssues ?? [] };
   } catch {
     // Without storage the list opens as it does the first time.
   }
-  return { lot: null, folded: ["delivered"], openIssues: [] };
+  return { lot: null, parent: null, folded: ["delivered"], openIssues: [] };
 }
 
 /** The app's icons, sized as Delivery draws them. */
@@ -921,8 +924,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   // first, else the busy ones.
   const qaLeases = (overview?.leases ?? []).filter((lease) => isQaLease(lease.name));
   const qaActive = qaLeases.filter((lease) => lease.state === "active");
-  const qa =
-    qaLeases.find((lease) => lease.state === "quarantined") ?? qaActive[0] ?? qaLeases[0];
+  const qa = qaLeases.find((lease) => lease.state === "quarantined") ?? qaActive[0] ?? qaLeases[0];
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
   // The QA jobs a quarantine holds back, wherever the scheduler put them,
   // and whether only the user can release it for them.
@@ -1538,7 +1540,17 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     activeRuns.length > 1 && activeRuns.some((candidate) => candidate.id === listView.lot)
       ? listView.lot
       : null;
-  const listed = lot ? tasks.filter((task) => task.run_id === lot) : tasks;
+  // The Jira parents of the repo's tasks, and the one the list is narrowed to.
+  const parents = [
+    ...new Map(
+      tasks.flatMap((task) => (task.parent ? [[task.parent.key, task.parent] as const] : [])),
+    ).values(),
+  ];
+  const parent = parents.find((candidate) => candidate.key === listView.parent) ?? null;
+  const listed = tasks.filter(
+    (task) => (!lot || task.run_id === lot) && (!parent || task.parent?.key === parent.key),
+  );
+  const chooseParent = (next: string | null) => setListView((view) => ({ ...view, parent: next }));
   // What needs the user is never folded.
   const isFolded = (group: StatusGroup) => group !== "attention" && listView.folded.includes(group);
   const needsYou = (task: DeliveryTask) => statuses.get(task.id)?.group === "attention";
@@ -1637,6 +1649,21 @@ function DeliveryRepoView({ repo }: { repo: string }) {
     </span>
   );
 
+  // The task's Jira parent; a click narrows the list to its children.
+  const parentTag = (task: DeliveryTask) =>
+    task.parent && (
+      <span
+        className="delivery-task-row__parent"
+        title={`Mostrar solo las hijas de ${task.parent.key}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          chooseParent(task.parent!.key);
+        }}
+      >
+        ↳ {task.parent.key}
+        {task.parent.summary && ` · ${task.parent.summary}`}
+      </span>
+    );
   // A task's row; a package's, nested under its issue, says only which one it is.
   const taskRow = (task: DeliveryTask) => {
     const pr = (overview?.prs ?? []).find((candidate) => candidate.task_id === task.id);
@@ -1696,6 +1723,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         <span className="delivery-task-row__title">
           {task.package ? task.package.title || task.title : task.title || task.branch}
         </span>
+        {!task.package && parentTag(task)}
         <StatusLine status={status} who={overview ? waitsOnLabel(overview, task.id) : null} />
         {status.detail && (
           <span className="delivery-task-row__blocker" title={status.detail}>
@@ -1731,6 +1759,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
           </span>
         </span>
         <span className="delivery-task-row__title">{first.title || `${of} paquetes`}</span>
+        {parentTag(first)}
         {folded && (
           <>
             <span className="delivery-task-row__package">
@@ -1893,6 +1922,35 @@ function DeliveryRepoView({ repo }: { repo: string }) {
                   ))}
                 </select>
               </label>
+            )}
+            {parents.length > 0 && (
+              <label className="delivery-lot-filter">
+                <span>Padre</span>
+                <select
+                  value={parent?.key ?? ""}
+                  onChange={(event) => chooseParent(event.target.value || null)}
+                >
+                  <option value="">Todos los padres</option>
+                  {parents.map((candidate) => (
+                    <option key={candidate.key} value={candidate.key}>
+                      {`${candidate.key}${candidate.summary ? ` · ${candidate.summary}` : ""} (${
+                        tasks.filter((task) => task.parent?.key === candidate.key).length
+                      })`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {parent && (
+              <p className="delivery-parent-progress">
+                {(() => {
+                  const children = tasks.filter((task) => task.parent?.key === parent.key);
+                  const delivered = children.filter(
+                    (task) => statuses.get(task.id)?.group === "delivered",
+                  ).length;
+                  return `${children.length} ${children.length === 1 ? "tarea" : "tareas"} en Delivery · ${delivered} ${delivered === 1 ? "entregada" : "entregadas"}`;
+                })()}
+              </p>
             )}
             {groups.map((group) => (
               <section key={group.group} className="delivery-task-group" aria-label={group.label}>
