@@ -60,6 +60,7 @@ const COORDINATOR_EVENTS: &[&str] = &[
     "round_changed",
     "blocker_cleared",
     "blockers_changed",
+    "guides_requested",
 ];
 
 /// Changes acquire_run and takeover_run sum up for the coordinator: what
@@ -618,6 +619,10 @@ fn change_text(event: &DeliveryEvent, key: Option<&str>, role: Option<&str>) -> 
         }
         "run_takeover" => "otro coordinador tomó el lote".to_string(),
         "run_closed" => "el lote se cerró".to_string(),
+        "guides_requested" => format!(
+            "el usuario pide destilar las guías del repositorio: {} comentarios nuevos de sus revisores guía. Léelos con read_guide_comments y propón las reglas con propose_guide",
+            detail.split(' ').nth(1).unwrap_or("0")
+        ),
         "round_opened" => format!(
             "se abrió una ronda: {detail}. El trabajo vuelve a implementation; las etapas que lances la llevan en sus instrucciones"
         ),

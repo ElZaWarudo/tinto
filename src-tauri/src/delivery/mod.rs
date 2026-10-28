@@ -13,6 +13,7 @@ pub mod coordination;
 pub mod decisions;
 pub mod environment;
 pub mod feed;
+pub mod guides;
 pub mod jira;
 mod job_process;
 pub mod mcp;

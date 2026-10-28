@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  DeliveryGuideView,
   DeliveryAccess,
   DeliveryAgent,
   DeliveryApproval,
@@ -378,3 +379,18 @@ export function onDeliveryChanged(callback: () => void): Promise<UnlistenFn> {
     return Promise.resolve(() => {});
   }
 }
+
+export const getDeliveryGuide = (repo: string) =>
+  invoke<DeliveryGuideView>("delivery_guide", { repo });
+
+export const getDeliveryGuideCandidates = (repo: string, distro: string | null) =>
+  invoke<string[]>("delivery_guide_candidates", { repo, distro });
+
+export const collectDeliveryGuideComments = (repo: string, distro: string | null) =>
+  invoke<DeliveryGuideView>("delivery_collect_guide_comments", { repo, distro });
+
+export const requestDeliveryGuide = (repo: string) =>
+  invoke<number>("delivery_request_guide", { repo });
+
+export const decideDeliveryGuide = (repo: string, approve: boolean) =>
+  invoke<DeliveryGuideView>("delivery_decide_guide", { repo, approve });

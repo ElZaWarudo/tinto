@@ -129,6 +129,7 @@ import { JiraIssue } from "./DeliveryIssue";
 import { QaProblems } from "./DeliveryQaProblems";
 import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { CoordinatorDock } from "./DeliveryCoordinator";
+import { GuidesPage } from "./DeliveryGuides";
 import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
@@ -1517,6 +1518,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
   const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guidesOpen, setGuidesOpen] = useState(false);
   const key = repoKey(repo);
   const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
     path: repo,
@@ -1885,11 +1887,25 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         <EnvironmentStatus repo={choice.path} distro={choice.distro} />
         <button
           type="button"
+          aria-pressed={guidesOpen}
+          title={`Guías de ${choice.label}: reglas que salen de sus revisores`}
+          onClick={() => {
+            setGuidesOpen(!guidesOpen);
+            setSettingsOpen(false);
+          }}
+        >
+          Guías
+        </button>
+        <button
+          type="button"
           className="delivery-icon-button"
           aria-label={`Ajustes de ${choice.label}`}
           aria-pressed={settingsOpen}
           title={`Ajustes de ${choice.label}`}
-          onClick={() => setSettingsOpen(!settingsOpen)}
+          onClick={() => {
+            setSettingsOpen(!settingsOpen);
+            setGuidesOpen(false);
+          }}
         >
           <Icon name="gear" />
         </button>
@@ -1897,6 +1913,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
 
       {settingsOpen ? (
         <RepoSettingsPage repo={choice} onBack={() => setSettingsOpen(false)} />
+      ) : guidesOpen ? (
+        <GuidesPage repo={choice} onBack={() => setGuidesOpen(false)} />
       ) : (
         <div className="delivery-panel__body">
           <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">

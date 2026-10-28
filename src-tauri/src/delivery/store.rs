@@ -78,6 +78,7 @@ impl DeliveryStore {
             CREATE TABLE IF NOT EXISTS settings_proposals (
               id TEXT PRIMARY KEY, repo TEXT NOT NULL, data TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS guides (repo TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events (
               seq INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
               task_id TEXT, job_id TEXT, detail TEXT NOT NULL
@@ -426,6 +427,35 @@ impl DeliveryStore {
         id: &str,
     ) -> Result<Option<DeliverySettingsProposal>, DeliveryError> {
         self.one("SELECT data FROM settings_proposals WHERE id = ?1", id)
+    }
+
+    /// The repo's guide; an empty one until something is collected.
+    pub fn guide(&self, repo: &Path) -> Result<super::guides::DeliveryGuide, DeliveryError> {
+        let value: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT data FROM guides WHERE repo = ?1",
+                [path_key(repo)],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(value
+            .map(|value| decode(&value))
+            .transpose()?
+            .unwrap_or_default())
+    }
+
+    pub fn put_guide(
+        &self,
+        repo: &Path,
+        guide: &super::guides::DeliveryGuide,
+    ) -> Result<(), DeliveryError> {
+        self.conn.execute(
+            "INSERT INTO guides (repo, data) VALUES (?1, ?2)
+             ON CONFLICT(repo) DO UPDATE SET data = excluded.data",
+            params![path_key(repo), encode(guide)?],
+        )?;
+        Ok(())
     }
 
     pub fn settings_proposals(&self) -> Result<Vec<DeliverySettingsProposal>, DeliveryError> {

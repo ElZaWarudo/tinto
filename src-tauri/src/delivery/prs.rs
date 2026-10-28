@@ -729,8 +729,9 @@ pub trait GitHub: Send + Sync {
         Err(offline())
     }
     /// The latest review comments of every PR in `repo` (`owner/name`),
-    /// newest first, as GitHub's REST API lists them.
-    fn repo_review_comments(&self, _repo: &str) -> Result<Value, DeliveryError> {
+    /// newest first, as GitHub's REST API lists them: page `page` (from 1)
+    /// of a hundred.
+    fn repo_review_comments(&self, _repo: &str, _page: u32) -> Result<Value, DeliveryError> {
         Err(offline())
     }
 }
@@ -1219,9 +1220,10 @@ impl GitHub for GhCli {
         )
     }
 
-    fn repo_review_comments(&self, repo: &str) -> Result<Value, DeliveryError> {
-        // One page: enough to find the user's latest replies.
-        let path = format!("repos/{repo}/pulls/comments?sort=created&direction=desc&per_page=100");
+    fn repo_review_comments(&self, repo: &str, page: u32) -> Result<Value, DeliveryError> {
+        let path = format!(
+            "repos/{repo}/pulls/comments?sort=created&direction=desc&per_page=100&page={page}"
+        );
         let output = Self::act(
             &["api", &path],
             "gh no pudo leer los comentarios del repositorio",
@@ -2104,7 +2106,8 @@ impl DeliveryService {
         let github = self.github();
         let (Ok(me), Ok(comments)) = (
             self.github_login(&*github),
-            github.repo_review_comments(&repo),
+            // One page: enough to find the user's latest replies.
+            github.repo_review_comments(&repo, 1),
         ) else {
             return Vec::new();
         };

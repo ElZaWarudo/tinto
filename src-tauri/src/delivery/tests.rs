@@ -4630,8 +4630,15 @@ impl super::prs::GitHub for FakeGitHub {
         assert_eq!((repo, number), ("o/r", 299));
         Ok(self.review_comments.lock().unwrap().clone())
     }
-    fn repo_review_comments(&self, repo: &str) -> Result<serde_json::Value, super::DeliveryError> {
+    fn repo_review_comments(
+        &self,
+        repo: &str,
+        page: u32,
+    ) -> Result<serde_json::Value, super::DeliveryError> {
         assert_eq!(repo, "o/r");
+        if page > 1 {
+            return Ok(json!([]));
+        }
         let mut comments = self.review_comments.lock().unwrap().clone();
         comments.as_array_mut().unwrap().reverse();
         Ok(comments)
@@ -10518,4 +10525,104 @@ fn a_qa_that_ends_without_its_record_leaves_a_stub_and_its_changes_undone() {
     assert!(std::fs::read_to_string(source)
         .unwrap()
         .contains("not verifiable: out of time"));
+}
+
+#[test]
+fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
+    use super::model::{DeliveryGuideKind, DeliveryGuidePerson};
+    let h = harness();
+    github_origin(&h);
+    let github = FakeGitHub::new(json!({}), json!([]));
+    let comment = |id: u64, login: &str, body: &str| {
+        json!({
+            "id": id, "user": {"login": login}, "body": body,
+            "path": "frontend/menu.vue", "line": 4, "diff_hunk": "@@ -1 +1 @@\n-a\n+b",
+            "html_url": format!("https://github.com/o/r/pull/7#discussion_r{id}"),
+            "_links": {"pull_request": {"href": "https://api.github.com/repos/o/r/pulls/7"}},
+            "created_at": "2026-10-01T10:00:00Z"
+        })
+    };
+    *github.review_comments.lock().unwrap() = json!([
+        comment(1, "ana", "Usa el token de 4px, no 6px"),
+        comment(2, "bob", "lgtm"),
+        comment(3, "Luis", "El error pasa por el handler común"),
+    ]);
+    h.service.set_github(github);
+    let repo = h.repo.path();
+    assert_eq!(
+        h.service
+            .collect_guide_comments(repo, None)
+            .unwrap_err()
+            .category,
+        "invalid_guide",
+        "nothing to collect before a guide is chosen"
+    );
+    let person = |login: &str, kind| DeliveryGuidePerson {
+        login: login.into(),
+        kinds: vec![kind],
+    };
+    let store = h.service.store().unwrap();
+    let mut settings = store.repo_settings(repo).unwrap();
+    settings.guides = vec![
+        person("ana", DeliveryGuideKind::Visual),
+        person("luis", DeliveryGuideKind::Technical),
+    ];
+    store.set_repo_settings(repo, &settings).unwrap();
+    drop(store);
+    // Only the guides' comments, each once however often it is read.
+    h.service.collect_guide_comments(repo, None).unwrap();
+    let view = h.service.collect_guide_comments(repo, None).unwrap();
+    assert_eq!((view.comments, view.pending), (2, 2));
+
+    // Distilling takes a batch's coordinator, who hears of it.
+    assert_eq!(
+        h.service.request_guide(repo).unwrap_err().category,
+        "invalid_guide"
+    );
+    let coordinator = Coordinator::start(&h);
+    h.service.request_guide(repo).unwrap();
+    let woken = coordinator.write("wait_run", json!({}));
+    assert!(
+        woken["structuredContent"]["events"]
+            .to_string()
+            .contains("read_guide_comments"),
+        "{woken}"
+    );
+    let read = coordinator.call("read_guide_comments", json!({"run_id": coordinator.run_id}))
+        ["structuredContent"]
+        .clone();
+    assert_eq!(read["comments"].as_array().unwrap().len(), 2, "{read}");
+    assert_eq!(read["through"], 3);
+    let stale = coordinator.write("propose_guide", json!({"through": 9, "rules": []}));
+    assert_eq!(stale["isError"], true, "{stale}");
+    coordinator.write(
+        "propose_guide",
+        json!({"through": 3, "note": "Primeras reglas", "rules": [
+            {"kind": "visual", "rule": "El espaciado sale de los tokens de 4px", "applies_to": ["frontend/"], "seen": 1},
+            {"kind": "technical", "rule": "Los errores pasan por el handler común"}
+        ]}),
+    );
+    let view = h.service.guide_view(repo).unwrap();
+    let proposed: Vec<String> = view
+        .proposal
+        .unwrap()
+        .rules
+        .into_iter()
+        .map(|rule| rule.id)
+        .collect();
+    assert_eq!(proposed, ["V-1", "T-1"]);
+    assert!(
+        view.rules.is_empty(),
+        "nothing changes until the user approves"
+    );
+
+    let view = h.service.decide_guide(repo, true).unwrap();
+    assert_eq!(view.rules.len(), 2);
+    assert_eq!((view.pending, view.proposal), (0, None));
+    let read = coordinator.call("read_guide_comments", json!({"run_id": coordinator.run_id}));
+    assert_eq!(
+        read["structuredContent"]["comments"],
+        json!([]),
+        "distilled comments are not read again"
+    );
 }
