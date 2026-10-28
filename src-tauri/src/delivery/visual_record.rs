@@ -40,7 +40,9 @@ pub fn write_stub(
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .filter(|name| {
             let lower = name.to_ascii_lowercase();
-            [".png", ".jpg", ".jpeg"].iter().any(|ext| lower.ends_with(ext))
+            [".png", ".jpg", ".jpeg"]
+                .iter()
+                .any(|ext| lower.ends_with(ext))
         })
         .collect();
     shots.sort();
@@ -61,7 +63,11 @@ pub fn write_stub(
         "| --- | --- |".to_string(),
     ];
     let fallback = [(format!("QA of {key}"), false)];
-    let items = if items.is_empty() { &fallback[..] } else { items };
+    let items = if items.is_empty() {
+        &fallback[..]
+    } else {
+        items
+    };
     for (number, (item, done)) in items.iter().enumerate() {
         let item = item.replace('|', "/");
         let verdict = match done {
@@ -844,12 +850,26 @@ mod tests {
     fn a_stub_record_keeps_the_evidence_and_verdicts_nothing() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("K-1-1-menu-desktop.png"), b"png").unwrap();
-        let items = [("Check the menu".to_string(), true), ("Check the toast".to_string(), false)];
-        let path = write_stub(dir.path(), "K-1", "feat/k-1", &date_of(1_793_106_614_092), "its 60 minutes ran out", &items).unwrap();
+        let items = [
+            ("Check the menu".to_string(), true),
+            ("Check the toast".to_string(), false),
+        ];
+        let path = write_stub(
+            dir.path(),
+            "K-1",
+            "feat/k-1",
+            &date_of(1_793_106_614_092),
+            "its 60 minutes ran out",
+            &items,
+        )
+        .unwrap();
         let text = std::fs::read_to_string(path).unwrap();
         assert!(missing_parts(&text).is_empty(), "{text}");
         assert!(text.contains("| Date | 2026-10-27 |"), "{text}");
-        assert!(text.contains("| 2. Check the toast | not verifiable: out of time |"), "{text}");
+        assert!(
+            text.contains("| 2. Check the toast | not verifiable: out of time |"),
+            "{text}"
+        );
         assert!(text.contains("![](K-1-1-menu-desktop.png)"), "{text}");
         assert!(!text.contains("pass"), "{text}");
     }

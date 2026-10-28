@@ -53,7 +53,9 @@ pub fn rebuild(
     changed: Vec<String>,
     prepared: Option<&DeliveryPreparedStack>,
 ) -> (Vec<String>, bool) {
-    if prepared.is_some_and(|prepared| prepared.task_id == task_id && prepared.candidate == candidate) {
+    if prepared
+        .is_some_and(|prepared| prepared.task_id == task_id && prepared.candidate == candidate)
+    {
         return (Vec::new(), true);
     }
     let mut services = changed;
@@ -85,10 +87,12 @@ pub fn assets_in(html: &str) -> Vec<String> {
             let skipped = [".ico", ".png", ".svg", ".jpg", ".webp", ".woff", ".woff2"]
                 .iter()
                 .any(|ext| value.ends_with(ext));
-            if value.starts_with('/') && !value.starts_with("//") && !skipped {
-                if !assets.iter().any(|seen| seen == value) {
-                    assets.push(value.to_string());
-                }
+            if value.starts_with('/')
+                && !value.starts_with("//")
+                && !skipped
+                && !assets.iter().any(|seen| seen == value)
+            {
+                assets.push(value.to_string());
             }
         }
     }
@@ -100,7 +104,14 @@ pub fn assets_in(html: &str) -> Vec<String> {
 /// bundle hangs on these, not on the page.
 pub fn imports_in(module: &str) -> Vec<String> {
     let mut imports: Vec<String> = Vec::new();
-    for opening in ["from \"/", "from '/", "import \"/", "import '/", "import(\"/", "import('/"] {
+    for opening in [
+        "from \"/",
+        "from '/",
+        "import \"/",
+        "import '/",
+        "import(\"/",
+        "import('/",
+    ] {
         let quote = if opening.contains('\'') { '\'' } else { '"' };
         let mut rest = module;
         while let Some(at) = rest.find(opening) {
@@ -126,7 +137,11 @@ pub fn origin(url: &str) -> &str {
 
 /// Appends a line to the preparation's log.
 pub fn log(path: &Path, line: &str) {
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = writeln!(file, "{line}");
     }
 }
@@ -168,7 +183,11 @@ pub fn warm(base: &str, paths: &[String], log_path: &Path) -> Result<usize, Stri
         let body = response.text().unwrap_or_default();
         log(
             log_path,
-            &format!("  {} {url} en {:.1} s", status.as_u16(), started.elapsed().as_secs_f32()),
+            &format!(
+                "  {} {url} en {:.1} s",
+                status.as_u16(),
+                started.elapsed().as_secs_f32()
+            ),
         );
         if status.is_server_error() || status.is_client_error() {
             return Err(format!("{url} respondió {status}"));
@@ -236,10 +255,7 @@ pub fn run(
         .open(log_path)
         .map_err(|error| error.to_string())?;
     let errors = output.try_clone().map_err(|error| error.to_string())?;
-    command
-        .stdin(Stdio::null())
-        .stdout(output)
-        .stderr(errors);
+    command.stdin(Stdio::null()).stdout(output).stderr(errors);
     let mut process = super::job_process::JobProcess::spawn(&mut command, job_id)
         .map_err(|error| format!("no se pudo iniciar «{label}»: {error}"))?;
     loop {
@@ -290,17 +306,26 @@ mod tests {
                 "services/workflows".to_string(),
                 vec!["workflows".to_string(), "scheduler".to_string()],
             ),
-            ("protocol".to_string(), vec!["api-gateway".to_string(), "workflows".to_string()]),
+            (
+                "protocol".to_string(),
+                vec!["api-gateway".to_string(), "workflows".to_string()],
+            ),
         ])
     }
 
     #[test]
     fn only_the_services_of_the_changed_folders_are_rebuilt() {
         let changed = |paths: &[&str]| -> Vec<String> {
-            services_for(&paths.iter().map(|p| p.to_string()).collect::<Vec<_>>(), &map())
+            services_for(
+                &paths.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+                &map(),
+            )
         };
         // A frontend-only change rebuilds no backend service.
-        assert_eq!(changed(&["frontend/pages/x.vue", "README.md"]), ["frontend"]);
+        assert_eq!(
+            changed(&["frontend/pages/x.vue", "README.md"]),
+            ["frontend"]
+        );
         assert_eq!(
             changed(&["protocol/a.proto", "services/workflows/src/a.ts"]),
             ["api-gateway", "scheduler", "workflows"]
@@ -316,7 +341,10 @@ mod tests {
             candidate: "c1".into(),
             services: vec!["rag".into()],
         };
-        assert_eq!(rebuild("t1", "c1", vec!["frontend".into()], Some(&prepared)), (vec![], true));
+        assert_eq!(
+            rebuild("t1", "c1", vec!["frontend".into()], Some(&prepared)),
+            (vec![], true)
+        );
         // Another task's services serve its worktree: they are rebuilt too.
         assert_eq!(
             rebuild("t2", "c9", vec!["frontend".into()], Some(&prepared)),
@@ -344,7 +372,10 @@ import '/_nuxt/app.css'; const p = import("/_nuxt/pages/login.vue"); import x fr
                 "/_nuxt/pages/login.vue"
             ]
         );
-        assert_eq!(origin("http://localhost:8080/login?a=1"), "http://localhost:8080");
+        assert_eq!(
+            origin("http://localhost:8080/login?a=1"),
+            "http://localhost:8080"
+        );
         assert_eq!(origin("http://localhost:8080"), "http://localhost:8080");
     }
 }

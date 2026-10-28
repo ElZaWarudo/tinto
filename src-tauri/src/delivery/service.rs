@@ -22,9 +22,8 @@ use super::model::{
     DeliveryDecisionKind, DeliveryDecisionStatus, DeliveryFrozenCopy, DeliveryJob, DeliveryJobLog,
     DeliveryJobStatus, DeliveryLease, DeliveryLeaseState, DeliveryOverview, DeliveryPackage,
     DeliveryPlatform, DeliveryPreparedStack, DeliveryQaPrepare, DeliveryQaStack,
-    DeliveryRepoSettings, DeliveryResultState, DeliverySettings,
-    DeliverySettingsProposalStatus, DeliveryTask, DeliveryTaskMilestone, DeliveryTiming,
-    NewBlocker,
+    DeliveryRepoSettings, DeliveryResultState, DeliverySettings, DeliverySettingsProposalStatus,
+    DeliveryTask, DeliveryTaskMilestone, DeliveryTiming, NewBlocker,
 };
 use super::phase::{current_checks, current_setup, has_open_findings, is_broken, last_change};
 use super::prs::{self, GitHub};
@@ -2732,7 +2731,9 @@ impl DeliveryService {
             );
             match written {
                 Ok(_) => stub = true,
-                Err(error) => eprintln!("tinto: delivery could not write a stub QA record: {error}"),
+                Err(error) => {
+                    eprintln!("tinto: delivery could not write a stub QA record: {error}")
+                }
             }
         }
         if job.role == QA_ROLE
@@ -2744,7 +2745,15 @@ impl DeliveryService {
                 eprintln!("tinto: delivery could not save a QA record: {error}");
             }
         }
-        self.finish(&job.id, ending, outcome, timing, end, reverted, &stderr_text)?;
+        self.finish(
+            &job.id,
+            ending,
+            outcome,
+            timing,
+            end,
+            reverted,
+            &stderr_text,
+        )?;
         // A task Tinto cannot queue checks on now (blocked, paused) goes on
         // without them.
         let _ = self.queue_checks(&job.id);
@@ -2791,14 +2800,21 @@ impl DeliveryService {
         self.record_observation(
             &job.id,
             adapters::Observation {
-                command: Some(Some(("Tinto prepara el entorno de QA".to_string(), now_ms()))),
+                command: Some(Some((
+                    "Tinto prepara el entorno de QA".to_string(),
+                    now_ms(),
+                ))),
                 ..Default::default()
             },
         );
         // What the task changed since it left its base, committed or not.
         let place = Place::of(task.distro.as_deref());
-        let base = tasks::git(place, &task.worktree, &["merge-base", "HEAD", &task.base_ref])
-            .unwrap_or_else(|_| task.base_commit.clone());
+        let base = tasks::git(
+            place,
+            &task.worktree,
+            &["merge-base", "HEAD", &task.base_ref],
+        )
+        .unwrap_or_else(|_| task.base_commit.clone());
         let mut changed: Vec<String> = Vec::new();
         for args in [
             vec!["diff", "--name-only", base.as_str()],
@@ -2807,7 +2823,9 @@ impl DeliveryService {
             let listed = tasks::git(place, &task.worktree, &args).map_err(|e| failed(e.message))?;
             changed.extend(listed.lines().map(str::to_string));
         }
-        let candidate = start.map(WorktreeSnapshot::candidate_id).unwrap_or_default();
+        let candidate = start
+            .map(WorktreeSnapshot::candidate_id)
+            .unwrap_or_default();
         let lease_name = job.lease.clone().unwrap_or_default();
         let prepared = self
             .store()
@@ -2836,7 +2854,8 @@ impl DeliveryService {
             let mut shell = job.clone();
             shell.agent = DeliveryAgent::Shell;
             shell.prompt = command.to_string();
-            let launch = adapters::launch(&shell, task, paths, None).map_err(|e| failed(e.message))?;
+            let launch =
+                adapters::launch(&shell, task, paths, None).map_err(|e| failed(e.message))?;
             let mut process = Command::new(&launch.program);
             process.args(&launch.args).envs(&job.check_env);
             if let Some(cwd) = &launch.cwd {
@@ -2875,7 +2894,9 @@ impl DeliveryService {
         }
         prepare::log(&log, "calentando las páginas de QA");
         let warmed = prepare::warm(&stack.ready_url, &stack.warm_paths, &log).map_err(failed)?;
-        done.push(format!("respondió y compiló {warmed} módulos de sus páginas"));
+        done.push(format!(
+            "respondió y compiló {warmed} módulos de sus páginas"
+        ));
         let note = match reused {
             true => format!(
                 "ya servía este worktree en el mismo commit, así que no reconstruyó nada; {}.",
@@ -2921,13 +2942,20 @@ impl DeliveryService {
             return Ok(());
         };
         job.status = DeliveryJobStatus::Cancelled;
-        job.error = Some("Cancelado por el usuario mientras Tinto preparaba el entorno de QA.".to_string());
+        job.error =
+            Some("Cancelado por el usuario mientras Tinto preparaba el entorno de QA.".to_string());
         job.ended_at_ms = Some(now_ms());
         job.current_command = None;
         job.current_command_at_ms = None;
         store.put_job(&job)?;
         settle_lease(&store, &job, false, &[])?;
-        store.record_event(now_ms(), "job_cancelled", Some(&job.task_id), Some(&job.id), "")
+        store.record_event(
+            now_ms(),
+            "job_cancelled",
+            Some(&job.task_id),
+            Some(&job.id),
+            "",
+        )
     }
 
     /// What a stub QA record lists: the agent's task list as it last wrote
@@ -3225,6 +3253,7 @@ impl DeliveryService {
         output[start..].to_string()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish(
         &self,
         job_id: &str,

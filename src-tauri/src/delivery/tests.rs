@@ -10436,7 +10436,10 @@ fn browser_qa_starts_on_a_prepared_stack_beside_a_command_line_qa() {
     assert!(!cli.qa_browser && cli.qa_stack.is_none());
     // Each holds its own environment's resource: both run at once.
     h.wait_status(&browser.id, DeliveryJobStatus::Started);
-    assert_eq!(h.service.job(&cli.id).unwrap().status, DeliveryJobStatus::Started);
+    assert_eq!(
+        h.service.job(&cli.id).unwrap().status,
+        DeliveryJobStatus::Started
+    );
 
     let browser = h.wait(&browser.id);
     let prepare = browser.prepare.clone().unwrap();
@@ -10461,13 +10464,21 @@ fn a_qa_that_ends_without_its_record_leaves_a_stub_and_its_changes_undone() {
     let qa = h.wait(&h.dispatch(&task, "qa", "events=none touch=README.md").id);
     let worktree = PathBuf::from(plain_path(&task.worktree));
     assert_eq!(
-        std::fs::read_to_string(worktree.join("README.md")).unwrap().replace('\r', ""),
+        std::fs::read_to_string(worktree.join("README.md"))
+            .unwrap()
+            .replace('\r', ""),
         "base\n"
     );
     assert_eq!(qa.reverted, ["README.md"]);
     assert!(qa.changes.is_empty());
     let source = qa.visual_record_source.unwrap();
     assert!(source.ends_with("S-3.md"), "{source}");
-    assert!(qa.visual_record_warnings.is_empty(), "{:?}", qa.visual_record_warnings);
-    assert!(std::fs::read_to_string(source).unwrap().contains("not verifiable: out of time"));
+    assert!(
+        qa.visual_record_warnings.is_empty(),
+        "{:?}",
+        qa.visual_record_warnings
+    );
+    assert!(std::fs::read_to_string(source)
+        .unwrap()
+        .contains("not verifiable: out of time"));
 }
