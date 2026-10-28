@@ -819,7 +819,7 @@ function phaseStatus(task: DeliveryTask, overview: DeliveryOverview, now: number
       };
     case "merged_failing_ci":
       return {
-        ...danger(`PR #${phase.number} fusionado con la CI sin pasar`, "x"),
+        ...danger(`PR #${phase.number} fusionado con checks fallando`, "x"),
         detail: phase.why,
       };
     case "pr": {

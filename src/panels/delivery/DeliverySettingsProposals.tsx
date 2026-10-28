@@ -15,13 +15,15 @@ import type {
 
 import { ActionButton, ActionGroup } from "./ActionButton";
 
-type ListField = "checks_add" | "checks_remove" | "qa_commands_add" | "setup_add" | "setup_remove";
+type ListField =
+  "checks_add" | "checks_remove" | "qa_commands_add" | "setup_add" | "setup_remove" | "probes_add";
 const LIST_FIELDS: ListField[] = [
   "checks_add",
   "checks_remove",
   "qa_commands_add",
   "setup_add",
   "setup_remove",
+  "probes_add",
 ];
 
 const key = (field: string, value: string) => `${field}\u0000${value}`;
@@ -52,6 +54,7 @@ function accepted(
     qa_commands_add: pick("qa_commands_add"),
     setup_add: pick("setup_add"),
     setup_remove: pick("setup_remove"),
+    probes_add: pick("probes_add"),
   };
   if (changes.bootstrap != null && selected.has(key("bootstrap", ""))) {
     part.bootstrap = changes.bootstrap;
@@ -233,6 +236,16 @@ function ProposalCard({ proposal }: { proposal: DeliverySettingsProposal }) {
         added={changes.setup_add ?? []}
         removed={changes.setup_remove ?? []}
         addField="setup_add"
+        removeField="setup_remove"
+        selected={selected}
+        toggle={toggle}
+      />
+      <ListDiff
+        title="Comprobaciones del entorno"
+        before={current?.environment_probes ?? []}
+        added={changes.probes_add ?? []}
+        removed={[]}
+        addField="probes_add"
         removeField="setup_remove"
         selected={selected}
         toggle={toggle}

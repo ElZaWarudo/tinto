@@ -56,6 +56,38 @@ pub type EnvironmentCheck = Arc<
 >;
 
 const CODEX_MODEL_SETTING: &str = "codex_model";
+/// Models an account refused in a job ("codex:gpt-…"): not dispatched
+/// again until the view reads that agent's catalog anew.
+const REFUSED_MODELS_SETTING: &str = "refused_models";
+/// How long a job its account's usage limit stopped waits to run again.
+const USAGE_LIMIT_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    Duration::from_secs(60 * 60)
+};
+
+fn refused_model(agent: DeliveryAgent, model: &str) -> String {
+    format!("{}:{}", agent_name(agent).to_lowercase(), model.trim())
+}
+
+/// A check that formats or lints: quick enough for a writing stage to run
+/// before it ends.
+fn style_check(command: &str) -> bool {
+    let lower = command.to_lowercase();
+    [
+        "fmt", "format", "prettier", "lint", "clippy", "ruff", "black", "biome",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
+}
+
+/// A provider stopping the account for its usage, not the job's work.
+fn usage_limit(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    ["hit your session limit", "usage limit", "hit your limit"]
+        .iter()
+        .any(|phrase| lower.contains(phrase))
+}
 
 /// Where the models of an agent's catalog, as the view last saw it, are kept.
 fn catalog_setting(agent: DeliveryAgent) -> Option<&'static str> {
@@ -72,6 +104,14 @@ const WSL_JOB_FILE: &str = "wsl-job.json";
 const STDIN_FILE: &str = "stdin.txt";
 /// How long a WSL job gets to exit after `TERM` before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(5);
+/// A stopped job whose processes survive the kill is killed again this
+/// often, and stops being waited on after `KILL_GIVE_UP`: its queue goes on.
+const KILL_AGAIN: Duration = Duration::from_secs(2);
+const KILL_GIVE_UP: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(30)
+};
 
 /// The stage that gets QA tools: network, the main checkout, QA commands
 /// and, when the repo enables it, a browser.
@@ -543,17 +583,21 @@ impl DeliveryService {
                 continue;
             }
             // Past its run's brainstorm nothing waits for the user, so the
-            // job is repeated as if the repo asked for it.
-            let retry_on_restart = match store.task(&job.task_id)? {
-                Some(task) => {
-                    let unattended = match task.run_id.as_deref() {
-                        Some(run_id) => store.run(run_id)?.is_some_and(|run| run.unattended),
-                        None => false,
-                    };
-                    unattended || store.repo_settings(&task.repo)?.retry_on_restart
-                }
-                None => false,
-            };
+            // job is repeated as if the repo asked for it. Checks and setup
+            // only run commands: they always run again.
+            let commands = job.agent == DeliveryAgent::Shell
+                && matches!(job.role.as_str(), CHECKS_ROLE | SETUP_ROLE);
+            let retry_on_restart = commands
+                || match store.task(&job.task_id)? {
+                    Some(task) => {
+                        let unattended = match task.run_id.as_deref() {
+                            Some(run_id) => store.run(run_id)?.is_some_and(|run| run.unattended),
+                            None => false,
+                        };
+                        unattended || store.repo_settings(&task.repo)?.retry_on_restart
+                    }
+                    None => false,
+                };
             let not_retried = if retry_on_restart {
                 not_safe_to_repeat(&job)
             } else {
@@ -861,6 +905,15 @@ impl DeliveryService {
         }
         let store = self.store()?;
         store.set_setting(setting, &known)?;
+        // A catalog seen anew: what the account refused may be back.
+        let prefix = refused_model(agent, "");
+        let refused: Vec<String> = store
+            .setting::<Vec<String>>(REFUSED_MODELS_SETTING)?
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|key| !key.starts_with(&prefix))
+            .collect();
+        store.set_setting(REFUSED_MODELS_SETTING, &refused)?;
         let default_model = default_model
             .map(|model| model.trim().to_string())
             .filter(|model| !model.is_empty());
@@ -1365,6 +1418,88 @@ impl DeliveryService {
         Ok(task)
     }
 
+    /// Takes a package off the one it builds on, when it turns out not to
+    /// need its code: it starts again from the base that chain started from,
+    /// and stops waiting for it. Only while it has nothing of its own (no
+    /// commit, no change, nothing published), so nothing is lost.
+    pub fn detach_package(&self, task_id: &str) -> Result<DeliveryTask, DeliveryError> {
+        let refused = |message: String| DeliveryError::new("package_detach_refused", message);
+        let mut task = self.task(task_id)?;
+        let Some(mut package) = task.package.clone() else {
+            return Err(refused("la tarea no es un paquete".into()));
+        };
+        let Some(other_id) = package.builds_on.clone() else {
+            return Err(refused("el paquete ya parte de la base, no de otro".into()));
+        };
+        if self
+            .store()?
+            .task_jobs(task_id)?
+            .iter()
+            .any(|job| job.status.is_open())
+        {
+            return Err(refused(
+                "tiene trabajos en curso: espera a que terminen o cancélalos".into(),
+            ));
+        }
+        let place = Place::of(task.distro.as_deref());
+        let head = tasks::head(place, &task.worktree)?;
+        let state = tasks::worktree_state(place, &task.worktree, &task.base_commit)?;
+        let other = self.task(&other_id)?;
+        if state.dirty || head != task.base_commit {
+            return Err(refused(format!(
+                "ya tiene trabajo propio sobre la rama de {}: rebásalo a mano sobre la base",
+                other.key
+            )));
+        }
+        if state.has_upstream || self.task_pr(task_id)?.is_some() {
+            return Err(refused("su rama ya está publicada".into()));
+        }
+        // The base the chain started from: up the packages, each on the one
+        // before, to the first that started elsewhere.
+        let mut first = other.clone();
+        while let Some(previous) = first.package.as_ref().and_then(|p| p.builds_on.clone()) {
+            let previous = self.task(&previous)?;
+            if first.base_ref != previous.branch {
+                break;
+            }
+            first = previous;
+        }
+        let (base_ref, commit) =
+            tasks::resolve_base(place, &task.repo, Some(&first.base_ref), None)?;
+        tasks::git(place, &task.worktree, &["reset", "-q", "--hard", &commit])?;
+        task.base_ref = base_ref;
+        task.base_commit = commit;
+        package.builds_on = None;
+        task.package = Some(package);
+        task.updated_at_ms = now_ms();
+        let store = self.store()?;
+        store.put_task(&task)?;
+        store.record_event(
+            task.updated_at_ms,
+            "package_detached",
+            Some(&task.id),
+            None,
+            &format!("ya no espera a {}: parte de {}", other.key, task.base_ref),
+        )?;
+        drop(store);
+        let waits: Vec<String> = task
+            .blockers
+            .iter()
+            .filter(|blocker| {
+                blocker.is_open()
+                    && matches!(&blocker.kind, super::model::DeliveryBlockerKind::Task { task_id, .. } if *task_id == other.id)
+            })
+            .map(|blocker| blocker.id.clone())
+            .collect();
+        let task = if waits.is_empty() {
+            task
+        } else {
+            self.clear_blockers(&task.id, Some(&waits), false)?
+        };
+        self.notify();
+        Ok(task)
+    }
+
     /// Makes a task created as a whole issue one package of it, so the
     /// issue's other packages can follow. It keeps its worktree and base.
     pub fn set_task_package(
@@ -1547,6 +1682,18 @@ impl DeliveryService {
                 .flatten(),
             model => model,
         };
+        if let Some(model) = &model {
+            let refused: Vec<String> = store.setting(REFUSED_MODELS_SETTING)?.unwrap_or_default();
+            if refused.contains(&refused_model(request.agent, model)) {
+                return Err(DeliveryError::new(
+                    "model_unavailable",
+                    format!(
+                        "la cuenta de {} rechazó el modelo «{model}» en un trabajo anterior: elige otro en Ajustes o en el despacho",
+                        agent_name(request.agent)
+                    ),
+                ));
+            }
+        }
         let settings = store.repo_settings(&task.repo)?;
         let qa = role == QA_ROLE;
         let decisions = store.task_decisions(&task.id)?;
@@ -2032,13 +2179,19 @@ impl DeliveryService {
             if let Some(wsl_job) = wsl_job {
                 adapters::stop_wsl_job(&wsl_job, "KILL");
             }
-            if let Err(error) = self.retry_after_restart(&job_id) {
+            if let Err(error) = self.retry_after_restart(&job_id, "al reiniciar Tinto") {
                 eprintln!("tinto: delivery could not retry job {job_id}: {error}");
             }
         }
     }
 
-    pub(super) fn retry_after_restart(&self, job_id: &str) -> Result<(), DeliveryError> {
+    /// Queues a stopped job again on its own, `when` saying why in its note
+    /// ("al reiniciar Tinto").
+    pub(super) fn retry_after_restart(
+        &self,
+        job_id: &str,
+        when: &str,
+    ) -> Result<(), DeliveryError> {
         let mut job = self.job(job_id)?;
         // An agent that had started goes on in its session, keeping what it
         // did; anything else starts over.
@@ -2058,7 +2211,7 @@ impl DeliveryService {
                     Some(&retry.id),
                     &job.id,
                 )?;
-                "Se reintentó al reiniciar Tinto.".to_string()
+                format!("Se reintentó {when}.")
             }
             Err(error) => {
                 store.record_event(
@@ -2068,7 +2221,7 @@ impl DeliveryService {
                     Some(&job.id),
                     &error.message,
                 )?;
-                format!("No se pudo reintentar al reiniciar: {}.", error.message)
+                format!("No se pudo reintentar {when}: {}.", error.message)
             }
         };
         job.error = Some(
@@ -2606,6 +2759,7 @@ impl DeliveryService {
         let mut timed_out = false;
         // When the job is being stopped: kill it outright once this passes.
         let mut kill_at: Option<Instant> = None;
+        let mut give_up_at: Option<Instant> = None;
         let exited = loop {
             if self.inner.closed.load(Ordering::SeqCst) {
                 return Ok(());
@@ -2635,11 +2789,16 @@ impl DeliveryService {
                 }
             }
             if kill_at.is_some_and(|at| Instant::now() >= at) {
-                kill_at = None;
+                kill_at = Some(Instant::now() + KILL_AGAIN);
+                give_up_at.get_or_insert(Instant::now() + KILL_GIVE_UP);
                 if let Some(wsl_job) = &wsl_job {
                     adapters::stop_wsl_job(wsl_job, "KILL");
                 }
                 process.kill_tree();
+            }
+            // Killed and still there: it ends as stopped all the same.
+            if give_up_at.is_some_and(|at| Instant::now() >= at) {
+                break None;
             }
             std::thread::sleep(MONITOR_TICK);
         };
@@ -2765,6 +2924,12 @@ impl DeliveryService {
         if let Err(error) = self.settle_doubtful_check(&job.id) {
             eprintln!(
                 "tinto: delivery could not look again at check {}: {error}",
+                job.id
+            );
+        }
+        if let Err(error) = self.settle_account_failure(&job.id) {
+            eprintln!(
+                "tinto: delivery could not settle the account failure of {}: {error}",
                 job.id
             );
         }
@@ -3198,6 +3363,20 @@ impl DeliveryService {
             lines.push("Run only the tests you write or change: Tinto runs the full checks once the implementation makes them pass.".to_string());
         } else if job.writes {
             lines.push("While you work, run only the tests of what you change, not these checks in full: Tinto runs them on your result when you finish.".to_string());
+            // Formatting and lint are quick, and each one Tinto finds after
+            // you costs a round.
+            let style: Vec<String> = task
+                .checks
+                .iter()
+                .filter(|check| style_check(check))
+                .map(|check| format!("`{check}`"))
+                .collect();
+            if !style.is_empty() {
+                lines.push(format!(
+                    "Before you finish, run the format and lint checks and fix what they report: {}.",
+                    style.join("; ")
+                ));
+            }
         } else if job.role == QA_ROLE {
             lines.push("Do not run these checks, builds, linters, type checkers or test suites: Tinto runs them. Test the behaviour the task asks for.".to_string());
         } else {
@@ -3418,6 +3597,56 @@ impl DeliveryService {
         Ok(())
     }
 
+    /// A job the agent's account stopped, not its work: a model the account
+    /// refused is not dispatched again until the catalog is seen anew, and
+    /// a usage limit makes the job run again once the limit may have reset.
+    fn settle_account_failure(&self, job_id: &str) -> Result<(), DeliveryError> {
+        let job = self.job(job_id)?;
+        if job.status != DeliveryJobStatus::Failed {
+            return Ok(());
+        }
+        let error = job.error.as_deref().unwrap_or_default();
+        if error.starts_with(adapters::MODEL_REFUSED) {
+            if let Some(model) = &job.model {
+                let store = self.store()?;
+                let mut refused: Vec<String> =
+                    store.setting(REFUSED_MODELS_SETTING)?.unwrap_or_default();
+                let key = refused_model(job.agent, model);
+                if !refused.contains(&key) {
+                    refused.push(key);
+                    store.set_setting(REFUSED_MODELS_SETTING, &refused)?;
+                }
+            }
+            return Ok(());
+        }
+        if !usage_limit(error) {
+            return Ok(());
+        }
+        let store = self.store()?;
+        let mut stopped = job.clone();
+        stopped.error = Some(format!(
+            "{error} — Tinto lo reintenta en {} minutos, cuando el límite puede haberse renovado.",
+            USAGE_LIMIT_WAIT.as_secs() / 60
+        ));
+        store.put_job(&stopped)?;
+        drop(store);
+        self.notify();
+        let service = self.clone();
+        let job_id = job.id.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(USAGE_LIMIT_WAIT);
+            if service.inner.closed.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Err(error) = service.retry_after_restart(&job_id, "tras el límite de uso") {
+                eprintln!(
+                    "tinto: delivery could not retry {job_id} after its usage limit: {error}"
+                );
+            }
+        });
+        Ok(())
+    }
+
     /// A check that failed on the first run on this code because it was
     /// killed, or in a repo whose environment may be down, before it sends
     /// the work back: killed, it runs again; with the environment down, it
@@ -3606,10 +3835,13 @@ fn result_state(
 }
 
 /// The check's process was stopped from outside (the system or a closed
-/// console on Windows, a signal elsewhere), not failed by its tests.
+/// console on Windows, a signal elsewhere) or could not start, not failed
+/// by its tests.
 fn killed(job: &DeliveryJob) -> bool {
-    // 0x40010004 (DBG_TERMINATE_PROCESS) and 0xC000013A (STATUS_CONTROL_C_EXIT).
-    const WINDOWS_KILLED: [i32; 2] = [0x4001_0004, 0xC000_013A_u32 as i32];
+    // 0x40010004 (DBG_TERMINATE_PROCESS), 0xC000013A (STATUS_CONTROL_C_EXIT)
+    // and 0xC0000142 (STATUS_DLL_INIT_FAILED: Windows could not start it,
+    // as when many processes start at once).
+    const WINDOWS_KILLED: [i32; 3] = [0x4001_0004, 0xC000_013A_u32 as i32, 0xC000_0142_u32 as i32];
     let timed_out = job
         .error
         .as_deref()

@@ -379,7 +379,7 @@ pub fn job_prompt(
     if !job.task_checks.is_empty() {
         lines.push(String::new());
         lines.push(
-            "If the assignment asks you to run the task's checks above in full (builds, linters, type checkers, test suites), do not: Tinto runs them on your result. Run only the tests of what you change."
+            "If the assignment asks you to run the task's checks above in full (builds, type checkers, test suites), do not: Tinto runs them on your result. Run only the tests of what you change, and the format and lint checks Tinto asked you to run above."
                 .to_string(),
         );
     }
@@ -2153,10 +2153,14 @@ fn model_unavailable(agent: DeliveryAgent, error: String) -> String {
         return error;
     }
     format!(
-        "El modelo de la etapa no está disponible para esta cuenta de {}: cámbialo en Ajustes. ({error})",
+        "{MODEL_REFUSED} {}: cámbialo en Ajustes. ({error})",
         super::service::agent_name(agent)
     )
 }
+
+/// How a job's error starts when the account refused its model.
+pub(super) const MODEL_REFUSED: &str =
+    "El modelo de la etapa no está disponible para esta cuenta de";
 
 /// Codex wraps API errors as JSON text; keep the human-readable message.
 fn provider_error_reason(error: &str) -> String {

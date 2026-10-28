@@ -24,6 +24,7 @@ use crate::agent_console::checkpoint::CheckpointConfig;
 
 const CODEX_OK: &str = include_str!("fixtures/codex-ok.jsonl");
 const CODEX_FAILED: &str = include_str!("fixtures/codex-failed.jsonl");
+const CODEX_LIMIT: &str = include_str!("fixtures/codex-limit.jsonl");
 const CLAUDE_OK: &str = include_str!("fixtures/claude-ok.jsonl");
 /// How often a test looks again at what it waits for.
 const POLL: Duration = Duration::from_millis(20);
@@ -40,6 +41,7 @@ fn fake_launcher() -> Launcher {
         let events = match spec.get("events").copied() {
             Some("codex-ok") => CODEX_OK,
             Some("codex-failed") => CODEX_FAILED,
+            Some("codex-limit") => CODEX_LIMIT,
             Some("claude-ok") => CLAUDE_OK,
             _ => "",
         };
@@ -215,23 +217,27 @@ impl Harness {
 
     fn dispatch(&self, task: &DeliveryTask, role: &str, prompt: &str) -> DeliveryJob {
         self.service
-            .dispatch(NewJob {
-                task_id: task.id.clone(),
-                role: role.to_string(),
-                agent: DeliveryAgent::Codex,
-                model: None,
-                access: DeliveryAccess::Workspace,
-                prompt: prompt.to_string(),
-                writes: None,
-                lease: None,
-                timeout_minutes: None,
-                reasoning: None,
-                platform: None,
-                read_dirs: Vec::new(),
-                stage_default: false,
-                needs_environment: false,
-            })
+            .dispatch(self.new_job(task, role, prompt))
             .unwrap()
+    }
+
+    fn new_job(&self, task: &DeliveryTask, role: &str, prompt: &str) -> NewJob {
+        NewJob {
+            task_id: task.id.clone(),
+            role: role.to_string(),
+            agent: DeliveryAgent::Codex,
+            model: None,
+            access: DeliveryAccess::Workspace,
+            prompt: prompt.to_string(),
+            writes: None,
+            lease: None,
+            timeout_minutes: None,
+            reasoning: None,
+            platform: None,
+            read_dirs: Vec::new(),
+            stage_default: false,
+            needs_environment: false,
+        }
     }
 
     fn wait(&self, job_id: &str) -> DeliveryJob {
@@ -443,10 +449,17 @@ fn a_read_only_job_that_changes_files_is_invalid() {
 }
 
 #[test]
-fn a_failed_agent_reports_its_reason() {
+fn a_failed_agent_reports_its_reason_and_a_refused_model_is_not_dispatched_again() {
     let h = harness();
     let task = h.task("K-3");
-    let job = h.dispatch(&task, "implementation", "events=codex-failed exit=1");
+    let with_model = |prompt: &str| NewJob {
+        model: Some("gpt-6.1-sol".into()),
+        ..h.new_job(&task, "implementation", prompt)
+    };
+    let job = h
+        .service
+        .dispatch(with_model("events=codex-failed exit=1"))
+        .unwrap();
     let job = h.wait(&job.id);
     assert_eq!(job.status, DeliveryJobStatus::Failed);
     // A model the account cannot use is said plainly, with the provider's words.
@@ -455,6 +468,40 @@ fn a_failed_agent_reports_its_reason() {
         Some("El modelo de la etapa no está disponible para esta cuenta de Codex: cámbialo en Ajustes. (The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.)")
     );
     assert_eq!(job.exit_code, Some(1));
+    let again = eventually(|| h.service.dispatch(with_model("events=codex-ok")).err());
+    assert_eq!(again.category, "model_unavailable");
+    // The catalog seen anew: it may be dispatched again.
+    h.service
+        .set_model_catalog(DeliveryAgent::Codex, None, vec!["gpt-6.1-sol".into()])
+        .unwrap();
+    assert!(h.service.dispatch(with_model("events=codex-ok")).is_ok());
+}
+
+#[test]
+fn a_job_its_usage_limit_stopped_runs_again_later() {
+    let h = harness();
+    let task = h.task("K-3B");
+    let job = h.dispatch(&task, "implementation", "events=codex-limit exit=1");
+    assert_eq!(h.wait(&job.id).status, DeliveryJobStatus::Failed);
+    let retry = eventually(|| {
+        h.service
+            .overview()
+            .unwrap()
+            .jobs
+            .into_iter()
+            .find(|other| other.retry_of.as_deref() == Some(job.id.as_str()))
+    });
+    assert_eq!(retry.task_id, task.id);
+    let stopped = h.service.job(&job.id).unwrap();
+    assert!(
+        stopped
+            .error
+            .as_deref()
+            .unwrap()
+            .ends_with("Se reintentó tras el límite de uso."),
+        "{:?}",
+        stopped.error
+    );
 }
 
 #[test]
@@ -1269,13 +1316,21 @@ fn retry_on_restart_queues_again_once_the_jobs_safe_to_repeat_and_tells_the_coor
 }
 
 #[test]
-fn without_retry_on_restart_an_interrupted_job_stays_as_it_was() {
+fn without_retry_on_restart_an_interrupted_agent_job_stays_but_checks_run_again() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("delivery.sqlite");
     let h = harness_with_store(DeliveryStore::open(&path).unwrap());
     let task = h.task("R-3");
     let job = h.dispatch(&task, "implementation", "sleep=30");
     h.wait_status(&job.id, DeliveryJobStatus::Started);
+    // A check cut off with it: commands only, so it runs again regardless.
+    let mut checks = super::adapters::tests::sample_job(DeliveryAgent::Shell);
+    checks.id = "checks-1".into();
+    checks.task_id = task.id.clone();
+    checks.role = "checks".into();
+    checks.prompt = "exit=0".into();
+    checks.status = DeliveryJobStatus::Started;
+    h.service.store().unwrap().put_job(&checks).unwrap();
     close_tinto(&h.service);
     kill_job(&h.service, &job.id);
 
@@ -1288,11 +1343,16 @@ fn without_retry_on_restart_an_interrupted_job_stays_as_it_was() {
     .unwrap();
     restarted.retry_interrupted();
     let jobs = restarted.overview().unwrap().jobs;
-    assert_eq!(jobs.len(), 1);
     assert_eq!(
-        jobs[0].error.as_deref(),
+        restarted.job(&job.id).unwrap().error.as_deref(),
         Some("Tinto se cerró mientras el trabajo corría.")
     );
+    assert!(!jobs
+        .iter()
+        .any(|again| again.retry_of.as_deref() == Some(job.id.as_str())));
+    assert!(jobs
+        .iter()
+        .any(|again| again.retry_of.as_deref() == Some("checks-1")));
     let _ = h.service.cancel(&job.id);
 }
 
@@ -2844,6 +2904,37 @@ fn package(
             until: None,
         }),
     })
+}
+
+#[test]
+fn a_package_without_work_of_its_own_detaches_onto_the_base() {
+    let h = harness();
+    let first = package(&h, "K-61", 1, None).unwrap();
+    let first_tree = PathBuf::from(plain_path(&first.worktree));
+    std::fs::write(first_tree.join("backend.txt"), "api\n").unwrap();
+    git(&first_tree, &["add", "."]);
+    git(&first_tree, &["commit", "-q", "-m", "backend"]);
+    let second = package(&h, "K-61", 2, Some(1)).unwrap();
+    let second_tree = PathBuf::from(plain_path(&second.worktree));
+    assert!(second_tree.join("backend.txt").exists());
+
+    // Work of its own on package 1's code: detaching would lose it.
+    std::fs::write(second_tree.join("ui.txt"), "ui\n").unwrap();
+    assert_eq!(
+        h.service.detach_package(&second.id).unwrap_err().category,
+        "package_detach_refused"
+    );
+    std::fs::remove_file(second_tree.join("ui.txt")).unwrap();
+
+    let detached = h.service.detach_package(&second.id).unwrap();
+    assert_eq!(detached.base_ref, "main");
+    assert_eq!(detached.package.unwrap().builds_on, None);
+    assert!(detached.blockers.iter().all(|blocker| !blocker.is_open()));
+    assert!(!second_tree.join("backend.txt").exists());
+    assert_eq!(
+        in_worktree(&second, &["rev-parse", "HEAD"]),
+        in_worktree(&second, &["rev-parse", "main"])
+    );
 }
 
 #[test]
@@ -8127,6 +8218,22 @@ fn tinto_runs_the_task_checks_after_a_change_and_sends_a_failure_back_to_impleme
 }
 
 #[test]
+fn a_writing_stage_runs_the_format_and_lint_checks_before_it_ends() {
+    let h = harness();
+    set_repo_checks(&h, &["npm test", "npm run lint"]);
+    let task = h.task("K-50");
+    h.service
+        .set_task_checks(&task.id, vec!["npm test".into(), "npm run lint".into()])
+        .unwrap();
+    let implementation = h.dispatch(&task, "implementation", "events=codex-ok");
+    let told = h.wait(&implementation.id).task_checks;
+    assert!(
+        told.contains(&"Before you finish, run the format and lint checks and fix what they report: `npm run lint`.".to_string()),
+        "{told:?}"
+    );
+}
+
+#[test]
 fn a_stage_after_passing_checks_is_told_not_to_run_them_again() {
     let h = harness();
     set_repo_checks(&h, &["exit=0"]);
@@ -9423,7 +9530,9 @@ fn a_job_cut_off_by_a_restart_goes_on_in_its_session_when_retried() {
     cut.status = DeliveryJobStatus::Interrupted;
     cut.error = Some("Tinto se cerró mientras el trabajo corría.".into());
     h.service.store().unwrap().put_job(&cut).unwrap();
-    h.service.retry_after_restart(&cut.id).unwrap();
+    h.service
+        .retry_after_restart(&cut.id, "al reiniciar Tinto")
+        .unwrap();
     let retry = h
         .service
         .overview()
@@ -9442,7 +9551,9 @@ fn a_job_cut_off_by_a_restart_goes_on_in_its_session_when_retried() {
     silent.status = DeliveryJobStatus::Interrupted;
     silent.provider_session_id = Some("never-started".into());
     h.service.store().unwrap().put_job(&silent).unwrap();
-    h.service.retry_after_restart(&silent.id).unwrap();
+    h.service
+        .retry_after_restart(&silent.id, "al reiniciar Tinto")
+        .unwrap();
     let again = h
         .service
         .overview()
@@ -9607,10 +9718,12 @@ fn the_merge_needs_green_ci_on_the_head_and_a_base_that_has_not_moved() {
             ci: Some(super::prs::CiState::NotRun)
         }
     );
-    // Green, beside a job of the same workflow that runs only on main.
+    // Green, beside a job of the same workflow that runs only on main and
+    // a workflow that skipped by its own condition.
     let green = json!([
         check("ci", "COMPLETED", "SUCCESS"),
-        check("deploy", "COMPLETED", "SKIPPED")
+        check("deploy", "COMPLETED", "SKIPPED"),
+        {"workflowName": "PR Agent", "name": "PR Agent review", "status": "COMPLETED", "conclusion": "SKIPPED"}
     ]);
     assert!(refused(green.clone()).is_none());
     let asked = h
@@ -9686,14 +9799,19 @@ fn the_pr_and_push_steps_put_the_ci_label_on_and_a_push_starts_ci_again() {
 }
 
 #[test]
-fn a_pr_merged_on_github_with_red_ci_opens_a_round_to_fix_it_on_the_base() {
+fn a_pr_merged_on_github_opens_a_ci_round_only_while_a_check_fails() {
     let h = harness();
     let task = h.task("CI-3");
+    // Passed, beside a workflow that skipped by its own condition.
+    let passed = json!([
+        {"workflowName": "api", "name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"workflowName": "PR Agent", "name": "PR Agent review", "status": "COMPLETED", "conclusion": "SKIPPED"}
+    ]);
     let github = FakeGitHub::new(
         json!({
             "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
             "headRefOid": "fedcba98", "baseRefName": "main", "reviews": [], "comments": [],
-            "statusCheckRollup": [{"workflowName": "api", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}]
+            "statusCheckRollup": passed.clone()
         }),
         json!([]),
     );
@@ -9702,6 +9820,23 @@ fn a_pr_merged_on_github_with_red_ci_opens_a_round_to_fix_it_on_the_base() {
     h.service.link_pr(&task.id, &reference).unwrap();
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
     github.snapshot.lock().unwrap()["state"] = json!("MERGED");
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let rounds = || h.service.store().unwrap().task_rounds(&task.id).unwrap();
+
+    // Merged with CI ok: the merge is done and nothing needs fixing.
+    let merge = h
+        .service
+        .latest_approval(&task.id, DeliveryRung::Merge)
+        .unwrap()
+        .unwrap();
+    assert_eq!(merge.status, DeliveryApprovalStatus::Executed);
+    let pr = h.service.task_pr(&task.id).unwrap().unwrap();
+    assert_eq!(pr.merged_failing_ci, None);
+    assert!(rounds().is_empty());
+    let clean = h.service.overview().unwrap().phases[&task.id].phase.clone();
+
+    // GitHub shows a check on that head failing.
+    github.snapshot.lock().unwrap()["statusCheckRollup"] = json!([{"workflowName": "api", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}]);
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
 
     let why = "el PR #9 tiene checks fallando en fedcba9";
@@ -9728,15 +9863,19 @@ fn a_pr_merged_on_github_with_red_ci_opens_a_round_to_fix_it_on_the_base() {
     );
     // Read again: still one round.
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
-    assert_eq!(
-        h.service
-            .store()
-            .unwrap()
-            .task_rounds(&task.id)
-            .unwrap()
-            .len(),
-        1
-    );
+    assert_eq!(rounds().len(), 1);
+
+    // Recorded as failing, but GitHub no longer shows a failure (its re-run
+    // passed, or it was a skip once counted against it): taken back.
+    github.snapshot.lock().unwrap()["statusCheckRollup"] = passed;
+    h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    let pr = h.service.task_pr(&task.id).unwrap().unwrap();
+    assert_eq!(pr.merged_failing_ci, None);
+    let round = rounds().pop().unwrap();
+    assert!(!round.is_open());
+    assert_eq!(round.outcome.as_deref(), Some("CI passed; no fix needed"));
+    // Where a clean merge leaves it.
+    assert_eq!(h.service.overview().unwrap().phases[&task.id].phase, clean);
 }
 
 /// A task whose sync stopped on conflicts in `shared.txt`, with `exit=0`
@@ -9817,6 +9956,38 @@ fn during_a_merge_only_its_stages_run_and_tinto_asks_its_commit_once_they_pass()
     assert!(super::tasks::merge_head(super::tasks::Place::Native, &task.worktree).is_none());
     let qa = try_dispatch(&h, &task, "qa").unwrap();
     h.wait(&qa.id);
+}
+
+#[test]
+fn a_merge_committed_and_pushed_by_hand_closes_its_round_and_asks_no_commit() {
+    let h = harness();
+    let task = conflicted_merge(&h, "MC-0");
+    resolve_merge(&h, &task);
+    merge_commit_asked(&h, &task);
+    // The user concludes the merge and publishes it outside Tinto.
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        h.repo.path(),
+        &["remote", "add", "origin", &plain_path(origin.path())],
+    );
+    git(&task.worktree, &["add", "--all"]);
+    git(&task.worktree, &["commit", "-q", "--no-edit"]);
+    git(&task.worktree, &["push", "-q", "-u", "origin", "HEAD"]);
+
+    h.service.overview().unwrap();
+    let store = h.service.store().unwrap();
+    let rounds = store.task_rounds(&task.id).unwrap();
+    assert!(rounds.iter().all(|round| !round.is_open()), "{rounds:?}");
+    assert_eq!(
+        rounds.last().unwrap().outcome.as_deref(),
+        Some("merge confirmado fuera de Tinto")
+    );
+    assert!(!store.approvals().unwrap().iter().any(|approval| {
+        approval.task_id == task.id
+            && approval.rung == DeliveryRung::Commit
+            && approval.status == DeliveryApprovalStatus::Pending
+    }));
 }
 
 #[test]

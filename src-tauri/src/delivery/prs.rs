@@ -160,15 +160,17 @@ pub struct PrChecks {
     pub passing: u32,
     pub failing: u32,
     pub pending: u32,
-    /// Skipped jobs, beside others of their workflow that ran (a deploy
-    /// that runs only on main): they count for nothing.
+    /// Checks that concluded skipped or neutral (a deploy that runs only on
+    /// main, a workflow whose condition was false): they block nothing.
     #[serde(default)]
     pub skipped: u32,
-    /// Workflows that started on the head but skipped every job (the PR
-    /// touches their paths, yet a condition such as a label kept them
-    /// from running): CI did not run there.
+    /// Checks that never started: required checks with no run on the head,
+    /// statuses GitHub still expects.
     #[serde(default)]
     pub not_run: Vec<String>,
+    /// The base's required checks, when it has any: only they count.
+    #[serde(default)]
+    pub required: Vec<String>,
 }
 
 /// The CI of a PR's head commit, as the merge reads it.
@@ -178,17 +180,21 @@ pub enum CiState {
     Passing,
     Failing,
     Pending,
-    /// No check ran on the head, or a workflow it triggered skipped all.
+    /// A check never started, or nothing ran on the head: no check, or
+    /// (without required checks) every one skipped, as when CI waits for
+    /// a label.
     NotRun,
 }
 
 impl PrChecks {
+    /// What every reader of a PR's CI goes by: the merge, its phase and a
+    /// merge found on GitHub.
     pub fn state(&self) -> CiState {
         if self.failing > 0 {
             CiState::Failing
         } else if self.pending > 0 {
             CiState::Pending
-        } else if self.passing == 0 || !self.not_run.is_empty() {
+        } else if !self.not_run.is_empty() || (self.passing == 0 && self.required.is_empty()) {
             CiState::NotRun
         } else {
             CiState::Passing
@@ -248,7 +254,7 @@ pub struct DeliveryPr {
     pub head: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
-    /// Merged on GitHub while its head's CI was not green: what it was.
+    /// Merged on GitHub while a check on its head failed: what it was.
     #[serde(default)]
     pub merged_failing_ci: Option<String>,
     /// Its head's CI as the merge reads it; `None` in a repo without CI
@@ -324,7 +330,8 @@ impl DeliveryPr {
     }
 
     /// Why its head's CI does not let it merge, or `None` when it passed.
-    /// `label` is the one the repo runs CI on, when it has one.
+    /// `label` is the one the repo runs CI on, when it has one: named only
+    /// when the PR lacks it.
     pub fn ci_refusal(&self, label: Option<&str>) -> Option<String> {
         let sha = self
             .head
@@ -342,10 +349,20 @@ impl DeliveryPr {
                 "el PR #{} tiene checks en curso en {sha}",
                 self.number
             )),
-            CiState::NotRun => Some(match label {
-                Some(label) => format!("la CI no se ejecutó en {sha}: añade la etiqueta {label}"),
-                None => format!("la CI no se ejecutó en {sha}"),
-            }),
+            CiState::NotRun => {
+                let missing = label.filter(|label| {
+                    !self
+                        .labels
+                        .iter()
+                        .any(|known| known.eq_ignore_ascii_case(label))
+                });
+                Some(match missing {
+                    Some(label) => {
+                        format!("la CI no se ejecutó en {sha}: añade la etiqueta {label}")
+                    }
+                    None => format!("la CI no se ejecutó en {sha}"),
+                })
+            }
         }
     }
 
@@ -412,6 +429,7 @@ fn check_state(check: &Value) -> &'static str {
         return match state.to_ascii_uppercase().as_str() {
             "SUCCESS" => "passing",
             "FAILURE" | "ERROR" => "failing",
+            "EXPECTED" => "not_run",
             _ => "pending",
         };
     }
@@ -420,9 +438,52 @@ fn check_state(check: &Value) -> &'static str {
     }
     match upper("conclusion").as_str() {
         "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failing",
-        "SKIPPED" => "skipped",
+        "SKIPPED" | "NEUTRAL" => "skipped",
         _ => "passing",
     }
+}
+
+/// The checks on the head of a `gh pr view --json` answer. With the base's
+/// required checks (`requiredChecks`, which `GhCli::pr` adds), only they
+/// count, and one with no run on the head never started.
+fn head_checks(snapshot: &Value) -> PrChecks {
+    let required: Vec<String> = snapshot["requiredChecks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| name.as_str().map(str::to_string))
+        .collect();
+    let mut checks = PrChecks::default();
+    let mut seen: Vec<String> = Vec::new();
+    for check in snapshot["statusCheckRollup"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let name = ["name", "context"]
+            .iter()
+            .find_map(|key| check[*key].as_str().filter(|name| !name.is_empty()))
+            .unwrap_or_default()
+            .to_string();
+        if !required.is_empty() && !required.contains(&name) {
+            continue;
+        }
+        match check_state(check) {
+            "passing" => checks.passing += 1,
+            "failing" => checks.failing += 1,
+            "skipped" => checks.skipped += 1,
+            "not_run" => checks.not_run.push(name.clone()),
+            _ => checks.pending += 1,
+        }
+        seen.push(name);
+    }
+    for name in &required {
+        if !seen.contains(name) && !checks.not_run.contains(name) {
+            checks.not_run.push(name.clone());
+        }
+    }
+    checks.required = required;
+    checks
 }
 
 /// Updates `pr` from a `gh pr view --json` answer. `me` is the user's login:
@@ -459,37 +520,7 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
         .flatten()
         .filter_map(|label| label["name"].as_str().map(str::to_string))
         .collect();
-    let mut checks = PrChecks::default();
-    // Each workflow (a status by its context) and whether a job of it ran.
-    let mut workflows: Vec<(String, bool)> = Vec::new();
-    for check in snapshot["statusCheckRollup"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        let state = check_state(check);
-        match state {
-            "passing" => checks.passing += 1,
-            "failing" => checks.failing += 1,
-            "skipped" => checks.skipped += 1,
-            _ => checks.pending += 1,
-        }
-        let workflow = ["workflowName", "name", "context"]
-            .iter()
-            .find_map(|key| text(&check[*key]))
-            .unwrap_or_default();
-        let ran = state != "skipped";
-        match workflows.iter_mut().find(|(name, _)| *name == workflow) {
-            Some((_, any)) => *any |= ran,
-            None => workflows.push((workflow, ran)),
-        }
-    }
-    checks.not_run = workflows
-        .into_iter()
-        .filter(|(_, ran)| !ran)
-        .map(|(name, _)| name)
-        .collect();
-    pr.checks = checks;
+    pr.checks = head_checks(snapshot);
 
     // Each reviewer's latest verdict; comments alone are not one.
     let mut verdicts: Vec<(&str, &str, &str)> = snapshot["reviews"]
@@ -574,6 +605,25 @@ pub fn apply_snapshot(pr: &mut DeliveryPr, snapshot: &Value, me: &str) {
                 activity.push((time.to_string(), author.to_string(), review, line));
             }
         }
+    }
+    // Comments on the code (`GhCli::pr` adds GitHub's REST answer): where
+    // and what, which a review's verdict alone does not say.
+    for item in snapshot["reviewComments"].as_array().into_iter().flatten() {
+        let author = item["user"]["login"].as_str().unwrap_or_default();
+        let (Some(time), Some(path)) = (item["created_at"].as_str(), item["path"].as_str()) else {
+            continue;
+        };
+        let body = item["body"].as_str().unwrap_or_default();
+        let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        if author.eq_ignore_ascii_case(me) || body.is_empty() {
+            continue;
+        }
+        let at = match item["line"].as_u64().or(item["original_line"].as_u64()) {
+            Some(line) => format!("{path}:{line}"),
+            None => path.to_string(),
+        };
+        let line = format!("{author} en {at}: {body}");
+        activity.push((time.to_string(), author.to_string(), false, line));
     }
     activity.sort();
     pr.latest_activity = activity
@@ -943,11 +993,52 @@ impl GhCli {
         serde_json::from_slice(&output.stdout)
             .map_err(|error| DeliveryError::new("github_failed", error.to_string()))
     }
+
+    /// The status checks `branch` of `repo` requires, by branch protection
+    /// or a ruleset; none when GitHub does not say.
+    fn required_checks(repo: &str, branch: &str) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let mut add = |name: Option<&str>| {
+            if let Some(name) = name.filter(|name| !name.is_empty()) {
+                if !names.iter().any(|known| known == name) {
+                    names.push(name.to_string());
+                }
+            }
+        };
+        if let Ok(found) = Self::json(&["api", &format!("repos/{repo}/branches/{branch}")]) {
+            let protection = &found["protection"]["required_status_checks"];
+            for context in protection["contexts"].as_array().into_iter().flatten() {
+                add(context.as_str());
+            }
+        }
+        if let Ok(rules) = Self::json(&["api", &format!("repos/{repo}/rules/branches/{branch}")]) {
+            for rule in rules.as_array().into_iter().flatten() {
+                if rule["type"] != "required_status_checks" {
+                    continue;
+                }
+                let checks = &rule["parameters"]["required_status_checks"];
+                for check in checks.as_array().into_iter().flatten() {
+                    add(check["context"].as_str());
+                }
+            }
+        }
+        names
+    }
 }
 
 impl GitHub for GhCli {
     fn pr(&self, url: &str) -> Result<Value, DeliveryError> {
-        Self::json(&["pr", "view", url, "--json", PR_FIELDS])
+        let mut snapshot = Self::json(&["pr", "view", url, "--json", PR_FIELDS])?;
+        if let Some(pr) = parse_pr_url(url) {
+            if let Some(base) = snapshot["baseRefName"].as_str() {
+                snapshot["requiredChecks"] = Value::from(Self::required_checks(&pr.repo, base));
+            }
+            // What a review said on the code: news a round must carry.
+            if let Ok(comments) = self.pr_review_comments(&pr.repo, pr.number) {
+                snapshot["reviewComments"] = comments;
+            }
+        }
+        Ok(snapshot)
     }
 
     fn me(&self) -> Result<String, DeliveryError> {
@@ -1592,7 +1683,7 @@ impl DeliveryService {
         }
         let merge = self.latest_approval(&pr.task_id, DeliveryRung::Merge)?;
         let step = match merge {
-            Some(merge) if merge.status == DeliveryApprovalStatus::Executed => return Ok(()),
+            Some(merge) if merge.status == DeliveryApprovalStatus::Executed => None,
             // A merge the user was about to approve happened on GitHub.
             Some(mut merge)
                 if matches!(
@@ -1603,22 +1694,30 @@ impl DeliveryService {
                 merge.status = DeliveryApprovalStatus::Executed;
                 merge.executed_at_ms = Some(now_ms());
                 merge.outcome = Some(merged_outside(pr));
-                merge
+                Some(merge)
             }
-            _ => found_step(
+            _ => Some(found_step(
                 &pr.task_id,
                 DeliveryRung::Merge,
                 format!("PR #{}", pr.number),
                 merged_outside(pr),
-            ),
+            )),
         };
-        self.save_approval(&step, "merge_found")?;
+        if let Some(step) = step {
+            self.save_approval(&step, "merge_found")?;
+        }
         self.check_merged_ci(pr)
     }
 
-    /// A PR merged on GitHub while its head's CI was red, still running or
-    /// never ran: the task says so, and a round fixes it on the base.
+    /// A PR merged on GitHub while a check on its head failed: the task says
+    /// so, and a round fixes it on the base. Skipped, running or never run
+    /// checks are no failure; one recorded as failing that GitHub no longer
+    /// shows failing (read again, or read before skipped checks stopped
+    /// counting) is taken back, its round closed.
     fn check_merged_ci(&self, pr: &DeliveryPr) -> Result<(), DeliveryError> {
+        if pr.checks.state() != CiState::Failing {
+            return self.clear_merged_ci(pr);
+        }
         if pr.merged_failing_ci.is_some() {
             return Ok(());
         }
@@ -1636,7 +1735,7 @@ impl DeliveryService {
             "pr_merged_failing_ci",
             Some(&task.id),
             None,
-            &format!("PR #{} fusionado con CI sin pasar: {why}", pr.number),
+            &format!("PR #{} fusionado con checks fallando: {why}", pr.number),
         )?;
         super::rounds::open_round(
             &store,
@@ -1645,13 +1744,44 @@ impl DeliveryService {
                 kind: "ci",
                 short: "CI en rojo".to_string(),
                 cause: format!(
-                    "El PR #{} se fusionó en GitHub con la CI sin pasar: arréglalo en {base}",
+                    "El PR #{} se fusionó en GitHub con checks fallando: arréglalo en {base}",
                     pr.number
                 ),
                 items: vec![why],
                 source: Some(format!("merged:{}", pr.url)),
             },
         )?;
+        drop(store);
+        self.notify();
+        Ok(())
+    }
+
+    /// Takes back a merge recorded with failing CI that GitHub does not show
+    /// failing: the merge stands, and the round to fix it closes.
+    fn clear_merged_ci(&self, pr: &DeliveryPr) -> Result<(), DeliveryError> {
+        if pr.merged_failing_ci.is_none() {
+            return Ok(());
+        }
+        let store = self.store()?;
+        let mut merged = pr.clone();
+        merged.merged_failing_ci = None;
+        store.put_pr(&merged)?;
+        let source = Some(format!("merged:{}", pr.url));
+        for mut round in store.task_rounds(&pr.task_id)? {
+            if round.source != source || !round.is_open() {
+                continue;
+            }
+            round.closed_at_ms = Some(now_ms());
+            round.outcome = Some("CI passed; no fix needed".to_string());
+            store.put_round(&round)?;
+            store.record_event(
+                now_ms(),
+                "round_closed",
+                Some(&pr.task_id),
+                None,
+                &super::rounds::round_text(&round),
+            )?;
+        }
         drop(store);
         self.notify();
         Ok(())
@@ -2548,7 +2678,8 @@ mod tests {
                 failing: 1,
                 pending: 2,
                 skipped: 1,
-                not_run: vec!["docs".to_string()],
+                not_run: Vec::new(),
+                required: Vec::new(),
             }
         );
         assert_eq!(pr.checks.state(), CiState::Failing);
@@ -2562,9 +2693,22 @@ mod tests {
             {"author": {"login": "ME"}, "state": "COMMENTED", "submittedAt": "2026-10-14T09:30:00Z"}
         ]);
         let comments = json!([{"author": {"login": "ana"}, "createdAt": "2026-10-14T09:10:00Z"}]);
-        apply_snapshot(&mut pr, &snapshot(reviews.clone(), comments.clone()), "me");
-        assert_eq!((pr.new_reviews, pr.new_comments), (1, 1));
+        // With the review's comments on the code; the user's own replies are
+        // no news.
+        let mut read = snapshot(reviews.clone(), comments.clone());
+        read["reviewComments"] = json!([
+            {"user": {"login": "luis"}, "path": "src/a.rs", "line": 12, "body": "Esto  falla con None", "created_at": "2026-10-14T09:00:00Z"},
+            {"user": {"login": "me"}, "path": "src/a.rs", "line": 12, "body": "Hecho", "created_at": "2026-10-14T09:20:00Z"}
+        ]);
+        apply_snapshot(&mut pr, &read, "me");
+        assert_eq!((pr.new_reviews, pr.new_comments), (1, 2));
         assert_eq!(pr.new_authors, vec!["ana".to_string(), "luis".to_string()]);
+        assert!(
+            pr.news
+                .contains(&"luis en src/a.rs:12: Esto falla con None".to_string()),
+            "{:?}",
+            pr.news
+        );
 
         pr.seen_until = pr.latest_activity.clone();
         apply_snapshot(&mut pr, &snapshot(reviews, comments), "me");
@@ -2573,5 +2717,133 @@ mod tests {
         apply_snapshot(&mut pr, &json!({"state": "MERGED"}), "me");
         assert_eq!(pr.state, "merged");
         assert!(!pr.is_open());
+    }
+
+    /// AIRInstitute/agentos#327 at 163a9b8 as GitHub gave it: builds passed,
+    /// docker jobs skipped (they run on push to main) and the whole PR Agent
+    /// workflow skipped by its own condition.
+    fn agentos_327() -> Value {
+        let run = |workflow: &str, name: &str, conclusion: &str| json!({"__typename": "CheckRun", "workflowName": workflow, "name": name, "status": "COMPLETED", "conclusion": conclusion});
+        json!([
+            run("PR Agent", "PR Agent review and describe", "SKIPPED"),
+            run("API Gateway CI", "ci / build", "SUCCESS"),
+            run("Frontend CI", "build", "SUCCESS"),
+            run("Scheduler service CI", "ci / build", "SUCCESS"),
+            run("Session Executor Service CI", "ci / build", "SUCCESS"),
+            run("Webhooks service CI", "ci / build", "SUCCESS"),
+            run("Workflows service CI", "ci / build", "SUCCESS"),
+            run("API Gateway CI", "ci / docker_image", "SKIPPED"),
+            run("Frontend CI", "docker_image", "SKIPPED"),
+            run("Scheduler service CI", "ci / docker_image", "SKIPPED"),
+            run(
+                "Session Executor Service CI",
+                "ci / docker_image",
+                "SKIPPED"
+            ),
+            run("Webhooks service CI", "ci / docker_image", "SKIPPED"),
+            run("Workflows service CI", "ci / docker_image", "SKIPPED")
+        ])
+    }
+
+    #[test]
+    fn the_head_ci_counts_skipped_and_neutral_checks_as_no_block() {
+        let run = |name: &str, status: &str, conclusion: &str| json!({"name": name, "status": status, "conclusion": conclusion});
+        let ok = || run("build", "COMPLETED", "SUCCESS");
+        let cases = [
+            (
+                "agentos#327",
+                agentos_327(),
+                json!(null),
+                CiState::Passing,
+                vec![],
+            ),
+            (
+                "neutral beside a pass",
+                json!([ok(), run("lint", "COMPLETED", "NEUTRAL")]),
+                json!(null),
+                CiState::Passing,
+                vec![],
+            ),
+            (
+                "one failing",
+                json!([ok(), run("lint", "COMPLETED", "TIMED_OUT")]),
+                json!(null),
+                CiState::Failing,
+                vec![],
+            ),
+            (
+                "one running",
+                json!([ok(), run("e2e", "QUEUED", "")]),
+                json!(null),
+                CiState::Pending,
+                vec![],
+            ),
+            (
+                "nothing on the sha",
+                json!([]),
+                json!(null),
+                CiState::NotRun,
+                vec![],
+            ),
+            (
+                "everything skipped, as without the CI label",
+                json!([run("build", "COMPLETED", "SKIPPED")]),
+                json!(null),
+                CiState::NotRun,
+                vec![],
+            ),
+            (
+                "a status still expected",
+                json!([ok(), {"context": "ci/jenkins", "state": "EXPECTED"}]),
+                json!(null),
+                CiState::NotRun,
+                vec!["ci/jenkins"],
+            ),
+            // Required checks decide: others failing do not count, theirs
+            // skipped pass, and one missing never started.
+            (
+                "required passed, another failing",
+                json!([ok(), run("lint", "COMPLETED", "FAILURE")]),
+                json!(["build"]),
+                CiState::Passing,
+                vec![],
+            ),
+            (
+                "required skipped",
+                json!([run("build", "COMPLETED", "SKIPPED")]),
+                json!(["build"]),
+                CiState::Passing,
+                vec![],
+            ),
+            (
+                "required missing",
+                json!([ok()]),
+                json!(["build", "e2e"]),
+                CiState::NotRun,
+                vec!["e2e"],
+            ),
+        ];
+        for (case, rollup, required, state, not_run) in cases {
+            let checks =
+                head_checks(&json!({"statusCheckRollup": rollup, "requiredChecks": required}));
+            assert_eq!(checks.state(), state, "{case}");
+            assert_eq!(checks.not_run, not_run, "{case}");
+        }
+    }
+
+    #[test]
+    fn the_ci_label_is_asked_only_when_the_pr_lacks_it() {
+        let reference = parse_pr_url("https://github.com/o/r/pull/7").unwrap();
+        let mut pr = DeliveryPr::linked("t1", &reference);
+        pr.head = Some("163a9b8f4c".into());
+        assert_eq!(
+            pr.ci_refusal(Some("Ready")).as_deref(),
+            Some("la CI no se ejecutó en 163a9b8: añade la etiqueta Ready")
+        );
+        pr.labels = vec!["ready".into()];
+        assert_eq!(
+            pr.ci_refusal(Some("Ready")).as_deref(),
+            Some("la CI no se ejecutó en 163a9b8")
+        );
     }
 }

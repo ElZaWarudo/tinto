@@ -1115,6 +1115,10 @@ pub struct DeliverySettingsChanges {
     pub setup_add: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setup_remove: Vec<String>,
+    /// Commands that tell whether a service the jobs need is up: they
+    /// become environment probes (and checks, which probes must be).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probes_add: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

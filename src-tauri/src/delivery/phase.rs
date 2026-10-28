@@ -376,11 +376,14 @@ pub fn open_merge<'a>(
         sync.status == DeliveryApprovalStatus::Executed && !sync.conflicts.is_empty()
     })?;
     let at = sync.executed_at_ms.unwrap_or(0);
-    let concluded = approvals.iter().any(|approval| {
-        approval.rung == DeliveryRung::Commit
-            && approval.status == DeliveryApprovalStatus::Executed
-            && approval.executed_at_ms.unwrap_or(0) > at
-    });
+    // Concluded by a commit step, or outside Tinto (the sync then records
+    // the commit that did).
+    let concluded = !sync.created.is_empty()
+        || approvals.iter().any(|approval| {
+            approval.rung == DeliveryRung::Commit
+                && approval.status == DeliveryApprovalStatus::Executed
+                && approval.executed_at_ms.unwrap_or(0) > at
+        });
     (!concluded).then_some(sync)
 }
 

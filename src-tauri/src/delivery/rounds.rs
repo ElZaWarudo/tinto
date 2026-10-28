@@ -151,11 +151,14 @@ fn checks_round(task: &DeliveryTask, job: &DeliveryJob, jobs: &[DeliveryJob]) ->
 /// reviews and comments.
 fn pr_round(pr: &DeliveryPr, rounds: &[DeliveryRound]) -> Option<NewRound> {
     // An approval asks for no work: only what else reviewers said sends the
-    // work back.
-    let news = pr
+    // work back, and only that is addressed.
+    let mut items: Vec<String> = pr
         .news
         .iter()
-        .any(|line| !line.ends_with(super::prs::APPROVED_NEWS));
+        .filter(|item| !item.ends_with(super::prs::APPROVED_NEWS))
+        .map(|item| line(item))
+        .collect();
+    let news = !items.is_empty();
     // Changes asked since the latest round that answered the PR.
     let answered = rounds
         .iter()
@@ -180,17 +183,23 @@ fn pr_round(pr: &DeliveryPr, rounds: &[DeliveryRound]) -> Option<NewRound> {
         (_, true) => format!("Comentarios nuevos en el PR #{}", pr.number),
         (_, false) => format!("Comentarios nuevos en el PR #{} de {by}", pr.number),
     };
-    if !pr.news.is_empty() {
+    if news {
         cause.push_str(&format!(
             " ({})",
-            plural(pr.news.len(), "comentario", "comentarios")
+            plural(items.len(), "comentario", "comentarios")
+        ));
+    } else {
+        // Changes asked whose words Tinto no longer has (seen already).
+        items.push(format!(
+            "Lee en {} la revisión que pidió cambios y sus comentarios",
+            pr.url
         ));
     }
     Some(NewRound {
         kind: "pr",
         short: "PR".to_string(),
         cause,
-        items: pr.news.iter().map(|item| line(item)).collect(),
+        items,
         source: None,
     })
 }
@@ -213,7 +222,10 @@ fn task_approvals(
         .collect())
 }
 
-fn open_of(store: &DeliveryStore, task_id: &str) -> Result<Option<DeliveryRound>, DeliveryError> {
+pub(super) fn open_of(
+    store: &DeliveryStore,
+    task_id: &str,
+) -> Result<Option<DeliveryRound>, DeliveryError> {
     Ok(store
         .task_rounds(task_id)?
         .into_iter()
@@ -615,6 +627,15 @@ mod tests {
     fn an_approval_alone_sends_no_work_back() {
         assert!(pr_round(&pr(&["ana aprobó"]), &[]).is_none());
         let round = pr_round(&pr(&["ana aprobó", "ana: Falta un test"]), &[]).unwrap();
-        assert_eq!(round.items, ["ana aprobó", "ana: Falta un test"]);
+        assert_eq!(round.items, ["ana: Falta un test"]);
+        // Changes asked, their words already seen: the round says where.
+        let mut asked = pr(&[]);
+        asked.review_decision = Some("changes_requested".into());
+        asked.changes_requested_at_ms = Some(2);
+        let round = pr_round(&asked, &[]).unwrap();
+        assert_eq!(
+            round.items,
+            ["Lee en https://github.com/o/r/pull/5 la revisión que pidió cambios y sus comentarios"]
+        );
     }
 }

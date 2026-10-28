@@ -490,7 +490,7 @@ describe("a followed PR", () => {
     const red = status({ kind: "merged_failing_ci", number: 9, why: "checks fallando en fedcba9" });
     expect(red).toMatchObject({
       tone: "danger",
-      label: "PR #9 fusionado con la CI sin pasar",
+      label: "PR #9 fusionado con checks fallando",
       detail: "checks fallando en fedcba9",
     });
   });

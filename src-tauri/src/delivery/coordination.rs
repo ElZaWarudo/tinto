@@ -1886,6 +1886,66 @@ impl DeliveryService {
     }
 
     /// The sync whose merge is still in progress in the task's worktree.
+    /// A sync whose merge git no longer has in progress, its merged commit on
+    /// the branch: someone committed the merge outside Tinto. The sync
+    /// records that commit, so nothing waits for a commit step to conclude
+    /// it any more.
+    fn record_merge_concluded_outside(&self, task: &DeliveryTask) -> Result<(), DeliveryError> {
+        let approvals: Vec<DeliveryApproval> = self
+            .store()?
+            .approvals()?
+            .into_iter()
+            .filter(|approval| approval.task_id == task.id)
+            .collect();
+        let refs: Vec<&DeliveryApproval> = approvals.iter().collect();
+        let Some(mut sync) = super::phase::open_merge(&refs, true).cloned() else {
+            return Ok(());
+        };
+        let place = Place::of(task.distro.as_deref());
+        let merged = sync
+            .merge_head
+            .as_deref()
+            .is_some_and(|commit| tasks::on_branch(place, &task.worktree, commit));
+        let Ok(head) = tasks::head(place, &task.worktree) else {
+            return Ok(());
+        };
+        if !merged {
+            return Ok(());
+        }
+        sync.created = vec![head];
+        self.save_approval(&sync, "merge_concluded_outside")?;
+        // Its round ends with that commit, as with Tinto's.
+        let store = self.store()?;
+        for mut round in store.task_rounds(&task.id)? {
+            if round.kind != "sync"
+                || round.source.as_deref() != Some(sync.id.as_str())
+                || !round.is_open()
+            {
+                continue;
+            }
+            round.closed_at_ms = Some(now_ms());
+            round.outcome = Some("merge confirmado fuera de Tinto".to_string());
+            store.put_round(&round)?;
+            store.record_event(
+                now_ms(),
+                "round_closed",
+                Some(&task.id),
+                None,
+                &super::rounds::round_text(&round),
+            )?;
+        }
+        drop(store);
+        // The commit Tinto asked to conclude it has nothing left to commit.
+        for asked in approvals.iter().filter(|approval| {
+            approval.rung == DeliveryRung::Commit
+                && approval.status == DeliveryApprovalStatus::Pending
+                && approval.requested_by == "auto"
+        }) {
+            self.withdraw_approval(&asked.id, "el merge se confirmó fuera de Tinto")?;
+        }
+        Ok(())
+    }
+
     fn task_open_merge(
         &self,
         task: &DeliveryTask,
@@ -1936,6 +1996,7 @@ impl DeliveryService {
     pub(super) fn conclude_merge(&self, task_id: &str) -> Result<(), DeliveryError> {
         let task = self.task(task_id)?;
         let Some(sync) = self.task_open_merge(&task)? else {
+            self.record_merge_concluded_outside(&task)?;
             let store = self.store()?;
             return super::rounds::release_waiting(&store, task_id);
         };
@@ -2131,6 +2192,28 @@ impl DeliveryService {
             self.save_approval(&approval, "commit_rewritten")?;
             return Ok(false);
         }
+        // Committed and published outside Tinto (a merge redone and pushed by
+        // hand), with nothing left to commit: the step stands on what the
+        // branch has, and asking a commit again would find nothing.
+        let head = tasks::head(place, &task.worktree)?;
+        let clean = tasks::worktree_state(place, &task.worktree, &task.base_commit)
+            .is_ok_and(|state| !state.dirty);
+        if clean
+            && tasks::merge_head(place, &task.worktree).is_none()
+            && tasks::published(place, &task.worktree, &head)
+        {
+            approval.created = vec![head];
+            self.save_approval(&approval, "commit_rewritten")?;
+            return Ok(false);
+        }
+        // Another reader (the view, a wait) may have found it first.
+        let still_done = self
+            .store()?
+            .approval(&approval.id)?
+            .is_some_and(|stored| stored.status == DeliveryApprovalStatus::Executed);
+        if !still_done {
+            return Ok(true);
+        }
         approval.status = DeliveryApprovalStatus::Undone;
         approval.outcome = Some(format!(
             "Los commits que hizo Tinto ({}) ya no están en la rama: se deshicieron o reescribieron fuera de Tinto (reset, amend o rebase). Hay que volver a preparar el commit.",
@@ -2239,6 +2322,12 @@ impl DeliveryService {
                 .is_some_and(|approval| approval.status == DeliveryApprovalStatus::Executed);
             if committed && !pushed {
                 self.commits_lost(&task)?;
+            }
+            // A sync's merge committed by hand, its round still open.
+            let store = self.store()?;
+            if super::rounds::open_of(&store, &task.id)?.is_some() {
+                drop(store);
+                self.record_merge_concluded_outside(&task)?;
             }
         }
         Ok(())

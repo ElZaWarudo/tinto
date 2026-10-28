@@ -1924,6 +1924,7 @@ describe("DeliveryPanel", () => {
         qa_commands_add: [],
         setup_add: [],
         setup_remove: [],
+        probes_add: [],
       }),
     );
   });
@@ -1976,6 +1977,7 @@ describe("DeliveryPanel", () => {
         qa_commands_add: [],
         setup_add: ["npm --prefix frontend ci", "npm run bindings"],
         setup_remove: [],
+        probes_add: [],
       }),
     );
   });
@@ -2031,6 +2033,7 @@ describe("DeliveryPanel", () => {
         qa_commands_add: [],
         setup_add: [],
         setup_remove: [],
+        probes_add: [],
         check_env: { TEST_DB_MONGO_URL: "mongodb://127.0.0.1:27419/agos{task}" },
       }),
     );

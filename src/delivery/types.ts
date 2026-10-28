@@ -663,6 +663,7 @@ export interface DeliverySettingsChanges {
   qa_commands_add?: string[];
   setup_add?: string[];
   setup_remove?: string[];
+  probes_add?: string[];
   bootstrap?: string | null;
   qa_browser?: boolean | null;
   verification?: string | null;
@@ -824,15 +825,17 @@ export interface DeliveryPr {
     failing: number;
     pending: number;
     skipped?: number;
-    /** Workflows that started on the head but skipped every job. */
+    /** Checks that never started (required with no run, or expected). */
     not_run?: string[];
+    /** The base's required checks, when it has any: only they count. */
+    required?: string[];
   };
   /** Its head's CI as the merge reads it; null in a repo without CI where no check ran. */
   ci?: DeliveryCiState | null;
   /** The head commit its checks ran on. */
   head?: string | null;
   labels?: string[];
-  /** Merged on GitHub while its head's CI was not green: what it was. */
+  /** Merged on GitHub while a check on its head failed: what it was. */
   merged_failing_ci?: string | null;
   /** Reviews and comments by others since the user last saw the PR. */
   new_reviews: number;

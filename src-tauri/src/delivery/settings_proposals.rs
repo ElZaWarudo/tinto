@@ -39,6 +39,7 @@ fn clean(changes: &DeliverySettingsChanges) -> DeliverySettingsChanges {
         qa_commands_add: trimmed(&changes.qa_commands_add),
         setup_add: trimmed(&changes.setup_add),
         setup_remove: trimmed(&changes.setup_remove),
+        probes_add: trimmed(&changes.probes_add),
         bootstrap: changes
             .bootstrap
             .as_deref()
@@ -62,6 +63,7 @@ fn is_empty(changes: &DeliverySettingsChanges) -> bool {
         && changes.qa_commands_add.is_empty()
         && changes.setup_add.is_empty()
         && changes.setup_remove.is_empty()
+        && changes.probes_add.is_empty()
         && changes.bootstrap.is_none()
         && changes.qa_browser.is_none()
         && changes.verification.is_none()
@@ -130,6 +132,11 @@ fn problems(
         &settings.qa_commands,
     );
     commands("setup_add", &changes.setup_add, &settings.setup);
+    commands(
+        "probes_add",
+        &changes.probes_add,
+        &settings.environment_probes,
+    );
     if let Some(bootstrap) = &changes.bootstrap {
         if let Some(problem) = command_problem(bootstrap, task) {
             problems.push(format!("bootstrap «{bootstrap}»: {problem}"));
@@ -185,6 +192,7 @@ fn is_part_of(part: &DeliverySettingsChanges, whole: &DeliverySettingsChanges) -
         && within(&part.qa_commands_add, &whole.qa_commands_add)
         && within(&part.setup_add, &whole.setup_add)
         && within(&part.setup_remove, &whole.setup_remove)
+        && within(&part.probes_add, &whole.probes_add)
         && (part.bootstrap.is_none() || part.bootstrap == whole.bootstrap)
         && (part.qa_browser.is_none() || part.qa_browser == whole.qa_browser)
         && (part.verification.is_none() || part.verification == whole.verification)
@@ -218,6 +226,14 @@ fn apply(settings: &mut DeliveryRepoSettings, changes: &DeliverySettingsChanges)
     settings
         .setup
         .retain(|item| !changes.setup_remove.contains(item));
+    for item in &changes.probes_add {
+        if !settings.environment_probes.contains(item) {
+            settings.environment_probes.push(item.clone());
+        }
+        if !settings.checks.contains(item) {
+            settings.checks.push(item.clone());
+        }
+    }
     if let Some(bootstrap) = &changes.bootstrap {
         settings.bootstrap = Some(bootstrap.clone()).filter(|text| !text.is_empty());
     }
@@ -488,6 +504,21 @@ mod tests {
     }
 
     #[test]
+    fn an_added_probe_is_a_check_too_so_it_runs() {
+        let mut settings = DeliveryRepoSettings {
+            checks: vec!["npm test".into()],
+            ..Default::default()
+        };
+        let changes = DeliverySettingsChanges {
+            probes_add: vec!["npm test".into(), "nc -z 127.0.0.1 27419".into()],
+            ..Default::default()
+        };
+        apply(&mut settings, &changes);
+        assert_eq!(settings.environment_probes, changes.probes_add);
+        assert_eq!(settings.checks, changes.probes_add);
+    }
+
+    #[test]
     fn a_part_must_come_from_the_proposal() {
         let whole = DeliverySettingsChanges {
             checks_add: vec!["a".into(), "b".into()],
@@ -518,6 +549,7 @@ mod tests {
                 qa_commands_add: vec!["qa".into()],
                 setup_add: vec!["make bindings".into()],
                 setup_remove: vec!["gone".into()],
+                probes_add: Vec::new(),
                 bootstrap: Some("npm ci".into()),
                 qa_browser: Some(true),
                 verification: Some("e2e".into()),
