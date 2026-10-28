@@ -75,6 +75,44 @@ impl DeliveryService {
         Ok(shots)
     }
 
+    /// The QA screenshots a PR description or a reply names where it shows
+    /// them, `![what it shows](qa:<file>)`: each from the newest QA of the
+    /// task that has it. A name no QA of the task has is refused.
+    pub(super) fn named_screenshots(
+        &self,
+        task_id: &str,
+        body: &str,
+    ) -> Result<Vec<DeliveryReplyImage>, DeliveryError> {
+        let named = qa_refs(body);
+        if named.is_empty() {
+            return Ok(Vec::new());
+        }
+        let available = self.qa_screenshots(task_id)?;
+        let mut images: Vec<DeliveryReplyImage> = Vec::new();
+        for file in named {
+            let Some(shot) = available.iter().find(|shot| shot.file == file) else {
+                let mut names: Vec<&str> =
+                    available.iter().map(|shot| shot.file.as_str()).collect();
+                names.dedup();
+                return Err(invalid(&format!(
+                    "{file} no es una captura de la QA de esta tarea; las que hay: {}",
+                    if names.is_empty() {
+                        "ninguna".to_string()
+                    } else {
+                        names.join(", ")
+                    }
+                )));
+            };
+            if !images.iter().any(|image| image.file == file) {
+                images.push(DeliveryReplyImage {
+                    job_id: shot.job_id.clone(),
+                    file: file.to_string(),
+                });
+            }
+        }
+        Ok(images)
+    }
+
     /// The QA screenshots the user chose for a PR step or a reply not
     /// approved yet.
     pub fn set_reply_images(
@@ -107,14 +145,15 @@ impl DeliveryService {
     }
 
     /// The text of a PR step or a reply as it is published: its images,
-    /// pushed to the task's evidence branch, follow it (in a PR's
-    /// description, at the end of its "How to test" section), each shown by
-    /// the commit that has it.
+    /// pushed to the task's evidence branch, each shown by the commit that
+    /// has it where the text names it (`qa:<file>`), else after it (in a
+    /// PR's description, at the end of its "How to test" section). A
+    /// screenshot it names that the user took out goes with its mention.
     pub(super) fn text_with_images(
         &self,
         approval: &DeliveryApproval,
     ) -> Result<String, DeliveryError> {
-        let body = approval.body.trim().to_string();
+        let mut body = without_qa_refs(approval.body.trim(), &approval.images);
         if approval.images.is_empty() {
             return Ok(body);
         }
@@ -141,10 +180,13 @@ impl DeliveryService {
                 &bytes,
                 &format!("QA de {}: {}", task.key, image.file),
             )?;
-            shown.push(format!(
-                "![{}](https://github.com/{repo}/blob/{commit}/{path}?raw=true)",
-                image.file
-            ));
+            let url = format!("https://github.com/{repo}/blob/{commit}/{path}?raw=true");
+            let named = format!("(qa:{})", image.file);
+            if body.contains(&named) {
+                body = body.replace(&named, &format!("({url})"));
+            } else {
+                shown.push(format!("![{}]({url})", image.file));
+            }
         }
         if shown.is_empty() {
             return Ok(body);
@@ -183,6 +225,35 @@ impl DeliveryService {
             );
         }
     }
+}
+
+/// The files a text names as `![…](qa:<file>)`, in order.
+fn qa_refs(body: &str) -> Vec<&str> {
+    body.match_indices("](qa:")
+        .filter_map(|(at, open)| {
+            let rest = &body[at + open.len()..];
+            rest.find(')').map(|end| rest[..end].trim())
+        })
+        .filter(|file| !file.is_empty())
+        .collect()
+}
+
+/// `body` without the `![…](qa:<file>)` of files not among `images`.
+fn without_qa_refs(body: &str, images: &[DeliveryReplyImage]) -> String {
+    let mut text = body.to_string();
+    for file in qa_refs(body) {
+        if images.iter().any(|image| image.file == file) {
+            continue;
+        }
+        let target = format!("](qa:{file})");
+        while let Some(end) = text.find(&target) {
+            let Some(start) = text[..end].rfind("![") else {
+                break;
+            };
+            text.replace_range(start..end + target.len(), "");
+        }
+    }
+    text
 }
 
 /// `images` at the end of the description's "How to test" section (in
