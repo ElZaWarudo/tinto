@@ -614,6 +614,8 @@ export interface DeliveryRepoSettings {
   retry_on_restart?: boolean;
   /** The checks the user marked as environment probes, run by the "Entorno" check. */
   environment_probes?: string[];
+  /** The reviewers whose comments make the repo's guides. */
+  guides?: DeliveryGuidePerson[];
 }
 
 /** One line of a repo's "Entorno" check: Docker or a probe. */
@@ -876,4 +878,50 @@ export interface DeliveryIssue {
   links: { type: string; key: string; summary: string; status: string }[];
   description_html: string;
   comments: { author: string; created: string; body_html: string }[];
+}
+
+/** What a guide reviews for: how things look, or how they are built. */
+export type DeliveryGuideKind = "visual" | "technical";
+
+/** A reviewer the user made a guide of the repo, of one kind or both. */
+export interface DeliveryGuidePerson {
+  login: string;
+  kinds: DeliveryGuideKind[];
+}
+
+/** One thing a guide keeps asking for. */
+export interface DeliveryGuideRule {
+  /** `V-3`, `T-12`: kept across versions. */
+  id: string;
+  kind: DeliveryGuideKind;
+  rule: string;
+  /** Folders or file patterns; everywhere when empty. */
+  applies_to: string[];
+  /** Stages it applies to; all when empty. */
+  stages: string[];
+  why: string;
+  example: string;
+  /** The comments it comes from, by URL. */
+  sources: string[];
+  seen: number;
+}
+
+/** A new version of the rules, waiting for the user. */
+export interface DeliveryGuideProposal {
+  rules: DeliveryGuideRule[];
+  through: number;
+  note: string;
+  requested_by: string;
+  requested_at_ms: number;
+}
+
+/** A repo's guide as Tinto shows it. */
+export interface DeliveryGuideView {
+  people: DeliveryGuidePerson[];
+  rules: DeliveryGuideRule[];
+  proposal: DeliveryGuideProposal | null;
+  /** The guides' comments collected, and those not distilled yet. */
+  comments: number;
+  pending: number;
+  collected_at_ms: number | null;
 }

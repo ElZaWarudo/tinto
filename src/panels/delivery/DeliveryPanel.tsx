@@ -129,6 +129,7 @@ import { JiraIssue } from "./DeliveryIssue";
 import { QaProblems } from "./DeliveryQaProblems";
 import { AddBlocker, BlockedBar } from "./DeliveryBlockers";
 import { CoordinatorDock } from "./DeliveryCoordinator";
+import { GuidesPage } from "./DeliveryGuides";
 import { coordinatorStalls, type CoordinatorStall } from "./DeliveryNotifications";
 import { CoordinatorDecisions, DecisionLog, PendingDecisions } from "./DeliveryDecisions";
 import { PendingSettingsProposals } from "./DeliverySettingsProposals";
@@ -921,8 +922,7 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
   // first, else the busy ones.
   const qaLeases = (overview?.leases ?? []).filter((lease) => isQaLease(lease.name));
   const qaActive = qaLeases.filter((lease) => lease.state === "active");
-  const qa =
-    qaLeases.find((lease) => lease.state === "quarantined") ?? qaActive[0] ?? qaLeases[0];
+  const qa = qaLeases.find((lease) => lease.state === "quarantined") ?? qaActive[0] ?? qaLeases[0];
   const qaHolder = tasks.find((task) => task.id === qa?.holder_task_id);
   // The QA jobs a quarantine holds back, wherever the scheduler put them,
   // and whether only the user can release it for them.
@@ -1515,6 +1515,7 @@ function DeliveryRepoView({ repo }: { repo: string }) {
   const shared = useDelivery();
   const { overview, now, repos, listView, setListView, selected, select, reveal, run } = shared;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guidesOpen, setGuidesOpen] = useState(false);
   const key = repoKey(repo);
   const choice = repos.find((candidate) => repoKey(candidate.path) === key) ?? {
     path: repo,
@@ -1856,11 +1857,25 @@ function DeliveryRepoView({ repo }: { repo: string }) {
         <EnvironmentStatus repo={choice.path} distro={choice.distro} />
         <button
           type="button"
+          aria-pressed={guidesOpen}
+          title={`Guías de ${choice.label}: reglas que salen de sus revisores`}
+          onClick={() => {
+            setGuidesOpen(!guidesOpen);
+            setSettingsOpen(false);
+          }}
+        >
+          Guías
+        </button>
+        <button
+          type="button"
           className="delivery-icon-button"
           aria-label={`Ajustes de ${choice.label}`}
           aria-pressed={settingsOpen}
           title={`Ajustes de ${choice.label}`}
-          onClick={() => setSettingsOpen(!settingsOpen)}
+          onClick={() => {
+            setSettingsOpen(!settingsOpen);
+            setGuidesOpen(false);
+          }}
         >
           <Icon name="gear" />
         </button>
@@ -1868,6 +1883,8 @@ function DeliveryRepoView({ repo }: { repo: string }) {
 
       {settingsOpen ? (
         <RepoSettingsPage repo={choice} onBack={() => setSettingsOpen(false)} />
+      ) : guidesOpen ? (
+        <GuidesPage repo={choice} onBack={() => setGuidesOpen(false)} />
       ) : (
         <div className="delivery-panel__body">
           <nav className="delivery-panel__tasks" aria-label="Tareas de Delivery">
