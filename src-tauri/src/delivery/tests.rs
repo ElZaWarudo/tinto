@@ -102,6 +102,7 @@ fn fake_launcher() -> Launcher {
                 provider_session_id: None,
                 wsl_job: None,
                 note: None,
+                files: Vec::new(),
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -142,6 +143,7 @@ fn fake_launcher() -> Launcher {
                 provider_session_id: None,
                 wsl_job: None,
                 note: None,
+                files: Vec::new(),
             })
         }
     })

@@ -2447,6 +2447,9 @@ impl DeliveryService {
         // it (see `reconcile`).
         let stdin_path = paths.dir.join(STDIN_FILE);
         std::fs::write(&stdin_path, &launch.stdin).map_err(DeliveryError::io)?;
+        for (path, text) in &launch.files {
+            std::fs::write(path, text).map_err(DeliveryError::io)?;
+        }
         let mut command = Command::new(&launch.program);
         // The repo's variables for checks reach every command the agent
         // runs; a WSL job exports them in its script instead.
