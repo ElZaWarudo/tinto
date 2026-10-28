@@ -504,6 +504,17 @@ pub fn delivery_set_repo_settings(
     let settings = DeliveryRepoSettings {
         retry_on_restart: settings.retry_on_restart,
         environment_probes,
+        // A person with no kind left guides nothing.
+        guides: settings
+            .guides
+            .into_iter()
+            .map(|mut person| {
+                person.login = person.login.trim().to_string();
+                person.kinds.dedup();
+                person
+            })
+            .filter(|person| !person.login.is_empty() && !person.kinds.is_empty())
+            .collect(),
         worktree_root: settings
             .worktree_root
             .filter(|root| !root.as_os_str().is_empty()),
@@ -1196,4 +1207,56 @@ fn clean_qa_stack(stack: Option<DeliveryQaStack>) -> Result<Option<DeliveryQaSta
         ));
     }
     Ok(Some(stack))
+}
+
+/// The repo's guide: who guides it, its rules and the version waiting.
+#[tauri::command]
+pub fn delivery_guide(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+) -> Result<super::guides::DeliveryGuideView, CommandError> {
+    service.guide_view(&repo).map_err(CommandError::from)
+}
+
+/// The people who can review the repo's PRs, to choose its guides from.
+#[tauri::command]
+pub async fn delivery_guide_candidates(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+    distro: Option<String>,
+) -> Result<Vec<String>, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.guide_candidates(&repo, distro.as_deref())).await
+}
+
+/// Reads the guides' new review comments from GitHub.
+#[tauri::command]
+pub async fn delivery_collect_guide_comments(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+    distro: Option<String>,
+) -> Result<super::guides::DeliveryGuideView, CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.collect_guide_comments(&repo, distro.as_deref())).await
+}
+
+/// Asks the repo's coordinators to distill the guides' new comments.
+#[tauri::command]
+pub fn delivery_request_guide(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+) -> Result<usize, CommandError> {
+    service.request_guide(&repo).map_err(CommandError::from)
+}
+
+/// Approves or rejects the rules a coordinator proposed.
+#[tauri::command]
+pub fn delivery_decide_guide(
+    service: State<'_, DeliveryService>,
+    repo: PathBuf,
+    approve: bool,
+) -> Result<super::guides::DeliveryGuideView, CommandError> {
+    service
+        .decide_guide(&repo, approve)
+        .map_err(CommandError::from)
 }

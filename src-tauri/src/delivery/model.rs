@@ -1310,6 +1310,24 @@ pub struct DeliveryRepoSettings {
     /// probes: the "Entorno" check runs them (e.g. a database ping).
     #[serde(default)]
     pub environment_probes: Vec<String>,
+    /// The reviewers whose comments make the repo's guides.
+    #[serde(default)]
+    pub guides: Vec<DeliveryGuidePerson>,
+}
+
+/// What a guide reviews for: how things look, or how they are built.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryGuideKind {
+    Visual,
+    Technical,
+}
+
+/// A reviewer the user made a guide of the repo, of one kind or both.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryGuidePerson {
+    pub login: String,
+    pub kinds: Vec<DeliveryGuideKind>,
 }
 
 pub const SINGLE_COMMIT_MAX_FILES: u32 = 5;
