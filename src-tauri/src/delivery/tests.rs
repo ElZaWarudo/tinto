@@ -8557,11 +8557,13 @@ fn put_stage(
     // Each stage after the one before it, and after any round it opened.
     std::thread::sleep(Duration::from_millis(5));
     let at = super::now_ms();
+    // Started before it ended, like a real job: the round it opens at its
+    // end is never one it worked on, even within the same millisecond.
     let job: DeliveryJob = serde_json::from_value(json!({
         "id": id, "task_id": task.id, "role": role, "attempt": 1, "agent": "claude",
         "access": "workspace", "prompt": "x", "contract_version": 1,
         "writes": matches!(role, "tests" | "implementation"), "timeout_minutes": 60,
-        "status": "finished", "created_at_ms": at, "started_at_ms": at, "ended_at_ms": at,
+        "status": "finished", "created_at_ms": at - 1, "started_at_ms": at - 1, "ended_at_ms": at,
         "result_state": "accepted",
         "changes": if changed { json!([{"path": "a.txt", "kind": "modified"}]) } else { json!([]) },
         "result": {
