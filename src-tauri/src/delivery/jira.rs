@@ -207,7 +207,7 @@ pub struct DeliveryIssue {
     pub comments: Vec<DeliveryIssueComment>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeliveryIssueParent {
     pub key: String,
     pub summary: String,
@@ -233,6 +233,17 @@ pub struct DeliveryIssueComment {
 
 /// How many comments the issue view keeps: the newest ones.
 const ISSUE_COMMENTS: usize = 10;
+
+/// The issue's parent in Jira's `fields`, if it has one.
+fn parent_from(fields: &Value) -> Option<DeliveryIssueParent> {
+    Some(DeliveryIssueParent {
+        key: fields["parent"]["key"].as_str()?.to_string(),
+        summary: fields["parent"]["fields"]["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
 
 /// The issue from Jira's answer to `GET /rest/api/2/issue/{key}` with
 /// `expand=renderedFields`.
@@ -298,12 +309,7 @@ fn issue_from(key: &str, url: String, issue: &Value) -> DeliveryIssue {
             .flatten()
             .filter_map(|label| label.as_str().map(str::to_string))
             .collect(),
-        parent: fields["parent"]["key"]
-            .as_str()
-            .map(|parent| DeliveryIssueParent {
-                key: parent.to_string(),
-                summary: text(&fields["parent"]["fields"]["summary"]),
-            }),
+        parent: parent_from(fields),
         links,
         description_html: text(&rendered["description"]),
         comments,
@@ -393,7 +399,42 @@ impl DeliveryService {
         );
         let issue = self.jira_client().call(&site, "GET", &path, None)?;
         let url = format!("{}/browse/{}", site.host, task.key);
-        Ok(issue_from(&task.key, url, &issue))
+        let issue = issue_from(&task.key, url, &issue);
+        self.remember_parent(task_id, issue.parent.clone())?;
+        Ok(issue)
+    }
+
+    /// Reads from Jira the parent of each task never read yet, in the repos
+    /// with Jira set; one that fails is tried again on the next call.
+    pub(super) fn read_parents(&self) -> Result<(), DeliveryError> {
+        let tasks = self.store()?.tasks()?;
+        for task in tasks {
+            if task.parent_read_at_ms.is_some() || task.removed_at_ms.is_some() {
+                continue;
+            }
+            let Some(site) = self.jira_site(&task.repo)? else {
+                continue;
+            };
+            let path = format!("/rest/api/2/issue/{}?fields=parent", task.key);
+            if let Ok(issue) = self.jira_client().call(&site, "GET", &path, None) {
+                self.remember_parent(&task.id, parent_from(&issue["fields"]))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn remember_parent(
+        &self,
+        task_id: &str,
+        parent: Option<DeliveryIssueParent>,
+    ) -> Result<(), DeliveryError> {
+        let store = self.store()?;
+        let Some(mut task) = store.task(task_id)? else {
+            return Ok(());
+        };
+        task.parent = parent;
+        task.parent_read_at_ms = Some(super::now_ms());
+        store.put_task(&task)
     }
 }
 

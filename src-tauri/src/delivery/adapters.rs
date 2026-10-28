@@ -96,7 +96,7 @@ impl JobPaths {
     }
 
     pub fn prepare(&self) -> Result<(), DeliveryError> {
-        std::fs::create_dir_all(&self.dir).map_err(DeliveryError::io)?;
+        std::fs::create_dir_all(&self.qa_output).map_err(DeliveryError::io)?;
         std::fs::write(&self.schema, RESULT_SCHEMA).map_err(DeliveryError::io)
     }
 }
@@ -114,7 +114,12 @@ pub struct JobLaunch {
     pub wsl_job: Option<WslJob>,
     /// Something about how the job runs that its stage should say.
     pub note: Option<String>,
+    /// Files the job needs in its folder, written when it starts.
+    pub files: Vec<JobFile>,
 }
+
+/// A file a job needs, as its path and contents.
+pub type JobFile = (PathBuf, String);
 
 /// A job running in WSL. Every process it starts inherits
 /// `TINTO_DELIVERY_JOB=<job_id>`, which is how [`stop_wsl_job`] finds them,
@@ -735,6 +740,7 @@ fn codex_launch(
                 provider_session_id: resume.map(str::to_string),
                 wsl_job: None,
                 note: plan.note.clone(),
+                files: Vec::new(),
             })
         }
         Some(distro) => {
@@ -868,6 +874,7 @@ fn muse_launch(
                 provider_session_id: Some(session_id),
                 wsl_job: None,
                 note: None,
+                files: Vec::new(),
             })
         }
         (None, Some(distro)) => {
@@ -951,13 +958,14 @@ fn claude_launch(
         if let Some(effort) = job.reasoning.as_deref() {
             args.extend(["--effort".to_string(), effort.to_string()]);
         }
-        args.extend(claude_qa_args(
+        let (qa, files) = claude_qa_args(
             job,
             &plain_path(&task.repo),
             &plain_path(&paths.qa_output),
             false,
             paths,
-        )?);
+        )?;
+        args.extend(qa);
         if !allowed.is_empty() {
             args.push("--allowedTools".to_string());
             args.extend(allowed);
@@ -974,6 +982,7 @@ fn claude_launch(
             provider_session_id: Some(session_id),
             wsl_job: None,
             note: None,
+            files,
         });
     }
     let (distro, cwd) = match task.distro.as_deref() {
@@ -1035,22 +1044,25 @@ fn claude_launch(
         Some(_) => task.repo.to_string_lossy().into_owned(),
         None => wsl_path(&task.repo)?,
     };
-    let qa: String = claude_qa_args(
+    let (qa, files) = claude_qa_args(
         job,
         &main_checkout,
         &wsl_path(&paths.qa_output)?,
         true,
         paths,
-    )?
-    .iter()
-    .map(|value| format!(" {}", sh_quote(value)))
-    .collect();
+    )?;
+    let qa: String = qa
+        .iter()
+        .map(|value| format!(" {}", sh_quote(value)))
+        .collect();
     let script = format!(
         "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema \"$(cat {})\"{model}{effort}{qa}{allowed}{denied}",
         sh_quote(&session_id),
         sh_quote(&wsl_path(&paths.schema)?)
     );
-    wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)
+    let mut launch = wsl_launch(&distro, &cwd, script, prompt, Some(session_id), job)?;
+    launch.files = files;
+    Ok(launch)
 }
 
 /// Commands a Claude job without full access may not run, whatever it
@@ -1169,17 +1181,17 @@ fn claude_qa_args(
     qa_output: &str,
     from_wsl: bool,
     paths: &JobPaths,
-) -> Result<Vec<String>, DeliveryError> {
+) -> Result<(Vec<String>, Vec<JobFile>), DeliveryError> {
     if job.role != QA_ROLE {
         // A read-only stage (review) reads the main checkout too: that is
         // where the contract it reviews against lives. Its permission mode
         // lets it edit nothing there.
-        return Ok(match job.writes {
+        let args = match job.writes {
             true => Vec::new(),
             false => vec!["--add-dir".to_string(), main_checkout.to_string()],
-        });
+        };
+        return Ok((args, Vec::new()));
     }
-    std::fs::create_dir_all(&paths.qa_output).map_err(DeliveryError::io)?;
     let mut args = vec![
         "--add-dir".to_string(),
         main_checkout.to_string(),
@@ -1209,11 +1221,7 @@ fn claude_qa_args(
     // Past its budget, every tool call tells the agent to write its record.
     let budget_ms = u64::from(job.timeout_minutes * QA_BUDGET_PERCENT / 100) * 60_000;
     let script = paths.dir.join(QA_BUDGET_SCRIPT);
-    std::fs::write(
-        &script,
-        qa_budget_script(super::now_ms() + budget_ms, job.timeout_minutes, &job.id),
-    )
-    .map_err(DeliveryError::io)?;
+    let budget = qa_budget_script(super::now_ms() + budget_ms, job.timeout_minutes, &job.id);
     let hook = format!("node \"{}\"", agent_path(&plain_path(&script), from_wsl));
     args.push("--settings".to_string());
     args.push(
@@ -1222,7 +1230,7 @@ fn claude_qa_args(
         })
         .to_string(),
     );
-    Ok(args)
+    Ok((args, vec![(script, budget)]))
 }
 
 /// The hook that tells a QA agent its budget is spent (see
@@ -1336,6 +1344,7 @@ fn shell_launch(
         provider_session_id: None,
         wsl_job: None,
         note: None,
+        files: Vec::new(),
     })
 }
 
@@ -1383,6 +1392,7 @@ fn wsl_launch(
         provider_session_id,
         wsl_job: Some(wsl_job),
         note: None,
+        files: Vec::new(),
     })
 }
 
@@ -2196,6 +2206,8 @@ pub(crate) mod tests {
             unblocked: None,
             checks: Vec::new(),
             setup: Vec::new(),
+            parent: None,
+            parent_read_at_ms: None,
         }
     }
 

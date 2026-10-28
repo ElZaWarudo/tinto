@@ -147,8 +147,17 @@ export function AgentRuntimeControls({
     const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) onMenuChange(null);
     };
+    // Escape closes it also when focus is not inside, as after a click on
+    // a button the inspector replaced.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onMenuChange(null);
+    };
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [menu, onMenuChange]);
 
   const toggle = (

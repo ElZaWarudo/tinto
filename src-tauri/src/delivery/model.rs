@@ -61,6 +61,12 @@ pub struct DeliveryTask {
     /// the task's worktree before its stages, as the coordinator chose them.
     #[serde(default)]
     pub setup: Vec<String>,
+    /// Its issue's parent in Jira (an epic, a story), as last read.
+    #[serde(default)]
+    pub parent: Option<super::jira::DeliveryIssueParent>,
+    /// When `parent` was last read from Jira; never, while `None`.
+    #[serde(default)]
+    pub parent_read_at_ms: Option<u64>,
 }
 
 /// A task's place among the pull requests of its issue: "2 of 3".

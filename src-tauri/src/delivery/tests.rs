@@ -102,6 +102,7 @@ fn fake_launcher() -> Launcher {
                 provider_session_id: None,
                 wsl_job: None,
                 note: None,
+                files: Vec::new(),
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -142,6 +143,7 @@ fn fake_launcher() -> Launcher {
                 provider_session_id: None,
                 wsl_job: None,
                 note: None,
+                files: Vec::new(),
             })
         }
     })
@@ -5502,6 +5504,9 @@ impl super::jira::Jira for FakeJira {
             ("GET", "/rest/api/2/issue/AGOS-455?fields=status") => {
                 Ok(json!({"fields": {"status": {"name": *status}}}))
             }
+            ("GET", "/rest/api/2/issue/AGOS-455?fields=parent") => Ok(json!({
+                "fields": {"parent": {"key": "AGOS-400", "fields": {"summary": "Facturación"}}}
+            })),
             ("GET", "/rest/api/2/issue/AGOS-455/transitions") => Ok(json!({
                 "transitions": self.workflow.iter()
                     .filter(|(from, ..)| *from == status.as_str())
@@ -5592,6 +5597,14 @@ fn tinto_reads_a_tasks_issue_from_the_repos_jira() {
         "jira_not_configured"
     );
     h.service.set_jira_token(h.repo.path(), "secret").unwrap();
+
+    // The list shows each task's parent: read once in the background; an
+    // issue Jira refuses stays unread, to try again.
+    h.service.read_parents().unwrap();
+    let read = h.service.task(&task.id).unwrap();
+    assert_eq!(read.parent.unwrap().key, "AGOS-400");
+    assert!(read.parent_read_at_ms.is_some());
+    assert_eq!(h.service.task(&missing.id).unwrap().parent_read_at_ms, None);
 
     let issue = h.service.issue(&task.id).unwrap();
     assert_eq!(
@@ -8557,11 +8570,13 @@ fn put_stage(
     // Each stage after the one before it, and after any round it opened.
     std::thread::sleep(Duration::from_millis(5));
     let at = super::now_ms();
+    // Started before it ended, like a real job: the round it opens at its
+    // end is never one it worked on, even within the same millisecond.
     let job: DeliveryJob = serde_json::from_value(json!({
         "id": id, "task_id": task.id, "role": role, "attempt": 1, "agent": "claude",
         "access": "workspace", "prompt": "x", "contract_version": 1,
         "writes": matches!(role, "tests" | "implementation"), "timeout_minutes": 60,
-        "status": "finished", "created_at_ms": at, "started_at_ms": at, "ended_at_ms": at,
+        "status": "finished", "created_at_ms": at - 1, "started_at_ms": at - 1, "ended_at_ms": at,
         "result_state": "accepted",
         "changes": if changed { json!([{"path": "a.txt", "kind": "modified"}]) } else { json!([]) },
         "result": {
@@ -10052,7 +10067,7 @@ fn the_watch_reads_a_red_pr_on_every_pass_and_any_open_pr_every_two_minutes() {
 }
 
 #[test]
-fn the_pr_step_shows_the_qa_screenshots_the_user_chose_in_its_description() {
+fn the_pr_step_shows_each_qa_screenshot_where_its_description_names_it() {
     let h = harness();
     github_origin(&h);
     let task = h.task("O-9");
@@ -10062,24 +10077,45 @@ fn the_pr_step_shows_the_qa_screenshots_the_user_chose_in_its_description() {
     h.wait(&qa.id);
     let folder = (h.service.inner.paths_for)(&qa.id).unwrap().qa_output;
     std::fs::create_dir_all(&folder).unwrap();
-    let shot = "O-9-1-menu-desktop.png";
-    std::fs::write(folder.join(shot), b"png").unwrap();
+    let (named, dropped, chosen) = (
+        "O-9-1-menu-desktop.png",
+        "O-9-2-toast-desktop.png",
+        "O-9-3-menu-mobile.png",
+    );
+    for shot in [named, dropped, chosen] {
+        std::fs::write(folder.join(shot), b"png").unwrap();
+    }
+    let body = format!(
+        "## How to test\n\n1. Open the menu.\n\n![The wider menu](qa:{named})\n\n2. Save.\n\n![The toast](qa:{dropped})\n\n## Notes\n\nNone."
+    );
+    // The coordinator names them; one no QA of the task has is refused.
+    let images = h.service.named_screenshots(&task.id, &body).unwrap();
+    assert_eq!(
+        images
+            .iter()
+            .map(|image| image.file.as_str())
+            .collect::<Vec<_>>(),
+        [named, dropped]
+    );
+    let unknown = h
+        .service
+        .named_screenshots(&task.id, "![x](qa:O-9-9-nope.png)")
+        .unwrap_err();
+    assert!(unknown.message.contains(named), "{}", unknown.message);
     let step: super::model::DeliveryApproval = serde_json::from_value(json!({
         "id": "a-pr", "task_id": task.id, "rung": "pr", "title": "feat: menu",
-        "body": "## Summary\n\nA wider menu.\n\n## How to test\n\nOpen the menu.\n\n## Notes\n\nNone.",
-        "status": "pending",
+        "body": body, "status": "pending", "images": images,
         "requested_by": "coord", "requested_at_ms": 1
     }))
     .unwrap();
     h.service.store().unwrap().put_approval(&step).unwrap();
+    // The user takes one out and adds another.
+    let image = |file: &str| super::model::DeliveryReplyImage {
+        job_id: qa.id.clone(),
+        file: file.into(),
+    };
     h.service
-        .set_reply_images(
-            "a-pr",
-            vec![super::model::DeliveryReplyImage {
-                job_id: qa.id.clone(),
-                file: shot.into(),
-            }],
-        )
+        .set_reply_images("a-pr", vec![image(named), image(chosen)])
         .unwrap();
 
     let done = h.service.decide_approval("a-pr", true, None).unwrap();
@@ -10090,17 +10126,20 @@ fn the_pr_step_shows_the_qa_screenshots_the_user_chose_in_its_description() {
         done.notice
     );
     let short = qa.id.split('-').next().unwrap();
-    let path = format!("O-9/{short}/{shot}");
+    let url =
+        |shot: &str| format!("https://github.com/o/r/blob/c0ffee1/O-9/{short}/{shot}?raw=true");
     let branch = task.branch.replace('/', "-");
-    let actions = github.actions.lock().unwrap().clone();
-    // The screenshot goes up before the PR opens with it.
+    // The screenshots go up before the PR opens with them.
     assert_eq!(
-        actions[0],
-        format!("upload o/r tinto/qa-evidence/{branch} {path}")
+        github.actions.lock().unwrap()[0],
+        format!("upload o/r tinto/qa-evidence/{branch} O-9/{short}/{named}")
     );
-    // In its "How to test" section.
+    // The named one under its step, the taken-out one gone, the added one
+    // at the end of "How to test".
     let shown = format!(
-        "## Summary\n\nA wider menu.\n\n## How to test\n\nOpen the menu.\n\n![{shot}](https://github.com/o/r/blob/c0ffee1/{path}?raw=true)\n\n## Notes\n\nNone."
+        "## How to test\n\n1. Open the menu.\n\n![The wider menu]({})\n\n2. Save.\n\n![{chosen}]({})\n\n## Notes\n\nNone.",
+        url(named),
+        url(chosen)
     );
     assert_eq!(github.snapshot.lock().unwrap()["body"], shown);
     // The step holds the text GitHub has.
@@ -10434,7 +10473,10 @@ fn browser_qa_starts_on_a_prepared_stack_beside_a_command_line_qa() {
     assert!(!cli.qa_browser && cli.qa_stack.is_none());
     // Each holds its own environment's resource: both run at once.
     h.wait_status(&browser.id, DeliveryJobStatus::Started);
-    assert_eq!(h.service.job(&cli.id).unwrap().status, DeliveryJobStatus::Started);
+    assert_eq!(
+        h.service.job(&cli.id).unwrap().status,
+        DeliveryJobStatus::Started
+    );
 
     let browser = h.wait(&browser.id);
     let prepare = browser.prepare.clone().unwrap();
@@ -10459,13 +10501,21 @@ fn a_qa_that_ends_without_its_record_leaves_a_stub_and_its_changes_undone() {
     let qa = h.wait(&h.dispatch(&task, "qa", "events=none touch=README.md").id);
     let worktree = PathBuf::from(plain_path(&task.worktree));
     assert_eq!(
-        std::fs::read_to_string(worktree.join("README.md")).unwrap().replace('\r', ""),
+        std::fs::read_to_string(worktree.join("README.md"))
+            .unwrap()
+            .replace('\r', ""),
         "base\n"
     );
     assert_eq!(qa.reverted, ["README.md"]);
     assert!(qa.changes.is_empty());
     let source = qa.visual_record_source.unwrap();
     assert!(source.ends_with("S-3.md"), "{source}");
-    assert!(qa.visual_record_warnings.is_empty(), "{:?}", qa.visual_record_warnings);
-    assert!(std::fs::read_to_string(source).unwrap().contains("not verifiable: out of time"));
+    assert!(
+        qa.visual_record_warnings.is_empty(),
+        "{:?}",
+        qa.visual_record_warnings
+    );
+    assert!(std::fs::read_to_string(source)
+        .unwrap()
+        .contains("not verifiable: out of time"));
 }

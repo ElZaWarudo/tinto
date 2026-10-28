@@ -1240,7 +1240,13 @@ impl DeliveryService {
             notice,
             corrections: Vec::new(),
             resolve_thread: reply && request.resolve_thread,
-            images: Vec::new(),
+            // The QA screenshots its text shows where it names them.
+            images: match request.rung {
+                DeliveryRung::Pr | DeliveryRung::PrReply => {
+                    self.named_screenshots(&task.id, &body)?
+                }
+                _ => Vec::new(),
+            },
             comment_url,
             thread,
             style_examples,

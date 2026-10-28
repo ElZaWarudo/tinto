@@ -11,8 +11,9 @@ use super::coordination::{DeliveryCommitDraft, NewApproval};
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryApproval, DeliveryCommit, DeliveryDecision,
     DeliveryJiraSettings, DeliveryJob, DeliveryJobLog, DeliveryLease, DeliveryOverview,
-    DeliveryPlatform, DeliveryQaStack, DeliveryRepoSettings, DeliveryRun, DeliveryRung, DeliverySettings,
-    DeliverySettingsChanges, DeliverySettingsProposal, DeliveryStageAgent, DeliveryTask,
+    DeliveryPlatform, DeliveryQaStack, DeliveryRepoSettings, DeliveryRun, DeliveryRung,
+    DeliverySettings, DeliverySettingsChanges, DeliverySettingsProposal, DeliveryStageAgent,
+    DeliveryTask,
 };
 use super::prs::DeliveryPr;
 use super::service::{DeliveryService, NewJob, NewTask};
@@ -1168,7 +1169,10 @@ fn clean_qa_stack(stack: Option<DeliveryQaStack>) -> Result<Option<DeliveryQaSta
             .services
             .into_iter()
             .map(|(folder, services)| {
-                (folder.trim().trim_end_matches(['/', '\\']).to_string(), lines(services))
+                (
+                    folder.trim().trim_end_matches(['/', '\\']).to_string(),
+                    lines(services),
+                )
             })
             .filter(|(folder, services)| !folder.is_empty() && !services.is_empty())
             .collect(),
@@ -1177,7 +1181,11 @@ fn clean_qa_stack(stack: Option<DeliveryQaStack>) -> Result<Option<DeliveryQaSta
         seed: lines(stack.seed),
         preview: stack.preview.trim().to_string(),
     };
-    if stack.name.chars().any(|c| !(c.is_ascii_alphanumeric() || "-_.".contains(c))) {
+    if stack
+        .name
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || "-_.".contains(c)))
+    {
         return Err(CommandError::new(
             "invalid_qa_stack",
             "el nombre del entorno de QA solo admite letras, números, «-», «_» y «.»",

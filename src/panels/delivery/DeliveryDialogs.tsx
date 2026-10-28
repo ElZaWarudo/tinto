@@ -299,7 +299,10 @@ function parseServices(text: string): Record<string, string[]> {
     const at = line.indexOf(":");
     if (at < 0) continue;
     const folder = line.slice(0, at).trim();
-    const built = line.slice(at + 1).split(/[\s,]+/).filter(Boolean);
+    const built = line
+      .slice(at + 1)
+      .split(/[\s,]+/)
+      .filter(Boolean);
     if (folder && built.length > 0) services[folder] = built;
   }
   return services;
@@ -929,10 +932,10 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
       </Field>
       <h3>Pila de QA</h3>
       <p className="delivery-settings__intro">
-        Antes de cada QA con navegador, Tinto reconstruye solo los servicios cuyas carpetas cambió la
-        tarea, espera a que la pila responda y abre las páginas de QA para que estén compiladas. El
-        tiempo que tarda no cuenta en el límite del trabajo. Si la pila ya sirve el worktree de la
-        tarea en el mismo commit, no reconstruye nada. Sin nombre, no hay pila.
+        Antes de cada QA con navegador, Tinto reconstruye solo los servicios cuyas carpetas cambió
+        la tarea, espera a que la pila responda y abre las páginas de QA para que estén compiladas.
+        El tiempo que tarda no cuenta en el límite del trabajo. Si la pila ya sirve el worktree de
+        la tarea en el mismo commit, no reconstruye nada. Sin nombre, no hay pila.
       </p>
       <Field
         label="Nombre"
@@ -959,7 +962,9 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
           value={stackServices}
           onChange={(event) => setStackServices(event.target.value)}
           rows={3}
-          placeholder={"frontend: frontend\napi-gateway: api-gateway\nservices/workflows: workflows"}
+          placeholder={
+            "frontend: frontend\napi-gateway: api-gateway\nservices/workflows: workflows"
+          }
         />
       </Field>
       <Field label="URL de disponibilidad" hint="Responde cuando la pila está lista.">
