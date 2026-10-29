@@ -19,6 +19,7 @@ import type {
   DeliveryTaskPhase,
   DeliveryWaiter,
 } from "../../delivery/types";
+import { UNLIMITED_CAPACITY } from "../../delivery/types";
 
 const client = vi.hoisted(() => ({
   getDeliveryOverview: vi.fn(),
@@ -485,6 +486,17 @@ describe("DeliveryPanel", () => {
     expect(within(changes).getByText("−")).toBeInTheDocument();
     expect(screen.getByText("11111111 → 22222222")).toBeInTheDocument();
     expect(screen.getByText("Implement the parser change.")).toBeInTheDocument();
+  });
+
+  it("counts the running agents without a meter when the capacity has no limit", async () => {
+    client.getDeliveryOverview.mockResolvedValue(
+      overview({
+        settings: { capacity: UNLIMITED_CAPACITY },
+        capacity: UNLIMITED_CAPACITY,
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByText(/en marcha, sin límite/)).toBeInTheDocument();
   });
 
   it("shows what a running agent does, its plan and use, and pauses it", async () => {

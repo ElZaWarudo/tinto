@@ -579,9 +579,15 @@ export interface DeliveryRun {
 }
 
 export interface DeliverySettings {
-  /** Agents running at once; 0 is automatic: one per active task, up to 8. */
+  /**
+   * Agents running at once; 0 is automatic: one per active task, up to 8;
+   * {@link UNLIMITED_CAPACITY} starts every queued job.
+   */
   capacity: number;
 }
+
+/** The capacity with no limit (the backend's `u32::MAX`). */
+export const UNLIMITED_CAPACITY = 4294967295;
 
 export interface DeliveryRepoSettings {
   worktree_root: string | null;

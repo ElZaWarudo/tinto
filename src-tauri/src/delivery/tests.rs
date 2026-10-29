@@ -5940,8 +5940,8 @@ fn a_delivered_task_is_archived_without_its_worktree_and_comes_back_from_its_pr(
 }
 
 #[test]
-fn automatic_capacity_runs_one_agent_per_active_task_up_to_what_the_cores_bear() {
-    use super::model::auto_capacity_limit;
+fn capacity_is_automatic_fixed_up_to_eight_or_unlimited() {
+    use super::model::{auto_capacity_limit, UNLIMITED_CAPACITY};
     // One per physical core (half the logical ones), less one for checks.
     assert_eq!(auto_capacity_limit(8), 3);
     assert_eq!(auto_capacity_limit(32), 8);
@@ -5963,6 +5963,17 @@ fn automatic_capacity_runs_one_agent_per_active_task_up_to_what_the_cores_bear()
         (overview.settings.capacity, overview.capacity),
         (0, 4.min(limit))
     );
+
+    for (asked, kept) in [(20, 8), (UNLIMITED_CAPACITY, UNLIMITED_CAPACITY)] {
+        h.service
+            .update_settings(DeliverySettings { capacity: asked })
+            .unwrap();
+        let overview = h.service.overview().unwrap();
+        assert_eq!(
+            (overview.settings.capacity, overview.capacity),
+            (kept, kept)
+        );
+    }
 }
 
 #[test]

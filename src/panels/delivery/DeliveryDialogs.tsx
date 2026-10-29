@@ -32,6 +32,7 @@ import type {
   DeliveryStageAgent,
   DeliveryTask,
 } from "../../delivery/types";
+import { UNLIMITED_CAPACITY } from "../../delivery/types";
 import { GrowingTextarea } from "./GrowingTextarea";
 
 export interface RepoChoice {
@@ -1370,6 +1371,7 @@ export function DeliverySettingsDialog({
               {value}
             </option>
           ))}
+          <option value={UNLIMITED_CAPACITY}>Sin límite</option>
         </select>
       </Field>
       <h3 className="delivery-dialog__subtitle">Conectar un coordinador</h3>

@@ -111,6 +111,7 @@ import type {
   DeliveryTiming,
   DeliveryUsage,
 } from "../../delivery/types";
+import { UNLIMITED_CAPACITY } from "../../delivery/types";
 import {
   DispatchDialog,
   ArchivedTasksDialog,
@@ -1050,12 +1051,18 @@ export function DeliveryPanel({ only }: { only?: string } = {}) {
             )}
             <span className="delivery-load">
               Agentes
-              <span className="delivery-meter" aria-hidden>
-                {Array.from({ length: capacity }, (_, index) => (
-                  <i key={index} className={index < running.length ? "on" : undefined} />
-                ))}
-              </span>
-              {running.length} de {capacity}
+              {capacity === UNLIMITED_CAPACITY ? (
+                <>{running.length} en marcha, sin límite</>
+              ) : (
+                <>
+                  <span className="delivery-meter" aria-hidden>
+                    {Array.from({ length: capacity }, (_, index) => (
+                      <i key={index} className={index < running.length ? "on" : undefined} />
+                    ))}
+                  </span>
+                  {running.length} de {capacity}
+                </>
+              )}
               {queued.length > 0 && (
                 <span className="delivery-muted">· {queued.length} en cola</span>
               )}

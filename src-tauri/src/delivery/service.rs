@@ -874,9 +874,11 @@ impl DeliveryService {
         &self,
         settings: DeliverySettings,
     ) -> Result<DeliverySettings, DeliveryError> {
-        let settings = DeliverySettings {
-            capacity: settings.capacity.min(super::model::MAX_CAPACITY),
+        let capacity = match settings.capacity {
+            super::model::UNLIMITED_CAPACITY => super::model::UNLIMITED_CAPACITY,
+            fixed => fixed.min(super::model::MAX_CAPACITY),
         };
+        let settings = DeliverySettings { capacity };
         self.store()?.set_settings(&settings)?;
         self.tick();
         Ok(settings)

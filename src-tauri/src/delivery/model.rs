@@ -1228,11 +1228,14 @@ pub struct DeliveryEvent {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliverySettings {
     /// Agents running at once. 0 is automatic: one per active task (each
-    /// issue), up to what the machine's cores bear ([`auto_capacity_limit`]).
+    /// issue), up to what the machine's cores bear ([`auto_capacity_limit`]);
+    /// [`UNLIMITED_CAPACITY`] starts every queued job.
     pub capacity: u32,
 }
 
 pub const MAX_CAPACITY: u32 = 8;
+/// The capacity that never makes a job wait for another task's.
+pub const UNLIMITED_CAPACITY: u32 = u32::MAX;
 
 /// Most jobs the automatic capacity runs at once: one per physical core
 /// (about half the logical ones), less one for Tinto's checks, at least 2.
@@ -1250,6 +1253,7 @@ impl DeliverySettings {
                 let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
                 (active_tasks as u32).clamp(1, auto_capacity_limit(cores))
             }
+            UNLIMITED_CAPACITY => UNLIMITED_CAPACITY,
             fixed => fixed.min(MAX_CAPACITY),
         }
     }
