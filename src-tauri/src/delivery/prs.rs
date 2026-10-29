@@ -807,6 +807,17 @@ pub trait GitHub: Send + Sync {
     fn repo_review_comments(&self, _repo: &str, _page: u32) -> Result<Value, DeliveryError> {
         Err(offline())
     }
+    /// The latest comments in the conversation of `repo`'s issues and PRs,
+    /// newest first, as GitHub's REST API lists them: page `page` of a
+    /// hundred.
+    fn repo_conversation_comments(&self, _repo: &str, _page: u32) -> Result<Value, DeliveryError> {
+        Err(offline())
+    }
+    /// The reviews of `repo`'s latest PRs, each with its summary, shaped as
+    /// a REST comment (`id`, `user.login`, `body`, `html_url`, `created_at`).
+    fn repo_review_bodies(&self, _repo: &str) -> Result<Value, DeliveryError> {
+        Err(offline())
+    }
 }
 
 fn offline() -> DeliveryError {
@@ -1341,6 +1352,44 @@ impl GitHub for GhCli {
         let output = Self::act(
             &["api", &path],
             "gh no pudo leer los comentarios del repositorio",
+        )?;
+        serde_json::from_str(&output)
+            .map_err(|error| DeliveryError::new("github_failed", error.to_string()))
+    }
+
+    fn repo_conversation_comments(&self, repo: &str, page: u32) -> Result<Value, DeliveryError> {
+        let path = format!(
+            "repos/{repo}/issues/comments?sort=created&direction=desc&per_page=100&page={page}"
+        );
+        let output = Self::act(
+            &["api", &path],
+            "gh no pudo leer las conversaciones del repositorio",
+        )?;
+        serde_json::from_str(&output)
+            .map_err(|error| DeliveryError::new("github_failed", error.to_string()))
+    }
+
+    fn repo_review_bodies(&self, repo: &str) -> Result<Value, DeliveryError> {
+        let (owner, name) = repo.split_once('/').ok_or_else(|| {
+            DeliveryError::new("github_failed", format!("repositorio inválido: {repo}"))
+        })?;
+        // One query for the reviews of the 30 PRs updated last.
+        let query = "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(first: 30, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { reviews(first: 50) { nodes { databaseId body url createdAt author { login } } } } } } }";
+        let select = "[.data.repository.pullRequests.nodes[].reviews.nodes[] | {id: .databaseId, user: {login: (.author.login // \"\")}, body, html_url: .url, created_at: .createdAt}]";
+        let output = Self::act(
+            &[
+                "api",
+                "graphql",
+                "-f",
+                &format!("query={query}"),
+                "-f",
+                &format!("owner={owner}"),
+                "-f",
+                &format!("name={name}"),
+                "--jq",
+                select,
+            ],
+            "gh no pudo leer las revisiones del repositorio",
         )?;
         serde_json::from_str(&output)
             .map_err(|error| DeliveryError::new("github_failed", error.to_string()))
@@ -2575,6 +2624,9 @@ impl DeliveryService {
                 }
                 if let Err(error) = service.read_parents() {
                     eprintln!("tinto: delivery could not read the issues' parents: {error}");
+                }
+                if let Err(error) = service.watch_guides() {
+                    eprintln!("tinto: delivery could not collect the guides' comments: {error}");
                 }
                 std::thread::sleep(wait);
             }

@@ -4622,6 +4622,9 @@ struct FakeGitHub {
     actions: std::sync::Mutex<Vec<String>>,
     /// What `gh api …/pulls/<n>/comments` answers.
     review_comments: std::sync::Mutex<serde_json::Value>,
+    /// The repo's conversation comments and its PRs' review summaries.
+    conversation: std::sync::Mutex<serde_json::Value>,
+    review_bodies: std::sync::Mutex<serde_json::Value>,
 }
 
 impl FakeGitHub {
@@ -4635,6 +4638,8 @@ impl FakeGitHub {
             branch_prs: std::sync::Mutex::new(branch_prs),
             actions: std::sync::Mutex::new(Vec::new()),
             review_comments: std::sync::Mutex::new(json!([])),
+            conversation: std::sync::Mutex::new(json!([])),
+            review_bodies: std::sync::Mutex::new(json!([])),
         })
     }
 }
@@ -4747,6 +4752,19 @@ impl super::prs::GitHub for FakeGitHub {
         comments.as_array_mut().unwrap().reverse();
         Ok(comments)
     }
+    fn repo_conversation_comments(
+        &self,
+        _repo: &str,
+        page: u32,
+    ) -> Result<serde_json::Value, super::DeliveryError> {
+        Ok(match page {
+            1 => self.conversation.lock().unwrap().clone(),
+            _ => json!([]),
+        })
+    }
+    fn repo_review_bodies(&self, _repo: &str) -> Result<serde_json::Value, super::DeliveryError> {
+        Ok(self.review_bodies.lock().unwrap().clone())
+    }
     fn reply_to_review_comment(
         &self,
         repo: &str,
@@ -4858,6 +4876,8 @@ fn a_linked_pr_is_followed_from_the_feed_and_its_news_is_seen() {
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
         review_comments: std::sync::Mutex::new(json!([])),
+        conversation: std::sync::Mutex::new(json!([])),
+        review_bodies: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
 
@@ -4931,6 +4951,8 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
         branch_prs: std::sync::Mutex::new(json!([])),
         actions: std::sync::Mutex::new(Vec::new()),
         review_comments: std::sync::Mutex::new(json!([])),
+        conversation: std::sync::Mutex::new(json!([])),
+        review_bodies: std::sync::Mutex::new(json!([])),
     });
     h.service.set_github(github.clone());
     let merge = |method: Option<&str>| NewApproval {
@@ -10829,7 +10851,7 @@ fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
         comment(2, "bob", "lgtm"),
         comment(3, "Luis", "El error pasa por el handler común"),
     ]);
-    h.service.set_github(github);
+    h.service.set_github(github.clone());
     let repo = h.repo.path();
     assert_eq!(
         h.service
@@ -10874,18 +10896,19 @@ fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
         ["structuredContent"]
         .clone();
     assert_eq!(read["comments"].as_array().unwrap().len(), 2, "{read}");
-    assert_eq!(read["through"], 3);
+    // Tinto's own numbers, in the order collected.
+    assert_eq!(read["through"], 2);
     let stale = coordinator.write("propose_guide", json!({"through": 9, "rules": []}));
     assert_eq!(stale["isError"], true, "{stale}");
     // A stage no job has would leave the rule out of every job.
     let unknown = coordinator.write(
         "propose_guide",
-        json!({"through": 3, "rules": [{"kind": "visual", "rule": "x", "stages": ["QA"]}]}),
+        json!({"through": 2, "rules": [{"kind": "visual", "rule": "x", "stages": ["QA"]}]}),
     );
     assert_eq!(unknown["isError"], true, "{unknown}");
     coordinator.write(
         "propose_guide",
-        json!({"through": 3, "note": "Primeras reglas", "rules": [
+        json!({"through": 2, "note": "Primeras reglas", "rules": [
             {"kind": "visual", "rule": "El espaciado sale de los tokens de 4px", "applies_to": ["frontend/"], "seen": 1},
             {"kind": "technical", "rule": "Los errores pasan por el handler común", "stages": ["review"]}
         ]}),
@@ -10922,4 +10945,75 @@ fn guides_turn_their_reviewers_comments_into_rules_the_user_approves() {
         ["V-1: El espaciado sale de los tokens de 4px (in frontend/)"]
     );
     h.wait(&job.id);
+
+    // While Tinto follows PRs it collects on its own what the guides write in
+    // a review's summary or a PR's conversation (not an issue's, nor an empty
+    // approval), and asks the coordinator to distill the new comments.
+    let written = |id: u64, login: &str, body: &str, url: &str, at: &str| json!({"id": id, "user": {"login": login}, "body": body, "html_url": url, "created_at": at});
+    *github.conversation.lock().unwrap() = json!([
+        written(
+            40,
+            "ana",
+            "Los vacíos dicen qué hacer",
+            "https://github.com/o/r/pull/7#issuecomment-40",
+            "2026-10-03T10:00:00Z"
+        ),
+        written(
+            41,
+            "ana",
+            "Una idea para el roadmap",
+            "https://github.com/o/r/issues/8#issuecomment-41",
+            "2026-10-03T11:00:00Z"
+        ),
+    ]);
+    *github.review_bodies.lock().unwrap() = json!([
+        written(
+            9,
+            "luis",
+            "Falta manejar el timeout",
+            "https://github.com/o/r/pull/7#pullrequestreview-9",
+            "2026-10-02T10:00:00Z"
+        ),
+        written(
+            10,
+            "luis",
+            "",
+            "https://github.com/o/r/pull/7#pullrequestreview-10",
+            "2026-10-04T10:00:00Z"
+        ),
+    ]);
+    h.service.watch_guides().unwrap();
+    assert_eq!(
+        h.service.guide_view(repo).unwrap().pending,
+        0,
+        "collected at most every half hour"
+    );
+    {
+        let store = h.service.store().unwrap();
+        let mut guide = store.guide(repo).unwrap();
+        guide.collected_at_ms = Some(0);
+        store.put_guide(repo, &guide).unwrap();
+    }
+    h.service.watch_guides().unwrap();
+    let woken = coordinator.write("wait_run", json!({}));
+    assert!(
+        woken["structuredContent"]["events"]
+            .to_string()
+            .contains("read_guide_comments"),
+        "{woken}"
+    );
+    let read = coordinator.call("read_guide_comments", json!({"run_id": coordinator.run_id}))
+        ["structuredContent"]
+        .clone();
+    let texts: Vec<&str> = read["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|comment| comment["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        ["Falta manejar el timeout", "Los vacíos dicen qué hacer"]
+    );
+    assert_eq!(read["through"], 4);
 }

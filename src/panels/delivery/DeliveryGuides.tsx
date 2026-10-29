@@ -118,8 +118,10 @@ export function GuidesPage({ repo, onBack }: { repo: RepoChoice; onBack: () => v
         <section className="delivery-settings__section" aria-label={`Guías de ${repo.label}`}>
           <h2>Guías de {repo.label}</h2>
           <p className="delivery-settings__intro">
-            Los comentarios de revisión de quienes elijas como guía se convierten en reglas breves.
-            Un coordinador las propone y tú las apruebas aquí.
+            Lo que escriben en los PRs quienes elijas como guía (comentarios en líneas, resúmenes de
+            sus revisiones y la conversación del PR) se convierte en reglas breves. Tinto lo lee
+            solo cada media hora mientras sigue los PRs y, si hay comentarios nuevos, pide al
+            coordinador del lote que proponga las reglas; tú las apruebas aquí.
           </p>
 
           <h3>Quién guía</h3>
@@ -165,12 +167,15 @@ export function GuidesPage({ repo, onBack }: { repo: RepoChoice; onBack: () => v
               {view.comments === 0
                 ? "Todavía no hay comentarios de las guías."
                 : `${view.comments} comentarios de las guías, ${view.pending} sin destilar.`}
+              {view.collected_at_ms
+                ? ` Leídos por última vez ${new Date(view.collected_at_ms).toLocaleString()}.`
+                : ""}
             </p>
           )}
           <ActionGroup>
             <ActionButton
               disabled={!view || view.people.length === 0}
-              title="Lee los últimos comentarios de revisión de los PRs y guarda los de las guías"
+              title="Lee ahora lo último que escribieron las guías en los PRs, sin esperar a la próxima lectura"
               onAction={async () => {
                 const found = await collectDeliveryGuideComments(repo.path, repo.distro);
                 setView(found);

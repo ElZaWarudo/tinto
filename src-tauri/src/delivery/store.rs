@@ -445,9 +445,10 @@ impl DeliveryStore {
             )
             .optional()?;
         Ok(value
-            .map(|value| decode(&value))
+            .map(|value| decode::<super::guides::DeliveryGuide>(&value))
             .transpose()?
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .upgraded())
     }
 
     pub fn put_guide(

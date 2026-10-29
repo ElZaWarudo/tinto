@@ -1,9 +1,14 @@
 //! Guides: reviewers the user marks as the repo's visual or technical
-//! guide. Tinto collects their review comments from the repo's PRs, a
-//! coordinator distills them into short rules, and each version of the
-//! rules waits for the user's approval before it replaces the last.
+//! guide. Tinto collects what they write on the repo's PRs (comments on
+//! lines, review summaries and the PR conversation) on its own while it
+//! follows PRs, asks a coordinator to distill the new ones into short rules,
+//! and each version of the rules waits for the user's approval before it
+//! replaces the last.
 //!
 //! - The comments are evidence, kept whole; the rules are what agents get.
+//! - Each comment gets Tinto's own number in the order it was collected:
+//!   GitHub numbers each kind of comment apart, so its ids say nothing of
+//!   which came first.
 //! - A coordinator reads the comments not distilled yet, oldest first, and
 //!   proposes the whole new set of rules with the newest comment it read.
 //!   Approving it replaces the rules and marks those comments distilled;
@@ -27,6 +32,8 @@ use super::{now_ms, DeliveryError};
 /// hundred each, newest first.
 const PAGES: u32 = 5;
 const PAGE_SIZE: usize = 100;
+/// How often Tinto collects a repo's guide comments on its own.
+const COLLECT_EVERY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 /// The comments a coordinator gets at once, oldest first.
 const READ_LIMIT: usize = 150;
 /// A comment's text as a coordinator reads it, at most.
@@ -34,9 +41,14 @@ const BODY_CHARS: usize = 1500;
 /// The end of a comment's diff a coordinator reads: the lines it is on.
 const HUNK_LINES: usize = 12;
 
-/// A guide's review comment, as GitHub gave it.
+/// A guide's comment, as GitHub gave it: on a line, a review's summary or
+/// in the PR's conversation (these two without `path`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryGuideComment {
+    /// Tinto's number for it, in the order collected: what `through` and
+    /// `distilled_through` count.
+    #[serde(default)]
+    pub seq: u64,
     pub id: u64,
     pub login: String,
     pub body: String,
@@ -81,7 +93,7 @@ pub struct DeliveryGuideRule {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeliveryGuideProposal {
     pub rules: Vec<DeliveryGuideRule>,
-    /// The newest comment it took in.
+    /// The newest comment it took in, by `seq`.
     pub through: u64,
     pub note: String,
     pub requested_by: String,
@@ -94,10 +106,38 @@ pub struct DeliveryGuideProposal {
 pub struct DeliveryGuide {
     pub rules: Vec<DeliveryGuideRule>,
     pub comments: Vec<DeliveryGuideComment>,
-    /// The newest comment the approved rules took in.
+    /// The newest comment the approved rules took in, by `seq`.
     pub distilled_through: u64,
     pub proposal: Option<DeliveryGuideProposal>,
     pub collected_at_ms: Option<u64>,
+}
+
+impl DeliveryGuide {
+    /// A guide saved before comments had `seq`: numbered in the order of
+    /// their ids, which then were all of one kind, and its marks moved to
+    /// those numbers.
+    pub(super) fn upgraded(mut self) -> Self {
+        if self.comments.iter().all(|comment| comment.seq > 0) {
+            return self;
+        }
+        self.comments.sort_by_key(|comment| comment.id);
+        for (index, comment) in self.comments.iter_mut().enumerate() {
+            comment.seq = index as u64 + 1;
+        }
+        let renumber = |id: u64, comments: &[DeliveryGuideComment]| {
+            comments
+                .iter()
+                .filter(|comment| comment.id <= id)
+                .map(|comment| comment.seq)
+                .max()
+                .unwrap_or(0)
+        };
+        self.distilled_through = renumber(self.distilled_through, &self.comments);
+        if let Some(proposal) = &mut self.proposal {
+            proposal.through = renumber(proposal.through, &self.comments);
+        }
+        self
+    }
 }
 
 /// The guide as Tinto shows it: its comments counted, not listed.
@@ -118,7 +158,13 @@ fn invalid(message: impl Into<String>) -> DeliveryError {
 
 fn comment_from(comment: &Value) -> Option<DeliveryGuideComment> {
     let text = |key: &str| comment[key].as_str().unwrap_or_default().to_string();
+    // A review approved without words says nothing to distill.
+    if text("body").trim().is_empty() {
+        return None;
+    }
+    let url = text("html_url");
     Some(DeliveryGuideComment {
+        seq: 0,
         id: comment["id"].as_u64()?,
         login: comment["user"]["login"].as_str()?.to_string(),
         body: text("body"),
@@ -127,14 +173,15 @@ fn comment_from(comment: &Value) -> Option<DeliveryGuideComment> {
             .as_u64()
             .or_else(|| comment["original_line"].as_u64()),
         diff_hunk: text("diff_hunk"),
-        url: text("html_url"),
         pr_url: comment["_links"]["pull_request"]["href"]
             .as_str()
             .map(|api| {
                 api.replace("api.github.com/repos/", "github.com/")
                     .replace("/pulls/", "/pull/")
             })
-            .unwrap_or_default(),
+            // A conversation comment or a review: its PR is in its URL.
+            .unwrap_or_else(|| url.split('#').next().unwrap_or_default().to_string()),
+        url,
         created_at: text("created_at"),
     })
 }
@@ -214,7 +261,7 @@ impl DeliveryService {
             pending: guide
                 .comments
                 .iter()
-                .filter(|comment| comment.id > guide.distilled_through)
+                .filter(|comment| comment.seq > guide.distilled_through)
                 .count(),
             comments: guide.comments.len(),
             rules: guide.rules,
@@ -235,45 +282,118 @@ impl DeliveryService {
         Ok(logins)
     }
 
-    /// Reads the latest review comments of the repo's PRs and keeps the
-    /// guides' new ones.
+    /// Reads what the guides wrote lately on the repo's PRs and keeps the
+    /// new comments.
     pub fn collect_guide_comments(
         &self,
         repo: &Path,
         distro: Option<&str>,
     ) -> Result<DeliveryGuideView, DeliveryError> {
-        let people = self.store()?.repo_settings(repo)?.guides;
-        if people.is_empty() {
+        if self.store()?.repo_settings(repo)?.guides.is_empty() {
             return Err(invalid("elige antes quién es guía de este repositorio"));
         }
+        self.collect_new_guide_comments(repo, distro)?;
+        self.guide_view(repo)
+    }
+
+    /// Collects the guides' comments on lines, their review summaries and
+    /// what they wrote in the PRs' conversation; returns how many are new.
+    fn collect_new_guide_comments(
+        &self,
+        repo: &Path,
+        distro: Option<&str>,
+    ) -> Result<usize, DeliveryError> {
+        let people = self.store()?.repo_settings(repo)?.guides;
         let github_repo = repo_on_github(repo, distro)?;
         let github = self.github();
-        let mut found = Vec::new();
-        for page in 1..=PAGES {
-            let listed = github.repo_review_comments(&github_repo, page)?;
-            let items = listed.as_array().map(Vec::as_slice).unwrap_or_default();
-            found.extend(items.iter().filter_map(comment_from).filter(|comment| {
+        let mut listed = Vec::new();
+        for conversation in [false, true] {
+            for page in 1..=PAGES {
+                let items = match conversation {
+                    false => github.repo_review_comments(&github_repo, page)?,
+                    true => github.repo_conversation_comments(&github_repo, page)?,
+                };
+                let items = items.as_array().cloned().unwrap_or_default();
+                let last = items.len() < PAGE_SIZE;
+                listed.extend(items);
+                if last {
+                    break;
+                }
+            }
+        }
+        listed.extend(
+            github
+                .repo_review_bodies(&github_repo)?
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let mut found: Vec<DeliveryGuideComment> = listed
+            .iter()
+            .filter_map(comment_from)
+            // Conversation comments of issues are not about a PR's code.
+            .filter(|comment| comment.pr_url.contains("/pull/"))
+            .filter(|comment| {
                 people
                     .iter()
                     .any(|person| person.login.eq_ignore_ascii_case(&comment.login))
-            }));
-            if items.len() < PAGE_SIZE {
-                break;
+            })
+            .collect();
+        found.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        let store = self.store()?;
+        let mut guide = store.guide(repo)?;
+        let mut next = guide
+            .comments
+            .iter()
+            .map(|comment| comment.seq)
+            .max()
+            .unwrap_or(0);
+        let mut new = 0;
+        for mut comment in found {
+            if guide.comments.iter().any(|known| known.url == comment.url) {
+                continue;
+            }
+            next += 1;
+            comment.seq = next;
+            guide.comments.push(comment);
+            new += 1;
+        }
+        guide.collected_at_ms = Some(now_ms());
+        store.put_guide(repo, &guide)?;
+        Ok(new)
+    }
+
+    /// While Tinto follows PRs: in each repo of the tasks with guides,
+    /// collects their comments at most every [`COLLECT_EVERY`], and asks the
+    /// repo's coordinators to distill when new ones came and no proposal
+    /// waits for the user.
+    pub(super) fn watch_guides(&self) -> Result<(), DeliveryError> {
+        let mut repos: Vec<(std::path::PathBuf, Option<String>)> = Vec::new();
+        for task in self.store()?.tasks()? {
+            if !repos.iter().any(|(repo, _)| *repo == task.repo) {
+                repos.push((task.repo.clone(), task.distro.clone()));
             }
         }
-        {
-            let store = self.store()?;
-            let mut guide = store.guide(repo)?;
-            for comment in found {
-                if !guide.comments.iter().any(|known| known.id == comment.id) {
-                    guide.comments.push(comment);
-                }
+        for (repo, distro) in repos {
+            let (people, guide) = {
+                let store = self.store()?;
+                (store.repo_settings(&repo)?.guides, store.guide(&repo)?)
+            };
+            let due = guide
+                .collected_at_ms
+                .is_none_or(|at| now_ms().saturating_sub(at) >= COLLECT_EVERY.as_millis() as u64);
+            if people.is_empty() || !due {
+                continue;
             }
-            guide.comments.sort_by_key(|comment| comment.id);
-            guide.collected_at_ms = Some(now_ms());
-            store.put_guide(repo, &guide)?;
+            let new = self.collect_new_guide_comments(&repo, distro.as_deref())?;
+            if new > 0 && guide.proposal.is_none() {
+                // Without a coordinator the comments wait, counted on the
+                // Guías page, for the next batch.
+                let _ = self.request_guide(&repo);
+            }
+            self.notify();
         }
-        self.guide_view(repo)
+        Ok(())
     }
 
     /// Asks the coordinators of the repo's batches to distill the comments
@@ -284,7 +404,7 @@ impl DeliveryService {
         let pending = guide
             .comments
             .iter()
-            .filter(|comment| comment.id > guide.distilled_through)
+            .filter(|comment| comment.seq > guide.distilled_through)
             .count();
         if pending == 0 {
             return Err(invalid(
@@ -329,7 +449,7 @@ impl DeliveryService {
         let pending: Vec<&DeliveryGuideComment> = guide
             .comments
             .iter()
-            .filter(|comment| comment.id > guide.distilled_through)
+            .filter(|comment| comment.seq > guide.distilled_through)
             .collect();
         let shown = &pending[..pending.len().min(READ_LIMIT)];
         let kinds = |login: &str| {
@@ -343,7 +463,7 @@ impl DeliveryService {
             "guides": people,
             "rules": guide.rules,
             "comments": shown.iter().map(|comment| json!({
-                "id": comment.id,
+                "id": comment.seq,
                 "by": comment.login,
                 "kinds": kinds(&comment.login),
                 "path": comment.path,
@@ -352,7 +472,7 @@ impl DeliveryService {
                 "diff": last_lines(&comment.diff_hunk, HUNK_LINES),
                 "url": comment.url,
             })).collect::<Vec<_>>(),
-            "through": shown.last().map_or(guide.distilled_through, |comment| comment.id),
+            "through": shown.last().map_or(guide.distilled_through, |comment| comment.seq),
             "more": pending.len() - shown.len(),
         }))
     }
@@ -385,7 +505,12 @@ impl DeliveryService {
         }
         let store = self.store()?;
         let mut guide = store.guide(&run.repo)?;
-        let newest = guide.comments.last().map_or(0, |comment| comment.id);
+        let newest = guide
+            .comments
+            .iter()
+            .map(|comment| comment.seq)
+            .max()
+            .unwrap_or(0);
         if through < guide.distilled_through || through > newest {
             return Err(invalid(format!(
                 "`through` es el último comentario que leíste con read_guide_comments (entre {} y {newest})",
@@ -463,6 +588,39 @@ fn repo_on_github(repo: &Path, distro: Option<&str>) -> Result<String, DeliveryE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guide_saved_by_github_ids_is_renumbered_with_its_marks() {
+        let comment = |id: u64| DeliveryGuideComment {
+            seq: 0,
+            id,
+            login: "ana".into(),
+            body: "x".into(),
+            path: None,
+            line: None,
+            diff_hunk: String::new(),
+            url: format!("https://github.com/o/r/pull/1#discussion_r{id}"),
+            pr_url: String::new(),
+            created_at: String::new(),
+        };
+        let guide = DeliveryGuide {
+            comments: vec![comment(300), comment(100), comment(200)],
+            distilled_through: 200,
+            proposal: Some(DeliveryGuideProposal {
+                rules: Vec::new(),
+                through: 300,
+                note: String::new(),
+                requested_by: "coord".into(),
+                requested_at_ms: 1,
+            }),
+            ..Default::default()
+        }
+        .upgraded();
+        let numbered: Vec<(u64, u64)> = guide.comments.iter().map(|c| (c.id, c.seq)).collect();
+        assert_eq!(numbered, [(100, 1), (200, 2), (300, 3)]);
+        assert_eq!(guide.distilled_through, 2);
+        assert_eq!(guide.proposal.unwrap().through, 3);
+    }
 
     fn rule(id: &str, kind: DeliveryGuideKind) -> DeliveryGuideRule {
         DeliveryGuideRule {
