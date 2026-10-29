@@ -11,6 +11,9 @@ on:
 permissions:
   contents: write
 
+# Both jobs build with one pinned Rust: a newer stable can bring lints that
+# fail a release halfway. Check locally with the same one before tagging.
+
 jobs:
   wsl-agent:
     name: WSL agent
@@ -35,7 +38,7 @@ jobs:
             wget
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.1
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -73,7 +76,7 @@ jobs:
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
 

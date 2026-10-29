@@ -34,7 +34,10 @@ signed update that every installed Tinto offers on its next start.
 
    The workflow checks that the tag matches the app's version, runs lint, the
    frontend tests and clippy, then builds and publishes. Follow it in the
-   repo's Actions tab.
+   repo's Actions tab. It builds with the Rust version pinned in
+   `release.yml` (`dtolnay/rust-toolchain@…`): run clippy locally with that
+   same version before tagging, or a newer lint fails the release; raise the
+   pin when you update Rust.
 
 ## Secrets
 

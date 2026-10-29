@@ -347,8 +347,10 @@ pub fn autodetect_repos_under(root: PathBuf) -> Vec<PathBuf> {
 fn decode_wsl_output(bytes: &[u8]) -> String {
     if bytes.len() >= 2 && bytes[1] == 0 {
         let words = bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_le_bytes(*chunk))
             .collect::<Vec<_>>();
         String::from_utf16_lossy(&words).replace('\0', "")
     } else {
