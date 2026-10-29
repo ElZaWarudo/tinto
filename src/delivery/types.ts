@@ -589,6 +589,22 @@ export interface DeliverySettings {
 /** The capacity with no limit (the backend's `u32::MAX`). */
 export const UNLIMITED_CAPACITY = 4294967295;
 
+/** Per step, true when Tinto takes it on its own past the brainstorm. */
+export interface DeliveryAutonomy {
+  decisions: boolean;
+  permissions: boolean;
+  full_access: boolean;
+  settings_proposals: boolean;
+  qa_problems: boolean;
+  commit: boolean;
+  sync: boolean;
+  push: boolean;
+  pr: boolean;
+  merge: boolean;
+  jira: boolean;
+  pr_reply: boolean;
+}
+
 export interface DeliveryRepoSettings {
   worktree_root: string | null;
   bootstrap: string | null;
@@ -620,8 +636,10 @@ export interface DeliveryRepoSettings {
   jira?: DeliveryJiraSettings | null;
   /** "Reintentar al reiniciar": jobs a restart interrupted run again once, when safe. */
   retry_on_restart?: boolean;
-  /** "PR sin revisor": the PR step can be approved without choosing a reviewer. */
+  /** "PR sin revisor": the PR opens without a reviewer and merges without a review. */
   pr_without_reviewer?: boolean;
+  /** Which steps Tinto takes on its own past the brainstorm. */
+  autonomy?: DeliveryAutonomy;
   /** The checks the user marked as environment probes, run by the "Entorno" check. */
   environment_probes?: string[];
   /** The reviewers whose comments make the repo's guides. */

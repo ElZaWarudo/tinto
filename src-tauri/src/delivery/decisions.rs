@@ -32,7 +32,13 @@ pub const AUTO: &str = "auto";
 
 /// The answer Tinto gives in the user's place: the recommended option of a
 /// choice, the text as proposed, and, when `permissions`, allowed.
-fn recommended_answer(decision: &DeliveryDecision, permissions: bool) -> Option<String> {
+fn recommended_answer(
+    decision: &DeliveryDecision,
+    takes: impl Fn(&DeliveryDecision) -> bool,
+) -> Option<String> {
+    if !takes(decision) {
+        return None;
+    }
     match decision.kind {
         DeliveryDecisionKind::Choice => decision
             .options
@@ -40,7 +46,7 @@ fn recommended_answer(decision: &DeliveryDecision, permissions: bool) -> Option<
             .find(|option| option.recommended)
             .map(|option| option.label.clone()),
         DeliveryDecisionKind::Text => Some(decision.text.clone()),
-        DeliveryDecisionKind::Permission => permissions.then(|| ALLOWED.to_string()),
+        DeliveryDecisionKind::Permission => Some(ALLOWED.to_string()),
     }
 }
 
@@ -428,7 +434,7 @@ impl DeliveryService {
         }
         // The batch is all or nothing, and the refusal names every invalid
         // item, so a coordinator never believes a valid one was asked.
-        let unattended = self.unattended(&task)?;
+        let unattended = self.takes_on_its_own(&task, |autonomy| autonomy.decisions)?;
         let mut frozen = Vec::new();
         let mut refused = Vec::new();
         for (index, decision) in decisions.iter().enumerate() {
@@ -776,7 +782,9 @@ impl DeliveryService {
         task_id: &str,
         decided_by: &str,
     ) -> Result<Vec<DeliveryDecision>, DeliveryError> {
-        self.answer_pending(task_id, decided_by, false)
+        self.answer_pending(task_id, decided_by, |decision| {
+            decision.kind != DeliveryDecisionKind::Permission
+        })
     }
 
     /// Once the task's run is past its brainstorm, settles what the task has
@@ -785,17 +793,24 @@ impl DeliveryService {
         &self,
         task_id: &str,
     ) -> Result<Vec<DeliveryDecision>, DeliveryError> {
-        if !self.unattended(&self.task(task_id)?)? {
+        let task = self.task(task_id)?;
+        if !self.unattended(&task)? {
             return Ok(Vec::new());
         }
-        self.answer_pending(task_id, AUTO, true)
+        // Only what the repo lets Tinto answer.
+        let autonomy = self.autonomy(&task)?;
+        self.answer_pending(task_id, AUTO, |decision| match decision.kind {
+            DeliveryDecisionKind::Permission if decision.full_access => autonomy.full_access,
+            DeliveryDecisionKind::Permission => autonomy.permissions,
+            _ => autonomy.decisions,
+        })
     }
 
     fn answer_pending(
         &self,
         task_id: &str,
         decided_by: &str,
-        permissions: bool,
+        takes: impl Fn(&DeliveryDecision) -> bool,
     ) -> Result<Vec<DeliveryDecision>, DeliveryError> {
         let pending: Vec<DeliveryDecision> = self
             .task_decisions(task_id)?
@@ -804,7 +819,7 @@ impl DeliveryService {
             .collect();
         let mut answered = Vec::new();
         for decision in pending {
-            if let Some(answer) = recommended_answer(&decision, permissions) {
+            if let Some(answer) = recommended_answer(&decision, &takes) {
                 answered.push(self.answer_decision(&decision.id, &answer, decided_by)?);
             }
         }

@@ -22,6 +22,7 @@ import { parseStatuses } from "./taskStatus";
 import { ExternalLink } from "./ExternalLink";
 import { ActionButton, ActionGroup } from "./ActionButton";
 import type {
+  DeliveryAutonomy,
   DeliveryAccess,
   DeliveryAgent,
   DeliveryArchivedTask,
@@ -816,8 +817,33 @@ export function StageAgentRow({
 
 /** What QA can use in a repo and who runs each stage, set once so
  *  coordinators read it instead of asking on every task. */
-function RepoSettings({ repo, label }: { repo: string; label: string }) {
+function RepoSettings({
+  repo,
+  label,
+  onBack,
+  wide,
+}: {
+  repo: string;
+  label: string;
+  onBack: () => void;
+  /** What applies to every repo, after this repo's sections. */
+  wide: ReactNode;
+}) {
   const [loaded, setLoaded] = useState<DeliveryRepoSettings | null>(null);
+  const [autonomy, setAutonomy] = useState<DeliveryAutonomy>(DEFAULT_AUTONOMY);
+  // The section in sight, marked in the list; the list scrolls the page to one.
+  const page = useRef<HTMLDivElement>(null);
+  const [current, setCurrent] = useState(SETTINGS_SECTIONS[0].id);
+  const sectionAt = (id: string) =>
+    page.current?.querySelector<HTMLElement>(`[data-section="${id}"]`) ?? null;
+  const spy = () => {
+    const top = page.current?.scrollTop ?? 0;
+    const seen = SETTINGS_SECTIONS.filter((section) => {
+      const heading = sectionAt(section.id);
+      return heading && heading.offsetTop - (page.current?.offsetTop ?? 0) <= top + 24;
+    });
+    setCurrent((seen.at(-1) ?? SETTINGS_SECTIONS[0]).id);
+  };
   const [browser, setBrowser] = useState(false);
   const [commands, setCommands] = useState("");
   const [setup, setSetup] = useState("");
@@ -892,6 +918,7 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         setStages(settings.stages ?? {});
         setRetryOnRestart(settings.retry_on_restart ?? false);
         setPrWithoutReviewer(settings.pr_without_reviewer ?? false);
+        setAutonomy({ ...DEFAULT_AUTONOMY, ...settings.autonomy });
         setProbes(settings.environment_probes ?? []);
         setJiraHost(settings.jira?.host ?? "");
         setJiraProject(settings.jira?.project ?? "");
@@ -908,385 +935,532 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
       active = false;
     };
   }, [repo]);
+  const markEdited = () => {
+    setEdited(true);
+    setStatus("");
+  };
   return (
-    <section
-      className="delivery-settings__section"
-      aria-label={`Ajustes de ${label}`}
-      onChange={() => {
-        setEdited(true);
-        setStatus("");
-      }}
-    >
-      <h2>{label}</h2>
-      <p className="delivery-settings__intro">
-        Lo que la QA puede usar en este repositorio y quién corre cada etapa. Los coordinadores lo
-        leen aquí y no lo preguntan en cada tarea.
-      </p>
-      <h3>QA</h3>
-      <Field
-        label="Entorno de QA"
-        hint="Dónde se prueba en esta máquina: plataforma, ámbito, clientes. Por ejemplo: Windows, ámbito personal; Claude Code y Codex con mis sesiones."
-      >
-        <GrowingTextarea
-          value={environment}
-          onChange={(event) => setEnvironment(event.target.value)}
-          rows={2}
-        />
-      </Field>
-      <h3>Pila de QA</h3>
-      <p className="delivery-settings__intro">
-        Antes de cada QA con navegador, Tinto reconstruye solo los servicios cuyas carpetas cambió
-        la tarea, espera a que la pila responda y abre las páginas de QA para que estén compiladas.
-        El tiempo que tarda no cuenta en el límite del trabajo. Si la pila ya sirve el worktree de
-        la tarea en el mismo commit, no reconstruye nada. Sin nombre, no hay pila.
-      </p>
-      <Field
-        label="Nombre"
-        hint="El proyecto de compose, por ejemplo agentos-dev. La QA con navegador ocupa el recurso qa:browser:<nombre>; una QA de línea de comandos en su propio proyecto corre a la vez."
-      >
-        <input value={stackName} onChange={(event) => setStackName(event.target.value)} />
-      </Field>
-      <Field
-        label="Comando que la levanta"
-        hint="Corre en el worktree de la tarea. {services} se cambia por los servicios a reconstruir."
-      >
-        <GrowingTextarea
-          value={stackUp}
-          onChange={(event) => setStackUp(event.target.value)}
-          rows={2}
-          placeholder="docker compose -p agentos-dev -f docker/compose/docker-compose.yml --env-file ../agentos/docker/compose/.env up -d --build --no-deps {services}"
-        />
-      </Field>
-      <Field
-        label="Servicios por carpeta"
-        hint="Una carpeta por línea con los servicios que se construyen de ella: carpeta: servicio servicio."
-      >
-        <GrowingTextarea
-          value={stackServices}
-          onChange={(event) => setStackServices(event.target.value)}
-          rows={3}
-          placeholder={
-            "frontend: frontend\napi-gateway: api-gateway\nservices/workflows: workflows"
-          }
-        />
-      </Field>
-      <Field label="URL de disponibilidad" hint="Responde cuando la pila está lista.">
-        <input
-          value={stackReady}
-          onChange={(event) => setStackReady(event.target.value)}
-          placeholder="http://localhost:8080/"
-        />
-      </Field>
-      <Field
-        label="Páginas a calentar"
-        hint="Una ruta por línea; Tinto las pide con los módulos que cargan antes de que empiece la QA. Vacío: la URL de disponibilidad."
-      >
-        <GrowingTextarea
-          value={stackWarm}
-          onChange={(event) => setStackWarm(event.target.value)}
-          rows={2}
-          placeholder={"/login\n/app/workflows"}
-        />
-      </Field>
-      <Field
-        label="Datos de prueba"
-        hint="Comandos, uno por línea, que corren cuando la pila responde: usuarios y datos de prueba."
-      >
-        <GrowingTextarea
-          value={stackSeed}
-          onChange={(event) => setStackSeed(event.target.value)}
-          rows={2}
-        />
-      </Field>
-      <Field
-        label="Build de producción"
-        hint="Opcional: un comando que sirve el frontend compilado para producción en lugar del servidor de desarrollo, sin compilar cada página al abrirla."
-      >
-        <GrowingTextarea
-          value={stackPreview}
-          onChange={(event) => setStackPreview(event.target.value)}
-          rows={2}
-        />
-      </Field>
-      <Field
-        label="Comandos de QA"
-        hint="Uno por línea: el comando real, nunca un script que los agentes puedan editar. Pueden escribir fuera del worktree."
-      >
-        <GrowingTextarea
-          value={commands}
-          onChange={(event) => setCommands(event.target.value)}
-          rows={2}
-          placeholder="agentos skills install"
-        />
-      </Field>
-      <Field
-        label="Variables de entorno de verificación y QA"
-        hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. {task} en un valor se cambia por la clave de la tarea (AGOS-474 → agos_474), así cada tarea tiene la suya. Son ajustes de prueba, no secretos: se ven tal cual."
-      >
-        <GrowingTextarea
-          value={checkEnv}
-          onChange={(event) => setCheckEnv(event.target.value)}
-          rows={2}
-          placeholder="TEST_DB_MONGO_URL=mongodb://localhost:27017/tinto_{task}"
-        />
-      </Field>
-      <Field label="Navegador para la QA">
-        <input
-          type="checkbox"
-          checked={browser}
-          onChange={(event) => setBrowser(event.target.checked)}
-        />
-      </Field>
-      <Field
-        label="Cómo se verifica"
-        hint="Además de las etapas: pruebas de punta a punta, QA en navegador cuando hay interfaz, en qué entorno… Los coordinadores lo leen y no lo preguntan en cada issue."
-      >
-        <GrowingTextarea
-          value={verification}
-          onChange={(event) => setVerification(event.target.value)}
-          rows={2}
-          placeholder="Tests automáticos y una prueba de punta a punta en el stack local; QA en navegador solo si cambia la interfaz."
-        />
-      </Field>
-      <Field label="Llamadas de pago a modelos en la QA">
-        <select value={paidCalls} onChange={(event) => setPaidCalls(event.target.value)}>
-          <option value="">Sin fijar (el coordinador pregunta)</option>
-          <option value="yes">Permitidas, con un modelo barato</option>
-          <option value="no">No permitidas</option>
-        </select>
-      </Field>
-      <h3>Entorno</h3>
-      <Field
-        label="Comandos de preparación"
-        hint="Uno por línea: instalaciones y generadores que una tarea necesita antes de compilar y probar (cada paquete, los bindings…). El coordinador elige los de cada tarea y Tinto los corre en su worktree antes de las etapas, fuera de cualquier sandbox."
-      >
-        <GrowingTextarea
-          value={setup}
-          onChange={(event) => setSetup(event.target.value)}
-          rows={3}
-          placeholder="npm --prefix frontend ci"
-        />
-      </Field>
-      <label className="delivery-check">
-        <input
-          type="checkbox"
-          checked={retryOnRestart}
-          onChange={(event) => setRetryOnRestart(event.target.checked)}
-        />
-        <span>
-          Reintentar al reiniciar
-          <small>
-            Si Tinto se cierra con etapas en marcha, al abrirse las vuelve a poner en cola una vez,
-            con el mismo encargo. Nunca las que pudieron dejar algo a medias fuera del worktree
-            (acceso completo, comandos de shell, la QA con su recurso en cuarentena): esas quedan
-            interrumpidas con el motivo.
-          </small>
-        </span>
-      </label>
-      <label className="delivery-check">
-        <input
-          type="checkbox"
-          checked={prWithoutReviewer}
-          onChange={(event) => setPrWithoutReviewer(event.target.checked)}
-        />
-        <span>
-          PR sin revisor
-          <small>
-            Puedes aprobar el paso PR sin elegir revisor y fusionarlo sin una revisión aprobada,
-            para repositorios donde nadie más revisa. Sigue haciendo falta la CI en verde, la
-            aprobación de los revisores que elijas y que nadie haya pedido cambios.
-          </small>
-        </span>
-      </label>
-      <div className="delivery-field">
-        <span className="delivery-field__label">Sondas de entorno</span>
-        {(loaded?.checks ?? []).length === 0 ? (
-          <small className="delivery-field__hint">
-            Sin comandos de verificación todavía: se añaden al lanzar una etapa.
-          </small>
-        ) : (
-          (loaded?.checks ?? []).map((check) => (
-            <label key={check} className="delivery-check">
-              <input
-                type="checkbox"
-                checked={probes.includes(check)}
-                onChange={(event) =>
-                  setProbes((current) =>
-                    event.target.checked
-                      ? [...current, check]
-                      : current.filter((probe) => probe !== check),
-                  )
+    <div className="delivery-settings">
+      <header className="delivery-settings__bar">
+        <button type="button" className="delivery-settings__back" onClick={onBack}>
+          ← Tareas
+        </button>
+        <h2>Ajustes de {label}</h2>
+        <div className="delivery-settings__save">
+          <ActionButton
+            className="delivery-button--primary"
+            disabled={!loaded}
+            onAction={async () =>
+              loaded &&
+              setDeliveryRepoSettings(repo, {
+                ...loaded,
+                qa_browser: browser,
+                qa_commands: parseChecks(commands),
+                setup: parseChecks(setup),
+                check_env: parseEnv(checkEnv),
+                qa_environment: environment.trim(),
+                qa_stack: stackName.trim()
+                  ? {
+                      name: stackName.trim(),
+                      up: stackUp.trim(),
+                      services: parseServices(stackServices),
+                      ready_url: stackReady.trim(),
+                      warm_paths: parseChecks(stackWarm),
+                      seed: parseChecks(stackSeed),
+                      preview: stackPreview.trim(),
+                    }
+                  : null,
+                verification: verification.trim(),
+                paid_model_calls: paidCalls === "" ? null : paidCalls === "yes",
+                single_commit_max_files: positive(maxFiles),
+                single_commit_max_lines: positive(maxLines),
+                stages,
+                retry_on_restart: retryOnRestart,
+                pr_without_reviewer: prWithoutReviewer,
+                autonomy,
+                environment_probes: probes,
+                jira: jiraHost.trim()
+                  ? {
+                      host: jiraHost.trim(),
+                      project: jiraProject.trim(),
+                      after_pr: parseStatuses(afterPr),
+                      after_merge: parseStatuses(afterMerge),
+                    }
+                  : null,
+              })
+                .then(async (saved) => {
+                  // The token goes apart and only when typed: empty keeps it.
+                  if (jiraToken.trim()) await setDeliveryJiraToken(repo, jiraToken);
+                  setJiraToken("");
+                  setLoaded(await getDeliveryRepoSettings(repo));
+                  setEdited(false);
+                  setStatus(`Guardado para ${label}.`);
+                  return saved;
+                })
+                .catch((cause) =>
+                  setStatus(`No se pudo guardar: ${String(cause?.message ?? cause)}`),
+                )
+            }
+          >
+            Guardar
+          </ActionButton>
+          <span className="delivery-field__hint" role="status">
+            {status || (edited ? "Cambios sin guardar." : "")}
+          </span>
+        </div>
+      </header>
+      <div className="delivery-settings__body">
+        <nav className="delivery-settings__rail" aria-label="Secciones de los ajustes">
+          {SETTINGS_SECTIONS.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              aria-current={current === section.id ? "true" : undefined}
+              onClick={() => {
+                setCurrent(section.id);
+                sectionAt(section.id)?.scrollIntoView?.({ block: "start" });
+              }}
+            >
+              {section.label}
+            </button>
+          ))}
+        </nav>
+        <div className="delivery-settings__page" ref={page} onScroll={spy}>
+          <section
+            className="delivery-settings__section"
+            aria-label={`Ajustes de ${label}`}
+            onChange={markEdited}
+          >
+            <p className="delivery-settings__intro">
+              Lo que la QA puede usar en este repositorio, quién corre cada etapa y qué hace Tinto
+              por su cuenta. Los coordinadores lo leen aquí y no lo preguntan en cada tarea.
+            </p>
+            <h3 data-section="autonomy">Autonomía</h3>
+            <p className="delivery-settings__intro">
+              Qué pasos da Tinto por su cuenta cuando el lote termina su brainstorm, y cuáles te
+              espera. Una sincronización, en cualquier momento.
+            </p>
+            <AutonomyTable
+              value={autonomy}
+              onChange={(next) => {
+                setAutonomy(next);
+                markEdited();
+              }}
+            />
+            <h3 data-section="qa">QA</h3>
+            <Field
+              label="Entorno de QA"
+              hint="Dónde se prueba en esta máquina: plataforma, ámbito, clientes. Por ejemplo: Windows, ámbito personal; Claude Code y Codex con mis sesiones."
+            >
+              <GrowingTextarea
+                value={environment}
+                onChange={(event) => setEnvironment(event.target.value)}
+                rows={2}
+              />
+            </Field>
+            <h3 data-section="stack">Pila de QA</h3>
+            <p className="delivery-settings__intro">
+              Antes de cada QA con navegador, Tinto reconstruye solo los servicios cuyas carpetas
+              cambió la tarea, espera a que la pila responda y abre las páginas de QA para que estén
+              compiladas. El tiempo que tarda no cuenta en el límite del trabajo. Si la pila ya
+              sirve el worktree de la tarea en el mismo commit, no reconstruye nada. Sin nombre, no
+              hay pila.
+            </p>
+            <Field
+              label="Nombre"
+              hint="El proyecto de compose, por ejemplo agentos-dev. La QA con navegador ocupa el recurso qa:browser:<nombre>; una QA de línea de comandos en su propio proyecto corre a la vez."
+            >
+              <input value={stackName} onChange={(event) => setStackName(event.target.value)} />
+            </Field>
+            <Field
+              label="Comando que la levanta"
+              hint="Corre en el worktree de la tarea. {services} se cambia por los servicios a reconstruir."
+            >
+              <GrowingTextarea
+                value={stackUp}
+                onChange={(event) => setStackUp(event.target.value)}
+                rows={2}
+                placeholder="docker compose -p agentos-dev -f docker/compose/docker-compose.yml --env-file ../agentos/docker/compose/.env up -d --build --no-deps {services}"
+              />
+            </Field>
+            <Field
+              label="Servicios por carpeta"
+              hint="Una carpeta por línea con los servicios que se construyen de ella: carpeta: servicio servicio."
+            >
+              <GrowingTextarea
+                value={stackServices}
+                onChange={(event) => setStackServices(event.target.value)}
+                rows={3}
+                placeholder={
+                  "frontend: frontend\napi-gateway: api-gateway\nservices/workflows: workflows"
                 }
               />
-              <code>{check}</code>
+            </Field>
+            <Field label="URL de disponibilidad" hint="Responde cuando la pila está lista.">
+              <input
+                value={stackReady}
+                onChange={(event) => setStackReady(event.target.value)}
+                placeholder="http://localhost:8080/"
+              />
+            </Field>
+            <Field
+              label="Páginas a calentar"
+              hint="Una ruta por línea; Tinto las pide con los módulos que cargan antes de que empiece la QA. Vacío: la URL de disponibilidad."
+            >
+              <GrowingTextarea
+                value={stackWarm}
+                onChange={(event) => setStackWarm(event.target.value)}
+                rows={2}
+                placeholder={"/login\n/app/workflows"}
+              />
+            </Field>
+            <Field
+              label="Datos de prueba"
+              hint="Comandos, uno por línea, que corren cuando la pila responde: usuarios y datos de prueba."
+            >
+              <GrowingTextarea
+                value={stackSeed}
+                onChange={(event) => setStackSeed(event.target.value)}
+                rows={2}
+              />
+            </Field>
+            <Field
+              label="Build de producción"
+              hint="Opcional: un comando que sirve el frontend compilado para producción en lugar del servidor de desarrollo, sin compilar cada página al abrirla."
+            >
+              <GrowingTextarea
+                value={stackPreview}
+                onChange={(event) => setStackPreview(event.target.value)}
+                rows={2}
+              />
+            </Field>
+            <Field
+              label="Comandos de QA"
+              hint="Uno por línea: el comando real, nunca un script que los agentes puedan editar. Pueden escribir fuera del worktree."
+            >
+              <GrowingTextarea
+                value={commands}
+                onChange={(event) => setCommands(event.target.value)}
+                rows={2}
+                placeholder="agentos skills install"
+              />
+            </Field>
+            <Field
+              label="Variables de entorno de verificación y QA"
+              hint="Una por línea, NOMBRE=valor. Los trabajos corren con ellas los comandos de verificación y de QA; por ejemplo, la base de datos de pruebas. {task} en un valor se cambia por la clave de la tarea (AGOS-474 → agos_474), así cada tarea tiene la suya. Son ajustes de prueba, no secretos: se ven tal cual."
+            >
+              <GrowingTextarea
+                value={checkEnv}
+                onChange={(event) => setCheckEnv(event.target.value)}
+                rows={2}
+                placeholder="TEST_DB_MONGO_URL=mongodb://localhost:27017/tinto_{task}"
+              />
+            </Field>
+            <Field label="Navegador para la QA">
+              <input
+                type="checkbox"
+                checked={browser}
+                onChange={(event) => setBrowser(event.target.checked)}
+              />
+            </Field>
+            <Field
+              label="Cómo se verifica"
+              hint="Además de las etapas: pruebas de punta a punta, QA en navegador cuando hay interfaz, en qué entorno… Los coordinadores lo leen y no lo preguntan en cada issue."
+            >
+              <GrowingTextarea
+                value={verification}
+                onChange={(event) => setVerification(event.target.value)}
+                rows={2}
+                placeholder="Tests automáticos y una prueba de punta a punta en el stack local; QA en navegador solo si cambia la interfaz."
+              />
+            </Field>
+            <Field label="Llamadas de pago a modelos en la QA">
+              <select value={paidCalls} onChange={(event) => setPaidCalls(event.target.value)}>
+                <option value="">Sin fijar (el coordinador pregunta)</option>
+                <option value="yes">Permitidas, con un modelo barato</option>
+                <option value="no">No permitidas</option>
+              </select>
+            </Field>
+            <h3 data-section="environment">Entorno</h3>
+            <Field
+              label="Comandos de preparación"
+              hint="Uno por línea: instalaciones y generadores que una tarea necesita antes de compilar y probar (cada paquete, los bindings…). El coordinador elige los de cada tarea y Tinto los corre en su worktree antes de las etapas, fuera de cualquier sandbox."
+            >
+              <GrowingTextarea
+                value={setup}
+                onChange={(event) => setSetup(event.target.value)}
+                rows={3}
+                placeholder="npm --prefix frontend ci"
+              />
+            </Field>
+            <label className="delivery-check">
+              <input
+                type="checkbox"
+                checked={retryOnRestart}
+                onChange={(event) => setRetryOnRestart(event.target.checked)}
+              />
+              <span>
+                Reintentar al reiniciar
+                <small>
+                  Si Tinto se cierra con etapas en marcha, al abrirse las vuelve a poner en cola una
+                  vez, con el mismo encargo. Nunca las que pudieron dejar algo a medias fuera del
+                  worktree (acceso completo, comandos de shell, la QA con su recurso en cuarentena):
+                  esas quedan interrumpidas con el motivo.
+                </small>
+              </span>
             </label>
-          ))
-        )}
-        <small className="delivery-field__hint">
-          Los comandos de verificación marcados se corren en «Entorno», en la barra del lote, junto
-          con Docker si el repositorio lo usa. Marca solo los rápidos que dicen si el entorno
-          responde (por ejemplo, un ping a la base de datos).
-        </small>
+            <div className="delivery-field">
+              <span className="delivery-field__label">Sondas de entorno</span>
+              {(loaded?.checks ?? []).length === 0 ? (
+                <small className="delivery-field__hint">
+                  Sin comandos de verificación todavía: se añaden al lanzar una etapa.
+                </small>
+              ) : (
+                (loaded?.checks ?? []).map((check) => (
+                  <label key={check} className="delivery-check">
+                    <input
+                      type="checkbox"
+                      checked={probes.includes(check)}
+                      onChange={(event) =>
+                        setProbes((current) =>
+                          event.target.checked
+                            ? [...current, check]
+                            : current.filter((probe) => probe !== check),
+                        )
+                      }
+                    />
+                    <code>{check}</code>
+                  </label>
+                ))
+              )}
+              <small className="delivery-field__hint">
+                Los comandos de verificación marcados se corren en «Entorno», en la barra del lote,
+                junto con Docker si el repositorio lo usa. Marca solo los rápidos que dicen si el
+                entorno responde (por ejemplo, un ping a la base de datos).
+              </small>
+            </div>
+            <h3 data-section="commits">Commits</h3>
+            <Field
+              label="Un solo commit, como mucho"
+              hint="Un coordinador que proponga un único commit más grande, o que mezcle código, tests y documentación, debe justificarlo."
+            >
+              <span className="delivery-field-row">
+                <input
+                  aria-label="Archivos de un único commit"
+                  type="number"
+                  min={1}
+                  value={maxFiles}
+                  placeholder="5"
+                  onChange={(event) => setMaxFiles(event.target.value)}
+                />
+                archivos y
+                <input
+                  aria-label="Líneas de un único commit"
+                  type="number"
+                  min={1}
+                  value={maxLines}
+                  placeholder="300"
+                  onChange={(event) => setMaxLines(event.target.value)}
+                />
+                líneas
+              </span>
+            </Field>
+            <h3 data-section="agents">Agente de cada etapa</h3>
+            <p className="delivery-settings__intro">
+              Con qué agente, modelo y razonamiento corre cada etapa. El diálogo de lanzar etapa
+              parte de aquí y los coordinadores lo usan en lugar de elegir ellos.
+            </p>
+            {DELIVERY_ROLES.map((stage) => (
+              <StageAgentRow
+                key={stage.value}
+                label={stage.label}
+                value={stages[stage.value]}
+                onChange={(next) =>
+                  setStages((current) => {
+                    const rest = { ...current };
+                    delete rest[stage.value];
+                    return next ? { ...rest, [stage.value]: next } : rest;
+                  })
+                }
+              />
+            ))}
+            <h3 data-section="pr">PR y fusión</h3>
+            <label className="delivery-check">
+              <input
+                type="checkbox"
+                checked={prWithoutReviewer}
+                onChange={(event) => setPrWithoutReviewer(event.target.checked)}
+              />
+              <span>
+                PR sin revisor
+                <small>
+                  Puedes aprobar el paso PR sin elegir revisor y fusionarlo sin una revisión
+                  aprobada, para repositorios donde nadie más revisa. Sigue haciendo falta la CI en
+                  verde, la aprobación de los revisores que elijas y que nadie haya pedido cambios.
+                </small>
+              </span>
+            </label>
+            <h3 data-section="jira">Jira</h3>
+            <p className="delivery-settings__intro">
+              Con Jira configurado, Tinto hace los pasos Jira al aprobarlos: enlaza el PR, lleva la
+              issue por estos estados y comprueba el estado final. Sin él, los hace el coordinador.
+            </p>
+            <Field label="Host de Jira" hint="Por ejemplo: https://jira.example.com">
+              <input value={jiraHost} onChange={(event) => setJiraHost(event.target.value)} />
+            </Field>
+            <Field label="Proyecto">
+              <input value={jiraProject} onChange={(event) => setJiraProject(event.target.value)} />
+            </Field>
+            <Field
+              label="Token de Jira"
+              hint={
+                loaded?.jira?.has_token
+                  ? "Hay un token guardado. Escribe otro solo para cambiarlo."
+                  : "Un token de acceso personal. Se guarda aparte y no se muestra."
+              }
+            >
+              <input
+                type="password"
+                autoComplete="off"
+                value={jiraToken}
+                onChange={(event) => setJiraToken(event.target.value)}
+                placeholder={loaded?.jira?.has_token ? MASK : ""}
+              />
+            </Field>
+            <Field
+              label="Estados al abrir el PR"
+              hint="En orden, separados por comas: En ejecución, In Review"
+            >
+              <input value={afterPr} onChange={(event) => setAfterPr(event.target.value)} />
+            </Field>
+            <Field label="Estados al fusionar el PR" hint="Por ejemplo: Cerrada">
+              <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
+            </Field>
+            <div className="delivery-actions delivery-settings__aside">
+              <ActionButton
+                disabled={!loaded?.jira?.has_token}
+                title={loaded?.jira?.has_token ? undefined : "Guarda antes el host y el token."}
+                onAction={() => {
+                  setJiraCheck("Comprobando…");
+                  return checkDeliveryJira(repo).then(
+                    (name) => setJiraCheck(`Conectado como ${name}.`),
+                    (cause) => setJiraCheck(`No se pudo: ${String(cause?.message ?? cause)}`),
+                  );
+                }}
+              >
+                Comprobar Jira
+              </ActionButton>
+              <span className="delivery-field__hint" role="status">
+                {jiraCheck}
+              </span>
+            </div>
+          </section>
+          <section className="delivery-settings__section" aria-label="Ajustes de todo Delivery">
+            <h3 data-section="delivery">Todo Delivery</h3>
+            <p className="delivery-settings__intro">
+              Vale para todos los repositorios y se guarda al cambiarlo.
+            </p>
+            {wide}
+          </section>
+        </div>
       </div>
-      <h3>Commits</h3>
-      <Field
-        label="Un solo commit, como mucho"
-        hint="Un coordinador que proponga un único commit más grande, o que mezcle código, tests y documentación, debe justificarlo."
-      >
-        <span className="delivery-field-row">
-          <input
-            aria-label="Archivos de un único commit"
-            type="number"
-            min={1}
-            value={maxFiles}
-            placeholder="5"
-            onChange={(event) => setMaxFiles(event.target.value)}
-          />
-          archivos y
-          <input
-            aria-label="Líneas de un único commit"
-            type="number"
-            min={1}
-            value={maxLines}
-            placeholder="300"
-            onChange={(event) => setMaxLines(event.target.value)}
-          />
-          líneas
-        </span>
-      </Field>
-      <h3>Agente de cada etapa</h3>
-      <p className="delivery-settings__intro">
-        Con qué agente, modelo y razonamiento corre cada etapa. El diálogo de lanzar etapa parte de
-        aquí y los coordinadores lo usan en lugar de elegir ellos.
-      </p>
-      {DELIVERY_ROLES.map((stage) => (
-        <StageAgentRow
-          key={stage.value}
-          label={stage.label}
-          value={stages[stage.value]}
-          onChange={(next) =>
-            setStages((current) => {
-              const rest = { ...current };
-              delete rest[stage.value];
-              return next ? { ...rest, [stage.value]: next } : rest;
-            })
-          }
-        />
+    </div>
+  );
+}
+
+/** The settings page's sections, in order, as its list names them. */
+const SETTINGS_SECTIONS = [
+  { id: "autonomy", label: "Autonomía" },
+  { id: "qa", label: "QA" },
+  { id: "stack", label: "Pila de QA" },
+  { id: "environment", label: "Entorno" },
+  { id: "commits", label: "Commits" },
+  { id: "agents", label: "Agentes" },
+  { id: "pr", label: "PR y fusión" },
+  { id: "jira", label: "Jira" },
+  { id: "delivery", label: "Todo Delivery" },
+];
+
+/** Tinto's own defaults, for a repo saved before autonomy existed. */
+const DEFAULT_AUTONOMY: DeliveryAutonomy = {
+  decisions: true,
+  permissions: true,
+  full_access: true,
+  settings_proposals: true,
+  qa_problems: true,
+  commit: true,
+  sync: true,
+  push: true,
+  pr: false,
+  merge: false,
+  jira: true,
+  pr_reply: false,
+};
+
+/** Every step Tinto can take on its own, in the order a task meets them. */
+const AUTONOMY_STEPS: { key: keyof DeliveryAutonomy; label: string; hint: string }[] = [
+  {
+    key: "decisions",
+    label: "Decisiones",
+    hint: "La opción recomendada; los textos, como vienen.",
+  },
+  {
+    key: "permissions",
+    label: "Permisos",
+    hint: "Correr un comando, leer o escribir fuera del worktree.",
+  },
+  { key: "full_access", label: "QA con acceso total", hint: "Una QA sin su sandbox." },
+  { key: "settings_proposals", label: "Propuestas de ajustes", hint: "Se aplican enteras." },
+  {
+    key: "qa_problems",
+    label: "Problemas de QA",
+    hint: "Van al coordinador con la primera sugerencia de la QA.",
+  },
+  { key: "commit", label: "Commit", hint: "El plan de commits del coordinador." },
+  { key: "sync", label: "Sincronizar", hint: "Traer la base a la rama local, sin publicar." },
+  { key: "push", label: "Push", hint: "Publicar la rama." },
+  { key: "pr", label: "Abrir el PR", hint: "Sin revisores, salvo los que elija el coordinador." },
+  { key: "merge", label: "Fusionar", hint: "Cuando la CI y las revisiones lo permiten." },
+  { key: "jira", label: "Jira", hint: "Los pasos que Tinto hace él mismo." },
+  {
+    key: "pr_reply",
+    label: "Respuestas en el PR",
+    hint: "Publicar en tu nombre una respuesta a un revisor.",
+  },
+];
+
+/** One row per step: whether it waits for the user or Tinto takes it. */
+function AutonomyTable({
+  value,
+  onChange,
+}: {
+  value: DeliveryAutonomy;
+  onChange: (next: DeliveryAutonomy) => void;
+}) {
+  return (
+    <div className="delivery-autonomy" role="group" aria-label="Autonomía por paso">
+      {AUTONOMY_STEPS.map((step) => (
+        <label key={step.key} className="delivery-autonomy__row">
+          <span>
+            {step.label}
+            <small>{step.hint}</small>
+          </span>
+          <select
+            aria-label={step.label}
+            value={value[step.key] ? "auto" : "ask"}
+            // The table saves with the page; a select's change must not
+            // bubble to the section twice.
+            onChange={(event) => {
+              event.stopPropagation();
+              onChange({ ...value, [step.key]: event.target.value === "auto" });
+            }}
+          >
+            <option value="ask">Te pregunta</option>
+            <option value="auto">Automático</option>
+          </select>
+        </label>
       ))}
-      <h3>Jira</h3>
-      <p className="delivery-settings__intro">
-        Con Jira configurado, Tinto hace los pasos Jira al aprobarlos: enlaza el PR, lleva la issue
-        por estos estados y comprueba el estado final. Sin él, los hace el coordinador.
-      </p>
-      <Field label="Host de Jira" hint="Por ejemplo: https://jira.example.com">
-        <input value={jiraHost} onChange={(event) => setJiraHost(event.target.value)} />
-      </Field>
-      <Field label="Proyecto">
-        <input value={jiraProject} onChange={(event) => setJiraProject(event.target.value)} />
-      </Field>
-      <Field
-        label="Token de Jira"
-        hint={
-          loaded?.jira?.has_token
-            ? "Hay un token guardado. Escribe otro solo para cambiarlo."
-            : "Un token de acceso personal. Se guarda aparte y no se muestra."
-        }
-      >
-        <input
-          type="password"
-          autoComplete="off"
-          value={jiraToken}
-          onChange={(event) => setJiraToken(event.target.value)}
-          placeholder={loaded?.jira?.has_token ? MASK : ""}
-        />
-      </Field>
-      <Field
-        label="Estados al abrir el PR"
-        hint="En orden, separados por comas: En ejecución, In Review"
-      >
-        <input value={afterPr} onChange={(event) => setAfterPr(event.target.value)} />
-      </Field>
-      <Field label="Estados al fusionar el PR" hint="Por ejemplo: Cerrada">
-        <input value={afterMerge} onChange={(event) => setAfterMerge(event.target.value)} />
-      </Field>
-      <div className="delivery-actions delivery-settings__aside">
-        <ActionButton
-          disabled={!loaded?.jira?.has_token}
-          title={loaded?.jira?.has_token ? undefined : "Guarda antes el host y el token."}
-          onAction={() => {
-            setJiraCheck("Comprobando…");
-            return checkDeliveryJira(repo).then(
-              (name) => setJiraCheck(`Conectado como ${name}.`),
-              (cause) => setJiraCheck(`No se pudo: ${String(cause?.message ?? cause)}`),
-            );
-          }}
-        >
-          Comprobar Jira
-        </ActionButton>
-        <span className="delivery-field__hint" role="status">
-          {jiraCheck}
-        </span>
-      </div>
-      <div className="delivery-settings__save">
-        <ActionButton
-          className="delivery-button--primary"
-          disabled={!loaded}
-          onAction={async () =>
-            loaded &&
-            setDeliveryRepoSettings(repo, {
-              ...loaded,
-              qa_browser: browser,
-              qa_commands: parseChecks(commands),
-              setup: parseChecks(setup),
-              check_env: parseEnv(checkEnv),
-              qa_environment: environment.trim(),
-              qa_stack: stackName.trim()
-                ? {
-                    name: stackName.trim(),
-                    up: stackUp.trim(),
-                    services: parseServices(stackServices),
-                    ready_url: stackReady.trim(),
-                    warm_paths: parseChecks(stackWarm),
-                    seed: parseChecks(stackSeed),
-                    preview: stackPreview.trim(),
-                  }
-                : null,
-              verification: verification.trim(),
-              paid_model_calls: paidCalls === "" ? null : paidCalls === "yes",
-              single_commit_max_files: positive(maxFiles),
-              single_commit_max_lines: positive(maxLines),
-              stages,
-              retry_on_restart: retryOnRestart,
-              pr_without_reviewer: prWithoutReviewer,
-              environment_probes: probes,
-              jira: jiraHost.trim()
-                ? {
-                    host: jiraHost.trim(),
-                    project: jiraProject.trim(),
-                    after_pr: parseStatuses(afterPr),
-                    after_merge: parseStatuses(afterMerge),
-                  }
-                : null,
-            })
-              .then(async (saved) => {
-                // The token goes apart and only when typed: empty keeps it.
-                if (jiraToken.trim()) await setDeliveryJiraToken(repo, jiraToken);
-                setJiraToken("");
-                setLoaded(await getDeliveryRepoSettings(repo));
-                setEdited(false);
-                setStatus(`Guardado para ${label}.`);
-                return saved;
-              })
-              .catch((cause) => setStatus(`No se pudo guardar: ${String(cause?.message ?? cause)}`))
-          }
-        >
-          Guardar
-        </ActionButton>
-        <span className="delivery-field__hint" role="status">
-          {status || (edited ? "Cambios sin guardar." : "")}
-        </span>
-      </div>
-    </section>
+    </div>
   );
 }
 
@@ -1325,36 +1499,49 @@ function CopySnippet({ label, shown, copied }: { label: string; shown: string; c
   );
 }
 
-/** Delivery's settings as a page in place of the tasks: one section at a
- *  time, chosen in its own list. */
-/** One repo's settings, in place of its tasks: what QA can use, its
- *  commits, who runs each stage and its Jira. */
-export function RepoSettingsPage({ repo, onBack }: { repo: RepoChoice; onBack: () => void }) {
+/** One repo's settings, in place of its tasks, and after them what applies
+ *  to all of Delivery. */
+export function RepoSettingsPage({
+  repo,
+  onBack,
+  ...wide
+}: {
+  repo: RepoChoice;
+  onBack: () => void;
+} & DeliveryWideProps) {
   return (
-    <div className="delivery-settings">
-      <div className="delivery-settings__page">
-        <button type="button" className="delivery-settings__back" onClick={onBack}>
-          ← Volver a las tareas
-        </button>
-        <RepoSettings key={repo.path} repo={repo.path} label={repo.label} />
-      </div>
-    </div>
+    <RepoSettings
+      key={repo.path}
+      repo={repo.path}
+      label={repo.label}
+      onBack={onBack}
+      wide={<DeliveryWideSettings {...wide} />}
+    />
   );
 }
+
+type DeliveryWideProps = {
+  capacity: number;
+  endpoint: DeliveryCoordinatorEndpoint | null;
+  onCapacity: (capacity: number) => void;
+};
 
 /** What applies to Delivery in every repo: how many agents run at once and
  *  how an outside coordinator connects. */
 export function DeliverySettingsDialog({
-  capacity,
-  endpoint,
-  onCapacity,
   onClose,
-}: {
-  capacity: number;
-  endpoint: DeliveryCoordinatorEndpoint | null;
-  onCapacity: (capacity: number) => void;
-  onClose: () => void;
-}) {
+  ...wide
+}: DeliveryWideProps & { onClose: () => void }) {
+  return (
+    <FormDialog title="Ajustes de Delivery" wide onCancel={onClose}>
+      <DeliveryWideSettings {...wide} />
+    </FormDialog>
+  );
+}
+
+/** How many agents run at once and how an outside coordinator connects:
+ *  the same in the dialog and on a repo's settings page. */
+function DeliveryWideSettings({ capacity, endpoint, onCapacity }: DeliveryWideProps) {
   // The token is a credential: the page shows it masked and only the copy
   // buttons carry it.
   // Through Tinto's proxy as a stdio server, which updates leave running,
@@ -1377,7 +1564,7 @@ export function DeliverySettingsDialog({
         ? `[mcp_servers.tinto-delivery]\ncommand = '${command}'\nargs = ["--delivery-mcp-proxy"]`
         : `[mcp_servers.tinto-delivery]\nurl = "${endpoint.url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`;
   return (
-    <FormDialog title="Ajustes de Delivery" wide onCancel={onClose}>
+    <>
       <Field
         label="Agentes en paralelo"
         hint="Automático: uno por cada tarea activa (cada issue), hasta uno por núcleo físico menos uno (para las comprobaciones de Tinto), que corren de una en una. Los demás esperan en cola, en orden de llegada. Las conversaciones de Agents no cuentan."
@@ -1417,7 +1604,7 @@ export function DeliverySettingsDialog({
       ) : (
         <p className="delivery-settings__intro">El API de coordinador no está disponible.</p>
       )}
-    </FormDialog>
+    </>
   );
 }
 

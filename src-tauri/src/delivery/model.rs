@@ -1335,6 +1335,57 @@ pub struct DeliveryRepoSettings {
     /// The reviewers whose comments make the repo's guides.
     #[serde(default)]
     pub guides: Vec<DeliveryGuidePerson>,
+    /// Which steps Tinto takes on its own once a batch is past its
+    /// brainstorm, and which still wait for the user.
+    #[serde(default)]
+    pub autonomy: DeliveryAutonomy,
+}
+
+/// Per step, `true` when Tinto takes it on its own past the brainstorm (a
+/// sync, at any time). The defaults stop only to open and merge the PR and
+/// to reply on it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct DeliveryAutonomy {
+    /// Choices take their recommended option; texts, as proposed.
+    pub decisions: bool,
+    /// Permissions to run a command, read or write outside the worktree.
+    pub permissions: bool,
+    /// A QA without its sandbox.
+    pub full_access: bool,
+    pub settings_proposals: bool,
+    /// Each QA problem goes to the coordinator with QA's first suggestion.
+    pub qa_problems: bool,
+    pub commit: bool,
+    pub sync: bool,
+    pub push: bool,
+    /// Opening the PR, without reviewers unless the coordinator chose some.
+    pub pr: bool,
+    /// Merging it, once its checks and reviews let it.
+    pub merge: bool,
+    /// The Jira steps Tinto runs itself.
+    pub jira: bool,
+    /// Posting a reply on the PR as the user.
+    pub pr_reply: bool,
+}
+
+impl Default for DeliveryAutonomy {
+    fn default() -> Self {
+        Self {
+            decisions: true,
+            permissions: true,
+            full_access: true,
+            settings_proposals: true,
+            qa_problems: true,
+            commit: true,
+            sync: true,
+            push: true,
+            pr: false,
+            merge: false,
+            jira: true,
+            pr_reply: false,
+        }
+    }
 }
 
 /// What a guide reviews for: how things look, or how they are built.

@@ -298,8 +298,8 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
-        // Past the brainstorm nothing waits for the user: it applies whole.
-        if self.run(run_id)?.unattended {
+        // Past the brainstorm, when the repo lets Tinto, it applies whole.
+        if self.run(run_id)?.unattended && settings.autonomy.settings_proposals {
             let changes = proposal.changes.clone();
             return self.approve_settings_proposal(&proposal.id, changes, AUTO);
         }

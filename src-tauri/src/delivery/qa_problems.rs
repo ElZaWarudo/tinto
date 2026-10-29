@@ -320,7 +320,7 @@ impl DeliveryService {
         self.notify();
         // Past the brainstorm nothing waits for the user: each problem goes
         // to the coordinator with QA's recommended fix.
-        if self.unattended(task)? {
+        if self.takes_on_its_own(task, |autonomy| autonomy.qa_problems)? {
             let choices: Vec<QaProblemChoice> = self
                 .task_qa_problems(&task.id)?
                 .into_iter()

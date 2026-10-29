@@ -887,6 +887,24 @@ impl DeliveryService {
         })
     }
 
+    /// The steps the task's repo lets Tinto take on its own.
+    pub(super) fn autonomy(
+        &self,
+        task: &DeliveryTask,
+    ) -> Result<super::model::DeliveryAutonomy, DeliveryError> {
+        Ok(self.store()?.repo_settings(&task.repo)?.autonomy)
+    }
+
+    /// Whether Tinto takes this step of the task on its own now: past the
+    /// brainstorm, when the repo lets it.
+    pub(super) fn takes_on_its_own(
+        &self,
+        task: &DeliveryTask,
+        step: impl FnOnce(&super::model::DeliveryAutonomy) -> bool,
+    ) -> Result<bool, DeliveryError> {
+        Ok(self.unattended(task)? && step(&self.autonomy(task)?))
+    }
+
     pub fn close_run(&self, run_id: &str) -> Result<DeliveryRun, DeliveryError> {
         let mut run = self.run(run_id)?;
         run.status = "closed".to_string();
@@ -1274,25 +1292,31 @@ impl DeliveryService {
         )?;
         drop(store);
         self.notify();
-        // Past the brainstorm the branch is committed and published without
-        // stopping, and the Jira steps Tinto runs itself go through; opening
-        // the PR and merging it still wait for the user.
+        // Past the brainstorm Tinto takes each step the repo lets it (by
+        // default commit, push and the Jira steps it runs itself; opening
+        // the PR, merging it and replies wait for the user).
+        let autonomy = self.autonomy(&task)?;
         let tinto_runs_jira = approval.rung == DeliveryRung::Jira
             && (!approval.jira_statuses.is_empty()
                 || (approval.jira_link_only && self.jira_site(&task.repo)?.is_some()));
-        if (tinto_runs_jira
-            || matches!(
-                approval.rung,
-                DeliveryRung::Commit | DeliveryRung::Sync | DeliveryRung::Push
-            ))
-            && self.unattended(&task)?
-        {
-            return self.decide_approval(&approval.id, true, None);
-        }
-        // A sync only brings the base into the local branch, publishing
-        // nothing, and Tinto refuses it on a dirty worktree or a running
-        // job: it runs as it is asked, brainstorm or not.
-        if approval.rung == DeliveryRung::Sync {
+        let allowed = match approval.rung {
+            DeliveryRung::Commit => autonomy.commit,
+            DeliveryRung::Push => autonomy.push,
+            DeliveryRung::Pr => autonomy.pr,
+            DeliveryRung::Merge => autonomy.merge,
+            DeliveryRung::Jira => autonomy.jira && tinto_runs_jira,
+            DeliveryRung::PrReply => autonomy.pr_reply,
+            // A sync only brings the base into the local branch, publishing
+            // nothing, and Tinto refuses it on a dirty worktree or a running
+            // job: it runs as it is asked, brainstorm or not.
+            DeliveryRung::Sync => {
+                return match autonomy.sync {
+                    true => self.decide_approval(&approval.id, true, None),
+                    false => Ok(approval),
+                }
+            }
+        };
+        if allowed && self.unattended(&task)? {
             return self.decide_approval(&approval.id, true, None);
         }
         Ok(approval)

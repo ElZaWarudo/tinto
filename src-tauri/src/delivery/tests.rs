@@ -6216,6 +6216,28 @@ fn after_the_brainstorm_decisions_settle_as_they_are_asked() {
         commit["structuredContent"]["status"], "executed",
         "{commit}"
     );
+
+    // A repo can keep any step for the user, even past the brainstorm.
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.autonomy.permissions = false;
+    settings.autonomy.commit = false;
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
+    assert_eq!(answers(ask(json!([permission]))), vec![(None, None)]);
+    std::fs::write(worktree.join("b.txt"), "b").unwrap();
+    let held = call(
+        "request_approval",
+        fenced(json!({"rung": "commit", "commits": [{"message": "feat: b", "paths": ["b.txt"]}]})),
+    );
+    assert_eq!(held["structuredContent"]["status"], "pending", "{held}");
 }
 
 #[test]

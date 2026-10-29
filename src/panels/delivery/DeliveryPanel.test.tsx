@@ -2433,7 +2433,7 @@ describe("DeliveryPanel", () => {
     await user.click(screen.getByRole("button", { name: "Ajustes de agentos" }));
     expect(screen.queryByRole("navigation", { name: "Tareas de Delivery" })).toBeNull();
     const qa = screen.getByRole("region", { name: "Ajustes de agentos" });
-    const save = await within(qa).findByRole("button", { name: "Guardar" });
+    const save = await screen.findByRole("button", { name: "Guardar" });
     await waitFor(() => expect(save).toBeEnabled());
     await user.type(
       within(qa).getByRole("textbox", { name: /Entorno de QA/ }),
@@ -2460,7 +2460,7 @@ describe("DeliveryPanel", () => {
     expect(limit).toHaveValue(null);
     await user.type(limit, "90");
     await user.tab();
-    expect(within(qa).getByText("Cambios sin guardar.")).toBeInTheDocument();
+    expect(screen.getByText("Cambios sin guardar.")).toBeInTheDocument();
     await user.click(save);
     await waitFor(() =>
       expect(client.setDeliveryRepoSettings).toHaveBeenCalledWith(
@@ -2478,7 +2478,7 @@ describe("DeliveryPanel", () => {
         }),
       ),
     );
-    expect(await within(qa).findByText(/^Guardado para/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Guardado para/)).toBeInTheDocument();
   });
 
   it("checks the repo's environment when its view opens and again on demand", async () => {
@@ -2510,7 +2510,7 @@ describe("DeliveryPanel", () => {
     expect(client.checkDeliveryEnvironment).toHaveBeenCalledTimes(2);
   });
 
-  it("sets retrying on restart and marks verification commands as environment probes", async () => {
+  it("sets each step's autonomy, retrying on restart and the environment probes", async () => {
     const user = userEvent.setup();
     client.getDeliveryOverview.mockResolvedValue(overview());
     client.getDeliveryRepoSettings.mockResolvedValue({
@@ -2525,8 +2525,13 @@ describe("DeliveryPanel", () => {
     renderPanel();
     await user.click(await screen.findByRole("button", { name: "Ajustes de agentos" }));
     const settings = screen.getByRole("region", { name: "Ajustes de agentos" });
-    const save = await within(settings).findByRole("button", { name: "Guardar" });
+    const save = await screen.findByRole("button", { name: "Guardar" });
     await waitFor(() => expect(save).toBeEnabled());
+    // A step Tinto waits on becomes its own, and one it took waits again.
+    const autonomy = within(settings).getByRole("group", { name: "Autonomía por paso" });
+    await user.selectOptions(within(autonomy).getByRole("combobox", { name: "Fusionar" }), "auto");
+    await user.selectOptions(within(autonomy).getByRole("combobox", { name: "Push" }), "ask");
+    expect(screen.getByText("Cambios sin guardar.")).toBeInTheDocument();
     await user.click(within(settings).getByRole("checkbox", { name: /^Reintentar al reiniciar/ }));
     await user.click(within(settings).getByRole("checkbox", { name: /^PR sin revisor/ }));
     await user.click(within(settings).getByRole("checkbox", { name: "pg_isready -h localhost" }));
@@ -2542,6 +2547,7 @@ describe("DeliveryPanel", () => {
         expect.objectContaining({
           retry_on_restart: true,
           pr_without_reviewer: true,
+          autonomy: expect.objectContaining({ merge: true, push: false, commit: true }),
           environment_probes: ["pg_isready -h localhost"],
           setup: ["npm --prefix frontend ci", "npm run bindings"],
         }),

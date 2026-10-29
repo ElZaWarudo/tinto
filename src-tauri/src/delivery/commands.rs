@@ -505,6 +505,7 @@ pub fn delivery_set_repo_settings(
     let settings = DeliveryRepoSettings {
         retry_on_restart: settings.retry_on_restart,
         pr_without_reviewer: settings.pr_without_reviewer,
+        autonomy: settings.autonomy,
         environment_probes,
         // A person with no kind left guides nothing.
         guides: settings
@@ -676,6 +677,7 @@ pub async fn delivery_undo_commit(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn delivery_decide_approval(
     service: State<'_, DeliveryService>,
     approval_id: String,

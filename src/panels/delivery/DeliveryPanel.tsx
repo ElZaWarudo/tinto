@@ -1919,7 +1919,13 @@ function DeliveryRepoView({ repo }: { repo: string }) {
       </div>
 
       {settingsOpen ? (
-        <RepoSettingsPage repo={choice} onBack={() => setSettingsOpen(false)} />
+        <RepoSettingsPage
+          repo={choice}
+          onBack={() => setSettingsOpen(false)}
+          capacity={overview?.settings.capacity ?? 0}
+          endpoint={overview?.coordinator ?? null}
+          onCapacity={(value) => void run(() => updateDeliverySettings(value))}
+        />
       ) : guidesOpen ? (
         <GuidesPage repo={choice} onBack={() => setGuidesOpen(false)} />
       ) : (
@@ -4007,14 +4013,13 @@ function ApprovalBanner({
   const [title, setTitle] = useState(approval.title);
   const [body, setBody] = useState(approval.body);
   const [messages, setMessages] = useState<string[] | undefined>(undefined);
-  const edited =
-    !editsText
-      ? undefined
-      : planned
-        ? messages && { messages }
-        : title !== approval.title || body !== approval.body
-          ? { title, body }
-          : undefined;
+  const edited = !editsText
+    ? undefined
+    : planned
+      ? messages && { messages }
+      : title !== approval.title || body !== approval.body
+        ? { title, body }
+        : undefined;
   // The PR's description can show the task's QA screenshots.
   const [images, setImages] = useState<DeliveryReplyImage[]>(approval.images ?? []);
   const [shots, setShots] = useState<DeliveryQaScreenshot[]>([]);
