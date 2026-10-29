@@ -3646,15 +3646,7 @@ fn spawn_output_reader(
 ) {
     let last_output_at = Arc::new(AtomicU64::new(0));
     let done = Arc::new(AtomicBool::new(false));
-    let hook_events = app
-        .try_state::<Mutex<AgentSessionRegistry>>()
-        .and_then(|registry| registry.lock().ok()?.session_hook_events_path(&session_id));
-    spawn_output_quiet_monitor(
-        app.clone(),
-        last_output_at.clone(),
-        done.clone(),
-        hook_events,
-    );
+    spawn_output_quiet_monitor(app.clone(), last_output_at.clone(), done.clone());
     std::thread::spawn(move || {
         let mut buffer = vec![0u8; 2 * 1024 * 1024];
         loop {
@@ -3928,11 +3920,9 @@ fn spawn_output_quiet_monitor(
     app: AppHandle,
     last_output_at: Arc<AtomicU64>,
     done: Arc<AtomicBool>,
-    hook_events: Option<std::path::PathBuf>,
 ) {
     thread::spawn(move || {
         let mut last_emitted_output_at = 0;
-        let mut hook_events_len = 0;
         loop {
             thread::sleep(std::time::Duration::from_millis(
                 SESSION_OUTPUT_MONITOR_TICK_MS,
@@ -3945,16 +3935,6 @@ fn spawn_output_quiet_monitor(
             {
                 refresh_and_emit_sessions(&app);
                 last_emitted_output_at = observed;
-            }
-            // A hook reported something (a turn's start or end), maybe with
-            // no output around it.
-            let hooks_len = hook_events
-                .as_deref()
-                .and_then(|path| std::fs::metadata(path).ok())
-                .map_or(0, |metadata| metadata.len());
-            if hooks_len != hook_events_len {
-                hook_events_len = hooks_len;
-                refresh_and_emit_sessions(&app);
             }
             if is_done && (observed == 0 || observed == last_emitted_output_at) {
                 return;

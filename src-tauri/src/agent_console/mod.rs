@@ -6,6 +6,7 @@ pub mod acp;
 pub mod app_server;
 pub mod checkpoint;
 pub mod claude_hooks;
+pub mod claude_stream;
 pub mod cli_update;
 pub mod commands;
 pub mod install;
@@ -686,10 +687,6 @@ impl AgentSessionRegistry {
             .get(session_id)
             .ok_or_else(|| AgentConsoleError::session_not_found(session_id))?;
         Ok(session.supports_context_compaction())
-    }
-
-    pub fn session_hook_events_path(&self, session_id: &str) -> Option<PathBuf> {
-        self.sessions.get(session_id)?.hook_events_path()
     }
 
     pub fn compact_session_context(&mut self, session_id: &str) -> Result<(), AgentConsoleError> {

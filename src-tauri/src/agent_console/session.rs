@@ -356,12 +356,6 @@ impl AgentSessionRecord {
             .steer_turn(text, &runtime_attachments)
     }
 
-    pub fn hook_events_path(&self) -> Option<PathBuf> {
-        self.process
-            .as_ref()
-            .and_then(|process| process.hook_events_path())
-    }
-
     pub fn supports_subagents(&self) -> bool {
         self.status == AgentSessionStatus::Running
             && self

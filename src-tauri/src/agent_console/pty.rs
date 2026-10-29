@@ -10,9 +10,9 @@ use std::{
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
-use super::claude_hooks::{forward_slashes, ClaudeHooks};
 use super::{
     app_server::CodexAppServerHandle,
+    claude_stream::ClaudeStreamHandle,
     msp::{is_muse_binary, muse_program, MuseServeHandle},
     AgentConsoleError, ResumeResultReceiver,
 };
@@ -43,7 +43,7 @@ pub fn with_launch_options<T>(
 }
 
 /// `--model` and `--effort` for the Claude Code conversation being launched.
-fn claude_launch_args() -> Vec<String> {
+pub(super) fn claude_launch_args() -> Vec<String> {
     // With its Chrome extension installed, Claude Code opens with a question
     // about using the user's browser and waits for a key nobody in Tinto
     // presses. Tinto has its own browser for QA: keep Chrome's tools off.
@@ -140,9 +140,6 @@ pub trait AgentProcess: Send {
         self.reports_turns()
     }
     /// The file where the provider's hooks report its turns, to watch it.
-    fn hook_events_path(&self) -> Option<PathBuf> {
-        None
-    }
     fn supports_turn_interrupt(&self) -> bool {
         false
     }
@@ -419,6 +416,15 @@ impl AgentProcessFactory for PortablePtyFactory {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        // Claude Code speaks stream-json: its conversation never goes
+        // through its terminal screen.
+        if is_claude_binary(binary_path) {
+            return Ok(Box::new(ClaudeStreamHandle::spawn(
+                binary_path,
+                working_dir,
+                None,
+            )?));
+        }
         if is_muse_binary(binary_path) {
             // Like Codex, prefer the structured protocol and keep Muse's own
             // terminal UI as the fallback.
@@ -449,6 +455,13 @@ impl AgentProcessFactory for PortablePtyFactory {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
+        if agent_type.eq_ignore_ascii_case("claude") {
+            return Ok(Box::new(ClaudeStreamHandle::spawn_wsl(
+                distro,
+                working_dir,
+                None,
+            )?));
+        }
         if agent_type.eq_ignore_ascii_case("muse") {
             if let Ok(handle) = MuseServeHandle::spawn_wsl(distro, working_dir, permission_mode) {
                 return Ok(Box::new(handle));
@@ -479,11 +492,10 @@ impl AgentProcessFactory for PortablePtyFactory {
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         if is_claude_binary(binary_path) {
-            return Ok(Box::new(PtyHandle::resume_claude(
+            return Ok(Box::new(ClaudeStreamHandle::spawn(
                 binary_path,
                 working_dir,
-                provider_session_id,
-                permission_mode,
+                Some(provider_session_id),
             )?));
         }
         if is_muse_binary(binary_path) {
@@ -517,11 +529,10 @@ impl AgentProcessFactory for PortablePtyFactory {
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Box<dyn AgentProcess>, AgentConsoleError> {
         if agent_type.eq_ignore_ascii_case("claude") {
-            return Ok(Box::new(PtyHandle::resume_wsl_claude(
+            return Ok(Box::new(ClaudeStreamHandle::spawn_wsl(
                 distro,
                 working_dir,
-                provider_session_id,
-                permission_mode,
+                Some(provider_session_id),
             )?));
         }
         if agent_type.eq_ignore_ascii_case("muse") {
@@ -554,7 +565,6 @@ pub struct PtyHandle {
     /// Shared with the reader, which answers the console's cursor query.
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     exit_code: Option<i32>,
-    claude_hooks: Option<ClaudeHooks>,
     /// Whether the agent has been seen reading keys (see `wait_until_reading_keys`).
     #[cfg(unix)]
     reads_keys: bool,
@@ -628,38 +638,11 @@ impl PtyHandle {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
-        Self::spawn_local(binary_path, working_dir, permission_mode, None)
-    }
-
-    /// Claude Code continuing one of its conversations.
-    pub fn resume_claude(
-        binary_path: &Path,
-        working_dir: &Path,
-        claude_session_id: &str,
-        permission_mode: AgentSessionPermissionMode,
-    ) -> Result<Self, AgentConsoleError> {
-        Self::spawn_local(
+        Self::spawn_command_builder(build_agent_command_with_permission(
             binary_path,
             working_dir,
             permission_mode,
-            Some(claude_session_id),
-        )
-    }
-
-    fn spawn_local(
-        binary_path: &Path,
-        working_dir: &Path,
-        permission_mode: AgentSessionPermissionMode,
-        resume: Option<&str>,
-    ) -> Result<Self, AgentConsoleError> {
-        let mut command =
-            build_agent_command_with_permission(binary_path, working_dir, permission_mode);
-        let hooks = is_claude_binary(binary_path)
-            .then(|| with_claude_hooks(&mut command, false, resume))
-            .flatten();
-        let mut handle = Self::spawn_command_builder(command)?;
-        handle.claude_hooks = hooks;
-        Ok(handle)
+        ))
     }
 
     pub fn spawn_with_env_allowlist(
@@ -680,41 +663,12 @@ impl PtyHandle {
         working_dir: &Path,
         permission_mode: AgentSessionPermissionMode,
     ) -> Result<Self, AgentConsoleError> {
-        Self::spawn_wsl(agent_type, distro, working_dir, permission_mode, None)
-    }
-
-    /// Claude Code in WSL continuing one of its conversations.
-    pub fn resume_wsl_claude(
-        distro: &str,
-        working_dir: &Path,
-        claude_session_id: &str,
-        permission_mode: AgentSessionPermissionMode,
-    ) -> Result<Self, AgentConsoleError> {
-        Self::spawn_wsl(
-            "claude",
+        Self::spawn_command_builder(build_wsl_agent_command(
             distro,
+            agent_type,
             working_dir,
             permission_mode,
-            Some(claude_session_id),
-        )
-    }
-
-    fn spawn_wsl(
-        agent_type: &str,
-        distro: &str,
-        working_dir: &Path,
-        permission_mode: AgentSessionPermissionMode,
-        resume: Option<&str>,
-    ) -> Result<Self, AgentConsoleError> {
-        let mut command =
-            build_wsl_agent_command(distro, agent_type, working_dir, permission_mode)?;
-        let hooks = agent_type
-            .eq_ignore_ascii_case("claude")
-            .then(|| with_claude_hooks(&mut command, true, resume))
-            .flatten();
-        let mut handle = Self::spawn_command_builder(command)?;
-        handle.claude_hooks = hooks;
-        Ok(handle)
+        )?)
     }
 
     fn spawn_command_builder(command: CommandBuilder) -> Result<Self, AgentConsoleError> {
@@ -750,7 +704,6 @@ impl PtyHandle {
             reader: Some(reader),
             writer,
             exit_code: None,
-            claude_hooks: None,
             #[cfg(unix)]
             reads_keys: false,
         })
@@ -873,76 +826,6 @@ impl AgentProcess for PtyHandle {
     fn take_output_reader(&mut self) -> Option<Box<dyn Read + Send>> {
         self.reader.take()
     }
-
-    fn reports_turns(&self) -> bool {
-        self.claude_hooks.as_ref().is_some_and(ClaudeHooks::active)
-    }
-
-    fn turn_starts_on_send(&self) -> bool {
-        false
-    }
-
-    fn hook_events_path(&self) -> Option<PathBuf> {
-        self.claude_hooks
-            .as_ref()
-            .map(|hooks| hooks.path().to_path_buf())
-    }
-
-    fn provider_session_id(&self) -> Option<String> {
-        self.claude_hooks
-            .as_ref()
-            .and_then(|hooks| hooks.session_id())
-            .map(str::to_owned)
-    }
-
-    fn drain_events(&mut self) -> Vec<AgentProcessEvent> {
-        self.claude_hooks
-            .as_mut()
-            .map(ClaudeHooks::drain)
-            .unwrap_or_default()
-    }
-
-    fn supports_turn_interrupt(&self) -> bool {
-        self.reports_turns()
-    }
-
-    fn interrupt_turn(&mut self) -> Result<(), AgentConsoleError> {
-        if !self.reports_turns() {
-            return Err(AgentConsoleError::new(
-                "interrupt_unsupported",
-                "este runtime no admite interrumpir el turno activo",
-            ));
-        }
-        self.write_input_pty(b"")?;
-        // Claude reports nothing when interrupted; the next drain ends the turn.
-        if let Some(hooks) = self.claude_hooks.as_mut() {
-            hooks.mark_interrupted();
-        }
-        Ok(())
-    }
-}
-
-/// Adds Claude Code's turn hooks to its command. Without them (no config
-/// folder, no path to this executable) the session simply has no turns.
-fn with_claude_hooks(
-    command: &mut CommandBuilder,
-    wsl: bool,
-    resume: Option<&str>,
-) -> Option<ClaudeHooks> {
-    if let Some(claude_session_id) = resume {
-        command.arg("--resume");
-        command.arg(claude_session_id);
-    }
-    let hooks = ClaudeHooks::create(resume).ok()?;
-    let exe = std::env::current_exe().ok()?;
-    let hook_command = if wsl {
-        crate::wsl_agent::launcher::windows_path_to_wsl_mount(&exe).ok()?
-    } else {
-        forward_slashes(&exe)
-    };
-    command.arg("--settings");
-    command.arg(hooks.settings(&hook_command));
-    Some(hooks)
 }
 
 pub(crate) fn build_agent_command(binary_path: &Path, working_dir: &Path) -> CommandBuilder {
