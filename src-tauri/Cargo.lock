@@ -4895,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "tinto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "agent-client-protocol-schema",
  "base64 0.22.1",
