@@ -137,7 +137,8 @@ fn problems(
         &changes.probes_add,
         &settings.environment_probes,
     );
-    if let Some(bootstrap) = &changes.bootstrap {
+    // An empty bootstrap removes it.
+    if let Some(bootstrap) = changes.bootstrap.as_ref().filter(|text| !text.is_empty()) {
         if let Some(problem) = command_problem(bootstrap, task) {
             problems.push(format!("bootstrap «{bootstrap}»: {problem}"));
         }
@@ -457,6 +458,21 @@ mod tests {
             "cargo test --manifest-path=src-tauri/Cargo.toml",
         ]);
         assert!(problems(&changes, &DeliveryRepoSettings::default(), &task()).is_empty());
+    }
+
+    #[test]
+    fn an_empty_bootstrap_removes_it() {
+        let changes = DeliverySettingsChanges {
+            bootstrap: Some(String::new()),
+            ..Default::default()
+        };
+        let mut settings = DeliveryRepoSettings {
+            bootstrap: Some("npm ci".into()),
+            ..Default::default()
+        };
+        assert!(problems(&changes, &settings, &task()).is_empty());
+        apply(&mut settings, &changes);
+        assert_eq!(settings.bootstrap, None);
     }
 
     #[test]
