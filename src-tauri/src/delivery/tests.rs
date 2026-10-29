@@ -7271,14 +7271,24 @@ fn a_reply_to_a_reviewer_waits_for_the_user_and_is_posted_once_in_its_thread() {
     assert_ne!(phase.waits_on, Waiter::User);
 
     // The user's edited text is what is posted, in the thread's first
-    // comment, and the thread is resolved.
+    // comment, and the thread is resolved. Approved in a batch, the call
+    // returns at once and the post follows in the background.
     h.service
-        .set_reply_body(
-            &reply_id,
-            "The CLI now deletes only folders it installed. A new test checks it (abc123).",
+        .approve_replies(
+            vec![super::prs::ApprovedReply {
+                approval_id: reply_id.clone(),
+                body:
+                    "The CLI now deletes only folders it installed. A new test checks it (abc123)."
+                        .into(),
+                images: Vec::new(),
+            }],
+            Vec::new(),
         )
         .unwrap();
-    let posted = h.service.decide_approval(&reply_id, true, None).unwrap();
+    let posted = eventually(|| {
+        let reply = h.service.approval(&reply_id).unwrap();
+        (reply.status != DeliveryApprovalStatus::Pending).then_some(reply)
+    });
     assert_eq!(posted.status, DeliveryApprovalStatus::Executed);
     assert_eq!(
         posted.body,

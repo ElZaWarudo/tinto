@@ -313,6 +313,13 @@ export const getDeliveryQaScreenshots = (taskId: string) =>
   invoke<DeliveryQaScreenshot[]>("delivery_qa_screenshots", { taskId });
 
 /** Asks for a review (again) or takes requests back on the task's open PR. */
+/** Approves several replies with the user's texts; Tinto posts them one
+ *  after another in the background, then asks `rerequest` to review again. */
+export const approveDeliveryReplies = (
+  replies: { approval_id: string; body: string; images: DeliveryReplyImage[] }[],
+  rerequest: string[],
+) => invoke<void>("delivery_approve_replies", { replies, rerequest });
+
 export const changeDeliveryPrReviewers = (taskId: string, request: string[], remove: string[]) =>
   invoke<DeliveryPr | null>("delivery_change_pr_reviewers", { taskId, request, remove });
 

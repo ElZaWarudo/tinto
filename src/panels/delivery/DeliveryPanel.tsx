@@ -66,6 +66,7 @@ import {
   correctDeliveryApproval,
   createDeliveryRun,
   createDeliveryTask,
+  approveDeliveryReplies,
   changeDeliveryPrReviewers,
   decideDeliveryApproval,
   dispatchDeliveryJob,
@@ -3842,18 +3843,19 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
     );
     await askAgain([authorOf(reply)]);
   };
+  // Approved together, the replies are posted in the background: until
+  // each one is, it stays here without its buttons.
+  const [posting, setPosting] = useState(false);
   const approveAll = async () => {
-    for (const reply of replies) {
-      await decideDeliveryApproval(
-        reply.id,
-        true,
-        undefined,
-        undefined,
-        bodyOf(reply),
-        imagesOf(reply),
-      );
-    }
-    await askAgain(authors);
+    await approveDeliveryReplies(
+      replies.map((reply) => ({
+        approval_id: reply.id,
+        body: bodyOf(reply),
+        images: imagesOf(reply),
+      })),
+      authors.filter((login) => !skipped.includes(login)),
+    );
+    setPosting(true);
   };
   return (
     <div
@@ -3912,20 +3914,28 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
               {reply.thread ? " en el hilo del comentario" : " como comentario del PR"}
               {reply.resolve_thread ? " y resuelve el hilo" : ""}. Rechazar no publica nada.
             </p>
-            <ActionGroup>
-              <div className="delivery-actions">
-                <ActionButton
-                  className="delivery-button--primary"
-                  disabled={!body.trim()}
-                  onAction={() => approve(reply)}
-                >
-                  {body === reply.body ? "Aprobar y responder" : "Aprobar y responder con tu texto"}
-                </ActionButton>
-                <ActionButton onAction={() => decideDeliveryApproval(reply.id, false)}>
-                  Rechazar
-                </ActionButton>
-              </div>
-            </ActionGroup>
+            {posting ? (
+              <p className="delivery-muted" role="status">
+                Publicando en GitHub…
+              </p>
+            ) : (
+              <ActionGroup>
+                <div className="delivery-actions">
+                  <ActionButton
+                    className="delivery-button--primary"
+                    disabled={!body.trim()}
+                    onAction={() => approve(reply)}
+                  >
+                    {body === reply.body
+                      ? "Aprobar y responder"
+                      : "Aprobar y responder con tu texto"}
+                  </ActionButton>
+                  <ActionButton onAction={() => decideDeliveryApproval(reply.id, false)}>
+                    Rechazar
+                  </ActionButton>
+                </div>
+              </ActionGroup>
+            )}
           </section>
         );
       })}
@@ -3950,7 +3960,7 @@ function RepliesBanner({ replies }: { replies: DeliveryApproval[] }) {
           ))}
         </fieldset>
       )}
-      {replies.length > 1 && (
+      {replies.length > 1 && !posting && (
         <ActionGroup>
           <div className="delivery-actions">
             <ActionButton

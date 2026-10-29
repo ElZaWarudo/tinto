@@ -396,6 +396,15 @@ impl DeliveryPr {
     }
 }
 
+/// A reply the user approves with their text, in a batch.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApprovedReply {
+    pub approval_id: String,
+    pub body: String,
+    #[serde(default)]
+    pub images: Vec<super::model::DeliveryReplyImage>,
+}
+
 /// How an approval reads among a PR's news ("ana aprobó"): news that asks
 /// for no work.
 pub(super) const APPROVED_NEWS: &str = " aprobó";
@@ -2160,6 +2169,44 @@ impl DeliveryService {
             .collect();
         self.save_approval(&approval, "pr_reviewers")?;
         Ok(approval)
+    }
+
+    /// Approves the task's replies with the user's texts and returns once
+    /// they are saved; a background thread then posts them one after
+    /// another, as GitHub wants one user's writes, and asks `rerequest` to
+    /// review again after the last. Each reply shows as posted or failed when
+    /// its turn ends; one Tinto closes before posting stays pending.
+    pub fn approve_replies(
+        &self,
+        replies: Vec<ApprovedReply>,
+        rerequest: Vec<String>,
+    ) -> Result<(), DeliveryError> {
+        let mut task_id = None;
+        for reply in &replies {
+            let saved = self.set_reply_body(&reply.approval_id, &reply.body)?;
+            self.set_reply_images(&reply.approval_id, reply.images.clone())?;
+            task_id = Some(saved.task_id);
+        }
+        let service = self.clone();
+        std::thread::spawn(move || {
+            for reply in replies {
+                if let Err(error) = service.decide_approval(&reply.approval_id, true, None) {
+                    eprintln!(
+                        "tinto: no se pudo responder {}: {}",
+                        reply.approval_id, error.message
+                    );
+                }
+            }
+            if let Some(task_id) = task_id.filter(|_| !rerequest.is_empty()) {
+                if let Err(error) = service.change_pr_reviewers(&task_id, rerequest, Vec::new()) {
+                    eprintln!(
+                        "tinto: no se pudo volver a pedir la revisión: {}",
+                        error.message
+                    );
+                }
+            }
+        });
+        Ok(())
     }
 
     /// The reply as the user edited it before approving: the text posted.

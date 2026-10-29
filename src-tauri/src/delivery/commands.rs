@@ -735,6 +735,17 @@ pub async fn delivery_pr_reviewers(
 
 /// Asks reviewers for a review (again) or takes their request back on the
 /// task's open PR.
+/// Approves several replies at once; they are posted in the background.
+#[tauri::command]
+pub async fn delivery_approve_replies(
+    service: State<'_, DeliveryService>,
+    replies: Vec<super::prs::ApprovedReply>,
+    rerequest: Vec<String>,
+) -> Result<(), CommandError> {
+    let service = service.inner().clone();
+    blocking(move || service.approve_replies(replies, rerequest)).await
+}
+
 #[tauri::command]
 pub async fn delivery_change_pr_reviewers(
     service: State<'_, DeliveryService>,

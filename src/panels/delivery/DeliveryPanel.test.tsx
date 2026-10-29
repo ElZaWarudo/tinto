@@ -79,6 +79,7 @@ const client = vi.hoisted(() => ({
   getDeliveryMergeMethod: vi.fn(() => Promise.resolve("squash")),
   getDeliveryPrReviewers: vi.fn((): Promise<string[]> => Promise.resolve([])),
   getDeliveryQaScreenshots: vi.fn((): Promise<DeliveryQaScreenshot[]> => Promise.resolve([])),
+  approveDeliveryReplies: vi.fn(),
   changeDeliveryPrReviewers: vi.fn(),
   correctDeliveryApproval: vi.fn(),
   archiveDeliveryTask: vi.fn(),
@@ -3566,7 +3567,7 @@ describe("DeliveryPanel", () => {
       }),
     );
     client.decideDeliveryApproval.mockResolvedValue({});
-    client.changeDeliveryPrReviewers.mockResolvedValue(null);
+    client.approveDeliveryReplies.mockResolvedValue(undefined);
     const shot = { job_id: "qa-1", file: "K-1-1-menu-mobile.png", attempt: 2 };
     client.getDeliveryQaScreenshots.mockResolvedValue([
       { ...shot, data_uri: "data:image/png;base64,cG5n" },
@@ -3601,28 +3602,25 @@ describe("DeliveryPanel", () => {
     const text = within(first).getByRole("textbox", { name: "Respuesta, tal como se publicará" });
     await user.clear(text);
     await user.type(text, "Only folders the CLI installed are deleted now.");
+    // Approved together in one call: Tinto posts them in the background and
+    // asks the reviewer again after, while they wait here without buttons.
     await user.click(within(banner).getByRole("button", { name: "Aprobar y responder las 2" }));
     await waitFor(() =>
-      expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
-        "r2",
-        true,
-        undefined,
-        undefined,
-        "The typo is gone.",
-        [],
+      expect(client.approveDeliveryReplies).toHaveBeenCalledWith(
+        [
+          {
+            approval_id: "r1",
+            body: "Only folders the CLI installed are deleted now.",
+            images: [{ job_id: "qa-1", file: "K-1-1-menu-mobile.png" }],
+          },
+          { approval_id: "r2", body: "The typo is gone.", images: [] },
+        ],
+        ["Sn4pe"],
       ),
     );
-    expect(client.decideDeliveryApproval).toHaveBeenCalledWith(
-      "r1",
-      true,
-      undefined,
-      undefined,
-      "Only folders the CLI installed are deleted now.",
-      [{ job_id: "qa-1", file: "K-1-1-menu-mobile.png" }],
-    );
-    await waitFor(() =>
-      expect(client.changeDeliveryPrReviewers).toHaveBeenCalledWith("t1", ["Sn4pe"], []),
-    );
+    expect(await within(banner).findAllByText("Publicando en GitHub…")).toHaveLength(2);
+    expect(within(banner).queryByRole("button", { name: "Aprobar y responder" })).toBeNull();
+    expect(client.decideDeliveryApproval).not.toHaveBeenCalled();
     const posted = screen.getByRole("listitem", { name: "Respuesta a ana" });
     expect(
       within(posted).getByText("https://github.com/o/r/pull/299#discussion_r9003"),
