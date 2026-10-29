@@ -230,6 +230,8 @@ pub struct Facts<'a> {
     /// Batches whose coordinator may release a quarantined resource:
     /// nothing of theirs waits on the user's answer.
     pub releasable_runs: &'a HashSet<String>,
+    /// Tasks whose repo merges a PR without a review ("PR sin revisor").
+    pub review_optional: &'a HashSet<String>,
 }
 
 fn is_open(job: &DeliveryJob) -> bool {
@@ -719,16 +721,16 @@ pub fn split_issues(
 }
 
 /// Who a followed PR waits on: the user when it has news or trouble, the
-/// coordinator once approved or merged (the next step), else its reviewers.
-/// Past the brainstorm the coordinator takes the news and trouble too.
-fn pr_waits_on(pr: &DeliveryPr, unattended: bool) -> Waiter {
+/// coordinator once its reviews let it merge or it merged (the next step),
+/// else its reviewers. Past the brainstorm the coordinator takes the news and
+/// trouble too.
+fn pr_waits_on(pr: &DeliveryPr, unattended: bool, review_optional: bool) -> Waiter {
     let trouble = pr.state == "closed"
         || pr.new_reviews + pr.new_comments > 0
         || pr.checks.failing > 0
         || pr.conflicts
         || pr.review_decision.as_deref() == Some("changes_requested");
-    // Every reviewer who must approve it has.
-    let approved = pr.is_approved();
+    let approved = pr.review_allows_merge(review_optional);
     if trouble && unattended {
         Waiter::Coordinator
     } else if trouble {
@@ -1166,7 +1168,7 @@ fn phase_in_round(
                 number: pr.number,
                 ci: pr.ci,
             },
-            pr_waits_on(pr, unattended),
+            pr_waits_on(pr, unattended, facts.review_optional.contains(&task.id)),
         );
     }
     if let Some(role) = next.clone() {
@@ -1227,6 +1229,7 @@ mod tests {
         rounds: Vec<DeliveryRound>,
         merging: HashSet<String>,
         releasable_runs: HashSet<String>,
+        review_optional: HashSet<String>,
     }
 
     impl World {
@@ -1242,6 +1245,7 @@ mod tests {
                 rounds: Vec::new(),
                 merging: HashSet::new(),
                 releasable_runs: HashSet::new(),
+                review_optional: HashSet::new(),
             }
         }
 
@@ -1260,6 +1264,7 @@ mod tests {
                     queued: &BTreeMap::new(),
                     merging: &self.merging,
                     releasable_runs: &self.releasable_runs,
+                    review_optional: &self.review_optional,
                 },
             )
         }
@@ -1394,6 +1399,7 @@ mod tests {
             queued: &BTreeMap::new(),
             merging: &HashSet::new(),
             releasable_runs: &HashSet::new(),
+            review_optional: &HashSet::new(),
         };
         assert!(matches!(
             task_phase(&task, &facts).phase,
@@ -1659,11 +1665,35 @@ mod tests {
             serde_json::json!({"conflicts": true}),
             serde_json::json!({"review_decision": "changes_requested"}),
         ] {
-            assert_eq!(pr_waits_on(&pr(trouble), true), Waiter::Coordinator);
+            assert_eq!(pr_waits_on(&pr(trouble), true, false), Waiter::Coordinator);
         }
         assert_eq!(
-            pr_waits_on(&pr(serde_json::json!({})), true),
+            pr_waits_on(&pr(serde_json::json!({})), true, false),
             Waiter::Reviewers
+        );
+        // A repo that merges without a review waits only on the reviewers
+        // it chose or GitHub requires, and still not past changes requested.
+        let unreviewed = serde_json::json!({"review_decision": null});
+        assert_eq!(
+            pr_waits_on(&pr(unreviewed), false, true),
+            Waiter::Coordinator
+        );
+        for waits_review in [
+            serde_json::json!({"review_decision": null, "reviewers": ["ana"]}),
+            serde_json::json!({"review_decision": "review_required"}),
+        ] {
+            assert_eq!(
+                pr_waits_on(&pr(waits_review), false, true),
+                Waiter::Reviewers
+            );
+        }
+        assert_eq!(
+            pr_waits_on(
+                &pr(serde_json::json!({"review_decision": "changes_requested"})),
+                false,
+                true
+            ),
+            Waiter::User
         );
     }
 

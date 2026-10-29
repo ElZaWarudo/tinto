@@ -2333,8 +2333,9 @@ impl DeliveryService {
         Ok(())
     }
 
-    /// A merge needs the followed PR open, without conflicts and with its
-    /// checks finished and green. GitHub still enforces its own rules.
+    /// A merge needs the followed PR open, approved (unless the repo merges
+    /// without a review), without conflicts and with its checks finished and
+    /// green. GitHub still enforces its own rules.
     fn merge_prerequisites(
         &self,
         task: &DeliveryTask,
@@ -2370,7 +2371,9 @@ impl DeliveryService {
                 pr.number,
                 pr.missing_approvals().join(", ")
             ))
-        } else if !pr.is_approved() {
+        } else if !pr
+            .review_allows_merge(self.store()?.repo_settings(&task.repo)?.pr_without_reviewer)
+        {
             Some(format!(
                 "el PR #{} no tiene una revisión aprobada",
                 pr.number

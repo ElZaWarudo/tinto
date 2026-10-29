@@ -4023,7 +4023,7 @@ function ApprovalBanner({
         : approval.rung === "push"
           ? `Al aprobar, Tinto publica la rama ${task.branch}.`
           : approval.rung === "pr"
-            ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas. Sin una revisión aprobada no se podrá fusionar.`
+            ? `Al aprobar, Tinto abre en GitHub el PR de ${task.branch} con este título y cuerpo exactos (o se los pone al PR abierto de la rama). Desde entonces lo sigue y pide la revisión a quienes elijas.${reviewerOptional ? "" : " Sin una revisión aprobada no se podrá fusionar."}`
             : approval.rung === "merge"
               ? `Al aprobar, Tinto comprueba que la CI pasó en el último commit del PR y que la base no avanzó, fusiona el PR en GitHub (${approval.merge_method ?? "squash"}) con este mensaje y borra allí la rama ${task.branch}. La rama local sigue hasta que elimines la tarea.`
               : approval.jira_link_only

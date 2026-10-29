@@ -1092,8 +1092,9 @@ function RepoSettings({ repo, label }: { repo: string; label: string }) {
         <span>
           PR sin revisor
           <small>
-            Puedes aprobar el paso PR sin elegir revisor, para repositorios donde nadie más revisa.
-            Tinto sigue sin fusionar un PR que no tenga una revisión aprobada.
+            Puedes aprobar el paso PR sin elegir revisor y fusionarlo sin una revisión aprobada,
+            para repositorios donde nadie más revisa. Sigue haciendo falta la CI en verde, la
+            aprobación de los revisores que elijas y que nadie haya pedido cambios.
           </small>
         </span>
       </label>

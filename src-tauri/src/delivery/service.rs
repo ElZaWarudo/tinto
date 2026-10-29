@@ -820,6 +820,15 @@ impl DeliveryService {
             })
             .map(|run| run.id.clone())
             .collect();
+        let review_optional: HashSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                store
+                    .repo_settings(&task.repo)
+                    .is_ok_and(|settings| settings.pr_without_reviewer)
+            })
+            .map(|task| task.id.clone())
+            .collect();
         // Where each task is, from the same facts the view gets.
         let facts = super::phase::Facts {
             runs: &runs,
@@ -833,6 +842,7 @@ impl DeliveryService {
             queued: &queued,
             merging: &merging,
             releasable_runs: &releasable_runs,
+            review_optional: &review_optional,
         };
         let phases = tasks
             .iter()

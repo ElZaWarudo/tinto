@@ -380,6 +380,20 @@ impl DeliveryPr {
         };
         decided && self.missing_approvals().is_empty()
     }
+
+    /// Its reviews let it merge: approved or, in a repo that merges without
+    /// a review ("PR sin revisor"), with no changes requested, no review
+    /// GitHub requires and approved by every reviewer who was chosen anyway.
+    pub fn review_allows_merge(&self, review_optional: bool) -> bool {
+        if review_optional {
+            !matches!(
+                self.review_decision.as_deref(),
+                Some("changes_requested" | "review_required")
+            ) && self.missing_approvals().is_empty()
+        } else {
+            self.is_approved()
+        }
+    }
 }
 
 /// How an approval reads among a PR's news ("ana aprobó"): news that asks

@@ -4907,7 +4907,7 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     let task = h.task("P-2");
     let github = std::sync::Arc::new(FakeGitHub {
         snapshot: std::sync::Mutex::new(json!({
-            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "APPROVED",
+            "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": "",
             "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
             "reviews": [], "comments": []
         })),
@@ -4964,6 +4964,27 @@ fn the_merge_step_merges_the_followed_pr_and_deletes_its_branch() {
     github.snapshot.lock().unwrap()["statusCheckRollup"] =
         json!([{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]);
     h.service.refresh_pr(&task.id, Duration::ZERO).unwrap();
+    assert_eq!(
+        h.service
+            .request_approval(merge(Some("squash")))
+            .unwrap_err()
+            .category,
+        "pr_not_ready",
+        "a PR nobody approved does not merge"
+    );
+    // Unless its repo merges without a review.
+    let mut settings = h
+        .service
+        .store()
+        .unwrap()
+        .repo_settings(h.repo.path())
+        .unwrap();
+    settings.pr_without_reviewer = true;
+    h.service
+        .store()
+        .unwrap()
+        .set_repo_settings(h.repo.path(), &settings)
+        .unwrap();
     let asked = h.service.request_approval(merge(Some("squash"))).unwrap();
     assert_eq!(asked.merge_method.as_deref(), Some("squash"));
     let done = h.service.decide_approval(&asked.id, true, None).unwrap();
