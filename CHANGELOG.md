@@ -4,6 +4,30 @@ Each release's notes, newest first. `scripts/release.mjs` writes a section
 from the conventional commits since the previous tag; see
 [RELEASING.md](RELEASING.md).
 
+## [1.0.2] - 2026-10-29
+
+### Features
+
+- **delivery:** CI policy for Tinto's pushes, cancelled runs and path-filtered workflows
+- **delivery:** `{job}` in check_env gives each job its own value
+
+### Fixes
+
+- **delivery:** publish flow survives restacks, stacked merges and rewrites
+- **delivery:** retry_job warns when a check that failed at once will fail again
+- **delivery:** a coordinator reads only the batch it coordinates
+- **delivery:** next_stage leaves QA out when there is nothing for it to verify
+- **delivery:** Tinto stops starting agent jobs near the account's limit
+- **delivery:** job agents get only the tools their stage needs
+- **delivery:** changes asked on a PR open their round as they arrive
+- **delivery:** a checks round that a re-run fixed closes on its own
+- **delivery:** a Tinto restart no longer throws away long check runs
+- **delivery:** only the checks configured now hold a task, and a failing one can be accepted
+- **delivery:** jobs, checks and setup run without the AppImage's environment
+- **delivery:** a failed check's summary quotes the failure, not a Node warning
+- **delivery:** a coordinator's overview fits, and autonomy reaches waiting steps
+- **agents:** show Claude Code's permission requests in the conversation
+
 ## [1.0.1] - 2026-10-29
 
 The first stable release of Tinto: from now on each version is tagged,
