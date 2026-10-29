@@ -14,10 +14,10 @@ use serde_json::Value;
 
 use super::model::{
     DeliveryAccess, DeliveryAgent, DeliveryJob, DeliveryJobResult, DeliveryLogEntry,
-    DeliveryPlanItem, DeliveryPlatform, DeliverySlowCommand, DeliveryTask, DeliveryTiming,
-    DeliveryUsage,
+    DeliveryPlanItem, DeliveryPlatform, DeliveryQuota, DeliverySlowCommand, DeliveryTask,
+    DeliveryTiming, DeliveryUsage,
 };
-use super::service::{QA_CLI_LEASE, QA_ROLE};
+use super::service::{style_check, QA_CLI_LEASE, QA_ROLE};
 use super::tasks::{git, plain_path, Place};
 use super::DeliveryError;
 
@@ -33,12 +33,16 @@ pub const BROWSER_TOOL_SILENCE_SECS: u32 = 180;
 pub const QA_BUDGET_PERCENT: u32 = 70;
 
 /// Shape of the result every agent job ends with; Codex and Claude both
-/// enforce it on the final answer.
+/// enforce it on the final answer. Results of about 8 KB failed to parse
+/// as Claude's StructuredOutput call, so it states a size budget; and
+/// agents listed what they fixed as findings, which kept done rounds open,
+/// so that goes in `addressed`.
 pub const RESULT_SCHEMA: &str = r#"{
   "type": "object",
+  "description": "Keep the whole result under 4000 characters: summary and each finding or addressed item one or two short sentences; any longer detail goes in handoff, at most 1500 characters.",
   "properties": {
     "status": { "type": "string", "enum": ["pass", "findings", "blocked"] },
-    "summary": { "type": "string" },
+    "summary": { "type": "string", "description": "At most three sentences." },
     "changed_paths": { "type": "array", "items": { "type": "string" } },
     "checks": {
       "type": "array",
@@ -49,11 +53,12 @@ pub const RESULT_SCHEMA: &str = r#"{
         "additionalProperties": false
       }
     },
-    "findings": { "type": "array", "items": { "type": "string" } },
+    "findings": { "type": "array", "description": "Only defects still open, one short line each: never what was fixed, addressed, verified or found fine.", "items": { "type": "string" } },
+    "addressed": { "type": "array", "description": "Each item of the round or earlier finding dealt with: the item, what was done and where (file:line), one short line each.", "items": { "type": "string" } },
     "handoff": { "type": "string" },
     "blocked_by": { "type": "string", "enum": ["none", "environment", "sandbox"] }
   },
-  "required": ["status", "summary", "changed_paths", "checks", "findings", "handoff", "blocked_by"],
+  "required": ["status", "summary", "changed_paths", "checks", "findings", "addressed", "handoff", "blocked_by"],
   "additionalProperties": false
 }"#;
 
@@ -336,7 +341,18 @@ pub fn job_prompt(
         if !commands.is_empty() {
             lines.push(format!("The repo's checks: {}.", commands.join("; ")));
         }
+        if job.role != QA_ROLE {
+            lines.push("You have no web tools (WebFetch, WebSearch): work from the code, the dependencies on disk and the task's folders.".to_string());
+        }
         lines.push("Run commands in the foreground and read their output when they end, with a time limit (`timeout`) on a slow one. Start one in the background only when it outlasts your shell's limit, and then wait for it once, not with repeated polls. To wait for a server you started, use one bounded readiness check (for example `curl --retry 30 --retry-delay 2 --retry-all-errors <url>`).".to_string());
+    }
+    let full = full_checks(job, task);
+    if matches!(job.agent, DeliveryAgent::Claude | DeliveryAgent::Opencode) && !full.is_empty() {
+        let listed: Vec<String> = full.iter().map(|check| format!("`{check}`")).collect();
+        lines.push(format!(
+            "Tinto refuses these checks exactly as written, since it runs them itself on your result: {}. To test what you change, run the test runner on just those files or tests (for example `npx mocha -r ts-node/register <spec files>`, `npx vitest run <files>`, `cargo test <test name>`, `pytest <files>`).",
+            listed.join("; ")
+        ));
     }
     if let Some(merge) = &job.merge_conflicts {
         let files = merge.files.join(", ");
@@ -384,8 +400,11 @@ pub fn job_prompt(
         "Do not commit, push, open pull requests or change issue trackers: Tinto asks the user for those steps."
             .to_string(),
     );
+    if !job.round.is_empty() {
+        lines.push("In the result, list in `addressed` each round item you dealt with (the item, what you did, file:line). `findings` holds only defects still open: never what you fixed, addressed or verified.".to_string());
+    }
     lines.push(
-        "Finish with the structured result: status (pass, findings or blocked), summary, changed_paths, checks you ran with their results, findings, and handoff notes for the next stage."
+        "Finish with the structured result: status (pass, findings or blocked), summary, changed_paths, checks you ran with their results, findings (only defects still open), addressed (what you fixed or confirmed), and handoff notes for the next stage. Keep it short, under 4000 characters: one or two sentences per finding, the detail in handoff."
             .to_string(),
     );
     lines.push(
@@ -987,7 +1006,7 @@ fn opencode_launch(
         args.extend(["--variant".to_string(), effort.to_string()]);
     }
     let config =
-        serde_json::json!({ "permission": opencode_permissions(job, paths, &worktree, from_wsl) })
+        serde_json::json!({ "permission": opencode_permissions(job, task, paths, &worktree, from_wsl) })
             .to_string();
     match (native, task.distro.as_deref()) {
         (Some(program), _) => Ok(JobLaunch {
@@ -1078,6 +1097,7 @@ const OPENCODE_READ_COMMANDS: [&str; 13] = [
 /// comes after the `*` it narrows.
 fn opencode_permissions(
     job: &DeliveryJob,
+    task: &DeliveryTask,
     paths: &JobPaths,
     worktree: &str,
     from_wsl: bool,
@@ -1106,11 +1126,13 @@ fn opencode_permissions(
         if read_only { "deny" } else { "allow" },
     );
     rule(&mut outside, "*".into(), "deny");
+    let full = full_checks(job, task);
     if read_only {
         for command in OPENCODE_READ_COMMANDS
             .iter()
             .map(|command| command.to_string())
             .chain(job.allowed_commands.iter().cloned())
+            .filter(|command| !full.contains(&command.as_str()))
         {
             // Also as `git -C <worktree> …`, as agents often write it.
             if let Some(rest) = command.strip_prefix("git ") {
@@ -1150,6 +1172,9 @@ fn opencode_permissions(
         if let Some(rest) = command.strip_prefix("git ") {
             rule(&mut bash, format!("git -C {worktree} {rest} *"), "deny");
         }
+    }
+    for check in full {
+        rule(&mut bash, check.to_string(), "deny");
     }
     serde_json::json!({
         "edit": edit,
@@ -1229,6 +1254,9 @@ fn claude_launch(
             &session_id,
             "--json-schema",
             RESULT_SCHEMA,
+            // None of the user's MCP servers: only those the job is given
+            // (QA's browser), never Drive, Docs or Tinto's own.
+            "--strict-mcp-config",
         ]
         .iter()
         .map(|value| value.to_string())
@@ -1338,7 +1366,7 @@ fn claude_launch(
         .map(|value| format!(" {}", sh_quote(value)))
         .collect();
     let script = format!(
-        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema \"$(cat {})\"{model}{effort}{qa}{allowed}{denied}",
+        "{line_endings}exec claude -p --output-format stream-json --verbose --permission-mode {mode} {session_flag} {} --json-schema \"$(cat {})\" --strict-mcp-config{model}{effort}{qa}{allowed}{denied}",
         sh_quote(&session_id),
         sh_quote(&wsl_path(&paths.schema)?)
     );
@@ -1398,24 +1426,76 @@ fn claude_allowed_tools(
     tools
 }
 
-/// The deny list for a Claude job without full access, also as
-/// `git -C <worktree> …`, which would otherwise slip past it.
-fn claude_denied_tools(job: &DeliveryJob, task: &DeliveryTask, from_wsl: bool) -> Vec<String> {
+/// Claude Code tools no job needs, whatever its access: they reach beyond
+/// its task (schedules, notifications, remote sessions, workflows, other
+/// agents' conversations, publishing, other worktrees).
+const CLAUDE_UNNEEDED_TOOLS: [&str; 12] = [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "PushNotification",
+    "RemoteTrigger",
+    "Workflow",
+    "SendMessage",
+    "PublishPlugin",
+    "ShareOnboardingGuide",
+    "EnterWorktree",
+    "ExitWorktree",
+];
+
+/// The web tools, which only QA (it has network) and full access keep:
+/// other stages that tried them were refused, so they do not get them.
+const CLAUDE_WEB_TOOLS: [&str; 2] = ["WebFetch", "WebSearch"];
+
+/// The task's checks a job without full access may not run as they are:
+/// Tinto runs each one on the job's result, and agents that ran whole
+/// suites themselves spent 10 to 14 minutes on them, past Claude Code's
+/// Bash ceiling. The format and lint checks stay, since writing stages run
+/// them before they end; so does any narrower run (a test file, a filter).
+fn full_checks<'a>(job: &DeliveryJob, task: &'a DeliveryTask) -> Vec<&'a str> {
     if job.access == DeliveryAccess::Full {
         return Vec::new();
     }
-    let worktree = agent_path(&plain_path(&task.worktree), from_wsl);
-    CLAUDE_DENIED
+    task.checks
         .iter()
-        .flat_map(|command| {
-            let mut forms = vec![command.to_string()];
-            if let Some(rest) = command.strip_prefix("git ") {
-                forms.push(format!("git -C {worktree} {rest}"));
-            }
-            forms
-        })
-        .map(|command| format!("Bash({command}:*)"))
+        .map(String::as_str)
+        .filter(|check| !style_check(check))
         .collect()
+}
+
+/// What a Claude job may not use: the tools no job needs and, without full
+/// access, the web outside QA, Tinto's own steps (also as `git -C
+/// <worktree> …`, which would otherwise slip past them) and the task's
+/// checks as they are written.
+fn claude_denied_tools(job: &DeliveryJob, task: &DeliveryTask, from_wsl: bool) -> Vec<String> {
+    let mut tools: Vec<String> = CLAUDE_UNNEEDED_TOOLS.map(str::to_string).to_vec();
+    if job.access == DeliveryAccess::Full {
+        return tools;
+    }
+    if job.role != QA_ROLE {
+        tools.extend(CLAUDE_WEB_TOOLS.map(str::to_string));
+    }
+    let worktree = agent_path(&plain_path(&task.worktree), from_wsl);
+    tools.extend(
+        CLAUDE_DENIED
+            .iter()
+            .flat_map(|command| {
+                let mut forms = vec![command.to_string()];
+                if let Some(rest) = command.strip_prefix("git ") {
+                    forms.push(format!("git -C {worktree} {rest}"));
+                }
+                forms
+            })
+            .map(|command| format!("Bash({command}:*)")),
+    );
+    // Exactly as written, so a narrower run of the same tool stays allowed.
+    tools.extend(
+        full_checks(job, task)
+            .into_iter()
+            .map(|check| format!("Bash({check})")),
+    );
+    tools
 }
 
 /// Wraps Playwright MCP for QA jobs (see the file's header).
@@ -1964,6 +2044,36 @@ pub fn observe(agent: DeliveryAgent, line: &str) -> Observation {
         usage,
         command: None,
     }
+}
+
+/// The use of its account's limit a Claude Code `rate_limit_event` reports:
+/// the window nearest its limit (five hours, seven days…), with when it
+/// renews. `None` for any other line.
+pub fn rate_limit(agent: DeliveryAgent, line: &str) -> Option<DeliveryQuota> {
+    if agent != DeliveryAgent::Claude || !line.contains("\"rate_limit_event\"") {
+        return None;
+    }
+    let value: Value = serde_json::from_str(line).ok()?;
+    let info = &value["rate_limit_info"];
+    let windows: Vec<(String, &Value)> = match info["unifiedWindows"].as_object() {
+        Some(windows) => windows
+            .iter()
+            .map(|(name, window)| (name.clone(), window))
+            .collect(),
+        None => vec![(info["rateLimitType"].as_str()?.to_string(), info)],
+    };
+    windows
+        .into_iter()
+        .filter_map(|(window, values)| {
+            Some(DeliveryQuota {
+                agent,
+                window,
+                utilization: (values["utilization"].as_f64()? * 100.0).round() as u32,
+                resets_at_ms: values["resetsAt"].as_u64()? * 1000,
+                seen_at_ms: 0,
+            })
+        })
+        .max_by_key(|quota| quota.utilization)
 }
 
 /// Claude Code's Bash stops waiting for a command after 10 minutes.
@@ -2543,8 +2653,9 @@ pub fn read_outcome(agent: DeliveryAgent, events: &str, result_file: Option<&str
 }
 
 pub fn parse_result(value: &Value) -> Result<DeliveryJobResult, String> {
-    let result: DeliveryJobResult = serde_json::from_value(value.clone())
+    let mut result: DeliveryJobResult = serde_json::from_value(value.clone())
         .map_err(|error| format!("resultado con formato inválido: {error}"))?;
+    settle_confirmations(&mut result);
     if !matches!(result.status.as_str(), "pass" | "findings" | "blocked") {
         return Err(format!(
             "estado de resultado desconocido: {}",
@@ -2555,6 +2666,38 @@ pub fn parse_result(value: &Value) -> Result<DeliveryJobResult, String> {
         return Err("el resultado no tiene resumen".to_string());
     }
     Ok(result)
+}
+
+/// Agents still report what they fixed or confirmed as findings ("Fixed
+/// (decision 1…)", "MEDIUM tx hash: addressed…"), which kept tasks in rounds
+/// that were done: such a finding, or one whose text after its label starts
+/// that way, moves to `addressed`, and a `findings` result left without
+/// findings is a pass.
+fn settle_confirmations(result: &mut DeliveryJobResult) {
+    let (confirmed, open): (Vec<String>, Vec<String>) = std::mem::take(&mut result.findings)
+        .into_iter()
+        .partition(|finding| confirmation(finding));
+    result.findings = open;
+    result.addressed.extend(confirmed);
+    if result.status == "findings" && result.findings.is_empty() {
+        result.status = "pass".to_string();
+    }
+}
+
+/// Whether a finding says something was fixed, addressed, verified or OK.
+fn confirmation(finding: &str) -> bool {
+    let text = finding.trim_start_matches(|c: char| !c.is_alphanumeric());
+    let after_label = text.split_once(':').map(|(_, rest)| rest.trim_start());
+    [Some(text), after_label].into_iter().flatten().any(|text| {
+        let word: String = text.chars().take_while(|c| c.is_alphabetic()).collect();
+        let rest = text[word.len()..].trim_start();
+        match word.to_lowercase().as_str() {
+            "fixed" | "addressed" | "verified" => true,
+            // "OK button overlaps" is a defect; "OK: …", "OK, …" are not.
+            "ok" => rest.is_empty() || rest.starts_with([':', ',', '.', ';', '-', '—', '(']),
+            _ => false,
+        }
+    })
 }
 
 /// The JSON object in a final answer, tolerating code fences or prose
@@ -2823,7 +2966,8 @@ pub(crate) mod tests {
     fn an_opencode_job_runs_by_rules_for_its_stage() {
         let dir = std::env::temp_dir().join(format!("tinto-opencode-{}", uuid::Uuid::new_v4()));
         let paths = JobPaths::in_dir(dir);
-        let task = sample_task();
+        let mut task = sample_task();
+        task.checks = vec!["npm test".into(), "npm run lint".into()];
         let rules = |job: &DeliveryJob| {
             let launch =
                 opencode_launch(job, &task, &paths, Some(PathBuf::from("opencode"))).unwrap();
@@ -2866,6 +3010,9 @@ pub(crate) mod tests {
         assert_eq!(writer["bash"]["git push *"], "deny");
         assert_eq!(writer["bash"]["git -C /repo-wt/K-1 commit *"], "deny");
         assert_eq!(writer["external_directory"]["*"], "deny");
+        // Tinto runs the suites: not as written, but lint and narrower runs.
+        assert_eq!(writer["bash"]["npm test"], "deny");
+        assert!(writer["bash"].get("npm run lint").is_none());
 
         // Review reads: no edits, only the checks and commands that read.
         job.role = "review".into();
@@ -2874,7 +3021,8 @@ pub(crate) mod tests {
         let (_, review) = rules(&job);
         assert_eq!(review["edit"]["*"], "deny");
         assert_eq!(review["bash"]["*"], "deny");
-        assert_eq!(review["bash"]["npm test *"], "allow");
+        assert_eq!(review["bash"]["npm test"], "deny");
+        assert!(review["bash"].get("npm test *").is_none());
         assert_eq!(review["bash"]["git diff *"], "allow");
         assert_eq!(review["bash"]["git -C /repo-wt/K-1 diff *"], "allow");
         assert_eq!(review["bash"]["git commit *"], "deny");
@@ -3056,6 +3204,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn findings_that_confirm_a_fix_are_addressed_not_open() {
+        // Seen in jobs 7c50b2b3 and da6ed9d5: confirmations kept done rounds open.
+        let result = |findings: &[&str]| {
+            parse_result(&serde_json::json!({
+                "status": "findings", "summary": "Round done.", "findings": findings,
+            }))
+            .unwrap()
+        };
+        let done = result(&[
+            "Fixed (decision 1): the hash is checked",
+            "MEDIUM tx hash: addressed in src/tx.ts:40",
+            "- Verified the migration runs twice",
+            "OK: lint passes",
+        ]);
+        assert_eq!(done.status, "pass");
+        assert!(done.findings.is_empty());
+        assert_eq!(done.addressed.len(), 4);
+        // Defects that merely start with a similar word stay open.
+        let open = result(&["OK button overlaps the footer", "Fixes are missing a test"]);
+        assert_eq!(open.status, "findings");
+        assert_eq!(open.findings.len(), 2);
+        assert!(open.addressed.is_empty());
+        // The schema asks for them apart, and for a size budget.
+        let schema: Value = serde_json::from_str(RESULT_SCHEMA).unwrap();
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("addressed")));
+        assert!(schema["description"].as_str().unwrap().contains("4000"));
+    }
+
+    #[test]
     fn launches_carry_sandbox_schema_and_prompt() {
         let mut task = sample_task();
         task.distro = Some("Ubuntu".into());
@@ -3176,6 +3356,26 @@ pub(crate) mod tests {
         assert!(
             prompt.contains("You may also read and list these folders outside the worktree, without changing them: C:/repo/docs."),
             "{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_claude_rate_limit_event_gives_the_window_nearest_its_limit() {
+        // As the DPP batch's jobs reported it.
+        let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1793271600,"rateLimitType":"five_hour","utilization":0.94,"overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false,"surpassedThreshold":0.9,"unifiedWindows":{"five_hour":{"utilization":0.94,"resetsAt":1793271600,"status":"allowed_warning","surpassedThreshold":0.9},"seven_day":{"utilization":0.37,"resetsAt":1793610000,"status":"allowed"}}},"session_id":"4b90393f"}"#;
+        assert_eq!(
+            rate_limit(DeliveryAgent::Claude, line),
+            Some(DeliveryQuota {
+                agent: DeliveryAgent::Claude,
+                window: "five_hour".into(),
+                utilization: 94,
+                resets_at_ms: 1_793_271_600_000,
+                seen_at_ms: 0,
+            })
+        );
+        assert_eq!(
+            rate_limit(DeliveryAgent::Claude, CLAUDE_OK.lines().next().unwrap()),
+            None
         );
     }
 
@@ -3381,15 +3581,43 @@ pub(crate) mod tests {
         let paths = JobPaths::in_dir(PathBuf::from(
             r"C:\Users\me\AppData\Roaming\tinto\delivery\jobs\j1",
         ));
+        task.checks = vec!["npm test".into(), "npm run lint".into()];
         let mut job = sample_job(DeliveryAgent::Claude);
         job.allowed_commands = vec!["npm test".into(), "cargo test".into()];
         let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
         assert!(script.contains("--permission-mode acceptEdits"), "{script}");
+        // None of the user's MCP servers (Drive, Docs, Tinto's own).
+        assert!(script.contains(" --strict-mcp-config"), "{script}");
+        // Neither the tools that reach beyond the task nor, outside QA, the web.
+        assert!(
+            script.contains(" --allowedTools 'Bash' --disallowedTools 'CronCreate'"),
+            "{script}"
+        );
+        for tool in [
+            "'PushNotification'",
+            "'RemoteTrigger'",
+            "'Workflow'",
+            "'WebFetch'",
+        ] {
+            assert!(script.contains(tool), "{tool}: {script}");
+        }
         // Any command, compound ones too, but Tinto's own steps, also
-        // spelled with `git -C <worktree>`.
-        assert!(script.contains(" --allowedTools 'Bash' --disallowedTools 'Bash(git commit:*)' 'Bash(git -C /repo-wt/K-1 commit:*)' 'Bash(git push:*)'"), "{script}");
-        assert!(script.ends_with(" 'Bash(cargo install:*)'"), "{script}");
+        // spelled with `git -C <worktree>`, and the suites Tinto runs as
+        // they are written: the lint check stays, as writers run it.
+        assert!(
+            script.contains(
+                " 'Bash(git commit:*)' 'Bash(git -C /repo-wt/K-1 commit:*)' 'Bash(git push:*)'"
+            ),
+            "{script}"
+        );
+        assert!(
+            script.ends_with(" 'Bash(cargo install:*)' 'Bash(npm test)'"),
+            "{script}"
+        );
+        assert!(launch.stdin.contains(
+            "Tinto refuses these checks exactly as written, since it runs them itself on your result: `npm test`. To test what you change, run the test runner on just those files"
+        ));
         assert!(launch
             .stdin
             .contains("You can run any shell command, compound ones included"));
@@ -3414,11 +3642,20 @@ pub(crate) mod tests {
         );
         assert!(!launch.stdin.contains("The repo's checks"));
 
-        // With full access nothing is listed either way.
+        // With full access only the tools no job needs are left out.
         job.access = DeliveryAccess::Full;
         let launch = claude_launch(&job, &task, &paths, None, None).unwrap();
         let script = launch.args.last().unwrap();
-        assert!(!script.contains("--disallowedTools"), "{script}");
+        assert!(script.contains(" --strict-mcp-config"), "{script}");
+        assert!(
+            script.contains("--disallowedTools 'CronCreate'"),
+            "{script}"
+        );
+        assert!(
+            !script.contains("Bash(") && !script.contains("WebFetch"),
+            "{script}"
+        );
+        assert!(!launch.stdin.contains("Tinto refuses these checks"));
     }
 
     #[test]

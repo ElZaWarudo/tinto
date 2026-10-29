@@ -484,6 +484,10 @@ impl DeliveryService {
                 }
                 // Jobs waiting on the environment start once it answers.
                 service.check_due_environments();
+                // Jobs held by an agent's quota start once it renews.
+                if let Err(error) = service.release_renewed_quotas() {
+                    eprintln!("tinto: delivery could not release the agents' quotas: {error}");
+                }
                 let (count, changed) = &service.inner.changes;
                 let Ok(guard) = count.lock() else { return };
                 let Ok((guard, _)) =

@@ -73,13 +73,45 @@ fn refused_model(agent: DeliveryAgent, model: &str) -> String {
 
 /// A check that formats or lints: quick enough for a writing stage to run
 /// before it ends.
-fn style_check(command: &str) -> bool {
+pub(super) fn style_check(command: &str) -> bool {
     let lower = command.to_lowercase();
     [
         "fmt", "format", "prettier", "lint", "clippy", "ruff", "black", "biome",
     ]
     .iter()
     .any(|word| lower.contains(word))
+}
+
+/// How each of the task's checks went the last time it ran, and how long it
+/// took, for a stage that starts from other code: agents that did not know
+/// a suite takes 12 minutes ran it themselves.
+fn latest_check_runs(checks: &[String], jobs: &[&DeliveryJob]) -> Option<String> {
+    let runs: Vec<String> = checks
+        .iter()
+        .filter_map(|check| {
+            let run = jobs
+                .iter()
+                .filter(|job| job.role == CHECKS_ROLE && job.prompt == *check)
+                .filter(|job| {
+                    matches!(
+                        job.status,
+                        DeliveryJobStatus::Finished | DeliveryJobStatus::Failed
+                    )
+                })
+                .max_by_key(|job| job.created_at_ms)?;
+            let took = run.ended_at_ms?.saturating_sub(run.started_at_ms?) / 1000;
+            let took = match took {
+                0..=59 => format!("{took} s"),
+                _ => format!("{} min", took.div_ceil(60)),
+            };
+            let how = match run.status {
+                DeliveryJobStatus::Finished => "passed",
+                _ => "failed",
+            };
+            Some(format!("`{check}` {how} in {took}"))
+        })
+        .collect();
+    (!runs.is_empty()).then(|| format!("Their latest runs, on earlier code: {}.", runs.join("; ")))
 }
 
 /// A provider stopping the account for its usage, not the job's work.
@@ -880,6 +912,7 @@ impl DeliveryService {
                 .and_then(|slot| slot.clone()),
             coordinators,
             queued,
+            quotas: super::queue::quotas(&store)?,
             tasks,
         })
     }
@@ -2813,6 +2846,9 @@ impl DeliveryService {
                         self.record_session_id(&job.id, id);
                     }
                 }
+                if let Some(quota) = adapters::rate_limit(agent, &line) {
+                    self.record_quota(quota);
+                }
                 if !model_recorded {
                     if let Some(model) = adapters::claude_init_model(&line) {
                         model_recorded = true;
@@ -3517,6 +3553,9 @@ impl DeliveryService {
         let same_code = last_change(&jobs).is_some_and(|change| {
             change.end_candidate.is_some() && change.end_candidate == job.start_candidate
         });
+        if !same_code {
+            lines.extend(latest_check_runs(&task.checks, &jobs));
+        }
         let checks = current_checks(&jobs);
         if !same_code || checks.is_empty() {
             return Ok(lines);
@@ -4404,5 +4443,39 @@ pub(crate) fn agent_name(agent: DeliveryAgent) -> &'static str {
         DeliveryAgent::Muse => "Muse Code",
         DeliveryAgent::Opencode => "OpenCode",
         DeliveryAgent::Shell => "Shell",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::delivery::adapters::tests::sample_job;
+
+    #[test]
+    fn a_stage_on_other_code_hears_how_long_each_check_took() {
+        let check = |at: u64, command: &str, status, seconds: u64| {
+            let mut job = sample_job(DeliveryAgent::Shell);
+            job.id = format!("c{at}");
+            job.created_at_ms = at;
+            job.role = CHECKS_ROLE.into();
+            job.prompt = command.into();
+            job.status = status;
+            job.started_at_ms = Some(1_000);
+            job.ended_at_ms = Some(1_000 + seconds * 1000);
+            job
+        };
+        let jobs = [
+            check(1, "npm run unit-tests", DeliveryJobStatus::Failed, 30),
+            check(2, "npm run unit-tests", DeliveryJobStatus::Finished, 660),
+            check(3, "npm run lint", DeliveryJobStatus::Failed, 4),
+            check(4, "npm run removed", DeliveryJobStatus::Finished, 9),
+        ];
+        let jobs: Vec<&DeliveryJob> = jobs.iter().collect();
+        let checks = ["npm run unit-tests".to_string(), "npm run lint".to_string()];
+        assert_eq!(
+            latest_check_runs(&checks, &jobs).as_deref(),
+            Some("Their latest runs, on earlier code: `npm run unit-tests` passed in 11 min; `npm run lint` failed in 4 s.")
+        );
+        assert_eq!(latest_check_runs(&checks, &[]), None);
     }
 }

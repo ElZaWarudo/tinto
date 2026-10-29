@@ -311,8 +311,12 @@ pub struct DeliveryJobResult {
     pub changed_paths: Vec<String>,
     #[serde(default)]
     pub checks: Vec<DeliveryCheck>,
+    /// Only defects still open.
     #[serde(default)]
     pub findings: Vec<String>,
+    /// What the job fixed or confirmed of its round or earlier findings.
+    #[serde(default)]
+    pub addressed: Vec<String>,
     #[serde(default)]
     pub handoff: String,
     /// What stopped the job, if anything: `sandbox` (its sandbox or
@@ -1521,6 +1525,36 @@ pub struct DeliveryOverview {
     /// Why each queued job (by id) has not started.
     #[serde(default)]
     pub queued: std::collections::BTreeMap<String, DeliveryQueueWait>,
+    /// How much of each agent account's limit its jobs last reported used.
+    #[serde(default)]
+    pub quotas: Vec<DeliveryQuota>,
+}
+
+/// From this share of its account's limit on, Tinto starts no new job of
+/// an agent until the limit renews: past 100% every running job would
+/// fail mid-stage.
+pub const QUOTA_STOP_PERCENT: u32 = 95;
+
+/// How much of an agent account's usage limit is spent, as its jobs last
+/// reported it (Claude Code's `rate_limit_event`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryQuota {
+    pub agent: DeliveryAgent,
+    /// The window nearest its limit: `five_hour`, `seven_day`…
+    pub window: String,
+    /// Percent of the window's limit used.
+    pub utilization: u32,
+    /// When the window renews.
+    pub resets_at_ms: u64,
+    /// When a job reported it.
+    pub seen_at_ms: u64,
+}
+
+impl DeliveryQuota {
+    /// It stops new jobs of its agent now.
+    pub fn stops(&self, now: u64) -> bool {
+        self.utilization >= QUOTA_STOP_PERCENT && now < self.resets_at_ms
+    }
 }
 
 /// Why a queued job has not started, by the scheduler's own rules.

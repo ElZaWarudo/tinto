@@ -8194,6 +8194,83 @@ fn the_coordinator_reads_a_compact_overview_and_jobs_without_their_instructions(
 }
 
 #[test]
+fn the_overview_narrows_to_a_batch_or_task_leaves_closed_batches_out_and_sends_rounds_once() {
+    let h = harness();
+    let run = |title: &str| {
+        h.service
+            .create_run(
+                h.repo.path().to_path_buf(),
+                title,
+                Some("coord".into()),
+                None,
+            )
+            .unwrap()
+    };
+    let (open, other, closed) = (run("Abierto"), run("Otro"), run("Cerrado"));
+    let (first, second) = (task_in(&h, &open.id, "K-1"), task_in(&h, &open.id, "K-2"));
+    let elsewhere = task_in(&h, &other.id, "K-3");
+    let old = task_in(&h, &closed.id, "K-4");
+    h.service.close_run(&closed.id).unwrap();
+    let items: Vec<String> = (0..3).map(|n| format!("Arregla el punto {n}")).collect();
+    h.service
+        .store()
+        .unwrap()
+        .put_round(&super::model::DeliveryRound {
+            id: "round-1".into(),
+            task_id: first.id.clone(),
+            number: 2,
+            kind: "review".into(),
+            short: "3 hallazgos".into(),
+            cause: "La revisión pidió cambios".into(),
+            items: items.clone(),
+            source: None,
+            opened_at_ms: super::now_ms(),
+            after_push: false,
+            closed_at_ms: None,
+            outcome: None,
+            waits_merge_commit: false,
+        })
+        .unwrap();
+    let ids = |value: &serde_json::Value, list: &str| -> Vec<String> {
+        value[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // By default every batch but the closed one.
+    let all = mcp_tool(&h, "delivery_overview", json!({}));
+    assert_eq!(ids(&all, "runs"), [open.id.clone(), other.id.clone()]);
+    assert!(all["phases"].get(&old.id).is_none());
+    assert!(all["phases"].get(&elsewhere.id).is_some());
+    // The round's items come once; the phase names it.
+    assert_eq!(
+        all["phases"][&first.id]["round"],
+        json!({"id": "round-1", "number": 2, "kind": "review", "at": all["phases"][&first.id]["round"]["at"]})
+    );
+    assert_eq!(ids(&all, "rounds"), ["round-1"]);
+    assert_eq!(all["rounds"][0]["items"], json!(items));
+    let closed_too = mcp_tool(&h, "delivery_overview", json!({"closed": true}));
+    assert!(closed_too["phases"].get(&old.id).is_some());
+
+    // One batch, one task, some parts.
+    let batch = mcp_tool(&h, "delivery_overview", json!({"run_id": open.id}));
+    assert_eq!(ids(&batch, "tasks"), [first.id.clone(), second.id.clone()]);
+    let task = mcp_tool(
+        &h,
+        "delivery_overview",
+        json!({"task_id": second.id, "fields": ["tasks", "phases", "runs"]}),
+    );
+    assert_eq!(ids(&task, "tasks"), std::slice::from_ref(&second.id));
+    assert_eq!(ids(&task, "runs"), std::slice::from_ref(&open.id));
+    let mut parts: Vec<&String> = task.as_object().unwrap().keys().collect();
+    parts.sort();
+    assert_eq!(parts, ["phases", "runs", "tasks"]);
+}
+
+#[test]
 fn the_coordinator_is_not_told_of_its_own_task_edits_but_is_of_the_users() {
     let h = harness();
     let run = h

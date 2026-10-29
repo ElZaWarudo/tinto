@@ -216,6 +216,8 @@ export interface DeliveryJobResult {
   changed_paths: string[];
   checks: DeliveryCheck[];
   findings: string[];
+  /** What the job fixed or confirmed of its round or earlier findings. */
+  addressed?: string[];
   handoff: string;
   /** What stopped the job: its own sandbox or rules, something outside, or nothing. */
   blocked_by?: "none" | "environment" | "sandbox" | string;
@@ -797,6 +799,14 @@ export interface DeliveryOverview {
   issues?: DeliverySplitIssue[];
   /** Why each queued job (by id) has not started. */
   queued?: Record<string, DeliveryQueueWait>;
+  /** How much of each agent account's usage limit its jobs last reported used. */
+  quotas?: {
+    agent: DeliveryAgent;
+    window: string;
+    utilization: number;
+    resets_at_ms: number;
+    seen_at_ms: number;
+  }[];
 }
 
 /** Whether a batch's coordinator keeps up with its changes. */
