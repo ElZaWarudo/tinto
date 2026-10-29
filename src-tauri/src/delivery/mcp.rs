@@ -293,11 +293,23 @@ fn run_tool(
     };
     match name {
         "delivery_overview" => {
-            let overview = service.overview()?;
-            match args["compact"].as_bool().unwrap_or(true) {
-                true => compact_overview(&overview),
-                false => to_json(&overview),
+            let overview = narrow_overview(
+                service.overview()?,
+                args["run_id"].as_str(),
+                args["task_id"].as_str(),
+                args["closed"].as_bool().unwrap_or(false),
+            );
+            let mut value = match args["compact"].as_bool().unwrap_or(true) {
+                true => compact_overview(&overview)?,
+                false => to_json(&overview)?,
+            };
+            // Only the parts asked for.
+            if let (Some(fields), Some(object)) = (args["fields"].as_array(), value.as_object_mut())
+            {
+                let wanted: Vec<&str> = fields.iter().filter_map(Value::as_str).collect();
+                object.retain(|key, _| wanted.contains(&key.as_str()));
             }
+            Ok(value)
         }
         "create_run" => {
             let run = service.create_run(
@@ -1087,6 +1099,60 @@ fn job_json(job: &DeliveryJob, full: bool) -> Result<Value, DeliveryError> {
 }
 
 /// The overview without what the coordinator does not act on, so it fits
+/// The overview of one batch (`run_id`) or one task (`task_id`); closed
+/// batches and their tasks only when `closed`. Shared state (resources,
+/// settings, capacity, quotas) stays whole.
+fn narrow_overview(
+    mut overview: DeliveryOverview,
+    run_id: Option<&str>,
+    task_id: Option<&str>,
+    closed: bool,
+) -> DeliveryOverview {
+    let task_run = task_id.and_then(|id| {
+        overview
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .map(|task| task.run_id.clone())
+    });
+    overview.runs.retain(|run| {
+        (closed || run.status != "closed")
+            && run_id.is_none_or(|id| run.id == id)
+            && task_run
+                .as_ref()
+                .is_none_or(|of_task| of_task.as_deref() == Some(run.id.as_str()))
+    });
+    let runs: HashSet<String> = overview.runs.iter().map(|run| run.id.clone()).collect();
+    overview.tasks.retain(|task| {
+        task_id.is_none_or(|id| task.id == id)
+            && match task.run_id.as_deref() {
+                Some(run) => runs.contains(run),
+                None => run_id.is_none(),
+            }
+    });
+    let tasks: HashSet<String> = overview.tasks.iter().map(|task| task.id.clone()).collect();
+    let kept = |task: &String| tasks.contains(task);
+    overview.phases.retain(|task, _| kept(task));
+    overview.jobs.retain(|job| kept(&job.task_id));
+    let jobs: HashSet<&str> = overview.jobs.iter().map(|job| job.id.as_str()).collect();
+    overview.queued.retain(|job, _| jobs.contains(job.as_str()));
+    overview.approvals.retain(|approval| kept(&approval.task_id));
+    overview.decisions.retain(|decision| kept(&decision.task_id));
+    overview.qa_problems.retain(|problem| kept(&problem.task_id));
+    overview.rounds.retain(|round| kept(&round.task_id));
+    overview.prs.retain(|pr| kept(&pr.task_id));
+    overview
+        .settings_proposals
+        .retain(|proposal| runs.contains(&proposal.run_id));
+    overview
+        .coordinators
+        .retain(|coordinator| runs.contains(&coordinator.run_id));
+    overview
+        .issues
+        .retain(|issue| issue.packages.iter().any(|package| kept(&package.task_id)));
+    overview
+}
+
 /// in one tool result however long the batch ran: jobs carry only what they
 /// are and how they went (read_job has the rest), only the latest of each
 /// stage of a task still in progress (of each command, for checks) and
@@ -1228,10 +1294,23 @@ fn compact_overview(overview: &DeliveryOverview) -> Result<Value, DeliveryError>
     value["approvals"] = Value::Array(approvals);
     value["decisions"] = Value::Array(decisions);
     value["qa_problems"] = Value::Array(qa_problems);
-    // The open round of each task is in its phase.
-    if let Some(fields) = value.as_object_mut() {
-        fields.remove("rounds");
+    // Each open round once, with what it has to address; a phase names
+    // its round by id. Earlier rounds come with `compact: false`.
+    let mut rounds = Vec::new();
+    if let Some(phases) = value["phases"].as_object_mut() {
+        for phase in phases.values_mut() {
+            let Some(round) = phase.get_mut("round").filter(|round| round.is_object()) else {
+                continue;
+            };
+            let whole = round.take();
+            *round = json!({
+                "id": whole["id"], "number": whole["number"], "kind": whole["kind"],
+                "at": whole["at"],
+            });
+            rounds.push(whole);
+        }
     }
+    value["rounds"] = Value::Array(rounds);
     Ok(value)
 }
 
@@ -1259,7 +1338,7 @@ fn tool_definitions() -> Value {
     // Apart from the list: one `json!` this deep exceeds the macro's recursion limit.
     let decision_item = json!({"type": "object", "properties": {"kind": {"type": "string", "enum": ["choice", "text", "permission"]}, "question": {"type": "string"}, "detail": {"type": "string"}, "references": {"type": "array", "maxItems": 5, "description": "The code the question is about, shown to the user above the options as GitHub shows a review thread: give `comment_url` (a PR review comment, e.g. https://github.com/o/r/pull/7#discussion_r123) or `path` with `start_line`/`end_line` (lines of the task worktree, relative to it). Tinto reads the comment, its diff and the code itself; add `note` to say why it matters. Always attach them when a decision comes from a PR review or from specific code.", "items": {"type": "object", "properties": {"comment_url": {"type": "string"}, "path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}, "note": {"type": "string"}}}}, "options": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "consequence": {"type": "string"}, "recommended": {"type": "boolean"}}, "required": ["label", "consequence"]}}, "text": {"type": "string"}, "command": {"type": "string"}, "undo": {"type": "string"}, "scripts": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of the scripts the command runs; frozen and shown to the user."}, "read_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of folders outside the worktree QA may read and list."}, "write_dirs": {"type": "array", "items": {"type": "string"}, "description": "permission: absolute paths of concrete folders outside the worktree QA's commands may write in. Never the user's whole home."}, "clients": {"type": "array", "items": {"type": "string", "enum": ["claude", "codex"]}, "description": "permission: the user's real clients the command starts."}, "blocking": {"type": "boolean", "description": "Default true: the stages wait for the user. false: your own call, answered at once with the recommended option (or the text), changeable by the user later. Never false for a permission."}, "full_access": {"type": "boolean", "description": "permission: ask the user to let this task's QA run with full access (no sandbox, any command, writes anywhere). An exception for QA that cannot run in a sandbox, for example when it must start the user's real Codex; say in the question why nothing narrower works and what QA will do. Once allowed, the QA jobs you dispatch on this task run with full access; other roles never do."}}, "required": ["kind", "question"]});
     json!([
-        { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, unblocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when what one of its queued jobs waits for looks stuck (a job far beyond its usual time, a resource held by a job whose process is gone), a `warning`. `unblocked` means its last blocker cleared (`cleared`, `by` user or tinto) and it waits on you until you act on it. `queued` (by job id) says why each queued job has not started (`reason`: another job of its task such as its checks, its setup, the environment, a resource held by another job, the capacity, a paused batch, its agent's account at 95% or more of its usage limit until the window renews), since when (`since_ms`) and any `warning`; a queued phase carries its `reason` too. `quotas` gives how much of each agent account's usage limit its jobs last reported used (`agent`, `window`, `utilization` in percent, `resets_at_ms`). Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when its work was sent back, its `round`: number, cause, `items` to address and the stage or step it is `at` (earlier rounds are in `rounds` with `compact: false`). Act on the tasks that wait on the coordinator; do not dispatch on one that waits on the user, an agent or the queue. By default it is compact, to fit however long the batch ran: jobs carry what they are (a check its `command`), their status, timing, activity and the start of their result's `summary`; only the latest job of each stage of a task in progress (of each command, for checks) and any queued or running one are listed, with how many older ones each task has in `older_jobs`; and settled history keeps only ids and status: steps a later one of the same step replaced and any of a delivered task, answered decisions, and QA problems verified, dismissed or superseded. Read the rest with read_job, read_approval, read_decisions or read_qa_problems; `compact: false` returns everything.", "inputSchema": schema(json!({"compact": {"type": "boolean", "description": "Default true."}}), json!([])) },
+        { "name": "delivery_overview", "description": "Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, unblocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when what one of its queued jobs waits for looks stuck (a job far beyond its usual time, a resource held by a job whose process is gone), a `warning`. `unblocked` means its last blocker cleared (`cleared`, `by` user or tinto) and it waits on you until you act on it. `queued` (by job id) says why each queued job has not started (`reason`: another job of its task such as its checks, its setup, the environment, a resource held by another job, the capacity, a paused batch, its agent's account at 95% or more of its usage limit until the window renews), since when (`since_ms`) and any `warning`; a queued phase carries its `reason` too. `quotas` gives how much of each agent account's usage limit its jobs last reported used (`agent`, `window`, `utilization` in percent, `resets_at_ms`). Runs, tasks, jobs, exclusive resources, approvals (with the `drifted` steps and their `notice`), decisions, pending settings proposals and the followed PRs, and in `phases` (by task id) where each task is, as the user sees it in Tinto: its `kind` (decisions, approval, record, drifted, running, paused, batch_paused, waits_quarantine, setup_failed, waits_environment, queued, quarantined, settings_proposal, blocked, broken, delivered, pr, next_stage, next_step) with its details, who it `waits_on` (user, coordinator, agent, queue, reviewers, dependency, external, nobody), the `next_stage` due and, when its work was sent back, its `round`: its `id`, number, kind and the stage or step it is `at`; compact, each open round comes once in `rounds` (by that id) with its cause and the `items` to address (with `compact: false` the phase carries the whole round and `rounds` lists every round, earlier ones too). Act on the tasks that wait on the coordinator; do not dispatch on one that waits on the user, an agent or the queue. By default it is compact, to fit however long the batch ran: jobs carry what they are (a check its `command`), their status, timing, activity and the start of their result's `summary`; only the latest job of each stage of a task in progress (of each command, for checks) and any queued or running one are listed, with how many older ones each task has in `older_jobs`; and settled history keeps only ids and status: steps a later one of the same step replaced and any of a delivered task, answered decisions, and QA problems verified, dismissed or superseded. Read the rest with read_job, read_approval, read_decisions or read_qa_problems; `compact: false` returns everything. Closed batches and their tasks are left out unless `closed: true`; `run_id` or `task_id` narrows it to one batch or one task (resources, settings, capacity and quotas stay whole), and `fields` returns only the top-level parts named (for example [\"phases\", \"rounds\", \"queued\"]).", "inputSchema": schema(json!({"compact": {"type": "boolean", "description": "Default true."}, "run_id": {"type": "string", "description": "Only this batch and its tasks."}, "task_id": {"type": "string", "description": "Only this task (and its batch)."}, "fields": {"type": "array", "items": {"type": "string"}, "description": "Only these top-level parts, e.g. phases, jobs, rounds, queued, approvals, decisions, quotas."}, "closed": {"type": "boolean", "description": "Include closed batches and their tasks. Default false."}}), json!([])) },
         { "name": "create_run", "description": "Start a run you coordinate. Returns its id and generation 1.", "inputSchema": schema(json!({"repo": {"type": "string"}, "title": {"type": "string"}, "owner": {"type": "string"}}), json!(["repo", "title", "owner"])) },
         { "name": "acquire_run", "description": "Take a run nobody coordinates, or confirm you hold it. The run comes with `pending`: what waits on you since the cursor you last acknowledged (tasks whose blockers cleared, answered decisions, approved or rejected steps, QA problems sent), one line each with its `kind`, `key` and `text`. When another coordinator holds it, it is refused with run_locked: then, if the user asked you to coordinate it, use takeover_run.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}}), json!(["run_id", "owner"])) },
         { "name": "takeover_run", "description": "Become the run's coordinator in place of the one holding it. Do it when the user asks you to coordinate (or take over) the batch, which is enough: you need not check on the other coordinator; also when that coordinator stopped. The generation increases, so whatever the previous coordinator still sends is refused (fenced), and its wait_run hands it a run_takeover event. Pass `expect_generation` (the generation you read) to make sure nobody took it in between; without it the current one is taken. `reason` says why (default: asked by the user). Its result's `pending` sums up what waits on the coordinator since the last acknowledged cursor (tasks whose blockers cleared, answered decisions, approved or rejected steps, QA problems sent). Then call wait_run without a cursor and go on with the batch from delivery_overview. When the user asks you to coordinate several batches, take each one (each keeps its own generation) and wait on all of them with wait_run's `runs`.", "inputSchema": schema(json!({"run_id": {"type": "string"}, "owner": {"type": "string"}, "expect_generation": {"type": "integer"}, "reason": {"type": "string"}}), json!(["run_id", "owner"])) },
